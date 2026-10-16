@@ -89,7 +89,11 @@ digest the action
   -> if the cache is read-write and the action is sendable, upload
 ```
 
-Sendable, for the first remote cache, means a core compile: a known runner, declared inputs, no build-file closure. Tests stay local until a sandbox exists. Publish never leaves the machine. Custom closures run locally and are not uploaded. A plugin runner is sendable only when the plugin says it is hermetic.
+Sendable, for the first remote cache, means a core compile: a known runner, declared inputs, no build-file closure. Publish never leaves the machine. Custom closures run locally and are not uploaded. A plugin runner is sendable only when the plugin says it is hermetic.
+
+A test task runs as one subprocess for that project, Scala version, and platform. It does not run inside the server, and it does not fork once per test case. The process gets a fresh work directory, a scrubbed environment, and the declared classpath and inputs. Interruption kills the process group, so `System.exit` in a test cannot take Metals down.
+
+`Network` and `Docker` are declared needs. A task that declares either stays local and is not cacheable. The filesystem jail and the network jail are the same test action, added before any test is sendable. Until that jail exists, tests run locally in the subprocess and are not uploaded.
 
 A cache miss runs locally. Naming a remote cache does not turn on remote execution. Remote execution is a later client on this same action, off unless an executor is configured. There is no second scheduler.
 
@@ -97,7 +101,7 @@ The local cache is a content-addressed store under `~/.cache/histos`, or the XDG
 
 `histos cache list` shows id, path, size, and last used. `histos cache clean` deletes JDKs, launchers, and compiled plugin sources unused for 30 days, prints what it removed, and keeps the current project's entries. `--dry-run` previews. `histos cache path` prints the root. Nothing is deleted during a build.
 
-Cache keys include source contents, resolved dependency artifacts, compiler flags, the full Scala version, the platform, the locked JDK build, and declared environment variables.
+Cache keys include source contents, resolved dependency artifacts, compiler flags, the full Scala version, the platform, the resolved JDK, and declared environment variables. A Js task that needs Node includes the locked Node build. A Native task includes the full clang version that satisfied the declared major.
 
 ### 5.3 Process model
 
@@ -115,7 +119,7 @@ The launcher is a native image, on the Mill pattern, so the process that decides
 |---------|------|-----------|
 | **CLI** | One-shot commands. Attaches to a matching server, otherwise runs in-process. | Local process |
 | **BSP** | Metals. Starts a server. | Build Server Protocol |
-| **MCP** | Agents. Tools are the graph, run, and cancel. | MCP over stdio |
+| **MCP** | Agents. Tools are the graph, run, cancel, and toolchain. | MCP over stdio |
 | **ACP** | Handshake, then the same capabilities. | Agent Client Protocol |
 
 Histos does not emulate Metals MCP tool names. Metals is a BSP client. An agent config points at `./histos mcp` with the repo as the working directory.
@@ -148,6 +152,12 @@ The probe does not call `cs java`, `cs java-home`, or `sdk install`. Those comma
 When Coursier or sdkman is present and already has a match, Histos uses it. When a manager is present and the pin is missing, Histos prints that manager's install command and stops with a typed error. It does not install into the manager, and it does not hide a private JDK beside it. If both managers exist and neither has a match, the command is `cs java-home --jvm temurin:<major>`, because that name stays stable. An sdkman-only machine is told to run `sdk list java` and install the matching Temurin id.
 
 A bare machine, with no suitable JDK and neither manager, gets a private Temurin in the Histos cache. It is not placed on `PATH` and it is not registered with a manager.
+
+Node follows the same rules, and only when a Js task needs Node. The build names a Node major. `.histos/node.lock` stores the exact build, URL, and sha256. nvm, fnm, and volta count as managers. A manager that lacks the pin gets an install command. A bare machine that actually runs Js gets a private Node in the Histos cache. A JVM-only repo does not probe Node.
+
+A Native project declares a clang major. Histos checks `clang` on `PATH` and does not provision one. The cache key includes the full version of the binary that matched. A miss is a typed error that lists what was found and how to install it.
+
+`histos toolchain` prints every candidate considered, why it was rejected or chosen, the version, the path, and whether the decision came from the lock or a local override. `histos toolchain use --lock` rewrites the committed lock. `histos toolchain use --local` writes `.histos/toolchain.local`, which is gitignored. CI does not read that file. When a local override is active, the build prints one line. An unchanged lock hit stays quiet. The first time a private JDK or Node is provisioned, one line names the path and `histos cache clean`.
 
 ### 5.6 Plugins
 
@@ -202,37 +212,37 @@ Changing this scheme would be an organization-wide catalog migration. Histos doe
 
 ### 5.9 Build definition
 
-The file is ordinary Scala 3. Projects are values, so one project can depend on another by reference. A loop may build the module list. `scala"3.9.0"` and `dep"dev.zio::zio:2.1.26"` are inline literals. A malformed literal fails when the build file compiles. Builder calls capture source positions. A missing required field, such as Scala versions, is a typed load error with that position.
+The file is ordinary Scala 3. Projects are values, so one project can depend on another by reference. A loop may build the module list. `scala"3.9.0"` and `dep"dev.zio::zio:2.1.26"` are inline literals. A malformed literal fails when the build file compiles. Builder calls capture source positions.
 
-The concrete builder shape (a statement block, or a chained builder) is not settled. This sketch shows the information the graph holds, not the final method names:
+v1 has one front end. `module` starts a compiling project. Platforms and Scala versions are required arguments, so forgetting either is a compile error. Further settings, including plugin extensions, are immutable methods that return a new value. `aggregate` is the constructor for a root that does not compile.
 
 ```scala
 import histos.*
 
 object build extends HistosBuild:
   def graph =
-    val core = project("core"):
-      platforms(Jvm, Js, Native)
-      scalaVersions(scala"3.9.0", scala"2.13.16")
-      libraryDependencies(dep"dev.zio::zio:2.1.26")
+    val core =
+      module("core", Jvm, Js, Native)(scala"3.9.0", scala"2.13.16")
+        .libraryDependencies(dep"dev.zio::zio:2.1.26")
 
-    val tests = project("tests"):
-      dependsOn(core)
-      platforms(Jvm)
-      scalaVersions(scala"3.9.0", scala"2.13.16")
+    val tests =
+      module("tests", Jvm)(scala"3.9.0", scala"2.13.16")
+        .dependsOn(core)
 
-    Projects(core, tests)
+    Projects(aggregate("root", core, tests), core, tests)
 ```
 
 Evaluating `graph` does not compile or publish. A client runs a task by id.
 
-A structural macro is not the v1 authoring surface. `inline` is limited to literals and positions. Plugins stay ordinary methods and libraries.
+The graph is the model. A later front end, including a context-function block, is allowed only if it produces the same `ProjectGraph`. v1 does not ship that second DSL. A structural macro is not a v1 surface. `inline` is limited to literals and positions. Plugins stay ordinary methods and libraries.
 
 ### 5.10 CI
 
 Histos replaces sbt-zipx. The graph renders `.github/workflows/ci.yml`. A drift check fails the build when the committed file disagrees.
 
-The default workflow is aggregate, one job per verify task, in the zipx sense: `./histos test` in one job, plus format and the workflow check, plus a publish job on tags. On a pull request, test runs the changed projects and their dependents. Elsewhere it runs the full graph. Splitting jobs by Scala version or platform is a setting on the graph, off by default. Layer and Graph fan-out from zipx are that setting, later. Aggregate is the default a repo gets now.
+The default workflow is Aggregate: `./histos test` in one job, plus format and the workflow check, plus a publish job on tags. On a pull request, the test job runs the changed projects and their dependents. Elsewhere it runs the full graph.
+
+Fan-out is one split model, not a second renderer. The graph holds a set of axes: `Platform`, `ScalaVersion`, and `Module`. The empty set is Aggregate, and it is the default. A non-empty set is a matrix. On a pull request the matrix is filtered by the affected set, so an unchanged cell is not a job. There is no wave scheduler and no separate Layer or Graph mode. Ordering is `dependsOn` plus the content-addressed cache.
 
 The runner needs a shell and curl. The launcher provisions the JDK. The workflow does not need `setup-java`.
 
@@ -249,7 +259,7 @@ A cloner of an existing Histos repo runs `./histos test`. Nothing else is instal
 A maintainer moving a repo:
 
 1. Runs `histos bootstrap` and commits `./histos`, `histos.bat`, and `.histos-version`.
-2. Writes `histos.scala` by hand: the modules, platforms, and exact Scala versions. Pins the JDK major and commits `.histos/jdk.lock` from `histos jdk update`.
+2. Writes `histos.scala` by hand: the modules, platforms, and exact Scala versions. Pins the JDK major and commits `.histos/jdk.lock`. A repo with Js also commits `.histos/node.lock`. A repo with Native declares a clang major. `histos toolchain` shows which binary was chosen.
 3. Lets Histos render the workflow and commits it. The drift check keeps it aligned.
 
 The first repo is hand-written. An sbt importer waits until a second repo repeats the same shape. The builder is allowed to change during that first migration.
@@ -261,30 +271,27 @@ Remote cache stays off until the build names one. The default mode is read-only.
 ## 7. Phased Roadmap
 
 **Phase 0. Skeleton.**
-Bootstrap script, native launcher, ZIO app, typed graph, batch CLI, MCP tools (`graph`, `run`, `cancel`), ACP `initialize`.
+Bootstrap script, native launcher, ZIO app, typed graph, batch CLI, MCP tools (`graph`, `run`, `cancel`), ACP `initialize`. The v1 builder (`module`, `aggregate`, then an immutable chain) is the front end the skeleton loads.
 
-**Phase 1. Local engine.**
-Scheduler, local content-addressed cache, JDK lock and provisioning, Zinc, JVM compile and test for one exact Scala 3 version.
+**Phase 1. Local engine and CI.**
+Scheduler, local content-addressed cache, JDK lock and provisioning, `histos toolchain`, Zinc, and JVM compile and test for one exact Scala 3 version. Tests run as one subprocess per test task. Workflow render, drift check, and affected tests land here, for the JVM tasks that exist. The split axes are already in the model. The default is the empty set (Aggregate). A repo that sets `Module` gets one cell per module from this same renderer.
 
-**Phase 2. Cross-build, versions, CI.**
-Scala.js, Scala Native, exact Scala 2.13 versions. Version catalog and the zipx snapshot/release names. Workflow render and drift check. Central plugin, enough for a library to publish without sbt-zipx.
+**Phase 2. Cross-build and versions.**
+Scala.js, Scala Native, exact Scala 2.13 versions. Node lock for Js tasks. Clang major check for Native tasks. The same renderer emits `Platform` and `ScalaVersion` cells, filtered by the affected set on pull requests. Version catalog and the zipx snapshot/release names. Central plugin, enough for a library to publish without sbt-zipx.
 
 **Phase 3. Protocols and remote cache.**
-BSP for Metals. Production MCP. Remote cache for sendable compile actions, opt-in, miss falls back to local.
+BSP for Metals. Production MCP, including `toolchain`. Remote cache for sendable compile actions, opt-in, miss falls back to local.
 
 **Phase 4. Dogfood.**
-One hand-written early-effect library. Generated CI. Drop sbt-zipx for the capabilities that library uses. Measure against sbt 2 and Mill.
+One hand-written early-effect library. Generated CI. Drop sbt-zipx for the capabilities that library uses. Measure against sbt 2 and Mill. Filesystem and network jail on the test action, before any test is sendable.
 
 **Phase 5. The rest of the zipx surface, then execution.**
-Docs, docker, deploy, coverage, and the dependency-update bot, as plugins. sbt importer once a second repo repeats the shape. Remote execution client, still off by default, after a test sandbox exists. `LinkStrategy.Api` and MiMa on `histos.api` at 1.0.
+Docs, docker, deploy, coverage, and the dependency-update bot, as plugins. sbt importer once a second repo repeats the shape. Remote execution client, still off by default. `LinkStrategy.Api` and MiMa on `histos.api` at 1.0.
 
-## 8. Not yet decided
+## 8. Review close
 
-- The concrete builder surface: a statement block, or a chained builder.
-- How the test sandbox works. Tests stay local until it exists.
-- Which Node and clang versions a remote worker would carry. JS and Native toolchains are not pinned yet.
-- When the workflow renderer implements Layer and Graph fan-out. Aggregate is the default.
+The builder surface, the test subprocess, Node and clang resolution, and CI fan-out were decided in the same review as sections 5 through 7. This draft does not leave them open. A context-function front end is a later producer of the same `ProjectGraph`, and it is not part of v1.
 
 ---
 
-*This document is a living draft. The decisions in sections 5 through 7 were settled in design review on 2026-10-16.*
+*This document is a living draft. Sections 5 through 8 record the design review of 2026-10-16.*
