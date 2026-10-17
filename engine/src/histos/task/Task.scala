@@ -7,11 +7,13 @@ import zio.*
 enum TaskKind:
   case Inspect
   case Compile
+  case Versions
 
 opaque type TaskId = String
 
 object TaskId:
   val Inspect: TaskId = "inspect"
+  val Versions: TaskId = "versions"
 
   given CanEqual[TaskId, TaskId] = CanEqual.derived
 
@@ -37,11 +39,13 @@ enum TaskError:
   case EmptyId
   case NoRunner(id: TaskId)
   case UnknownRun(id: RunId)
+  case Version(error: histos.version.VersionError)
 
   def message: String = this match
     case EmptyId        => "a task id is not empty"
     case NoRunner(id)   => s"no runner for '${id.value}'"
     case UnknownRun(id) => s"no run '${id.value}'"
+    case Version(error) => error.message
 
 final case class TaskResult(kind: TaskKind, text: String)
 

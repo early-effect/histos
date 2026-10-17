@@ -313,23 +313,24 @@ The Central plugin is the one early-effect libraries need. GitHub Packages, othe
 
 Publish runs locally, including in CI. It is not cached and it is not sent to a remote executor.
 
-Version identity is the zipx scheme, implemented as Histos tasks, so existing pins still resolve:
+The pin strings are the zipx strings, so a catalog that already pins them still resolves. The model is not the sbt session those strings were squeezed into. There is no string version, no dirty id, no warn gate, and no publish that fails afterwards.
 
-- Everyday builds compile `<version>-ci`.
-- A snapshot publish stores `<version>-<sha>-SNAPSHOT`, which is the coordinate a downstream catalog pins.
-- The default branch also updates a `<version>-SNAPSHOT` pointer. That pointer is not a dependency.
-- A Ship number is the next release.
-- Once that number is on the release registry, further snapshots of it publish nothing.
-- The drift gate fails the build when a row has moved on.
-- The release job opens a pull request that bumps the catalog. CI does not commit the catalog on the tagged SHA.
+- A ship number is `major.minor.patch` with no leading zeros. It lives on the catalog, which is part of the graph. `ship("libs", ship"1.4.2")(core)` names the row and the modules that publish it. A module is in at most one ship. An aggregate is not a member.
+- Everyday development compiles `<ship>-ci`. That coordinate is never published.
+- A snapshot of a clean commit stores `<ship>-<12 lowercase hex>-SNAPSHOT`. That stored form is the snapshot pin. The sha is the whole 40-hex commit. A shorter sha is refused. There is no dirty id and no git-less id.
+- The default branch also names a `<ship>-SNAPSHOT` pointer. The pointer is not a pin. A pull request stores the same snapshot and has no pointer. The type has no branch to move it.
+- Once a ship number is on the release registry and the tree still matches its tag, further snapshots of it publish nothing.
+- A released ship whose tree has moved, or whose tag cannot be proven, refuses the decision. The refusal carries no coordinate. A sibling ship does not publish beside it.
+- A missing registry read is not "nothing is released". Development may still compile `<ship>-ci`, and the decision says the drift gate was not checked. Snapshot, pull request, and release refuse until the registry has been read. `.histos/releases` is the local stand-in, one `<ship> matches|moved|unknown` line. Central replaces that read.
+- A release publishes each unreleased ship at its bare number and yields a catalog bump. The bump is a pull request. The tagged commit does not contain it, and this layer does not guess the next number. Releasing when every ship is already on the registry is refused.
 
-Changing this scheme would be an organization-wide catalog migration. Histos does not invent a second one.
+Changing the pin strings would be an organization-wide catalog migration. Histos does not invent a second set of them.
 
 ### 5.10 Build definition
 
 The file is ordinary Scala 3. Projects are values, so one project can depend on another by reference. A loop may build the module list. `scala"3.9.0"` and `dep"dev.zio::zio:2.1.26"` are inline literals. A malformed literal fails when the build file compiles. Builder calls capture source positions.
 
-v1 has one front end. `module` starts a compiling project. Platforms and Scala versions are required arguments, so forgetting either is a compile error. Further settings, including plugin extensions, are immutable methods that return a new value. `aggregate` is the constructor for a root that does not compile.
+v1 has one front end. `module` starts a compiling project. Platforms and Scala versions are required arguments, so forgetting either is a compile error. Further settings, including plugin extensions, are immutable methods that return a new value. `aggregate` is the constructor for a root that does not compile. `ship` is a catalog row. `ships` gathers those rows. A build that calls neither has an empty catalog.
 
 ```scala
 import histos.*
@@ -344,7 +345,7 @@ object build extends HistosBuild:
       module("tests", Jvm)(scala"3.9.0", scala"2.13.16")
         .dependsOn(core)
 
-    Projects(aggregate("root", core, tests), core, tests)
+    Projects(ships(ship("libs", ship"1.4.2")(core)), aggregate("root", core, tests), core, tests)
 ```
 
 Evaluating `graph` does not compile or publish. A client runs a task by id.

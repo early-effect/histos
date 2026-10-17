@@ -2,6 +2,8 @@ package histos
 
 import _root_.scala.compiletime.testing.typeCheckErrors
 
+import histos.version.{ShipNumber, ShipNumberError}
+
 import zio.test.*
 
 object LiteralSpec extends ZIOSpecDefault:
@@ -33,6 +35,20 @@ object LiteralSpec extends ZIOSpecDefault:
         Dep.from("") == Left(DepError.Empty),
         Dep.from("a::b::c") == Left(DepError.BadShape("a::b::c")),
       ),
+    test("a ship number rejects leading zeros and short forms"):
+      val errors = typeCheckErrors("""ship"01.2.3"""")
+      assertTrue(
+        ship"1.4.2" == ShipNumber("1.4.2"),
+        ship"0.1.0".render == "0.1.0",
+        ShipNumber.from("1.2") == Left(ShipNumberError.NotAShip("1.2")),
+        ShipNumber.from("01.2.3") == Left(ShipNumberError.NotAShip("01.2.3")),
+        ShipNumber.from("1.02.3") == Left(ShipNumberError.NotAShip("1.02.3")),
+        ShipNumber.from("") == Left(ShipNumberError.Empty),
+        errors match
+          case e :: _ => e.message.contains("01.2.3")
+          case Nil    => false
+      )
+    ,
     test("a broken dependency literal does not compile"):
       val errors = typeCheckErrors("""dep"nope"""")
       assertTrue:

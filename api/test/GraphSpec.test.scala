@@ -34,6 +34,7 @@ object GraphSpec extends ZIOSpecDefault:
                     Module(_, _, _, _, testDeps, _, _),
                   ),
                   Splits.aggregate,
+                  _,
                 )
               ) =>
             children.map(_.value) == List("core", "tests") &&
@@ -93,12 +94,36 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),
         extra.contains("does not target Native"),
         pin == ClangPin.Major(ClangMajor(21)),
+      )
+    ,
+    test("a ship names the modules that publish its number"):
+      val core  = module("core", Jvm)(scala3)
+      val tests = module("tests", Jvm)(scala3).dependsOn(core)
+      val built = Projects(ships(ship("libs", ship"1.4.2")(core)), core, tests)
+      val shipsOnGraph = built.map(_.catalog.ships.map(row => s"${row.name.value} ${row.number.render} ${row.members.map(_.value).mkString(",")}"))
+      assertTrue(shipsOnGraph == Right(List("libs 1.4.2 core")))
+    ,
+    test("a module is in at most one ship and an aggregate is not a member"):
+      val core  = module("core", Jvm)(scala3)
+      val tests = module("tests", Jvm)(scala3)
+      val root  = aggregate("root", core)
+      val shared = summary(Projects(ships(ship("libs", ship"1.0.0")(core), ship("also", ship"2.0.0")(core)), core))
+      val again  = summary(Projects(ships(ship("libs", ship"1.0.0")(core), ship("libs", ship"2.0.0")(tests)), core, tests))
+      val agg    = summary(Projects(ships(ship("libs", ship"1.0.0")(root)), root, core))
+      val repeat = summary(Projects(ships(ship("libs", ship"1.0.0")(core, core)), core))
+      val absent = summary(Projects(ships(ship("libs", ship"1.0.0")(core))))
+      assertTrue(
+        shared.contains("ship 'libs'") && shared.contains("ship 'also'"),
+        again.contains("declared twice"),
+        agg.contains("aggregate 'root'"),
+        repeat.contains("lists 'core' twice"),
+        absent.contains("core"),
       )
     ,
     test("records a builder position"):

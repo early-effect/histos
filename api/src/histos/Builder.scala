@@ -10,3 +10,4 @@ inline def module(name: String, platform: Platform, platforms: Platform*)(
 /** A root that does not compile. It aggregates the projects it is given. */
 inline def aggregate(name: String, project: ProjectDef, projects: ProjectDef*): AggregateDef =
   ${ BuilderMacro.aggregate('name, 'project, 'projects) }
+

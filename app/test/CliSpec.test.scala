@@ -179,6 +179,43 @@ object CliSpec extends ZIOSpecDefault:
         for done <- invoke(List("run", "inspect"))
         yield assertTrue(done.exit == CliExit.Success && done.out == "core")
     ,
+    test("run versions names an empty catalog"):
+      ZIO.scoped:
+        for done <- invoke(List("run", "versions"))
+        yield assertTrue(done.exit == CliExit.Success && done.out == "no catalog" && done.err.isEmpty)
+    ,
+    test("run versions publishes a checked snapshot and refuses a moved ship"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          _ <- ZIO.attempt {
+                 Files.createDirectories(dir.resolve(".histos"))
+                 Files.writeString(
+                   dir.resolve("histos.scala"),
+                   """import histos.*
+                     |object build extends HistosBuild:
+                     |  def graph =
+                     |    val core = module("core", Jvm)(scala"3.9.0")
+                     |    Projects(ships(ship("libs", ship"1.4.2")(core)), core)
+                     |""".stripMargin,
+                 )
+                 Files.writeString(dir.resolve(".histos").resolve("releases"), "libs matches\n")
+               }.mapError(t => LoadError.Io(LoadIo.Temp))
+          env = Map(
+            "HISTOS_SESSION" -> "snapshot",
+            "HISTOS_SHA" -> "1234567890abcdef1234567890abcdef12345678",
+            "HISTOS_BRANCH" -> "default",
+          )
+          held <- Cli.execute(List("run", "versions"), dir, jar).provideSome[Scope](layers(dir, env))
+          _ <- ZIO.attempt(Files.writeString(dir.resolve(".histos").resolve("releases"), "libs moved\n"))
+            .mapError(t => LoadError.Io(LoadIo.Temp))
+          refused <- Cli.execute(List("run", "versions"), dir, jar).provideSome[Scope](layers(dir, env))
+        yield assertTrue(
+          held.exit == CliExit.Success && held.out.contains("hold already-released") && held.out.contains("1.4.2-ci"),
+          refused.exit == CliExit.TaskFailed && refused.err.contains("has changes since its tag"),
+        )
+    ,
     test("run of an unknown task fails"):
       ZIO.scoped:
         for done <- invoke(List("run", "compile"))

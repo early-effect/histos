@@ -45,6 +45,13 @@ private object LiteralMacro:
         report.errorAndAbort(err)
       case Right(raw) => DepMacro.literal(Expr(raw))
 
+  def shipNumber(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ShipNumber] =
+    onePart(sc, args, "ship") match
+      case Left(err)  =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => histos.version.ShipNumberMacro.literal(Expr(raw))
+
   private def onePart(sc: Expr[StringContext], args: Expr[Seq[Any]], what: String)(using Quotes): Either[String, String] =
     import quotes.reflect.*
     def literal(term: Term): Option[String] =
@@ -87,6 +94,15 @@ private object BuilderMacro:
   )(using Quotes): Expr[AggregateDef] =
     val at = pos
     '{ AggregateDef.make($name, $project :: $projects.toList, $at) }
+
+  def ship(
+      name: Expr[String],
+      number: Expr[histos.version.ShipNumber],
+      member: Expr[ProjectDef],
+      members: Expr[Seq[ProjectDef]],
+  )(using Quotes): Expr[ShipDef] =
+    val at = pos
+    '{ ShipDef.make($name, $number, ::($member, $members.toList), $at) }
 
   private def pos(using Quotes): Expr[SourcePos] =
     import quotes.reflect.Position

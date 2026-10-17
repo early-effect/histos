@@ -1,5 +1,7 @@
 package histos
 
+import histos.version.ShipName
+
 enum BuildError:
   case EmptyName(position: SourcePos)
   case BadName(raw: String, position: SourcePos)
@@ -14,6 +16,12 @@ enum BuildError:
   case Cycle(path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
   case ClangWithoutNative(name: ProjectName, position: SourcePos)
+  case EmptyShipName(position: SourcePos)
+  case BadShipName(raw: String, position: SourcePos)
+  case DuplicateShip(name: ShipName, first: SourcePos, second: SourcePos)
+  case RepeatedShipMember(ship: ShipName, member: ProjectName, position: SourcePos)
+  case AggregateShipMember(ship: ShipName, aggregate: ProjectName, position: SourcePos)
+  case MemberInTwoShips(member: ProjectName, first: ShipName, second: ShipName, position: SourcePos)
 
   def message: String = this match
     case EmptyName(position)                 => s"a project name is not empty (${position.line}:${position.column})"
@@ -38,3 +46,15 @@ enum BuildError:
       s"project '${name.value}' targets Native and does not name a clang major (${position.line}:${position.column})"
     case ClangWithoutNative(name, position)  =>
       s"project '${name.value}' names a clang major and does not target Native (${position.line}:${position.column})"
+    case EmptyShipName(position) =>
+      s"a ship name is not empty (${position.line}:${position.column})"
+    case BadShipName(raw, position) =>
+      s"'$raw' is not a ship name (${position.line}:${position.column})"
+    case DuplicateShip(name, _, second) =>
+      s"ship '${name.value}' is declared twice (${second.line}:${second.column})"
+    case RepeatedShipMember(ship, member, position) =>
+      s"ship '${ship.value}' lists '${member.value}' twice (${position.line}:${position.column})"
+    case AggregateShipMember(ship, aggregate, position) =>
+      s"ship '${ship.value}' lists aggregate '${aggregate.value}' (${position.line}:${position.column})"
+    case MemberInTwoShips(member, first, second, position) =>
+      s"'${member.value}' is in ship '${first.value}' and ship '${second.value}' (${position.line}:${position.column})"
