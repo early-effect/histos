@@ -30,6 +30,16 @@ private object DepMacro:
       case DepKind.Binary => '{ DepKind.Binary }
       case DepKind.Full   => '{ DepKind.Full }
 
+private object RepositoryUrlMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[RepositoryUrl] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("RepositoryUrl(...) takes a literal. Use RepositoryUrl.from at runtime.", raw)
+      case Some(text) =>
+        RepositoryUrl.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ RepositoryUrl.trusted(${ Expr(text) }) }
+
 private object OrganizationMacro:
   def literal(raw: Expr[String])(using Quotes): Expr[Organization] =
     import quotes.reflect.report
@@ -61,6 +71,15 @@ private object LiteralMacro:
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => histos.version.ManualVersionMacro.literal(Expr(raw))
+
+  def maven(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Resolver] =
+    onePart(sc, args, "maven") match
+      case Left(err)  =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) =>
+        val url = RepositoryUrlMacro.literal(Expr(raw))
+        '{ Resolver.Maven($url) }
 
   def organization(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Organization] =
     onePart(sc, args, "organization") match

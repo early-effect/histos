@@ -7,6 +7,7 @@ extension (inline sc: StringContext)
   inline def ship(inline args: Any*): histos.version.ShipNumber      = ${ LiteralMacro.shipNumber('sc, 'args) }
   inline def manual(inline args: Any*): histos.version.ManualVersion = ${ LiteralMacro.declaredVersion('sc, 'args) }
   inline def organization(inline args: Any*): Organization           = ${ LiteralMacro.organization('sc, 'args) }
+  inline def maven(inline args: Any*): Resolver                      = ${ LiteralMacro.maven('sc, 'args) }
 
 /** An early-effect catalog row. The number is the next release. Members are the modules that publish it. */
 inline def ship(name: String, number: histos.version.ShipNumber)(member: ProjectDef, members: ProjectDef*): ShipDef =

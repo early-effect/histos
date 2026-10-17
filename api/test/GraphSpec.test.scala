@@ -38,6 +38,7 @@ object GraphSpec extends ZIOSpecDefault:
                   Splits.aggregate,
                   _,
                   None,
+                  Nil,
                 )
               ) =>
             children.map(_.value) == List("core", "tests") &&
@@ -48,6 +49,23 @@ object GraphSpec extends ZIOSpecDefault:
             testDeps.map(_.value) == List("core") &&
             clang == ClangMajor(21)
           case other => summary(other) == "core module"
+    ,
+    test("a listed repository is not implied to be central, and a repeat is refused"):
+      val core = module("core", Jvm)(scala3)
+      val file = Projects.resolvers(maven"file:///repo")(core)
+      val both = Projects.resolvers(maven"file:///repo", central)(core)
+      val twice = Projects.resolvers(central, central)(core)
+      assertTrue(
+        file match
+          case Right(graph) => graph.resolvers == List(Resolver.Maven(RepositoryUrl("file:///repo")))
+          case Left(_)      => false
+        ,
+        both match
+          case Right(graph) => graph.resolvers == List(Resolver.Maven(RepositoryUrl("file:///repo")), central)
+          case Left(_)      => false
+        ,
+        twice.fold(_.message, _ => "") == "repository central is listed twice",
+      )
     ,
     test("the empty split set is the default"):
       val core = module("core", Jvm)(scala3)
@@ -97,7 +115,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),

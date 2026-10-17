@@ -2,10 +2,10 @@ package histos.publish
 
 import histos.central.Publisher
 import histos.jdk.{JdkMajor, JdkVersion}
-import histos.resolve.{RepoUrl, Repositories, Repository, Resolve, ResolveCell}
+import histos.resolve.{BuildResolvers, Resolve}
 import histos.version.{ManualVersion, ShipNumber}
-import histos.zinc.{CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
-import histos.{Dep, Jvm, Organization, Platform, ProjectName, Projects, ScalaVersion, module}
+import histos.zinc.{GraphCompile, ResolvedJdk}
+import histos.{Dep, Jvm, Organization, Projects, RepositoryUrl, Resolver, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -38,7 +38,7 @@ object PublishSpec extends ZIOSpecDefault:
           lines <- LocalPublish.run(root, built, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo))
           appPom <- ZIO.attempt(Files.readString(repo.resolve("com/example/app_3/1.0.0/app_3-1.0.0.pom")))
           names <- ZIO.attempt(zipNames(repo.resolve("com/example/core_3/1.0.0/core_3-1.0.0.jar")))
-          used <- consume(repo, root.resolve("use"))
+          used <- consume(repo, root.resolve("use"), jdk)
         yield assertTrue(
           lines.map(line => s"${line.group.value} ${line.artifact} ${line.revision}") == List(
             "com.example app_3 1.0.0",
@@ -72,24 +72,19 @@ object PublishSpec extends ZIOSpecDefault:
     ,
   )
 
-  private def consume(repo: Path, work: Path): ZIO[Scope, Throwable, Boolean] =
+  /** The second build names the published directory. Resolve and compile use that list, not Central. */
+  private def consume(repo: Path, work: Path, jdk: ResolvedJdk): ZIO[Scope, Throwable, Boolean] =
     val version = ScalaVersion("3.10.0")
     val dependency = Dep("com.example::core:1.0.0")
-    ZIO.fromEither(RepoUrl.from(repo.toUri.toASCIIString)).mapError(error => new IllegalStateException(error.message)).flatMap: url =>
-      ZIO.fromEither(ProjectName.from("use")).mapError(error => new IllegalStateException(error.message)).flatMap: name =>
-        val cell = ResolveCell(name, List(dependency), version, Platform.Jvm, Repositories(Repository.Maven(url), Nil))
+    ZIO.fromEither(RepositoryUrl.from(repo.toUri.toASCIIString)).mapError(error => new IllegalStateException(error.message)).flatMap: url =>
+      val use = module("use", Jvm)(version).libraryDependencies(dependency)
+      ZIO.fromEither(Projects.resolvers(Resolver.Maven(url))(use)).mapError(error => new IllegalStateException(error.message)).flatMap: graph =>
+        val repositories = BuildResolvers(graph.resolvers)
         for
-          _ <- ZIO.attempt(write(work, "Use.scala", "object Use {\n  def text: String = demo.Hello.greet\n}\n"))
-          classpath <- ZIO.serviceWithZIO[Resolve](_.resolve(cell)).provide(Resolve.live(work.resolve("coursier"))).mapError(error => new IllegalStateException(error.message))
-          compiled <- JvmCompile.compile(CompileRequest(
-                        CompileToolchain(version, Platform.Jvm, jdk, ScalacFlags.empty),
-                        List(work.resolve("Use.scala")),
-                        classpath.artifacts.map(_.path),
-                        work.resolve("classes"),
-                        work.resolve("analysis"),
-                        Nil,
-                      )).mapError(error => new IllegalStateException(error.message))
-        yield Files.isRegularFile(compiled.classes.resolve("Use.class"))
+          _ <- ZIO.attempt(write(work, "src/main/scala/Use.scala", "object Use {\n  def text: String = demo.Hello.greet\n}\n"))
+          _ <- Resolve.update(work, graph, repositories).provide(Resolve.live(work.resolve("coursier"))).mapError(error => new IllegalStateException(error.message))
+          cells <- GraphCompile.run(work, graph, Nil, jdk).provide(Resolve.live(work.resolve("coursier"))).mapError(error => new IllegalStateException(error.message))
+        yield cells.exists(cell => Files.isRegularFile(cell.classes.resolve("Use.class")))
 
   private val library =
     val scalaVersion = ScalaVersion("3.10.0")
