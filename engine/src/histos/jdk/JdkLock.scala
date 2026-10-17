@@ -16,7 +16,7 @@ object Sha256:
 
   def of(bytes: Chunk[Byte]): Sha256 = fromDigest(MessageDigest.getInstance("SHA-256").digest(bytes.toArray))
 
-  private[jdk] def fromDigest(bytes: Array[Byte]): Sha256 =
+  private[histos] def fromDigest(bytes: Array[Byte]): Sha256 =
     bytes.map(b => f"${b & 0xff}%02x").mkString
 
   extension (sha: Sha256) def value: String = sha

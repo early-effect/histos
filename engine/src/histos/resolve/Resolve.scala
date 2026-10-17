@@ -236,11 +236,12 @@ object Resolve:
     yield Classpath(artifacts, locked.evictions)
 
   private[resolve] def prepare(cell: ResolveCell): IO[ResolveError, Unit] =
-    if cell.platform != Platform.Jvm then ZIO.fail(ResolveError.UnsupportedPlatform(cell.platform))
-    else
-      cell.dependencies.find(ranged) match
-        case Some(dependency) => ZIO.fail(ResolveError.Range(dependency))
-        case None             => ZIO.unit
+    cell.platform match
+      case Platform.Native => ZIO.fail(ResolveError.UnsupportedPlatform(Platform.Native))
+      case Platform.Jvm | Platform.Js =>
+        cell.dependencies.find(ranged) match
+          case Some(dependency) => ZIO.fail(ResolveError.Range(dependency))
+          case None             => ZIO.unit
 
   private def locate(cell: ResolveCell, lock: DependencyLock): Either[ResolveError, LockedCell] =
     val drift = ResolveError.LockDrift(cell.module, cell.scalaVersion, cell.platform)
