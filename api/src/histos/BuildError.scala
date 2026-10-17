@@ -16,6 +16,7 @@ enum BuildError:
   case Cycle(path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
   case ClangWithoutNative(name: ProjectName, position: SourcePos)
+  case NativeVersionWithoutNative(name: ProjectName, position: SourcePos)
   case EmptyShipName(position: SourcePos)
   case BadShipName(raw: String, position: SourcePos)
   case DuplicateShip(name: ShipName, first: SourcePos, second: SourcePos)
@@ -49,6 +50,8 @@ enum BuildError:
       s"project '${name.value}' targets Native and does not name a clang major (${position.line}:${position.column})"
     case ClangWithoutNative(name, position)  =>
       s"project '${name.value}' names a clang major and does not target Native (${position.line}:${position.column})"
+    case NativeVersionWithoutNative(name, position) =>
+      s"project '${name.value}' names a Scala Native version and does not target Native (${position.line}:${position.column})"
     case EmptyShipName(position) =>
       s"a ship name is not empty (${position.line}:${position.column})"
     case BadShipName(raw, position) =>

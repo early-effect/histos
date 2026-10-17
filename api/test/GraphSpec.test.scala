@@ -32,8 +32,8 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _),
-                    Module(_, _, _, _, testDeps, _, _, _, _, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _, _),
+                    Module(_, _, _, _, testDeps, _, _, _, _, _, _),
                   ),
                   Splits.aggregate,
                   _,
@@ -55,7 +55,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue(
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None, None)), _, _, _, _)) =>
             main.value == "demo.Check"
           case other => summary(other) == "stored"
         ,
@@ -86,7 +86,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None, None)), _, _, _, _)) =>
             dependencies == List(zioDep) && testDependencies == List(tests)
           case other => summary(other) == "split"
     ,
@@ -150,12 +150,28 @@ object GraphSpec extends ZIOSpecDefault:
       check(Gen.int(2, 6)): n =>
         val message = summary(ring(n))
         assertTrue(message.contains("cycle") && message.contains("p0") && message.contains("p1")),
+    test("a native version belongs on a native module"):
+      val native = Projects(
+        module("core", Native)(scala3).clang(ClangMajor(21)).nativeVersion(NativeVersion("0.5.13-SNAPSHOT")),
+      )
+      val jvm = summary(Projects(module("core", Jvm)(scala3).nativeVersion(NativeVersion("0.5.12"))))
+      assertTrue(
+        native match
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, _, _, _, Some(version))), _, _, _, _)) =>
+            version.value == "0.5.13-SNAPSHOT"
+          case other => summary(other) == "native version"
+        ,
+        jvm.contains("does not target Native"),
+        NativeVersion.from("0.5") == Left(NativeVersionError.Bad("0.5")),
+        NativeVersion.from("latest") == Left(NativeVersionError.Bad("latest")),
+      )
+    ,
     test("a native module names a clang major, and a jvm module does not"):
       val missing = summary(Projects(module("core", Native)(scala3)))
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _)), _, _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _, _)), _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),

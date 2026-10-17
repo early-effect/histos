@@ -30,6 +30,16 @@ private object DepMacro:
       case DepKind.Binary => '{ DepKind.Binary }
       case DepKind.Full   => '{ DepKind.Full }
 
+private object NativeVersionMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[NativeVersion] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("NativeVersion(...) takes a literal. Use NativeVersion.from at runtime.", raw)
+      case Some(text) =>
+        NativeVersion.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ NativeVersion.trusted(${ Expr(text) }) }
+
 private object FrameworkClassMacro:
   def literal(raw: Expr[String])(using Quotes): Expr[FrameworkClass] =
     import quotes.reflect.report

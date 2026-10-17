@@ -1,12 +1,14 @@
 package histos.native
 
 import histos.jdk.Sha256
-import histos.testrun.MainClass
+import histos.testrun.{MainClass, TestClasspath, TestProcess, TestRequest}
 import histos.zinc.{CompileError, CompileOutput, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
-import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{NativeVersion, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
+
+import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, ZIO}
 
@@ -72,7 +74,7 @@ enum NativeDeclaration:
 object NativeProject:
   def declaration(graph: ProjectGraph): NativeDeclaration =
     val pins = graph.projects.flatMap:
-      case histos.Module(name, platforms, _, _, _, _, clang, _, _, _) if platforms.all.contains(Platform.Native) =>
+      case histos.Module(name, platforms, _, _, _, _, clang, _, _, _, _) if platforms.all.contains(Platform.Native) =>
         clang match
           case histos.ClangPin.Major(major) => List(name -> Some(major))
           case histos.ClangPin.Unused       => List(name -> None)
@@ -90,6 +92,7 @@ object NativeProject:
 object NativeLink:
   def link(
       major: histos.ClangMajor,
+      revision: NativeVersion,
       env: Map[String, String],
       sourcesRoot: Path,
       work: Path,
@@ -98,13 +101,13 @@ object NativeLink:
   ): IO[NativeError, Linked] =
     for
       clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
-      toolchain <- ZIO.fromEither(NativeToolchain.fromEnv(env)).mapError(NativeError.Toolchain(_))
-      libs  <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
+      toolchain <- ZIO.fromEither(NativeToolchain.resolve(revision, env)).mapError(NativeError.Toolchain(_))
+      libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
       sources <- histos.zinc.Sources.select(sourcesRoot, JvmCompile.Scala390, Platform.Native).mapError(NativeError.Compile(_))
       digest <- JvmCompile.sourceDigest(sources).mapError(NativeError.Compile(_))
       compiled <- compile(sources, libs, work, jdk).mapError(NativeError.Compile(_))
       hashes <- NativeClasspath.hashes(libs, toolchain.source).mapError(NativeError.Fetch(_))
-      binary <- invoke(clang, main, compiled.classes :: libs.libraries, work).mapError(NativeError.Link(_))
+      binary <- invoke(clang, main, revision, compiled.classes :: libs.libraries, work, jdk, toolchain)
     yield Linked(binary, NativeKey.of(JvmCompile.Scala390, clang.version, clang.target, digest, hashes))
 
   private def compile(
@@ -123,35 +126,70 @@ object NativeLink:
     )
     JvmCompile.compilePrepared(request, List(libs.plugin))
 
-  private def invoke(clang: Clang, main: MainClass, classpath: List[Path], work: Path): IO[LinkError, Path] =
-    ZIO.attemptBlockingInterrupt(run(clang, main, classpath, work)).mapError:
-      case _: InterruptedException => LinkError.Interrupted
-      case other                   => LinkError.Unexpected(other.getClass.getName)
-    .flatMap(ZIO.fromEither)
+  /** Compiles the bridge against this revision's tools, then links in a child JVM. */
+  private def invoke(
+      clang: Clang,
+      main: MainClass,
+      revision: NativeVersion,
+      classpath: List[Path],
+      work: Path,
+      jdk: ResolvedJdk,
+      toolchain: NativeToolchain,
+  ): IO[NativeError, Path] =
+    val bridgeRoot = work.resolve("bridge").resolve(revision.value)
+    val classes = bridgeRoot.resolve("classes")
+    val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("NativeBridge.scala")
+    val child = work.resolve("child")
+    for
+      jars <- NativeClasspath.bridgeJars(toolchain).mapError(NativeError.Fetch(_))
+      _ <- write(source, NativeBridge.source("hello", main.binary, clang.clang, clang.clangpp, classpath))
+      _ <- JvmCompile.compile(CompileRequest(
+             CompileToolchain(JvmCompile.Scala390, Platform.Jvm, jdk, ScalacFlags.empty),
+             List(source),
+             jars,
+             classes,
+             bridgeRoot.resolve("analysis"),
+             Nil,
+           )).mapError(NativeError.Compile(_))
+      _ <- emptyDir(child)
+      bridge <- ZIO.fromEither(MainClass.from(NativeBridge.MainName)).mapError(error => NativeError.Link(LinkError.Linker(error.message)))
+      binary <- TestProcess.run(TestRequest(
+                  Platform.Jvm,
+                  jdk.home.resolve("bin").resolve("java"),
+                  TestClasspath(classes, jars),
+                  bridge,
+                  child,
+                )).mapError(error => NativeError.Link(LinkError.Linker(error.message)))
+      linked <- binary.exit.value match
+        case 0 => readBinary(child.resolve("binary.path"))
+        case _ => ZIO.fail(NativeError.Link(LinkError.Linker(shown(binary.out.text, binary.err.text))))
+    yield linked
 
-  private def run(clang: Clang, main: MainClass, classpath: List[Path], work: Path): Either[LinkError, Path] =
-    try
-      Right(scala.scalanative.util.Scope { scope =>
-        val config = scala.scalanative.build.Config.empty
-          .withLogger(scala.scalanative.build.Logger.nullLogger)
-          .withBaseDir(work)
-          .withModuleName("hello")
-          .withMainClass(Some(main.binary))
-          .withClassPath(classpath)
-          .withCompilerConfig(
-            scala.scalanative.build.NativeConfig.empty
-              .withClang(clang.clang)
-              .withClangPP(clang.clangpp)
-              .withLinkStubs(true)
-              .withOptimize(false)
-              .withMultithreading(false)
-              .withCompileOptions(Seq("-Qunused-arguments"))
-          )
-        scala.scalanative.build.Build.buildCachedAwait(config)(using scope)
-      })
-    catch
-      case _: InterruptedException => Left(LinkError.Interrupted)
-      case error: scala.scalanative.build.BuildException =>
-        Left(LinkError.Linker(Option(error.getMessage).getOrElse("the native linker failed")))
-      case error: scala.scalanative.linker.LinkingException =>
-        Left(LinkError.Linker(Option(error.getMessage).getOrElse("the native linker failed")))
+  private def shown(out: String, err: String): String =
+    val text = List(out, err).filter(_.nonEmpty).mkString("\n")
+    if text.isEmpty then "the native linker failed" else text
+
+  private def readBinary(path: Path): IO[NativeError, Path] =
+    ZIO.attemptBlocking {
+      if Files.isRegularFile(path) then Right(Path.of(Files.readString(path).trim))
+      else Left(NativeError.Link(LinkError.Linker("the native bridge did not write a binary")))
+    }.mapError(_ => NativeError.Link(LinkError.Linker(s"could not read $path"))).flatMap(ZIO.fromEither)
+
+  private def write(path: Path, text: String): IO[NativeError, Unit] =
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      Files.writeString(path, text)
+      ()
+    }.mapError(_ => NativeError.Link(LinkError.Linker(s"could not write $path")))
+
+  private def emptyDir(path: Path): IO[NativeError, Unit] =
+    ZIO.attemptBlocking {
+      if Files.exists(path) then
+        val walk = Files.walk(path)
+        val paths =
+          try walk.iterator.asScala.toList
+          finally walk.close()
+        paths.sortBy(_.getNameCount).reverse.foreach(file => Files.deleteIfExists(file))
+      Files.createDirectories(path)
+      ()
+    }.mapError(_ => NativeError.Link(LinkError.Linker(s"could not prepare $path")))

@@ -3,7 +3,7 @@ package histos.native
 import histos.jdk.{JdkVersion, ReleaseError}
 import histos.testrun.MainClass
 import histos.zinc.{JvmCompile, ResolvedJdk}
-import histos.{ClangMajor, ClangPin, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
+import histos.{ClangMajor, ClangPin, Module, NativeVersion, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -106,28 +106,37 @@ object NativeSpec extends ZIOSpecDefault:
   )
 
   private val toolchain = suite("toolchain")(
-    test("unset HISTOS_NATIVE is the Central release, and an override names its origin"):
-      val ivy = NativeToolchain.fromEnv(Map(NativeToolchain.Key -> "ivy-local@0.5.13-SNAPSHOT"))
-      val file = NativeToolchain.parse("file:///tmp/native@0.5.13-SNAPSHOT")
-      val central = NativeToolchain.fromEnv(Map(NativeToolchain.Key -> "central@0.5.12"))
+    test("unset HISTOS_NATIVE is Central, and the revision stays on the module"):
+      val ivy = NativeToolchain.source(Map(NativeToolchain.Key -> "ivy-local"))
+      val file = NativeToolchain.source(Map(NativeToolchain.Key -> "file:///tmp/native"))
+      val revision = NativeToolchain.source(Map(NativeToolchain.Key -> "ivy-local@0.5.13-SNAPSHOT"))
+      val release = NativeToolchain.resolve(NativeToolchain.ReleaseRevision, Map.empty)
       assertTrue(
-        NativeToolchain.fromEnv(Map.empty) == Right(NativeToolchain.Release),
-        NativeToolchain.Release.revision.value == "0.5.12",
-        ivy == Right(NativeToolchain(NativeSource.IvyLocal, NativeRevision.trusted("0.5.13-SNAPSHOT"))),
+        ivy == Right(NativeSource.IvyLocal),
         file match
-          case Right(NativeToolchain(NativeSource.Maven(_), revision)) => revision.value == "0.5.13-SNAPSHOT"
-          case _                                                        => false
+          case Right(NativeSource.Maven(_)) => true
+          case _                            => false
         ,
-        central.isLeft,
+        revision.isLeft,
         NativeToolchain.parse("").isLeft,
-        NativeToolchain.parse("ivy-local").isLeft,
+        NativeToolchain.parse("central").isLeft,
+        release == Right(NativeToolchain.Release),
+        NativeToolchain.Release.revision.value == "0.5.12",
       )
+    ,
+    test("the engine does not load the native linker"):
+      val loaded =
+        try
+          Class.forName("scala.scalanative.build.Build")
+          true
+        catch case _: ClassNotFoundException => false
+      assertTrue(!loaded)
   )
 
   private val link = suite("link")(
     test("an ivy-local override fetches the snapshot jars"):
       for
-        libs <- NativeClasspath.fetch(NativeToolchain(NativeSource.IvyLocal, NativeRevision.trusted("0.5.13-SNAPSHOT")))
+        libs <- NativeClasspath.fetch(NativeToolchain(NativeSource.IvyLocal, NativeVersion("0.5.13-SNAPSHOT")))
         paths = (libs.plugin :: libs.libraries).map(_.toString)
       yield assertTrue(
         paths.exists(_.contains("0.5.13-SNAPSHOT")),
@@ -137,7 +146,7 @@ object NativeSpec extends ZIOSpecDefault:
     ,
     test("the toolchain jars are the native libraries and the plugin, not tools"):
       for
-        toolchain <- ZIO.fromEither(NativeToolchain.fromEnv(liveEnv))
+        toolchain <- ZIO.fromEither(NativeToolchain.resolve(NativeToolchain.ReleaseRevision, liveEnv))
         libs <- NativeClasspath.fetch(toolchain)
         names = (libs.plugin :: libs.libraries).flatMap(path => Option(path.getFileName).map(_.toString))
       yield assertTrue(
@@ -157,7 +166,7 @@ object NativeSpec extends ZIOSpecDefault:
           found <- ClangProbe.found(liveEnv)
           jdk <- ZIO.fromEither(running)
           main <- ZIO.fromEither(MainClass.from("Hello"))
-          linked <- NativeLink.link(found.version.major, liveEnv, root, root.resolve("work"), jdk, main)
+          linked <- NativeLink.link(found.version.major, NativeToolchain.ReleaseRevision, liveEnv, root, root.resolve("work"), jdk, main)
           ran <- ZIO.attemptBlocking {
                    val process = new ProcessBuilder(linked.binary.toString).redirectErrorStream(true).start()
                    try

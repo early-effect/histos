@@ -71,6 +71,10 @@ object NativeClasspath:
     NativeComponent.Scala3Lib,
   )
 
+  /** `tools`, `nir`, `util`, and the Scala 3 library the bridge runs on. Not the user's classpath. */
+  def bridgeJars(toolchain: NativeToolchain): IO[NativeFetch, List[Path]] =
+    ZIO.attemptBlockingInterrupt(loadBridge(toolchain)).mapError(_ => NativeFetch.Unavailable(toolchain.source)).flatMap(ZIO.fromEither)
+
   def fetch(toolchain: NativeToolchain): IO[NativeFetch, NativeClasspath] =
     ZIO.attemptBlockingInterrupt(load(toolchain)).mapError(_ => NativeFetch.Unavailable(toolchain.source)).flatMap(ZIO.fromEither)
 
@@ -98,6 +102,51 @@ object NativeClasspath:
     publication match
       case Right(published) => published.classifier.nonEmpty
       case Left(variant)    => variant.classifier.nonEmpty
+
+  private def loadBridge(toolchain: NativeToolchain): Either[NativeFetch, List[Path]] =
+    val tools = artifact("tools", toolchain.revision.value)
+    val nir = artifact("nir", toolchain.revision.value)
+    val util = artifact("util", toolchain.revision.value)
+    val library = artifact("scala3-library", JvmCompile.Scala390.value)
+    for
+      linker <- jar(toolchain.source, "org.scala-native", tools, toolchain.revision.value)
+      nirJar <- jar(toolchain.source, "org.scala-native", nir, toolchain.revision.value)
+      utilJar <- jar(toolchain.source, "org.scala-native", util, toolchain.revision.value)
+      scalaLib <- jars(NativeSource.Central, "org.scala-lang", library, JvmCompile.Scala390.value, transitive = true)
+    yield List(linker, nirJar, utilJar) ++ scalaLib
+
+  private def artifact(name: String, revision: String): String =
+    ArtifactName.of(Dep.trusted(if name == "scala3-library" then "org.scala-lang" else "org.scala-native", name, revision, DepKind.Binary), JvmCompile.Scala390, Platform.Jvm)
+
+  private def jar(source: NativeSource, organization: String, name: String, revision: String): Either[NativeFetch, Path] =
+    jars(source, organization, name, revision, transitive = false).flatMap:
+      case path :: Nil => Right(path)
+      case Nil         => Left(NativeFetch.Missing(name, revision))
+      case _           => Left(NativeFetch.Duplicated(name))
+
+  private def jars(
+      source: NativeSource,
+      organization: String,
+      name: String,
+      revision: String,
+      transitive: Boolean,
+  ): Either[NativeFetch, List[Path]] =
+    val dependency = coursier.Dependency(
+      coursier.Module(coursier.Organization(organization), coursier.ModuleName(name)),
+      coursier.version.VersionConstraint(revision),
+    ).copy(transitive = transitive)
+    val got = coursier.Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
+      .noMirrors
+      .withGradleModuleSupport(false)
+      .withRepositories(Seq(repository(source)))
+      .addDependencies(dependency)
+      .eitherResult()
+    got match
+      case Left(_) => Left(NativeFetch.Unavailable(source))
+      case Right(result) =>
+        val found = result.detailedArtifacts0.toList.flatMap: (_, publication, _, file) =>
+          if file.getName.endsWith(".jar") && !classified(publication) then List(file.toPath) else Nil
+        if found.isEmpty then Left(NativeFetch.Missing(name, revision)) else Right(found)
 
   private def repository(source: NativeSource): coursier.core.Repository =
     source match
