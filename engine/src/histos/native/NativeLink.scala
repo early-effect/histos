@@ -2,7 +2,7 @@ package histos.native
 
 import histos.jdk.Sha256
 import histos.testrun.MainClass
-import histos.zinc.{Bootstrap, CompileError, CompileOutput, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
+import histos.zinc.{CompileError, CompileOutput, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
@@ -118,7 +118,7 @@ object NativeLink:
       work.resolve("analysis"),
       Nil,
     )
-    JvmCompile.compilePrepared(request, List(libs.plugin), Bootstrap.JvmScala)
+    JvmCompile.compilePrepared(request, List(libs.plugin))
 
   private def invoke(clang: Clang, main: MainClass, classpath: List[Path], work: Path): IO[LinkError, Path] =
     ZIO.attemptBlockingInterrupt(run(clang, main, classpath, work)).mapError:

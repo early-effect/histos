@@ -8,7 +8,7 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** The binary series of a full Scala version. `3.9.0` is Scala 3. `2.13.16` is Scala 2.13. */
+/** The binary series of a full Scala version. `3.10.0` is Scala 3. `2.13.18` is Scala 2.13. */
 enum ScalaSeries:
   case Scala3
   case Scala2(minor: Int)

@@ -11,12 +11,12 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** The one Scala 2.13 compiler this engine can load. Other patch versions are not this compiler. */
+/** A Scala 2.13 compiler, fetched for the patch a module names. Scala 2.12 and older are not this compiler. */
 object Scala213:
   val version: ScalaVersion = ScalaVersion.trusted("2.13.16")
 
   /**
-   * Fetched off the engine classpath. Scala 3.9 publishes `scala-library` as 3.9.0, and a 2.13
+   * Fetched off the engine classpath. The engine's Scala library is a Scala 3 library, and a 2.13
    * compiler on that classpath breaks Zinc.
    *
    * `runtime` is the only classpath a compiled program may see. `compilerClasspath` is the
@@ -48,8 +48,8 @@ object Scala213:
         ClassLoader.getPlatformClassLoader,
       )
 
-  private[zinc] def jars: IO[CompileError, Toolchain] =
-    ZIO.attemptBlockingInterrupt(fetch()).mapError(_ => CompileError.Toolchain(ToolchainMiss.Fetch)).flatMap(ZIO.fromEither)
+  private[zinc] def jars(scalaVersion: ScalaVersion): IO[CompileError, Toolchain] =
+    ZIO.attemptBlockingInterrupt(fetch(scalaVersion)).mapError(_ => CompileError.Toolchain(ToolchainMiss.Fetch(scalaVersion))).flatMap(ZIO.fromEither)
 
   private val Organization = coursier.Organization("org.scala-lang")
   private val LibraryProperties = "library.properties"
@@ -64,10 +64,10 @@ object Scala213:
       case Reflect  => "scala-reflect"
       case Bridge   => "scala2-sbt-bridge"
 
-    def dependency: coursier.core.Dependency =
+    def dependency(scalaVersion: ScalaVersion): coursier.core.Dependency =
       coursier.Dependency(
         coursier.Module(Organization, coursier.ModuleName(artifact)),
-        coursier.version.VersionConstraint(version.value),
+        coursier.version.VersionConstraint(scalaVersion.value),
       )
 
   private enum Role:
@@ -89,53 +89,53 @@ object Scala213:
       case JLine => Role.JLine
       case Diff  => Role.Diff
 
-  private def fetch(): Either[CompileError, Toolchain] =
+  private def fetch(scalaVersion: ScalaVersion): Either[CompileError, Toolchain] =
     val files = coursier.cache.FileCache()
     val got = coursier.Fetch(files)(using coursier.util.Task.sync)
       .noMirrors
       .withGradleModuleSupport(false)
-      .addDependencies(ToolModule.values.toSeq.map(_.dependency)*)
+      .addDependencies(ToolModule.values.toSeq.map(_.dependency(scalaVersion))*)
       .eitherResult()
     got match
-      case Left(_)       => Left(CompileError.Toolchain(ToolchainMiss.Fetch))
-      case Right(result) => assemble(result.files.map(_.toPath).toList)
+      case Left(_)       => Left(CompileError.Toolchain(ToolchainMiss.Fetch(scalaVersion)))
+      case Right(result) => assemble(scalaVersion, result.files.map(_.toPath).toList)
 
-  private def assemble(paths: List[Path]): Either[CompileError, Toolchain] =
-    val inspected = paths.map(inspect)
+  private def assemble(scalaVersion: ScalaVersion, paths: List[Path]): Either[CompileError, Toolchain] =
+    val inspected = paths.map(path => inspect(scalaVersion, path))
     inspected.collect { case Inspected.Foreign(path) => path } match
       case Nil =>
         val known = inspected.collect { case Inspected.Jar(path, role) => role -> path }
         for
-          library  <- one(known, CompilerPart.Library, Role.Library)
-          compiler <- one(known, CompilerPart.Compiler, Role.Compiler)
-          reflect  <- one(known, CompilerPart.Reflect, Role.Reflect)
-          bridge   <- one(known, CompilerPart.Bridge, Role.Bridge)
+          library  <- one(scalaVersion, known, CompilerPart.Library, Role.Library)
+          compiler <- one(scalaVersion, known, CompilerPart.Compiler, Role.Compiler)
+          reflect  <- one(scalaVersion, known, CompilerPart.Reflect, Role.Reflect)
+          bridge   <- one(scalaVersion, known, CompilerPart.Bridge, Role.Bridge)
         yield
           val support = known.collect:
             case (Role.JLine, path) => path
             case (Role.Diff, path)  => path
           Toolchain.load(library, compiler, reflect, bridge, support)
       case foreign =>
-        Left(CompileError.Toolchain(ToolchainMiss.Unexpected(foreign)))
+        Left(CompileError.Toolchain(ToolchainMiss.Unexpected(scalaVersion, foreign)))
 
-  private def one(known: List[(Role, Path)], part: CompilerPart, role: Role): Either[CompileError, Path] =
+  private def one(scalaVersion: ScalaVersion, known: List[(Role, Path)], part: CompilerPart, role: Role): Either[CompileError, Path] =
     known.collect { case (`role`, path) => path } match
       case path :: Nil => Right(path)
-      case Nil         => Left(CompileError.Toolchain(ToolchainMiss.Missing(part)))
-      case _           => Left(CompileError.Toolchain(ToolchainMiss.Duplicated(part)))
+      case Nil         => Left(CompileError.Toolchain(ToolchainMiss.Missing(scalaVersion, part)))
+      case _           => Left(CompileError.Toolchain(ToolchainMiss.Duplicated(scalaVersion, part)))
 
-  private def inspect(path: Path): Inspected =
+  private def inspect(scalaVersion: ScalaVersion, path: Path): Inspected =
     open(path): zip =>
-      roleOf(zip) match
+      roleOf(scalaVersion, zip) match
         case Some(role) => Inspected.Jar(path, role)
         case None       => Inspected.Foreign(path)
     .getOrElse(Inspected.NotJar)
 
-  private def roleOf(zip: ZipFile): Option[Role] =
+  private def roleOf(scalaVersion: ScalaVersion, zip: ZipFile): Option[Role] =
     if ClassMarker.XsbtBridge.present(zip) then Some(Role.Bridge)
     else if ClassMarker.NscGlobal.present(zip) then Some(Role.Compiler)
     else if ClassMarker.JavaUniverse.present(zip) then Some(Role.Reflect)
-    else if libraryVersion(zip).contains(version) then Some(Role.Library)
+    else if libraryVersion(zip).contains(scalaVersion) then Some(Role.Library)
     else Support.values.collectFirst { case support if hasClass(zip, support.prefix) => support.role }
 
   private def hasClass(zip: ZipFile, prefix: String): Boolean =

@@ -5,7 +5,7 @@ import histos.schedule.{Action, ActionId, Input, InputName, InputValue}
 import histos.task.TaskKind
 import histos.{Platform, ScalaVersion}
 
-import java.net.{URI, URL, URLClassLoader}
+import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.Optional
@@ -68,28 +68,33 @@ object CompileDiagnostic:
 
 /** A jar the Scala 2.13 toolchain must contain exactly once. */
 enum CompilerPart:
-  case Library, Compiler, Reflect, Bridge
+  case Library, Compiler, Reflect, Bridge, Scala3Compiler, Scala3Bridge, Scala3Library
 
   def label: String = this match
-    case Library  => "scala-library"
-    case Compiler => "scala-compiler"
-    case Reflect  => "scala-reflect"
-    case Bridge   => "scala2-sbt-bridge"
+    case Library        => "scala-library"
+    case Compiler       => "scala-compiler"
+    case Reflect        => "scala-reflect"
+    case Bridge         => "scala2-sbt-bridge"
+    case Scala3Compiler => "scala3-compiler"
+    case Scala3Bridge   => "scala3-sbt-bridge"
+    case Scala3Library  => "scala3-library"
 
-/** Why the Scala 2.13 compiler could not be loaded. */
+/** Why the compiler a module named could not be loaded. */
 enum ToolchainMiss:
-  case Fetch
-  case Missing(part: CompilerPart)
-  case Duplicated(part: CompilerPart)
-  case Unexpected(jars: List[Path])
+  case Fetch(version: ScalaVersion)
+  case Missing(version: ScalaVersion, part: CompilerPart)
+  case Duplicated(version: ScalaVersion, part: CompilerPart)
+  case Unexpected(version: ScalaVersion, jars: List[Path])
+  case Library(requested: ScalaVersion, found: ScalaVersion)
 
   def message: String = this match
-    case Fetch              => "the Scala 2.13 compiler could not be fetched"
-    case Missing(part)      => s"the Scala 2.13 fetch has no ${part.label}"
-    case Duplicated(part)   => s"the Scala 2.13 fetch has more than one ${part.label}"
-    case Unexpected(jars)   =>
+    case Fetch(version)            => s"the ${version.value} compiler could not be fetched"
+    case Missing(version, part)    => s"the ${version.value} fetch has no ${part.label}"
+    case Duplicated(version, part) => s"the ${version.value} fetch has more than one ${part.label}"
+    case Unexpected(version, jars) =>
       val names = jars.map(path => Option(path.getFileName).map(_.toString).getOrElse(path.toString))
-      s"the Scala 2.13 fetch included ${names.mkString(", ")}"
+      s"the ${version.value} fetch included ${names.mkString(", ")}"
+    case Library(requested, found) => s"the ${requested.value} fetch brought Scala library ${found.value}"
 
 enum CompileError:
   case UnsupportedPlatform(platform: Platform)
@@ -97,18 +102,16 @@ enum CompileError:
   case NoSources
   case Banned(path: Path, ban: ClasspathBan)
   case Failed(diagnostics: List[CompileDiagnostic])
-  case NoBridge
   case Toolchain(miss: ToolchainMiss)
   case Io(op: CompileIo)
 
   def message: String = this match
     case UnsupportedPlatform(platform) => s"compile does not support $platform"
     case UnsupportedScala(version)     =>
-      s"compile supports ${JvmCompile.Scala390.value} and ${Scala213.version.value}, not ${version.value}"
+      s"compile supports Scala 3 and Scala 2.13, not ${version.value}"
     case NoSources                     => "compile has no sources"
     case Banned(path, ban)             => s"$path is ${ban.label} and is not a user dependency"
     case Failed(diagnostics)           => diagnostics.map(_.text).mkString("\n")
-    case NoBridge                      => "the Scala 3 compiler bridge is not on the engine classpath"
     case Toolchain(miss)               => miss.message
     case Io(op)                        => s"compile failed while ${op.label}"
 
@@ -149,10 +152,6 @@ object CompileKey:
   def action(id: ActionId, key: Sha256): Action =
     Action(id, TaskKind.Compile, List(Input(InputName.trusted("compile"), InputValue.Hash(key))), Nil)
 
-enum Bootstrap:
-  case JvmScala
-  case Provided(jars: List[Path])
-
 object JvmCompile:
   val Scala390: ScalaVersion = ScalaVersion.trusted("3.9.0")
 
@@ -161,19 +160,17 @@ object JvmCompile:
   def compile(request: CompileRequest): IO[CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
-    else if tool.version != Scala390 && tool.version != Scala213.version then
-      ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else compilePrepared(request, Nil, Bootstrap.JvmScala)
+    else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
+    else compilePrepared(request, Nil)
 
-  /** Scala 3 compile with toolchain plugins. The plugins are not user dependencies. */
+  /** Compile with the Scala compiler the request names. Plugins are not user dependencies. */
   private[histos] def compilePrepared(
       request: CompileRequest,
       plugins: List[Path],
-      bootstrap: Bootstrap,
   ): IO[CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg), bootstrap))
+       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg)))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -211,31 +208,48 @@ object JvmCompile:
       }.mapError(_ => CompileError.Io(CompileIo.Read))
     .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
 
-  private def invoke(request: CompileRequest, extra: List[String], bootstrap: Bootstrap): IO[CompileError, CompileOutput] =
-    if request.toolchain.version == Scala213.version then invoke213(request)
-    else ZIO.attemptBlockingInterrupt(runZinc3(request, extra, bootstrap)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+  /** Scala 3, any patch. Scala 2.13, any patch. Nothing older. */
+  private def supported(version: ScalaVersion): Boolean =
+    ScalaSeries.of(version) match
+      case Some(ScalaSeries.Scala3)     => true
+      case Some(ScalaSeries.Scala2(13)) => true
+      case _                            => false
+
+  private def invoke(request: CompileRequest, extra: List[String]): IO[CompileError, CompileOutput] =
+    val version = request.toolchain.version
+    ScalaSeries.of(version) match
+      case Some(ScalaSeries.Scala3) =>
+        Scala3.jars(version).flatMap: toolchain =>
+          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+      case Some(ScalaSeries.Scala2(13)) =>
+        invoke213(request)
+      case _ =>
+        ZIO.fail(CompileError.UnsupportedScala(version))
 
   private def invoke213(request: CompileRequest): IO[CompileError, CompileOutput] =
-    Scala213.jars.flatMap: jars =>
+    Scala213.jars(request.toolchain.version).flatMap: jars =>
       ZIO.attemptBlockingInterrupt(runZinc213(request, jars)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
 
-  private def runZinc3(request: CompileRequest, extra: List[String], bootstrap: Bootstrap): Either[CompileError, CompileOutput] =
-    val libraries = bootstrap match
-      case Bootstrap.JvmScala       => libraryJars
-      case Bootstrap.Provided(jars) => jars
-    val compiler  = codeSource(classOf[dotty.tools.dotc.Driver]).toList
-    bridgeJar match
-      case None                                              => Left(CompileError.NoBridge)
-      case Some(_) if libraries.isEmpty || compiler.isEmpty => Left(CompileError.Io(CompileIo.Bridge))
-      case Some(bridge)                                      =>
-        compileOne(request, Scala390, bridge, libraries, compiler, getClass.getClassLoader, extra)
+  private def runZinc3(request: CompileRequest, extra: List[String], toolchain: Scala3.Toolchain): Either[CompileError, CompileOutput] =
+    val loader = toolchain.openLoader(getClass.getClassLoader)
+    try
+      compileOne(
+        request,
+        request.toolchain.version,
+        toolchain.bridgeJar,
+        toolchain.runtime,
+        toolchain.compilerClasspath,
+        loader,
+        extra,
+      )
+    finally loader.close()
 
   private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader()
     try
       compileOne(
         request,
-        Scala213.version,
+        request.toolchain.version,
         toolchain.bridgeJar,
         toolchain.runtime,
         toolchain.compilerClasspath,
@@ -320,31 +334,6 @@ object JvmCompile:
       val walk = Files.walk(root)
       try walk.iterator.asScala.count(path => Option(path.getFileName).exists(_.toString.endsWith(".class")))
       finally walk.close()
-
-  private def bridgeJar: Option[Path] =
-    val loader = getClass.getClassLoader
-    loader.getResources(ClassMarker.DottyBridge.entry).asScala.toList.flatMap(jarOf).headOption
-
-  private def libraryJars: List[Path] =
-    List(classOf[scala.collection.immutable.List[?]], classOf[scala.quoted.Quotes]).flatMap(codeSource).distinct
-
-  private def codeSource(cls: Class[?]): Option[Path] =
-    Option(cls.getProtectionDomain).flatMap(domain => Option(domain.getCodeSource)).flatMap: source =>
-      Option(source.getLocation).flatMap(jarOf)
-
-  private def jarOf(url: URL): Option[Path] =
-    url.getProtocol match
-      case "jar" =>
-        val spec = url.getPath
-        val bang = spec.indexOf('!')
-        if bang <= 0 then None
-        else
-          try Some(Path.of(URI.create(spec.substring(0, bang))))
-          catch case _: IllegalArgumentException | _: java.net.URISyntaxException => None
-      case "file" =>
-        try Some(Path.of(url.toURI))
-        catch case _: IllegalArgumentException | _: java.net.URISyntaxException => None
-      case _ => None
 
 private final class CollectingReporter extends xsbti.Reporter:
   private var found: List[xsbti.Problem] = Nil

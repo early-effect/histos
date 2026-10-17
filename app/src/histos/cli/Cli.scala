@@ -12,6 +12,7 @@ import histos.resolve.{Repositories, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
 import histos.workflow.{TestTarget, Workflow, WorkflowAction}
+import histos.zinc.{CompiledCell, GraphCompile}
 import histos.{Aggregate, Module, Project}
 
 import java.nio.file.Path
@@ -24,6 +25,7 @@ enum Command:
   case Graph
   case Run(id: TaskId)
   case Test(projects: List[String])
+  case Compile(projects: List[String])
   case Mcp
   case Acp
   case Toolchain
@@ -51,7 +53,7 @@ enum CliParseError:
     case BadTaskId                        => "a task id is not empty"
 
 enum CliExit:
-  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed, TestFailed
+  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed, TestFailed, CompileFailed
 
   def code: Int = this match
     case Success         => 0
@@ -62,6 +64,7 @@ enum CliExit:
     case ResolveFailed   => 5
     case WorkflowFailed  => 6
     case TestFailed      => 7
+    case CompileFailed   => 8
 
 final case class Completed(exit: CliExit, out: String, err: String)
 
@@ -69,7 +72,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | test [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -83,6 +86,7 @@ object Cli:
           case Command.Graph            => graph(repo, apiJar)
           case Command.Run(id)          => run(repo, apiJar, id)
           case Command.Test(projects)   => test(repo, apiJar, projects)
+          case Command.Compile(projects) => compile(repo, apiJar, projects)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
           case Command.Toolchain        => toolchain(repo, apiJar)
@@ -111,6 +115,22 @@ object Cli:
                 yield Completed(CliExit.Success, out.text, "")
               .provide(Tasks.live(loaded.graph, runners))
               .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+
+  private def compile(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+      case Right(loaded) =>
+        GraphCompile.jdkHere.flatMap(jdk => GraphCompile.run(repo, loaded.graph, projects, jdk)).mapBoth(
+          error => Completed(CliExit.CompileFailed, "", error.message),
+          cells => Completed(CliExit.Success, cells.map(cell => compiledLine(repo, cell)).mkString("\n"), ""),
+        ).merge
+
+  /** `<module> <scala> jvm <class files> <classes dir>`. The directory is the classpath root, relative to the repo. */
+  private def compiledLine(repo: Path, cell: CompiledCell): String =
+    val base = repo.toAbsolutePath.normalize
+    val full = cell.classes.toAbsolutePath.normalize
+    val shown = (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
+    s"${cell.module.value} ${cell.version.value} jvm ${cell.classFiles} $shown"
 
   /** Selected modules, then the lock. This does not claim a test framework ran. */
   private def test(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =

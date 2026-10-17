@@ -79,7 +79,7 @@ object SchedulerSpec extends ZIOSpecDefault:
         exit    <- fiber.await
       yield assertTrue(exit.isInterrupted),
     test("a cache hit does not run locally"):
-      val hit = new ActionCache:
+      val hit: ActionCache = new ActionCache:
         def get(digest: Digest): UIO[Option[String]] = ZIO.some("cached")
       (for
         called <- Ref.make(false)

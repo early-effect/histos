@@ -2,7 +2,7 @@ package histos.zinc
 
 import histos.jdk.{JdkVersion, ReleaseError}
 import histos.testrun.{MainClass, TestClasspath, TestProcess, TestRequest}
-import histos.Platform
+import histos.{Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -67,7 +67,7 @@ object Scala213Spec extends ZIOSpecDefault:
           _ <- ZIO.attempt(write(root, "scala-2.13/Hello.scala", hello))
           _ <- ZIO.attempt(write(root, "scala-3/Later.scala", "enum Later { case A }\n"))
           sources <- Sources.select(root, v213, Platform.Jvm)
-          found <- Scala213.jars
+          found <- Scala213.jars(v213)
           jdk <- ZIO.fromEither(running)
           classes = root.resolve("classes")
           compiled <- JvmCompile.compile(CompileRequest(
@@ -109,7 +109,7 @@ object Scala213Spec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          found <- Scala213.jars
+          found <- Scala213.jars(v213)
           jdk <- ZIO.fromEither(running)
           compiler = found.compiler
           out <- JvmCompile.compile(CompileRequest(
@@ -152,6 +152,32 @@ object Scala213Spec extends ZIOSpecDefault:
                     |object runtime is not a member of package reflect
                     |object jline is not a member of package org
                     |object github is not a member of package com""".stripMargin,
+        )
+    ,
+    test("2.13.18 compiles"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- ZIO.attempt(write(root, "Hello.scala", "object Hello { def greet: String = \"hi\" }\n"))
+          found <- Scala213.jars(ScalaVersion.trusted("2.13.18"))
+          jdk <- ZIO.fromEither(running)
+          compiled <- JvmCompile.compile(CompileRequest(
+                        CompileToolchain(ScalaVersion.trusted("2.13.18"), Platform.Jvm, jdk, ScalacFlags.empty),
+                        List(root.resolve("Hello.scala")),
+                        Nil,
+                        root.resolve("classes"),
+                        root.resolve("analysis"),
+                        Nil,
+                      ))
+          names <- ZIO.attempt {
+                     val walk = Files.walk(compiled.classes)
+                     try
+                       walk.iterator.asScala.filter(Files.isRegularFile(_)).map(path => compiled.classes.relativize(path).toString).toList.sorted
+                     finally walk.close()
+                   }
+        yield assertTrue(
+          found.runtime == List(found.library),
+          names == List("Hello$.class", "Hello.class"),
         )
   )
 
