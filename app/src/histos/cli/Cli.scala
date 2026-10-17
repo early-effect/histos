@@ -320,7 +320,7 @@ object Cli:
 
   private def render(projects: List[Project]): String =
     projects.map:
-      case Module(name, platforms, versions, _, _, _, _, _) =>
+      case Module(name, platforms, versions, _, _, _, _, _, _) =>
         s"${name.value} ${platforms.all.map(_.toString.toLowerCase).mkString(",")} ${versions.all.map(_.value).mkString(",")}"
       case Aggregate(name, children, _) =>
         s"${name.value} aggregate ${children.map(_.value).mkString(",")}"

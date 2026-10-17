@@ -32,8 +32,8 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _),
-                    Module(_, _, _, _, testDeps, _, _, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _),
+                    Module(_, _, _, _, testDeps, _, _, _, _),
                   ),
                   Splits.aggregate,
                   _,
@@ -55,7 +55,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue(
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main))), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil)), _, _, _, _)) =>
             main.value == "demo.Check"
           case other => summary(other) == "stored"
         ,
@@ -63,6 +63,16 @@ object GraphSpec extends ZIOSpecDefault:
         TestMain.from("") == Left(TestMainError.Empty),
         TestMain.from("1bad") == Left(TestMainError.Bad("1bad")),
       )
+    ,
+    test("test dependencies stay off the compile classpath"):
+      val tests = dep"dev.zio::zio-test:2.1.27"
+      val core = module("core", Jvm)(scala3).libraryDependencies(zioDep).testDependencies(tests)
+      val built = Projects(core)
+      assertTrue:
+        built match
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies)), _, _, _, _)) =>
+            dependencies == List(zioDep) && testDependencies == List(tests)
+          case other => summary(other) == "split"
     ,
     test("a listed repository is not implied to be central, and a repeat is refused"):
       val core = module("core", Jvm)(scala3)
@@ -129,7 +139,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _)), _, _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _)), _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),

@@ -20,24 +20,30 @@ final case class ModuleDef private (
     platforms: Platforms,
     versions: ScalaVersions,
     dependencies: List[Dep],
+    testDependencies: List[Dep],
     dependsOn: List[ProjectDef],
     clang: ClangPin,
     test: Option[TestMain],
     position: SourcePos,
 ) extends ProjectDef:
+  /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, dependsOn, clang, test, position)
+    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, testDependencies, dependsOn, clang, test, position)
+
+  /** Test classpath only. Compile does not see them, and publish does not write them. */
+  def testDependencies(deps: Dep*): ModuleDef =
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies ++ deps.toList, dependsOn, clang, test, position)
 
   def dependsOn(projects: ProjectDef*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, dependsOn ++ projects.toList, clang, test, position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn ++ projects.toList, clang, test, position)
 
   /** The clang major this Native module must find on `PATH`. */
   def clang(major: ClangMajor): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, dependsOn, ClangPin.Major(major), test, position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, ClangPin.Major(major), test, position)
 
   /** The one main `histos test` runs. There is no test framework behind it. */
   def test(main: TestMain): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, dependsOn, clang, Some(main), position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, Some(main), position)
 
 object ModuleDef:
   /** Spliced by `module`. Source code outside this package cannot call it. */
@@ -47,7 +53,7 @@ object ModuleDef:
       versions: ScalaVersions,
       position: SourcePos,
   ): ModuleDef =
-    new ModuleDef(name, platforms, versions, Nil, Nil, ClangPin.Unused, None, position)
+    new ModuleDef(name, platforms, versions, Nil, Nil, Nil, ClangPin.Unused, None, position)
 
 final case class AggregateDef private (
     name: String,

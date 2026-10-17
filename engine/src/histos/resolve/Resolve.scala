@@ -106,6 +106,7 @@ final case class ResolveCell(
     scalaVersion: ScalaVersion,
     platform: Platform,
     repositories: Repositories,
+    scope: ClasspathScope = ClasspathScope.Compile,
 )
 
 final case class ResolvedArtifact(
@@ -125,12 +126,13 @@ enum RepositoryIo:
   case Read, Fetch, Metadata, Write
 
 enum LockField:
-  case Cell, Direct, Artifact, Evict
+  case Cell, Test, Direct, Artifact, Evict
 
 object LockField:
   def from(raw: String): Option[LockField] =
     raw match
       case "cell"     => Some(LockField.Cell)
+      case "test"     => Some(LockField.Test)
       case "direct"   => Some(LockField.Direct)
       case "artifact" => Some(LockField.Artifact)
       case "evict"    => Some(LockField.Evict)
@@ -139,6 +141,7 @@ object LockField:
   def token(field: LockField): String =
     field match
       case LockField.Cell     => "cell"
+      case LockField.Test     => "test"
       case LockField.Direct   => "direct"
       case LockField.Artifact => "artifact"
       case LockField.Evict    => "evict"
@@ -146,7 +149,7 @@ object LockField:
 enum LockError:
   case Empty
   case BadLine(line: String)
-  case DuplicateCell(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform)
+  case DuplicateCell(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform, scope: ClasspathScope)
   case Missing(field: LockField)
   case BadSha256(raw: String)
   case BadRepository(raw: String)
@@ -154,8 +157,8 @@ enum LockError:
   def message: String = this match
     case Empty => "dependency lock is empty"
     case BadLine(line) => s"dependency lock line is not a field: $line"
-    case DuplicateCell(module, version, platform) =>
-      s"dependency lock repeats ${module.value} ${version.value} ${PlatformToken.render(platform)}"
+    case DuplicateCell(module, version, platform, scope) =>
+      s"dependency lock repeats ${scope.header} ${module.value} ${version.value} ${PlatformToken.render(platform)}"
     case Missing(field)       => s"dependency lock is missing ${LockField.token(field)}"
     case BadSha256(raw)       => s"dependency lock sha256 is not 64 hex digits: $raw"
     case BadRepository(raw)   => s"dependency lock repository is not central, ivy-local, or a maven url: $raw"
@@ -164,7 +167,7 @@ enum ResolveError:
   case Range(dependency: Dep)
   case NotFound(organization: String, name: String, revision: String)
   case Checksum(path: Path, expected: Sha256, actual: Sha256)
-  case LockDrift(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform)
+  case LockDrift(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform, scope: ClasspathScope)
   case NoLock(path: Path)
   case UnsupportedPlatform(platform: Platform)
   case Lock(error: LockError)
@@ -174,8 +177,8 @@ enum ResolveError:
     case ResolveError.Range(dependency) => s"${shown(dependency)} is not an exact revision"
     case ResolveError.NotFound(organization, name, revision) => s"$organization:$name:$revision was not found"
     case ResolveError.Checksum(path, _, _) => s"checksum of $path does not match the lock"
-    case ResolveError.LockDrift(module, version, platform) =>
-      s"${module.value} ${version.value} ${PlatformToken.render(platform)} does not match the dependency lock"
+    case ResolveError.LockDrift(module, version, platform, scope) =>
+      s"${scope.header} ${module.value} ${version.value} ${PlatformToken.render(platform)} does not match the dependency lock"
     case ResolveError.NoLock(path)                  => s"no dependency lock at $path"
     case ResolveError.UnsupportedPlatform(platform) => s"resolve does not fetch ${PlatformToken.render(platform)}"
     case ResolveError.Lock(error)                   => error.message
@@ -201,14 +204,26 @@ object Resolve:
   def lockPath(repo: Path): Path =
     repo.resolve(".histos").resolve("dependencies.lock")
 
-  /** Aggregates have no cell. Order is graph order, then platform, then Scala version. */
+  /** Aggregates have no cell. Order is graph order, then platform, then Scala version. A test cell follows its compile cell. */
   def cells(graph: ProjectGraph, repositories: Repositories): List[ResolveCell] =
     graph.projects.flatMap:
       case Aggregate(_, _, _) => Nil
-      case Module(name, platforms, versions, dependencies, _, _, _, _) =>
+      case Module(name, platforms, versions, dependencies, _, _, _, _, testDependencies) =>
         platforms.all.flatMap: platform =>
-          versions.all.map: version =>
-            ResolveCell(name, dependencies, version, platform, repositories)
+          versions.all.flatMap: version =>
+            val compile = ResolveCell(name, dependencies, version, platform, repositories, ClasspathScope.Compile)
+            val tests =
+              if testDependencies.isEmpty then Nil
+              else
+                List(ResolveCell(
+                  name,
+                  dependencies ++ testDependencies,
+                  version,
+                  platform,
+                  repositories,
+                  ClasspathScope.Test,
+                ))
+            compile :: tests
 
   def verify(repo: Path, graph: ProjectGraph, repositories: Repositories): ZIO[Resolve, ResolveError, String] =
     val planned = cells(graph, repositories)
@@ -263,14 +278,14 @@ object Resolve:
           case None             => ZIO.unit
 
   private def locate(cell: ResolveCell, lock: DependencyLock): Either[ResolveError, LockedCell] =
-    val drift = ResolveError.LockDrift(cell.module, cell.scalaVersion, cell.platform)
+    val drift = drifted(cell)
     lock.cells.find(same(cell)) match
       case None                                   => Left(drift)
       case Some(locked) if locked.directs != directs(cell) => Left(drift)
       case Some(locked)                           => Right(locked)
 
   private def agree(cell: ResolveCell, fresh: Classpath, locked: LockedCell): Either[ResolveError, Unit] =
-    val drift = ResolveError.LockDrift(cell.module, cell.scalaVersion, cell.platform)
+    val drift = drifted(cell)
     val got   = fresh.artifacts.map(artifact => (artifact.organization, artifact.name, artifact.revision, artifact.repository))
     val want  = locked.artifacts.map(artifact => (artifact.organization, artifact.name, artifact.revision, artifact.repository))
     if got != want || fresh.evictions != locked.evictions then Left(drift)
@@ -292,6 +307,7 @@ object Resolve:
         LockedArtifact(artifact.organization, artifact.name, artifact.revision, artifact.sha256, artifact.repository),
       ),
       classpath.evictions,
+      cell.scope,
     )
 
   private def directs(cell: ResolveCell): List[LockedDirect] =
@@ -300,10 +316,19 @@ object Resolve:
     )
 
   private def same(cell: ResolveCell)(locked: LockedCell): Boolean =
-    locked.module == cell.module && locked.scalaVersion == cell.scalaVersion && locked.platform == cell.platform
+    locked.module == cell.module &&
+      locked.scalaVersion == cell.scalaVersion &&
+      locked.platform == cell.platform &&
+      locked.scope == cell.scope
+
+  private def drifted(cell: ResolveCell): ResolveError =
+    ResolveError.LockDrift(cell.module, cell.scalaVersion, cell.platform, cell.scope)
 
   private def describe(cell: ResolveCell): String =
-    s"${cell.module.value} ${cell.scalaVersion.value} ${PlatformToken.render(cell.platform)}"
+    val base = s"${cell.module.value} ${cell.scalaVersion.value} ${PlatformToken.render(cell.platform)}"
+    cell.scope match
+      case ClasspathScope.Compile => base
+      case ClasspathScope.Test    => s"$base test"
 
   private def ranged(dependency: Dep): Boolean =
     val revision = dependency.revision

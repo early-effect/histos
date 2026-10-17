@@ -1,7 +1,7 @@
 package histos.testrun
 
 import histos.jdk.Sha256
-import histos.resolve.{BuildResolvers, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.workflow.{CiError, TestTarget, Workflow}
 import histos.zinc.{
   CompileError,
@@ -201,7 +201,10 @@ object ModuleTest:
       lock: DependencyLock,
       repositories: Repositories,
   ): ZIO[Resolve, ResolveError, Fetched] =
-    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories)
+    val (dependencies, scope) =
+      if module.testDependencies.isEmpty then (module.dependencies, ClasspathScope.Compile)
+      else (module.dependencies ++ module.testDependencies, ClasspathScope.Test)
+    val cell = ResolveCell(module.name, dependencies, version, Platform.Jvm, repositories, scope)
     Resolve.materialize(cell, lock).map(fetched => Fetched(fetched.artifacts.map(_.path), fetched.artifacts.map(_.sha256)))
 
   private def readLock(repo: Path): IO[ModuleTestError, DependencyLock] =

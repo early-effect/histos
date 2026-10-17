@@ -47,6 +47,7 @@ object PublishSpec extends ZIOSpecDefault:
           names.contains("demo/Hello.class"),
           names.contains("demo/Hello.tasty"),
           appPom.contains("<artifactId>core_3</artifactId>"),
+          !appPom.contains("zio-test"),
           appPom.contains("<version>1.0.0</version>"),
           used,
         )
@@ -89,7 +90,7 @@ object PublishSpec extends ZIOSpecDefault:
   private val library =
     val scalaVersion = ScalaVersion("3.10.0")
     val core = module("core", Jvm)(scalaVersion)
-    val app = module("app", Jvm)(scalaVersion).dependsOn(core)
+    val app = module("app", Jvm)(scalaVersion).dependsOn(core).testDependencies(Dep("dev.zio::zio-test:2.1.27"))
     Projects.organization(Organization("com.example"))(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)), core, app)
 
   private val development =

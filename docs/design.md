@@ -129,11 +129,15 @@ final case class Classpath(artifacts: List[ResolvedArtifact], evictions: List[Ev
 `name` on an artifact is the name after the suffix above. `repository` is the repository that served the artifact. A missing jar is downloaded from that repository only. Classpath order is the resolved order with duplicates removed, first occurrence kept. That order is part of the lock.
 
 ```scala
+enum ClasspathScope:
+  case Compile
+  case Test
+
 enum ResolveError:
   case Range(dependency: Dep)
   case NotFound(organization: String, name: String, revision: String)
   case Checksum(path: Path, expected: Sha256, actual: Sha256)
-  case LockDrift(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform)
+  case LockDrift(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform, scope: ClasspathScope)
   case NoLock(path: Path)
   case UnsupportedPlatform(platform: Platform)
   case Lock(error: LockError)
@@ -142,13 +146,13 @@ enum ResolveError:
 enum LockError:
   case Empty
   case BadLine(line: String)
-  case DuplicateCell(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform)
+  case DuplicateCell(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform, scope: ClasspathScope)
   case Missing(field: LockField)
   case BadSha256(raw: String)
   case BadRepository(raw: String)
 ```
 
-`RepositoryIo` names the operation (`Read`, `Fetch`, `Metadata`, `Write`). The exception text is not the error. `LockField` is the lock's own fields (`Cell`, `Direct`, `Artifact`, `Evict`). A download that cannot satisfy the locked sha256 stays `Checksum`. The build does not try another repository.
+`RepositoryIo` names the operation (`Read`, `Fetch`, `Metadata`, `Write`). The exception text is not the error. `LockField` is the lock's own fields (`Cell`, `Test`, `Direct`, `Artifact`, `Evict`). A download that cannot satisfy the locked sha256 stays `Checksum`. The build does not try another repository.
 
 Repositories, in the order they are asked:
 
@@ -164,7 +168,7 @@ final case class Repositories(first: Repository, rest: List[Repository]):
 
 `RepoUrl` is a `file:` or `https:` URL, the same split as a JDK archive. An empty repository list is not representable. The default value is `Repositories(Central, Nil)`. `IvyLocal` is not on that list. The Scala Native layer adds it for its own resolve. Extra Maven repositories are declared by the build: `Projects.resolvers(maven"file:///repo", central)`. Declared repositories come first. `central` is last when it is present, and it is not added when the build leaves it out. Naming none means Central. `histos resolve` and `histos compile` use that list. Tests pass a `Maven` `file:` repository and do not include `Central`, so the suite does no network.
 
-`.histos/dependencies.lock` is committed. It is the authority for compile and test. One cell per module, Scala version, and platform the graph declares. An aggregate has no cell. Blank lines and `#` comments are ignored. A bad line, a repeated cell, or a missing field is a lock error enum, not a string.
+`.histos/dependencies.lock` is committed. It is the authority for compile and test. One compile cell per module, Scala version, and platform the graph declares. `libraryDependencies` are that cell, and they are what `histos publish` writes into the pom. `testDependencies` add a second cell, introduced by `test` instead of `cell`, and only when the list is non-empty. Its directs are the library dependencies followed by the test dependencies, resolved once so eviction is shared. That cell is the test classpath. Compile does not read it, and the pom does not list it. An aggregate has no cell. Blank lines and `#` comments are ignored. A bad line, a repeated cell, or a missing field is a lock error enum, not a string.
 
 ```text
 cell core 3.9.0 jvm
@@ -172,11 +176,14 @@ direct dev.zio zio 2.1.26 binary
 artifact dev.zio zio_3 2.1.26 <sha256> central
 artifact org.scala-lang scala-library 2.13.16 <sha256> central
 evict dev.zio zio_3 2.1.20 2.1.26
+test core 3.9.0 jvm
+direct dev.zio zio 2.1.26 binary
+direct dev.zio zio-test 2.1.27 binary
 ```
 
 `direct` lines are the cell's `Dep`s, in graph order, with kind `java`, `binary`, or `full`. `artifact` lines are the classpath, in order. The repository token is `central`, `ivy-local`, or `maven:<url>`.
 
-Compile and test compare the graph's direct dependencies to the `direct` lines. A difference is `ResolveError.LockDrift`. They do not re-solve versions. A locked jar that is absent locally is downloaded at that revision from the recorded repository, and the bytes must match the locked sha256. A mismatch is `ResolveError.Checksum`. A missing lock is `ResolveError.NoLock`.
+Compile compares `libraryDependencies` to the `cell` directs. Test compares `libraryDependencies` followed by `testDependencies` to the `test` directs, and uses the compile cell when the module has no test dependencies. A difference is `ResolveError.LockDrift`, and the message names `cell` or `test`. They do not re-solve versions. A locked jar that is absent locally is downloaded at that revision from the recorded repository, and the bytes must match the locked sha256. A mismatch is `ResolveError.Checksum`. A missing lock is `ResolveError.NoLock`.
 
 `histos resolve` checks the lock against the graph and the local bytes. `histos resolve --update` re-resolves and rewrites the lock. `histos resolve --check` re-resolves and fails if the selected revisions or checksums differ from the lock. Update and check are the network paths. `./histos test` is not. `./histos compile` is not either: it reads the lock and downloads a missing locked jar.
 
