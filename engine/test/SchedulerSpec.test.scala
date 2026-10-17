@@ -14,7 +14,7 @@ object SchedulerSpec extends ZIOSpecDefault:
   private val d = aid("d")
 
   private def action(id: ActionId, deps: ActionId*): Action =
-    Action(id, TaskKind.Inspect, List(Input("src", id.value)), deps.toList)
+    Action(id, TaskKind.Inspect, List(Input(InputName.trusted("src"), InputValue.Text(id.value))), deps.toList)
 
   private val localOk: Action => IO[TaskError, String] =
     action => ZIO.succeed(action.id.value)
@@ -89,7 +89,7 @@ object SchedulerSpec extends ZIOSpecDefault:
     ).provide(Scheduler.live, ZLayer.succeed(hit)),
     test("changing an input changes the digest"):
       val first  = action(a)
-      val second = first.copy(inputs = List(Input("src", "other")))
+      val second = first.copy(inputs = List(Input(InputName.trusted("src"), InputValue.Text("other"))))
       assertTrue(Digest.of(first, Map.empty) != Digest.of(second, Map.empty)),
   )
 
