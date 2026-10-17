@@ -87,12 +87,13 @@ final case class CompileRequest(
     classpath: List[Path],
     classes: Path,
     analysis: Path,
+    artifactHashes: List[Sha256],
 )
 
 final case class CompileOutput(classes: Path, classFiles: Int)
 
 object CompileKey:
-  /** Identity of a compile. The classes directory is not part of it. */
+  /** Identity of a compile. The classes directory is not part of it. Artifact checksums are. */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
     val tool = request.toolchain
     val text =
@@ -101,6 +102,7 @@ object CompileKey:
          |${tool.jdk.version.value}
          |${tool.flags.canonical}
          |${sources.value}
+         |${request.artifactHashes.map(_.value).mkString("\n")}
          |""".stripMargin
     Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
 

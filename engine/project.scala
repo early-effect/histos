@@ -4,6 +4,7 @@
 //> using dep org.scala-lang::scala3-compiler:3.9.0
 //> using dep org.scala-sbt::zinc:2.0.4
 //> using dep org.scala-lang:scala3-sbt-bridge:3.9.0
+//> using dep io.get-coursier::coursier:2.1.26
 //> using test.dep dev.zio::zio-test:2.1.27
 //> using test.dep dev.zio::zio-test-sbt:2.1.27
 //> using test.framework zio.test.sbt.ZTestFramework
