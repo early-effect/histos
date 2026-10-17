@@ -1,0 +1,45 @@
+#!/bin/sh
+# Frozen entry point. Verifies the pinned JVM assembly and execs it.
+# HISTOS_ASSEMBLY overrides the cache path so a fixture can be used before a release exists.
+set -eu
+
+dir=$(dirname "$0") || exit 1
+root=$(CDPATH= cd -- "$dir" && pwd) || exit 1
+version=$(tr -d '[:space:]' < "$root/.histos-version")
+shafile=$root/.histos/assembly.sha256
+
+if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
+  jar=$HISTOS_ASSEMBLY
+else
+  cache=${XDG_CACHE_HOME:-$HOME/.cache}
+  jar=$cache/histos/launchers/$version/histos.jar
+fi
+
+if [ ! -f "$jar" ]; then
+  echo "histos $version: no assembly at $jar" >&2
+  exit 1
+fi
+
+if [ ! -f "$shafile" ]; then
+  echo "histos $version: missing $shafile" >&2
+  exit 1
+fi
+
+expected=$(tr -d '[:space:]' < "$shafile")
+if command -v sha256sum >/dev/null 2>&1; then
+  actual=$(sha256sum "$jar" | awk '{print $1}')
+else
+  actual=$(shasum -a 256 "$jar" | awk '{print $1}')
+fi
+
+if [ "$expected" != "$actual" ]; then
+  echo "histos $version: checksum mismatch" >&2
+  exit 1
+fi
+
+if ! command -v java >/dev/null 2>&1; then
+  echo "histos $version: java is not on PATH" >&2
+  exit 1
+fi
+
+exec java -jar "$jar" "$@"
