@@ -104,7 +104,7 @@ object CliSpec extends ZIOSpecDefault:
         named  <- Cli.parse(List("compile", "core"))
       yield assertTrue(entire == Command.Compile(Nil), named == Command.Compile(List("core")))
     ,
-    test("test takes project names and checks the lock"):
+    test("test takes project names"):
       for
         entire <- Cli.parse(List("test"))
         named  <- Cli.parse(List("test", "core"))

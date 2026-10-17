@@ -11,10 +11,11 @@ import histos.mcp.HistosMcp
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
-import histos.workflow.{TestTarget, Workflow, WorkflowAction}
+import histos.workflow.{Workflow, WorkflowAction}
 import histos.central.Publisher
 import histos.publish.LocalPublish
-import histos.zinc.{CompiledCell, GraphCompile}
+import histos.testrun.{ModuleTest, ModuleTestError, TestStatus, TestedCell}
+import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError}
 import histos.{Aggregate, Module, Project}
 
 import java.nio.file.Path
@@ -164,23 +165,50 @@ object Cli:
     val shown = (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
     s"${line.group.value} ${line.artifact} ${line.revision} $shown"
 
-  /** Selected modules, then the lock. This does not claim a test framework ran. */
+  /** Compile, then one subprocess per Scala version. `no tests` is success and is not a passing suite. */
   private def test(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
-        Workflow.target(loaded.graph, projects) match
-          case Left(error) => ZIO.succeed(Completed(CliExit.TestFailed, "", error.message))
-          case Right(selected) =>
-            Resolve.verify(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers)).mapBoth(
-              error => Completed(CliExit.ResolveFailed, "", error.message),
-              text =>
-                val header = selected match
-                  case TestTarget.Entire => "entire"
-                  case TestTarget.Named(first, rest) => (first :: rest).map(_.value).mkString(" ")
-                val body = if text.isEmpty then header else s"$header\n$text"
-                Completed(CliExit.Success, s"$body\nlock ok", ""),
-            ).merge
+        GraphCompile.jdkHere
+          .mapError(ModuleTestError.Compile(_))
+          .flatMap(jdk => ModuleTest.run(repo, loaded.graph, projects, jdk))
+          .mapBoth(
+            error => Completed(testExit(error), "", error.message),
+            cells => tested(cells),
+          )
+          .merge
+
+  /** A missing lock is still a resolve failure. A test result, including a non-zero main, is not. */
+  private def testExit(error: ModuleTestError): CliExit =
+    error match
+      case ModuleTestError.Compile(GraphCompileError.Lock(_) | GraphCompileError.LockRead(_)) =>
+        CliExit.ResolveFailed
+      case ModuleTestError.Lock(_) | ModuleTestError.LockRead(_) =>
+        CliExit.ResolveFailed
+      case _ =>
+        CliExit.TestFailed
+
+  private def tested(cells: List[TestedCell]): Completed =
+    val out = cells.map(testedLine).mkString("\n")
+    val err = cells.flatMap(failureText).mkString("\n")
+    val exit = if cells.exists(cell => failed(cell.status)) then CliExit.TestFailed else CliExit.Success
+    Completed(exit, out, err)
+
+  private def testedLine(cell: TestedCell): String =
+    s"${cell.module.value} ${cell.version.value} jvm ${cell.status.label}"
+
+  private def failed(status: TestStatus): Boolean =
+    status match
+      case TestStatus.Failed(_, _, _)              => true
+      case TestStatus.NoTests | TestStatus.Passed => false
+
+  private def failureText(cell: TestedCell): Option[String] =
+    cell.status match
+      case TestStatus.Failed(_, out, err) =>
+        val body = List(out, err).filter(_.nonEmpty).mkString("\n")
+        if body.isEmpty then Some(testedLine(cell)) else Some(s"${testedLine(cell)}\n$body")
+      case TestStatus.NoTests | TestStatus.Passed => None
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store => Completed(CliExit.Success, store.root.toString, ""))
@@ -292,7 +320,7 @@ object Cli:
 
   private def render(projects: List[Project]): String =
     projects.map:
-      case Module(name, platforms, versions, _, _, _, _) =>
+      case Module(name, platforms, versions, _, _, _, _, _) =>
         s"${name.value} ${platforms.all.map(_.toString.toLowerCase).mkString(",")} ${versions.all.map(_.value).mkString(",")}"
       case Aggregate(name, children, _) =>
         s"${name.value} aggregate ${children.map(_.value).mkString(",")}"

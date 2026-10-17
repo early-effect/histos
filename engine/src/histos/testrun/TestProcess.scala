@@ -152,9 +152,14 @@ object TestProcess:
       _ <- file(request.java, TestError.Java(request.java))
       _ <- file(compiler, TestError.Java(compiler))
       _ <- directory(request.classpath.classes, TestError.Classes(request.classpath.classes))
-      _ <- ZIO.foreachDiscard(request.classpath.artifacts)(path => file(path, TestError.Artifact(path)))
+      _ <- ZIO.foreachDiscard(request.classpath.artifacts)(path => present(path, TestError.Artifact(path)))
       _ <- empty(request.work)
     yield ()
+
+  /** A classpath entry is a jar or a classes directory. Main classes are a directory. */
+  private def present(path: Path, error: TestError): IO[TestError, Unit] =
+    ZIO.attemptBlocking(Files.isRegularFile(path) || Files.isDirectory(path)).mapError(_ => TestError.Io(TestIo.Read)).flatMap: found =>
+      if found then ZIO.unit else ZIO.fail(error)
 
   private def file(path: Path, error: TestError): IO[TestError, Unit] =
     ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(_ => TestError.Io(TestIo.Read)).flatMap: present =>
