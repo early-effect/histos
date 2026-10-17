@@ -12,6 +12,7 @@ object Grammar:
     case Version, Graph, Mcp, Acp, CachePath, CacheList, Toolchain
     case Run(id: String)
     case Test(projects: List[String])
+    case Compile(projects: List[String])
     case CacheClean(dryRun: Boolean)
     case Resolve(update: Boolean, check: Boolean)
     case Workflow(check: Boolean, update: Boolean)
@@ -20,6 +21,7 @@ object Grammar:
   private val graph     = CliCommand("graph").map(_ => Wire.Graph)
   private val run       = CliCommand("run", Args.text("id")).map(Wire.Run(_))
   private val test      = CliCommand("test", Args.text("project").*).map(names => Wire.Test(names.toList))
+  private val compile   = CliCommand("compile", Args.text("project").*).map(names => Wire.Compile(names.toList))
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
   private val acp       = CliCommand("acp").map(_ => Wire.Acp)
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
@@ -36,7 +38,7 @@ object Grammar:
       Wire.Workflow(check, update)
     }
   private val root      =
-    CliCommand("histos").subcommands(version | graph | run | test | mcp | acp | toolchain | cache | resolve | workflow)
+    CliCommand("histos").subcommands(version | graph | run | test | compile | mcp | acp | toolchain | cache | resolve | workflow)
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     root.parse("histos" :: args, CliConfig.default).mapError(reject).flatMap:
@@ -65,6 +67,7 @@ object Grammar:
       case Wire.Workflow(_, update) =>
         ZIO.succeed(Command.Workflow(if update then WorkflowAction.Update else WorkflowAction.Check))
       case Wire.Test(projects) => ZIO.succeed(Command.Test(projects))
+      case Wire.Compile(projects) => ZIO.succeed(Command.Compile(projects))
       case Wire.Run(raw)           =>
         ZIO.fromEither(TaskId.from(raw)).mapBoth(_ => CliParseError.BadTaskId, Command.Run(_))
 

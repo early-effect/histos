@@ -5,7 +5,7 @@ The design in `docs/design.md` stands, with the amendments below. The first four
 ## Amendments
 
 1. The launcher is the frozen `./histos` and `histos.bat`. They download the pinned JVM assembly, verify it, and exec it. There is no Scala Native launcher and no Rust launcher. A native image is bloat for a downloader, and a second language is the same cost. JDK policy lives in the JVM engine. The script only fetches the locked Temurin when no `java` exists, then the engine re-checks the lock and re-execs if needed.
-2. Histos itself is built with scala-cli 1.18 (Scala 3.9.0) until it can build itself. No sbt. No zipx. No GitHub Actions on this repo until dogfood.
+2. Histos itself is built with scala-cli 1.18 (Scala 3.10.0) until it can build itself. A module is compiled by the compiler it names, fetched with Coursier: any Scala 3 version, any Scala 2.13 patch, and nothing older. No sbt. No zipx. No GitHub Actions on this repo until dogfood.
 3. The engine is a JVM process. ZIO, load, Zinc, MCP, and the Scala Native linker (`tools_3`) run there.
 4. Scala Native is a target toolchain, not a build plugin. The jars already in `~/.ivy2/local` are `org.scala-native` `0.5.13-SNAPSHOT` (`tools_3`, `nir_3`, `util_3`, `nscplugin_3.9.0`, `nativelib_native0.5_3`, `scala3lib` / `scalalib` at `3.9.0+0.5.13-SNAPSHOT`). That nativelib is the Mac Mini M6 unwind fix (scala-native#5109). The native layer resolves them with `//> using repository ivy2Local` while Histos is built by scala-cli. When that layer of Histos itself fetches them, it adds `IvyLocal` to the repository list for that resolve. `IvyLocal` is not a default repository. When 0.5.13 is on Maven Central, that layer drops `IvyLocal` and the snapshot pin.
 5. Library resolution is Coursier linked as a library. The `cs` program is not a resolver. The specification is section 5.2 of the design. The layer sits after Zinc and before the test subprocess, because a classpath of real dependencies has to exist before a test is defined as running on one.
@@ -53,7 +53,7 @@ trait Tasks:
   def cancel(run: RunId): IO[TaskError, Unit]
 ```
 
-`LoadedBuild` holds the graph and the build classloader. The `Scope` closes the classloader. Load uses the Scala 3.9.0 compiler in-process (`scala3-compiler`). That compiler is not on the classpath of the project being built. Phase 0 assumes a JDK is already present. Provisioning is the JDK layer.
+`LoadedBuild` holds the graph and the build classloader. The `Scope` closes the classloader. Load uses the Scala 3.10.0 compiler in-process (`scala3-compiler`). That compiler loads the build file. It is not the compiler that compiles a module, and it is not on the classpath of the project being built. Phase 0 assumes a JDK is already present. Provisioning is the JDK layer.
 
 Phase 0 `run` executes `Inspect`. Any other id is `TaskError.NoRunner`. `cancel` drops a fiber from a `Ref` registry. A test installs a slow task and cancels it. No compile task is pretended.
 
@@ -116,6 +116,8 @@ Proposed stack C: Phase 2, after B merges.
     Verify: `scala-cli test central` against a local repository fixture.
 
 The general plugin classloader is not this layer. One in-tree module that only sees `api` is the pattern. The loader arrives when a second plugin exists.
+
+Before stack D, the library loop. `histos compile` compiles JVM cells from the lock and `dependsOn`. The next layer publishes that class directory into the local Maven writer, with the Scala binary suffix and pom dependencies. One small library must go sources, jar, local repository, and a second resolve before Histos builds Histos. BSP waits until that loop works. CI does not render a publish job until `histos publish` can succeed.
 
 Proposed stack D: Phase 3, after C merges.
 

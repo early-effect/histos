@@ -35,21 +35,21 @@ object ZincSpec extends ZIOSpecDefault:
         key == CompileKey.of(base, sha),
       )
     ,
-    test("js and another Scala version are rejected before Zinc"):
-      val js  = sample(ScalacFlags.empty, v21, Platform.Js, JvmCompile.Scala390)
-      val old = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("3.8.1"))
-      val patch = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("2.13.15"))
-      val supported = sample(ScalacFlags.empty, v21, Platform.Jvm, Scala213.version)
+    test("js and Scala 2.12 are rejected, and Scala 3 and 2.13 reach the compiler"):
+      val js = sample(ScalacFlags.empty, v21, Platform.Js, JvmCompile.Scala390)
+      val scala212 = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("2.12.20"))
+      val scala3 = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("3.8.1"))
+      val scala213 = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("2.13.15"))
       for
         platform <- JvmCompile.compile(js).either
-        version  <- JvmCompile.compile(old).either
-        other    <- JvmCompile.compile(patch).either
-        accepted <- JvmCompile.compile(supported).either
+        rejected <- JvmCompile.compile(scala212).either
+        any3     <- JvmCompile.compile(scala3).either
+        any213   <- JvmCompile.compile(scala213).either
       yield assertTrue(
         platform == Left(CompileError.UnsupportedPlatform(Platform.Js)),
-        version == Left(CompileError.UnsupportedScala(ScalaVersion.trusted("3.8.1"))),
-        other == Left(CompileError.UnsupportedScala(ScalaVersion.trusted("2.13.15"))),
-        accepted == Left(CompileError.NoSources),
+        rejected == Left(CompileError.UnsupportedScala(ScalaVersion.trusted("2.12.20"))),
+        any3 == Left(CompileError.NoSources),
+        any213 == Left(CompileError.NoSources),
       )
   )
 
@@ -113,6 +113,45 @@ object ZincSpec extends ZIOSpecDefault:
             case Left(CompileError.Failed(diagnostics)) =>
               diagnostics.exists(diagnostic => diagnostic.text.contains("Driver") || diagnostic.text.contains("dotty"))
             case _ => false
+    ,
+    test("a project compiler does not load the engine Scala library or compiler"):
+      for
+        toolchain <- Scala3.jars(ScalaVersion.trusted("3.3.7"))
+        isolated <- ZIO.attempt {
+                      val loader = toolchain.openLoader(getClass.getClassLoader)
+                      try
+                        val engineList = classOf[scala.collection.immutable.List[?]]
+                        val projectList = loader.loadClass("scala.collection.immutable.List")
+                        val engineDriver = classOf[dotty.tools.dotc.Driver]
+                        val projectDriver = loader.loadClass("dotty.tools.dotc.Driver")
+                        val callback = classOf[xsbti.AnalysisCallback]
+                        val projectCallback = loader.loadClass("xsbti.AnalysisCallback")
+                        (projectList ne engineList) && (projectDriver ne engineDriver) && (projectCallback eq callback)
+                      finally loader.close()
+                    }
+      yield assertTrue(isolated)
+    ,
+    test("Scala 3.10 compiles a named tuple that Scala 3.3 rejects"):
+      ZIO.scoped:
+        for
+          root <- temp
+          source <- ZIO.attempt(write(root, "Hello.scala", namedTuple))
+          jdk = running
+          old <- JvmCompile.compile(request(root.resolve("old"), source, jdk, ScalaVersion.trusted("3.3.7"))).either
+          fresh <- JvmCompile.compile(request(root.resolve("fresh"), source, jdk, ScalaVersion.trusted("3.10.0")))
+          names <- ZIO.attempt {
+                     val walk = Files.walk(fresh.classes)
+                     try
+                       walk.iterator.asScala.filter(Files.isRegularFile(_)).map(path => fresh.classes.relativize(path).toString).toList.sorted
+                     finally walk.close()
+                   }
+        yield assertTrue(
+          old match
+            case Left(CompileError.Failed(_)) => true
+            case _                             => false
+          ,
+          names == List("Hello$.class", "Hello.class", "Hello.tasty"),
+        )
   )
 
   private val hello =
@@ -137,6 +176,22 @@ object ZincSpec extends ZIOSpecDefault:
       case Right(version) => ResolvedJdk(home, version)
       case Left(_)        => ResolvedJdk(home, v21)
 
+  private val namedTuple =
+    """object Hello {
+      |  def pair: (name: String) = (name = "hi")
+      |}
+      |""".stripMargin
+
+  private def request(root: Path, source: Path, jdk: ResolvedJdk, version: ScalaVersion): CompileRequest =
+    CompileRequest(
+      CompileToolchain(version, Platform.Jvm, jdk, ScalacFlags.empty),
+      List(source),
+      Nil,
+      root.resolve("classes"),
+      root.resolve("analysis"),
+      Nil,
+    )
+
   private def liveRequest(root: Path, source: Path, jdk: ResolvedJdk): CompileRequest =
     CompileRequest(
       CompileToolchain(JvmCompile.Scala390, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -154,7 +209,7 @@ object ZincSpec extends ZIOSpecDefault:
 
   private def located(cls: Class[?]): ZIO[Any, CompileError, Path] =
     val path = Option(cls.getProtectionDomain).flatMap(domain => Option(domain.getCodeSource)).flatMap(source => Option(source.getLocation)).map(url => Path.of(url.toURI))
-    ZIO.fromOption(path).orElseFail(CompileError.NoBridge)
+    ZIO.fromOption(path).orElseFail(CompileError.Io(CompileIo.Read))
 
   private def memory: ZIO[Any, Nothing, ActionCache] =
     Ref.make(Map.empty[Digest, String]).map: ref =>

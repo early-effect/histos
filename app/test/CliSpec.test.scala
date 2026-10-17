@@ -89,6 +89,12 @@ object CliSpec extends ZIOSpecDefault:
         both == Left(CliParseError.Rejected),
       )
     ,
+    test("compile takes project names"):
+      for
+        entire <- Cli.parse(List("compile"))
+        named  <- Cli.parse(List("compile", "core"))
+      yield assertTrue(entire == Command.Compile(Nil), named == Command.Compile(List("core")))
+    ,
     test("test takes project names and checks the lock"):
       for
         entire <- Cli.parse(List("test"))
@@ -99,6 +105,16 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for done <- invoke(List("workflow"))
         yield assertTrue(done.exit == CliExit.WorkflowFailed && done.exit.code == 6 && done.err.contains("ci.yml"))
+    ,
+    test("compile without a lock fails, and an unknown project is not a lock error"):
+      ZIO.scoped:
+        for
+          missing <- invoke(List("compile"))
+          unknown <- invoke(List("compile", "missing"))
+        yield assertTrue(
+          missing.exit == CliExit.CompileFailed && missing.exit.code == 8 && missing.err.contains("dependencies.lock"),
+          unknown.exit == CliExit.CompileFailed && unknown.err.contains("missing") && !unknown.err.contains("dependencies.lock"),
+        )
     ,
     test("test without a lock fails, and an unknown project is not a lock error"):
       ZIO.scoped:
