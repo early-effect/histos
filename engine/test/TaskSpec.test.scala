@@ -33,7 +33,7 @@ object TaskSpec extends ZIOSpecDefault:
           yield assertTrue:
             out match
               case Left(TaskError.NoRunner(missing)) => missing.value == "compile"
-              case other                             => other.toString == "no runner"
+              case _                                 => false
         .provide(Tasks.live(built))
     ,
     test("cancel interrupts a slow run"):
@@ -59,7 +59,7 @@ object TaskSpec extends ZIOSpecDefault:
           yield assertTrue:
             out match
               case Left(TaskError.UnknownRun(missing)) => missing.value == "missing"
-              case other                               => other.toString == "unknown run"
+              case _                                   => false
         .provide(Tasks.live(built))
     ,
   )

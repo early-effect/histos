@@ -21,7 +21,7 @@ private object LoaderLive extends Loader:
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
     val source = repo.resolve("histos.scala")
     for
-      _       <- ZIO.unlessZIO(exists(source))(ZIO.fail(LoadError.MissingFile(source.toString)))
+      _       <- ZIO.unlessZIO(exists(source))(ZIO.fail(LoadError.MissingFile(source)))
       out     <- ZIO.acquireRelease(tempDir("histos-classes"))(deleteTree)
       _       <- compile(source, apiJar, out)
       loader  <- ZIO.acquireRelease(classLoader(out))(closeLoader)
@@ -31,10 +31,10 @@ private object LoaderLive extends Loader:
     yield LoadedBuild(graph)
 
   private def exists(path: Path): IO[LoadError, Boolean] =
-    ZIO.attempt(Files.isRegularFile(path)).mapError(failed)
+    ZIO.attempt(Files.isRegularFile(path)).mapError(failed(LoadIo.Stat))
 
   private def tempDir(prefix: String): IO[LoadError, Path] =
-    ZIO.attempt(Files.createTempDirectory(prefix)).mapError(failed)
+    ZIO.attempt(Files.createTempDirectory(prefix)).mapError(failed(LoadIo.Temp))
 
   private def compile(source: Path, apiJar: Path, out: Path): IO[LoadError, Unit] =
     classpath(apiJar).flatMap: cp =>
@@ -51,23 +51,24 @@ private object LoaderLive extends Loader:
           ),
           reporter,
         )
-        if reporter.hasErrors then Left(LoadError.CompileFailed(reporter.allErrors.map(_.message)))
+        if reporter.hasErrors then
+          Left(LoadError.CompileFailed(reporter.allErrors.map(e => CompilerMessage.fromCompiler(e.message))))
         else Right(())
-      }.mapError(failed).flatMap(ZIO.fromEither)
+      }.mapError(failed(LoadIo.Compile)).flatMap(ZIO.fromEither)
 
   /** The build compiles against the api jar and the Scala libraries, not the engine. */
   private def classpath(apiJar: Path): IO[LoadError, String] =
     ZIO.attempt {
       val libs = List(classOf[scala.collection.immutable.Nil.type], classOf[scala.quoted.Quotes]).flatMap(codeSource)
       (apiJar :: libs).distinct.mkString(java.io.File.pathSeparator)
-    }.mapError(failed)
+    }.mapError(failed(LoadIo.Classpath))
 
   private def codeSource(cls: Class[?]): Option[Path] =
     Option(cls.getProtectionDomain).flatMap(domain => Option(domain.getCodeSource)).flatMap: source =>
       Option(source.getLocation).map(url => Path.of(url.toURI))
 
   private def classLoader(out: Path): IO[LoadError, URLClassLoader] =
-    ZIO.attempt(new URLClassLoader(Array(out.toUri.toURL), getClass.getClassLoader)).mapError(failed)
+    ZIO.attempt(new URLClassLoader(Array(out.toUri.toURL), getClass.getClassLoader)).mapError(failed(LoadIo.OpenLoader))
 
   private def closeLoader(loader: URLClassLoader): UIO[Unit] =
     ZIO.attempt(loader.close()).ignore
@@ -81,7 +82,7 @@ private object LoaderLive extends Loader:
       val walk = Files.walk(out)
       try walk.iterator.asScala.filter(isClass).toList
       finally walk.close()
-    }.mapError(failed)
+    }.mapError(failed(LoadIo.Walk))
 
   private def isClass(path: Path): Boolean =
     Option(path.getFileName).map(_.toString) match
@@ -89,7 +90,7 @@ private object LoaderLive extends Loader:
       case None       => false
 
   private def loadOne(loader: ClassLoader, out: Path, file: Path): IO[LoadError, Option[HistosBuild]] =
-    ZIO.attempt(module(loader.loadClass(className(out, file)))).mapError(failed)
+    ZIO.attempt(module(loader.loadClass(className(out, file)))).mapError(failed(LoadIo.LoadClass))
 
   private def className(out: Path, file: Path): String =
     val relative = out.relativize(file).toString
@@ -111,7 +112,7 @@ private object LoaderLive extends Loader:
     builds match
       case build :: Nil => ZIO.succeed(build)
       case Nil          => ZIO.fail(LoadError.NoEntry)
-      case many         => ZIO.fail(LoadError.AmbiguousEntry(many.map(_.getClass.getName)))
+      case many         => ZIO.fail(LoadError.AmbiguousEntry(many.map(build => BinaryName.fromClass(build.getClass))))
 
   private def deleteTree(root: Path): UIO[Unit] =
     ZIO.attempt {
@@ -123,5 +124,5 @@ private object LoaderLive extends Loader:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  private def failed(cause: Throwable): LoadError =
-    LoadError.Failed(cause.getClass.getName)
+  private def failed(op: LoadIo): Throwable => LoadError =
+    _ => LoadError.Io(op)

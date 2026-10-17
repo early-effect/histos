@@ -4,7 +4,7 @@ import heddle.LinePipe
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
 import histos.acp.Acp
 import histos.cli.Command
-import histos.load.{LoadError, Loader}
+import histos.load.{LoadError, LoadIo, Loader}
 
 import java.nio.file.{Files, Path}
 
@@ -34,15 +34,15 @@ object ProtocolSpec extends ZIOSpecDefault:
 
   private val apiJar: IO[LoadError, Path] =
     val candidates = List(Path.of("dist/histos-api.jar"), Path.of("../dist/histos-api.jar"))
-    ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Failed(t.getClass.getName)).flatMap:
+    ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
       case Some(jar) => ZIO.succeed(jar)
-      case None      => ZIO.fail(LoadError.MissingFile("dist/histos-api.jar"))
+      case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
 
   private def repo: ZIO[Scope, LoadError, Path] =
     for
-      dir <- ZIO.attempt(Files.createTempDirectory("histos-mcp")).mapError(t => LoadError.Failed(t.getClass.getName))
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-mcp")).mapError(t => LoadError.Io(LoadIo.Temp))
       _   <- ZIO.addFinalizer(delete(dir))
-      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Failed(t.getClass.getName))
+      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Io(LoadIo.Temp))
     yield dir
 
   private def delete(root: Path): UIO[Unit] =

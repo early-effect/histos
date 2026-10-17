@@ -136,6 +136,8 @@ A repo commits:
 - `.histos-version`. The launcher version.
 - `.histos/jdk.lock`. The exact Temurin build, URL, and sha256.
 
+The lock is one field per line: `major`, `version`, `url`, and `sha256`. Blank lines and lines starting with `#` are ignored. `url` is a `file:` or `https:` URL. The major has to be the major of `version`. The script reads the lock only when `java` is not on `PATH`. It fetches that url, checks the sha256, unpacks into the Histos JDK cache, and execs that `java`. The engine does not fetch `https`. When the policy says to provision and the url is a `file:` zip, the engine stages it into the same cache and re-execs onto it. An `https` lock on a machine that already has some other `java` stops with the provision report instead of downloading.
+
 `histos bootstrap` writes the scripts and `.histos-version`. It is idempotent. It does not write `histos.scala` or CI. A maintainer has a Histos binary once, runs the command, and commits the files. Everyone else uses `./histos`.
 
 The build names a JDK major. `./histos test` uses the lock and verifies the checksum. `histos jdk update` rewrites the lock. One default toolchain per build.

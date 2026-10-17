@@ -68,7 +68,7 @@ object SchedulerSpec extends ZIOSpecDefault:
       yield assertTrue:
         out match
           case Left(ScheduleError.Cycle(path)) => !did && path.map(_.value).contains("a")
-          case other                           => other.toString == "cycle"
+          case _                                => false
     ,
     test("interrupting the run interrupts the local action"):
       for
