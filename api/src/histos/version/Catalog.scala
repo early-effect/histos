@@ -27,19 +27,35 @@ enum ShipNameError:
     case Empty     => "a ship name is not empty"
     case Bad(raw)  => s"'$raw' is not a ship name"
 
-/** One catalog row: the next release number, and the modules that publish it. */
-final case class Ship(name: ShipName, number: ShipNumber, members: ::[ProjectName])
+/** One catalog row. A line derives coordinates from a ship number. A manual row publishes the version it states. */
+enum Ship:
+  case Line(shipName: ShipName, number: ShipNumber, modules: ::[ProjectName])
+  case Manual(shipName: ShipName, version: ManualVersion, modules: ::[ProjectName])
 
-/** The ships a build publishes. Empty is an application, not a library catalog. */
-final case class Catalog private (ships: List[Ship]):
+  def name: ShipName = this match
+    case Line(shipName, _, _)   => shipName
+    case Manual(shipName, _, _) => shipName
+
+  def members: ::[ProjectName] = this match
+    case Line(_, _, modules)   => modules
+    case Manual(_, _, modules) => modules
+
+/** How a build versions its ships. The two schemes are not mixed. Empty is an application. */
+enum Catalog:
+  case Empty
+  case Lines(rows: ::[Ship.Line])
+  case Manual(rows: ::[Ship.Manual])
+
   def get(name: ShipName): Option[Ship] =
     ships.find(_.name == name)
 
-object Catalog:
-  val empty: Catalog = new Catalog(Nil)
+  def ships: List[Ship] = this match
+    case Empty         => Nil
+    case Lines(rows)   => rows.map(ship => ship: Ship)
+    case Manual(rows)  => rows.map(ship => ship: Ship)
 
-  /** The caller proved names are unique and each module is in at most one ship. */
-  private[histos] def trusted(ships: List[Ship]): Catalog = new Catalog(ships)
+object Catalog:
+  val empty: Catalog = Empty
 
   def from(ships: List[Ship]): Either[CatalogError, Catalog] =
     ships.foldLeft[Either[CatalogError, List[Ship]]](Right(Nil)): (acc, ship) =>
@@ -52,7 +68,16 @@ object Catalog:
               clash(seen, ship) match
                 case Some(member, first) => Left(CatalogError.InTwoShips(member, first, ship.name))
                 case None                => Right(seen :+ ship)
-    .map(checked => new Catalog(checked))
+    .flatMap(assemble)
+
+  private def assemble(ships: List[Ship]): Either[CatalogError, Catalog] =
+    val lines = ships.collect { case line: Ship.Line => line }
+    val manual = ships.collect { case row: Ship.Manual => row }
+    (lines, manual) match
+      case (Nil, Nil)             => Right(Empty)
+      case (first :: rest, Nil)   => Right(Lines(::(first, rest)))
+      case (Nil, first :: rest)   => Right(Manual(::(first, rest)))
+      case _                      => Left(CatalogError.MixedScheme)
 
   private def repeated(ship: Ship): Option[ProjectName] =
     ship.members.foldLeft[(List[ProjectName], Option[ProjectName])]((Nil, None)):
@@ -71,6 +96,7 @@ enum CatalogError:
   case DuplicateName(name: ShipName)
   case RepeatedMember(ship: ShipName, member: ProjectName)
   case InTwoShips(member: ProjectName, first: ShipName, second: ShipName)
+  case MixedScheme
 
   def message: String = this match
     case DuplicateName(name) => s"ship '${name.value}' is declared twice"
@@ -78,3 +104,5 @@ enum CatalogError:
       s"ship '${ship.value}' lists '${member.value}' twice"
     case InTwoShips(member, first, second) =>
       s"'${member.value}' is in ship '${first.value}' and ship '${second.value}'"
+    case MixedScheme =>
+      "a catalog is either early-effect ships or manual versions, and this one is both"

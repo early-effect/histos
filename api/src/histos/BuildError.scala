@@ -22,6 +22,7 @@ enum BuildError:
   case RepeatedShipMember(ship: ShipName, member: ProjectName, position: SourcePos)
   case AggregateShipMember(ship: ShipName, aggregate: ProjectName, position: SourcePos)
   case MemberInTwoShips(member: ProjectName, first: ShipName, second: ShipName, position: SourcePos)
+  case MixedScheme(position: SourcePos)
 
   def message: String = this match
     case EmptyName(position)                 => s"a project name is not empty (${position.line}:${position.column})"
@@ -58,3 +59,5 @@ enum BuildError:
       s"ship '${ship.value}' lists aggregate '${aggregate.value}' (${position.line}:${position.column})"
     case MemberInTwoShips(member, first, second, position) =>
       s"'${member.value}' is in ship '${first.value}' and ship '${second.value}' (${position.line}:${position.column})"
+    case MixedScheme(position) =>
+      s"a catalog is either early-effect ships or manual versions, and this one is both (${position.line}:${position.column})"

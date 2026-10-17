@@ -49,6 +49,11 @@ enum Decision:
   case Develop(drift: Drift, lines: ::[DevelopLine])
   case Publish(kind: PublishKind, lines: ::[PublishLine])
   case Refused(refusals: ::[Refusal])
+  /** The build stated these versions. Git, the registry, and a bump pull request are not involved. */
+  case Manual(lines: ::[ManualLine])
+
+/** One manually versioned ship. Compile and publish use the same coordinate. */
+final case class ManualLine(ship: ShipName, version: ManualVersion)
 
 object Decision:
   def text(decision: Decision): String = decision match
@@ -59,6 +64,8 @@ object Decision:
       (kindText(kind) :: lines.map(publishText).toList).mkString("\n")
     case Decision.Refused(refusals) =>
       refusalText(refusals)
+    case Decision.Manual(lines) =>
+      ("session manual" :: lines.map(manualText).toList).mkString("\n")
 
   def refusalText(refusals: ::[Refusal]): String =
     refusals.map(oneRefusal).mkString("\n")
@@ -100,6 +107,9 @@ object Decision:
         s"compile ${compile.render} hold already-released"
     s"${line.ship.value} $body"
 
+  private def manualText(line: ManualLine): String =
+    s"${line.ship.value} compile ${line.version.value} publish ${line.version.value}"
+
   private def oneRefusal(refusal: Refusal): String = refusal match
     case Refusal.Unchecked =>
       "the release registry was not checked, so nothing publishes"
@@ -127,29 +137,37 @@ enum VersionError:
 
 object Versions:
   def assess(catalog: Catalog, env: Map[String, String], evidence: Evidence): Either[VersionError, Decision] =
-    Session.from(env).left.map(VersionError.Session(_)).flatMap: session =>
-      evidence match
-        case Evidence.Unchecked => Right(decide(catalog, session, evidence))
-        case Evidence.Checked(registry) =>
-          unknown(catalog, registry) match
-            case Some(name) => Left(VersionError.UnknownShip(name))
-            case None       => Right(decide(catalog, session, evidence))
+    catalog match
+      case Catalog.Empty | Catalog.Manual(_) => Right(decide(catalog, Session.Development, Evidence.Unchecked))
+      case Catalog.Lines(_) =>
+        Session.from(env).left.map(VersionError.Session(_)).flatMap: session =>
+          evidence match
+            case Evidence.Unchecked => Right(decide(catalog, session, evidence))
+            case Evidence.Checked(registry) =>
+              unknown(catalog, registry) match
+                case Some(name) => Left(VersionError.UnknownShip(name))
+                case None       => Right(decide(catalog, session, evidence))
 
   def decide(catalog: Catalog, session: Session, evidence: Evidence): Decision =
-    catalog.ships match
-      case Nil => Decision.NoCatalog
-      case first :: rest =>
-        val ships = ::(first, rest)
+    catalog match
+      case Catalog.Empty        => Decision.NoCatalog
+      case Catalog.Manual(ships) => Decision.Manual(manualLines(ships))
+      case Catalog.Lines(ships) =>
         evidence match
-          case Evidence.Unchecked => unchecked(session, ships)
+          case Evidence.Unchecked         => unchecked(session, ships)
           case Evidence.Checked(registry) => checked(session, ships, registry)
 
-  private def unchecked(session: Session, ships: ::[Ship]): Decision =
+  private def manualLines(ships: ::[Ship.Manual]): ::[ManualLine] =
+    ships match
+      case ship :: rest =>
+        ::(ManualLine(ship.name, ship.version), rest.map(item => ManualLine(item.name, item.version)))
+
+  private def unchecked(session: Session, ships: ::[Ship.Line]): Decision =
     session match
       case Session.Development => Decision.Develop(Drift.Unchecked, developLines(ships))
       case _                   => Decision.Refused(::(Refusal.Unchecked, Nil))
 
-  private def checked(session: Session, ships: ::[Ship], registry: Registry): Decision =
+  private def checked(session: Session, ships: ::[Ship.Line], registry: Registry): Decision =
     val judged = ships.map(ship => ship -> place(ship, registry.relation(ship.name)))
     val refusals = judged.collect { case (_, Left(refusal)) => refusal }
     refusals match
@@ -159,7 +177,7 @@ object Versions:
           case (ship, state) :: rest => ready(session, ::((ship, state), rest))
           case Nil                   => Decision.NoCatalog
 
-  private def ready(session: Session, placed: ::[(Ship, Placement)]): Decision =
+  private def ready(session: Session, placed: ::[(Ship.Line, Placement)]): Decision =
     session match
       case Session.Development =>
         Decision.Develop(Drift.Clear, developLines(names(placed)))
@@ -174,21 +192,21 @@ object Versions:
         if lines.forall(isHold) then Decision.Refused(::(Refusal.NothingToRelease, Nil))
         else Decision.Publish(PublishKind.Release, lines)
 
-  private def developLines(ships: ::[Ship]): ::[DevelopLine] =
+  private def developLines(ships: ::[Ship.Line]): ::[DevelopLine] =
     ships match
       case ship :: rest =>
         ::(DevelopLine(ship.name, CiVersion(ship.number)), rest.map(item => DevelopLine(item.name, CiVersion(item.number))))
 
-  private def names(placed: ::[(Ship, Placement)]): ::[Ship] =
+  private def names(placed: ::[(Ship.Line, Placement)]): ::[Ship.Line] =
     placed match
       case (ship, _) :: rest => ::(ship, rest.map(_._1))
 
-  private def publishLines(kind: PublishKind, placed: ::[(Ship, Placement)]): ::[PublishLine] =
+  private def publishLines(kind: PublishKind, placed: ::[(Ship.Line, Placement)]): ::[PublishLine] =
     placed match
       case (ship, state) :: rest =>
         ::(publishLine(kind, ship, state), rest.map(pair => publishLine(kind, pair._1, pair._2)))
 
-  private def publishLine(kind: PublishKind, ship: Ship, state: Placement): PublishLine =
+  private def publishLine(kind: PublishKind, ship: Ship.Line, state: Placement): PublishLine =
     val action = state match
       case Placement.Current =>
         kind match
@@ -214,7 +232,7 @@ object Versions:
       case PublishAction.Hold(_, _) => true
       case _                        => false
 
-  private def place(ship: Ship, relation: Option[TagRelation]): Either[Refusal, Placement] =
+  private def place(ship: Ship.Line, relation: Option[TagRelation]): Either[Refusal, Placement] =
     relation match
       case None                      => Right(Placement.Unreleased)
       case Some(TagRelation.Matches) => Right(Placement.Current)

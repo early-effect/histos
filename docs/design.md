@@ -326,11 +326,13 @@ The pin strings are the zipx strings, so a catalog that already pins them still 
 
 Changing the pin strings would be an organization-wide catalog migration. Histos does not invent a second set of them.
 
+That scheme is the default because it is the one early-effect publishes with. It is not the only way to ship. `manual("app", manual"1.2.3")(core)` states the coordinate. Histos compiles it and publishes it as written. It does not read a commit, a branch, a pull request, or `.histos/releases`, and it does not open a bump pull request. A catalog is one scheme or the other. Mixing an early-effect ship and a manual version in one catalog is a build error. A project that does not publish ships nothing.
+
 ### 5.10 Build definition
 
 The file is ordinary Scala 3. Projects are values, so one project can depend on another by reference. A loop may build the module list. `scala"3.9.0"` and `dep"dev.zio::zio:2.1.26"` are inline literals. A malformed literal fails when the build file compiles. Builder calls capture source positions.
 
-v1 has one front end. `module` starts a compiling project. Platforms and Scala versions are required arguments, so forgetting either is a compile error. Further settings, including plugin extensions, are immutable methods that return a new value. `aggregate` is the constructor for a root that does not compile. `ship` is a catalog row. `ships` gathers those rows. A build that calls neither has an empty catalog.
+v1 has one front end. `module` starts a compiling project. Platforms and Scala versions are required arguments, so forgetting either is a compile error. Further settings, including plugin extensions, are immutable methods that return a new value. `aggregate` is the constructor for a root that does not compile. `ship` is an early-effect catalog row. `manual` states a version. `ships` gathers those rows. A build that calls neither has an empty catalog.
 
 ```scala
 import histos.*

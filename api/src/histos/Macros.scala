@@ -45,6 +45,13 @@ private object LiteralMacro:
         report.errorAndAbort(err)
       case Right(raw) => DepMacro.literal(Expr(raw))
 
+  def declaredVersion(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ManualVersion] =
+    onePart(sc, args, "manual") match
+      case Left(err)  =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => histos.version.ManualVersionMacro.literal(Expr(raw))
+
   def shipNumber(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ShipNumber] =
     onePart(sc, args, "ship") match
       case Left(err)  =>
@@ -102,7 +109,16 @@ private object BuilderMacro:
       members: Expr[Seq[ProjectDef]],
   )(using Quotes): Expr[ShipDef] =
     val at = pos
-    '{ ShipDef.make($name, $number, ::($member, $members.toList), $at) }
+    '{ ShipDef.line($name, $number, ::($member, $members.toList), $at) }
+
+  def fixed(
+      name: Expr[String],
+      version: Expr[histos.version.ManualVersion],
+      member: Expr[ProjectDef],
+      members: Expr[Seq[ProjectDef]],
+  )(using Quotes): Expr[ShipDef] =
+    val at = pos
+    '{ ShipDef.manual($name, $version, ::($member, $members.toList), $at) }
 
   private def pos(using Quotes): Expr[SourcePos] =
     import quotes.reflect.Position

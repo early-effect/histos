@@ -16,7 +16,9 @@ object VersionTask:
   val fileName: String = "releases"
 
   def fromRepo(graph: ProjectGraph, repo: Path, env: Map[String, String]): IO[TaskError, TaskResult] =
-    evidence(repo).flatMap(found => effect(graph.catalog, env, found))
+    graph.catalog match
+      case Catalog.Empty | Catalog.Manual(_) => effect(graph.catalog, Map.empty, Evidence.Unchecked)
+      case Catalog.Lines(_)                  => evidence(repo).flatMap(found => effect(graph.catalog, env, found))
 
   def effect(catalog: Catalog, env: Map[String, String], evidence: Evidence): IO[TaskError, TaskResult] =
     ZIO.fromEither(Versions.assess(catalog, env, evidence)).mapError(TaskError.Version(_)).flatMap(complete)

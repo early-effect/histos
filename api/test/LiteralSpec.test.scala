@@ -2,7 +2,7 @@ package histos
 
 import _root_.scala.compiletime.testing.typeCheckErrors
 
-import histos.version.{ShipNumber, ShipNumberError}
+import histos.version.{ManualVersion, ManualVersionError, ShipNumber, ShipNumberError}
 
 import zio.test.*
 
@@ -46,6 +46,20 @@ object LiteralSpec extends ZIOSpecDefault:
         ShipNumber.from("") == Left(ShipNumberError.Empty),
         errors match
           case e :: _ => e.message.contains("01.2.3")
+          case Nil    => false
+      )
+    ,
+    test("a manual version is the text that was written"):
+      val errors = typeCheckErrors("""manual"1.2..3"""")
+      assertTrue(
+        manual"1.2.3".value == "1.2.3",
+        manual"1.2.3-SNAPSHOT" == ManualVersion("1.2.3-SNAPSHOT"),
+        manual"2026.10.17".value == "2026.10.17",
+        ManualVersion.from("") == Left(ManualVersionError.Empty),
+        ManualVersion.from("1.2..3") == Left(ManualVersionError.NotAVersion("1.2..3")),
+        ManualVersion.from(" 1.2.3") == Left(ManualVersionError.NotAVersion(" 1.2.3")),
+        errors match
+          case e :: _ => e.message.contains("1.2..3")
           case Nil    => false
       )
     ,
