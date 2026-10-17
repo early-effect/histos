@@ -101,7 +101,6 @@ object ResolveSpec extends ZIOSpecDefault:
           bracket <- resolve(open, open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "lib", "[1.0,2.0]", DepKind.Java))))
           milestone <- resolve(open, open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "missing", "1.0.0-M1", DepKind.Java))))
           snapshot <- resolve(open, open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "missing", "0.5.13-SNAPSHOT", DepKind.Java))))
-          js <- resolve(open, open.cell.copy(platform = Platform.Js))
           native <- resolve(open, open.cell.copy(platform = Platform.Native))
         yield assertTrue(
           plus == Left(ResolveError.Range(Dep.trusted("dev.histos", "lib", "1.+", DepKind.Java))),
@@ -109,9 +108,31 @@ object ResolveSpec extends ZIOSpecDefault:
           bracket == Left(ResolveError.Range(Dep.trusted("dev.histos", "lib", "[1.0,2.0]", DepKind.Java))),
           milestone == Left(ResolveError.NotFound("dev.histos", "missing", "1.0.0-M1")),
           snapshot == Left(ResolveError.NotFound("dev.histos", "missing", "0.5.13-SNAPSHOT")),
-          js == Left(ResolveError.UnsupportedPlatform(Platform.Js)),
           native == Left(ResolveError.UnsupportedPlatform(Platform.Native)),
         )
+    ,
+    test("a js cell fetches the sjs1 jar and does not ask the network"):
+      ZIO.scoped:
+        for
+          open <- opened
+          _ <- ZIO.attempt(writeMaven(
+                 open.maven,
+                 "dev.zio",
+                 "zio_sjs1_3",
+                 "2.1.26",
+                 emptyJar,
+                 pom("dev.zio", "zio_sjs1_3", "2.1.26", None),
+               ))
+          cell = ResolveCell(
+                   core,
+                   List(binary),
+                   v390,
+                   Platform.Js,
+                   open.repositories,
+                 )
+          classpath <- ZIO.serviceWithZIO[Resolve](_.resolve(cell)).provide(Resolve.live(open.cache)).either
+          names = classpath.map(_.artifacts.map(_.name))
+        yield assertTrue(names == Right(List("zio_sjs1_3")))
     ,
     test("one transitive is evicted onto the direct revision"):
       ZIO.scoped:
@@ -239,6 +260,7 @@ object ResolveSpec extends ZIOSpecDefault:
   private final case class Opened(
       root: Path,
       cache: Path,
+      maven: Path,
       cell: ResolveCell,
       repositories: Repositories,
       javac: Int,
@@ -256,7 +278,7 @@ object ResolveSpec extends ZIOSpecDefault:
       _ <- ZIO.when(compiled.code == 0)(ZIO.attempt(publish(repo, compiled.bytes)))
     yield
       val repositories = Repositories(Repository.Maven(RepoUrl.file(repo)), Nil)
-      Opened(root, root.resolve("cache"), ResolveCell(core, List(lib, base), v390, Platform.Jvm, repositories), repositories, compiled.code, compiled.text)
+      Opened(root, root.resolve("cache"), repo, ResolveCell(core, List(lib, base), v390, Platform.Jvm, repositories), repositories, compiled.code, compiled.text)
 
   private final case class Compiled(code: Int, text: String, bytes: Array[Byte])
 
@@ -273,12 +295,12 @@ object ResolveSpec extends ZIOSpecDefault:
     Compiled(code, text, bytes)
 
   private def publish(root: Path, greeting: Array[Byte]): Unit =
-    writeMaven(root, "base", "1.0.0", emptyJar, pom("base", "1.0.0", None))
-    writeMaven(root, "base", "1.1.0", emptyJar, pom("base", "1.1.0", None))
-    writeMaven(root, "lib", "1.0.0", greeting, pom("lib", "1.0.0", Some("base", "1.0.0")))
+    writeMaven(root, "dev.histos", "base", "1.0.0", emptyJar, pom("dev.histos", "base", "1.0.0", None))
+    writeMaven(root, "dev.histos", "base", "1.1.0", emptyJar, pom("dev.histos", "base", "1.1.0", None))
+    writeMaven(root, "dev.histos", "lib", "1.0.0", greeting, pom("dev.histos", "lib", "1.0.0", Some("base", "1.0.0")))
 
-  private def writeMaven(root: Path, name: String, revision: String, jar: Array[Byte], pomText: String): Unit =
-    val dir = List("dev", "histos", name, revision).foldLeft(root)(_.resolve(_))
+  private def writeMaven(root: Path, group: String, name: String, revision: String, jar: Array[Byte], pomText: String): Unit =
+    val dir = (group.split("\\.").toList :+ name :+ revision).foldLeft(root)(_.resolve(_))
     Files.createDirectories(dir)
     val jarName  = s"$name-$revision.jar"
     val pomName  = s"$name-$revision.pom"
@@ -288,7 +310,7 @@ object ResolveSpec extends ZIOSpecDefault:
     Files.writeString(dir.resolve(s"$jarName.sha1"), sha1(jar) + "\n")
     Files.writeString(dir.resolve(s"$pomName.sha1"), sha1(pomBytes) + "\n")
 
-  private def pom(name: String, revision: String, dependency: Option[(String, String)]): String =
+  private def pom(group: String, name: String, revision: String, dependency: Option[(String, String)]): String =
     val deps = dependency match
       case None => ""
       case Some((artifact, version)) =>
@@ -303,7 +325,7 @@ object ResolveSpec extends ZIOSpecDefault:
     s"""<?xml version="1.0" encoding="UTF-8"?>
        |<project>
        |  <modelVersion>4.0.0</modelVersion>
-       |  <groupId>dev.histos</groupId>
+       |  <groupId>$group</groupId>
        |  <artifactId>$name</artifactId>
        |  <version>$revision</version>
        |$deps</project>

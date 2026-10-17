@@ -4,7 +4,8 @@ import heddle.LinePipe
 import histos.acp.Acp
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled, Startup, Toolchain, ToolchainError}
-import histos.load.Loader
+import histos.load.{LoadError, Loader}
+import histos.node.{Node, NodeToolchain}
 import histos.mcp.HistosMcp
 import histos.resolve.{Repositories, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
@@ -79,7 +80,7 @@ object Cli:
           case Command.Run(id)          => run(repo, apiJar, id)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
-          case Command.Toolchain        => toolchain
+          case Command.Toolchain        => toolchain(repo, apiJar)
           case Command.CachePath        => cachePath
           case Command.CacheList        => cacheList
           case Command.CacheClean(dry)  => cacheClean(dry)
@@ -153,12 +154,21 @@ object Cli:
           file => Completed(CliExit.Success, file.toString, ""),
         ).merge
 
-  private def toolchain: URIO[Machine, Completed] =
+  private def toolchain(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
-      Toolchain.explain(machine).mapBoth(
-        err => Completed(CliExit.ToolchainFailed, "", err.message),
-        text => Completed(CliExit.Success, text, ""),
-      ).merge
+      Toolchain.explain(machine).either.flatMap:
+        case Left(err) => ZIO.succeed(Completed(CliExit.ToolchainFailed, "", err.message))
+        case Right(jdkText) =>
+          ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+            case Left(LoadError.MissingFile(_)) => ZIO.succeed(Completed(CliExit.Success, jdkText, ""))
+            case Left(error)                    => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+            case Right(loaded) if !Node.required(loaded.graph) =>
+              ZIO.succeed(Completed(CliExit.Success, jdkText, ""))
+            case Right(_) =>
+              NodeToolchain.explain(machine).mapBoth(
+                err => Completed(CliExit.ToolchainFailed, jdkText, err.message),
+                text => Completed(CliExit.Success, s"$jdkText\n$text", ""),
+              ).merge
     }
 
   private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =

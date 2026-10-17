@@ -121,7 +121,46 @@ object CliSpec extends ZIOSpecDefault:
                  )
                }.mapError(t => LoadError.Io(LoadIo.Temp))
           done <- Cli.execute(List("toolchain"), dir, jar).provideSome[Scope](layers(dir, Map("JAVA_HOME" -> jdk.toString)))
-        yield assertTrue(done.exit == CliExit.Success && done.out.contains("chosen JavaHome") && done.out.contains("21.0.2") && done.out.contains("lock 21.0.2"))
+        yield assertTrue(
+          done.exit == CliExit.Success && done.out.contains("chosen JavaHome") && done.out.contains("21.0.2") && done.out.contains("lock 21.0.2"),
+          !done.out.contains("node"),
+        )
+    ,
+    test("a js project asks for a node lock and still prints the jdk"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          jdk = dir.resolve("jdk")
+          _ <- ZIO.attempt {
+                 Files.createDirectories(jdk.resolve("bin"))
+                 Files.createDirectories(dir.resolve(".histos"))
+                 Files.writeString(jdk.resolve("bin").resolve("javac"), "")
+                 Files.writeString(jdk.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
+                 Files.writeString(
+                   dir.resolve(".histos").resolve("jdk.lock"),
+                   """major 21
+                     |version 21.0.2
+                     |url https://example.test/jdk.zip
+                     |sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                     |""".stripMargin,
+                 )
+                 Files.writeString(
+                   dir.resolve("histos.scala"),
+                   """import histos.*
+                     |object build extends HistosBuild:
+                     |  def graph =
+                     |    val core = module("core", Js)(scala"3.9.0")
+                     |    Projects(core)
+                     |""".stripMargin,
+                 )
+               }.mapError(t => LoadError.Io(LoadIo.Temp))
+          done <- Cli.execute(List("toolchain"), dir, jar).provideSome[Scope](layers(dir, Map("JAVA_HOME" -> jdk.toString)))
+        yield assertTrue(
+          done.exit == CliExit.ToolchainFailed,
+          done.out.contains("chosen JavaHome"),
+          done.err.contains("node.lock"),
+        )
     ,
     test("unknown commands and missing ids are usage"):
       for

@@ -1,0 +1,57 @@
+package histos.node
+
+import histos.jdk.{ArchiveSource, Machine}
+
+import java.nio.file.{Files, Path}
+
+import zio.{IO, ZIO}
+
+object NodeToolchain:
+  /** Print the Node decision. Does not download. A missing lock is an error: the caller already knows Js needs Node. */
+  def explain(machine: Machine): IO[NodeError, String] =
+    readLock(machine.repo).flatMap:
+      case None       => ZIO.fail(NodeError.NoLock(lockPath(machine.repo)))
+      case Some(lock) => resolution(machine, lock).map(found => render(lock, found))
+
+  def render(lock: NodeLock, resolution: NodeResolution): String =
+    val tail = resolution match
+      case NodeResolution.Provision(_, _) => s"archive ${NodeLock.url(lock.source)}"
+      case _                              => s"lock ${lock.version.value}"
+    Node.report(resolution) + "\n" + tail
+
+  private def resolution(machine: Machine, lock: NodeLock): IO[NodeError, NodeResolution] =
+    for
+      explicit <- readOverride(machine.repo)
+      input    <- NodeLocations.probe(machine, explicit)
+      view     <- NodeProbe.scan(input)
+    yield Node.resolve(lock.major, view)
+
+  private def readLock(repo: Path): IO[NodeError, Option[NodeLock]] =
+    val file = lockPath(repo)
+    ZIO.attempt(Files.isRegularFile(file)).mapError(_ => NodeError.Unreadable(file)).flatMap:
+      case false => ZIO.none
+      case true =>
+        ZIO.attempt(Files.readString(file)).mapError(_ => NodeError.Unreadable(file)).flatMap: text =>
+          ZIO.fromEither(NodeLock.parse(text)).mapBoth(NodeError.Lock(_), Some(_))
+
+  private def readOverride(repo: Path): IO[NodeError, Option[Path]] =
+    val file = repo.resolve(".histos").resolve("node.local")
+    ZIO.attempt(Files.isRegularFile(file)).mapError(_ => NodeError.Unreadable(file)).flatMap:
+      case false => ZIO.none
+      case true =>
+        ZIO.attempt(Files.readString(file)).mapError(_ => NodeError.Unreadable(file)).flatMap: text =>
+          ZIO.fromEither(parseOverride(text)).mapBoth(NodeError.Override(_), Some(_))
+
+  private def parseOverride(text: String): Either[NodeOverrideError, Path] =
+    val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+    lines match
+      case Nil => Left(NodeOverrideError.Empty)
+      case raw :: Nil =>
+        try
+          val path = Path.of(raw)
+          if path.isAbsolute then Right(path) else Left(NodeOverrideError.Relative(raw))
+        catch case _: java.nio.file.InvalidPathException => Left(NodeOverrideError.Invalid(raw))
+      case _ => Left(NodeOverrideError.Multiple)
+
+  private def lockPath(repo: Path): Path =
+    repo.resolve(".histos").resolve("node.lock")
