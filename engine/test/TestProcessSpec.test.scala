@@ -1,6 +1,7 @@
 package histos.testrun
 
 import histos.Platform
+import histos.pack.{MainClass, MainClassError}
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets

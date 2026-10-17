@@ -91,4 +91,4 @@ else
   java_bin=$(provision_jdk) || exit 1
 fi
 
-exec "$java_bin" -jar "$jar" "$@"
+exec "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"

@@ -1,7 +1,7 @@
 package histos.native
 
 import histos.jdk.{JdkVersion, ReleaseError}
-import histos.testrun.MainClass
+import histos.pack.MainClass
 import histos.zinc.{JvmCompile, ResolvedJdk}
 import histos.{ClangMajor, ClangPin, Module, NativeVersion, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 

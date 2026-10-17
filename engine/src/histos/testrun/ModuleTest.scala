@@ -15,6 +15,7 @@ import histos.zinc.{
   ScalacFlags,
   Sources,
 }
+import histos.pack.{MainClass, MainClassError}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
 
 import java.nio.file.{Files, Path}

@@ -161,6 +161,10 @@ object JdkLocations:
 end JdkLocations
 
 object Toolchain:
+  /** JDK 25 refuses unnamed native access without this flag. The manifest attribute is the jar form. */
+  val NativeAccess: String = "--enable-native-access=ALL-UNNAMED"
+  val NativeAccessManifest: String = "Enable-Native-Access: ALL-UNNAMED"
+
   def explain(machine: Machine): IO[ToolchainError, String] =
     readLock(machine.repo).flatMap:
       case None       => ZIO.fail(ToolchainError.NoLock(lockPath(machine.repo)))
@@ -191,7 +195,7 @@ object Toolchain:
             case found => ZIO.succeed(Startup.Refuse(render(lock, found)))
 
   def command(javaBin: Path, jar: Path, args: List[String]): List[String] =
-    javaBin.toString :: "-jar" :: jar.toString :: args
+    javaBin.toString :: NativeAccess :: "-jar" :: jar.toString :: args
 
   def replace(javaBin: Path, jar: Path, args: List[String]): IO[ToolchainError, Int] =
     ZIO.attemptBlockingInterrupt {

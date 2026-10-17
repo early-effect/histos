@@ -1,5 +1,7 @@
 package histos.testrun
 
+import histos.pack.MainClass
+
 import java.nio.file.Path
 
 /** The child that loads an sbt `Framework`. The engine does not. */

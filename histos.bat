@@ -39,7 +39,7 @@ if errorlevel 1 (
 ) else (
   set "JAVA_BIN=java"
 )
-"%JAVA_BIN%" -jar "%JAR%" %*
+"%JAVA_BIN%" --enable-native-access=ALL-UNNAMED -jar "%JAR%" %*
 exit /b %ERRORLEVEL%
 
 :provision
