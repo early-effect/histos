@@ -89,6 +89,15 @@ object CliSpec extends ZIOSpecDefault:
         both == Left(CliParseError.Rejected),
       )
     ,
+    test("publish takes a repository and project names"):
+      for
+        named <- Cli.parse(List("publish", "repo", "core"))
+        bare  <- Cli.parse(List("publish")).either
+      yield assertTrue(
+        named == Command.Publish("repo", List("core")),
+        bare == Left(CliParseError.MissingArgument),
+      )
+    ,
     test("compile takes project names"):
       for
         entire <- Cli.parse(List("compile"))
@@ -105,6 +114,11 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for done <- invoke(List("workflow"))
         yield assertTrue(done.exit == CliExit.WorkflowFailed && done.exit.code == 6 && done.err.contains("ci.yml"))
+    ,
+    test("publish of an empty catalog writes nothing"):
+      ZIO.scoped:
+        for done <- invoke(List("publish", "repo"))
+        yield assertTrue(done.exit == CliExit.PublishFailed && done.exit.code == 9 && done.err.contains("nothing publishes"))
     ,
     test("compile without a lock fails, and an unknown project is not a lock error"):
       ZIO.scoped:

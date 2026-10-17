@@ -9,6 +9,10 @@ object PlatformSuffix:
 
 /** The published artifact name. The Scala suffix is applied here, not when a `Dep` is parsed. */
 object ArtifactName:
+  /** The name Histos publishes for one of its modules. Binary suffix, same rule as a `::` dependency. */
+  def published(module: histos.ProjectName, version: ScalaVersion, platform: Platform): String =
+    s"${module.value}${platformSuffix(platform)}_${binary(version)}"
+
   def of(dependency: Dep, version: ScalaVersion, platform: Platform): String =
     dependency.kind match
       case DepKind.Java   => dependency.name

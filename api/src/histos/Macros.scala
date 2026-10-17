@@ -30,6 +30,16 @@ private object DepMacro:
       case DepKind.Binary => '{ DepKind.Binary }
       case DepKind.Full   => '{ DepKind.Full }
 
+private object OrganizationMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[Organization] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("Organization(...) takes a literal. Use Organization.from at runtime.", raw)
+      case Some(text) =>
+        Organization.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ Organization.trusted(${ Expr(text) }) }
+
 private object LiteralMacro:
   def scalaVersion(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[ScalaVersion] =
     onePart(sc, args, "scala").map(raw => ScalaVersionMacro.literal(Expr(raw))) match
@@ -51,6 +61,13 @@ private object LiteralMacro:
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => histos.version.ManualVersionMacro.literal(Expr(raw))
+
+  def organization(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Organization] =
+    onePart(sc, args, "organization") match
+      case Left(err)  =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => OrganizationMacro.literal(Expr(raw))
 
   def shipNumber(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ShipNumber] =
     onePart(sc, args, "ship") match

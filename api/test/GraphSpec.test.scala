@@ -37,6 +37,7 @@ object GraphSpec extends ZIOSpecDefault:
                   ),
                   Splits.aggregate,
                   _,
+                  None,
                 )
               ) =>
             children.map(_.value) == List("core", "tests") &&
@@ -96,7 +97,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),

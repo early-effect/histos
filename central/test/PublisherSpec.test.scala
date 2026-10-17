@@ -1,6 +1,7 @@
 package histos.central
 
 import histos.version.{CommitSha, CommitShaError, ManualVersion, ManualVersionError, ReleaseVersion, ShipNumber, ShipNumberError, SnapshotCoordinate, SnapshotPointer}
+import histos.{Organization, OrganizationError}
 
 import java.nio.file.{Files, Path}
 
@@ -15,7 +16,7 @@ object PublisherSpec extends ZIOSpecDefault:
 
   private enum FixtureError:
     case Ship(error: ShipNumberError)
-    case Group(error: PublishError)
+    case Group(error: OrganizationError)
     case Name(error: PublishError)
     case Commit(error: CommitShaError)
     case Version(error: ManualVersionError)
@@ -29,7 +30,7 @@ object PublisherSpec extends ZIOSpecDefault:
 
   private final case class Fixture(
       number: ShipNumber,
-      group: GroupId,
+      group: Organization,
       widget: ArtifactId,
       app: ArtifactId,
       commit: CommitSha,
@@ -39,7 +40,7 @@ object PublisherSpec extends ZIOSpecDefault:
   private val opened: Either[FixtureError, Fixture] =
     for
       number  <- ShipNumber.from("1.4.2").left.map(FixtureError.Ship(_))
-      group   <- GroupId.from("com.example").left.map(FixtureError.Group(_))
+      group   <- Organization.from("com.example").left.map(FixtureError.Group(_))
       widget  <- ArtifactId.from("widget").left.map(FixtureError.Name(_))
       app     <- ArtifactId.from("app").left.map(FixtureError.Name(_))
       commit  <- CommitSha.from(full).left.map(FixtureError.Commit(_))
@@ -93,6 +94,30 @@ object PublisherSpec extends ZIOSpecDefault:
             !published.jar.toString.contains("1234567890ab"),
           )
     ,
+    test("a dependency is written into the pom"):
+      use: fixture =>
+        ZIO.scoped:
+          for
+            root <- directory
+            dependency <- ZIO.fromEither {
+                            for
+                              group   <- Organization.from("dev.zio").left.map(_.message)
+                              name    <- ArtifactId.from("zio_3").left.map(_.message)
+                              version <- DependencyVersion.from("2.1.27").left.map(_.message)
+                            yield MavenDependency(group, name, version)
+                          }.mapError(new IllegalStateException(_))
+            published <- required(
+                           ZIO.serviceWithZIO[Publisher](
+                             _.publish(Artifact(fixture.group, fixture.widget, Revision.Release(ReleaseVersion(fixture.number)), bytes, List(dependency)))
+                           ).provide(Publisher.local(root))
+                         )
+            pom <- ZIO.attempt(Files.readString(published.pom))
+          yield assertTrue(
+            pom.contains("<artifactId>zio_3</artifactId>"),
+            pom.contains("<groupId>dev.zio</groupId>"),
+            pom.contains("<version>2.1.27</version>"),
+          )
+    ,
     test("an empty file, plain text, and an escaping name are refused before a write"):
       use: fixture =>
         ZIO.scoped:
@@ -104,9 +129,8 @@ object PublisherSpec extends ZIOSpecDefault:
           yield assertTrue(
             empty == Left(PublishError.EmptyJar),
             text == Left(PublishError.NotAJar),
-            GroupId.from("com/../example") == Left(PublishError.BadGroup("com/../example")),
-            GroupId.from("com..example") == Left(PublishError.BadGroup("com..example")),
             ArtifactId.from("..") == Left(PublishError.BadArtifact("..")),
+            DependencyVersion.from("../1") == Left(PublishError.BadVersion("../1")),
             listed.isEmpty,
           )
     ,
