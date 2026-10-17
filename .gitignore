@@ -4,4 +4,5 @@
 .bloop/
 .idea/
 dist/
+target/
 *.class
