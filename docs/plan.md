@@ -117,22 +117,35 @@ Proposed stack C: Phase 2, after B merges.
 
 The general plugin classloader is not this layer. One in-tree module that only sees `api` is the pattern. The loader arrives when a second plugin exists.
 
-Before stack D, the library loop. `histos compile` compiles JVM cells from the lock and `dependsOn`. `histos publish <repository>` jars those classes and writes a local Maven directory, with the Scala binary suffix and pom dependencies. It does not publish a development coordinate. A second project resolving that directory is the loop. Histos building Histos waits until that is the way this repo builds. CI does not render a publish job: a file repository is not a release.
+The library loop is in place. `histos compile` compiles JVM cells from the lock and `dependsOn`. `histos publish <repository>` jars those classes and writes a local Maven directory, with the Scala binary suffix and pom dependencies. It does not publish a development coordinate. A second project resolving that directory is the loop. CI does not render a publish job: a file repository is not a release.
 
-`histos test` is the CI command on that loop. It compiles, runs the module's named main in one subprocess per Scala version, and reports `no tests` when there is nothing to run. It does not start a test framework.
+`histos test` compiles, runs the module's named main in one subprocess per Scala version, and reports `no tests` when there is nothing to run. It does not start a test framework.
 
-Proposed stack D: Phase 3, after C merges.
+Self-build comes before stack D. A published local assembly has to compile, test, and package this repo, so scala-cli stops being the build. That assembly is not a Maven Central release. BSP, the agent toolchain, and the remote cache follow, and they stay in the plan.
 
-20. `histos/bsp`: BSP server for Metals on the same task API. `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: compile and test.
+20. `histos/test-classpath`: `libraryDependencies` stay the compile classpath and the published pom. `testDependencies` are a second lock cell, `test <module> <scala> <platform>`, resolved together with the library dependencies so one eviction applies. A module with no test dependencies has no test cell. `histos compile` and `histos publish` do not read it. `histos test` does. Depends on: the lock, compile, and test.
+    Verify: `scala-cli test api` and `scala-cli test engine`.
+21. `histos/zio-test`: The test subprocess runs ZIO Test when a module has test sources. One JVM per module and Scala version. The engine does not load the framework. `no tests` stays the answer when there is nothing to run. Depends on: the test classpath.
+    Verify: `scala-cli test engine` runs a ZIO Test suite in the child.
+22. `histos/native-tools`: This repo's dependency on `org.scala-native::tools:0.5.13-SNAPSHOT` resolves from a `file:` repository the build names. Ivy local stays private to the native toolchain resolve and is not a build resolver. Depends on: resolvers.
+    Verify: `scala-cli test engine` resolves `tools` from that directory and does not ask Central for it.
+23. `histos/assembly`: Package `app` and its runtime classpath into the one jar `./histos` execs, with main `histos.cli.Main`. The launcher passes `--enable-native-access=ALL-UNNAMED`. Depends on: the class jar.
+    Verify: `scala-cli test app` execs that jar far enough to print the version.
+24. `histos/self`: A root `histos.scala` for `api`, `central`, `engine`, and `app`, wired with `dependsOn` instead of `//> using file` and the hand-built api jar. One scala-cli build writes the first assembly. That assembly rebuilds the next one. The `project.scala` files go away only after that loop is green. Depends on: layers 20 through 23.
+    Verify: the rebuilt assembly prints the same version, and `./histos test` runs these suites.
+
+Stack D, after this repo builds itself:
+
+25. `histos/bsp`: BSP server for Metals on the same task API. `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: compile and test.
     Verify: `scala-cli test app` against a BSP client fixture.
-21. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
+26. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
     Verify: `scala-cli test app`
-22. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
+27. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
     Verify: `scala-cli test engine` against an in-process fake cache. No real remote service.
 
 Not in any of these stacks:
 
-- Dogfood. Moving a library off sbt-zipx is a PR in that library. Stacks cannot span repos. Histos work that dogfood exposes is a new layer on trunk after D, not a guessed layer now.
+- Moving a library other than this repo off sbt. Self-build of Histos is layers 20 through 24. Another library is a PR in that library after this repo builds itself.
 - Test jail (filesystem and network) before any test is sendable. It is the first layer of the next stack after dogfood shows the subprocess is the one we jail. Remote execution stays off.
 - Plugin loader (`ExactBinary`, `Source`, `BinaryOrSource`). `LinkStrategy.Api` stays a typed error until 1.0. After the loader merges, docs, docker, deploy, coverage, and the dependency-update bot are separate PRs. They do not form one stack: they share the loader and nothing else.
 - sbt importer. The design holds it until a second repo repeats the shape.
@@ -142,5 +155,5 @@ Not in any of these stacks:
 
 ## After approval
 
-Implement stack A only, bottom up. Each layer is committed and verified with the command above before the next branch is added. Do not open stacks B through D in the same session. Do not merge. You merge.
+Stacks A through C landed as those layers. The active sequence is the self-build, layers 20 through 24, one branch at a time. Stack D follows. Do not merge. You merge.
 

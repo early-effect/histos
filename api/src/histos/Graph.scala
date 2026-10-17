@@ -15,6 +15,7 @@ final case class Module(
     position: SourcePos,
     clang: ClangPin = ClangPin.Unused,
     test: Option[TestMain] = None,
+    testDependencies: List[Dep] = Nil,
 ) extends Project
 
 final case class Aggregate(
@@ -177,7 +178,7 @@ object Projects:
             target.defn match
               case _: AggregateDef => Left(BuildError.DependsOnAggregate(n.name, target.name, m.position))
               case _: ModuleDef    => Right(names :+ target.name)
-    .map(deps => Module(n.name, m.platforms, m.versions, m.dependencies, deps, m.position, m.clang, m.test))
+    .map(deps => Module(n.name, m.platforms, m.versions, m.dependencies, deps, m.position, m.clang, m.test, m.testDependencies))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
     a.children.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, child) =>

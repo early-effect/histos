@@ -84,11 +84,34 @@ object ResolveSpec extends ZIOSpecDefault:
         DependencyLock.parse("nope") == Left(LockError.BadLine("nope")),
         DependencyLock.parse("direct dev.zio zio 2.1.26 binary") == Left(LockError.Missing(LockField.Cell)),
         DependencyLock.parse(short) == Left(LockError.Missing(LockField.Direct)),
-        DependencyLock.parse(twice) == Left(LockError.DuplicateCell(core, v390, Platform.Jvm)),
+        DependencyLock.parse(twice) == Left(LockError.DuplicateCell(core, v390, Platform.Jvm, ClasspathScope.Compile)),
         DependencyLock.parse(s"cell core 3.9.0 jvm\n$sha") == Left(LockError.BadSha256("zzzz")),
         DependencyLock.parse(s"cell core 3.9.0 jvm\n$repo") == Left(LockError.BadRepository("nowhere")),
         DependencyLock.parse("") == Left(LockError.Empty),
       )
+    ,
+    test("a test cell follows the compile cell, and a repeated test cell is refused"):
+      val text =
+        """cell core 3.9.0 jvm
+          |direct dev.histos lib 1.0.0 java
+          |test core 3.9.0 jvm
+          |direct dev.histos lib 1.0.0 java
+          |direct dev.histos probe 1.0.0 java
+          |""".stripMargin
+      val twice =
+        """test core 3.9.0 jvm
+          |test core 3.9.0 jvm
+          |""".stripMargin
+      DependencyLock.parse(text) match
+        case Right(lock) =>
+          val again = DependencyLock.parse(DependencyLock.render(lock))
+          assertTrue(
+            again == Right(lock),
+            lock.cells.map(_.scope) == List(ClasspathScope.Compile, ClasspathScope.Test),
+            lock.cells.flatMap(_.directs.map(_.name)) == List("lib", "lib", "probe"),
+            DependencyLock.parse(twice) == Left(LockError.DuplicateCell(core, v390, Platform.Jvm, ClasspathScope.Test)),
+          )
+        case Left(_) => assertTrue(false)
   )
 
   private val fetch = suite("file repository")(
@@ -183,7 +206,7 @@ object ResolveSpec extends ZIOSpecDefault:
           out     <- Resolve.materialize(open.cell, lock).provide(Resolve.live(open.cache)).either
           touched  = Files.exists(open.cache)
         yield assertTrue(
-          out == Left(ResolveError.LockDrift(open.cell.module, open.cell.scalaVersion, open.cell.platform)),
+          out == Left(ResolveError.LockDrift(open.cell.module, open.cell.scalaVersion, open.cell.platform, ClasspathScope.Compile)),
           !touched,
         )
     ,
@@ -213,6 +236,43 @@ object ResolveSpec extends ZIOSpecDefault:
             case _                                                 => false
           ,
         )
+    ,
+    test("a test dependency is a second cell and is not on the compile classpath"):
+      ZIO.scoped:
+        for
+          open <- opened
+          _ <- ZIO.attempt(writeMaven(
+                 open.maven,
+                 "dev.histos",
+                 "probe",
+                 "1.0.0",
+                 emptyJar,
+                 pom("dev.histos", "probe", "1.0.0", None),
+               ))
+          probe = Dep.trusted("dev.histos", "probe", "1.0.0", DepKind.Java)
+          built = ProjectGraph.trusted(List(Module(
+                     core,
+                     Platforms(Platform.Jvm, Nil),
+                     ScalaVersions(v390, Nil),
+                     List(lib),
+                     Nil,
+                     SourcePos("histos.scala", 1, 1),
+                     testDependencies = List(probe),
+                   )))
+          _ <- Resolve.update(open.root, built, open.repositories).provide(Resolve.live(open.cache))
+          checked <- Resolve.check(open.root, built, open.repositories).provide(Resolve.live(open.cache))
+          text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
+          parsed = DependencyLock.parse(text)
+        yield assertTrue:
+          checked == "core 3.9.0 jvm\ncore 3.9.0 jvm test" &&
+            (parsed match
+              case Right(lock) =>
+                val compile = lock.cells.find(_.scope == ClasspathScope.Compile)
+                val tested = lock.cells.find(_.scope == ClasspathScope.Test)
+                compile.exists(cell => cell.directs.map(_.name) == List("lib") && !cell.artifacts.exists(_.name == "probe")) &&
+                  tested.exists(cell => cell.directs.map(_.name) == List("lib", "probe") && cell.artifacts.exists(_.name == "probe"))
+              case Left(_) => false
+            )
     ,
     test("compile reads the lock and calls a class from the resolved jar"):
       ZIO.scoped:

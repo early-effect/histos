@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.jdk.Sha256
-import histos.resolve.{BuildResolvers, Classpath, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{BuildResolvers, Classpath, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.workflow.{CiError, TestTarget, Workflow}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -185,7 +185,7 @@ object GraphCompile:
       lock: DependencyLock,
       repositories: Repositories,
   ): ZIO[Resolve, GraphCompileError, Fetched] =
-    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories)
+    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories, ClasspathScope.Compile)
     Resolve.materialize(cell, lock).mapBoth(GraphCompileError.Lock(_), fetched)
 
   private final case class Fetched(paths: List[Path], hashes: List[Sha256])

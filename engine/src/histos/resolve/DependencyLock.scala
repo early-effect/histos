@@ -15,7 +15,16 @@ final case class LockedArtifact(
     repository: Repository,
 )
 
-/** One module, Scala version, and platform. An aggregate has no cell. */
+/** Which classpath a lock cell is. Compile is published. Test is not. */
+enum ClasspathScope:
+  case Compile
+  case Test
+
+  def header: String = this match
+    case Compile => "cell"
+    case Test    => "test"
+
+/** One module, Scala version, platform, and classpath. An aggregate has no cell. */
 final case class LockedCell(
     module: ProjectName,
     scalaVersion: ScalaVersion,
@@ -23,6 +32,7 @@ final case class LockedCell(
     directs: List[LockedDirect],
     artifacts: List[LockedArtifact],
     evictions: List[Eviction],
+    scope: ClasspathScope = ClasspathScope.Compile,
 )
 
 /** The committed `.histos/dependencies.lock`. Cells stay in file order. */
@@ -53,7 +63,7 @@ object DependencyLock:
     else lock.cells.map(renderCell).mkString("\n") + "\n"
 
   def renderCell(cell: LockedCell): String =
-    val header = s"cell ${cell.module.value} ${cell.scalaVersion.value} ${PlatformToken.render(cell.platform)}"
+    val header = s"${cell.scope.header} ${cell.module.value} ${cell.scalaVersion.value} ${PlatformToken.render(cell.platform)}"
     val body   =
       cell.directs.map(renderDirect) ++ cell.artifacts.map(renderArtifact) ++ cell.evictions.map(renderEvict)
     (header :: body.toList).mkString("\n")
@@ -77,6 +87,7 @@ object DependencyLock:
       module: ProjectName,
       scalaVersion: ScalaVersion,
       platform: Platform,
+      scope: ClasspathScope,
       directs: List[LockedDirect],
       artifacts: List[LockedArtifact],
       evictions: List[Eviction],
@@ -102,13 +113,15 @@ object DependencyLock:
   private def values(field: LockField): Int =
     field match
       case LockField.Cell     => 3
+      case LockField.Test     => 3
       case LockField.Direct   => 4
       case LockField.Artifact => 5
       case LockField.Evict    => 4
 
   private def accept(state: Acc, field: LockField, rest: List[String], line: String): Either[LockError, Acc] =
     field match
-      case LockField.Cell     => open(state, rest, line)
+      case LockField.Cell     => open(state, rest, line, ClasspathScope.Compile)
+      case LockField.Test     => open(state, rest, line, ClasspathScope.Test)
       case LockField.Direct   => withOpen(state, line)((cell, values) => direct(cell, values))
       case LockField.Artifact => withOpen(state, line)((cell, values) => artifact(cell, values))
       case LockField.Evict    => withOpen(state, line)((cell, values) => evict(cell, values))
@@ -123,7 +136,7 @@ object DependencyLock:
           case Some(cell) => fill(cell, rest).map(next => state.copy(open = Some(next)))
       case Nil => Left(LockError.BadLine(line))
 
-  private def open(state: Acc, rest: List[String], line: String): Either[LockError, Acc] =
+  private def open(state: Acc, rest: List[String], line: String, scope: ClasspathScope): Either[LockError, Acc] =
     rest match
       case moduleRaw :: versionRaw :: platformRaw :: Nil =>
         val parsed =
@@ -134,10 +147,10 @@ object DependencyLock:
           yield (module, version, platform)
         parsed.flatMap: (module, version, platform) =>
           val closed = finish(state)
-          if closed.exists(cell => cell.module == module && cell.scalaVersion == version && cell.platform == platform) then
-            Left(LockError.DuplicateCell(module, version, platform))
+          if closed.exists(cell => cell.module == module && cell.scalaVersion == version && cell.platform == platform && cell.scope == scope) then
+            Left(LockError.DuplicateCell(module, version, platform, scope))
           else
-            Right(Acc(closed, Some(Building(module, version, platform, Nil, Nil, Nil))))
+            Right(Acc(closed, Some(Building(module, version, platform, scope, Nil, Nil, Nil))))
       case _ => Left(LockError.BadLine(line))
 
   private def direct(cell: Building, rest: List[String]): Either[LockError, Building] =
@@ -173,7 +186,8 @@ object DependencyLock:
   private def finish(state: Acc): List[LockedCell] =
     state.open match
       case None       => state.done
-      case Some(cell) => state.done :+ LockedCell(cell.module, cell.scalaVersion, cell.platform, cell.directs, cell.artifacts, cell.evictions)
+      case Some(cell) =>
+        state.done :+ LockedCell(cell.module, cell.scalaVersion, cell.platform, cell.directs, cell.artifacts, cell.evictions, cell.scope)
 
   private def build(state: Acc): Either[LockError, DependencyLock] =
     val cells = finish(state)
