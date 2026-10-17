@@ -44,13 +44,15 @@ final case class Linked(binary: Path, key: Sha256)
 
 enum NativeError:
   case Clang(miss: ClangMiss)
+  case Toolchain(error: NativeToolchainError)
   case Fetch(error: NativeFetch)
   case Compile(error: CompileError)
   case Link(error: LinkError)
 
   def message: String = this match
-    case Clang(miss)   => miss.message
-    case Fetch(error)  => error.message
+    case Clang(miss)        => miss.message
+    case Toolchain(error)   => error.message
+    case Fetch(error)       => error.message
     case Compile(error) => error.message
     case Link(error)   => error.message
 
@@ -96,11 +98,12 @@ object NativeLink:
   ): IO[NativeError, Linked] =
     for
       clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
-      libs  <- NativeClasspath.fetch.mapError(NativeError.Fetch(_))
+      toolchain <- ZIO.fromEither(NativeToolchain.fromEnv(env)).mapError(NativeError.Toolchain(_))
+      libs  <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
       sources <- histos.zinc.Sources.select(sourcesRoot, JvmCompile.Scala390, Platform.Native).mapError(NativeError.Compile(_))
       digest <- JvmCompile.sourceDigest(sources).mapError(NativeError.Compile(_))
       compiled <- compile(sources, libs, work, jdk).mapError(NativeError.Compile(_))
-      hashes <- NativeClasspath.hashes(libs).mapError(NativeError.Fetch(_))
+      hashes <- NativeClasspath.hashes(libs, toolchain.source).mapError(NativeError.Fetch(_))
       binary <- invoke(clang, main, compiled.classes :: libs.libraries, work).mapError(NativeError.Link(_))
     yield Linked(binary, NativeKey.of(JvmCompile.Scala390, clang.version, clang.target, digest, hashes))
 

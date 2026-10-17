@@ -127,8 +127,8 @@ Self-build comes before stack D. A published local assembly has to compile, test
     Verify: `scala-cli test api` and `scala-cli test engine`.
 21. `histos/zio-test`: Test providers are pluggable. A provider names an sbt framework class and the test-scoped library that supplies it. `TestProvider.Zio` is the default. A named main opts out. The child loads the framework. The engine does not. `no tests` stays the answer when there is nothing to run. Depends on: the test classpath.
     Verify: `scala-cli test engine` runs a ZIO Test suite in the child.
-22. `histos/native-tools`: This repo's dependency on `org.scala-native::tools:0.5.13-SNAPSHOT` resolves from a `file:` repository the build names. Ivy local stays private to the native toolchain resolve and is not a build resolver. Depends on: resolvers.
-    Verify: `scala-cli test engine` resolves `tools` from that directory and does not ask Central for it.
+22. `histos/native-override`: The engine compiles against Scala Native `tools` `0.5.12` from Central. The linker fetches that same release unless `HISTOS_NATIVE` names `ivy-local@revision` or `file:/path@revision`. That variable is the M6 snapshot override. It is not a build repository, and the jars are not committed. Depends on: the native linker.
+    Verify: `scala-cli test engine` parses the variable, and a link uses the origin it names.
 23. `histos/assembly`: Package `app` and its runtime classpath into the one jar `./histos` execs, with main `histos.cli.Main`. The launcher passes `--enable-native-access=ALL-UNNAMED`. Depends on: the class jar.
     Verify: `scala-cli test app` execs that jar far enough to print the version.
 24. `histos/self`: A root `histos.scala` for `api`, `central`, `engine`, and `app`, wired with `dependsOn` instead of `//> using file` and the hand-built api jar. One scala-cli build writes the first assembly. That assembly rebuilds the next one. The `project.scala` files go away only after that loop is green. Depends on: layers 20 through 23.

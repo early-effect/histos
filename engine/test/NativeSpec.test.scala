@@ -105,10 +105,40 @@ object NativeSpec extends ZIOSpecDefault:
       )
   )
 
+  private val toolchain = suite("toolchain")(
+    test("unset HISTOS_NATIVE is the Central release, and an override names its origin"):
+      val ivy = NativeToolchain.fromEnv(Map(NativeToolchain.Key -> "ivy-local@0.5.13-SNAPSHOT"))
+      val file = NativeToolchain.parse("file:///tmp/native@0.5.13-SNAPSHOT")
+      val central = NativeToolchain.fromEnv(Map(NativeToolchain.Key -> "central@0.5.12"))
+      assertTrue(
+        NativeToolchain.fromEnv(Map.empty) == Right(NativeToolchain.Release),
+        NativeToolchain.Release.revision.value == "0.5.12",
+        ivy == Right(NativeToolchain(NativeSource.IvyLocal, NativeRevision.trusted("0.5.13-SNAPSHOT"))),
+        file match
+          case Right(NativeToolchain(NativeSource.Maven(_), revision)) => revision.value == "0.5.13-SNAPSHOT"
+          case _                                                        => false
+        ,
+        central.isLeft,
+        NativeToolchain.parse("").isLeft,
+        NativeToolchain.parse("ivy-local").isLeft,
+      )
+  )
+
   private val link = suite("link")(
+    test("an ivy-local override fetches the snapshot jars"):
+      for
+        libs <- NativeClasspath.fetch(NativeToolchain(NativeSource.IvyLocal, NativeRevision.trusted("0.5.13-SNAPSHOT")))
+        paths = (libs.plugin :: libs.libraries).map(_.toString)
+      yield assertTrue(
+        paths.exists(_.contains("0.5.13-SNAPSHOT")),
+        paths.exists(_.contains("nativelib_native0.5_3")),
+        !paths.exists(_.contains("tools_3")),
+      )
+    ,
     test("the toolchain jars are the native libraries and the plugin, not tools"):
       for
-        libs <- NativeClasspath.fetch
+        toolchain <- ZIO.fromEither(NativeToolchain.fromEnv(liveEnv))
+        libs <- NativeClasspath.fetch(toolchain)
         names = (libs.plugin :: libs.libraries).flatMap(path => Option(path.getFileName).map(_.toString))
       yield assertTrue(
         names.exists(_.startsWith("nscplugin_3.9.0")),
@@ -187,4 +217,4 @@ object NativeSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("scala native")(versions, probe, declare, link) @@ TestAspect.sequential @@ TestAspect.timeout(5.minutes)
+  def spec = suite("scala native")(versions, probe, declare, toolchain, link) @@ TestAspect.sequential @@ TestAspect.timeout(5.minutes)

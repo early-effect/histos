@@ -13,15 +13,23 @@ import zio.{IO, ZIO}
 enum NativeComponent:
   case Nativelib, CLib, PosixLib, WindowsLib, JavaLib, AuxLib, ScalaLib, Scala3Lib, Plugin
 
-  def artifact: String = this match
+  def artifact(toolchain: NativeToolchain): String = this match
     case Plugin =>
-      ArtifactName.of(Dep.trusted("org.scala-native", "nscplugin", NativePins.revision, DepKind.Full), JvmCompile.Scala390, Platform.Jvm)
+      ArtifactName.of(
+        Dep.trusted("org.scala-native", "nscplugin", toolchain.revision.value, DepKind.Full),
+        JvmCompile.Scala390,
+        Platform.Jvm,
+      )
     case other =>
-      ArtifactName.of(Dep.trusted("org.scala-native", other.base, other.revision, DepKind.Binary), JvmCompile.Scala390, Platform.Native)
+      ArtifactName.of(
+        Dep.trusted("org.scala-native", other.base, revision(toolchain), DepKind.Binary),
+        JvmCompile.Scala390,
+        Platform.Native,
+      )
 
-  def revision: String = this match
-    case ScalaLib | Scala3Lib => NativePins.scala3Lib
-    case _                     => NativePins.revision
+  def revision(toolchain: NativeToolchain): String = this match
+    case ScalaLib | Scala3Lib => s"${JvmCompile.Scala390.value}+${toolchain.revision.value}"
+    case _                     => toolchain.revision.value
 
   private def base: String = this match
     case Nativelib  => "nativelib"
@@ -34,22 +42,15 @@ enum NativeComponent:
     case Scala3Lib  => "scala3lib"
     case Plugin     => "nscplugin"
 
-object NativePins:
-  /** The local Scala Native publish. Not a Maven Central release. */
-  val revision: String = "0.5.13-SNAPSHOT"
-
-  /** `scala3lib` and `scalalib` are published against the Scala version, not the toolchain revision alone. */
-  val scala3Lib: String = s"${JvmCompile.Scala390.value}+$revision"
-
 enum NativeFetch:
-  case Unavailable
-  case Missing(component: NativeComponent)
-  case Duplicated(component: NativeComponent)
+  case Unavailable(source: NativeSource)
+  case Missing(artifact: String, revision: String)
+  case Duplicated(artifact: String)
 
   def message: String = this match
-    case Unavailable         => "the Scala Native toolchain could not be fetched from ivy2 local"
-    case Missing(component)  => s"ivy2 local has no ${component.artifact} ${component.revision}"
-    case Duplicated(component) => s"ivy2 local has more than one ${component.artifact}"
+    case Unavailable(source)       => s"the Scala Native toolchain could not be fetched from ${source.label}"
+    case Missing(artifact, revision) => s"the Scala Native toolchain has no $artifact $revision"
+    case Duplicated(artifact)      => s"the Scala Native toolchain has more than one $artifact"
 
 /** Plugin jar, then the native libraries a program may see. `tools` is not here. */
 final class NativeClasspath private (
@@ -70,54 +71,60 @@ object NativeClasspath:
     NativeComponent.Scala3Lib,
   )
 
-  def fetch: IO[NativeFetch, NativeClasspath] =
-    ZIO.attemptBlockingInterrupt(load()).mapError(_ => NativeFetch.Unavailable).flatMap(ZIO.fromEither)
+  def fetch(toolchain: NativeToolchain): IO[NativeFetch, NativeClasspath] =
+    ZIO.attemptBlockingInterrupt(load(toolchain)).mapError(_ => NativeFetch.Unavailable(toolchain.source)).flatMap(ZIO.fromEither)
 
-  private def load(): Either[NativeFetch, NativeClasspath] =
+  private def load(toolchain: NativeToolchain): Either[NativeFetch, NativeClasspath] =
     val files = coursier.cache.FileCache()
     val wanted = NativeComponent.Plugin :: Order
     val got = coursier.Fetch(files)(using coursier.util.Task.sync)
       .noMirrors
       .withGradleModuleSupport(false)
-      .withRepositories(Seq(coursier.LocalRepositories.ivy2Local))
-      .addDependencies(wanted.map(dependency)*)
+      .withRepositories(Seq(repository(toolchain.source)))
+      .addDependencies(wanted.map(component => dependency(component, toolchain))*)
       .eitherResult()
     got match
-      case Left(_) => Left(NativeFetch.Unavailable)
+      case Left(_) => Left(NativeFetch.Unavailable(toolchain.source))
       case Right(result) =>
         val found = result.detailedArtifacts0.toList.flatMap: (dep, publication, _, file) =>
           val jar = file.getName.endsWith(".jar")
           if !jar || classified(publication) then Nil
           else
             val name = dep.module.name.value
-            wanted.find(_.artifact == name).toList.map(component => component -> file.toPath)
-        assemble(found)
+            wanted.find(_.artifact(toolchain) == name).toList.map(component => component -> file.toPath)
+        assemble(found, toolchain)
 
   private def classified(publication: Either[coursier.core.VariantPublication, coursier.core.Publication]): Boolean =
     publication match
       case Right(published) => published.classifier.nonEmpty
       case Left(variant)    => variant.classifier.nonEmpty
 
-  private def assemble(found: List[(NativeComponent, Path)]): Either[NativeFetch, NativeClasspath] =
+  private def repository(source: NativeSource): coursier.core.Repository =
+    source match
+      case NativeSource.Central     => coursier.Repositories.central
+      case NativeSource.IvyLocal    => coursier.LocalRepositories.ivy2Local
+      case NativeSource.Maven(url)  => coursier.MavenRepository(url.value)
+
+  private def assemble(found: List[(NativeComponent, Path)], toolchain: NativeToolchain): Either[NativeFetch, NativeClasspath] =
     def one(component: NativeComponent): Either[NativeFetch, Path] =
       found.collect { case (`component`, path) => path }.distinct match
         case path :: Nil => Right(path)
-        case Nil         => Left(NativeFetch.Missing(component))
-        case _           => Left(NativeFetch.Duplicated(component))
+        case Nil         => Left(NativeFetch.Missing(component.artifact(toolchain), component.revision(toolchain)))
+        case _           => Left(NativeFetch.Duplicated(component.artifact(toolchain)))
     for
       plugin <- one(NativeComponent.Plugin)
       libs   <- Order.foldLeft[Either[NativeFetch, List[Path]]](Right(Nil)): (acc, component) =>
         acc.flatMap(soFar => one(component).map(soFar :+ _))
     yield new NativeClasspath(plugin, libs)
 
-  private def dependency(component: NativeComponent): coursier.core.Dependency =
+  private def dependency(component: NativeComponent, toolchain: NativeToolchain): coursier.core.Dependency =
     coursier.Dependency(
-      coursier.Module(coursier.Organization("org.scala-native"), coursier.ModuleName(component.artifact)),
-      coursier.version.VersionConstraint(component.revision),
+      coursier.Module(coursier.Organization("org.scala-native"), coursier.ModuleName(component.artifact(toolchain))),
+      coursier.version.VersionConstraint(component.revision(toolchain)),
     ).copy(transitive = false)
 
-  def hashes(classpath: NativeClasspath): IO[NativeFetch, List[Sha256]] =
-    ZIO.foreach(classpath.libraries)(hash).mapError(_ => NativeFetch.Unavailable)
+  def hashes(classpath: NativeClasspath, source: NativeSource): IO[NativeFetch, List[Sha256]] =
+    ZIO.foreach(classpath.libraries)(path => hash(path, source))
 
-  private def hash(path: Path): IO[NativeFetch, Sha256] =
-    ZIO.attemptBlocking(Sha256.of(zio.Chunk.fromArray(java.nio.file.Files.readAllBytes(path)))).mapError(_ => NativeFetch.Unavailable)
+  private def hash(path: Path, source: NativeSource): IO[NativeFetch, Sha256] =
+    ZIO.attemptBlocking(Sha256.of(zio.Chunk.fromArray(java.nio.file.Files.readAllBytes(path)))).mapError(_ => NativeFetch.Unavailable(source))
