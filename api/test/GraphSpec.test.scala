@@ -32,7 +32,8 @@ object GraphSpec extends ZIOSpecDefault:
                     Aggregate(_, children, _),
                     Module(_, platforms, versions, dependencies, coreDeps, _),
                     Module(_, _, _, _, testDeps, _),
-                  )
+                  ),
+                  Splits.aggregate,
                 )
               ) =>
             children.map(_.value) == List("core", "tests") &&
@@ -42,6 +43,14 @@ object GraphSpec extends ZIOSpecDefault:
             coreDeps.isEmpty &&
             testDeps.map(_.value) == List("core")
           case other => summary(other) == "core module"
+    ,
+    test("the empty split set is the default"):
+      val core = module("core", Jvm)(scala3)
+      assertTrue(
+        Projects(core).map(_.splits) == Right(Splits.aggregate),
+        Projects(Splits.of(Axis.Module), core).map(_.splits) == Right(Splits.of(Axis.Module)),
+        Splits.of(Axis.Module, Axis.Module) == Splits.of(Axis.Module),
+      )
     ,
     test("rejects a duplicate name"):
       val first  = module("core", Jvm)(scala3)

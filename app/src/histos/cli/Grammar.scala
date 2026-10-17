@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.task.TaskId
+import histos.workflow.WorkflowAction
 
 import zio.{IO, ZIO}
 import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Options, ValidationError, ValidationErrorType}
@@ -12,6 +13,7 @@ object Grammar:
     case Run(id: String)
     case CacheClean(dryRun: Boolean)
     case Resolve(update: Boolean, check: Boolean)
+    case Workflow(update: Boolean)
 
   private val version   = CliCommand("version").map(_ => Wire.Version)
   private val graph     = CliCommand("graph").map(_ => Wire.Graph)
@@ -27,8 +29,9 @@ object Grammar:
     CliCommand("resolve", Options.boolean("update") ++ Options.boolean("check")).map { case (update, check) =>
       Wire.Resolve(update, check)
     }
+  private val workflow  = CliCommand("workflow", Options.boolean("update")).map(Wire.Workflow(_))
   private val root      =
-    CliCommand("histos").subcommands(version | graph | run | mcp | acp | toolchain | cache | resolve)
+    CliCommand("histos").subcommands(version | graph | run | mcp | acp | toolchain | cache | resolve | workflow)
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     root.parse("histos" :: args, CliConfig.default).mapError(reject).flatMap:
@@ -53,6 +56,8 @@ object Grammar:
           else if check then ResolveAction.Check
           else ResolveAction.Verify
         ZIO.succeed(Command.Resolve(action))
+      case Wire.Workflow(update) =>
+        ZIO.succeed(Command.Workflow(if update then WorkflowAction.Update else WorkflowAction.Check))
       case Wire.Run(raw)           =>
         ZIO.fromEither(TaskId.from(raw)).mapBoth(_ => CliParseError.BadTaskId, Command.Run(_))
 
