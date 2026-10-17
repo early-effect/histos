@@ -1,4 +1,5 @@
 //> using scala 3.9.0
+//> using javaOpt --enable-native-access=ALL-UNNAMED
 //> using jar ../dist/histos-api.jar
 //> using dep dev.zio::zio:2.1.27
 //> using dep org.scala-lang::scala3-compiler:3.9.0
