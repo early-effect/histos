@@ -304,14 +304,9 @@ A plugin contributes task nodes and runners. It may mark a task as a CI job (whe
 
 Publishing is a task implemented by a plugin.
 
-```scala
-trait Publisher:
-  def publish(artifact: Artifact, credentials: Credentials): ZIO[Scope, PublishError, Published]
-```
+The local publisher writes a Maven directory. It takes an artifact and returns `IO[PublishError, Published]`. The revision is a release, a stored snapshot, the pointer, or a manual version. `<ship>-ci` is not a revision, so it cannot be written. A file repository does not accept a password or a signature. Those layers arrive with a remote repository, and that publisher is still local to the machine: it is not cached and it is not sent to a remote executor.
 
-The Central plugin is the one early-effect libraries need. GitHub Packages, other Maven repositories, and a local `.m2` are further plugins. Credentials and signing are layers. Provider choice is configuration.
-
-Publish runs locally, including in CI. It is not cached and it is not sent to a remote executor.
+The Central plugin is the one early-effect libraries need. GitHub Packages, other Maven repositories, and a local `.m2` are further plugins. Provider choice is configuration.
 
 The pin strings are the zipx strings, so a catalog that already pins them still resolves. The model is not the sbt session those strings were squeezed into. There is no string version, no dirty id, no warn gate, and no publish that fails afterwards.
 
