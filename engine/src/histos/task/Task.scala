@@ -6,6 +6,7 @@ import zio.*
 
 enum TaskKind:
   case Inspect
+  case Compile
 
 opaque type TaskId = String
 

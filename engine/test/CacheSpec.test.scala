@@ -1,6 +1,6 @@
 package histos.cache
 
-import histos.schedule.{Action, ActionId, Digest, Input}
+import histos.schedule.{Action, ActionId, Digest, Input, InputName, InputValue}
 import histos.task.TaskKind
 
 import java.nio.file.{Files, Path}
@@ -17,7 +17,7 @@ object CacheSpec extends ZIOSpecDefault:
 
   private def digest(label: String): Digest =
     ActionId.from(label) match
-      case Right(id) => Digest.of(Action(id, TaskKind.Inspect, List(Input("n", label)), Nil), Map.empty)
+      case Right(id) => Digest.of(Action(id, TaskKind.Inspect, List(Input(InputName.trusted("n"), InputValue.Text(label))), Nil), Map.empty)
       case Left(_)   => Digest.of(Action(idOf("n"), TaskKind.Inspect, Nil, Nil), Map.empty)
 
   private def idOf(label: String): ActionId =

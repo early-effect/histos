@@ -1,5 +1,6 @@
 package histos.schedule
 
+import histos.jdk.Sha256
 import histos.task.TaskKind
 
 import java.nio.charset.StandardCharsets
@@ -7,8 +8,34 @@ import java.security.MessageDigest
 
 import zio.{IO, UIO, ZIO}
 
+/** A cache-key name. Empty is not a name. */
+opaque type InputName = String
+
+object InputName:
+  given CanEqual[InputName, InputName] = CanEqual.derived
+
+  def from(raw: String): Either[InputNameError, InputName] =
+    if raw.isEmpty then Left(InputNameError.Empty) else Right(raw)
+
+  /** A non-empty literal the caller already checked. */
+  private[histos] def trusted(raw: String): InputName = raw
+
+  extension (name: InputName) def value: String = name
+
+enum InputNameError:
+  case Empty
+
+/** What an input contributes to the key. Text stays text. A hash is not a stringly digest. */
+enum InputValue:
+  case Text(text: String)
+  case Hash(sha: Sha256)
+
+  def canonical: String = this match
+    case Text(text) => s"text $text"
+    case Hash(sha)  => s"hash ${sha.value}"
+
 /** One declared input. The name is part of the cache key. */
-final case class Input(name: String, value: String)
+final case class Input(name: InputName, value: InputValue)
 
 opaque type ActionId = String
 
@@ -44,7 +71,7 @@ object Digest:
     if raw.length == 64 && raw.forall(isHex) then Some(raw) else None
 
   def of(action: Action, dependencyDigests: Map[ActionId, Digest]): Digest =
-    val inputs = action.inputs.sortBy(_.name).map(input => s"${input.name}=${input.value}").mkString("\n")
+    val inputs = action.inputs.sortBy(_.name.value).map(input => s"${input.name.value}=${input.value.canonical}").mkString("\n")
     val deps = action.dependencies
       .map(id => s"${id.value}=${dependencyDigests.getOrElse(id, "")}")
       .sorted
