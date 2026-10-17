@@ -21,13 +21,18 @@ final case class ModuleDef private (
     versions: ScalaVersions,
     dependencies: List[Dep],
     dependsOn: List[ProjectDef],
+    clang: ClangPin,
     position: SourcePos,
 ) extends ProjectDef:
   def libraryDependencies(deps: Dep*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, dependsOn, position)
+    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, dependsOn, clang, position)
 
   def dependsOn(projects: ProjectDef*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, dependsOn ++ projects.toList, position)
+    new ModuleDef(name, platforms, versions, dependencies, dependsOn ++ projects.toList, clang, position)
+
+  /** The clang major this Native module must find on `PATH`. */
+  def clang(major: ClangMajor): ModuleDef =
+    new ModuleDef(name, platforms, versions, dependencies, dependsOn, ClangPin.Major(major), position)
 
 object ModuleDef:
   /** Spliced by `module`. Source code outside this package cannot call it. */
@@ -37,7 +42,7 @@ object ModuleDef:
       versions: ScalaVersions,
       position: SourcePos,
   ): ModuleDef =
-    new ModuleDef(name, platforms, versions, Nil, Nil, position)
+    new ModuleDef(name, platforms, versions, Nil, Nil, ClangPin.Unused, position)
 
 final case class AggregateDef private (
     name: String,

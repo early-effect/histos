@@ -101,14 +101,12 @@ object ResolveSpec extends ZIOSpecDefault:
           bracket <- resolve(open, open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "lib", "[1.0,2.0]", DepKind.Java))))
           milestone <- resolve(open, open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "missing", "1.0.0-M1", DepKind.Java))))
           snapshot <- resolve(open, open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "missing", "0.5.13-SNAPSHOT", DepKind.Java))))
-          native <- resolve(open, open.cell.copy(platform = Platform.Native))
         yield assertTrue(
           plus == Left(ResolveError.Range(Dep.trusted("dev.histos", "lib", "1.+", DepKind.Java))),
           latest == Left(ResolveError.Range(Dep.trusted("dev.histos", "lib", "latest.release", DepKind.Java))),
           bracket == Left(ResolveError.Range(Dep.trusted("dev.histos", "lib", "[1.0,2.0]", DepKind.Java))),
           milestone == Left(ResolveError.NotFound("dev.histos", "missing", "1.0.0-M1")),
           snapshot == Left(ResolveError.NotFound("dev.histos", "missing", "0.5.13-SNAPSHOT")),
-          native == Left(ResolveError.UnsupportedPlatform(Platform.Native)),
         )
     ,
     test("a js cell fetches the sjs1 jar and does not ask the network"):
@@ -133,6 +131,29 @@ object ResolveSpec extends ZIOSpecDefault:
           classpath <- ZIO.serviceWithZIO[Resolve](_.resolve(cell)).provide(Resolve.live(open.cache)).either
           names = classpath.map(_.artifacts.map(_.name))
         yield assertTrue(names == Right(List("zio_sjs1_3")))
+    ,
+    test("a native cell fetches the native0.5 jar and does not ask the network"):
+      ZIO.scoped:
+        for
+          open <- opened
+          _ <- ZIO.attempt(writeMaven(
+                 open.maven,
+                 "dev.zio",
+                 "zio_native0.5_3",
+                 "2.1.26",
+                 emptyJar,
+                 pom("dev.zio", "zio_native0.5_3", "2.1.26", None),
+               ))
+          cell = ResolveCell(
+                   core,
+                   List(binary),
+                   v390,
+                   Platform.Native,
+                   open.repositories,
+                 )
+          classpath <- ZIO.serviceWithZIO[Resolve](_.resolve(cell)).provide(Resolve.live(open.cache)).either
+          names = classpath.map(_.artifacts.map(_.name))
+        yield assertTrue(names == Right(List("zio_native0.5_3")))
     ,
     test("one transitive is evicted onto the direct revision"):
       ZIO.scoped:

@@ -149,6 +149,10 @@ object CompileKey:
   def action(id: ActionId, key: Sha256): Action =
     Action(id, TaskKind.Compile, List(Input(InputName.trusted("compile"), InputValue.Hash(key))), Nil)
 
+enum Bootstrap:
+  case JvmScala
+  case Provided(jars: List[Path])
+
 object JvmCompile:
   val Scala390: ScalaVersion = ScalaVersion.trusted("3.9.0")
 
@@ -159,10 +163,20 @@ object JvmCompile:
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if tool.version != Scala390 && tool.version != Scala213.version then
       ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else
-      ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
-        (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-         else hashSources(request.sources) *> invoke(request))
+    else compilePrepared(request, Nil, Bootstrap.JvmScala)
+
+  /** Scala 3 compile with toolchain plugins. The plugins are not user dependencies. */
+  private[histos] def compilePrepared(
+      request: CompileRequest,
+      plugins: List[Path],
+      bootstrap: Bootstrap,
+  ): IO[CompileError, CompileOutput] =
+    ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
+      (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
+       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg), bootstrap))
+
+  private def pluginArg(plugin: Path): String =
+    s"-Xplugin:${plugin.toAbsolutePath}"
 
   private def rejectBanned(path: Path): IO[CompileError, Unit] =
     ban(path).flatMap:
@@ -197,22 +211,24 @@ object JvmCompile:
       }.mapError(_ => CompileError.Io(CompileIo.Read))
     .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
 
-  private def invoke(request: CompileRequest): IO[CompileError, CompileOutput] =
+  private def invoke(request: CompileRequest, extra: List[String], bootstrap: Bootstrap): IO[CompileError, CompileOutput] =
     if request.toolchain.version == Scala213.version then invoke213(request)
-    else ZIO.attemptBlockingInterrupt(runZinc3(request)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+    else ZIO.attemptBlockingInterrupt(runZinc3(request, extra, bootstrap)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
 
   private def invoke213(request: CompileRequest): IO[CompileError, CompileOutput] =
     Scala213.jars.flatMap: jars =>
       ZIO.attemptBlockingInterrupt(runZinc213(request, jars)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
 
-  private def runZinc3(request: CompileRequest): Either[CompileError, CompileOutput] =
-    val libraries = libraryJars
+  private def runZinc3(request: CompileRequest, extra: List[String], bootstrap: Bootstrap): Either[CompileError, CompileOutput] =
+    val libraries = bootstrap match
+      case Bootstrap.JvmScala       => libraryJars
+      case Bootstrap.Provided(jars) => jars
     val compiler  = codeSource(classOf[dotty.tools.dotc.Driver]).toList
     bridgeJar match
       case None                                              => Left(CompileError.NoBridge)
       case Some(_) if libraries.isEmpty || compiler.isEmpty => Left(CompileError.Io(CompileIo.Bridge))
       case Some(bridge)                                      =>
-        compileOne(request, Scala390, bridge, libraries, compiler, getClass.getClassLoader)
+        compileOne(request, Scala390, bridge, libraries, compiler, getClass.getClassLoader, extra)
 
   private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader()
@@ -224,6 +240,7 @@ object JvmCompile:
         toolchain.runtime,
         toolchain.compilerClasspath,
         loader,
+        Nil,
       )
     finally loader.close()
 
@@ -234,6 +251,7 @@ object JvmCompile:
       libraries: List[Path],
       compiler: List[Path],
       compilerLoader: ClassLoader,
+      extra: List[String],
   ): Either[CompileError, CompileOutput] =
     val versionText = version.value
     val libraryLoader = new URLClassLoader(libraries.map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader)
@@ -277,7 +295,7 @@ object JvmCompile:
         sources,
         request.classes,
         None,
-        request.toolchain.flags.argv.toArray,
+        (request.toolchain.flags.argv ++ extra).toArray,
         Array.empty[String],
         100,
         Array.empty,

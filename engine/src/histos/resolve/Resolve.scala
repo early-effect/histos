@@ -185,7 +185,7 @@ object Resolve:
   def cells(graph: ProjectGraph, repositories: Repositories): List[ResolveCell] =
     graph.projects.flatMap:
       case Aggregate(_, _, _) => Nil
-      case Module(name, platforms, versions, dependencies, _, _) =>
+      case Module(name, platforms, versions, dependencies, _, _, _) =>
         platforms.all.flatMap: platform =>
           versions.all.map: version =>
             ResolveCell(name, dependencies, version, platform, repositories)
@@ -237,8 +237,7 @@ object Resolve:
 
   private[resolve] def prepare(cell: ResolveCell): IO[ResolveError, Unit] =
     cell.platform match
-      case Platform.Native => ZIO.fail(ResolveError.UnsupportedPlatform(Platform.Native))
-      case Platform.Jvm | Platform.Js =>
+      case Platform.Jvm | Platform.Js | Platform.Native =>
         cell.dependencies.find(ranged) match
           case Some(dependency) => ZIO.fail(ResolveError.Range(dependency))
           case None             => ZIO.unit

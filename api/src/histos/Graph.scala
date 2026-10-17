@@ -11,6 +11,7 @@ final case class Module(
     dependencies: List[Dep],
     dependsOn: List[ProjectName],
     position: SourcePos,
+    clang: ClangPin = ClangPin.Unused,
 ) extends Project
 
 final case class Aggregate(
@@ -76,7 +77,7 @@ object Projects:
       case m: ModuleDef    =>
         duplicate(m.platforms.all).map(BuildError.DuplicatePlatform(n.name, _, m.position)).orElse(
           duplicate(m.versions.all).map(BuildError.DuplicateScalaVersion(n.name, _, m.position))
-        )
+        ).orElse(clangOf(n.name, m))
       case a: AggregateDef =>
         val children = a.children.map(_.name)
         if children.contains(a.name) then Some(BuildError.AggregateIncludesItself(n.name, a.position))
@@ -105,13 +106,20 @@ object Projects:
             target.defn match
               case _: AggregateDef => Left(BuildError.DependsOnAggregate(n.name, target.name, m.position))
               case _: ModuleDef    => Right(names :+ target.name)
-    .map(deps => Module(n.name, m.platforms, m.versions, m.dependencies, deps, m.position))
+    .map(deps => Module(n.name, m.platforms, m.versions, m.dependencies, deps, m.position, m.clang))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
     a.children.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, child) =>
       acc.flatMap: names =>
         lookup(child, byName).map(target => names :+ target.name)
     .map(children => Aggregate(n.name, children, a.position))
+
+  private def clangOf(name: ProjectName, module: ModuleDef): Option[BuildError] =
+    val native = module.platforms.all.contains(Platform.Native)
+    module.clang match
+      case ClangPin.Major(_) if !native => Some(BuildError.ClangWithoutNative(name, module.position))
+      case ClangPin.Unused if native    => Some(BuildError.MissingClang(name, module.position))
+      case _                            => None
 
   private def cycle(projects: List[Project]): Either[BuildError, Unit] =
     val edges = projects.collect:

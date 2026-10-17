@@ -12,6 +12,8 @@ enum BuildError:
   case DependsOnAggregate(module: ProjectName, aggregate: ProjectName, position: SourcePos)
   case SelfDependency(name: ProjectName, position: SourcePos)
   case Cycle(path: List[ProjectName])
+  case MissingClang(name: ProjectName, position: SourcePos)
+  case ClangWithoutNative(name: ProjectName, position: SourcePos)
 
   def message: String = this match
     case EmptyName(position)                 => s"a project name is not empty (${position.line}:${position.column})"
@@ -32,3 +34,7 @@ enum BuildError:
       s"'${module.value}' depends on aggregate '${aggregate.value}'"
     case SelfDependency(name, _)             => s"'${name.value}' depends on itself"
     case Cycle(path)                         => s"dependency cycle ${path.map(_.value).mkString(" -> ")}"
+    case MissingClang(name, position)        =>
+      s"project '${name.value}' targets Native and does not name a clang major (${position.line}:${position.column})"
+    case ClangWithoutNative(name, position)  =>
+      s"project '${name.value}' names a clang major and does not target Native (${position.line}:${position.column})"

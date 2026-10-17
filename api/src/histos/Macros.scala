@@ -59,6 +59,16 @@ private object LiteralMacro:
           case None      => Left(s"""$what"..." takes a literal""")
       case _ => Left(s"""$what"..." takes no arguments""")
 
+private object ClangMajorMacro:
+  def literal(raw: Expr[Int])(using Quotes): Expr[ClangMajor] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("ClangMajor(...) takes a literal. Use ClangMajor.from at runtime.", raw)
+      case Some(n) =>
+        ClangMajor.from(n) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ ClangMajor.trusted(${ Expr(n) }) }
+
 private object BuilderMacro:
   def module(
       name: Expr[String],
