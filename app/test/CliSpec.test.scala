@@ -124,6 +124,7 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(
           done.exit == CliExit.Success && done.out.contains("chosen JavaHome") && done.out.contains("21.0.2") && done.out.contains("lock 21.0.2"),
           !done.out.contains("node"),
+          !done.out.contains("clang"),
         )
     ,
     test("a js project asks for a node lock and still prints the jdk"):

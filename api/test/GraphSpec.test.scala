@@ -21,7 +21,7 @@ object GraphSpec extends ZIOSpecDefault:
 
   private val graph = suite("ProjectGraph")(
     test("stores platforms, versions, and library dependencies"):
-      val core  = module("core", Jvm, Js, Native)(scala3, scala2).libraryDependencies(zioDep)
+      val core  = module("core", Jvm, Js, Native)(scala3, scala2).libraryDependencies(zioDep).clang(ClangMajor(21))
       val tests = module("tests", Jvm)(scala3).dependsOn(core)
       val built = Projects(aggregate("root", core, tests), core, tests)
       assertTrue:
@@ -30,8 +30,8 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _),
-                    Module(_, _, _, _, testDeps, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang)),
+                    Module(_, _, _, _, testDeps, _, _),
                   ),
                   Splits.aggregate,
                 )
@@ -41,7 +41,8 @@ object GraphSpec extends ZIOSpecDefault:
             versions.all == List(scala3, scala2) &&
             dependencies == List(zioDep) &&
             coreDeps.isEmpty &&
-            testDeps.map(_.value) == List("core")
+            testDeps.map(_.value) == List("core") &&
+            clang == ClangMajor(21)
           case other => summary(other) == "core module"
     ,
     test("the empty split set is the default"):
@@ -87,6 +88,19 @@ object GraphSpec extends ZIOSpecDefault:
       check(Gen.int(2, 6)): n =>
         val message = summary(ring(n))
         assertTrue(message.contains("cycle") && message.contains("p0") && message.contains("p1")),
+    test("a native module names a clang major, and a jvm module does not"):
+      val missing = summary(Projects(module("core", Native)(scala3)))
+      val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
+      val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
+      val pin = named match
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _)) => clang
+        case _                                                              => ClangPin.Unused
+      assertTrue(
+        missing.contains("clang major"),
+        extra.contains("does not target Native"),
+        pin == ClangPin.Major(ClangMajor(21)),
+      )
+    ,
     test("records a builder position"):
       val core = module("core", Jvm)(scala3)
       assertTrue(core.position.line >= 1 && core.position.column >= 1 && core.position.path.nonEmpty),
