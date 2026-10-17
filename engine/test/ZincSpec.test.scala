@@ -17,18 +17,21 @@ object ZincSpec extends ZIOSpecDefault:
   private val sha = Sha256.of(Chunk.fromArray("hello".getBytes))
 
   private val keys = suite("compile key")(
-    test("flags, the Scala version, the platform, and the JDK are part of the key"):
+    test("flags, the Scala version, the platform, the JDK, and artifact checksums are part of the key"):
       val base  = sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390)
       val flags = sample(ScalacFlags.of(ScalacFlag.EncodingUtf8), v21, Platform.Jvm, JvmCompile.Scala390)
       val older = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("3.8.1"))
       val js    = sample(ScalacFlags.empty, v21, Platform.Js, JvmCompile.Scala390)
       val jdk17 = sample(ScalacFlags.empty, v17, Platform.Jvm, JvmCompile.Scala390)
-      val key   = CompileKey.of(base, sha)
+      val jar    = Sha256.of(Chunk.fromArray("jar".getBytes))
+      val hashed = base.copy(artifactHashes = List(jar))
+      val key    = CompileKey.of(base, sha)
       assertTrue(
         key != CompileKey.of(flags, sha),
         key != CompileKey.of(older, sha),
         key != CompileKey.of(js, sha),
         key != CompileKey.of(jdk17, sha),
+        key != CompileKey.of(hashed, sha),
         key == CompileKey.of(base, sha),
       )
     ,
@@ -118,6 +121,7 @@ object ZincSpec extends ZIOSpecDefault:
       Nil,
       Path.of("/out"),
       Path.of("/analysis"),
+      Nil,
     )
 
   private def running: ResolvedJdk =
@@ -134,6 +138,7 @@ object ZincSpec extends ZIOSpecDefault:
       Nil,
       root.resolve("classes"),
       root.resolve("analysis"),
+      Nil,
     )
 
   private def write(root: Path, name: String, text: String): Path =

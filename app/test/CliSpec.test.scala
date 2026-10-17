@@ -62,6 +62,24 @@ object CliSpec extends ZIOSpecDefault:
       for parsed <- Cli.parse(List("toolchain"))
       yield assertTrue(parsed == Command.Toolchain)
     ,
+    test("resolve takes update or check, not both"):
+      for
+        plain  <- Cli.parse(List("resolve"))
+        update <- Cli.parse(List("resolve", "--update"))
+        check  <- Cli.parse(List("resolve", "--check"))
+        both   <- Cli.parse(List("resolve", "--update", "--check")).either
+      yield assertTrue(
+        plain == Command.Resolve(ResolveAction.Verify),
+        update == Command.Resolve(ResolveAction.Update),
+        check == Command.Resolve(ResolveAction.Check),
+        both == Left(CliParseError.Rejected),
+      )
+    ,
+    test("resolve without a lock fails"):
+      ZIO.scoped:
+        for done <- invoke(List("resolve"))
+        yield assertTrue(done.exit == CliExit.ResolveFailed && done.exit.code == 5 && done.err.contains("dependencies.lock"))
+    ,
     test("toolchain reports a missing lock"):
       ZIO.scoped:
         for done <- invoke(List("toolchain"))
@@ -124,7 +142,8 @@ object CliSpec extends ZIOSpecDefault:
   private def layers(dir: Path, env: Map[String, String] = Map.empty) =
     histos.load.Loader.live ++
       ZLayer.succeed(histos.cache.ContentStore.in(dir.resolve("cache"))) ++
-      ZLayer.succeed(machine(dir, env))
+      ZLayer.succeed(machine(dir, env)) ++
+      histos.resolve.Resolve.live(dir.resolve("cache").resolve("resolve"))
 
   private def machine(dir: Path, env: Map[String, String]): Machine =
     Machine(env, dir.toString, Os.Linux, dir.resolve("cache"), dir, None, Settled.No)

@@ -75,7 +75,7 @@ Load does not compile, test, or publish. Agents, CI generation, and the workflow
 
 Resolution runs after load and before any task that needs a classpath. Compile, test, and later link consume its result. Inter-project `dependsOn` is not a library coordinate: those class directories are prepended by the task, ahead of the resolved jars.
 
-Coursier is the resolution engine, linked as a library. The `cs` program is not invoked. Coursier types do not leave the adapter. The Coursier coordinate is chosen when the layer is implemented, from the published artifacts, and it is not guessed in this document.
+Coursier is the resolution engine, linked as a library (`io.get-coursier::coursier:2.1.26`). The `cs` program is not invoked. Coursier types do not leave the adapter.
 
 ```scala
 trait Resolve:
@@ -113,6 +113,7 @@ final case class ResolvedArtifact(
   revision: String,
   path: Path,
   sha256: Sha256,
+  repository: Repository,
 )
 
 final case class Eviction(
@@ -125,7 +126,7 @@ final case class Eviction(
 final case class Classpath(artifacts: List[ResolvedArtifact], evictions: List[Eviction])
 ```
 
-`name` on an artifact is the name after the suffix above. Classpath order is the resolved order with duplicates removed, first occurrence kept. That order is part of the lock.
+`name` on an artifact is the name after the suffix above. `repository` is the repository that served the artifact. A missing jar is downloaded from that repository only. Classpath order is the resolved order with duplicates removed, first occurrence kept. That order is part of the lock.
 
 ```scala
 enum ResolveError:
@@ -147,7 +148,7 @@ enum LockError:
   case BadRepository(raw: String)
 ```
 
-`RepositoryIo` names the operation (`Read`, `Fetch`, `Metadata`). The exception text is not the error. `LockField` is the lock's own fields (`Cell`, `Direct`, `Artifact`, `Evict`). A download that cannot satisfy the locked sha256 stays `Checksum`. The build does not try another repository.
+`RepositoryIo` names the operation (`Read`, `Fetch`, `Metadata`, `Write`). The exception text is not the error. `LockField` is the lock's own fields (`Cell`, `Direct`, `Artifact`, `Evict`). A download that cannot satisfy the locked sha256 stays `Checksum`. The build does not try another repository.
 
 Repositories, in the order they are asked:
 

@@ -6,6 +6,7 @@ import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled, Startup, Toolchain, ToolchainError}
 import histos.load.Loader
 import histos.mcp.HistosMcp
+import histos.resolve.{Repositories, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.{Aggregate, Module, Project}
 
@@ -24,6 +25,10 @@ enum Command:
   case CachePath
   case CacheList
   case CacheClean(dryRun: Boolean)
+  case Resolve(action: ResolveAction)
+
+enum ResolveAction:
+  case Verify, Update, Check
 
 enum CliParseError:
   case Help
@@ -40,14 +45,15 @@ enum CliParseError:
     case BadTaskId                        => "a task id is not empty"
 
 enum CliExit:
-  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed
+  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed
 
   def code: Int = this match
-    case Success          => 0
-    case TaskFailed       => 1
-    case Usage            => 2
-    case LoadFailed       => 3
-    case ToolchainFailed  => 4
+    case Success         => 0
+    case TaskFailed      => 1
+    case Usage           => 2
+    case LoadFailed      => 3
+    case ToolchainFailed => 4
+    case ResolveFailed   => 5
 
 final case class Completed(exit: CliExit, out: String, err: String)
 
@@ -55,12 +61,12 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run])"
+    "usage: histos (version | graph | run <id> | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
 
-  def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine, Completed] =
+  def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     parse(args).foldZIO(
       detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message)),
       command =>
@@ -73,7 +79,8 @@ object Cli:
           case Command.Toolchain        => toolchain
           case Command.CachePath        => cachePath
           case Command.CacheList        => cacheList
-          case Command.CacheClean(dry)  => cacheClean(dry),
+          case Command.CacheClean(dry)  => cacheClean(dry)
+          case Command.Resolve(action)  => resolve(repo, apiJar, action),
     )
 
   private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
@@ -116,6 +123,19 @@ object Cli:
           else entries.map(entry => s"$verb ${entry.digest.value}").mkString("\n")
         Completed(CliExit.Success, text, ""),
     ).merge
+
+  private def resolve(repo: Path, apiJar: Path, action: ResolveAction): URIO[Loader & Scope & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+      case Right(loaded) =>
+        val effect = action match
+          case ResolveAction.Verify => Resolve.verify(repo, loaded.graph, Repositories.central)
+          case ResolveAction.Update => Resolve.update(repo, loaded.graph, Repositories.central)
+          case ResolveAction.Check  => Resolve.check(repo, loaded.graph, Repositories.central)
+        effect.mapBoth(
+          error => Completed(CliExit.ResolveFailed, "", error.message),
+          text => Completed(CliExit.Success, text, ""),
+        ).merge
 
   private def toolchain: URIO[Machine, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
@@ -197,6 +217,7 @@ object Main extends ZIOAppDefault:
         Loader.live,
         ZLayer.succeed(ContentStore.in(machine.cache)),
         ZLayer.succeed(machine),
+        Resolve.live(machine.cache.resolve("resolve")),
       )
     .flatMap(finish)
 
