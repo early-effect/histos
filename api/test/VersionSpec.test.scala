@@ -38,8 +38,8 @@ object VersionSpec extends ZIOSpecDefault:
       core   <- ProjectName.from("core").left.map(FixtureError.Project(_))
       tests  <- ProjectName.from("tests").left.map(FixtureError.Project(_))
       pull   <- PullRequestNumber.parse("42").left.map(FixtureError.Pull(_))
-      one    <- Catalog.from(List(Ship(libs, number, ::(core, Nil)))).left.map(FixtureError.Rows(_))
-      both   <- Catalog.from(List(Ship(libs, number, ::(core, Nil)), Ship(client, clientNumber, ::(tests, Nil)))).left.map(FixtureError.Rows(_))
+      one    <- Catalog.from(List(Ship.Line(libs, number, ::(core, Nil)))).left.map(FixtureError.Rows(_))
+      both   <- Catalog.from(List(Ship.Line(libs, number, ::(core, Nil)), Ship.Line(client, clientNumber, ::(tests, Nil)))).left.map(FixtureError.Rows(_))
     yield Fixture(libs, client, core, one, both, pull)
 
   private def use(f: Fixture => TestResult): TestResult =
@@ -199,6 +199,28 @@ object VersionSpec extends ZIOSpecDefault:
             case other => other.fold(_.message, Decision.text) == "unproven"
           ,
         )
+    ,
+    test("a manual catalog publishes the stated version and does not read git"):
+      use: fixture =>
+        val stated = ManualVersion("1.2.3-SNAPSHOT")
+        Catalog.from(List(Ship.Manual(fixture.libs, stated, ::(fixture.core, Nil)))) match
+          case Left(error) => assertTrue(error.message == "manual")
+          case Right(catalog) =>
+            val decided = Versions.decide(catalog, Session.Snapshot(sha, Branch.Default), Evidence.Unchecked)
+            val assessed = Versions.assess(catalog, Map(Session.Key -> "snapshot"), Evidence.Unchecked)
+            assertTrue(
+              decided match
+                case Decision.Manual(line :: Nil) => line.ship == fixture.libs && line.version == stated
+                case other                        => Decision.text(other) == "manual"
+              ,
+              assessed match
+                case Right(decision @ Decision.Manual(line :: Nil)) =>
+                  line.version.value == "1.2.3-SNAPSHOT" &&
+                  Decision.text(decision).contains("session manual") &&
+                  !Decision.text(decision).contains("-ci")
+                case other => other.fold(_.message, Decision.text) == "assessed"
+              ,
+            )
     ,
     test("a publish does not run until the registry has been read"):
       use: fixture =>

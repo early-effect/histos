@@ -26,7 +26,7 @@ object VersionTaskSpec extends ZIOSpecDefault:
     for
       libs    <- ShipName.from("libs").left.map(FixtureError.Ship(_))
       core    <- ProjectName.from("core").left.map(FixtureError.Project(_))
-      catalog <- Catalog.from(List(Ship(libs, number, ::(core, Nil)))).left.map(FixtureError.Rows(_))
+      catalog <- Catalog.from(List(Ship.Line(libs, number, ::(core, Nil)))).left.map(FixtureError.Rows(_))
     yield (libs, catalog)
 
   private def use(f: (ShipName, Catalog) => ZIO[Any, Any, TestResult]): ZIO[Any, Any, TestResult] =
@@ -44,6 +44,22 @@ object VersionTaskSpec extends ZIOSpecDefault:
           checked.kind == TaskKind.Versions && checked.text.contains("1.4.2-ci") && checked.text.contains("drift clear"),
           missed.text.contains("drift unchecked"),
         )
+    ,
+    test("a manual ship publishes its stated version without a registry file"):
+      val core = module("core", Jvm)(scala"3.9.0")
+      Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core) match
+        case Left(error) => ZIO.succeed(assertTrue(error.message == "manual"))
+        case Right(graph) =>
+          ZIO.scoped:
+            for
+              dir <- ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-manual"))): path =>
+                ZIO.attempt(Files.deleteIfExists(path)).ignore
+              done <- VersionTask.fromRepo(graph, dir, Map(Session.Key -> "snapshot"))
+            yield assertTrue(
+              done.text.contains("session manual"),
+              done.text.contains("compile 1.2.3-SNAPSHOT publish 1.2.3-SNAPSHOT"),
+              !done.text.contains("-ci"),
+            )
     ,
     test("a snapshot stores the commit, and a missing registry read publishes nothing"):
       use: (_, catalog) =>

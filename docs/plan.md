@@ -110,7 +110,7 @@ Proposed stack C: Phase 2, after B merges.
     Verify: `scala-cli test engine` with a fixture Node, no network.
 17. `histos/scala-native`: Native platform. Clang major check, no clang provisioning. Link in-process with `tools_3` `0.5.13-SNAPSHOT`. That resolve adds `IvyLocal`. Cache key includes the full clang version that matched. A miss is a typed error. Depends on: the scheduler, the cache, and the resolver.
     Verify: `scala-cli test engine` links a hello-world on this machine. This is the layer that needs the local Scala Native publish. Other machines cannot compile it until they have those jars or the pin moves to Central.
-18. `histos/versions`: The zipx version scheme as tasks. Everyday `<version>-ci`, snapshot `<version>-<sha>-SNAPSHOT`, default-branch `<version>-SNAPSHOT` pointer, ship number, registry gate, catalog drift. No second scheme. Depends on: the task API and CI render.
+18. `histos/versions`: The zipx version scheme as tasks. Everyday `<version>-ci`, snapshot `<version>-<sha>-SNAPSHOT`, default-branch `<version>-SNAPSHOT` pointer, ship number, registry gate, catalog drift. That scheme is the default. `manual("app", manual"1.2.3")` is the other choice: the stated version, with no git and no registry. A catalog does not mix them. Depends on: the task API and CI render.
     Verify: `scala-cli test engine` over the version transitions, no network publish.
 19. `histos/central`: In-tree Central publisher module that compiles only against `api`. `Publisher` returns `ZIO[Scope, PublishError, Published]`. Credentials and signing are layers. Publish is local, uncached, and never sent to a remote executor. Depends on: layer 18 for the coordinates it publishes.
     Verify: `scala-cli test central` against a local repository fixture.

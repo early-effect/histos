@@ -216,6 +216,31 @@ object CliSpec extends ZIOSpecDefault:
           refused.exit == CliExit.TaskFailed && refused.err.contains("has changes since its tag"),
         )
     ,
+    test("a manual version does not need a commit or a registry file"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          _ <- ZIO.attempt(
+            Files.writeString(
+              dir.resolve("histos.scala"),
+              """import histos.*
+                |object build extends HistosBuild:
+                |  def graph =
+                |    val core = module("core", Jvm)(scala"3.9.0")
+                |    Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core)
+                |""".stripMargin,
+            )
+          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          done <- Cli.execute(List("run", "versions"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          done.exit == CliExit.Success,
+          done.out.contains("session manual"),
+          done.out.contains("compile 1.2.3-SNAPSHOT publish 1.2.3-SNAPSHOT"),
+          !done.out.contains("-ci"),
+          done.err.isEmpty,
+        )
+    ,
     test("run of an unknown task fails"):
       ZIO.scoped:
         for done <- invoke(List("run", "compile"))

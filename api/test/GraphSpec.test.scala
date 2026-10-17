@@ -1,5 +1,7 @@
 package histos
 
+import histos.version.Ship
+
 import zio.test.*
 
 object GraphSpec extends ZIOSpecDefault:
@@ -106,8 +108,24 @@ object GraphSpec extends ZIOSpecDefault:
       val core  = module("core", Jvm)(scala3)
       val tests = module("tests", Jvm)(scala3).dependsOn(core)
       val built = Projects(ships(ship("libs", ship"1.4.2")(core)), core, tests)
-      val shipsOnGraph = built.map(_.catalog.ships.map(row => s"${row.name.value} ${row.number.render} ${row.members.map(_.value).mkString(",")}"))
+      val shipsOnGraph = built.map(_.catalog.ships.map:
+        case Ship.Line(name, shipNumber, members) =>
+          s"${name.value} ${shipNumber.render} ${members.map(_.value).mkString(",")}"
+        case Ship.Manual(name, version, members) =>
+          s"${name.value} ${version.value} ${members.map(_.value).mkString(",")}"
+      )
       assertTrue(shipsOnGraph == Right(List("libs 1.4.2 core")))
+    ,
+    test("a manual version is not an early-effect ship, and the two are not mixed"):
+      val core = module("core", Jvm)(scala3)
+      val app = module("app", Jvm)(scala3)
+      val stated = Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core)
+      val mixed = summary(Projects(ships(ship("libs", ship"1.0.0")(core), manual("app", manual"2026.10.17")(app)), core, app))
+      val rendered = stated.map(_.catalog.ships.map:
+        case histos.version.Ship.Manual(_, version, _) => version.value
+        case histos.version.Ship.Line(_, number, _)    => number.render
+      )
+      assertTrue(rendered == Right(List("1.2.3-SNAPSHOT")), mixed.contains("manual versions"))
     ,
     test("a module is in at most one ship and an aggregate is not a member"):
       val core  = module("core", Jvm)(scala3)
