@@ -38,12 +38,18 @@ object ZincSpec extends ZIOSpecDefault:
     test("js and another Scala version are rejected before Zinc"):
       val js  = sample(ScalacFlags.empty, v21, Platform.Js, JvmCompile.Scala390)
       val old = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("3.8.1"))
+      val patch = sample(ScalacFlags.empty, v21, Platform.Jvm, ScalaVersion.trusted("2.13.15"))
+      val supported = sample(ScalacFlags.empty, v21, Platform.Jvm, Scala213.version)
       for
         platform <- JvmCompile.compile(js).either
         version  <- JvmCompile.compile(old).either
+        other    <- JvmCompile.compile(patch).either
+        accepted <- JvmCompile.compile(supported).either
       yield assertTrue(
         platform == Left(CompileError.UnsupportedPlatform(Platform.Js)),
         version == Left(CompileError.UnsupportedScala(ScalaVersion.trusted("3.8.1"))),
+        other == Left(CompileError.UnsupportedScala(ScalaVersion.trusted("2.13.15"))),
+        accepted == Left(CompileError.NoSources),
       )
   )
 

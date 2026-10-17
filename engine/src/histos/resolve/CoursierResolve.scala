@@ -8,7 +8,8 @@ import zio.{Chunk, IO, ZIO}
 
 /**
  * Coursier is linked as a library. `coursier.util.Task` runs on `Future`, and `eitherResult`
- * is that library's runner. This is the only place it executes. Callers see [[ResolveError]].
+ * is that library's runner. Callers see [[ResolveError]]. The Scala 2.13 toolchain is fetched
+ * separately and is not a user dependency.
  */
 private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
