@@ -157,7 +157,7 @@ object GraphCompile:
       _ <- ZIO.when(sources.isEmpty)(ZIO.fail(GraphCompileError.NoSources(module.name, base)))
       upstreamClasses <- ZIO.fromEither(upstreamClasses(module, version, done))
       fetched <- classpathOf(module, version, lock, repositories)
-      classes = output(repo, module.name, version)
+      classes = classesDir(repo, module.name, version)
       compiled <- JvmCompile.compile(CompileRequest(
                     CompileToolchain(version, Platform.Jvm, jdk, ScalacFlags.empty),
                     sources,
@@ -201,7 +201,8 @@ object GraphCompile:
     }.mapError(_ => GraphCompileError.LockRead(path)).flatMap(ZIO.fromEither).flatMap: text =>
       ZIO.fromEither(DependencyLock.parse(text).left.map(error => GraphCompileError.Lock(ResolveError.Lock(error))))
 
-  private def output(repo: Path, module: ProjectName, version: ScalaVersion): Path =
+  /** Classpath root written for one JVM cell. Test compile and the test subprocess read this directory. */
+  private[histos] def classesDir(repo: Path, module: ProjectName, version: ScalaVersion): Path =
     repo.resolve(".histos").resolve("classes").resolve(module.value).resolve(version.value).resolve("jvm")
 
   private def analysis(repo: Path, module: ProjectName, version: ScalaVersion): Path =

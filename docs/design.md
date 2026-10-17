@@ -208,6 +208,8 @@ Sendable, for the first remote cache, means a core compile: a known runner, decl
 
 A test task runs as one subprocess for that project, Scala version, and platform. It does not run inside the server, and it does not fork once per test case. The process gets a fresh work directory, a scrubbed environment, and the declared classpath and inputs. Interruption kills the process group, so `System.exit` in a test cannot take Metals down.
 
+`histos test` compiles the requested JVM modules, then runs each module's named main in one subprocess per Scala version. The build names that main with `.test(TestMain("demo.Check"))`. Upstream modules are compiled and are not run. A module with no test sources and no named main reports `no tests`. That is success, and it is not a passing suite. The command does not start a test framework, and it does not re-resolve.
+
 `Network` and `Docker` are declared needs. A task that declares either stays local and is not cacheable. The filesystem jail and the network jail are the same test action, added before any test is sendable. Until that jail exists, tests run locally in the subprocess and are not uploaded.
 
 A cache miss runs locally. Naming a remote cache does not turn on remote execution. Remote execution is a later client on this same action, off unless an executor is configured. There is no second scheduler.
@@ -363,7 +365,7 @@ Fan-out is one split model, not a second renderer. The graph holds a set of axes
 
 The runner needs a shell and curl. The launcher provisions the JDK. The workflow does not need `setup-java`.
 
-`./histos test` in CI is the batch command. No server is started. Publish is a separate local job with CI credentials.
+`./histos test` in CI is the batch command. It compiles and runs the named main, or reports `no tests`. It does not start a test framework. No server is started. Publish is a separate local job with CI credentials.
 
 Central, docs, docker, deploy, coverage, and the scheduled dependency-update bot are plugins. Each adds tasks, and any of those tasks can be marked as a CI job. A repo drops sbt-zipx when every capability it uses has a Histos plugin. A library can drop it once CI, test, and the Central plugin exist.
 

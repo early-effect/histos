@@ -119,6 +119,8 @@ The general plugin classloader is not this layer. One in-tree module that only s
 
 Before stack D, the library loop. `histos compile` compiles JVM cells from the lock and `dependsOn`. `histos publish <repository>` jars those classes and writes a local Maven directory, with the Scala binary suffix and pom dependencies. It does not publish a development coordinate. A second project resolving that directory is the loop. Histos building Histos waits until that is the way this repo builds. CI does not render a publish job: a file repository is not a release.
 
+`histos test` is the CI command on that loop. It compiles, runs the module's named main in one subprocess per Scala version, and reports `no tests` when there is nothing to run. It does not start a test framework.
+
 Proposed stack D: Phase 3, after C merges.
 
 20. `histos/bsp`: BSP server for Metals on the same task API. `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: compile and test.

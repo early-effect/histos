@@ -32,8 +32,8 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang)),
-                    Module(_, _, _, _, testDeps, _, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _),
+                    Module(_, _, _, _, testDeps, _, _, _),
                   ),
                   Splits.aggregate,
                   _,
@@ -49,6 +49,20 @@ object GraphSpec extends ZIOSpecDefault:
             testDeps.map(_.value) == List("core") &&
             clang == ClangMajor(21)
           case other => summary(other) == "core module"
+    ,
+    test("a module stores one test main"):
+      val core = module("core", Jvm)(scala3).test(TestMain("demo.Check"))
+      val built = Projects(core)
+      assertTrue(
+        built match
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main))), _, _, _, _)) =>
+            main.value == "demo.Check"
+          case other => summary(other) == "stored"
+        ,
+        TestMain.from("demo.Check").exists(_.value == "demo.Check"),
+        TestMain.from("") == Left(TestMainError.Empty),
+        TestMain.from("1bad") == Left(TestMainError.Bad("1bad")),
+      )
     ,
     test("a listed repository is not implied to be central, and a repeat is refused"):
       val core = module("core", Jvm)(scala3)
@@ -115,7 +129,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang)), _, _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _)), _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),
