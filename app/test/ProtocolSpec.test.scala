@@ -64,10 +64,10 @@ object ProtocolSpec extends ZIOSpecDefault:
 
   private val protocol = suite("mcp and acp")(
     test("mcp and acp are commands"):
-      assertTrue(
-        histos.cli.Cli.parse(List("mcp")) == Right(Command.Mcp),
-        histos.cli.Cli.parse(List("acp")) == Right(Command.Acp),
-      ),
+      for
+        mcp <- histos.cli.Cli.parse(List("mcp"))
+        acp <- histos.cli.Cli.parse(List("acp"))
+      yield assertTrue(mcp == Command.Mcp && acp == Command.Acp),
     test("graph and run answer over an in-memory pipe"):
       ZIO.scoped:
         for

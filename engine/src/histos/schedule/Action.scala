@@ -5,7 +5,7 @@ import histos.task.TaskKind
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
-import zio.{UIO, ZIO}
+import zio.{IO, UIO, ZIO}
 
 /** One declared input. The name is part of the cache key. */
 final case class Input(name: String, value: String)
@@ -40,6 +40,9 @@ opaque type Digest = String
 object Digest:
   given CanEqual[Digest, Digest] = CanEqual.derived
 
+  def from(raw: String): Option[Digest] =
+    if raw.length == 64 && raw.forall(isHex) then Some(raw) else None
+
   def of(action: Action, dependencyDigests: Map[ActionId, Digest]): Digest =
     val inputs = action.inputs.sortBy(_.name).map(input => s"${input.name}=${input.value}").mkString("\n")
     val deps = action.dependencies
@@ -52,9 +55,13 @@ object Digest:
 
   extension (digest: Digest) def value: String = digest
 
-/** Lookup only. A miss is `None`, and the scheduler runs the action locally. */
+  private def isHex(c: Char): Boolean =
+    c.isDigit || (c >= 'a' && c <= 'f')
+
+/** Lookup and store. A miss is `None`, and the scheduler runs the action locally, then `put`s the text. */
 trait ActionCache:
-  def get(digest: Digest): UIO[Option[String]]
+  def get(digest: Digest): IO[CacheError, Option[String]]
+  def put(digest: Digest, value: String): IO[CacheError, Unit] = ZIO.unit
 
 object ActionCache:
   val miss: ActionCache = _ => ZIO.none

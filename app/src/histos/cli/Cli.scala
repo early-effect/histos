@@ -2,12 +2,14 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.acp.Acp
+import histos.cache.ContentStore
 import histos.load.Loader
 import histos.mcp.HistosMcp
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.{Aggregate, Module, Project}
 
 import java.nio.file.Path
+import java.time.Instant
 
 import zio.*
 
@@ -17,6 +19,9 @@ enum Command:
   case Run(id: String)
   case Mcp
   case Acp
+  case CachePath
+  case CacheList
+  case CacheClean(dryRun: Boolean)
 
 enum CliExit:
   case Success, TaskFailed, Usage, LoadFailed
@@ -32,33 +37,25 @@ final case class Completed(exit: CliExit, out: String, err: String)
 object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
-  val usageText: String = "usage: histos (version | graph | run <id> | mcp | acp)"
+  val usageText: String = "usage: histos (version | graph | run <id> | mcp | acp | cache path | cache list | cache clean [--dry-run])"
 
-  def parse(args: List[String]): Either[String, Command] =
-    args match
-      case "version" :: Nil => Right(Command.Version)
-      case "version" :: _   => Left("version takes no arguments")
-      case "graph" :: Nil   => Right(Command.Graph)
-      case "graph" :: _     => Left("graph takes no arguments")
-      case "run" :: id :: Nil => Right(Command.Run(id))
-      case "run" :: _       => Left("run needs one task id")
-      case "mcp" :: Nil     => Right(Command.Mcp)
-      case "mcp" :: _       => Left("mcp takes no arguments")
-      case "acp" :: Nil     => Right(Command.Acp)
-      case "acp" :: _       => Left("acp takes no arguments")
-      case command :: _     => Left(s"unknown command $command")
-      case Nil              => Left(usageText)
+  def parse(args: List[String]): IO[String, Command] =
+    Grammar.parse(args).mapError(_.toString)
 
-  def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
-    parse(args) match
-      case Left(detail) => ZIO.succeed(Completed(CliExit.Usage, "", detail))
-      case Right(command) =>
+  def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & histos.cache.ContentStore, Completed] =
+    parse(args).foldZIO(
+      detail => ZIO.succeed(Completed(CliExit.Usage, "", detail)),
+      command =>
         command match
-          case Command.Version => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
-          case Command.Graph   => graph(repo, apiJar)
-          case Command.Run(id) => run(repo, apiJar, id)
-          case Command.Mcp     => mcp(repo, apiJar)
-          case Command.Acp     => acp
+          case Command.Version          => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
+          case Command.Graph            => graph(repo, apiJar)
+          case Command.Run(id)          => run(repo, apiJar, id)
+          case Command.Mcp              => mcp(repo, apiJar)
+          case Command.Acp              => acp
+          case Command.CachePath        => cachePath
+          case Command.CacheList        => cacheList
+          case Command.CacheClean(dry)  => cacheClean(dry),
+    )
 
   private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map:
@@ -79,6 +76,30 @@ object Cli:
               yield Completed(CliExit.Success, out.text, "")
             .provide(Tasks.live(loaded.graph))
             .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+
+  private def cachePath: URIO[ContentStore, Completed] =
+    ZIO.serviceWith[ContentStore](store => Completed(CliExit.Success, store.root.toString, ""))
+
+  private def cacheList: URIO[ContentStore, Completed] =
+    ZIO.serviceWithZIO[ContentStore](_.list).mapBoth(
+      err => Completed(CliExit.LoadFailed, "", err.message),
+      entries =>
+        val text =
+          if entries.isEmpty then ""
+          else entries.map(entry => s"${entry.digest.value} ${entry.bytes}").mkString("\n")
+        Completed(CliExit.Success, text, ""),
+    ).merge
+
+  private def cacheClean(dryRun: Boolean): URIO[ContentStore, Completed] =
+    ZIO.serviceWithZIO[ContentStore](_.clean(Instant.now(), ContentStore.Retention, dryRun)).mapBoth(
+      err => Completed(CliExit.LoadFailed, "", err.message),
+      entries =>
+        val verb = if dryRun then "would remove" else "removed"
+        val text =
+          if entries.isEmpty then s"$verb nothing"
+          else entries.map(entry => s"$verb ${entry.digest.value}").mkString("\n")
+        Completed(CliExit.Success, text, ""),
+    ).merge
 
   private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
     HistosMcp.serve(repo, apiJar, LinePipe.standard).fold(
@@ -121,7 +142,12 @@ object Main extends ZIOAppDefault:
         for
           args <- getArgs
           done <- ZIO.scoped:
-            Cli.execute(args.toList, Path.of("").toAbsolutePath, jar).provideSome[Scope](Loader.live)
+            val home = Option(java.lang.System.getProperty("user.home")).getOrElse(".")
+            val cacheRoot = histos.cache.ContentStore.home(scala.sys.env.get("XDG_CACHE_HOME"), home)
+            Cli.execute(args.toList, Path.of("").toAbsolutePath, jar).provideSome[Scope](
+              Loader.live,
+              ZLayer.succeed(histos.cache.ContentStore.in(cacheRoot)),
+            )
           _ <- Console.printLine(done.out).when(done.out.nonEmpty)
           _ <- Console.printLineError(done.err).when(done.err.nonEmpty)
         yield zio.ExitCode(done.exit.code),
