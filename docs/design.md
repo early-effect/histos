@@ -69,9 +69,119 @@ type Load = ZIO[LoadEnv, BuildError, ProjectGraph]
 
 The project list is fixed when load finishes. A generator cannot add a project.
 
-Load does not compile, test, or publish. Agents, CI generation, and the workflow drift check all read this value.
+Load does not compile, test, or publish. Agents, CI generation, and the workflow drift check all read this value. Load also does not resolve libraries. A `Dep` in the graph is a coordinate. The jars are the resolution in the next section.
 
-### 5.2 Tasks and actions
+### 5.2 Dependency resolution
+
+Resolution runs after load and before any task that needs a classpath. Compile, test, and later link consume its result. Inter-project `dependsOn` is not a library coordinate: those class directories are prepended by the task, ahead of the resolved jars.
+
+Coursier is the resolution engine, linked as a library. The `cs` program is not invoked. Coursier types do not leave the adapter. The Coursier coordinate is chosen when the layer is implemented, from the published artifacts, and it is not guessed in this document.
+
+```scala
+trait Resolve:
+  def resolve(cell: ResolveCell): IO[ResolveError, Classpath]
+
+final case class ResolveCell(
+  module: ProjectName,
+  dependencies: List[Dep],
+  scalaVersion: ScalaVersion,
+  platform: Platform,
+  repositories: Repositories,
+)
+```
+
+`Resolve` is the seam. Tests substitute a fixture. The live implementation is the Coursier adapter.
+
+A direct revision is exact. A revision that contains `[`, `]`, `(`, `)`, `+`, or `,`, or that starts with `latest`, is `ResolveError.Range`. A hyphen inside `1.0.0-M1` or `0.5.13-SNAPSHOT` is an exact revision.
+
+The artifact name is a pure function of the dependency, the Scala version, and the platform suffix:
+
+| Kind | JVM | Scala.js | Native |
+|------|-----|----------|--------|
+| `Java` (`:`) | `name` | `name` | `name` |
+| `Binary` (`::`) | `name_3` or `name_2.13` | `name_sjs1_3` | `name_native0.5_3` |
+| `Full` (`:::`) | `name_3.9.0` | `name_sjs1_3.9.0` | `name_native0.5_3.9.0` |
+
+`_3` is the Scala 3 binary suffix. `_2.13` is the Scala 2.13 binary suffix. `_sjs1` and `_native0.5` are v1 platform suffixes, named values, not string literals scattered through the fetch. This layer fetches JVM artifacts for whatever exact Scala version the cell names. Fetching a Js or Native cell is `ResolveError.UnsupportedPlatform` until those layers. The name function is still tested for those suffixes, so the later layers do not invent a second scheme.
+
+Transitive revisions come from the published metadata. When several versions of one module are requested, Coursier evicts down to one. Each eviction is a value on the result (`requested` revision, `selected` revision, cross-versioned artifact name). An eviction is not a failure. A module the metadata does not contain is `ResolveError.NotFound`. A checksum that does not match is `ResolveError.Checksum`.
+
+```scala
+final case class ResolvedArtifact(
+  organization: String,
+  name: String,
+  revision: String,
+  path: Path,
+  sha256: Sha256,
+)
+
+final case class Eviction(
+  organization: String,
+  name: String,
+  requested: String,
+  selected: String,
+)
+
+final case class Classpath(artifacts: List[ResolvedArtifact], evictions: List[Eviction])
+```
+
+`name` on an artifact is the name after the suffix above. Classpath order is the resolved order with duplicates removed, first occurrence kept. That order is part of the lock.
+
+```scala
+enum ResolveError:
+  case Range(dependency: Dep)
+  case NotFound(organization: String, name: String, revision: String)
+  case Checksum(path: Path, expected: Sha256, actual: Sha256)
+  case LockDrift(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform)
+  case NoLock(path: Path)
+  case UnsupportedPlatform(platform: Platform)
+  case Lock(error: LockError)
+  case Repository(op: RepositoryIo)
+
+enum LockError:
+  case Empty
+  case BadLine(line: String)
+  case DuplicateCell(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform)
+  case Missing(field: LockField)
+  case BadSha256(raw: String)
+  case BadRepository(raw: String)
+```
+
+`RepositoryIo` names the operation (`Read`, `Fetch`, `Metadata`). The exception text is not the error. `LockField` is the lock's own fields (`Cell`, `Direct`, `Artifact`, `Evict`). A download that cannot satisfy the locked sha256 stays `Checksum`. The build does not try another repository.
+
+Repositories, in the order they are asked:
+
+```scala
+enum Repository:
+  case Central
+  case IvyLocal
+  case Maven(url: RepoUrl)
+
+final case class Repositories(first: Repository, rest: List[Repository]):
+  def all: List[Repository] = first :: rest
+```
+
+`RepoUrl` is a `file:` or `https:` URL, the same split as a JDK archive. An empty repository list is not representable. The default value is `Repositories(Central, Nil)`. `IvyLocal` is not on that list. The Scala Native layer adds it for its own resolve. Extra Maven repositories are declared by the build. Declared repositories come first. `Central` is last when it is present. Tests pass a `Maven` `file:` repository and do not include `Central`, so the suite does no network.
+
+`.histos/dependencies.lock` is committed. It is the authority for compile and test. One cell per module, Scala version, and platform the graph declares. An aggregate has no cell. Blank lines and `#` comments are ignored. A bad line, a repeated cell, or a missing field is a lock error enum, not a string.
+
+```text
+cell core 3.9.0 jvm
+direct dev.zio zio 2.1.26 binary
+artifact dev.zio zio_3 2.1.26 <sha256> central
+artifact org.scala-lang scala-library 2.13.16 <sha256> central
+evict dev.zio zio_3 2.1.20 2.1.26
+```
+
+`direct` lines are the cell's `Dep`s, in graph order, with kind `java`, `binary`, or `full`. `artifact` lines are the classpath, in order. The repository token is `central`, `ivy-local`, or `maven:<url>`.
+
+Compile and test compare the graph's direct dependencies to the `direct` lines. A difference is `ResolveError.LockDrift`. They do not re-solve versions. A locked jar that is absent locally is downloaded at that revision from the recorded repository, and the bytes must match the locked sha256. A mismatch is `ResolveError.Checksum`. A missing lock is `ResolveError.NoLock`.
+
+`histos resolve` checks the lock against the graph and the local bytes. `histos resolve --update` re-resolves and rewrites the lock. `histos resolve --check` re-resolves and fails if the selected revisions or checksums differ from the lock. Update and check are the network paths. `./histos test` is not.
+
+The compile cache key includes each artifact sha256 in classpath order. The coordinate text is not the key. A jar that keeps its version and changes its bytes is a different compilation.
+
+### 5.3 Tasks and actions
 
 A task node is data: an id, a kind, declared inputs, declared outputs, and dependencies. The scheduler turns a requested node into a ZIO effect.
 
@@ -101,9 +211,9 @@ The local cache is a content-addressed store under `~/.cache/histos`, or the XDG
 
 `histos cache list` shows id, path, size, and last used. `histos cache clean` deletes JDKs, launchers, and compiled plugin sources unused for 30 days, prints what it removed, and keeps the current project's entries. `--dry-run` previews. `histos cache path` prints the root. Nothing is deleted during a build.
 
-Cache keys include source contents, resolved dependency artifacts, compiler flags, the full Scala version, the platform, the resolved JDK, and declared environment variables. A Js task that needs Node includes the locked Node build. A Native task includes the full clang version that satisfied the declared major.
+Cache keys include source contents, the sha256 of each resolved artifact in classpath order (section 5.2), compiler flags, the full Scala version, the platform, the resolved JDK, and declared environment variables. A Js task that needs Node includes the locked Node build. A Native task includes the full clang version that satisfied the declared major.
 
-### 5.3 Process model
+### 5.4 Process model
 
 `./histos test` is batch. It does not start a server, and it does not leave a process behind. That is the CI command.
 
@@ -113,7 +223,7 @@ If a server is already running for this repo, and the build fingerprint and Hist
 
 The entry point is the frozen script, not a native image. It downloads the pinned JVM assembly, verifies the checksum, and execs it. When no `java` is on `PATH`, the script fetches the locked JDK first. The engine then applies the toolchain policy and re-execs onto the chosen JDK. Scala Native is not the launcher. It is the toolchain for a project that targets Native.
 
-### 5.4 Protocol surfaces
+### 5.5 Protocol surfaces
 
 | Surface | Role | Transport |
 |---------|------|-----------|
@@ -128,7 +238,7 @@ The first commands (`version`, `graph`, `run`, `mcp`, `acp`) are a direct match 
 
 ACP in the skeleton answers `initialize`. Production ACP follows the MCP tools. Neither protocol contains build logic. The handlers call the task API.
 
-### 5.5 Bootstrap and JDK
+### 5.6 Bootstrap and JDK
 
 A repo commits:
 
@@ -163,7 +273,7 @@ A Native project declares a clang major. Histos checks `clang` on `PATH` and doe
 
 `histos toolchain` prints every candidate considered, why it was rejected or chosen, the version, the path, and whether the decision came from the lock or a local override. `histos toolchain use --lock` rewrites the committed lock. `histos toolchain use --local` writes `.histos/toolchain.local`, which is gitignored. CI does not read that file. When a local override is active, the build prints one line. An unchanged lock hit stays quiet. The first time a private JDK or Node is provisioned, one line names the path and `histos cache clean`.
 
-### 5.6 Plugins
+### 5.7 Plugins
 
 Plugins compile only against `histos.api`. histos and ZIO are provided by the launcher. The engine and the scheduler are not on the plugin compile classpath.
 
@@ -181,7 +291,7 @@ The loader uses the binary on an exact Histos match. Otherwise it compiles the s
 
 A plugin contributes task nodes and runners. It may mark a task as a CI job (when it runs, which task id). The workflow renderer emits that job without knowing what the task does.
 
-### 5.7 Platforms and Scala versions
+### 5.8 Platforms and Scala versions
 
 **Platforms.** `Jvm`, `Js`, and `Native`. A project targets one or more. Shared sources live in a common directory. Platform-specific sources live in `jvm/`, `js/`, and `native/`.
 
@@ -189,7 +299,7 @@ A plugin contributes task nodes and runners. It may mark a task as a CI job (whe
 
 **Tool and plugins.** Histos and every plugin are compiled with Scala 3.9+. They never appear on the classpath of the projects being built.
 
-### 5.8 Publishing and versions
+### 5.9 Publishing and versions
 
 Publishing is a task implemented by a plugin.
 
@@ -214,7 +324,7 @@ Version identity is the zipx scheme, implemented as Histos tasks, so existing pi
 
 Changing this scheme would be an organization-wide catalog migration. Histos does not invent a second one.
 
-### 5.9 Build definition
+### 5.10 Build definition
 
 The file is ordinary Scala 3. Projects are values, so one project can depend on another by reference. A loop may build the module list. `scala"3.9.0"` and `dep"dev.zio::zio:2.1.26"` are inline literals. A malformed literal fails when the build file compiles. Builder calls capture source positions.
 
@@ -240,7 +350,7 @@ Evaluating `graph` does not compile or publish. A client runs a task by id.
 
 The graph is the model. A later front end, including a context-function block, is allowed only if it produces the same `ProjectGraph`. v1 does not ship that second DSL. A structural macro is not a v1 surface. `inline` is limited to literals and positions. Plugins stay ordinary methods and libraries.
 
-### 5.10 CI
+### 5.11 CI
 
 Histos replaces sbt-zipx. The graph renders `.github/workflows/ci.yml`. A drift check fails the build when the committed file disagrees.
 
@@ -263,7 +373,7 @@ A cloner of an existing Histos repo runs `./histos test`. Nothing else is instal
 A maintainer moving a repo:
 
 1. Runs `histos bootstrap` and commits `./histos`, `histos.bat`, and `.histos-version`.
-2. Writes `histos.scala` by hand: the modules, platforms, and exact Scala versions. Pins the JDK major and commits `.histos/jdk.lock`. A repo with Js also commits `.histos/node.lock`. A repo with Native declares a clang major. `histos toolchain` shows which binary was chosen.
+2. Writes `histos.scala` by hand: the modules, platforms, and exact Scala versions. Pins the JDK major and commits `.histos/jdk.lock`. Runs `histos resolve --update` and commits `.histos/dependencies.lock`. A repo with Js also commits `.histos/node.lock`. A repo with Native declares a clang major. `histos toolchain` shows which binary was chosen.
 3. Lets Histos render the workflow and commits it. The drift check keeps it aligned.
 
 The first repo is hand-written. An sbt importer waits until a second repo repeats the same shape. The builder is allowed to change during that first migration.
@@ -278,7 +388,7 @@ Remote cache stays off until the build names one. The default mode is read-only.
 Bootstrap scripts, JVM assembly entry, ZIO app, typed graph, batch CLI, MCP tools (`graph`, `run`, `cancel`), ACP `initialize`. The v1 builder (`module`, `aggregate`, then an immutable chain) is the front end the skeleton loads. `Projects` returns `Either[BuildError, ProjectGraph]`. The sample omits that type.
 
 **Phase 1. Local engine and CI.**
-Scheduler, local content-addressed cache, JDK lock and provisioning, `histos toolchain`, Zinc, and JVM compile and test for one exact Scala 3 version. Tests run as one subprocess per test task. Workflow render, drift check, and affected tests land here, for the JVM tasks that exist. The split axes are already in the model. The default is the empty set (Aggregate). A repo that sets `Module` gets one cell per module from this same renderer.
+Scheduler, local content-addressed cache, JDK lock and provisioning, `histos toolchain`, Zinc, dependency resolution and `.histos/dependencies.lock`, and JVM compile and test for one exact Scala 3 version. Tests run as one subprocess per test task. Workflow render, drift check, and affected tests land here, for the JVM tasks that exist. The split axes are already in the model. The default is the empty set (Aggregate). A repo that sets `Module` gets one cell per module from this same renderer.
 
 **Phase 2. Cross-build and versions.**
 Scala.js, Scala Native, exact Scala 2.13 versions. Node lock for Js tasks. Clang major check for Native tasks. The same renderer emits `Platform` and `ScalaVersion` cells, filtered by the affected set on pull requests. Version catalog and the zipx snapshot/release names. Central plugin, enough for a library to publish without sbt-zipx.

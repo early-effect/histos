@@ -1,13 +1,14 @@
 # Histos implementation stack
 
-The design in `docs/design.md` stands, with four amendments from the interview. Those amendments are layer 1, so later layers are not implementing a document that still says the opposite.
+The design in `docs/design.md` stands, with the amendments below. The first four are layer 1, so later layers are not implementing a document that still says the opposite. The fifth is the dependency-resolution specification in design section 5.2.
 
 ## Amendments
 
 1. The launcher is the frozen `./histos` and `histos.bat`. They download the pinned JVM assembly, verify it, and exec it. There is no Scala Native launcher and no Rust launcher. A native image is bloat for a downloader, and a second language is the same cost. JDK policy lives in the JVM engine. The script only fetches the locked Temurin when no `java` exists, then the engine re-checks the lock and re-execs if needed.
 2. Histos itself is built with scala-cli 1.18 (Scala 3.9.0) until it can build itself. No sbt. No zipx. No GitHub Actions on this repo until dogfood.
 3. The engine is a JVM process. ZIO, load, Zinc, MCP, and the Scala Native linker (`tools_3`) run there.
-4. Scala Native is a target toolchain, not a build plugin. The jars already in `~/.ivy2/local` are `org.scala-native` `0.5.13-SNAPSHOT` (`tools_3`, `nir_3`, `util_3`, `nscplugin_3.9.0`, `nativelib_native0.5_3`, `scala3lib` / `scalalib` at `3.9.0+0.5.13-SNAPSHOT`). That nativelib is the Mac Mini M6 unwind fix (scala-native#5109). The native layer resolves them with `//> using repository ivy2Local`. Nothing else depends on them. When 0.5.13 is on Maven Central, that layer drops `ivy2Local` and the snapshot pin.
+4. Scala Native is a target toolchain, not a build plugin. The jars already in `~/.ivy2/local` are `org.scala-native` `0.5.13-SNAPSHOT` (`tools_3`, `nir_3`, `util_3`, `nscplugin_3.9.0`, `nativelib_native0.5_3`, `scala3lib` / `scalalib` at `3.9.0+0.5.13-SNAPSHOT`). That nativelib is the Mac Mini M6 unwind fix (scala-native#5109). The native layer resolves them with `//> using repository ivy2Local` while Histos is built by scala-cli. When that layer of Histos itself fetches them, it adds `IvyLocal` to the repository list for that resolve. `IvyLocal` is not a default repository. When 0.5.13 is on Maven Central, that layer drops `IvyLocal` and the snapshot pin.
+5. Library resolution is Coursier linked as a library. The `cs` program is not a resolver. The specification is section 5.2 of the design. The layer sits after Zinc and before the test subprocess, because a classpath of real dependencies has to exist before a test is defined as running on one.
 
 `heddle-mcp` is the MCP server. ACP `initialize` is a small handshake in histos. There is no ACP library.
 
@@ -15,7 +16,7 @@ The design in `docs/design.md` stands, with four amendments from the interview. 
 
 ```
 api/      pure graph, builder, literals. No ZIO on the main classpath.
-engine/   Load, tasks, later scheduler, cache, Zinc, native link.
+engine/   Load, tasks, later scheduler, cache, Zinc, resolution, native link.
 app/      CLI, MCP, ACP. One ZIOApp.
 ```
 
@@ -23,9 +24,9 @@ Each directory is its own scala-cli project (`project.scala` only; source files 
 
 Tests are ZIO Test (`zio-test` and `zio-test-sbt` as test deps, framework `zio.test.sbt.ZTestFramework`). The api jar does not depend on ZIO. Verify with `scala-cli test <dir>`. There is no sbt, so `testFull` does not apply. No CI cost until dogfood: each layer is proven locally. Do not add required checks before a workflow exists, or the stack cannot merge.
 
-Packages: `histos.*` is the DSL. Engine code is `histos.load`, `histos.task`, and later `histos.cache`, `histos.zinc`, `histos.native`. App code is `histos.cli`, `histos.mcp`, `histos.acp`.
+Packages: `histos.*` is the DSL. Engine code is `histos.load`, `histos.task`, and later `histos.cache`, `histos.zinc`, `histos.resolve`, `histos.native`. App code is `histos.cli`, `histos.mcp`, `histos.acp`.
 
-Errors are enums. `BuildError` (pure graph), `LoadError` (compiler and IO), `TaskError` (run and cancel). No `Either[String, _]`, no `throw`, no partial accessors, no `asInstanceOf`.
+Errors are enums. `BuildError` (pure graph), `LoadError` (compiler and IO), `TaskError` (run and cancel), `ResolveError` (resolution and the dependency lock). No `Either[String, _]`, no `throw`, no partial accessors, no `asInstanceOf`.
 
 ZIO version is whatever published `heddle-mcp` uses. Do not pin a second ZIO. The GitHub README currently shows heddle `0.11.0`; the heddle tree's next ship is `0.13.0`. The MCP layer resolves the Central coordinate and checks that `Mcp.stdio(pipe)` and `Mcp.native` exist. If the published jar is short, publish heddle to ivy2Local the same way as Scala Native and pin that. Do not fork the protocol.
 
@@ -92,35 +93,37 @@ Proposed stack B: Phase 1, opened after A has merged.
     Verify: `scala-cli test engine` with fixture directories. No network in the test. Provisioning is tested against a local file URL.
 11. `histos/zinc`: JVM compile for Scala 3.9.0 through Zinc. User classpath does not contain `scala3-compiler` or histos. Cache key includes sources, flags, the full Scala version, the platform, and the resolved JDK. Depends on: layers 9 and 10.
     Verify: `scala-cli test engine` compiles a fixture project twice and the second run is a hit. Look up the Zinc coordinate at implementation time; do not invent one.
-12. `histos/test-subprocess`: One subprocess per test task. Fresh work directory, scrubbed environment, declared classpath. Interruption kills the process group. Depends on: layer 11 for a compiled test.
+12. `histos/resolve`: Coursier as a library, per design section 5.2. A `Dep`, a Scala version, and a platform become a classpath and `.histos/dependencies.lock`. Direct revisions are exact. Evictions are values. Compile reads the lock, downloads a missing locked jar, and does not re-solve. `--update` and `--check` are the solve commands. The compile cache key gains the artifact sha256s. JVM fetch works. Js and Native names are tested; their fetch is `UnsupportedPlatform`. Depends on: the graph and `Sha256`. Zinc already accepts the classpath.
+    Verify: `scala-cli test engine` against a `file:` Maven repository. No network. One transitive, a rejected range, a checksum mismatch, a lock drift, and a Zinc compile of a source that calls a class from the resolved jar. Look up the Coursier coordinate at implementation time; do not invent one.
+13. `histos/test-subprocess`: One subprocess per test task. Fresh work directory, scrubbed environment, classpath from the resolution plus the compiled classes. Interruption kills the process group. Depends on: layer 12 for that classpath and layer 11 for a compiled test.
     Verify: a fixture whose test calls `System.exit`, and a cancel that kills a sleeping test. That test is the proof. Do not add a theory about process groups without it.
-13. `histos/ci-render`: Render `.github/workflows/ci.yml` from the graph. Empty split set is Aggregate and is the default. Drift fails the build. On a pull request the test job is the affected set. Depends on: layer 12, because the rendered command is `./histos test`.
+14. `histos/ci-render`: Render `.github/workflows/ci.yml` from the graph. Empty split set is Aggregate and is the default. Drift fails the build. On a pull request the test job is the affected set. Depends on: layer 13, because the rendered command is `./histos test`.
     Verify: `scala-cli test engine` against a golden file and a drifted file.
 
 Not in stack B: Scala.js, Scala Native, 2.13, Central, BSP.
 
 Proposed stack C: Phase 2, after B merges.
 
-14. `histos/scala-213`: Exact Scala 2.13 compile and test on the JVM, including `scala-2.13/` sources. Depends on: Zinc and the test subprocess.
+15. `histos/scala-213`: Exact Scala 2.13 compile and test on the JVM, including `scala-2.13/` sources. Depends on: Zinc, the test subprocess, and the resolver's `_2.13` suffix.
     Verify: `scala-cli test engine`
-15. `histos/scala-js`: Js platform. Node major and `.histos/node.lock`, same manager rules as the JDK, and only when a Js task runs. Depends on: layer 14 only for ordering; it needs the platform model from the api.
+16. `histos/scala-js`: Js platform. Node major and `.histos/node.lock`, same manager rules as the JDK, and only when a Js task runs. Resolution of a Js cell uses the `_sjs1` suffix from section 5.2. Depends on: layer 15 only for ordering; it needs the platform model from the api and the resolver.
     Verify: `scala-cli test engine` with a fixture Node, no network.
-16. `histos/scala-native`: Native platform. Clang major check, no clang provisioning. Link in-process with `tools_3` `0.5.13-SNAPSHOT` from ivy2Local. Cache key includes the full clang version that matched. A miss is a typed error. Depends on: the scheduler and the cache.
+17. `histos/scala-native`: Native platform. Clang major check, no clang provisioning. Link in-process with `tools_3` `0.5.13-SNAPSHOT`. That resolve adds `IvyLocal`. Cache key includes the full clang version that matched. A miss is a typed error. Depends on: the scheduler, the cache, and the resolver.
     Verify: `scala-cli test engine` links a hello-world on this machine. This is the layer that needs the local Scala Native publish. Other machines cannot compile it until they have those jars or the pin moves to Central.
-17. `histos/versions`: The zipx version scheme as tasks. Everyday `<version>-ci`, snapshot `<version>-<sha>-SNAPSHOT`, default-branch `<version>-SNAPSHOT` pointer, ship number, registry gate, catalog drift. No second scheme. Depends on: the task API and CI render.
+18. `histos/versions`: The zipx version scheme as tasks. Everyday `<version>-ci`, snapshot `<version>-<sha>-SNAPSHOT`, default-branch `<version>-SNAPSHOT` pointer, ship number, registry gate, catalog drift. No second scheme. Depends on: the task API and CI render.
     Verify: `scala-cli test engine` over the version transitions, no network publish.
-18. `histos/central`: In-tree Central publisher module that compiles only against `api`. `Publisher` returns `ZIO[Scope, PublishError, Published]`. Credentials and signing are layers. Publish is local, uncached, and never sent to a remote executor. Depends on: layer 17 for the coordinates it publishes.
+19. `histos/central`: In-tree Central publisher module that compiles only against `api`. `Publisher` returns `ZIO[Scope, PublishError, Published]`. Credentials and signing are layers. Publish is local, uncached, and never sent to a remote executor. Depends on: layer 18 for the coordinates it publishes.
     Verify: `scala-cli test central` against a local repository fixture.
 
 The general plugin classloader is not this layer. One in-tree module that only sees `api` is the pattern. The loader arrives when a second plugin exists.
 
 Proposed stack D: Phase 3, after C merges.
 
-19. `histos/bsp`: BSP server for Metals on the same task API. `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: compile and test.
+20. `histos/bsp`: BSP server for Metals on the same task API. `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: compile and test.
     Verify: `scala-cli test app` against a BSP client fixture.
-20. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
+21. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
     Verify: `scala-cli test app`
-21. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
+22. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
     Verify: `scala-cli test engine` against an in-process fake cache. No real remote service.
 
 Not in any of these stacks:
