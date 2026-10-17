@@ -1,7 +1,8 @@
 package histos.zinc
 
 import histos.jdk.{JdkVersion, ReleaseError}
-import histos.testrun.{MainClass, TestClasspath, TestProcess, TestRequest}
+import histos.pack.MainClass
+import histos.testrun.{TestClasspath, TestProcess, TestRequest}
 import histos.{Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}

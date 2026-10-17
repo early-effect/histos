@@ -352,7 +352,7 @@ object JdkSpec extends ZIOSpecDefault:
     ,
     test("re-exec keeps the jar and the arguments"):
       val command = Toolchain.command(Path.of("/jdks/21/bin/java"), Path.of("/app.jar"), List("run", "inspect"))
-      assertTrue(command == List("/jdks/21/bin/java", "-jar", "/app.jar", "run", "inspect"))
+      assertTrue(command == List("/jdks/21/bin/java", Toolchain.NativeAccess, "-jar", "/app.jar", "run", "inspect"))
     ,
     test("the re-exec guard is the digit 1"):
       assertTrue(Settled.from(Map("HISTOS_JDK_SETTLED" -> "1")) == Settled.Yes && Settled.from(Map("HISTOS_JDK_SETTLED" -> "true")) == Settled.No)

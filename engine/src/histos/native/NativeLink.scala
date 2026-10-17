@@ -1,7 +1,8 @@
 package histos.native
 
 import histos.jdk.Sha256
-import histos.testrun.{MainClass, TestClasspath, TestProcess, TestRequest}
+import histos.pack.MainClass
+import histos.testrun.{TestClasspath, TestProcess, TestRequest}
 import histos.zinc.{CompileError, CompileOutput, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.{NativeVersion, Platform, ProjectGraph, ProjectName, ScalaVersion}
 

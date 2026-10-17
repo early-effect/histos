@@ -92,7 +92,9 @@ object BootstrapSpec extends ZIOSpecDefault:
     test("verifies the fixture and execs java -jar"):
       val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
       val (code, output) = run(root, shaMatches = true, withJava = true, args = List("graph"))
-      assertTrue(code == 0 && output.contains("-jar") && output.contains("app.jar") && output.contains("graph")),
+      assertTrue(
+        code == 0 && output.contains("--enable-native-access=ALL-UNNAMED") && output.contains("-jar") && output.contains("app.jar") && output.contains("graph"),
+      ),
     test("a checksum mismatch does not exec"):
       val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
       val (code, output) = run(root, shaMatches = false, withJava = true, args = Nil)
@@ -105,7 +107,9 @@ object BootstrapSpec extends ZIOSpecDefault:
       val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
       val packed = lockedJdk(root)
       val (code, output) = run(root, shaMatches = true, withJava = false, args = List("graph"))
-      assertTrue(packed == 0 && code == 0 && output.contains("-jar") && output.contains("app.jar") && output.contains("graph")),
+      assertTrue(
+        packed == 0 && code == 0 && output.contains("--enable-native-access=ALL-UNNAMED") && output.contains("-jar") && output.contains("app.jar") && output.contains("graph"),
+      ),
   )
 
   private def lockedJdk(root: Path): Int =
