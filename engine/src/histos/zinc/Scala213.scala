@@ -1,0 +1,161 @@
+package histos.zinc
+
+import histos.ScalaVersion
+
+import java.net.URLClassLoader
+import java.nio.charset.StandardCharsets
+import java.nio.file.Path
+import java.util.zip.{ZipException, ZipFile}
+
+import scala.jdk.CollectionConverters.*
+
+import zio.{IO, ZIO}
+
+/** The one Scala 2.13 compiler this engine can load. Other patch versions are not this compiler. */
+object Scala213:
+  val version: ScalaVersion = ScalaVersion.trusted("2.13.16")
+
+  /**
+   * Fetched off the engine classpath. Scala 3.9 publishes `scala-library` as 3.9.0, and a 2.13
+   * compiler on that classpath breaks Zinc.
+   *
+   * `runtime` is the only classpath a compiled program may see. `compilerClasspath` is the
+   * compiler and its dependencies, never that program.
+   */
+  private[zinc] object Toolchain:
+    private[Scala213] def load(
+        library: Path,
+        compiler: Path,
+        reflect: Path,
+        bridge: Path,
+        support: List[Path],
+    ): Toolchain =
+      new Toolchain(library, compiler, reflect, bridge, support)
+
+  private[zinc] final class Toolchain private (
+      private[zinc] val library: Path,
+      private[zinc] val compiler: Path,
+      private val reflect: Path,
+      private val bridge: Path,
+      private val support: List[Path],
+  ):
+    private[zinc] def bridgeJar: Path = bridge
+    private[zinc] def runtime: List[Path] = List(library)
+    private[zinc] def compilerClasspath: List[Path] = compiler :: reflect :: support
+    private[zinc] def openLoader(): URLClassLoader =
+      new URLClassLoader(
+        (compiler :: reflect :: library :: support).map(_.toUri.toURL).toArray,
+        ClassLoader.getPlatformClassLoader,
+      )
+
+  private[zinc] def jars: IO[CompileError, Toolchain] =
+    ZIO.attemptBlockingInterrupt(fetch()).mapError(_ => CompileError.Toolchain(ToolchainMiss.Fetch)).flatMap(ZIO.fromEither)
+
+  private val Organization = coursier.Organization("org.scala-lang")
+  private val LibraryProperties = "library.properties"
+  private val VersionNumber = "version.number="
+
+  private enum ToolModule:
+    case Library, Compiler, Reflect, Bridge
+
+    def artifact: String = this match
+      case Library  => "scala-library"
+      case Compiler => "scala-compiler"
+      case Reflect  => "scala-reflect"
+      case Bridge   => "scala2-sbt-bridge"
+
+    def dependency: coursier.core.Dependency =
+      coursier.Dependency(
+        coursier.Module(Organization, coursier.ModuleName(artifact)),
+        coursier.version.VersionConstraint(version.value),
+      )
+
+  private enum Role:
+    case Library, Compiler, Reflect, Bridge, JLine, Diff
+
+  private enum Inspected:
+    case Jar(path: Path, role: Role)
+    case Foreign(path: Path)
+    case NotJar
+
+  private enum Support:
+    case JLine, Diff
+
+    def prefix: String = this match
+      case JLine => "org/jline/"
+      case Diff  => "com/github/difflib/"
+
+    def role: Role = this match
+      case JLine => Role.JLine
+      case Diff  => Role.Diff
+
+  private def fetch(): Either[CompileError, Toolchain] =
+    val files = coursier.cache.FileCache()
+    val got = coursier.Fetch(files)(using coursier.util.Task.sync)
+      .noMirrors
+      .withGradleModuleSupport(false)
+      .addDependencies(ToolModule.values.toSeq.map(_.dependency)*)
+      .eitherResult()
+    got match
+      case Left(_)       => Left(CompileError.Toolchain(ToolchainMiss.Fetch))
+      case Right(result) => assemble(result.files.map(_.toPath).toList)
+
+  private def assemble(paths: List[Path]): Either[CompileError, Toolchain] =
+    val inspected = paths.map(inspect)
+    inspected.collect { case Inspected.Foreign(path) => path } match
+      case Nil =>
+        val known = inspected.collect { case Inspected.Jar(path, role) => role -> path }
+        for
+          library  <- one(known, CompilerPart.Library, Role.Library)
+          compiler <- one(known, CompilerPart.Compiler, Role.Compiler)
+          reflect  <- one(known, CompilerPart.Reflect, Role.Reflect)
+          bridge   <- one(known, CompilerPart.Bridge, Role.Bridge)
+        yield
+          val support = known.collect:
+            case (Role.JLine, path) => path
+            case (Role.Diff, path)  => path
+          Toolchain.load(library, compiler, reflect, bridge, support)
+      case foreign =>
+        Left(CompileError.Toolchain(ToolchainMiss.Unexpected(foreign)))
+
+  private def one(known: List[(Role, Path)], part: CompilerPart, role: Role): Either[CompileError, Path] =
+    known.collect { case (`role`, path) => path } match
+      case path :: Nil => Right(path)
+      case Nil         => Left(CompileError.Toolchain(ToolchainMiss.Missing(part)))
+      case _           => Left(CompileError.Toolchain(ToolchainMiss.Duplicated(part)))
+
+  private def inspect(path: Path): Inspected =
+    open(path): zip =>
+      roleOf(zip) match
+        case Some(role) => Inspected.Jar(path, role)
+        case None       => Inspected.Foreign(path)
+    .getOrElse(Inspected.NotJar)
+
+  private def roleOf(zip: ZipFile): Option[Role] =
+    if ClassMarker.XsbtBridge.present(zip) then Some(Role.Bridge)
+    else if ClassMarker.NscGlobal.present(zip) then Some(Role.Compiler)
+    else if ClassMarker.JavaUniverse.present(zip) then Some(Role.Reflect)
+    else if libraryVersion(zip).contains(version) then Some(Role.Library)
+    else Support.values.collectFirst { case support if hasClass(zip, support.prefix) => support.role }
+
+  private def hasClass(zip: ZipFile, prefix: String): Boolean =
+    zip.entries.asScala.exists(entry => entry.getName.startsWith(prefix) && entry.getName.endsWith(".class"))
+
+  private def libraryVersion(zip: ZipFile): Option[ScalaVersion] =
+    text(zip, LibraryProperties).flatMap: body =>
+      val raw = body.linesIterator.map(_.trim).collectFirst:
+        case line if line.startsWith(VersionNumber) => line.drop(VersionNumber.length)
+      raw.flatMap(value => ScalaVersion.from(value).toOption)
+
+  private def text(zip: ZipFile, name: String): Option[String] =
+    Option(zip.getEntry(name)).map: entry =>
+      val stream = zip.getInputStream(entry)
+      try new String(stream.readAllBytes, StandardCharsets.UTF_8)
+      finally stream.close()
+
+  private def open[A](jar: Path)(use: ZipFile => A): Option[A] =
+    try
+      val zip = new ZipFile(jar.toFile)
+      try Some(use(zip))
+      finally zip.close()
+    catch case _: ZipException => None

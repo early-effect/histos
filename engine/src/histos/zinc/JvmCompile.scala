@@ -42,10 +42,22 @@ object ScalacFlags:
 
 enum ClasspathBan:
   case Scala3Compiler
+  case Scala2Compiler
   case Histos
+
+  def label: String = this match
+    case Scala3Compiler => "the Scala 3 compiler"
+    case Scala2Compiler => "the Scala 2 compiler"
+    case Histos         => "histos"
 
 enum CompileIo:
   case Read, Write, Compile, Bridge
+
+  def label: String = this match
+    case Read    => "read"
+    case Write   => "write"
+    case Compile => "compile"
+    case Bridge  => "bridge"
 
 /** A line the compiler produced. It is text because the compiler speaks text. */
 opaque type CompileDiagnostic = String
@@ -54,6 +66,31 @@ object CompileDiagnostic:
   def fromCompiler(raw: String): CompileDiagnostic = raw
   extension (diagnostic: CompileDiagnostic) def text: String = diagnostic
 
+/** A jar the Scala 2.13 toolchain must contain exactly once. */
+enum CompilerPart:
+  case Library, Compiler, Reflect, Bridge
+
+  def label: String = this match
+    case Library  => "scala-library"
+    case Compiler => "scala-compiler"
+    case Reflect  => "scala-reflect"
+    case Bridge   => "scala2-sbt-bridge"
+
+/** Why the Scala 2.13 compiler could not be loaded. */
+enum ToolchainMiss:
+  case Fetch
+  case Missing(part: CompilerPart)
+  case Duplicated(part: CompilerPart)
+  case Unexpected(jars: List[Path])
+
+  def message: String = this match
+    case Fetch              => "the Scala 2.13 compiler could not be fetched"
+    case Missing(part)      => s"the Scala 2.13 fetch has no ${part.label}"
+    case Duplicated(part)   => s"the Scala 2.13 fetch has more than one ${part.label}"
+    case Unexpected(jars)   =>
+      val names = jars.map(path => Option(path.getFileName).map(_.toString).getOrElse(path.toString))
+      s"the Scala 2.13 fetch included ${names.mkString(", ")}"
+
 enum CompileError:
   case UnsupportedPlatform(platform: Platform)
   case UnsupportedScala(version: ScalaVersion)
@@ -61,16 +98,19 @@ enum CompileError:
   case Banned(path: Path, ban: ClasspathBan)
   case Failed(diagnostics: List[CompileDiagnostic])
   case NoBridge
+  case Toolchain(miss: ToolchainMiss)
   case Io(op: CompileIo)
 
   def message: String = this match
     case UnsupportedPlatform(platform) => s"compile does not support $platform"
-    case UnsupportedScala(version)     => s"compile supports ${JvmCompile.Scala390.value}, not ${version.value}"
+    case UnsupportedScala(version)     =>
+      s"compile supports ${JvmCompile.Scala390.value} and ${Scala213.version.value}, not ${version.value}"
     case NoSources                     => "compile has no sources"
-    case Banned(path, ban)             => s"$path is ${ban.toString.toLowerCase} and is not a user dependency"
+    case Banned(path, ban)             => s"$path is ${ban.label} and is not a user dependency"
     case Failed(diagnostics)           => diagnostics.map(_.text).mkString("\n")
     case NoBridge                      => "the Scala 3 compiler bridge is not on the engine classpath"
-    case Io(op)                        => s"compile failed while ${op.toString.toLowerCase}"
+    case Toolchain(miss)               => miss.message
+    case Io(op)                        => s"compile failed while ${op.label}"
 
 final case class ResolvedJdk(home: Path, version: JdkVersion)
 
@@ -117,7 +157,8 @@ object JvmCompile:
   def compile(request: CompileRequest): IO[CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
-    else if tool.version != Scala390 then ZIO.fail(CompileError.UnsupportedScala(tool.version))
+    else if tool.version != Scala390 && tool.version != Scala213.version then
+      ZIO.fail(CompileError.UnsupportedScala(tool.version))
     else
       ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
         (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
@@ -136,17 +177,16 @@ object JvmCompile:
     }.mapError(_ => CompileError.Io(CompileIo.Read))
 
   private def directoryBan(path: Path): Option[ClasspathBan] =
-    if Files.isRegularFile(path.resolve("dotty").resolve("tools").resolve("dotc").resolve("Driver.class")) then
-      Some(ClasspathBan.Scala3Compiler)
-    else if Files.isRegularFile(path.resolve("histos").resolve("HistosBuild.class")) then Some(ClasspathBan.Histos)
-    else None
+    ClassMarker.userBans.collectFirst:
+      case marker if Files.isRegularFile(marker.under(path)) => marker.classpathBan
+    .flatten
 
   private def jarBan(path: Path): Option[ClasspathBan] =
     val zip = new ZipFile(path.toFile)
     try
-      if zip.getEntry("dotty/tools/dotc/Driver.class") != null then Some(ClasspathBan.Scala3Compiler)
-      else if zip.getEntry("histos/HistosBuild.class") != null then Some(ClasspathBan.Histos)
-      else None
+      ClassMarker.userBans.collectFirst:
+        case marker if marker.present(zip) => marker.classpathBan
+      .flatten
     finally zip.close()
 
   private def hashSources(sources: List[Path]): IO[CompileError, Sha256] =
@@ -158,36 +198,58 @@ object JvmCompile:
     .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
 
   private def invoke(request: CompileRequest): IO[CompileError, CompileOutput] =
-    ZIO.attemptBlockingInterrupt(runZinc(request)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+    if request.toolchain.version == Scala213.version then invoke213(request)
+    else ZIO.attemptBlockingInterrupt(runZinc3(request)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
 
-  private def runZinc(request: CompileRequest): Either[CompileError, CompileOutput] =
+  private def invoke213(request: CompileRequest): IO[CompileError, CompileOutput] =
+    Scala213.jars.flatMap: jars =>
+      ZIO.attemptBlockingInterrupt(runZinc213(request, jars)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+
+  private def runZinc3(request: CompileRequest): Either[CompileError, CompileOutput] =
     val libraries = libraryJars
     val compiler  = codeSource(classOf[dotty.tools.dotc.Driver]).toList
     bridgeJar match
-      case None                                                                => Left(CompileError.NoBridge)
-      case Some(_) if libraries.isEmpty || compiler.isEmpty                    => Left(CompileError.Io(CompileIo.Bridge))
-      case Some(bridge)                                                        => compileOne(request, bridge, libraries, compiler)
+      case None                                              => Left(CompileError.NoBridge)
+      case Some(_) if libraries.isEmpty || compiler.isEmpty => Left(CompileError.Io(CompileIo.Bridge))
+      case Some(bridge)                                      =>
+        compileOne(request, Scala390, bridge, libraries, compiler, getClass.getClassLoader)
+
+  private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain): Either[CompileError, CompileOutput] =
+    val loader = toolchain.openLoader()
+    try
+      compileOne(
+        request,
+        Scala213.version,
+        toolchain.bridgeJar,
+        toolchain.runtime,
+        toolchain.compilerClasspath,
+        loader,
+      )
+    finally loader.close()
 
   private def compileOne(
       request: CompileRequest,
+      version: ScalaVersion,
       bridge: Path,
       libraries: List[Path],
       compiler: List[Path],
+      compilerLoader: ClassLoader,
   ): Either[CompileError, CompileOutput] =
+    val versionText = version.value
     val libraryLoader = new URLClassLoader(libraries.map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader)
     try
       val instance = new ScalaInstance(
-        Scala390.value,
-        getClass.getClassLoader,
-        getClass.getClassLoader,
+        versionText,
+        compilerLoader,
+        compilerLoader,
         libraryLoader,
         libraries.map(_.toFile).toArray,
         compiler.map(_.toFile).toArray,
         (libraries ++ compiler).map(_.toFile).toArray,
-        Some(Scala390.value),
+        Some(versionText),
       )
       val zinc       = new IncrementalCompilerImpl
-      val options    = xsbti.compile.ClasspathOptionsUtil.noboot(Scala390.value)
+      val options    = xsbti.compile.ClasspathOptionsUtil.noboot(versionText)
       val scalac     = ZincUtil.scalaCompiler(instance, bridge, options)
       val compilers  = zinc.compilers(instance, options, Some(request.toolchain.jdk.home), scalac)
       val converter  = MappedFileConverter.empty
@@ -243,7 +305,7 @@ object JvmCompile:
 
   private def bridgeJar: Option[Path] =
     val loader = getClass.getClassLoader
-    loader.getResources("dotty/tools/xsbt/CompilerBridge.class").asScala.toList.flatMap(jarOf).headOption
+    loader.getResources(ClassMarker.DottyBridge.entry).asScala.toList.flatMap(jarOf).headOption
 
   private def libraryJars: List[Path] =
     List(classOf[scala.collection.immutable.List[?]], classOf[scala.quoted.Quotes]).flatMap(codeSource).distinct
