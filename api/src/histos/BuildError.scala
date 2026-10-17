@@ -24,6 +24,7 @@ enum BuildError:
   case MemberInTwoShips(member: ProjectName, first: ShipName, second: ShipName, position: SourcePos)
   case MixedScheme(position: SourcePos)
   case DuplicateResolver(token: String)
+  case MixedTest(name: ProjectName, position: SourcePos)
 
   def message: String = this match
     case EmptyName(position)                 => s"a project name is not empty (${position.line}:${position.column})"
@@ -63,3 +64,5 @@ enum BuildError:
     case MixedScheme(position) =>
       s"a catalog is either early-effect ships or manual versions, and this one is both (${position.line}:${position.column})"
     case DuplicateResolver(token) => s"repository $token is listed twice"
+    case MixedTest(name, position) =>
+      s"'${name.value}' names a test main and a test provider (${position.line}:${position.column})"

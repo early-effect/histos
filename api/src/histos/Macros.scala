@@ -30,6 +30,16 @@ private object DepMacro:
       case DepKind.Binary => '{ DepKind.Binary }
       case DepKind.Full   => '{ DepKind.Full }
 
+private object FrameworkClassMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[FrameworkClass] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("FrameworkClass(...) takes a literal. Use FrameworkClass.from at runtime.", raw)
+      case Some(text) =>
+        FrameworkClass.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ FrameworkClass.trusted(${ Expr(text) }) }
+
 private object TestMainMacro:
   def literal(raw: Expr[String])(using Quotes): Expr[TestMain] =
     import quotes.reflect.report

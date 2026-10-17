@@ -32,8 +32,8 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _),
-                    Module(_, _, _, _, testDeps, _, _, _, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _),
+                    Module(_, _, _, _, testDeps, _, _, _, _, _),
                   ),
                   Splits.aggregate,
                   _,
@@ -55,7 +55,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue(
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None)), _, _, _, _)) =>
             main.value == "demo.Check"
           case other => summary(other) == "stored"
         ,
@@ -64,13 +64,29 @@ object GraphSpec extends ZIOSpecDefault:
         TestMain.from("1bad") == Left(TestMainError.Bad("1bad")),
       )
     ,
+    test("a provider is stored, and a main beside a provider is refused"):
+      val custom = TestProvider(FrameworkClass("munit.Framework"), "org.scalameta", "munit")
+      val named = Projects(module("core", Jvm)(scala3).testProvider(TestProvider.Zio))
+      val mixed = module("core", Jvm)(scala3).test(TestMain("demo.Check")).testProvider(TestProvider.Zio)
+      assertTrue(
+        custom.map(_.library) == ProviderLibrary.from("org.scalameta", "munit"),
+        named match
+          case Right(graph) =>
+            graph.projects.collect { case module: Module => module.provider } == List(Some(TestProvider.Zio))
+          case Left(_) => false
+        ,
+        Projects(mixed).fold(_.message, _ => "").contains("names a test main and a test provider"),
+        FrameworkClass.from("") == Left(FrameworkClassError.Empty),
+        ProviderLibrary.from("", "munit") == Left(ProviderLibraryError.Empty),
+      )
+    ,
     test("test dependencies stay off the compile classpath"):
       val tests = dep"dev.zio::zio-test:2.1.27"
       val core = module("core", Jvm)(scala3).libraryDependencies(zioDep).testDependencies(tests)
       val built = Projects(core)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None)), _, _, _, _)) =>
             dependencies == List(zioDep) && testDependencies == List(tests)
           case other => summary(other) == "split"
     ,
@@ -139,7 +155,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _)), _, _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _)), _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),

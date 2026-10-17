@@ -119,13 +119,13 @@ The general plugin classloader is not this layer. One in-tree module that only s
 
 The library loop is in place. `histos compile` compiles JVM cells from the lock and `dependsOn`. `histos publish <repository>` jars those classes and writes a local Maven directory, with the Scala binary suffix and pom dependencies. It does not publish a development coordinate. A second project resolving that directory is the loop. CI does not render a publish job: a file repository is not a release.
 
-`histos test` compiles, runs the module's named main in one subprocess per Scala version, and reports `no tests` when there is nothing to run. It does not start a test framework.
+`histos test` compiles, then runs the module's test provider in one subprocess per Scala version. ZIO Test is that provider unless the module names another `TestProvider` or opts out with a main. The engine does not load the provider. A module with no test sources reports `no tests`.
 
 Self-build comes before stack D. A published local assembly has to compile, test, and package this repo, so scala-cli stops being the build. That assembly is not a Maven Central release. BSP, the agent toolchain, and the remote cache follow, and they stay in the plan.
 
 20. `histos/test-classpath`: `libraryDependencies` stay the compile classpath and the published pom. `testDependencies` are a second lock cell, `test <module> <scala> <platform>`, resolved together with the library dependencies so one eviction applies. A module with no test dependencies has no test cell. `histos compile` and `histos publish` do not read it. `histos test` does. Depends on: the lock, compile, and test.
     Verify: `scala-cli test api` and `scala-cli test engine`.
-21. `histos/zio-test`: The test subprocess runs ZIO Test when a module has test sources. One JVM per module and Scala version. The engine does not load the framework. `no tests` stays the answer when there is nothing to run. Depends on: the test classpath.
+21. `histos/zio-test`: Test providers are pluggable. A provider names an sbt framework class and the test-scoped library that supplies it. `TestProvider.Zio` is the default. A named main opts out. The child loads the framework. The engine does not. `no tests` stays the answer when there is nothing to run. Depends on: the test classpath.
     Verify: `scala-cli test engine` runs a ZIO Test suite in the child.
 22. `histos/native-tools`: This repo's dependency on `org.scala-native::tools:0.5.13-SNAPSHOT` resolves from a `file:` repository the build names. Ivy local stays private to the native toolchain resolve and is not a build resolver. Depends on: resolvers.
     Verify: `scala-cli test engine` resolves `tools` from that directory and does not ask Central for it.

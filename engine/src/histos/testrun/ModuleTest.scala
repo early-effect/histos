@@ -15,7 +15,7 @@ import histos.zinc.{
   ScalacFlags,
   Sources,
 }
-import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain}
+import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
 
 import java.nio.file.{Files, Path}
 
@@ -42,14 +42,18 @@ enum ModuleTestError:
   case Lock(error: ResolveError)
   case LockRead(path: Path)
   case Sources(module: ProjectName, version: ScalaVersion, error: CompileError)
-  case MissingMain(module: ProjectName)
   case MissingSources(module: ProjectName, main: TestMain)
+  case MissingProvider(module: ProjectName, provider: TestProvider)
+  case ProviderDependency(module: ProjectName, provider: TestProvider)
+  case NoneDiscovered(module: ProjectName, provider: TestProvider)
+  case Mixed(module: ProjectName)
   case Process(module: ProjectName, version: ScalaVersion, error: TestError)
   case Main(error: MainClassError)
   case Absent(module: ProjectName)
   case MissingUpstream(module: ProjectName, dependency: ProjectName, version: ScalaVersion)
   case Work(path: Path)
   case Root(path: Path)
+  case Runner(path: Path)
 
   def message: String = this match
     case Target(error)  => error.message
@@ -58,10 +62,17 @@ enum ModuleTestError:
     case LockRead(path) => s"could not read $path"
     case Sources(module, version, error) =>
       s"'${module.value}' ${version.value} failed to compile tests\n${error.message}"
-    case MissingMain(module) =>
-      s"'${module.value}' has test sources and does not name a main. Add .test(TestMain(\"demo.Check\"))"
     case MissingSources(module, main) =>
       s"'${module.value}' names ${main.value} and has no test sources"
+    case MissingProvider(module, provider) =>
+      s"'${module.value}' runs ${provider.framework.value} and has no test sources"
+    case ProviderDependency(module, provider) =>
+      val library = provider.library
+      s"'${module.value}' runs ${provider.framework.value} and testDependencies do not include ${library.organization}::${library.name}"
+    case NoneDiscovered(module, provider) =>
+      s"'${module.value}' ran ${provider.framework.value} and it found no tests"
+    case Mixed(module) =>
+      s"'${module.value}' names a test main and a test provider"
     case Process(module, version, error) =>
       s"'${module.value}' ${version.value} did not start\n${error.message}"
     case Main(error) => error.message
@@ -71,11 +82,13 @@ enum ModuleTestError:
       s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} classes"
     case Work(path) => s"could not prepare the test work directory $path"
     case Root(path) => s"could not read test roots under $path"
+    case Runner(path) => s"could not write the test provider runner at $path"
 
 object ModuleTest:
   /**
-   * Compile each requested module, then run its named main in one subprocess per Scala version.
-   * Upstream modules are compiled and not run. There is no test framework.
+   * Compile each requested module, then run its test provider in one subprocess per Scala version.
+   * `TestProvider.Zio` is the provider when the module names neither a provider nor a main.
+   * Upstream modules are compiled and not run. The engine does not load the provider.
    */
   def run(
       repo: Path,
@@ -121,11 +134,15 @@ object ModuleTest:
               .select(root, cell.version, Platform.Jvm)
               .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
               .flatMap: sources =>
-                (sources, module.test) match
-                  case (Nil, None)       => ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.NoTests))
-                  case (Nil, Some(main)) => ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
-                  case (_, None)         => ZIO.fail(ModuleTestError.MissingMain(cell.module))
-                  case (_, Some(main))   => execute(repo, module, cell, sources, main, jdk, lock, repositories)
+                (sources, module.test, module.provider) match
+                  case (_, Some(_), Some(_))     => ZIO.fail(ModuleTestError.Mixed(cell.module))
+                  case (Nil, None, None)         => ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.NoTests))
+                  case (Nil, Some(main), None)   => ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
+                  case (Nil, None, Some(provider)) =>
+                    ZIO.fail(ModuleTestError.MissingProvider(cell.module, provider))
+                  case (_, Some(main), None) => execute(repo, module, cell, sources, main, jdk, lock, repositories)
+                  case (_, None, provider) =>
+                    provide(repo, module, cell, sources, provider.getOrElse(TestProvider.Zio), jdk, lock, repositories)
       case _ =>
         ZIO.fail(ModuleTestError.Absent(cell.module))
 
@@ -167,6 +184,69 @@ object ModuleTest:
         ))
         .mapError(error => ModuleTestError.Process(cell.module, cell.version, error))
     yield TestedCell(cell.module, cell.version, status(outcome))
+
+  private def provide(
+      repo: Path,
+      module: Module,
+      cell: CompiledCell,
+      sources: List[Path],
+      provider: TestProvider,
+      jdk: ResolvedJdk,
+      lock: DependencyLock,
+      repositories: Repositories,
+  ): ZIO[Resolve, ModuleTestError, TestedCell] =
+    val classes = testClasses(repo, module.name, cell.version)
+    val analysis = testAnalysis(repo, module.name, cell.version)
+    val runner = providerSource(repo, module.name, cell.version)
+    for
+      _ <- ZIO.unless(satisfied(module, provider))(ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider)))
+      fetched <- classpath(module, cell.version, lock, repositories).mapError(ModuleTestError.Lock(_))
+      upstream <- upstreamClasses(repo, module, cell.version)
+      compileAgainst = cell.classes :: (upstream ++ fetched.paths)
+      _ <- writeRunner(runner, ProviderRunner.source(provider.framework.value, classes))
+      _ <- JvmCompile
+        .compile(CompileRequest(
+          CompileToolchain(cell.version, Platform.Jvm, jdk, ScalacFlags.empty),
+          sources :+ runner,
+          compileAgainst,
+          classes,
+          analysis,
+          fetched.hashes,
+        ))
+        .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
+      work <- fresh(testWork(repo, module.name, cell.version))
+      outcome <- TestProcess
+        .run(TestRequest(
+          Platform.Jvm,
+          jdk.home.resolve("bin").resolve("java"),
+          TestClasspath(classes, compileAgainst),
+          ProviderRunner.Main,
+          work,
+        ))
+        .mapError(error => ModuleTestError.Process(cell.module, cell.version, error))
+      tested <- outcome.exit.value match
+        case 0 =>
+          ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.Passed))
+        case ProviderRunner.NoneFound =>
+          ZIO.fail(ModuleTestError.NoneDiscovered(cell.module, provider))
+        case code =>
+          ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.Failed(code, outcome.out.text, outcome.err.text)))
+    yield tested
+
+  private def satisfied(module: Module, provider: TestProvider): Boolean =
+    val library = provider.library
+    library.organization.nonEmpty && library.name.nonEmpty &&
+      module.testDependencies.exists(dep => dep.organization == library.organization && dep.name == library.name)
+
+  private def providerSource(repo: Path, module: ProjectName, version: ScalaVersion): Path =
+    repo.resolve(".histos").resolve("provider-src").resolve(module.value).resolve(version.value).resolve("subprocess").resolve("Provider.scala")
+
+  private def writeRunner(path: Path, source: String): IO[ModuleTestError, Unit] =
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      Files.writeString(path, source)
+      ()
+    }.mapError(_ => ModuleTestError.Runner(path))
 
   private def status(outcome: TestOutcome): TestStatus =
     if outcome.exit.value == 0 then TestStatus.Passed
