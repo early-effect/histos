@@ -9,7 +9,7 @@
 
 Histos is an effect-oriented, agent-native build tool for the Scala ecosystem. Evaluating a build produces an immutable project graph. Tasks run as ZIO effects. Compile, test, publish, and inspect share one task API for the CLI, BSP, MCP, and ACP.
 
-A clone of a Histos project builds with `./histos`. The repo carries a small bootstrap and a version pin. The launcher is a native image. It does not need a JDK already installed.
+A clone of a Histos project builds with `./histos`. The repo carries frozen bootstrap scripts and a version pin. The scripts download the pinned JVM assembly, verify it, and exec it. They do not need a JDK already installed: when no `java` is present they fetch the locked JDK, and the engine checks that lock again.
 
 Histos replaces sbt-zipx for a repo that has moved. The build describes CI. Artifact names stay the ones downstream catalogs already pin.
 
@@ -22,7 +22,7 @@ The name comes from Ancient Greek ἱστός (*histós*): loom, mast, warp, web
 - **Effect-native.** Task execution is a ZIO effect with typed errors, resource safety, interruption, and structured concurrency. The graph stores task descriptions, not the effects. There are no stringly `TaskKey`s.
 - **Agent-drivable.** `./histos mcp` is the agent surface. Harnesses call it over stdio. They do not scrape CLI output and they do not need Metals installed.
 - **Human-usable.** The CLI is a one-shot command. Metals talks BSP to the same task API.
-- **Zero-install for a clone.** `./histos test` downloads the pinned launcher and a suitable JDK when the machine does not already have one.
+- **Zero-install for a clone.** `./histos test` downloads the pinned JVM assembly and a suitable JDK when the machine does not already have one.
 - **Cross-platform from the start.** JVM, Scala.js, and Scala Native are equal citizens in the project model.
 - **Exact cross-Scala.** A project names full Scala versions, such as `3.9.0` and `2.13.16`. A series such as `3` is not a pin.
 - **Provider-agnostic publishing.** Maven Central, GitHub Packages, and custom repositories are plugins behind one publisher interface. Publish runs on the local machine.
@@ -109,9 +109,9 @@ Cache keys include source contents, resolved dependency artifacts, compiler flag
 
 If a server is already running for this repo, and the build fingerprint and Histos version match, the batch command attaches so Zinc is shared with Metals. A missing or stale server falls back to batch.
 
-BSP and MCP start a server. A session needs one. `./histos server` is the explicit opt-in for a human who wants the daemon left up.
+`./histos mcp` is the process the client owns over stdio. It is not a daemon. BSP and `./histos server` are the long-lived server. A session that wants a daemon starts one. `./histos server` is the explicit opt-in for a human who wants that process left up.
 
-The launcher is a native image, on the Mill pattern, so the process that decides all of this does not need a JDK to start.
+The entry point is the frozen script, not a native image. It downloads the pinned JVM assembly, verifies the checksum, and execs it. When no `java` is on `PATH`, the script fetches the locked JDK first. The engine then applies the toolchain policy and re-execs onto the chosen JDK. Scala Native is not the launcher. It is the toolchain for a project that targets Native.
 
 ### 5.4 Protocol surfaces
 
@@ -124,13 +124,15 @@ The launcher is a native image, on the Mill pattern, so the process that decides
 
 Histos does not emulate Metals MCP tool names. Metals is a BSP client. An agent config points at `./histos mcp` with the repo as the working directory.
 
+The first commands (`version`, `graph`, `run`, `mcp`, `acp`) are a direct match into a `Command` value. That match stays until a command grows a real option. `cache clean --dry-run` and `toolchain use --lock` against `--local` are the point where the parser should become zio-cli, and zio-cli should parse into that same `Command` enum. zio-cli is still 0.8, and taking it for five subcommands would pull in `zio-streams` and `zio-process` for no grammar those libraries serve.
+
 ACP in the skeleton answers `initialize`. Production ACP follows the MCP tools. Neither protocol contains build logic. The handlers call the task API.
 
 ### 5.5 Bootstrap and JDK
 
 A repo commits:
 
-- `./histos` and `histos.bat`. Frozen scripts. They read the version pin, download that native launcher, verify it, and exec it.
+- `./histos` and `histos.bat`. Frozen scripts. They read the version pin, download that JVM assembly, verify it, and exec it.
 - `.histos-version`. The launcher version.
 - `.histos/jdk.lock`. The exact Temurin build, URL, and sha256.
 
@@ -271,7 +273,7 @@ Remote cache stays off until the build names one. The default mode is read-only.
 ## 7. Phased Roadmap
 
 **Phase 0. Skeleton.**
-Bootstrap script, native launcher, ZIO app, typed graph, batch CLI, MCP tools (`graph`, `run`, `cancel`), ACP `initialize`. The v1 builder (`module`, `aggregate`, then an immutable chain) is the front end the skeleton loads.
+Bootstrap scripts, JVM assembly entry, ZIO app, typed graph, batch CLI, MCP tools (`graph`, `run`, `cancel`), ACP `initialize`. The v1 builder (`module`, `aggregate`, then an immutable chain) is the front end the skeleton loads. `Projects` returns `Either[BuildError, ProjectGraph]`. The sample omits that type.
 
 **Phase 1. Local engine and CI.**
 Scheduler, local content-addressed cache, JDK lock and provisioning, `histos toolchain`, Zinc, and JVM compile and test for one exact Scala 3 version. Tests run as one subprocess per test task. Workflow render, drift check, and affected tests land here, for the JVM tasks that exist. The split axes are already in the model. The default is the empty set (Aggregate). A repo that sets `Module` gets one cell per module from this same renderer.
@@ -292,6 +294,12 @@ Docs, docker, deploy, coverage, and the dependency-update bot, as plugins. sbt i
 
 The builder surface, the test subprocess, Node and clang resolution, and CI fan-out were decided in the same review as sections 5 through 7. This draft does not leave them open. A context-function front end is a later producer of the same `ProjectGraph`, and it is not part of v1.
 
+The native-image launcher from that review is withdrawn. The script is the launcher. The engine is a JVM process. Scala Native stays a target platform: the linker is the Scala Native `tools` library and the native libraries, not an sbt plugin, and not a bootstrap binary.
+
+## 9. Building Histos
+
+Histos is built with scala-cli until it can build itself. This repository does not run CI until dogfood has a generated workflow. No sbt, and no sbt-zipx, on the Histos build.
+
 ---
 
-*This document is a living draft. Sections 5 through 8 record the design review of 2026-10-16.*
+*This document is a living draft. Sections 5 through 8 record the design review of 2026-10-16. Section 9 and the launcher sentences record the implementation amendments of the same day.*
