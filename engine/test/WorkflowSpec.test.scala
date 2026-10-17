@@ -1,5 +1,6 @@
 package histos.workflow
 
+import histos.version.{Catalog, Ship, ShipName, ShipNumber}
 import histos.{Axis, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos, Splits}
 
 import java.nio.file.{Files, Path}
@@ -22,7 +23,8 @@ object WorkflowSpec extends ZIOSpecDefault:
         rendered = Workflow.render(graph(Splits.aggregate))
       yield assertTrue(
         rendered == Right(golden),
-        golden.contains("./histos test") && !golden.contains("setup-java"),
+        golden.contains("./histos test") && golden.contains("contents: read") && golden.contains("workflow --check"),
+        !golden.contains("setup-java") && !golden.contains("format") && !golden.contains("publish") && !golden.contains("branches:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List("./histos", "test"),
       )
@@ -37,6 +39,19 @@ object WorkflowSpec extends ZIOSpecDefault:
             yaml.contains("\"./histos test tests\"") &&
             !yaml.contains("setup-java")
           case Left(_) => false
+    ,
+    test("a catalog adds the versions command and still does not publish"):
+      val rendered = (ShipName.from("libs"), ShipNumber.from("1.4.2")) match
+        case (Right(name), Right(number)) =>
+          Catalog.from(List(Ship.Line(name, number, ::(core, Nil)))) match
+            case Right(catalog) =>
+              Workflow.render(ProjectGraph.trusted(List(module("core", Platform.Jvm, Nil)), Splits.aggregate, catalog)) match
+                case Right(yaml) =>
+                  yaml.contains("./histos run versions") && !yaml.contains("publish") && !yaml.contains("format")
+                case Left(_) => false
+            case Left(_) => false
+        case _ => false
+      assertTrue(rendered)
     ,
     test("update writes the render and check rejects a drifted file"):
       ZIO.scoped:
@@ -72,6 +87,16 @@ object WorkflowSpec extends ZIOSpecDefault:
         leaf == Right(List(TestJob.Aggregate(TestTarget.Named(tests, Nil)))),
         none == Right(Nil),
         full == Right(List(TestJob.Aggregate(TestTarget.Entire))),
+      )
+    ,
+    test("names select modules and do not pull in dependents"):
+      val built = graph(Splits.aggregate)
+      assertTrue(
+        Workflow.target(built, Nil) == Right(TestTarget.Entire),
+        Workflow.target(built, List("core")) == Right(TestTarget.Named(core, Nil)),
+        Workflow.target(built, List("core", "core")) == Left(CiError.Duplicate(core)),
+        Workflow.target(built, List("1core")) == Left(CiError.BadName("1core")),
+        Workflow.target(built, List("missing")) == Left(CiError.Unknown(project("missing"))),
       )
     ,
     test("an unknown project is not dropped"):

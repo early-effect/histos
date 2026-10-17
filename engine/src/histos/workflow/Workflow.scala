@@ -1,7 +1,8 @@
 package histos.workflow
 
 import histos.resolve.PlatformToken
-import histos.{Axis, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, Splits}
+import histos.version.Catalog
+import histos.{Aggregate, Axis, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, Splits}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
@@ -43,13 +44,19 @@ enum WorkflowAction:
   case Check, Update
 
 enum CiError:
+  case BadName(raw: String)
   case Unknown(name: ProjectName)
+  case NotModule(name: ProjectName)
+  case Duplicate(name: ProjectName)
   case Missing(path: Path)
   case Drift
   case Io(op: CiIo)
 
   def message: String = this match
+    case BadName(raw)  => s"'$raw' is not a project name"
     case Unknown(name) => s"'${name.value}' is not a project"
+    case NotModule(name) => s"'${name.value}' is not a module"
+    case Duplicate(name) => s"'${name.value}' is listed twice"
     case Missing(path) => s"no workflow at $path"
     case Drift         => "workflow does not match the graph"
     case Io(op)        => s"workflow failed while ${op.toString.toLowerCase}"
@@ -70,8 +77,26 @@ object Workflow:
           val chosen = modules.filter(module => names.contains(module.name))
           jobs(graph.splits, event, modules, chosen)
 
+  /** No names is the whole graph. Names are modules, in the order given, without adding dependents. */
+  def target(graph: ProjectGraph, raw: List[String]): Either[CiError, TestTarget] =
+    if raw.isEmpty then Right(TestTarget.Entire)
+    else
+      raw.foldLeft[Either[CiError, List[ProjectName]]](Right(Nil)): (acc, item) =>
+        acc.flatMap: seen =>
+          ProjectName.from(item) match
+            case Left(_) => Left(CiError.BadName(item))
+            case Right(name) if seen.contains(name) => Left(CiError.Duplicate(name))
+            case Right(name) =>
+              graph.get(name) match
+                case None              => Left(CiError.Unknown(name))
+                case Some(_: Aggregate) => Left(CiError.NotModule(name))
+                case Some(_: Module)   => Right(seen :+ name)
+      .flatMap:
+        case first :: rest => Right(TestTarget.Named(first, rest))
+        case Nil           => Right(TestTarget.Entire)
+
   def render(graph: ProjectGraph): Either[CiError, String] =
-    plan(graph, CiEvent.Other).map(document)
+    plan(graph, CiEvent.Other).map(jobs => document(graph, jobs))
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
@@ -172,11 +197,14 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def document(jobs: List[TestJob]): String =
+  private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
     val test = jobs match
       case Nil => Nil
       case _   => testJob(jobs)
-    val body = test ++ List(formatJob, workflowJob, publishJob(jobs.nonEmpty))
+    val versions = graph.catalog match
+      case Catalog.Empty => Nil
+      case _             => List(versionsJob)
+    val body = test ++ versions ++ List(workflowJob)
     (header ++ body).mkString("\n") + "\n"
 
   private val header: List[String] =
@@ -185,10 +213,8 @@ object Workflow:
       "on:",
       "  pull_request:",
       "  push:",
-      "    branches:",
-      "      - main",
-      "    tags:",
-      "      - v*",
+      "permissions:",
+      "  contents: read",
       "jobs:",
     )
 
@@ -244,12 +270,12 @@ object Workflow:
       case VersionRef.All           => None
       case VersionRef.One(selected) => Some(selected.value)
 
-  private val formatJob: String =
-    """  format:
+  private val versionsJob: String =
+    """  versions:
       |    runs-on: ubuntu-latest
       |    steps:
       |      - uses: actions/checkout@v4
-      |      - run: "./histos format --check"""".stripMargin
+      |      - run: "./histos run versions"""".stripMargin
 
   private val workflowJob: String =
     """  workflow:
@@ -257,17 +283,6 @@ object Workflow:
       |    steps:
       |      - uses: actions/checkout@v4
       |      - run: "./histos workflow --check"""".stripMargin
-
-  private def publishJob(hasTest: Boolean): String =
-    val needs = (if hasTest then List("test") else Nil) ++ List("format", "workflow")
-    val lines = List("  publish:", "    needs:") ++ needs.map(name => s"      - $name") ++ List(
-      "    if: \"startsWith(github.ref, 'refs/tags/v')\"",
-      "    runs-on: ubuntu-latest",
-      "    steps:",
-      "      - uses: actions/checkout@v4",
-      "      - run: \"./histos publish\"",
-    )
-    lines.mkString("\n")
 
   private def quote(text: String): String =
     "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
