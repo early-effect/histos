@@ -1,19 +1,43 @@
 package histos.central
 
+import histos.Organization
+
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
 
 import zio.{Chunk, IO, ULayer, ZIO, ZLayer}
 
+/** The version text of a dependency. It is not a Histos revision: another project chose it. */
+opaque type DependencyVersion = String
+
+object DependencyVersion:
+  given CanEqual[DependencyVersion, DependencyVersion] = CanEqual.derived
+
+  private val Text = """[A-Za-z0-9][A-Za-z0-9._+-]*""".r
+
+  def from(raw: String): Either[PublishError, DependencyVersion] =
+    if Text.matches(raw) && !raw.contains("..") then Right(raw) else Left(PublishError.BadVersion(raw))
+
+  extension (version: DependencyVersion) def value: String = version
+
+/** One pom dependency. The artifact id already includes its Scala suffix. */
+final case class MavenDependency(group: Organization, name: ArtifactId, version: DependencyVersion)
+
 /** Bytes of one jar, at one publishable revision. */
-final case class Artifact(group: GroupId, name: ArtifactId, revision: Revision, jar: Chunk[Byte])
+final case class Artifact(
+    group: Organization,
+    name: ArtifactId,
+    revision: Revision,
+    jar: Chunk[Byte],
+    dependencies: List[MavenDependency] = Nil,
+)
 
 enum PublishIo:
   case Directory, Write, Move
 
 enum PublishError:
-  case BadGroup(raw: String)
   case BadArtifact(raw: String)
+  case BadVersion(raw: String)
   case EmptyJar
   case NotAJar
   case NotADirectory(path: Path)
@@ -21,8 +45,8 @@ enum PublishError:
   case Io(op: PublishIo)
 
   def message: String = this match
-    case BadGroup(raw)     => s"'$raw' is not a group id"
     case BadArtifact(raw)  => s"'$raw' is not an artifact id"
+    case BadVersion(raw)   => s"'$raw' is not a dependency version"
     case EmptyJar          => "a published jar is not empty"
     case NotAJar           => "a published jar is a zip"
     case NotADirectory(path) => s"$path is not a directory"
@@ -56,13 +80,28 @@ object Layout:
         )
 
   def pom(artifact: Artifact): String =
+    val dependencies = artifact.dependencies match
+      case Nil => ""
+      case listed =>
+        val rows = listed
+          .map: dependency =>
+            s"""    <dependency>
+               |      <groupId>${dependency.group.value}</groupId>
+               |      <artifactId>${dependency.name.value}</artifactId>
+               |      <version>${dependency.version.value}</version>
+               |    </dependency>""".stripMargin
+          .mkString("\n")
+        s"""
+           |  <dependencies>
+           |$rows
+           |  </dependencies>""".stripMargin
     s"""<?xml version="1.0" encoding="UTF-8"?>
        |<project xmlns="http://maven.apache.org/POM/4.0.0">
        |  <modelVersion>4.0.0</modelVersion>
        |  <groupId>${artifact.group.value}</groupId>
        |  <artifactId>${artifact.name.value}</artifactId>
        |  <version>${artifact.revision.render}</version>
-       |  <packaging>jar</packaging>
+       |  <packaging>jar</packaging>$dependencies
        |</project>
        |""".stripMargin
 

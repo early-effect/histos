@@ -15,23 +15,6 @@ enum Revision:
     case Pointer(pointer)       => pointer.render
     case Manual(version)        => version.value
 
-/** A Maven group. Dotted segments, each starting with a letter. `..` is not a group. */
-opaque type GroupId = String
-
-object GroupId:
-  given CanEqual[GroupId, GroupId] = CanEqual.derived
-
-  private val Segment = """[A-Za-z][A-Za-z0-9_-]*""".r
-
-  def from(raw: String): Either[PublishError, GroupId] =
-    val parts = raw.split("\\.", -1)
-    if raw.nonEmpty && parts.forall(Segment.matches) then Right(raw)
-    else Left(PublishError.BadGroup(raw))
-
-  extension (group: GroupId)
-    def value: String = group
-    def segments: List[String] = group.split("\\.", -1).toList
-
 /** A Maven artifact id. One path segment, not a group. */
 opaque type ArtifactId = String
 

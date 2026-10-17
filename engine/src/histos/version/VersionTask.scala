@@ -15,10 +15,12 @@ import zio.{IO, ZIO}
 object VersionTask:
   val fileName: String = "releases"
 
+  def decide(graph: ProjectGraph, repo: Path, env: Map[String, String]): IO[VersionError, Decision] =
+    evidence(graph, repo).flatMap: found =>
+      ZIO.fromEither(Versions.assess(graph.catalog, env, found))
+
   def fromRepo(graph: ProjectGraph, repo: Path, env: Map[String, String]): IO[TaskError, TaskResult] =
-    graph.catalog match
-      case Catalog.Empty | Catalog.Manual(_) => effect(graph.catalog, Map.empty, Evidence.Unchecked)
-      case Catalog.Lines(_)                  => evidence(repo).flatMap(found => effect(graph.catalog, env, found))
+    decide(graph, repo, env).mapError(TaskError.Version(_)).flatMap(complete)
 
   def effect(catalog: Catalog, env: Map[String, String], evidence: Evidence): IO[TaskError, TaskResult] =
     ZIO.fromEither(Versions.assess(catalog, env, evidence)).mapError(TaskError.Version(_)).flatMap(complete)
@@ -31,11 +33,16 @@ object VersionTask:
       case refused: Decision.Refused => ZIO.fail(TaskError.Version(VersionError.Refused(refused.refusals)))
       case other                      => ZIO.succeed(TaskResult(TaskKind.Versions, Decision.text(other)))
 
-  private def evidence(repo: Path): IO[TaskError, Evidence] =
+  private def evidence(graph: ProjectGraph, repo: Path): IO[VersionError, Evidence] =
+    graph.catalog match
+      case Catalog.Empty | Catalog.Manual(_) => ZIO.succeed(Evidence.Unchecked)
+      case Catalog.Lines(_)                  => read(repo)
+
+  private def read(repo: Path): IO[VersionError, Evidence] =
     val file = path(repo)
     ZIO.attemptBlocking {
       if Files.isRegularFile(file) then Some(Files.readAllLines(file).asScala.toList) else None
-    }.mapError(_ => TaskError.Version(VersionError.Unreadable)).flatMap:
+    }.mapError(_ => VersionError.Unreadable).flatMap:
       case None => ZIO.succeed(Evidence.Unchecked)
       case Some(lines) =>
-        ZIO.fromEither(Registry.parse(lines).map(Evidence.Checked(_))).mapError(error => TaskError.Version(VersionError.Registry(error)))
+        ZIO.fromEither(Registry.parse(lines).map(Evidence.Checked(_))).mapError(VersionError.Registry(_))

@@ -12,6 +12,8 @@ import histos.resolve.{Repositories, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
 import histos.workflow.{TestTarget, Workflow, WorkflowAction}
+import histos.central.Publisher
+import histos.publish.LocalPublish
 import histos.zinc.{CompiledCell, GraphCompile}
 import histos.{Aggregate, Module, Project}
 
@@ -26,6 +28,7 @@ enum Command:
   case Run(id: TaskId)
   case Test(projects: List[String])
   case Compile(projects: List[String])
+  case Publish(repository: String, projects: List[String])
   case Mcp
   case Acp
   case Toolchain
@@ -53,7 +56,7 @@ enum CliParseError:
     case BadTaskId                        => "a task id is not empty"
 
 enum CliExit:
-  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed, TestFailed, CompileFailed
+  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed, TestFailed, CompileFailed, PublishFailed
 
   def code: Int = this match
     case Success         => 0
@@ -65,6 +68,7 @@ enum CliExit:
     case WorkflowFailed  => 6
     case TestFailed      => 7
     case CompileFailed   => 8
+    case PublishFailed   => 9
 
 final case class Completed(exit: CliExit, out: String, err: String)
 
@@ -72,7 +76,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | publish <repository> [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -87,6 +91,7 @@ object Cli:
           case Command.Run(id)          => run(repo, apiJar, id)
           case Command.Test(projects)   => test(repo, apiJar, projects)
           case Command.Compile(projects) => compile(repo, apiJar, projects)
+          case Command.Publish(repository, projects) => publish(repo, apiJar, repository, projects)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
           case Command.Toolchain        => toolchain(repo, apiJar)
@@ -131,6 +136,33 @@ object Cli:
     val full = cell.classes.toAbsolutePath.normalize
     val shown = (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
     s"${cell.module.value} ${cell.version.value} jvm ${cell.classFiles} $shown"
+
+  private def publish(repo: Path, apiJar: Path, directory: String, projects: List[String]): URIO[Loader & Scope & Resolve & Machine, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+      case Right(loaded) =>
+        ZIO.attempt(Path.of(directory)).either.flatMap:
+          case Left(_) => ZIO.succeed(Completed(CliExit.PublishFailed, "", s"'$directory' is not a path"))
+          case Right(raw) =>
+            val destination = if raw.isAbsolute then raw else repo.resolve(raw)
+            GraphCompile.jdkHere.either.flatMap:
+              case Left(error) => ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message))
+              case Right(jdk) =>
+                ZIO.serviceWithZIO[Machine]: machine =>
+                  LocalPublish
+                    .run(repo, loaded.graph, projects, jdk, machine.env)
+                    .provideSome[histos.resolve.Resolve](Publisher.local(destination))
+                    .mapBoth(
+                      failure => Completed(CliExit.PublishFailed, "", failure.message),
+                      lines => Completed(CliExit.Success, lines.map(line => publishedLine(destination, line)).mkString("\n"), ""),
+                    )
+                    .merge
+
+  private def publishedLine(destination: Path, line: histos.publish.PublishedModule): String =
+    val base = destination.toAbsolutePath.normalize
+    val full = line.jar.toAbsolutePath.normalize
+    val shown = (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
+    s"${line.group.value} ${line.artifact} ${line.revision} $shown"
 
   /** Selected modules, then the lock. This does not claim a test framework ran. */
   private def test(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =

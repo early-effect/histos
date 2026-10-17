@@ -117,7 +117,7 @@ Proposed stack C: Phase 2, after B merges.
 
 The general plugin classloader is not this layer. One in-tree module that only sees `api` is the pattern. The loader arrives when a second plugin exists.
 
-Before stack D, the library loop. `histos compile` compiles JVM cells from the lock and `dependsOn`. The next layer publishes that class directory into the local Maven writer, with the Scala binary suffix and pom dependencies. One small library must go sources, jar, local repository, and a second resolve before Histos builds Histos. BSP waits until that loop works. CI does not render a publish job until `histos publish` can succeed.
+Before stack D, the library loop. `histos compile` compiles JVM cells from the lock and `dependsOn`. `histos publish <repository>` jars those classes and writes a local Maven directory, with the Scala binary suffix and pom dependencies. It does not publish a development coordinate. A second project resolving that directory is the loop. Histos building Histos waits until that is the way this repo builds. CI does not render a publish job: a file repository is not a release.
 
 Proposed stack D: Phase 3, after C merges.
 

@@ -8,6 +8,18 @@ import zio.test.*
 
 object LiteralSpec extends ZIOSpecDefault:
   private val literals = suite("literals")(
+    test("an organization is a dotted group"):
+      val errors = typeCheckErrors("""organization"com..example"""")
+      assertTrue(
+        organization"com.example".value == "com.example",
+        organization"com.example" == Organization("com.example"),
+        Organization.from("com..example") == Left(OrganizationError.Bad("com..example")),
+        Organization.from("com/example") == Left(OrganizationError.Bad("com/example")),
+        errors match
+          case e :: _ => e.message.contains("com..example")
+          case Nil    => false,
+      )
+    ,
     test("a full Scala version is a pin"):
       assertTrue(
         scala"3.9.0".value == "3.9.0",
