@@ -72,8 +72,9 @@ Proposed stack A: `histos` Phase 0  (main <- design <- api <- load <- tasks <- c
    Verify: `scala-cli test engine`
 4. `histos/tasks`: Inspect runner, `NoRunner`, and the cancel registry. Depends on: layer 3 for a loaded graph.
    Verify: `scala-cli test engine`
-5. `histos/cli`: Batch `graph`, `run`, and `version`, with exit codes mapped from the error enums. Depends on: layer 4.
+5. `histos/cli`: Batch `graph`, `run`, and `version`, with exit codes mapped from the error enums. A direct match into `Command`. Depends on: layer 4.
    Verify: `scala-cli test app`
+   zio-cli waits. Adopt it when the first real option lands (`cache clean --dry-run`, or `toolchain use --lock` against `--local`), and keep it as a parser into the same `Command` enum. It is 0.8 and would add `zio-streams` and `zio-process` before either is used.
 6. `histos/mcp-acp`: heddle-mcp stdio for `graph`, `run`, and `cancel`. ACP answers `initialize`. Depends on: layer 4 for the task API. Independent of the CLI, but the stack is linear, so it sits above layer 5.
    Verify: `scala-cli test app` (in-memory pipe, not a live socket)
 7. `histos/bootstrap`: `./histos`, `histos.bat`, and `.histos-version`. The script verifies a fixture assembly and execs `java -jar` when `java` exists. Depends on: layer 5 for the assembly it will eventually exec.
@@ -85,7 +86,7 @@ Proposed stack B: Phase 1, opened after A has merged.
 
 8. `histos/scheduler`: One action type, declared inputs, dependency order, interruption. A cache miss is "run locally". No remote path. Depends on: the task API.
    Verify: `scala-cli test engine` with fake runners.
-9. `histos/cache`: Content-addressed store under the XDG cache (`~/.cache/histos`). Write to a temp name, verify, then move. `cache path`, `cache list`, `cache clean` (30 days, keep the current project, `--dry-run`). Nothing is deleted during a build. Depends on: layer 8, because keys are action digests.
+9. `histos/cache`: Content-addressed store under the XDG cache (`~/.cache/histos`). Write to a temp name, verify, then move. `cache path`, `cache list`, `cache clean` (30 days, keep the current project, `--dry-run`). Nothing is deleted during a build. Depends on: layer 8, because keys are action digests. `--dry-run` is the first option, so this layer is where zio-cli replaces the match, parsing into `Command`.
    Verify: `scala-cli test engine`
 10. `histos/jdk`: Lock file, the detection order in the design, and private Temurin only for a bare machine. The script downloads the locked JDK only when no `java` exists. The engine owns the policy and re-execs onto the chosen JDK. `toolchain` prints every candidate. Depends on: layer 7 for the script and layer 9 for the cache location.
     Verify: `scala-cli test engine` with fixture directories. No network in the test. Provisioning is tested against a local file URL.

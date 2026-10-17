@@ -124,6 +124,8 @@ The entry point is the frozen script, not a native image. It downloads the pinne
 
 Histos does not emulate Metals MCP tool names. Metals is a BSP client. An agent config points at `./histos mcp` with the repo as the working directory.
 
+The first commands (`version`, `graph`, `run`, `mcp`, `acp`) are a direct match into a `Command` value. That match stays until a command grows a real option. `cache clean --dry-run` and `toolchain use --lock` against `--local` are the point where the parser should become zio-cli, and zio-cli should parse into that same `Command` enum. zio-cli is still 0.8, and taking it for five subcommands would pull in `zio-streams` and `zio-process` for no grammar those libraries serve.
+
 ACP in the skeleton answers `initialize`. Production ACP follows the MCP tools. Neither protocol contains build logic. The handlers call the task API.
 
 ### 5.5 Bootstrap and JDK
