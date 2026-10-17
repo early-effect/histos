@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.jdk.Sha256
-import histos.resolve.{Classpath, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{BuildResolvers, Classpath, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.workflow.{CiError, TestTarget, Workflow}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -51,7 +51,7 @@ object GraphCompile:
       selected <- ZIO.fromEither(choose(graph, names))
       layers   <- ZIO.fromEither(layersOf(selected))
       lock     <- readLock(repo)
-      compiled <- compileLayers(repo, modulesOf(graph), layers, lock, jdk)
+      compiled <- compileLayers(repo, modulesOf(graph), layers, lock, jdk, BuildResolvers(graph.resolvers))
     yield compiled.sortBy(cell => (cell.module.value, cell.version.value))
 
   def jdkHere: IO[GraphCompileError, ResolvedJdk] =
@@ -114,10 +114,11 @@ object GraphCompile:
       layers: List[List[Module]],
       lock: DependencyLock,
       jdk: ResolvedJdk,
+      repositories: Repositories,
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
     ZIO.foldLeft(layers)((Map.empty[(ProjectName, ScalaVersion), Path], List.empty[CompiledCell])): (state, layer) =>
       val (done, acc) = state
-      ZIO.foreachPar(layer)(module => compileModule(repo, all, module, done, lock, jdk)).map: batches =>
+      ZIO.foreachPar(layer)(module => compileModule(repo, all, module, done, lock, jdk, repositories)).map: batches =>
         val cells = batches.flatten
         val paths = cells.map(cell => (cell.module, cell.version) -> cell.classes).toMap
         (done ++ paths, acc ++ cells)
@@ -130,13 +131,14 @@ object GraphCompile:
       done: Map[(ProjectName, ScalaVersion), Path],
       lock: DependencyLock,
       jdk: ResolvedJdk,
+      repositories: Repositories,
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
     if !module.platforms.all.contains(Platform.Jvm) then ZIO.fail(GraphCompileError.NoJvm(module.name))
     else
       sourceBase(repo, module, all).flatMap:
         case None => ZIO.fail(GraphCompileError.NoRoot(module.name))
         case Some(base) =>
-          ZIO.foreachPar(module.versions.all)(version => compileVersion(repo, module, version, base, done, lock, jdk))
+          ZIO.foreachPar(module.versions.all)(version => compileVersion(repo, module, version, base, done, lock, jdk, repositories))
 
   private def compileVersion(
       repo: Path,
@@ -146,6 +148,7 @@ object GraphCompile:
       done: Map[(ProjectName, ScalaVersion), Path],
       lock: DependencyLock,
       jdk: ResolvedJdk,
+      repositories: Repositories,
   ): ZIO[Resolve, GraphCompileError, CompiledCell] =
     for
       sources <- Sources.select(base, version, Platform.Jvm).mapError(error =>
@@ -153,7 +156,7 @@ object GraphCompile:
                  )
       _ <- ZIO.when(sources.isEmpty)(ZIO.fail(GraphCompileError.NoSources(module.name, base)))
       upstreamClasses <- ZIO.fromEither(upstreamClasses(module, version, done))
-      fetched <- classpathOf(module, version, lock)
+      fetched <- classpathOf(module, version, lock, repositories)
       classes = output(repo, module.name, version)
       compiled <- JvmCompile.compile(CompileRequest(
                     CompileToolchain(version, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -180,8 +183,9 @@ object GraphCompile:
       module: Module,
       version: ScalaVersion,
       lock: DependencyLock,
+      repositories: Repositories,
   ): ZIO[Resolve, GraphCompileError, Fetched] =
-    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, Repositories.central)
+    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories)
     Resolve.materialize(cell, lock).mapBoth(GraphCompileError.Lock(_), fetched)
 
   private final case class Fetched(paths: List[Path], hashes: List[Sha256])

@@ -8,6 +8,17 @@ import zio.test.*
 
 object LiteralSpec extends ZIOSpecDefault:
   private val literals = suite("literals")(
+    test("a maven repository is a file or https url"):
+      val errors = typeCheckErrors("""maven"http://example.com"""")
+      assertTrue(
+        maven"file:///repo" == Resolver.Maven(RepositoryUrl("file:///repo")),
+        maven"https://repo.example/maven" == Resolver.Maven(RepositoryUrl("https://repo.example/maven")),
+        RepositoryUrl.from("http://example.com") == Left(RepositoryUrlError.Bad("http://example.com")),
+        errors match
+          case e :: _ => e.message.contains("http://example.com")
+          case Nil    => false,
+      )
+    ,
     test("an organization is a dotted group"):
       val errors = typeCheckErrors("""organization"com..example"""")
       assertTrue(

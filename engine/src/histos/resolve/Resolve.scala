@@ -14,17 +14,17 @@ object RepoUrl:
   given CanEqual[RepoUrl, RepoUrl] = CanEqual.derived
 
   def from(raw: String): Either[LockError, RepoUrl] =
-    if valid(raw) then Right(raw) else Left(LockError.BadRepository(raw))
+    histos.RepositoryUrl.from(raw) match
+      case Right(url) => Right(url.value)
+      case Left(_)    => Left(LockError.BadRepository(raw))
 
   def file(path: Path): RepoUrl =
     path.toAbsolutePath.normalize.toUri.toASCIIString
 
-  extension (url: RepoUrl) def value: String = url
+  /** The api already checked the text. */
+  private[resolve] def trusted(raw: String): RepoUrl = raw
 
-  private def valid(raw: String): Boolean =
-    val https = raw.startsWith("https://") && raw.length > "https://".length
-    val file  = raw.startsWith("file:") && raw.length > "file:".length
-    (https || file) && !raw.exists(_.isWhitespace)
+  extension (url: RepoUrl) def value: String = url
 
 enum Repository:
   case Central
@@ -70,6 +70,26 @@ object Repository:
 /** Declared repositories first. `Central` is last when it is present. Empty is not representable. */
 final case class Repositories(first: Repository, rest: List[Repository]):
   def all: List[Repository] = first :: rest
+
+object BuildResolvers:
+  /** An empty declaration is Central. A listed `central` is moved last. It is not added when absent. */
+  def apply(declared: List[histos.Resolver]): Repositories =
+    declared match
+      case Nil => Repositories.central
+      case first :: rest =>
+        val mapped = mapOne(first)
+        val tail = rest.map(mapOne)
+        pack(Repositories.ordered(Repositories(mapped, tail)))
+
+  private def mapOne(resolver: histos.Resolver): Repository =
+    resolver match
+      case histos.Resolver.Central    => Repository.Central
+      case histos.Resolver.Maven(url) => Repository.Maven(RepoUrl.trusted(url.value))
+
+  private def pack(ordered: List[Repository]): Repositories =
+    ordered match
+      case first :: rest => Repositories(first, rest)
+      case Nil           => Repositories.central
 
 object Repositories:
   val central: Repositories = Repositories(Repository.Central, Nil)

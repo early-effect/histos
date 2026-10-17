@@ -28,6 +28,7 @@ final case class ProjectGraph private (
     splits: Splits,
     catalog: Catalog,
     organization: Option[Organization],
+    resolvers: List[Resolver],
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -48,7 +49,16 @@ object ProjectGraph:
       catalog: Catalog,
       organization: Option[Organization],
   ): ProjectGraph =
-    new ProjectGraph(projects, splits, catalog, organization)
+    trusted(projects, splits, catalog, organization, Nil)
+
+  private[histos] def trusted(
+      projects: List[Project],
+      splits: Splits,
+      catalog: Catalog,
+      organization: Option[Organization],
+      resolvers: List[Resolver],
+  ): ProjectGraph =
+    new ProjectGraph(projects, splits, catalog, organization, resolvers)
 
 trait HistosBuild:
   def graph: Either[BuildError, ProjectGraph]
@@ -56,22 +66,36 @@ trait HistosBuild:
 object Projects:
   /** Every published module uses this organization. A build that does not publish omits it. */
   def organization(organization: Organization): Organized =
-    Organized(organization)
+    Organized(Some(organization), Nil)
+
+  /** Repositories this build resolves from. The list is not Central unless `central` is in it. An empty list, from [[apply]], is Central. */
+  def resolvers(first: Resolver, rest: Resolver*): Organized =
+    Organized(None, first :: rest.toList)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    build(None, Splits.aggregate, CatalogSpec.empty, defs.toList)
+    build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
   def apply(splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    build(None, splits, CatalogSpec.empty, defs.toList)
+    build(None, Nil, splits, CatalogSpec.empty, defs.toList)
 
   def apply(catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    build(None, Splits.aggregate, catalog, defs.toList)
+    build(None, Nil, Splits.aggregate, catalog, defs.toList)
 
   def apply(splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    build(None, splits, catalog, defs.toList)
+    build(None, Nil, splits, catalog, defs.toList)
+
+  private[histos] def assemble(
+      organization: Option[Organization],
+      resolvers: List[Resolver],
+      splits: Splits,
+      catalog: CatalogSpec,
+      listed: List[ProjectDef],
+  ): Either[BuildError, ProjectGraph] =
+    build(organization, resolvers, splits, catalog, listed)
 
   private def build(
       organization: Option[Organization],
+      resolvers: List[Resolver],
       splits: Splits,
       catalog: CatalogSpec,
       listed: List[ProjectDef],
@@ -83,7 +107,19 @@ object Projects:
       built <- links(named)
       _     <- cycle(built)
       ships <- ShipLink.catalog(catalog, built)
-    yield ProjectGraph.trusted(built, splits, ships, organization)
+      _     <- uniqueResolvers(resolvers)
+    yield ProjectGraph.trusted(built, splits, ships, organization, resolvers)
+
+  private def uniqueResolvers(resolvers: List[Resolver]): Either[BuildError, Unit] =
+    resolvers.foldLeft[Either[BuildError, List[Resolver]]](Right(Nil)): (acc, resolver) =>
+      acc.flatMap: seen =>
+        if seen.contains(resolver) then Left(BuildError.DuplicateResolver(token(resolver)))
+        else Right(seen :+ resolver)
+    .map(_ => ())
+
+  private def token(resolver: Resolver): String = resolver match
+    case Resolver.Central      => "central"
+    case Resolver.Maven(url)   => url.value
 
   private def nameAll(defs: List[ProjectDef]): Either[BuildError, List[Named]] =
     defs.foldLeft[Either[BuildError, List[Named]]](Right(Nil)): (acc, d) =>
@@ -206,19 +242,22 @@ object Projects:
   private final case class Named(name: ProjectName, defn: ProjectDef)
 end Projects
 
-/** [[Projects]] with an organization already chosen. The apply overloads are the ones on [[Projects]]. */
-final class Organized(organization: Organization):
+/** [[Projects]] with an organization, repositories, or both already chosen. */
+final class Organized(organization: Option[Organization], resolvers: List[Resolver]):
+  def organization(value: Organization): Organized =
+    Organized(Some(value), resolvers)
+
+  def resolvers(first: Resolver, rest: Resolver*): Organized =
+    Organized(organization, resolvers ++ (first :: rest.toList))
+
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    stated(Projects.apply(defs*))
+    Projects.assemble(organization, resolvers, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
   def apply(splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    stated(Projects.apply(splits, defs*))
+    Projects.assemble(organization, resolvers, splits, CatalogSpec.empty, defs.toList)
 
   def apply(catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    stated(Projects.apply(catalog, defs*))
+    Projects.assemble(organization, resolvers, Splits.aggregate, catalog, defs.toList)
 
   def apply(splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    stated(Projects.apply(splits, catalog, defs*))
-
-  private def stated(built: Either[BuildError, ProjectGraph]): Either[BuildError, ProjectGraph] =
-    built.map(graph => ProjectGraph.trusted(graph.projects, graph.splits, graph.catalog, Some(organization)))
+    Projects.assemble(organization, resolvers, splits, catalog, defs.toList)

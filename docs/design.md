@@ -162,7 +162,7 @@ final case class Repositories(first: Repository, rest: List[Repository]):
   def all: List[Repository] = first :: rest
 ```
 
-`RepoUrl` is a `file:` or `https:` URL, the same split as a JDK archive. An empty repository list is not representable. The default value is `Repositories(Central, Nil)`. `IvyLocal` is not on that list. The Scala Native layer adds it for its own resolve. Extra Maven repositories are declared by the build. Declared repositories come first. `Central` is last when it is present. Tests pass a `Maven` `file:` repository and do not include `Central`, so the suite does no network.
+`RepoUrl` is a `file:` or `https:` URL, the same split as a JDK archive. An empty repository list is not representable. The default value is `Repositories(Central, Nil)`. `IvyLocal` is not on that list. The Scala Native layer adds it for its own resolve. Extra Maven repositories are declared by the build: `Projects.resolvers(maven"file:///repo", central)`. Declared repositories come first. `central` is last when it is present, and it is not added when the build leaves it out. Naming none means Central. `histos resolve` and `histos compile` use that list. Tests pass a `Maven` `file:` repository and do not include `Central`, so the suite does no network.
 
 `.histos/dependencies.lock` is committed. It is the authority for compile and test. One cell per module, Scala version, and platform the graph declares. An aggregate has no cell. Blank lines and `#` comments are ignored. A bad line, a repeated cell, or a missing field is a lock error enum, not a string.
 

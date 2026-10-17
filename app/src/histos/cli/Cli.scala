@@ -8,7 +8,7 @@ import histos.load.{LoadError, Loader}
 import histos.native.{ClangProbe, NativeDeclaration, NativeProject}
 import histos.node.{Node, NodeToolchain}
 import histos.mcp.HistosMcp
-import histos.resolve.{Repositories, Resolve}
+import histos.resolve.{BuildResolvers, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
 import histos.workflow.{TestTarget, Workflow, WorkflowAction}
@@ -172,7 +172,7 @@ object Cli:
         Workflow.target(loaded.graph, projects) match
           case Left(error) => ZIO.succeed(Completed(CliExit.TestFailed, "", error.message))
           case Right(selected) =>
-            Resolve.verify(repo, loaded.graph, histos.resolve.Repositories.central).mapBoth(
+            Resolve.verify(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers)).mapBoth(
               error => Completed(CliExit.ResolveFailed, "", error.message),
               text =>
                 val header = selected match
@@ -211,9 +211,9 @@ object Cli:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
         val effect = action match
-          case ResolveAction.Verify => Resolve.verify(repo, loaded.graph, Repositories.central)
-          case ResolveAction.Update => Resolve.update(repo, loaded.graph, Repositories.central)
-          case ResolveAction.Check  => Resolve.check(repo, loaded.graph, Repositories.central)
+          case ResolveAction.Verify => Resolve.verify(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers))
+          case ResolveAction.Update => Resolve.update(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers))
+          case ResolveAction.Check  => Resolve.check(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers))
         effect.mapBoth(
           error => Completed(CliExit.ResolveFailed, "", error.message),
           text => Completed(CliExit.Success, text, ""),
