@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.jdk.{Machine, Os, Settled}
+import histos.workflow.WorkflowAction
 import histos.load.{LoadError, LoadIo}
 
 import java.nio.file.{Files, Path}
@@ -74,6 +75,20 @@ object CliSpec extends ZIOSpecDefault:
         check == Command.Resolve(ResolveAction.Check),
         both == Left(CliParseError.Rejected),
       )
+    ,
+    test("workflow checks by default and update rewrites"):
+      for
+        check  <- Cli.parse(List("workflow"))
+        update <- Cli.parse(List("workflow", "--update"))
+      yield assertTrue(
+        check == Command.Workflow(WorkflowAction.Check),
+        update == Command.Workflow(WorkflowAction.Update),
+      )
+    ,
+    test("workflow without a file fails"):
+      ZIO.scoped:
+        for done <- invoke(List("workflow"))
+        yield assertTrue(done.exit == CliExit.WorkflowFailed && done.exit.code == 6 && done.err.contains("ci.yml"))
     ,
     test("resolve without a lock fails"):
       ZIO.scoped:

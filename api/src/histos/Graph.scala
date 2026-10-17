@@ -20,27 +20,35 @@ final case class Aggregate(
 ) extends Project
 
 /** The project list is fixed once this value exists. Lookup is total: a missing name is `None`. */
-final case class ProjectGraph private (projects: List[Project]):
+final case class ProjectGraph private (projects: List[Project], splits: Splits):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
 
 object ProjectGraph:
   private[histos] def trusted(projects: List[Project]): ProjectGraph =
-    new ProjectGraph(projects)
+    trusted(projects, Splits.aggregate)
+
+  private[histos] def trusted(projects: List[Project], splits: Splits): ProjectGraph =
+    new ProjectGraph(projects, splits)
 
 trait HistosBuild:
   def graph: Either[BuildError, ProjectGraph]
 
 object Projects:
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    val listed = defs.toList
+    build(Splits.aggregate, defs.toList)
+
+  def apply(splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    build(splits, defs.toList)
+
+  private def build(splits: Splits, listed: List[ProjectDef]): Either[BuildError, ProjectGraph] =
     for
       named <- nameAll(listed)
       _     <- duplicates(named)
       _     <- shape(named)
       built <- links(named)
       _     <- cycle(built)
-    yield ProjectGraph.trusted(built)
+    yield ProjectGraph.trusted(built, splits)
 
   private def nameAll(defs: List[ProjectDef]): Either[BuildError, List[Named]] =
     defs.foldLeft[Either[BuildError, List[Named]]](Right(Nil)): (acc, d) =>
