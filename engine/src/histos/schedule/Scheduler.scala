@@ -11,6 +11,7 @@ enum ScheduleError:
   case Cycle(path: List[ActionId])
   case DuplicateInput(action: ActionId, name: String)
   case Failed(action: ActionId, error: TaskError)
+  case Cache(error: CacheError)
 
   def message: String = this match
     case UnknownAction(id)              => s"no action '${id.value}'"
@@ -20,6 +21,7 @@ enum ScheduleError:
     case Cycle(path)                    => s"action cycle ${path.map(_.value).mkString(" -> ")}"
     case DuplicateInput(action, name)   => s"'${action.value}' declares input '$name' twice"
     case Failed(action, error)          => s"'${action.value}' failed: ${error.message}"
+    case Cache(error)                   => error.message
 
 trait Scheduler:
   /** Run `root` after its dependencies. A cache hit is the stored text. A miss runs `local`. */
@@ -131,10 +133,12 @@ private object SchedulerLive extends Scheduler:
         action <- ZIO.fromEither(ready.byId.get(id).toRight(ScheduleError.UnknownAction(id)))
         _      <- ZIO.foreachParDiscard(action.dependencies)(dep => gate(gates, dep).flatMap(_.await))
         digest <- ZIO.fromEither(ready.digests.get(id).toRight(ScheduleError.UnknownAction(id)))
-        hit    <- cache.get(digest)
+        hit    <- cache.get(digest).mapError(ScheduleError.Cache(_))
         out    <- hit match
                     case Some(value) => ZIO.succeed(value)
-                    case None        => local(action).mapError(ScheduleError.Failed(id, _))
+                    case None        =>
+                      local(action).mapError(ScheduleError.Failed(id, _)).flatMap: value =>
+                        cache.put(digest, value).mapError(ScheduleError.Cache(_)).as(value)
       yield out
     compute.exit.flatMap: exit =>
       val resumed = exit match

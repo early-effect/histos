@@ -42,21 +42,30 @@ object CliSpec extends ZIOSpecDefault:
     }.ignore
 
   private def invoke(args: List[String]): ZIO[Scope, LoadError, Completed] =
-    (for
+    for
       jar  <- apiJar
       dir  <- repo
-      done <- Cli.execute(args, dir, jar)
-    yield done).provideSome[Scope](histos.load.Loader.live)
+      done <- Cli.execute(args, dir, jar).provideSome[Scope](
+                histos.load.Loader.live,
+                ZLayer.succeed(histos.cache.ContentStore.in(dir.resolve("cache"))),
+              )
+    yield done
 
   private val cli = suite("cli")(
     test("version does not touch the build"):
-      assertTrue(Cli.parse(List("version")) == Right(Command.Version) && Cli.VersionText.startsWith("histos ")),
+      for parsed <- Cli.parse(List("version"))
+      yield assertTrue(parsed == Command.Version && Cli.VersionText.startsWith("histos ")),
+    test("cache clean takes --dry-run"):
+      for
+        preview <- Cli.parse(List("cache", "clean", "--dry-run"))
+        clean   <- Cli.parse(List("cache", "clean"))
+      yield assertTrue(preview == Command.CacheClean(true) && clean == Command.CacheClean(false)),
     test("unknown commands and missing ids are usage"):
-      assertTrue(
-        Cli.parse(Nil) == Left(Cli.usageText),
-        Cli.parse(List("run")) == Left("run needs one task id"),
-        Cli.parse(List("nope")) == Left("unknown command nope"),
-      ),
+      for
+        empty <- Cli.parse(Nil).either
+        run   <- Cli.parse(List("run")).either
+        nope  <- Cli.parse(List("nope")).either
+      yield assertTrue(empty.isLeft && run.isLeft && nope.isLeft),
     test("graph prints the module"):
       ZIO.scoped:
         for done <- invoke(List("graph"))
@@ -78,7 +87,10 @@ object CliSpec extends ZIOSpecDefault:
           jar  <- apiJar
           dir  <- ZIO.attempt(Files.createTempDirectory("histos-none")).mapError(t => LoadError.Failed(t.getClass.getName))
           _    <- ZIO.addFinalizer(delete(dir))
-          done <- Cli.execute(List("graph"), dir, jar).provideSome[Scope](histos.load.Loader.live)
+          done <- Cli.execute(List("graph"), dir, jar).provideSome[Scope](
+                    histos.load.Loader.live,
+                    ZLayer.succeed(histos.cache.ContentStore.in(dir.resolve("cache"))),
+                  )
         yield assertTrue(done.exit == CliExit.LoadFailed && done.exit.code == 3 && done.err.contains("histos.scala"))
   )
 

@@ -4,6 +4,7 @@
 //> using dep dev.zio::zio:2.1.27
 //> using dep org.scala-lang::scala3-compiler:3.9.0
 //> using dep rocks.earlyeffect::heddle-mcp:0.12.0
+//> using dep dev.zio::zio-cli:0.8.2
 //> using test.dep dev.zio::zio-test:2.1.27
 //> using test.dep dev.zio::zio-test-sbt:2.1.27
 //> using test.framework zio.test.sbt.ZTestFramework
