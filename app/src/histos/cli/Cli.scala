@@ -11,7 +11,7 @@ import histos.mcp.HistosMcp
 import histos.resolve.{Repositories, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
-import histos.workflow.{Workflow, WorkflowAction}
+import histos.workflow.{TestTarget, Workflow, WorkflowAction}
 import histos.{Aggregate, Module, Project}
 
 import java.nio.file.Path
@@ -23,6 +23,7 @@ enum Command:
   case Version
   case Graph
   case Run(id: TaskId)
+  case Test(projects: List[String])
   case Mcp
   case Acp
   case Toolchain
@@ -50,7 +51,7 @@ enum CliParseError:
     case BadTaskId                        => "a task id is not empty"
 
 enum CliExit:
-  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed
+  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed, TestFailed
 
   def code: Int = this match
     case Success         => 0
@@ -60,6 +61,7 @@ enum CliExit:
     case ToolchainFailed => 4
     case ResolveFailed   => 5
     case WorkflowFailed  => 6
+    case TestFailed      => 7
 
 final case class Completed(exit: CliExit, out: String, err: String)
 
@@ -67,7 +69,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--update])"
+    "usage: histos (version | graph | run <id> | test [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -80,6 +82,7 @@ object Cli:
           case Command.Version          => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
           case Command.Graph            => graph(repo, apiJar)
           case Command.Run(id)          => run(repo, apiJar, id)
+          case Command.Test(projects)   => test(repo, apiJar, projects)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
           case Command.Toolchain        => toolchain(repo, apiJar)
@@ -108,6 +111,24 @@ object Cli:
                 yield Completed(CliExit.Success, out.text, "")
               .provide(Tasks.live(loaded.graph, runners))
               .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+
+  /** Selected modules, then the lock. This does not claim a test framework ran. */
+  private def test(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+      case Right(loaded) =>
+        Workflow.target(loaded.graph, projects) match
+          case Left(error) => ZIO.succeed(Completed(CliExit.TestFailed, "", error.message))
+          case Right(selected) =>
+            Resolve.verify(repo, loaded.graph, histos.resolve.Repositories.central).mapBoth(
+              error => Completed(CliExit.ResolveFailed, "", error.message),
+              text =>
+                val header = selected match
+                  case TestTarget.Entire => "entire"
+                  case TestTarget.Named(first, rest) => (first :: rest).map(_.value).mkString(" ")
+                val body = if text.isEmpty then header else s"$header\n$text"
+                Completed(CliExit.Success, s"$body\nlock ok", ""),
+            ).merge
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store => Completed(CliExit.Success, store.root.toString, ""))

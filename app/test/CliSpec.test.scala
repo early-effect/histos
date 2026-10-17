@@ -78,17 +78,37 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("workflow checks by default and update rewrites"):
       for
-        check  <- Cli.parse(List("workflow"))
+        plain  <- Cli.parse(List("workflow"))
+        check  <- Cli.parse(List("workflow", "--check"))
         update <- Cli.parse(List("workflow", "--update"))
+        both   <- Cli.parse(List("workflow", "--check", "--update")).either
       yield assertTrue(
+        plain == Command.Workflow(WorkflowAction.Check),
         check == Command.Workflow(WorkflowAction.Check),
         update == Command.Workflow(WorkflowAction.Update),
+        both == Left(CliParseError.Rejected),
       )
+    ,
+    test("test takes project names and checks the lock"):
+      for
+        entire <- Cli.parse(List("test"))
+        named  <- Cli.parse(List("test", "core"))
+      yield assertTrue(entire == Command.Test(Nil), named == Command.Test(List("core")))
     ,
     test("workflow without a file fails"):
       ZIO.scoped:
         for done <- invoke(List("workflow"))
         yield assertTrue(done.exit == CliExit.WorkflowFailed && done.exit.code == 6 && done.err.contains("ci.yml"))
+    ,
+    test("test without a lock fails, and an unknown project is not a lock error"):
+      ZIO.scoped:
+        for
+          missing <- invoke(List("test"))
+          unknown <- invoke(List("test", "missing"))
+        yield assertTrue(
+          missing.exit == CliExit.ResolveFailed && missing.err.contains("dependencies.lock"),
+          unknown.exit == CliExit.TestFailed && unknown.exit.code == 7 && unknown.err.contains("missing"),
+        )
     ,
     test("resolve without a lock fails"):
       ZIO.scoped:

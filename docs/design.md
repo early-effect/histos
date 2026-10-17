@@ -358,7 +358,7 @@ The graph is the model. A later front end, including a context-function block, i
 
 Histos replaces sbt-zipx. The graph renders `.github/workflows/ci.yml`. A drift check fails the build when the committed file disagrees.
 
-The default workflow is Aggregate: `./histos test` in one job, plus format and the workflow check, plus a publish job on tags. On a pull request, the test job runs the changed projects and their dependents. Elsewhere it runs the full graph.
+The default workflow is Aggregate: `./histos test` and `./histos workflow --check`, in parallel, with `contents: read`. It runs on every pull request and every push. It does not name a branch, and it does not install a JDK. A catalog adds `./histos run versions`, which decides coordinates and does not upload. Format and publish are not jobs until those commands exist. A rendered command that the CLI rejects is a broken workflow.
 
 Fan-out is one split model, not a second renderer. The graph holds a set of axes: `Platform`, `ScalaVersion`, and `Module`. The empty set is Aggregate, and it is the default. A non-empty set is a matrix. On a pull request the matrix is filtered by the affected set, so an unchanged cell is not a job. There is no wave scheduler and no separate Layer or Graph mode. Ordering is `dependsOn` plus the content-addressed cache.
 
