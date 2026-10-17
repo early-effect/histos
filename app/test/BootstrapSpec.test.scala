@@ -1,5 +1,7 @@
 package histos.cli
 
+import histos.jdk.{ArchiveSource, JdkLock, JdkMajor, JdkVersion, Sha256}
+
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
 
@@ -41,7 +43,19 @@ object BootstrapSpec extends ZIOSpecDefault:
   end layout
 
   private def linkTools(bin: Path): Unit =
-    List("/usr/bin/dirname", "/usr/bin/tr", "/usr/bin/awk", "/usr/bin/shasum", "/usr/bin/sha256sum").foreach: source =>
+    List(
+      "/usr/bin/dirname",
+      "/usr/bin/tr",
+      "/usr/bin/awk",
+      "/usr/bin/shasum",
+      "/usr/bin/sha256sum",
+      "/usr/bin/curl",
+      "/usr/bin/tar",
+      "/bin/mkdir",
+      "/usr/bin/find",
+      "/bin/chmod",
+      "/bin/rm",
+    ).foreach: source =>
       val path = Path.of(source)
       if Files.isRegularFile(path) then
         val link = bin.resolve(path.getFileName)
@@ -58,6 +72,8 @@ object BootstrapSpec extends ZIOSpecDefault:
     val env = process.environment()
     env.put("HISTOS_ASSEMBLY", jar.toString)
     env.put("HISTOS_JAVA_LOG", log.toString)
+    env.put("XDG_CACHE_HOME", root.resolve("xdg").toString)
+    env.put("HOME", root.toString)
     val path =
       if withJava then bin.toString
       else
@@ -81,10 +97,36 @@ object BootstrapSpec extends ZIOSpecDefault:
       val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
       val (code, output) = run(root, shaMatches = false, withJava = true, args = Nil)
       assertTrue(code == 1 && output.contains("checksum mismatch") && !output.contains("-jar")),
-    test("missing java is an error"):
+    test("missing java without a lock is an error"):
       val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
       val (code, output) = run(root, shaMatches = true, withJava = false, args = Nil)
-      assertTrue(code == 1 && output.contains("java is not on PATH")),
+      assertTrue(code == 1 && output.contains("java is not on PATH") && output.contains("jdk.lock") && !output.contains("-jar")),
+    test("missing java is taken from a file url in the lock"):
+      val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
+      val packed = lockedJdk(root)
+      val (code, output) = run(root, shaMatches = true, withJava = false, args = List("graph"))
+      assertTrue(packed == 0 && code == 0 && output.contains("-jar") && output.contains("app.jar") && output.contains("graph")),
   )
+
+  private def lockedJdk(root: Path): Int =
+    val jdkRoot = root.resolve("fake-jdk")
+    Files.createDirectories(jdkRoot.resolve("bin"))
+    Files.writeString(
+      jdkRoot.resolve("bin").resolve("java"),
+      """#!/bin/sh
+        |printf '%s\n' "$@" > "$HISTOS_JAVA_LOG"
+        |""".stripMargin,
+    )
+    jdkRoot.resolve("bin").resolve("java").toFile.setExecutable(true)
+    val archive = root.resolve("jdk.tgz")
+    val tar = new ProcessBuilder("tar", "-czf", archive.toString, "-C", jdkRoot.toString, ".").inheritIO().start()
+    val code = tar.waitFor()
+    if code == 0 then
+      val major   = JdkMajor.trusted(21)
+      val version = JdkVersion.trusted("21.0.2", major)
+      val sha     = Sha256.of(Chunk.fromArray(Files.readAllBytes(archive)))
+      val lock    = JdkLock(major, version, ArchiveSource.Local(archive), sha)
+      Files.writeString(root.resolve(".histos").resolve("jdk.lock"), JdkLock.render(lock))
+    code
 
   def spec = checks

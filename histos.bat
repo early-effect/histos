@@ -27,10 +27,65 @@ if /I not "%EXPECTED%"=="%ACTUAL%" (
   echo histos %VERSION%: checksum mismatch 1>&2
   exit /b 1
 )
+if defined XDG_CACHE_HOME (
+  set "CACHE=%XDG_CACHE_HOME%"
+) else (
+  set "CACHE=%USERPROFILE%\.cache"
+)
 where java >nul 2>&1
 if errorlevel 1 (
-  echo histos %VERSION%: java is not on PATH 1>&2
+  call :provision
+  if errorlevel 1 exit /b 1
+) else (
+  set "JAVA_BIN=java"
+)
+"%JAVA_BIN%" -jar "%JAR%" %*
+exit /b %ERRORLEVEL%
+
+:provision
+set "LOCK=%ROOT%.histos\jdk.lock"
+if not exist "%LOCK%" (
+  echo histos %VERSION%: java is not on PATH and %LOCK% is missing 1>&2
   exit /b 1
 )
-java -jar "%JAR%" %*
-exit /b %ERRORLEVEL%
+set "JDK_URL="
+set "JDK_SHA="
+for /f "usebackq tokens=1,2" %%A in ("%LOCK%") do (
+  if "%%A"=="url" set "JDK_URL=%%B"
+  if "%%A"=="sha256" set "JDK_SHA=%%B"
+)
+if "%JDK_URL%"=="" (
+  echo histos %VERSION%: jdk.lock needs url and sha256 1>&2
+  exit /b 1
+)
+if "%JDK_SHA%"=="" (
+  echo histos %VERSION%: jdk.lock needs url and sha256 1>&2
+  exit /b 1
+)
+set "DEST=%CACHE%\histos\jdks\%JDK_SHA%"
+if not exist "%DEST%" mkdir "%DEST%"
+set "ARCHIVE=%DEST%\archive"
+if not exist "%ARCHIVE%" (
+  curl -fsSL "%JDK_URL%" -o "%ARCHIVE%"
+  if errorlevel 1 exit /b 1
+)
+certutil -hashfile "%ARCHIVE%" SHA256 | findstr /v "hash" | findstr /v "CertUtil" > "%TEMP%\histos-jdk-sha.txt"
+set /p ACTUAL=<"%TEMP%\histos-jdk-sha.txt"
+set "ACTUAL=%ACTUAL: =%"
+if /I not "%JDK_SHA%"=="%ACTUAL%" (
+  echo histos %VERSION%: jdk checksum mismatch 1>&2
+  exit /b 1
+)
+set "UNPACK=%DEST%\unpack"
+if not exist "%UNPACK%" mkdir "%UNPACK%"
+tar -xf "%ARCHIVE%" -C "%UNPACK%"
+if errorlevel 1 exit /b 1
+set "JAVA_BIN="
+for /f "delims=" %%J in ('dir /s /b "%UNPACK%\java.exe"') do (
+  if not defined JAVA_BIN set "JAVA_BIN=%%J"
+)
+if not defined JAVA_BIN (
+  echo histos %VERSION%: locked jdk has no bin\java.exe 1>&2
+  exit /b 1
+)
+exit /b 0

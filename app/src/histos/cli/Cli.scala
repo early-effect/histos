@@ -3,6 +3,7 @@ package histos.cli
 import heddle.LinePipe
 import histos.acp.Acp
 import histos.cache.ContentStore
+import histos.jdk.{Machine, Os, Settled, Startup, Toolchain, ToolchainError}
 import histos.load.Loader
 import histos.mcp.HistosMcp
 import histos.task.{TaskError, TaskId, Tasks}
@@ -16,35 +17,52 @@ import zio.*
 enum Command:
   case Version
   case Graph
-  case Run(id: String)
+  case Run(id: TaskId)
   case Mcp
   case Acp
+  case Toolchain
   case CachePath
   case CacheList
   case CacheClean(dryRun: Boolean)
 
+enum CliParseError:
+  case Help
+  case UnknownCommand
+  case MissingArgument
+  case UnexpectedArguments
+  case BadTaskId
+  case Rejected
+
+  def message: String = this match
+    case Help | UnknownCommand | Rejected => Cli.usageText
+    case MissingArgument                  => "run needs one task id"
+    case UnexpectedArguments              => Cli.usageText
+    case BadTaskId                        => "a task id is not empty"
+
 enum CliExit:
-  case Success, TaskFailed, Usage, LoadFailed
+  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed
 
   def code: Int = this match
-    case Success     => 0
-    case TaskFailed  => 1
-    case Usage       => 2
-    case LoadFailed  => 3
+    case Success          => 0
+    case TaskFailed       => 1
+    case Usage            => 2
+    case LoadFailed       => 3
+    case ToolchainFailed  => 4
 
 final case class Completed(exit: CliExit, out: String, err: String)
 
 object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
-  val usageText: String = "usage: histos (version | graph | run <id> | mcp | acp | cache path | cache list | cache clean [--dry-run])"
+  val usageText: String =
+    "usage: histos (version | graph | run <id> | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run])"
 
-  def parse(args: List[String]): IO[String, Command] =
-    Grammar.parse(args).mapError(_.toString)
+  def parse(args: List[String]): IO[CliParseError, Command] =
+    Grammar.parse(args)
 
-  def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & histos.cache.ContentStore, Completed] =
+  def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine, Completed] =
     parse(args).foldZIO(
-      detail => ZIO.succeed(Completed(CliExit.Usage, "", detail)),
+      detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message)),
       command =>
         command match
           case Command.Version          => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
@@ -52,6 +70,7 @@ object Cli:
           case Command.Run(id)          => run(repo, apiJar, id)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
+          case Command.Toolchain        => toolchain
           case Command.CachePath        => cachePath
           case Command.CacheList        => cacheList
           case Command.CacheClean(dry)  => cacheClean(dry),
@@ -62,11 +81,8 @@ object Cli:
       case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
       case Right(loaded) => Completed(CliExit.Success, render(loaded.graph.projects), "")
 
-  private def run(repo: Path, apiJar: Path, raw: String): URIO[Loader & Scope, Completed] =
-    TaskId.from(raw) match
-      case Left(err) => ZIO.succeed(Completed(CliExit.TaskFailed, "", err.message))
-      case Right(id) =>
-        ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+  private def run(repo: Path, apiJar: Path, id: TaskId): URIO[Loader & Scope, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
           case Left(err) => ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
           case Right(loaded) =>
             ZIO.scoped:
@@ -101,6 +117,14 @@ object Cli:
         Completed(CliExit.Success, text, ""),
     ).merge
 
+  private def toolchain: URIO[Machine, Completed] =
+    ZIO.serviceWithZIO[Machine] { machine =>
+      Toolchain.explain(machine).mapBoth(
+        err => Completed(CliExit.ToolchainFailed, "", err.message),
+        text => Completed(CliExit.Success, text, ""),
+      ).merge
+    }
+
   private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
     HistosMcp.serve(repo, apiJar, LinePipe.standard).fold(
       err => Completed(CliExit.LoadFailed, "", err.message),
@@ -110,12 +134,12 @@ object Cli:
   private def acp: UIO[Completed] =
     def loop: UIO[Completed] =
       LinePipe.standard.readLine.foldZIO(
-        t => ZIO.succeed(Completed(CliExit.LoadFailed, "", t.getClass.getName)),
+        _ => ZIO.succeed(Completed(CliExit.LoadFailed, "", "the acp pipe failed")),
         {
           case None => ZIO.succeed(Completed(CliExit.Success, "", ""))
           case Some(line) =>
             LinePipe.standard.writeLine(Acp.answer(line)).foldZIO(
-              t => ZIO.succeed(Completed(CliExit.LoadFailed, "", t.getClass.getName)),
+              _ => ZIO.succeed(Completed(CliExit.LoadFailed, "", "the acp pipe failed")),
               _ => loop,
             )
         },
@@ -140,18 +164,58 @@ object Main extends ZIOAppDefault:
       exit => ZIO.succeed(zio.ExitCode(exit.code)),
       jar =>
         for
-          args <- getArgs
-          done <- ZIO.scoped:
-            val home = Option(java.lang.System.getProperty("user.home")).getOrElse(".")
-            val cacheRoot = histos.cache.ContentStore.home(scala.sys.env.get("XDG_CACHE_HOME"), home)
-            Cli.execute(args.toList, Path.of("").toAbsolutePath, jar).provideSome[Scope](
-              Loader.live,
-              ZLayer.succeed(histos.cache.ContentStore.in(cacheRoot)),
-            )
-          _ <- Console.printLine(done.out).when(done.out.nonEmpty)
-          _ <- Console.printLineError(done.err).when(done.err.nonEmpty)
-        yield zio.ExitCode(done.exit.code),
+          args <- getArgs.map(_.toList)
+          code <- dispatch(args, Path.of("").toAbsolutePath, jar)
+        yield code,
     )
+
+  private def dispatch(args: List[String], repo: Path, jar: Path): URIO[Scope, zio.ExitCode] =
+    machineHere(repo).foldZIO(
+      err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
+      machine =>
+        Cli.parse(args).either.flatMap:
+          case Left(_) => runCommand(args, repo, jar, machine)
+          case Right(Command.Toolchain) => runCommand(args, repo, jar, machine)
+          case Right(_) =>
+            Toolchain.prepare(machine).foldZIO(
+              err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
+              {
+                case Startup.Continue => runCommand(args, repo, jar, machine)
+                case Startup.Refuse(text) => finish(Completed(CliExit.ToolchainFailed, "", text))
+                case Startup.Replace(javaBin) =>
+                  Toolchain.replace(javaBin, jar, args).foldZIO(
+                    err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
+                    code => ZIO.succeed(zio.ExitCode(code)),
+                  )
+              },
+            )
+    )
+
+  private def runCommand(args: List[String], repo: Path, jar: Path, machine: Machine): URIO[Scope, zio.ExitCode] =
+    ZIO.scoped:
+      Cli.execute(args, repo, jar).provideSome[Scope](
+        Loader.live,
+        ZLayer.succeed(ContentStore.in(machine.cache)),
+        ZLayer.succeed(machine),
+      )
+    .flatMap(finish)
+
+  private def finish(done: Completed): UIO[zio.ExitCode] =
+    Console.printLine(done.out).when(done.out.nonEmpty).ignore *>
+      Console.printLineError(done.err).when(done.err.nonEmpty).ignore *>
+      ZIO.succeed(zio.ExitCode(done.exit.code))
+
+  private def machineHere(repo: Path): IO[ToolchainError, Machine] =
+    val env = scala.sys.env
+    val os = Option(java.lang.System.getProperty("os.name")).filter(_.nonEmpty) match
+      case Some(name) => Os.from(name)
+      case None       => Os.Other
+    val running = Option(java.lang.System.getProperty("java.home")).filter(_.nonEmpty).map(Path.of(_))
+    Option(java.lang.System.getProperty("user.home")).filter(_.nonEmpty) match
+      case None => ZIO.fail(ToolchainError.NoUserHome)
+      case Some(home) =>
+        val cache = ContentStore.home(env.get("XDG_CACHE_HOME"), home)
+        ZIO.succeed(Machine(env, home, os, cache, repo, running, Settled.from(env)))
 
   private def apiJar: IO[CliExit, Path] =
     val location = Option(classOf[histos.HistosBuild].getProtectionDomain)

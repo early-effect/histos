@@ -12,15 +12,15 @@ import zio.test.*
 object LoadSpec extends ZIOSpecDefault:
   private val apiJar: IO[LoadError, Path] =
     val candidates = List(Path.of("dist/histos-api.jar"), Path.of("../dist/histos-api.jar"))
-    ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Failed(t.getClass.getName)).flatMap:
+    ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
       case Some(jar) => ZIO.succeed(jar)
-      case None      => ZIO.fail(LoadError.MissingFile("dist/histos-api.jar"))
+      case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
 
   private def withRepo(source: String): ZIO[Scope, LoadError, Path] =
     for
-      dir <- ZIO.attempt(Files.createTempDirectory("histos-repo")).mapError(t => LoadError.Failed(t.getClass.getName))
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-repo")).mapError(t => LoadError.Io(LoadIo.Temp))
       _   <- ZIO.addFinalizer(deleteTree(dir))
-      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Failed(t.getClass.getName))
+      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Io(LoadIo.Temp))
     yield dir
 
   private def deleteTree(root: Path): UIO[Unit] =
@@ -66,7 +66,7 @@ object LoadSpec extends ZIOSpecDefault:
         yield assertTrue:
           loaded match
             case Left(LoadError.BrokenGraph(BuildError.DuplicateName(name, _, _))) => name.value == "core"
-            case other                                                              => other.toString == "duplicate core"
+            case _                                                                  => false
     ,
     test("a type error is a compile failure"):
       val source =
@@ -78,8 +78,8 @@ object LoadSpec extends ZIOSpecDefault:
         for loaded <- load(source).either
         yield assertTrue:
           loaded match
-            case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.exists(_.contains("nope"))
-            case other                                      => other.toString == "compile failed"
+            case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.exists(_.text.contains("nope"))
+            case _                                          => false
     ,
     test("the build file cannot see the engine"):
       val source =
@@ -94,19 +94,19 @@ object LoadSpec extends ZIOSpecDefault:
         yield assertTrue:
           loaded match
             case Left(LoadError.CompileFailed(_)) => true
-            case other                            => other.toString == "engine stayed off the classpath"
+            case _                                => false
     ,
     test("a missing build file is its own error"):
       ZIO.scoped:
         for
           jar <- apiJar
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-empty")).mapError(t => LoadError.Failed(t.getClass.getName))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-empty")).mapError(t => LoadError.Io(LoadIo.Temp))
           _   <- ZIO.addFinalizer(deleteTree(dir))
           out <- ZIO.serviceWithZIO[Loader](_.load(dir, jar)).either
         yield assertTrue:
           out match
             case Left(LoadError.MissingFile(path)) => path.endsWith("histos.scala")
-            case other                             => other.toString == "missing file"
+            case _                                 => false
   )
 
   def spec = loads.provideShared(Loader.live) @@ TestAspect.sequential

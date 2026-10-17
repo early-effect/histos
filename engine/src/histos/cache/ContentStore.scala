@@ -1,6 +1,6 @@
 package histos.cache
 
-import histos.schedule.{CacheError, Digest}
+import histos.schedule.{CacheError, CacheOp, Digest}
 
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.time.{Duration, Instant}
@@ -43,13 +43,13 @@ private final class DiskStore(val root: Path) extends ContentStore:
 
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]] =
     val dest = objectPath(digest)
-    ZIO.attempt(Files.isRegularFile(dest)).mapError(io).flatMap:
+    ZIO.attempt(Files.isRegularFile(dest)).mapError(io(CacheOp.Read)).flatMap:
       case false => ZIO.none
       case true  =>
         ZIO.attempt {
           val found = Chunk.fromArray(Files.readAllBytes(dest))
           found
-        }.mapError(io).map(Some(_))
+        }.mapError(io(CacheOp.Read)).map(Some(_))
 
   def list: IO[CacheError, List[CacheEntry]] =
     val cas = root.resolve("cas")
@@ -60,7 +60,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
         try
           walk.iterator.asScala.filter(Files.isRegularFile(_)).flatMap(entryOf).toList
         finally walk.close()
-    }.mapError(io)
+    }.mapError(io(CacheOp.List))
 
   def remember(digest: Digest): IO[CacheError, Unit] =
     ZIO.attempt {
@@ -69,14 +69,14 @@ private final class DiskStore(val root: Path) extends ContentStore:
       val have = if Files.isRegularFile(file) then Files.readString(file) else ""
       if !have.split('\n').contains(digest.value) then
         Files.writeString(file, have + digest.value + "\n")
-    }.mapError(io).unit
+    }.mapError(io(CacheOp.Keep)).unit
 
   def kept: IO[CacheError, Set[Digest]] =
     ZIO.attempt {
       val file = root.resolve("keep")
       if !Files.isRegularFile(file) then Set.empty[String]
       else Files.readString(file).split('\n').toSet.filter(_.nonEmpty)
-    }.mapError(io).map(_.flatMap(Digest.from))
+    }.mapError(io(CacheOp.Keep)).map(_.flatMap(Digest.from))
 
   def clean(now: Instant, retention: Duration, dryRun: Boolean): IO[CacheError, List[CacheEntry]] =
     val cutoff = now.minus(retention)
@@ -97,13 +97,13 @@ private final class DiskStore(val root: Path) extends ContentStore:
         val dir = root.resolve("tmp")
         Files.createDirectories(dir)
         dir.resolve(id.toString)
-      }.mapError(io)
+      }.mapError(io(CacheOp.CreateTemp))
 
   private def write(path: Path, bytes: Chunk[Byte]): IO[CacheError, Unit] =
-    ZIO.attempt(Files.write(path, bytes.toArray)).mapError(io).unit
+    ZIO.attempt(Files.write(path, bytes.toArray)).mapError(io(CacheOp.Write)).unit
 
   private def readBack(path: Path, bytes: Chunk[Byte], digest: Digest): IO[CacheError, Unit] =
-    ZIO.attempt(Chunk.fromArray(Files.readAllBytes(path))).mapError(io).flatMap: found =>
+    ZIO.attempt(Chunk.fromArray(Files.readAllBytes(path))).mapError(io(CacheOp.Read)).flatMap: found =>
       if found == bytes then ZIO.unit
       else delete(path) *> ZIO.fail(CacheError.Corrupt(digest))
 
@@ -114,13 +114,13 @@ private final class DiskStore(val root: Path) extends ContentStore:
       catch
         case _: java.nio.file.AtomicMoveNotSupportedException =>
           Files.move(from, to, StandardCopyOption.REPLACE_EXISTING)
-    }.mapError(io).unit
+    }.mapError(io(CacheOp.Move)).unit
 
   private def stamp(path: Path, at: Instant): IO[CacheError, Unit] =
-    ZIO.attempt(Files.setLastModifiedTime(path, java.nio.file.attribute.FileTime.from(at))).mapError(io).unit
+    ZIO.attempt(Files.setLastModifiedTime(path, java.nio.file.attribute.FileTime.from(at))).mapError(io(CacheOp.Stamp)).unit
 
   private def delete(path: Path): IO[CacheError, Unit] =
-    ZIO.attempt(Files.deleteIfExists(path)).mapError(io).unit
+    ZIO.attempt(Files.deleteIfExists(path)).mapError(io(CacheOp.Delete)).unit
 
   private def entryOf(path: Path): Option[CacheEntry] =
     val parent = Option(path.getParent).flatMap(dir => Option(dir.getFileName)).map(_.toString)
@@ -131,5 +131,5 @@ private final class DiskStore(val root: Path) extends ContentStore:
           CacheEntry(digest, path, Files.size(path), Files.getLastModifiedTime(path).toInstant)
       case _ => None
 
-  private def io(cause: Throwable): CacheError = CacheError.Io(cause.getClass.getName)
+  private def io(op: CacheOp): Throwable => CacheError = _ => CacheError.Io(op)
 end DiskStore

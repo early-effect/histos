@@ -1,17 +1,18 @@
 #!/bin/sh
 # Frozen entry point. Verifies the pinned JVM assembly and execs it.
-# HISTOS_ASSEMBLY overrides the cache path so a fixture can be used before a release exists.
+# When java is not on PATH, the locked JDK is fetched, checked, and unpacked first.
+# HISTOS_ASSEMBLY overrides the assembly path so a fixture can be used before a release exists.
 set -eu
 
 dir=$(dirname "$0") || exit 1
 root=$(CDPATH= cd -- "$dir" && pwd) || exit 1
 version=$(tr -d '[:space:]' < "$root/.histos-version")
 shafile=$root/.histos/assembly.sha256
+cache=${XDG_CACHE_HOME:-$HOME/.cache}
 
 if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
   jar=$HISTOS_ASSEMBLY
 else
-  cache=${XDG_CACHE_HOME:-$HOME/.cache}
   jar=$cache/histos/launchers/$version/histos.jar
 fi
 
@@ -37,9 +38,57 @@ if [ "$expected" != "$actual" ]; then
   exit 1
 fi
 
-if ! command -v java >/dev/null 2>&1; then
-  echo "histos $version: java is not on PATH" >&2
-  exit 1
+hash_of() {
+  file=$1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | awk '{print $1}'
+  else
+    shasum -a 256 "$file" | awk '{print $1}'
+  fi
+}
+
+provision_jdk() {
+  lock=$root/.histos/jdk.lock
+  if [ ! -f "$lock" ]; then
+    echo "histos $version: java is not on PATH and $lock is missing" >&2
+    return 1
+  fi
+  url=$(awk '$1 == "url" { print $2 }' "$lock")
+  sha=$(awk '$1 == "sha256" { print $2 }' "$lock" | tr '[:upper:]' '[:lower:]')
+  if [ -z "${url:-}" ] || [ -z "${sha:-}" ]; then
+    echo "histos $version: $lock needs url and sha256" >&2
+    return 1
+  fi
+  dest=$cache/histos/jdks/$sha
+  archive=$dest/archive
+  unpack=$dest/unpack
+  mkdir -p "$dest"
+  if [ ! -f "$archive" ]; then
+    curl -fsSL "$url" -o "$archive"
+  fi
+  actual=$(hash_of "$archive" | tr '[:upper:]' '[:lower:]')
+  if [ "$actual" != "$sha" ]; then
+    rm -f "$archive"
+    echo "histos $version: jdk checksum mismatch" >&2
+    return 1
+  fi
+  if [ ! -d "$unpack" ]; then
+    mkdir -p "$unpack"
+    tar -xf "$archive" -C "$unpack"
+  fi
+  java_bin=$(find "$unpack" -type f -name java | awk '/\/bin\/java$/ { print; exit }')
+  if [ -z "${java_bin:-}" ]; then
+    echo "histos $version: locked jdk has no bin/java" >&2
+    return 1
+  fi
+  chmod +x "$java_bin"
+  printf '%s\n' "$java_bin"
+}
+
+if command -v java >/dev/null 2>&1; then
+  java_bin=$(command -v java)
+else
+  java_bin=$(provision_jdk) || exit 1
 fi
 
-exec java -jar "$jar" "$@"
+exec "$java_bin" -jar "$jar" "$@"

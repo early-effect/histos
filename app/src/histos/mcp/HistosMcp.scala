@@ -21,20 +21,20 @@ object HistosMcp:
 
   enum ServeError:
     case Load(error: LoadError)
-    case Build(messages: List[String])
-    case Failed(detail: String)
+    case Build(errors: NonEmptyChunk[McpBuildError])
+    case Stdio
 
     def message: String = this match
-      case Load(error)     => error.message
-      case Build(messages) => messages.mkString("\n")
-      case Failed(detail)  => detail
+      case Load(error)  => error.message
+      case Build(errors) => errors.map(_.message).mkString("\n")
+      case Stdio         => "the mcp pipe failed"
 
   def serve(repo: Path, apiJar: Path, pipe: LinePipe): ZIO[Loader & Scope, ServeError, Unit] =
     for
       loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).mapError(ServeError.Load(_))
       tasks  <- Tasks.live(loaded.graph).build.map(_.get[Tasks])
-      mcp    <- ZIO.fromEither(tools(loaded.graph, tasks)).mapError(err => ServeError.Build(err.map(_.message).toList))
-      _      <- mcp.stdio(pipe).mapError(t => ServeError.Failed(t.getClass.getName))
+      mcp    <- ZIO.fromEither(tools(loaded.graph, tasks)).mapError(ServeError.Build(_))
+      _      <- mcp.stdio(pipe).mapError(_ => ServeError.Stdio)
     yield ()
 
   def tools(graph: ProjectGraph, tasks: Tasks): Either[NonEmptyChunk[McpBuildError], Mcp[Scope]] =
