@@ -208,7 +208,7 @@ object Resolve:
   def cells(graph: ProjectGraph, repositories: Repositories): List[ResolveCell] =
     graph.projects.flatMap:
       case Aggregate(_, _, _) => Nil
-      case Module(name, platforms, versions, dependencies, _, _, _, _, testDependencies) =>
+      case Module(name, platforms, versions, dependencies, _, _, _, _, testDependencies, _) =>
         platforms.all.flatMap: platform =>
           versions.all.flatMap: version =>
             val compile = ResolveCell(name, dependencies, version, platform, repositories, ClasspathScope.Compile)

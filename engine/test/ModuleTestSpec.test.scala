@@ -1,9 +1,9 @@
 package histos.testrun
 
 import histos.jdk.{JdkMajor, JdkVersion}
-import histos.resolve.Resolve
+import histos.resolve.{BuildResolvers, Resolve}
 import histos.zinc.ResolvedJdk
-import histos.{Jvm, Projects, ScalaVersion, TestMain, module}
+import histos.{Dep, Jvm, Projects, ScalaVersion, TestMain, TestProvider, module}
 
 import java.nio.file.{Files, Path}
 
@@ -86,8 +86,32 @@ object ModuleTestSpec extends ZIOSpecDefault:
     ,
   )
 
+  private val providers = suite("provider")(
+    test("ZIO Test is the default provider, and a failing spec is not a pass"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
+          core = module("core", Jvm)(scala3).testDependencies(zioDep)
+          bad = module("bad", Jvm)(scala3).testProvider(TestProvider.Zio).testDependencies(zioDep)
+          built <- ZIO.fromEither(Projects(core, bad)).mapError(error => new IllegalStateException(error.message))
+          _ <- ZIO.attempt {
+                 write(root, "core/src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
+                 write(root, "core/test/scala/demo/Check.scala", passSpec)
+                 write(root, "bad/src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
+                 write(root, "bad/test/scala/demo/Check.scala", failSpec)
+               }
+          _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
+        yield assertTrue:
+          cells match
+            case List(TestedCell(failed, _, TestStatus.Failed(exit, out, err)), TestedCell(passed, _, TestStatus.Passed)) =>
+              failed.value == "bad" && passed.value == "core" && exit == 1 && (out + err).contains("nope")
+            case _ => false
+  )
+
   private val refused = suite("refused before the subprocess")(
-    test("test sources without a named main are refused"):
+    test("test sources without a provider library are refused"):
       ZIO.scoped:
         for
           root <- temp
@@ -100,8 +124,9 @@ object ModuleTestSpec extends ZIOSpecDefault:
           out <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
-            case Left(ModuleTestError.MissingMain(module)) => module.value == "core"
-            case _                                         => false
+            case Left(ModuleTestError.ProviderDependency(module, provider)) =>
+              module.value == "core" && provider == TestProvider.Zio
+            case _ => false
     ,
     test("a named main without test sources is refused"):
       ZIO.scoped:
@@ -120,6 +145,28 @@ object ModuleTestSpec extends ZIOSpecDefault:
             case _ => false
     ,
   )
+
+  private val passSpec =
+    """import zio.test.*
+      |
+      |object Check extends ZIOSpecDefault:
+      |  def spec = suite("check")(
+      |    test("adds") {
+      |      assertTrue(1 + 1 == 2)
+      |    }
+      |  )
+      |""".stripMargin
+
+  private val failSpec =
+    """import zio.test.*
+      |
+      |object Check extends ZIOSpecDefault:
+      |  def spec = suite("check")(
+      |    test("nope") {
+      |      assertTrue(1 == 2)
+      |    }
+      |  )
+      |""".stripMargin
 
   private val helloPasses =
     """package demo
@@ -174,4 +221,4 @@ object ModuleTestSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("module test")(ran, refused) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+  def spec = suite("module test")(ran, providers, refused) @@ TestAspect.sequential @@ TestAspect.timeout(6.minutes)

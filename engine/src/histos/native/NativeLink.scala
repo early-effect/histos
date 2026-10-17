@@ -70,7 +70,7 @@ enum NativeDeclaration:
 object NativeProject:
   def declaration(graph: ProjectGraph): NativeDeclaration =
     val pins = graph.projects.flatMap:
-      case histos.Module(name, platforms, _, _, _, _, clang, _, _) if platforms.all.contains(Platform.Native) =>
+      case histos.Module(name, platforms, _, _, _, _, clang, _, _, _) if platforms.all.contains(Platform.Native) =>
         clang match
           case histos.ClangPin.Major(major) => List(name -> Some(major))
           case histos.ClangPin.Unused       => List(name -> None)

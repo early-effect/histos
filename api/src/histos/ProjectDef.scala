@@ -25,25 +25,30 @@ final case class ModuleDef private (
     clang: ClangPin,
     test: Option[TestMain],
     position: SourcePos,
+    provider: Option[TestProvider],
 ) extends ProjectDef:
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, testDependencies, dependsOn, clang, test, position)
+    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, testDependencies, dependsOn, clang, test, position, provider)
 
   /** Test classpath only. Compile does not see them, and publish does not write them. */
   def testDependencies(deps: Dep*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies ++ deps.toList, dependsOn, clang, test, position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies ++ deps.toList, dependsOn, clang, test, position, provider)
 
   def dependsOn(projects: ProjectDef*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn ++ projects.toList, clang, test, position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn ++ projects.toList, clang, test, position, provider)
 
   /** The clang major this Native module must find on `PATH`. */
   def clang(major: ClangMajor): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, ClangPin.Major(major), test, position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, ClangPin.Major(major), test, position, provider)
 
-  /** The one main `histos test` runs. There is no test framework behind it. */
+  /** Opt out of the test provider and run this main. */
   def test(main: TestMain): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, Some(main), position)
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, Some(main), position, provider)
+
+  /** Run this framework in the child. `TestProvider.Zio` is the one `histos test` uses when this is unset. */
+  def testProvider(provider: TestProvider): ModuleDef =
+    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, test, position, Some(provider))
 
 object ModuleDef:
   /** Spliced by `module`. Source code outside this package cannot call it. */
@@ -53,7 +58,7 @@ object ModuleDef:
       versions: ScalaVersions,
       position: SourcePos,
   ): ModuleDef =
-    new ModuleDef(name, platforms, versions, Nil, Nil, Nil, ClangPin.Unused, None, position)
+    new ModuleDef(name, platforms, versions, Nil, Nil, Nil, ClangPin.Unused, None, position, None)
 
 final case class AggregateDef private (
     name: String,
