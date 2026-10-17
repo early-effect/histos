@@ -109,4 +109,4 @@ object LoadSpec extends ZIOSpecDefault:
             case other                             => other.toString == "missing file"
   )
 
-  def spec = loads.provideShared(Loader.live)
+  def spec = loads.provideShared(Loader.live) @@ TestAspect.sequential
