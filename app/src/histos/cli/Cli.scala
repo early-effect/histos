@@ -10,6 +10,7 @@ import histos.node.{Node, NodeToolchain}
 import histos.mcp.HistosMcp
 import histos.resolve.{Repositories, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
+import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.{Aggregate, Module, Project}
 
@@ -94,17 +95,19 @@ object Cli:
       case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
       case Right(loaded) => Completed(CliExit.Success, render(loaded.graph.projects), "")
 
-  private def run(repo: Path, apiJar: Path, id: TaskId): URIO[Loader & Scope, Completed] =
+  private def run(repo: Path, apiJar: Path, id: TaskId): URIO[Loader & Scope & Machine, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
           case Left(err) => ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
           case Right(loaded) =>
-            ZIO.scoped:
-              for
-                run <- ZIO.serviceWithZIO[Tasks](_.run(id))
-                out <- run.await
-              yield Completed(CliExit.Success, out.text, "")
-            .provide(Tasks.live(loaded.graph))
-            .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+            ZIO.serviceWithZIO[Machine]: machine =>
+              val runners = Map(TaskId.Versions -> VersionTask.fromRepo(loaded.graph, repo, machine.env))
+              ZIO.scoped:
+                for
+                  run <- ZIO.serviceWithZIO[Tasks](_.run(id))
+                  out <- run.await
+                yield Completed(CliExit.Success, out.text, "")
+              .provide(Tasks.live(loaded.graph, runners))
+              .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store => Completed(CliExit.Success, store.root.toString, ""))
@@ -187,8 +190,9 @@ object Cli:
           found => Completed(CliExit.Success, s"$text\nchosen clang ${found.version.value} ${found.target.value} ${found.clang}", ""),
         ).merge
 
-  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
-    HistosMcp.serve(repo, apiJar, LinePipe.standard).fold(
+  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine, Completed] =
+    ZIO.serviceWithZIO[Machine]: machine =>
+      HistosMcp.serve(repo, apiJar, LinePipe.standard, machine.env).fold(
       err => Completed(CliExit.LoadFailed, "", err.message),
       _ => Completed(CliExit.Success, "", ""),
     )
@@ -210,7 +214,8 @@ object Cli:
 
   private def taskExit(err: TaskError): CliExit =
     err match
-      case TaskError.EmptyId | TaskError.NoRunner(_) | TaskError.UnknownRun(_) => CliExit.TaskFailed
+      case TaskError.EmptyId | TaskError.NoRunner(_) | TaskError.UnknownRun(_) | TaskError.Version(_) =>
+        CliExit.TaskFailed
 
   private def render(projects: List[Project]): String =
     projects.map:

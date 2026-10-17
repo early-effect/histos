@@ -74,7 +74,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           jar               <- apiJar
           dir               <- repo
           (client, server)  <- LinePipe.connected
-          done              <- HistosMcp.serve(dir, jar, server).provideSome[Scope](Loader.live).forkScoped
+          done              <- HistosMcp.serve(dir, jar, server, Map.empty).provideSome[Scope](Loader.live).forkScoped
           _                 <- client.writeLine(req("server/discover", obj(), 1).toJson)
           _                 <- client.writeLine(req("tools/call", obj("name" -> Json.Str("graph"), "arguments" -> obj()), 2).toJson)
           _                 <- client.writeLine(req("tools/call", obj("name" -> Json.Str("run"), "arguments" -> obj("id" -> Json.Str("inspect"))), 3).toJson)

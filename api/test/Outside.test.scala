@@ -12,7 +12,7 @@ object OutsideSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(Module(name, platforms, versions, dependencies, deps, _, _)), Splits.aggregate)) =>
+          case Right(ProjectGraph(List(Module(name, platforms, versions, dependencies, deps, _, _)), Splits.aggregate, _)) =>
             name.value == "core" &&
             platforms.all == List(Jvm, Js) &&
             versions.all.map(_.value) == List("3.9.0", "2.13.16") &&
