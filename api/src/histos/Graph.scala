@@ -17,6 +17,7 @@ final case class Module(
     test: Option[TestMain] = None,
     testDependencies: List[Dep] = Nil,
     provider: Option[TestProvider] = None,
+    nativeVersion: Option[NativeVersion] = None,
 ) extends Project
 
 final case class Aggregate(
@@ -150,7 +151,7 @@ object Projects:
       case m: ModuleDef    =>
         duplicate(m.platforms.all).map(BuildError.DuplicatePlatform(n.name, _, m.position)).orElse(
           duplicate(m.versions.all).map(BuildError.DuplicateScalaVersion(n.name, _, m.position))
-        ).orElse(clangOf(n.name, m))
+        ).orElse(clangOf(n.name, m)).orElse(nativeVersionOf(n.name, m))
       case a: AggregateDef =>
         val children = a.children.map(_.name)
         if children.contains(a.name) then Some(BuildError.AggregateIncludesItself(n.name, a.position))
@@ -182,7 +183,20 @@ object Projects:
     .flatMap: deps =>
       (m.test, m.provider) match
         case (Some(_), Some(_)) => Left(BuildError.MixedTest(n.name, m.position))
-        case _                  => Right(Module(n.name, m.platforms, m.versions, m.dependencies, deps, m.position, m.clang, m.test, m.testDependencies, m.provider))
+        case _                  =>
+          Right(Module(
+            n.name,
+            m.platforms,
+            m.versions,
+            m.dependencies,
+            deps,
+            m.position,
+            m.clang,
+            m.test,
+            m.testDependencies,
+            m.provider,
+            m.nativeVersion,
+          ))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
     a.children.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, child) =>
@@ -196,6 +210,12 @@ object Projects:
       case ClangPin.Major(_) if !native => Some(BuildError.ClangWithoutNative(name, module.position))
       case ClangPin.Unused if native    => Some(BuildError.MissingClang(name, module.position))
       case _                            => None
+
+  private def nativeVersionOf(name: ProjectName, module: ModuleDef): Option[BuildError] =
+    val native = module.platforms.all.contains(Platform.Native)
+    module.nativeVersion match
+      case Some(_) if !native => Some(BuildError.NativeVersionWithoutNative(name, module.position))
+      case _                  => None
 
   private def cycle(projects: List[Project]): Either[BuildError, Unit] =
     val edges = projects.collect:
