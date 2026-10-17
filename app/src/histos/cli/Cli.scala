@@ -1,6 +1,9 @@
 package histos.cli
 
-import histos.load.{LoadError, Loader}
+import heddle.LinePipe
+import histos.acp.Acp
+import histos.load.Loader
+import histos.mcp.HistosMcp
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.{Aggregate, Module, Project}
 
@@ -12,6 +15,8 @@ enum Command:
   case Version
   case Graph
   case Run(id: String)
+  case Mcp
+  case Acp
 
 enum CliExit:
   case Success, TaskFailed, Usage, LoadFailed
@@ -27,7 +32,7 @@ final case class Completed(exit: CliExit, out: String, err: String)
 object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
-  val usageText: String = "usage: histos (version | graph | run <id>)"
+  val usageText: String = "usage: histos (version | graph | run <id> | mcp | acp)"
 
   def parse(args: List[String]): Either[String, Command] =
     args match
@@ -37,6 +42,10 @@ object Cli:
       case "graph" :: _     => Left("graph takes no arguments")
       case "run" :: id :: Nil => Right(Command.Run(id))
       case "run" :: _       => Left("run needs one task id")
+      case "mcp" :: Nil     => Right(Command.Mcp)
+      case "mcp" :: _       => Left("mcp takes no arguments")
+      case "acp" :: Nil     => Right(Command.Acp)
+      case "acp" :: _       => Left("acp takes no arguments")
       case command :: _     => Left(s"unknown command $command")
       case Nil              => Left(usageText)
 
@@ -48,6 +57,8 @@ object Cli:
           case Command.Version => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
           case Command.Graph   => graph(repo, apiJar)
           case Command.Run(id) => run(repo, apiJar, id)
+          case Command.Mcp     => mcp(repo, apiJar)
+          case Command.Acp     => acp
 
   private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map:
@@ -68,6 +79,27 @@ object Cli:
               yield Completed(CliExit.Success, out.text, "")
             .provide(Tasks.live(loaded.graph))
             .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+
+  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
+    HistosMcp.serve(repo, apiJar, LinePipe.standard).fold(
+      err => Completed(CliExit.LoadFailed, "", err.message),
+      _ => Completed(CliExit.Success, "", ""),
+    )
+
+  private def acp: UIO[Completed] =
+    def loop: UIO[Completed] =
+      LinePipe.standard.readLine.foldZIO(
+        t => ZIO.succeed(Completed(CliExit.LoadFailed, "", t.getClass.getName)),
+        {
+          case None => ZIO.succeed(Completed(CliExit.Success, "", ""))
+          case Some(line) =>
+            LinePipe.standard.writeLine(Acp.answer(line)).foldZIO(
+              t => ZIO.succeed(Completed(CliExit.LoadFailed, "", t.getClass.getName)),
+              _ => loop,
+            )
+        },
+      )
+    loop
 
   private def taskExit(err: TaskError): CliExit =
     err match
