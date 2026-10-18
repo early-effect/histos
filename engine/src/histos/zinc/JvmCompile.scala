@@ -157,20 +157,21 @@ object JvmCompile:
 
   def sourceDigest(sources: List[Path]): IO[CompileError, Sha256] = hashSources(sources)
 
-  def compile(request: CompileRequest): IO[CompileError, CompileOutput] =
+  def compile(request: CompileRequest, hear: String => Unit = _ => ()): IO[CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else compilePrepared(request, Nil)
+    else compilePrepared(request, Nil, hear)
 
-  /** Compile with the Scala compiler the request names. Plugins are not user dependencies. */
+  /** Compile with the Scala compiler the request names. Plugins are not user dependencies. `hear` is called on the compiler thread for each diagnostic. */
   private[histos] def compilePrepared(
       request: CompileRequest,
       plugins: List[Path],
+      hear: String => Unit = _ => (),
   ): IO[CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg)))
+       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg), hear))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -208,6 +209,16 @@ object JvmCompile:
       }.mapError(_ => CompileError.Io(CompileIo.Read))
     .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
 
+  /** Compiler jars plus the library they linked against. BSP names this Scala version with these jars. */
+  private[histos] def scalaJars(version: ScalaVersion): IO[CompileError, List[Path]] =
+    ScalaSeries.of(version) match
+      case Some(ScalaSeries.Scala3) =>
+        Scala3.jars(version).map(toolchain => (toolchain.compilerClasspath ++ toolchain.runtime).distinct)
+      case Some(ScalaSeries.Scala2(13)) =>
+        Scala213.jars(version).map(toolchain => (toolchain.compilerClasspath ++ toolchain.runtime).distinct)
+      case _ =>
+        ZIO.fail(CompileError.UnsupportedScala(version))
+
   /** The standard library the compiler linked against. A test run puts it ahead of locked jars. */
   private[histos] def runtime(version: ScalaVersion): IO[CompileError, List[Path]] =
     ScalaSeries.of(version) match
@@ -222,22 +233,27 @@ object JvmCompile:
       case Some(ScalaSeries.Scala2(13)) => true
       case _                            => false
 
-  private def invoke(request: CompileRequest, extra: List[String]): IO[CompileError, CompileOutput] =
+  private def invoke(request: CompileRequest, extra: List[String], hear: String => Unit): IO[CompileError, CompileOutput] =
     val version = request.toolchain.version
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3) =>
         Scala3.jars(version).flatMap: toolchain =>
-          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
       case Some(ScalaSeries.Scala2(13)) =>
-        invoke213(request)
+        invoke213(request, hear)
       case _ =>
         ZIO.fail(CompileError.UnsupportedScala(version))
 
-  private def invoke213(request: CompileRequest): IO[CompileError, CompileOutput] =
+  private def invoke213(request: CompileRequest, hear: String => Unit): IO[CompileError, CompileOutput] =
     Scala213.jars(request.toolchain.version).flatMap: jars =>
-      ZIO.attemptBlockingInterrupt(runZinc213(request, jars)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+      ZIO.attemptBlockingInterrupt(runZinc213(request, jars, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
 
-  private def runZinc3(request: CompileRequest, extra: List[String], toolchain: Scala3.Toolchain): Either[CompileError, CompileOutput] =
+  private def runZinc3(
+      request: CompileRequest,
+      extra: List[String],
+      toolchain: Scala3.Toolchain,
+      hear: String => Unit,
+  ): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader(getClass.getClassLoader)
     try
       compileOne(
@@ -248,10 +264,11 @@ object JvmCompile:
         toolchain.compilerClasspath,
         loader,
         extra,
+        hear,
       )
     finally loader.close()
 
-  private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain): Either[CompileError, CompileOutput] =
+  private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain, hear: String => Unit): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader()
     try
       compileOne(
@@ -262,6 +279,7 @@ object JvmCompile:
         toolchain.compilerClasspath,
         loader,
         Nil,
+        hear,
       )
     finally loader.close()
 
@@ -273,6 +291,7 @@ object JvmCompile:
       compiler: List[Path],
       compilerLoader: ClassLoader,
       extra: List[String],
+      hear: String => Unit,
   ): Either[CompileError, CompileOutput] =
     val versionText = version.value
     val libraryLoader = new URLClassLoader(libraries.map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader)
@@ -292,7 +311,7 @@ object JvmCompile:
       val scalac     = ZincUtil.scalaCompiler(instance, bridge, options)
       val compilers  = zinc.compilers(instance, options, Some(request.toolchain.jdk.home), scalac)
       val converter  = MappedFileConverter.empty
-      val reporter   = CollectingReporter()
+      val reporter   = CollectingReporter(hear)
       val lookup     = new PerClasspathEntryLookup:
         def analysis(entry: xsbti.VirtualFile)     = Optional.empty
         def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
@@ -342,7 +361,7 @@ object JvmCompile:
       try walk.iterator.asScala.count(path => Option(path.getFileName).exists(_.toString.endsWith(".class")))
       finally walk.close()
 
-private final class CollectingReporter extends xsbti.Reporter:
+private final class CollectingReporter(hear: String => Unit) extends xsbti.Reporter:
   private var found: List[xsbti.Problem] = Nil
 
   def diagnostics: List[CompileDiagnostic] =
@@ -353,6 +372,8 @@ private final class CollectingReporter extends xsbti.Reporter:
   def hasWarnings: Boolean = found.exists(_.severity == xsbti.Severity.Warn)
   def printSummary(): Unit = ()
   def problems(): Array[xsbti.Problem] = found.reverse.toArray
-  def log(problem: xsbti.Problem): Unit = found = problem :: found
+  def log(problem: xsbti.Problem): Unit =
+    found = problem :: found
+    problem.message.split("\n", -1).iterator.filter(_.nonEmpty).foreach(hear)
   def comment(position: xsbti.Position, message: String): Unit = ()
 end CollectingReporter

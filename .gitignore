@@ -1,5 +1,7 @@
 .scala-build/
-.bsp/
+.bsp/*
+!.bsp/histos.json
+*/.bsp/
 .metals/
 .bloop/
 .idea/

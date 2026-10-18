@@ -117,11 +117,21 @@ object ModuleTest:
       names: List[String],
       jdk: ResolvedJdk,
   ): ZStream[Resolve, ModuleTestError, TestFeed] =
+    ZStream.fromZIO(GraphCompile.run(repo, graph, names, jdk).mapError(ModuleTestError.Compile(_))).flatMap: compiled =>
+      suites(repo, graph, names, jdk, compiled)
+
+  /** Test suites for cells that are already compiled. One suite's lines, then the next, in module name order. */
+  def suites(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[String],
+      jdk: ResolvedJdk,
+      compiled: List[CompiledCell],
+  ): ZStream[Resolve, ModuleTestError, TestFeed] =
     val repositories = BuildResolvers(graph.resolvers)
     ZStream.unwrap {
       for
         wanted <- ZIO.fromEither(requested(graph, names).left.map(ModuleTestError.Target(_)))
-        compiled <- GraphCompile.run(repo, graph, names, jdk).mapError(ModuleTestError.Compile(_))
         lock <- readLock(repo)
         cells = compiled.filter(cell => wanted.contains(cell.module)).sortBy(cell => (cell.module.value, cell.version.value))
         streams <- ZIO.foreachPar(cells)(cell => prepare(repo, graph, cell, jdk, lock, repositories))
