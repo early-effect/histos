@@ -173,7 +173,8 @@ object NodeSpec extends ZIOSpecDefault:
                     )
           url  <- ZIO.fromEither(HttpsUrl.from("https://example.test/node.zip"))
           _    <- ZIO.attempt(writeLock(root, ArchiveSource.Remote(url), Sha256.of(Chunk.fromArray("x".getBytes))))
-          text <- NodeToolchain.explain(machine)
+          found <- NodeToolchain.explain(machine)
+          text = NodeToolchain.text(found)
         yield assertTrue(text.contains("chosen nvm 22.14.0"), text.contains(nvm.toString), !text.contains("java"))
     ,
     test("a file zip is staged and an https lock is not fetched"):

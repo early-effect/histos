@@ -160,15 +160,21 @@ object JdkLocations:
     Option(javaBin.getParent).flatMap(parent => Option(parent.getParent))
 end JdkLocations
 
+/** The lock that was read and the decision it produced. Printing is [[Toolchain.text]]. */
+final case class JdkSurvey(lock: JdkLock, resolution: Resolution)
+
 object Toolchain:
   /** JDK 25 refuses unnamed native access without this flag. The manifest attribute is the jar form. */
   val NativeAccess: String = "--enable-native-access=ALL-UNNAMED"
   val NativeAccessManifest: String = "Enable-Native-Access: ALL-UNNAMED"
 
-  def explain(machine: Machine): IO[ToolchainError, String] =
+  def explain(machine: Machine): IO[ToolchainError, JdkSurvey] =
     readLock(machine.repo).flatMap:
       case None       => ZIO.fail(ToolchainError.NoLock(lockPath(machine.repo)))
-      case Some(lock) => resolution(machine, lock).map(found => render(lock, found))
+      case Some(lock) => resolution(machine, lock).map(found => JdkSurvey(lock, found))
+
+  def text(survey: JdkSurvey): String =
+    render(survey.lock, survey.resolution)
 
   def prepare(machine: Machine): IO[ToolchainError, Startup] =
     if machine.settled == Settled.Yes then ZIO.succeed(Startup.Continue)
