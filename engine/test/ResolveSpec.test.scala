@@ -72,6 +72,24 @@ object ResolveSpec extends ZIOSpecDefault:
           assertTrue(again == Right(lock), lock.cells.length == 1)
         case Left(_) => assertTrue(false)
     ,
+    test("an eviction with an empty requested version is not written"):
+      val cell = LockedCell(
+        core,
+        v390,
+        Platform.Jvm,
+        Nil,
+        Nil,
+        List(
+          Eviction("org.jline", "jline-native", "", "3.27.1"),
+          Eviction("dev.zio", "zio_3", "2.1.20", "2.1.26"),
+        ),
+      )
+      val text = DependencyLock.render(DependencyLock(List(cell)))
+      assertTrue(
+        !text.contains("jline-native"),
+        DependencyLock.parse(text) == Right(DependencyLock(List(cell.copy(evictions = List(Eviction("dev.zio", "zio_3", "2.1.20", "2.1.26")))))),
+      )
+    ,
     test("a bad line, a short field, a repeated cell, a bad digest, and a bad repository are lock errors"):
       val short = "cell core 3.9.0 jvm\ndirect dev.zio"
       val twice =

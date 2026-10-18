@@ -98,6 +98,12 @@ object CliSpec extends ZIOSpecDefault:
         bare == Left(CliParseError.MissingArgument),
       )
     ,
+    test("assembly takes an optional path"):
+      for
+        plain <- Cli.parse(List("assembly"))
+        path  <- Cli.parse(List("assembly", "dist/histos.jar"))
+      yield assertTrue(plain == Command.Assembly(None) && path == Command.Assembly(Some("dist/histos.jar")))
+    ,
     test("compile takes project names"):
       for
         entire <- Cli.parse(List("compile"))

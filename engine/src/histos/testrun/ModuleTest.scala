@@ -161,17 +161,15 @@ object ModuleTest:
     val analysis = testAnalysis(repo, module.name, cell.version)
     for
       binary <- ZIO.fromEither(MainClass.from(main.value).left.map(ModuleTestError.Main(_)))
-      fetched <- classpath(module, cell.version, lock, repositories).mapError(ModuleTestError.Lock(_))
-      upstream <- upstreamClasses(repo, module, cell.version)
-      compileAgainst = cell.classes :: (upstream ++ fetched.paths)
+      linked <- runtimeClasspath(repo, module, cell, lock, repositories)
       _ <- JvmCompile
         .compile(CompileRequest(
           CompileToolchain(cell.version, Platform.Jvm, jdk, ScalacFlags.empty),
           sources,
-          compileAgainst,
+          linked.paths,
           classes,
           analysis,
-          fetched.hashes,
+          linked.hashes,
         ))
         .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       work <- fresh(testWork(repo, module.name, cell.version))
@@ -179,7 +177,7 @@ object ModuleTest:
         .run(TestRequest(
           Platform.Jvm,
           jdk.home.resolve("bin").resolve("java"),
-          TestClasspath(classes, compileAgainst),
+          TestClasspath(classes, linked.paths),
           binary,
           work,
         ))
@@ -201,18 +199,16 @@ object ModuleTest:
     val runner = providerSource(repo, module.name, cell.version)
     for
       _ <- ZIO.unless(satisfied(module, provider))(ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider)))
-      fetched <- classpath(module, cell.version, lock, repositories).mapError(ModuleTestError.Lock(_))
-      upstream <- upstreamClasses(repo, module, cell.version)
-      compileAgainst = cell.classes :: (upstream ++ fetched.paths)
+      linked <- runtimeClasspath(repo, module, cell, lock, repositories)
       _ <- writeRunner(runner, ProviderRunner.source(provider.framework.value, classes))
       _ <- JvmCompile
         .compile(CompileRequest(
           CompileToolchain(cell.version, Platform.Jvm, jdk, ScalacFlags.empty),
           sources :+ runner,
-          compileAgainst,
+          linked.paths,
           classes,
           analysis,
-          fetched.hashes,
+          linked.hashes,
         ))
         .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       work <- fresh(testWork(repo, module.name, cell.version))
@@ -220,7 +216,7 @@ object ModuleTest:
         .run(TestRequest(
           Platform.Jvm,
           jdk.home.resolve("bin").resolve("java"),
-          TestClasspath(classes, compileAgainst),
+          TestClasspath(classes, linked.paths),
           ProviderRunner.Main,
           work,
         ))
@@ -275,6 +271,25 @@ object ModuleTest:
         else ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency, version))
 
   private final case class Fetched(paths: List[Path], hashes: List[Sha256])
+
+  /** Compiler library first, then locked jars. The first jar on the classpath defines `scala.*`. */
+  private final case class Linked(paths: List[Path], hashes: List[Sha256])
+
+  private def runtimeClasspath(
+      repo: Path,
+      module: Module,
+      cell: CompiledCell,
+      lock: DependencyLock,
+      repositories: Repositories,
+  ): ZIO[Resolve, ModuleTestError, Linked] =
+    for
+      fetched <- classpath(module, cell.version, lock, repositories).mapError(ModuleTestError.Lock(_))
+      upstream <- upstreamClasses(repo, module, cell.version)
+      library <- JvmCompile.runtime(cell.version).mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
+    yield Linked(
+      cell.classes :: (upstream ++ library ++ fetched.paths.filterNot(library.toSet.contains)),
+      fetched.hashes,
+    )
 
   private def classpath(
       module: Module,

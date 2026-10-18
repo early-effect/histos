@@ -54,7 +54,7 @@ object ZincSpec extends ZIOSpecDefault:
   )
 
   private val banned = suite("user classpath")(
-    test("the Scala 3 compiler and histos are not user dependencies"):
+    test("a declared compiler is a library, and a histos api jar is not"):
       ZIO.scoped:
         for
           root     <- temp
@@ -71,7 +71,7 @@ object ZincSpec extends ZIOSpecDefault:
                      classpath = List(api),
                    )).either
         yield assertTrue(
-          onCompiler == Left(CompileError.Banned(compiler, ClasspathBan.Scala3Compiler)),
+          onCompiler == Left(CompileError.NoSources),
           onApi == Left(CompileError.Banned(api, ClasspathBan.Histos)),
         )
   )

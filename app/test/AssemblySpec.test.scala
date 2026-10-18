@@ -40,7 +40,7 @@ object AssemblySpec extends ZIOSpecDefault:
       case directory :: Nil =>
         for
           root <- temp
-          assembled <- Assembly.write(directory, jars, MainClass.trusted("histos.cli.Main"), root.resolve("histos.jar"))
+          assembled <- Assembly.write(List(directory), jars, MainClass.trusted("histos.cli.Main"), root.resolve("histos.jar"))
           ran <- ZIO.attempt(exec(assembled.path, root.resolve("work"), javaBin))
           names <- ZIO.attempt(namesOf(assembled.path))
           manifest <- ZIO.attempt(manifestOf(assembled.path))

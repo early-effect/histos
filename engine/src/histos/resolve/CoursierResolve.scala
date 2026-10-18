@@ -107,8 +107,9 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
       selected.get(dependency.module).flatMap: chosen =>
         val requested = dependency.versionConstraint.asString
         val got       = chosen.asString
-        if requested == got then None
-        else Some(Eviction(dependency.module.organization.value, dependency.module.name.value, requested, got))
+        val eviction = Eviction(dependency.module.organization.value, dependency.module.name.value, requested, got)
+        if requested == got || !Eviction.printable(eviction) then None
+        else Some(eviction)
     val roots = resolution.rootDependencies.toList.flatMap(one)
     val transitive = resolution.projectCache0.toList.flatMap { case (_, (_, project)) =>
       project.dependencies0.toList.flatMap((_, dependency) => one(dependency))

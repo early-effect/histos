@@ -52,7 +52,7 @@ object AssemblySpec extends ZIOSpecDefault:
                    ),
                  )
                }
-          packed <- Assembly.write(classes, List(first, second), main, root.resolve("out").resolve("app.jar"))
+          packed <- Assembly.write(List(classes), List(first, second), main, root.resolve("out").resolve("app.jar"))
           names <- ZIO.attempt(entries(packed.path))
           body <- ZIO.attempt(texts(packed.path))
         yield assertTrue(
@@ -80,7 +80,7 @@ object AssemblySpec extends ZIOSpecDefault:
         for
           root <- temp
           classes <- ZIO.attempt(writeClasses(root, List("demo/A.class" -> Array[Byte](1))))
-          missing <- Assembly.write(classes, Nil, main, root.resolve("app.jar")).either
+          missing <- Assembly.write(List(classes), Nil, main, root.resolve("app.jar")).either
         yield assertTrue(missing == Left(AssemblyError.MissingMain(main)))
     ,
     test("an empty classes directory is refused"):
@@ -88,7 +88,7 @@ object AssemblySpec extends ZIOSpecDefault:
         for
           root <- temp
           _ <- ZIO.attempt(Files.createDirectories(root.resolve("empty")))
-          empty <- Assembly.write(root.resolve("empty"), Nil, main, root.resolve("app.jar")).either
+          empty <- Assembly.write(List(root.resolve("empty")), Nil, main, root.resolve("app.jar")).either
         yield assertTrue(empty == Left(AssemblyError.Empty(root.resolve("empty"))))
     ,
     test("a file is not a classes directory"):
@@ -97,7 +97,7 @@ object AssemblySpec extends ZIOSpecDefault:
           root <- temp
           file = root.resolve("classes")
           _ <- ZIO.attempt(Files.write(file, Array[Byte](1)))
-          refused <- Assembly.write(file, Nil, main, root.resolve("app.jar")).either
+          refused <- Assembly.write(List(file), Nil, main, root.resolve("app.jar")).either
         yield assertTrue(refused == Left(AssemblyError.NotADirectory(file)))
     ,
     test("a file that is not a jar is refused"):
@@ -107,7 +107,7 @@ object AssemblySpec extends ZIOSpecDefault:
           classes <- ZIO.attempt(writeClasses(root, List("demo/Entry.class" -> Array[Byte](1))))
           notes = root.resolve("notes.txt")
           _ <- ZIO.attempt(Files.writeString(notes, "not a jar"))
-          refused <- Assembly.write(classes, List(notes), main, root.resolve("app.jar")).either
+          refused <- Assembly.write(List(classes), List(notes), main, root.resolve("app.jar")).either
         yield assertTrue(refused == Left(AssemblyError.NotAJar(notes)))
     ,
     test("a jar entry that escapes is refused"):
@@ -117,7 +117,7 @@ object AssemblySpec extends ZIOSpecDefault:
           classes <- ZIO.attempt(writeClasses(root, List("demo/Entry.class" -> Array[Byte](1))))
           hostile = root.resolve("hostile.jar")
           _ <- ZIO.attempt(jar(hostile, List("../Evil.class" -> Array[Byte](1))))
-          refused <- Assembly.write(classes, List(hostile), main, root.resolve("app.jar")).either
+          refused <- Assembly.write(List(classes), List(hostile), main, root.resolve("app.jar")).either
         yield assertTrue(refused == Left(AssemblyError.Escaped("../Evil.class")))
     ,
     test("the destination is not inside the classes directory"):
@@ -126,7 +126,7 @@ object AssemblySpec extends ZIOSpecDefault:
           root <- temp
           classes <- ZIO.attempt(writeClasses(root, List("demo/Entry.class" -> Array[Byte](1))))
           destination = classes.resolve("app.jar")
-          refused <- Assembly.write(classes, Nil, main, destination).either
+          refused <- Assembly.write(List(classes), Nil, main, destination).either
         yield assertTrue(refused == Left(AssemblyError.DestinationInside(destination)))
     ,
     test("the destination is not one of the jars"):
@@ -136,13 +136,35 @@ object AssemblySpec extends ZIOSpecDefault:
           classes <- ZIO.attempt(writeClasses(root, List("demo/Entry.class" -> Array[Byte](1))))
           destination = root.resolve("app.jar")
           _ <- ZIO.attempt(jar(destination, List("demo/Other.class" -> Array[Byte](2))))
-          refused <- Assembly.write(classes, List(destination), main, destination).either
+          refused <- Assembly.write(List(classes), List(destination), main, destination).either
         yield assertTrue(refused == Left(AssemblyError.Overlap(destination)))
+    ,
+    test("the first classes directory wins, and a resource stays one entry"):
+      ZIO.scoped:
+        for
+          root <- temp
+          first <- ZIO.attempt(writeClasses(root, List("demo/A.class" -> Array[Byte](1), "demo/Entry.class" -> Array[Byte](7)), "first"))
+          second <- ZIO.attempt(writeClasses(root, List("demo/A.class" -> Array[Byte](2), "demo/B.class" -> Array[Byte](3)), "second"))
+          payload = root.resolve("payload")
+          _ <- ZIO.attempt(Files.write(payload, "api-jar".getBytes(utf8)))
+          packed <- Assembly.write(
+            List(first, second),
+            Nil,
+            main,
+            root.resolve("app.jar"),
+            List(AssemblyFile("bootstrap/histos-api.jar", payload)),
+          )
+          body <- ZIO.attempt(texts(packed.path))
+        yield assertTrue(
+          body.get("demo/A.class").contains(List(1)),
+          body.get("demo/B.class").contains(List(3)),
+          text(body, "bootstrap/histos-api.jar").contains("api-jar"),
+        )
     ,
   )
 
-  private def writeClasses(root: Path, files: List[(String, Array[Byte])]): Path =
-    val dir = root.resolve("classes")
+  private def writeClasses(root: Path, files: List[(String, Array[Byte])], name: String = "classes"): Path =
+    val dir = root.resolve(name)
     files.foreach: (name, body) =>
       val path = dir.resolve(name)
       Option(path.getParent).foreach(parent => Files.createDirectories(parent))

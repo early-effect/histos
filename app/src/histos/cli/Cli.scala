@@ -2,6 +2,8 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.acp.Acp
+import histos.assembly.Assemble
+import histos.load.BuildClasspath
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled, Startup, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
@@ -29,6 +31,7 @@ enum Command:
   case Run(id: TaskId)
   case Test(projects: List[String])
   case Compile(projects: List[String])
+  case Assembly(destination: Option[String])
   case Publish(repository: String, projects: List[String])
   case Mcp
   case Acp
@@ -77,7 +80,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | publish <repository> [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -92,6 +95,7 @@ object Cli:
           case Command.Run(id)          => run(repo, apiJar, id)
           case Command.Test(projects)   => test(repo, apiJar, projects)
           case Command.Compile(projects) => compile(repo, apiJar, projects)
+          case Command.Assembly(destination) => assembly(repo, apiJar, destination)
           case Command.Publish(repository, projects) => publish(repo, apiJar, repository, projects)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
@@ -130,6 +134,38 @@ object Cli:
           error => Completed(CliExit.CompileFailed, "", error.message),
           cells => Completed(CliExit.Success, cells.map(cell => compiledLine(repo, cell)).mkString("\n"), ""),
         ).merge
+
+  private def assembly(repo: Path, apiJar: Path, destination: Option[String]): URIO[Loader & Scope & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+      case Right(loaded) =>
+        target(repo, destination) match
+          case None => ZIO.succeed(Completed(CliExit.CompileFailed, "", "assembly path is not a path"))
+          case Some(path) =>
+            GraphCompile.jdkHere.either.flatMap:
+              case Left(error) => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message))
+              case Right(jdk) =>
+                Assemble
+                  .run(repo, loaded.graph, jdk, path)
+                  .mapBoth(
+                    error => Completed(CliExit.CompileFailed, "", error.message),
+                    assembled => Completed(CliExit.Success, relative(repo, assembled.path), ""),
+                  )
+                  .merge
+
+  private def target(repo: Path, destination: Option[String]): Option[Path] =
+    destination match
+      case None => Some(repo.resolve("dist").resolve("histos.jar"))
+      case Some(raw) =>
+        try
+          val path = Path.of(raw)
+          Some(if path.isAbsolute then path else repo.resolve(path))
+        catch case _: java.nio.file.InvalidPathException => None
+
+  private def relative(repo: Path, path: Path): String =
+    val base = repo.toAbsolutePath.normalize
+    val full = path.toAbsolutePath.normalize
+    (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
 
   /** `<module> <scala> jvm <class files> <classes dir>`. The directory is the classpath root, relative to the repo. */
   private def compiledLine(repo: Path, cell: CompiledCell): String =
@@ -328,38 +364,40 @@ object Cli:
 
 object Main extends ZIOAppDefault:
   def run =
-    apiJar.foldZIO(
-      exit => ZIO.succeed(zio.ExitCode(exit.code)),
-      jar =>
+    jars.foldZIO(
+      error => Console.printLineError(error.message).ignore *> stop(CliExit.LoadFailed.code),
+      found =>
         for
           args <- getArgs.map(_.toList)
-          code <- dispatch(args, Path.of("").toAbsolutePath, jar)
-        yield code,
+          _ <- dispatch(args, Path.of("").toAbsolutePath, found)
+        yield (),
     )
 
-  private def dispatch(args: List[String], repo: Path, jar: Path): URIO[Scope, zio.ExitCode] =
+  private def dispatch(args: List[String], repo: Path, jars: Jars): URIO[Scope, Unit] =
     machineHere(repo).foldZIO(
       err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
       machine =>
         Cli.parse(args).either.flatMap:
-          case Left(_) => runCommand(args, repo, jar, machine)
-          case Right(Command.Toolchain) => runCommand(args, repo, jar, machine)
+          case Left(_) => runCommand(args, repo, jars.api, machine)
+          case Right(Command.Toolchain) => runCommand(args, repo, jars.api, machine)
           case Right(_) =>
             Toolchain.prepare(machine).foldZIO(
               err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
               {
-                case Startup.Continue => runCommand(args, repo, jar, machine)
+                case Startup.Continue => runCommand(args, repo, jars.api, machine)
                 case Startup.Refuse(text) => finish(Completed(CliExit.ToolchainFailed, "", text))
                 case Startup.Replace(javaBin) =>
-                  Toolchain.replace(javaBin, jar, args).foldZIO(
+                  Toolchain.replace(javaBin, jars.program, args).foldZIO(
                     err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
-                    code => ZIO.succeed(zio.ExitCode(code)),
+                    code => stop(code),
                   )
               },
             )
     )
 
-  private def runCommand(args: List[String], repo: Path, jar: Path, machine: Machine): URIO[Scope, zio.ExitCode] =
+  private final case class Jars(program: Path, api: Path)
+
+  private def runCommand(args: List[String], repo: Path, jar: Path, machine: Machine): URIO[Scope, Unit] =
     ZIO.scoped:
       Cli.execute(args, repo, jar).provideSome[Scope](
         Loader.live,
@@ -369,10 +407,14 @@ object Main extends ZIOAppDefault:
       )
     .flatMap(finish)
 
-  private def finish(done: Completed): UIO[zio.ExitCode] =
+  /** A successful `run` is process status 0. `exit` is the status the operating system sees. */
+  private def stop(code: Int): UIO[Unit] =
+    exit(zio.ExitCode(code))
+
+  private def finish(done: Completed): UIO[Unit] =
     Console.printLine(done.out).when(done.out.nonEmpty).ignore *>
       Console.printLineError(done.err).when(done.err.nonEmpty).ignore *>
-      ZIO.succeed(zio.ExitCode(done.exit.code))
+      stop(done.exit.code)
 
   private def machineHere(repo: Path): IO[ToolchainError, Machine] =
     val env = scala.sys.env
@@ -386,11 +428,26 @@ object Main extends ZIOAppDefault:
         val cache = ContentStore.home(env.get("XDG_CACHE_HOME"), home)
         ZIO.succeed(Machine(env, home, os, cache, repo, running, Settled.from(env)))
 
-  private def apiJar: IO[CliExit, Path] =
+  private def jars: IO[LoadError, Jars] =
+    located.flatMap: program =>
+      cacheHome.flatMap: cache =>
+        BuildClasspath(program, cache).map(api => Jars(program, api))
+
+  private def located: IO[LoadError, Path] =
     val location = Option(classOf[histos.HistosBuild].getProtectionDomain)
       .flatMap(domain => Option(domain.getCodeSource))
       .flatMap(source => Option(source.getLocation))
     location match
-      case None => ZIO.fail(CliExit.LoadFailed)
+      case None => ZIO.fail(LoadError.MissingFile(Path.of("histos-api.jar")))
       case Some(url) =>
-        ZIO.attempt(Path.of(url.toURI)).orElseFail(CliExit.LoadFailed)
+        ZIO.attempt(Path.of(url.toURI)).orElseFail(LoadError.Io(histos.load.LoadIo.Classpath))
+
+  private def cacheHome: IO[LoadError, Path] =
+    for
+      xdg <- System.env("XDG_CACHE_HOME").orElseFail(LoadError.Io(histos.load.LoadIo.Classpath))
+      home <- System.property("user.home").orElseFail(LoadError.Io(histos.load.LoadIo.Classpath))
+      root <- (xdg.filter(_.nonEmpty), home.filter(_.nonEmpty)) match
+        case (Some(dir), _) => ZIO.succeed(Path.of(dir, "histos"))
+        case (_, Some(dir)) => ZIO.succeed(Path.of(dir, ".cache", "histos"))
+        case _               => ZIO.fail(LoadError.NoHome)
+    yield root

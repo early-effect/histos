@@ -19,6 +19,10 @@ enum AssemblyError:
   case Overlap(path: Path)
   case NotAJar(path: Path)
   case MissingMain(main: MainClass)
+  case NoClasses
+  case Duplicate(name: String)
+  case NotAFile(path: Path)
+  case LazyVal(error: LazyValError)
   case Io(op: JarIo)
 
   def message: String = this match
@@ -29,26 +33,61 @@ enum AssemblyError:
     case Overlap(path)           => s"$path is the assembly destination"
     case NotAJar(path)           => s"$path is not a jar"
     case MissingMain(main)       => s"${main.binary} is not in the assembly"
+    case NoClasses               => "an assembly needs a classes directory"
+    case Duplicate(name)         => s"'$name' is already in the assembly"
+    case NotAFile(path)          => s"$path is not a file"
+    case LazyVal(error)          => error.message
     case Io(op)                  => s"assembly failed while ${op.toString.toLowerCase}"
 
 final case class Assembled(path: Path, entries: Int)
+
+/** A file stored under one entry name. It is not unzipped. */
+final case class AssemblyFile(entry: String, file: Path)
 
 object Assembly:
   /** Merge application classes and runtime jars into one jar `java -jar` can exec.
     * Application classes win, then earlier jars. Service files are concatenated.
     * Signature files and `module-info.class` are omitted. The jar is not those signed artifacts and it is not a JPMS module.
     */
-  def write(classes: Path, jars: List[Path], main: MainClass, destination: Path): IO[AssemblyError, Assembled] =
+  def write(
+      classes: List[Path],
+      jars: List[Path],
+      main: MainClass,
+      destination: Path,
+      resources: List[AssemblyFile] = Nil,
+  ): IO[AssemblyError, Assembled] =
     for
-      files <- entries(classes, destination)
+      files <- classFiles(classes, destination)
       _     <- overlap(jars, destination)
-      count <- place(destination, files, jars, main)
+      _     <- accept(resources, files.map(_._1).toSet)
+      count <- place(destination, classes, files, jars, resources, main)
     yield Assembled(destination, count)
+
+  private def classFiles(classes: List[Path], destination: Path): IO[AssemblyError, List[(String, Path)]] =
+    if classes.isEmpty then ZIO.fail(AssemblyError.NoClasses)
+    else
+      ZIO.foldLeft(classes)(List.empty[(String, Path)]): (acc, dir) =>
+        entries(dir, destination).map: files =>
+          val taken = acc.map(_._1).toSet
+          acc ++ files.filterNot((name, _) => taken.contains(name))
+
+  private def accept(resources: List[AssemblyFile], taken: Set[String]): IO[AssemblyError, Unit] =
+    ZIO.foreachDiscard(resources): resource =>
+      if resource.entry.isEmpty || escaped(resource.entry) then ZIO.fail(AssemblyError.Escaped(resource.entry))
+      else if taken.contains(resource.entry) then ZIO.fail(AssemblyError.Duplicate(resource.entry))
+      else
+        ZIO.attemptBlocking(Files.isRegularFile(resource.file)).mapError(_ => AssemblyError.Io(JarIo.Read)).flatMap: present =>
+          if present then ZIO.unit else ZIO.fail(AssemblyError.NotAFile(resource.file))
 
   private enum Classified:
     case Drop, Escape, Service, Keep
 
-  private final class Merge(out: ZipOutputStream, mainClass: String):
+  private final class Merge(
+      out: ZipOutputStream,
+      mainClass: String,
+      handles: Map[(String, String), LazyVals.Handle],
+      loader: ClassLoader,
+  ):
     private var seen: Set[String] = Set.empty
     private var count: Int = 0
     private var foundMain: Boolean = false
@@ -58,6 +97,7 @@ object Assembly:
 
     def written: Int = count
     def hasMain: Boolean = foundMain
+    def has(name: String): Boolean = seen.contains(name)
 
     def manifest(bytes: Array[Byte]): Unit =
       put("META-INF/MANIFEST.MF", bytes)
@@ -70,8 +110,11 @@ object Assembly:
       serviceLines = serviceLines.updated(name, serviceLines.getOrElse(name, Vector.empty) ++ fresh)
       serviceSeen = serviceSeen.updated(name, known ++ fresh)
 
-    def keep(name: String, input: InputStream): Unit =
-      if seen.contains(name) then input.transferTo(OutputStream.nullOutputStream())
+    def keep(name: String, input: InputStream): Either[AssemblyError, Unit] =
+      if seen.contains(name) then
+        input.transferTo(OutputStream.nullOutputStream())
+        Right(())
+      else if name.endsWith(".class") then store(name, input.readAllBytes())
       else
         seen = seen + name
         out.putNextEntry(new ZipEntry(name))
@@ -79,12 +122,25 @@ object Assembly:
         out.closeEntry()
         count += 1
         if name == mainClass then foundMain = true
+        Right(())
 
-    def keepFile(name: String, file: Path): Unit =
-      if !seen.contains(name) then
+    def keepFile(name: String, file: Path): Either[AssemblyError, Unit] =
+      if seen.contains(name) then Right(())
+      else if name.endsWith(".class") then store(name, Files.readAllBytes(file))
+      else
         seen = seen + name
         out.putNextEntry(new ZipEntry(name))
         Files.copy(file, out)
+        out.closeEntry()
+        count += 1
+        if name == mainClass then foundMain = true
+        Right(())
+
+    private def store(name: String, bytes: Array[Byte]): Either[AssemblyError, Unit] =
+      LazyVals.rewrite(name, bytes, handles, loader).left.map(AssemblyError.LazyVal(_)).map: rewritten =>
+        seen = seen + name
+        out.putNextEntry(new ZipEntry(name))
+        out.write(rewritten)
         out.closeEntry()
         count += 1
         if name == mainClass then foundMain = true
@@ -140,15 +196,17 @@ object Assembly:
 
   private def place(
       destination: Path,
+      classes: List[Path],
       files: List[(String, Path)],
       jars: List[Path],
+      resources: List[AssemblyFile],
       main: MainClass,
   ): IO[AssemblyError, Int] =
     val parent = Option(destination.getParent).getOrElse(destination)
     val fileName = Option(destination.getFileName).map(_.toString).getOrElse("histos.jar")
     val temp = parent.resolve(s"$fileName.tmp")
     ZIO.acquireReleaseWith(ZIO.succeed(temp))(leftover => ZIO.attemptBlocking(Files.deleteIfExists(leftover)).ignore): _ =>
-      written(temp, parent, files, jars, main).flatMap: count =>
+      written(temp, parent, classes, files, jars, resources, main).flatMap: count =>
         ZIO.attemptBlocking {
           try Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
           catch
@@ -160,22 +218,56 @@ object Assembly:
   private def written(
       temp: Path,
       parent: Path,
+      classes: List[Path],
       files: List[(String, Path)],
       jars: List[Path],
+      resources: List[AssemblyFile],
       main: MainClass,
   ): IO[AssemblyError, Int] =
     ZIO.attemptBlocking {
       Files.createDirectories(parent)
       val stream = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(temp)))
       try
-        val merge = Merge(stream, classFile(main))
-        merge.manifest(manifest(main))
-        writeOwn(merge, files).flatMap: _ =>
-          writeJars(merge, jars).flatMap: _ =>
-            merge.writeServices()
-            if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
+        val packed = LazyVals.catalog(ownBytes(files) ++ jarBytes(jars)) match
+          case Left(error) => Left(AssemblyError.LazyVal(error))
+          case Right(handles) =>
+            val merge = Merge(stream, classFile(main), handles, hierarchy(classes, jars))
+            merge.manifest(manifest(main))
+            writeOwn(merge, files).flatMap: _ =>
+              writeResources(merge, resources).flatMap: _ =>
+                writeJars(merge, jars).flatMap: _ =>
+                  merge.writeServices()
+                  if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
+        packed
       finally stream.close()
     }.mapError(_ => AssemblyError.Io(JarIo.Write)).flatMap(ZIO.fromEither)
+
+  private def ownBytes(files: List[(String, Path)]): List[(String, Array[Byte])] =
+    files.collect:
+      case (name, path) if name.endsWith(".class") => name -> Files.readAllBytes(path)
+
+  private def jarBytes(jars: List[Path]): List[(String, Array[Byte])] =
+    jars.flatMap: path =>
+      if !Files.isRegularFile(path) then Nil
+      else
+        try
+          val zip = new ZipFile(path.toFile)
+          try
+            zip.entries.asScala.toList.flatMap: entry =>
+              val name = Option(entry.getName).getOrElse("")
+              if !name.endsWith(".class") then Nil
+              else
+                Option(zip.getInputStream(entry)) match
+                  case None => Nil
+                  case Some(input) =>
+                    try List(name -> input.readAllBytes())
+                    finally input.close()
+          finally zip.close()
+        catch case _: ZipException => Nil
+
+  private def hierarchy(classes: List[Path], jars: List[Path]): ClassLoader =
+    val urls = (classes ++ jars).map(_.toUri.toURL).toArray
+    new java.net.URLClassLoader(urls, ClassLoader.getPlatformClassLoader)
 
   private def writeOwn(merge: Merge, files: List[(String, Path)]): Either[AssemblyError, Unit] =
     files.foldLeft[Either[AssemblyError, Unit]](Right(())): (acc, file) =>
@@ -187,9 +279,13 @@ object Assembly:
           case Classified.Service =>
             merge.service(name, Files.readAllBytes(path))
             Right(())
-          case Classified.Keep =>
-            merge.keepFile(name, path)
-            Right(())
+          case Classified.Keep => merge.keepFile(name, path)
+
+  private def writeResources(merge: Merge, resources: List[AssemblyFile]): Either[AssemblyError, Unit] =
+    resources.foldLeft[Either[AssemblyError, Unit]](Right(())): (acc, resource) =>
+      acc.flatMap: _ =>
+        if merge.has(resource.entry) then Left(AssemblyError.Duplicate(resource.entry))
+        else merge.keepFile(resource.entry, resource.file)
 
   private def writeJars(merge: Merge, jars: List[Path]): Either[AssemblyError, Unit] =
     jars.foldLeft[Either[AssemblyError, Unit]](Right(())): (acc, jar) =>
@@ -223,9 +319,7 @@ object Assembly:
       case Classified.Service =>
         merge.service(name, input.readAllBytes())
         Right(())
-      case Classified.Keep =>
-        merge.keep(name, input)
-        Right(())
+      case Classified.Keep => merge.keep(name, input)
 
   private def classified(name: String): Classified =
     if name.isEmpty || name.endsWith("/") then Classified.Drop

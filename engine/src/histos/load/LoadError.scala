@@ -28,6 +28,8 @@ enum LoadError:
   case NoEntry
   case AmbiguousEntry(classes: List[BinaryName])
   case BrokenGraph(error: BuildError)
+  case MissingApi(path: Path)
+  case NoHome
   case Io(op: LoadIo)
 
   def message: String = this match
@@ -37,4 +39,6 @@ enum LoadError:
     case AmbiguousEntry(classes)    =>
       s"histos.scala defines more than one HistosBuild: ${classes.map(_.value).mkString(", ")}"
     case BrokenGraph(error)         => error.message
+    case MissingApi(path)           => s"$path has no bootstrap api jar"
+    case NoHome                     => "no user home, so the api jar cannot be cached"
     case Io(op)                     => s"load failed while ${op.toString.toLowerCase}"

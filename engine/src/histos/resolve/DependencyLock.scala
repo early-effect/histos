@@ -65,7 +65,7 @@ object DependencyLock:
   def renderCell(cell: LockedCell): String =
     val header = s"${cell.scope.header} ${cell.module.value} ${cell.scalaVersion.value} ${PlatformToken.render(cell.platform)}"
     val body   =
-      cell.directs.map(renderDirect) ++ cell.artifacts.map(renderArtifact) ++ cell.evictions.map(renderEvict)
+      cell.directs.map(renderDirect) ++ cell.artifacts.map(renderArtifact) ++ cell.evictions.filter(Eviction.printable).map(renderEvict)
     (header :: body.toList).mkString("\n")
 
   private def renderDirect(direct: LockedDirect): String =
