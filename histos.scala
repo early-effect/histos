@@ -34,5 +34,10 @@ object build extends HistosBuild:
         // zio-cli 0.8.2 still requests zio-process 0.7.1, whose lazy vals call Unsafe.
         dep"dev.zio::zio-process:0.8.1",
       )
-      .testDependencies(zioTest, zioTestSbt)
+      .testDependencies(
+        zioTest,
+        zioTestSbt,
+        dep"org.ow2.asm:asm:9.11.1",
+        dep"org.ow2.asm:asm-tree:9.11.1",
+      )
     Projects(api, central, engine, app)

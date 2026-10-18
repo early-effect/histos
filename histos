@@ -12,6 +12,8 @@ cache=${XDG_CACHE_HOME:-$HOME/.cache}
 
 if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
   jar=$HISTOS_ASSEMBLY
+elif [ -f "$root/dist/histos.jar" ]; then
+  jar=$root/dist/histos.jar
 else
   jar=$cache/histos/launchers/$version/histos.jar
 fi

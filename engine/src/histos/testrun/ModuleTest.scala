@@ -141,14 +141,16 @@ object ModuleTest:
                   case (Nil, Some(main), None)   => ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
                   case (Nil, None, Some(provider)) =>
                     ZIO.fail(ModuleTestError.MissingProvider(cell.module, provider))
-                  case (_, Some(main), None) => execute(repo, module, cell, sources, main, jdk, lock, repositories)
+                  case (_, Some(main), None) =>
+                    execute(repo, modules, module, cell, sources, main, jdk, lock, repositories)
                   case (_, None, provider) =>
-                    provide(repo, module, cell, sources, provider.getOrElse(TestProvider.Zio), jdk, lock, repositories)
+                    provide(repo, modules, module, cell, sources, provider.getOrElse(TestProvider.Zio), jdk, lock, repositories)
       case _ =>
         ZIO.fail(ModuleTestError.Absent(cell.module))
 
   private def execute(
       repo: Path,
+      modules: List[Module],
       module: Module,
       cell: CompiledCell,
       sources: List[Path],
@@ -161,7 +163,7 @@ object ModuleTest:
     val analysis = testAnalysis(repo, module.name, cell.version)
     for
       binary <- ZIO.fromEither(MainClass.from(main.value).left.map(ModuleTestError.Main(_)))
-      linked <- runtimeClasspath(repo, module, cell, lock, repositories)
+      linked <- runtimeClasspath(repo, modules, module, cell, lock, repositories)
       _ <- JvmCompile
         .compile(CompileRequest(
           CompileToolchain(cell.version, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -180,12 +182,14 @@ object ModuleTest:
           TestClasspath(classes, linked.paths),
           binary,
           work,
+          suiteEnv(repo),
         ))
         .mapError(error => ModuleTestError.Process(cell.module, cell.version, error))
     yield TestedCell(cell.module, cell.version, status(outcome))
 
   private def provide(
       repo: Path,
+      modules: List[Module],
       module: Module,
       cell: CompiledCell,
       sources: List[Path],
@@ -199,7 +203,7 @@ object ModuleTest:
     val runner = providerSource(repo, module.name, cell.version)
     for
       _ <- ZIO.unless(satisfied(module, provider))(ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider)))
-      linked <- runtimeClasspath(repo, module, cell, lock, repositories)
+      linked <- runtimeClasspath(repo, modules, module, cell, lock, repositories)
       _ <- writeRunner(runner, ProviderRunner.source(provider.framework.value, classes))
       _ <- JvmCompile
         .compile(CompileRequest(
@@ -219,6 +223,7 @@ object ModuleTest:
           TestClasspath(classes, linked.paths),
           ProviderRunner.Main,
           work,
+          suiteEnv(repo),
         ))
         .mapError(error => ModuleTestError.Process(cell.module, cell.version, error))
       tested <- outcome.exit.value match
@@ -249,6 +254,13 @@ object ModuleTest:
     if outcome.exit.value == 0 then TestStatus.Passed
     else TestStatus.Failed(outcome.exit.value, outcome.out.text, outcome.err.text)
 
+  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds a toolchain. */
+  private def suiteEnv(repo: Path): Map[String, String] =
+    val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
+    sys.env.get("PATH").filter(_.nonEmpty) match
+      case Some(path) => root + ("PATH" -> path)
+      case None       => root
+
   /** `<module>/test` wins. The repository `test` is only for a graph with one module. */
   private def testBase(repo: Path, module: Module, modules: List[Module]): IO[ModuleTestError, Option[Path]] =
     ZIO.attemptBlocking {
@@ -277,6 +289,7 @@ object ModuleTest:
 
   private def runtimeClasspath(
       repo: Path,
+      modules: List[Module],
       module: Module,
       cell: CompiledCell,
       lock: DependencyLock,
@@ -285,11 +298,34 @@ object ModuleTest:
     for
       fetched <- classpath(module, cell.version, lock, repositories).mapError(ModuleTestError.Lock(_))
       upstream <- upstreamClasses(repo, module, cell.version)
+      libraries <- dependencyJars(module, modules, cell.version, lock, repositories)
       library <- JvmCompile.runtime(cell.version).mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
-    yield Linked(
-      cell.classes :: (upstream ++ library ++ fetched.paths.filterNot(library.toSet.contains)),
-      fetched.hashes,
-    )
+      jars = (fetched.paths ++ libraries).distinct.filterNot(library.toSet.contains)
+    yield Linked(cell.classes :: (upstream ++ library ++ jars), fetched.hashes)
+
+  /** Compile jars of `dependsOn`, not their tests. The child runs those classes. */
+  private def dependencyJars(
+      module: Module,
+      modules: List[Module],
+      version: ScalaVersion,
+      lock: DependencyLock,
+      repositories: Repositories,
+  ): ZIO[Resolve, ModuleTestError, List[Path]] =
+    val byName = modules.map(item => item.name -> item).toMap
+    def grow(have: Set[ProjectName]): Set[ProjectName] =
+      val extra = have.flatMap(name => byName.get(name).toList.flatMap(_.dependsOn))
+      if extra.subsetOf(have) then have else grow(have ++ extra)
+    val found = grow(module.dependsOn.toSet).toList.flatMap(byName.get)
+    ZIO.foreach(found)(compileArtifacts(_, version, lock, repositories)).map(_.flatten.distinct)
+
+  private def compileArtifacts(
+      module: Module,
+      version: ScalaVersion,
+      lock: DependencyLock,
+      repositories: Repositories,
+  ): ZIO[Resolve, ModuleTestError, List[Path]] =
+    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories, ClasspathScope.Compile)
+    Resolve.materialize(cell, lock).mapBoth(ModuleTestError.Lock(_), _.artifacts.map(_.path))
 
   private def classpath(
       module: Module,

@@ -5,6 +5,8 @@ set "ROOT=%~dp0"
 set /p VERSION=<"%ROOT%.histos-version"
 if defined HISTOS_ASSEMBLY (
   set "JAR=%HISTOS_ASSEMBLY%"
+) else if exist "%ROOT%dist\histos.jar" (
+  set "JAR=%ROOT%dist\histos.jar"
 ) else (
   if defined XDG_CACHE_HOME (
     set "JAR=%XDG_CACHE_HOME%\histos\launchers\%VERSION%\histos.jar"

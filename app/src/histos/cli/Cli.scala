@@ -5,7 +5,7 @@ import histos.acp.Acp
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
-import histos.jdk.{Machine, Os, Settled, Startup, Toolchain, ToolchainError}
+import histos.jdk.{Machine, Os, Settled, Sha256, Startup, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
 import histos.native.{ClangProbe, NativeDeclaration, NativeProject}
 import histos.node.{Node, NodeToolchain}
@@ -20,7 +20,7 @@ import histos.testrun.{ModuleTest, ModuleTestError, TestStatus, TestedCell}
 import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError}
 import histos.{Aggregate, Module, Project}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.time.Instant
 
 import zio.*
@@ -145,13 +145,26 @@ object Cli:
             GraphCompile.jdkHere.either.flatMap:
               case Left(error) => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message))
               case Right(jdk) =>
-                Assemble
-                  .run(repo, loaded.graph, jdk, path)
-                  .mapBoth(
-                    error => Completed(CliExit.CompileFailed, "", error.message),
-                    assembled => Completed(CliExit.Success, relative(repo, assembled.path), ""),
-                  )
-                  .merge
+                Assemble.run(repo, loaded.graph, jdk, path).either.flatMap:
+                  case Left(error) => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message))
+                  case Right(assembled) =>
+                    pin(repo, assembled.path).foldZIO(
+                      message => ZIO.succeed(Completed(CliExit.CompileFailed, "", message)),
+                      _ => ZIO.succeed(Completed(CliExit.Success, relative(repo, assembled.path), "")),
+                    )
+
+  /** The launcher verifies this checksum of `dist/histos.jar`. Another destination is not that jar. */
+  private def pin(repo: Path, jar: Path): IO[String, Unit] =
+    val pinned = repo.resolve("dist").resolve("histos.jar").toAbsolutePath.normalize
+    if jar.toAbsolutePath.normalize != pinned then ZIO.unit
+    else
+      ZIO.attempt {
+        val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value
+        val dir = repo.resolve(".histos")
+        Files.createDirectories(dir)
+        Files.writeString(dir.resolve("assembly.sha256"), sha + "\n")
+        ()
+      }.mapError(_ => s"could not write ${repo.resolve(".histos").resolve("assembly.sha256")}")
 
   private def target(repo: Path, destination: Option[String]): Option[Path] =
     destination match

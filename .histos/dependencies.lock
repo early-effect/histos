@@ -269,12 +269,16 @@ direct dev.zio zio-cli 0.8.2 binary
 direct dev.zio zio-process 0.8.1 binary
 direct dev.zio zio-test 2.1.27 binary
 direct dev.zio zio-test-sbt 2.1.27 binary
+direct org.ow2.asm asm 9.11.1 java
+direct org.ow2.asm asm-tree 9.11.1 java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact rocks.earlyeffect heddle-mcp_3 0.12.0 3edbc4d3f62876cbb02c4ec3b0e9d58da5b3325b58b6b37282e6876f4dbca964 central
 artifact dev.zio zio-cli_3 0.8.2 fb139967afc793a5f21a022a5a026b2fb91dc1169066252570bb3ce7c3084e3f central
 artifact dev.zio zio-process_3 0.8.1 596fbe8a3732986f258f7bc42c5f05a8a007f3432fe279b28d5057fe32fabc66 central
 artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
 artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
+artifact org.ow2.asm asm 9.11.1 ae4e6e10d59d0a1500317764b21881ad883f8550e33c66e6142f7032c6fb566c central
+artifact org.ow2.asm asm-tree 9.11.1 2b15c3c1b288a9fad3bb2cd6d988ba9521554914ed1f2a2029141fa3f483154a central
 artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
 artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
 artifact org.scala-lang scala3-library_3 3.9.0 9343f9651453945fc6a9b75bb4fd230418ee28a1f88ea28ee429f3ebe0511aba central

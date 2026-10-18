@@ -6,6 +6,7 @@
 dist/
 target/
 .histos/toolchain.local
+.histos/assembly.sha256
 .histos/classes
 .histos/analysis
 .histos/test-classes

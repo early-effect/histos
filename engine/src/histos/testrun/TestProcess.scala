@@ -39,6 +39,7 @@ final case class TestRequest(
     classpath: TestClasspath,
     main: MainClass,
     work: Path,
+    environment: Map[String, String] = Map.empty,
 )
 
 final case class TestOutcome(exit: ProcessExit, out: ProcessOutput, err: ProcessOutput)
@@ -102,7 +103,7 @@ object TestProcess:
       |}
       |""".stripMargin
 
-  /** One subprocess for one main. The environment is empty. Interrupt kills the process group. */
+  /** One subprocess for one main. The environment is the request's map. Interrupt kills the process group. */
   def run(request: TestRequest): IO[TestError, TestOutcome] =
     if request.platform != Platform.Jvm then ZIO.fail(TestError.UnsupportedPlatform(request.platform))
     else
@@ -193,7 +194,9 @@ object TestProcess:
       )
       val builder = new ProcessBuilder(command.asJava)
       builder.directory(request.work.toFile)
-      builder.environment().clear()
+      val env = builder.environment()
+      env.clear()
+      request.environment.foreach((key, value) => env.put(key, value))
       builder.redirectOutput(request.work.resolve("stdout").toFile)
       builder.redirectError(request.work.resolve("stderr").toFile)
       builder.redirectInput(ProcessBuilder.Redirect.PIPE)

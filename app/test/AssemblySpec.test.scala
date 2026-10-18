@@ -1,7 +1,6 @@
 package histos.cli
 
 import histos.jdk.Toolchain
-import histos.pack.{Assembly, AssemblyError, MainClass}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -14,61 +13,39 @@ import zio.*
 import zio.test.*
 
 object AssemblySpec extends ZIOSpecDefault:
-  private val mainFile = Path.of("histos", "cli", "Main.class")
   private val utf8 = StandardCharsets.UTF_8
 
   private val checks = suite("runtime assembly")(
     test("the runtime jar prints the version"):
       ZIO.scoped:
-        for
-          classpath <- System.property("java.class.path")
-          home <- System.property("java.home")
-          verdict <- (classpath, home) match
-            case (Some(text), Some(value)) => run(text, Path.of(value, "bin", "java"))
-            case _                          => ZIO.succeed(assertTrue(classpath.isDefined && home.isDefined))
-        yield verdict
+        val found = rooted("dist/histos.jar").find(path => Files.isRegularFile(path))
+        found match
+          case None => ZIO.succeed(assertTrue(found.nonEmpty))
+          case Some(jar) =>
+            for
+              root <- temp
+              ran <- ZIO.attempt(exec(jar, root.resolve("work"), javaBin))
+              names <- ZIO.attempt(namesOf(jar))
+              manifest <- ZIO.attempt(manifestOf(jar))
+            yield
+              val lines = ran.output.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+              assertTrue(
+                ran.finished,
+                ran.code == 0,
+                lines == List(Cli.VersionText),
+                names.contains("histos/cli/Main.class"),
+                !names.exists(_.startsWith("scala/scalanative/")),
+                manifest.contains("Main-Class: histos.cli.Main"),
+              )
     ,
   )
 
-  private def run(classpath: String, javaBin: Path): ZIO[Scope, Throwable | AssemblyError, TestResult] =
-    val entries = split(classpath)
-    val withMain = entries.filter(path => Files.isDirectory(path) && Files.isRegularFile(path.resolve(mainFile)))
-    val mainOnly = withMain.filterNot(path => Files.isRegularFile(path.resolve("histos").resolve("cli").resolve("BootstrapSpec.class")))
-    val chosen = if mainOnly.nonEmpty then mainOnly else withMain
-    val jars = entries.filter(runtimeJar)
-    chosen match
-      case directory :: Nil =>
-        for
-          root <- temp
-          assembled <- Assembly.write(List(directory), jars, MainClass.trusted("histos.cli.Main"), root.resolve("histos.jar"))
-          ran <- ZIO.attempt(exec(assembled.path, root.resolve("work"), javaBin))
-          names <- ZIO.attempt(namesOf(assembled.path))
-          manifest <- ZIO.attempt(manifestOf(assembled.path))
-        yield
-          val lines = ran.output.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-          assertTrue(
-            ran.finished,
-            ran.code == 0,
-            lines == List(Cli.VersionText),
-            names.contains("histos/cli/Main.class"),
-            !names.exists(_.startsWith("scala/scalanative/")),
-            manifest.contains("Main-Class: histos.cli.Main"),
-          )
-      case other =>
-        ZIO.succeed(assertTrue(other.map(_.toString) == List("the classes directory that contains histos.cli.Main")))
+  private def rooted(name: String): List[Path] =
+    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+    root.toList.map(_.resolve(name)) ++ List(Path.of(name), Path.of("..").resolve(name))
 
-  private def runtimeJar(path: Path): Boolean =
-    Files.isRegularFile(path) && path.getFileName.toString.endsWith(".jar") && !excluded(path)
-
-  private def excluded(path: Path): Boolean =
-    val text = path.toString
-    text.contains("zio-test") ||
-      text.contains("test-interface") ||
-      text.contains("scala-native") ||
-      text.contains("org.scala-native")
-
-  private def split(classpath: String): List[Path] =
-    classpath.split(java.io.File.pathSeparator).toList.filter(_.nonEmpty).map(Path.of(_))
+  private def javaBin: Path =
+    Path.of(java.lang.System.getProperty("java.home")).resolve("bin").resolve("java")
 
   private def exec(jar: Path, work: Path, javaBin: Path): Ran =
     Files.createDirectories(work)
@@ -81,7 +58,9 @@ object AssemblySpec extends ZIOSpecDefault:
     val finished = process.waitFor(120, TimeUnit.SECONDS)
     if !finished then process.destroyForcibly()
     val output = if Files.isRegularFile(out) then Files.readString(out) else ""
-    Ran(finished, if finished then process.exitValue() else -1, output)
+    val err = work.resolve("err")
+    val errors = if Files.isRegularFile(err) then Files.readString(err) else ""
+    Ran(finished, if finished then process.exitValue() else -1, output + errors)
 
   private def namesOf(path: Path): Set[String] =
     val zip = new ZipFile(path.toFile)

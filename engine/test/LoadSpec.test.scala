@@ -11,10 +11,14 @@ import zio.test.*
 
 object LoadSpec extends ZIOSpecDefault:
   private val apiJar: IO[LoadError, Path] =
-    val candidates = List(Path.of("dist/histos-api.jar"), Path.of("../dist/histos-api.jar"))
+    val candidates = rooted("dist/histos-api.jar", "../dist/histos-api.jar")
     ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
       case Some(jar) => ZIO.succeed(jar)
       case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+
+  private def rooted(names: String*): List[Path] =
+    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+    root.toList.flatMap(base => names.map(base.resolve)) ++ names.map(Path.of(_))
 
   private def withRepo(source: String): ZIO[Scope, LoadError, Path] =
     for

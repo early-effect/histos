@@ -213,9 +213,9 @@ digest the action
 
 Sendable, for the first remote cache, means a core compile: a known runner, declared inputs, no build-file closure. Publish never leaves the machine. Custom closures run locally and are not uploaded. A plugin runner is sendable only when the plugin says it is hermetic.
 
-A test task runs as one subprocess for that project, Scala version, and platform. It does not run inside the server, and it does not fork once per test case. The process gets a fresh work directory, a scrubbed environment, and the declared classpath and inputs. Interruption kills the process group, so `System.exit` in a test cannot take Metals down.
+A test task runs as one subprocess for that project, Scala version, and platform. It does not run inside the server, and it does not fork once per test case. The process gets a fresh work directory, the declared classpath, and an environment that contains only `HISTOS_REPO` and `PATH`. `HISTOS_REPO` is the repository. `PATH` is how a test sees a toolchain. The jail that drops `PATH` arrives when a test is sendable. Interruption kills the process group, so `System.exit` in a test cannot take Metals down.
 
-`histos test` compiles the requested JVM modules, then runs one subprocess per Scala version. The default provider is `TestProvider.Zio`: the child loads `zio.test.sbt.ZTestFramework` from the module's test classpath, which must include `dev.zio::zio-test-sbt`. Another provider is `TestProvider(FrameworkClass("..."), organization, name)` for any sbt framework. `.test(TestMain("demo.Check"))` opts out and runs that main. A main and a provider together are refused. Upstream modules are compiled and are not run. A module with no test sources reports `no tests`. That is success, and it is not a passing suite. The engine does not load the provider, and the command does not re-resolve. The child's classpath puts that Scala version's standard library ahead of the locked jars, because the compiler linked against that library.
+`histos test` compiles the requested JVM modules, then runs one subprocess per Scala version. The default provider is `TestProvider.Zio`: the child loads `zio.test.sbt.ZTestFramework` from the module's test classpath, which must include `dev.zio::zio-test-sbt`. Another provider is `TestProvider(FrameworkClass("..."), organization, name)` for any sbt framework. `.test(TestMain("demo.Check"))` opts out and runs that main. A main and a provider together are refused. Upstream modules are compiled and are not run. A module with no test sources reports `no tests`. That is success, and it is not a passing suite. The engine does not load the provider, and the command does not re-resolve. The child classpath includes the libraries of `dependsOn`, because those classes run in the child. The child's classpath puts that Scala version's standard library ahead of the locked jars, because the compiler linked against that library.
 
 `Network` and `Docker` are declared needs. A task that declares either stays local and is not cacheable. The filesystem jail and the network jail are the same test action, added before any test is sendable. Until that jail exists, tests run locally in the subprocess and are not uploaded.
 
@@ -426,7 +426,7 @@ The native-image launcher from that review is withdrawn. The script is the launc
 
 ## 9. Building Histos
 
-Histos is built with scala-cli until it can build itself. This repository does not run CI until dogfood has a generated workflow. No sbt, and no sbt-zipx, on the Histos build.
+Histos builds Histos. `./histos` execs `dist/histos.jar` when that file is present, and `histos assembly` writes the checksum the script verifies. There is no scala-cli project in this repository. This repository does not run CI until dogfood has a generated workflow. No sbt, and no sbt-zipx, on the Histos build.
 
 ---
 
