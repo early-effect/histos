@@ -43,10 +43,10 @@ object SourceFilter:
 
   private def platform(name: String): Option[SourceFilter] =
     name match
-      case "jvm"    => Some(SourceFilter.PlatformDir(Platform.Jvm))
-      case "js"     => Some(SourceFilter.PlatformDir(Platform.Js))
-      case "native" => Some(SourceFilter.PlatformDir(Platform.Native))
-      case _        => None
+      case "jvm" | "scalajvm"         => Some(SourceFilter.PlatformDir(Platform.Jvm))
+      case "js" | "scalajs"           => Some(SourceFilter.PlatformDir(Platform.Js))
+      case "native" | "scalanative"   => Some(SourceFilter.PlatformDir(Platform.Native))
+      case _                          => None
 
   private def scalaDir(name: String): Option[SourceFilter] =
     val prefix = "scala-"
@@ -86,15 +86,20 @@ object Sources:
 
   /** Filters apply before the first package directory. `src` and `main` are layout, not packages. */
   private def allows(root: Path, path: Path, version: ScalaVersion, platform: Platform): Boolean =
-    prefix(root.relativize(path).iterator.asScala.map(_.toString).toList.dropRight(1))
-      .forall(filter => SourceFilter.allows(filter, version, platform))
+    prefix(root.relativize(path).iterator.asScala.map(_.toString).toList.dropRight(1)) match
+      case None          => false
+      case Some(filters) => filters.forall(filter => SourceFilter.allows(filter, version, platform))
 
   private val layout = Set("src", "main")
 
-  private def prefix(directories: List[String]): List[SourceFilter] =
+  /** `src/test` is the test tree. A package named `test` under `scala` is not, because `scala` already ended the layout. */
+  private val excluded = Set("test")
+
+  private def prefix(directories: List[String]): Option[List[SourceFilter]] =
     directories match
-      case Nil => Nil
+      case Nil => Some(Nil)
+      case name :: _ if excluded.contains(name) => None
       case name :: rest =>
         SourceFilter.parse(name) match
-          case Some(filter) => filter :: prefix(rest)
-          case None         => if layout.contains(name) then prefix(rest) else Nil
+          case Some(filter) => prefix(rest).map(filter :: _)
+          case None         => if layout.contains(name) then prefix(rest) else Some(Nil)

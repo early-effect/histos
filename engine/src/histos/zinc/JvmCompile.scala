@@ -12,6 +12,7 @@ import java.util.Optional
 import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
+import scala.util.control.NonFatal
 
 import sbt.internal.inc.{IncrementalCompilerImpl, Locate, MappedFileConverter, ScalaInstance, Stamps, ZincUtil}
 import sbt.util.Logger
@@ -104,6 +105,8 @@ enum CompileError:
   case Failed(diagnostics: List[CompileDiagnostic])
   case Toolchain(miss: ToolchainMiss)
   case Io(op: CompileIo)
+  case JsLibrary(miss: JsLibraryMiss)
+  case NativeLibrary(text: String)
 
   def message: String = this match
     case UnsupportedPlatform(platform) => s"compile does not support $platform"
@@ -114,6 +117,17 @@ enum CompileError:
     case Failed(diagnostics)           => diagnostics.map(_.text).mkString("\n")
     case Toolchain(miss)               => miss.message
     case Io(op)                        => s"compile failed while ${op.label}"
+    case JsLibrary(miss)               => miss.message
+    case NativeLibrary(text)           => text
+
+/** Why the Scala.js standard library did not arrive. The compiler's `-scalajs` backend needs it instead of `scala-library`. */
+enum JsLibraryMiss:
+  case Unavailable
+  case Empty
+
+  def message: String = this match
+    case Unavailable => "the Scala.js library could not be fetched"
+    case Empty       => "the Scala.js library resolve was empty"
 
 final case class ResolvedJdk(home: Path, version: JdkVersion)
 
@@ -233,12 +247,31 @@ object JvmCompile:
       case Some(ScalaSeries.Scala2(13)) => true
       case _                            => false
 
-  private def invoke(request: CompileRequest, extra: List[String], hear: String => Unit): IO[CompileError, CompileOutput] =
+  /** Compile with `stdlib` on the user classpath instead of the JVM standard library. The compiler loader is unchanged. */
+  private[histos] def compileWith(
+      request: CompileRequest,
+      stdlib: List[Path],
+      plugins: List[Path],
+      extra: List[String],
+      hear: String => Unit = _ => (),
+  ): IO[CompileError, CompileOutput] =
+    if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
+    else
+      ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned) *>
+        (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
+         else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg) ++ extra, hear, Some(stdlib)))
+
+  private def invoke(
+      request: CompileRequest,
+      extra: List[String],
+      hear: String => Unit,
+      stdlib: Option[List[Path]] = None,
+  ): IO[CompileError, CompileOutput] =
     val version = request.toolchain.version
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3) =>
         Scala3.jars(version).flatMap: toolchain =>
-          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear, stdlib)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
       case Some(ScalaSeries.Scala2(13)) =>
         invoke213(request, hear)
       case _ =>
@@ -253,6 +286,7 @@ object JvmCompile:
       extra: List[String],
       toolchain: Scala3.Toolchain,
       hear: String => Unit,
+      stdlib: Option[List[Path]],
   ): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader(getClass.getClassLoader)
     try
@@ -260,12 +294,17 @@ object JvmCompile:
         request,
         request.toolchain.version,
         toolchain.bridgeJar,
-        toolchain.runtime,
+        stdlib.getOrElse(toolchain.runtime),
         toolchain.compilerClasspath,
         loader,
         extra,
         hear,
       )
+    catch
+      case NonFatal(thrown) =>
+        val text = Option(thrown.getMessage).filter(_.nonEmpty).getOrElse(thrown.getClass.getName)
+        val trace = thrown.getStackTrace.take(8).mkString("\n")
+        Left(CompileError.Failed(List(CompileDiagnostic.fromCompiler(s"$text\n$trace"))))
     finally loader.close()
 
   private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain, hear: String => Unit): Either[CompileError, CompileOutput] =
@@ -358,7 +397,11 @@ object JvmCompile:
     if !Files.isDirectory(root) then 0
     else
       val walk = Files.walk(root)
-      try walk.iterator.asScala.count(path => Option(path.getFileName).exists(_.toString.endsWith(".class")))
+      try
+        walk.iterator.asScala.count: path =>
+          Option(path.getFileName).map(_.toString) match
+            case Some(name) => name.endsWith(".class") || name.endsWith(".sjsir") || name.endsWith(".nir")
+            case None       => false
       finally walk.close()
 
 private final class CollectingReporter(hear: String => Unit) extends xsbti.Reporter:

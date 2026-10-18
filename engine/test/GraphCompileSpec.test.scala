@@ -108,21 +108,35 @@ object GraphCompileSpec extends ZIOSpecDefault:
           out <- GraphCompile.run(root, built, List("app"), jdk).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
-            case Left(GraphCompileError.MissingUpstream(module, dependency, version)) =>
-              module.value == "app" && dependency.value == "core" && version.value == "3.9.0"
+            case Left(GraphCompileError.MissingUpstream(module, dependency, version, platform)) =>
+              module.value == "app" && dependency.value == "core" && version.value == "3.9.0" && platform == Jvm
             case _ => false
     ,
-    test("a module that is not JVM is refused"):
+    test("a js module compiles to sjsir, and its tests are not on that classpath"):
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(write(root, ".histos/dependencies.lock", "cell ui 3.9.0 js\n"))
+          _ <- ZIO.attempt {
+                 write(root, "ui/src/main/scala/Ui.scala", "object Ui:\n  def n: Int = 1\n")
+                 write(root, "ui/src/test/scala/UiTest.scala", "object UiTest:\n  def missing = notDefined\n")
+                 write(root, "ui/src/main/scalajvm/JvmOnly.scala", "object JvmOnly:\n  def n: Int = 1\n")
+                 write(root, ".histos/dependencies.lock", "cell ui 3.9.0 js\n")
+               }
           built <- ZIO.fromEither(Projects(module("ui", Js)(ScalaVersion("3.9.0")))).mapError(error => new IllegalStateException(error.message))
-          out <- GraphCompile.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier"))).either
-        yield assertTrue:
-          built.projects.collectFirst { case module: histos.Module => module.name } match
-            case Some(name) => out == Left(GraphCompileError.NoJvm(name))
-            case None       => false
+          out <- GraphCompile.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
+        yield
+          val files = out match
+            case cell :: Nil => entries(cell.classes)
+            case _           => Nil
+          assertTrue(
+            out match
+              case cell :: Nil => cell.platform == Js && cell.classFiles > 0
+              case _           => false
+            ,
+            files.exists(_.endsWith(".sjsir")),
+            !files.exists(_.contains("UiTest")),
+            !files.exists(_.contains("JvmOnly")),
+          )
     ,
   )
 

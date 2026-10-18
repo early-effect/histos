@@ -216,7 +216,7 @@ object Cli:
 
   private def compileReport(error: GraphCompileError): String =
     error match
-      case GraphCompileError.Failed(module, version, _) =>
+      case GraphCompileError.Failed(module, version, _, _) =>
         s"'${module.value}' ${version.value} failed to compile"
       case other => other.message
 
