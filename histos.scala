@@ -15,6 +15,7 @@ object build extends HistosBuild:
       .dependsOn(central, api)
       .libraryDependencies(
         zio,
+        dep"dev.zio::zio-streams:2.1.27",
         dep"org.scala-lang::scala3-compiler:3.10.0",
         dep"org.scala-sbt::zinc:2.0.4",
         // Zinc 2.0.4 still requests jars whose lazy vals call Unsafe.

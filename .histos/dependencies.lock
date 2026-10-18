@@ -49,6 +49,7 @@ evict org.scala-lang scala-library 2.13.4 2.13.18
 evict org.scala-lang scala3-library_3 3.3.6 3.3.8
 cell engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
+direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
 direct org.scala-sbt zinc 2.0.4 binary
 direct org.scala-sbt sbinary 0.6.0 binary
@@ -57,6 +58,7 @@ direct io.get-coursier coursier 2.1.26 binary
 direct org.ow2.asm asm 9.11.1 java
 direct org.ow2.asm asm-tree 9.11.1 java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-sbt zinc_3 2.0.4 83ef81980ff8ab819d2367b1cb23ee8df0cc2e6f4fe76b8f9cd42e70eac05bfd central
 artifact org.scala-sbt sbinary_3 0.6.0 6c7e65a95d8dc2680687397fdd0e72c5c8e4a36ae257d5ed604fe71616d718b7 central
@@ -138,6 +140,7 @@ evict org.scala-sbt sbinary_3 0.5.1 0.6.0
 evict org.scala-sbt util-interface 1.11.5 2.0.0
 test engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
+direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
 direct org.scala-sbt zinc 2.0.4 binary
 direct org.scala-sbt sbinary 0.6.0 binary
@@ -148,6 +151,7 @@ direct org.ow2.asm asm-tree 9.11.1 java
 direct dev.zio zio-test 2.1.27 binary
 direct dev.zio zio-test-sbt 2.1.27 binary
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-sbt zinc_3 2.0.4 83ef81980ff8ab819d2367b1cb23ee8df0cc2e6f4fe76b8f9cd42e70eac05bfd central
 artifact org.scala-sbt sbinary_3 0.6.0 6c7e65a95d8dc2680687397fdd0e72c5c8e4a36ae257d5ed604fe71616d718b7 central
@@ -176,7 +180,6 @@ artifact io.get-coursier dependency_3 0.3.3 254e37584fd757f3f5636d2b3d3e9fad7b99
 artifact com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.0 2ba3d5ecf2e9bc2235ed7b703228358fe43f93272632c0ebf86b31f983908e5b central
 artifact io.get-coursier coursier-core_3 2.1.26 5aaf3f716e31146aa82d531bae7c52c56fa9cf6ee38063c4b7f296172d629161 central
 artifact io.get-coursier coursier-cache_3 2.1.26 37b78094ff5456285963c6618440cf6bd3fd0ce8affcf084c2b312a3eb5076d7 central
-artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
 artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
 artifact org.scala-lang scala-library 3.10.0 b47befb29e02bbc08a10bbd387b35cf80ff9bf04fda8fdf3dda6c8ad6895f325 central

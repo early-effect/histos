@@ -4,12 +4,14 @@ import histos.Platform
 import histos.jdk.Toolchain
 import histos.pack.MainClass
 
+import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
+import zio.stream.{ZPipeline, ZStream}
 
 /** The status the operating system reported. Zero and non-zero are both statuses. */
 opaque type ProcessExit = Int
@@ -43,6 +45,12 @@ final case class TestRequest(
 )
 
 final case class TestOutcome(exit: ProcessExit, out: ProcessOutput, err: ProcessOutput)
+
+/** One line from a test process, then its status. The lines arrive as the process writes them. */
+enum TestEvent:
+  case Out(text: String)
+  case Err(text: String)
+  case Exited(code: ProcessExit)
 
 enum GroupOp:
   case Lookup, Call, Set, Pid
@@ -103,25 +111,58 @@ object TestProcess:
       |}
       |""".stripMargin
 
-  /** One subprocess for one main. The environment is the request's map. Interrupt kills the process group. */
-  def run(request: TestRequest): IO[TestError, TestOutcome] =
-    if request.platform != Platform.Jvm then ZIO.fail(TestError.UnsupportedPlatform(request.platform))
+  /**
+   * One subprocess for one main. Stdout and stderr are lines, merged so neither pipe fills up.
+   * The environment is the request's map. Interrupt kills the process group.
+   */
+  def events(request: TestRequest): ZStream[Any, TestError, TestEvent] =
+    if request.platform != Platform.Jvm then ZStream.fail(TestError.UnsupportedPlatform(request.platform))
     else
-      for
-        _       <- require(request)
-        compiler <- ZIO.fromEither(javac(request.java))
-        entry    <- bootstrap(request.work, compiler)
-        process <- start(request, entry)
-        outcome <- body(request, process).ensuring(stop(process))
-      yield outcome
+      ZStream.unwrapScoped {
+        for
+          _        <- require(request)
+          compiler <- ZIO.fromEither(javac(request.java))
+          entry    <- bootstrap(request.work, compiler)
+          process  <- start(request, entry)
+          _        <- ZIO.addFinalizer(stop(process))
+        yield console(process) ++ ZStream.fromZIO(finish(request, process).map(TestEvent.Exited(_)))
+      }
 
-  private def body(request: TestRequest, process: Process): IO[TestError, TestOutcome] =
+  /** Collect [[events]] for a caller that wants the text after the process ends. */
+  def run(request: TestRequest): IO[TestError, TestOutcome] =
+    events(request).runFold(Captured("", "", None))(capture).flatMap: captured =>
+      captured.exit match
+        case Some(code) => ZIO.succeed(TestOutcome(code, ProcessOutput.from(captured.out), ProcessOutput.from(captured.err)))
+        case None       => ZIO.fail(TestError.Io(TestIo.Wait))
+
+  private final case class Captured(out: String, err: String, exit: Option[ProcessExit])
+
+  private def capture(have: Captured, event: TestEvent): Captured =
+    event match
+      case TestEvent.Out(text)     => have.copy(out = join(have.out, text))
+      case TestEvent.Err(text)     => have.copy(err = join(have.err, text))
+      case TestEvent.Exited(code)  => have.copy(exit = Some(code))
+
+  private def join(have: String, line: String): String =
+    s"$have$line\n"
+
+  /** `HaltStrategy.Both`: one pipe ending does not cancel the other. A failure does. */
+  private def console(process: Process): ZStream[Any, TestError, TestEvent] =
+    text(process.getInputStream).map(TestEvent.Out(_))
+      .merge(text(process.getErrorStream).map(TestEvent.Err(_)))
+
+  private def text(input: InputStream): ZStream[Any, TestError, String] =
+    ZStream
+      .fromInputStream(input, 4096)
+      .via(ZPipeline.utf8Decode)
+      .mapError(_ => TestError.Io(TestIo.Read))
+      .via(ZPipeline.splitLines)
+
+  private def finish(request: TestRequest, process: Process): IO[TestError, ProcessExit] =
     for
       code <- wait(process)
       _    <- grouped(request.work)
-      out  <- read(request.work.resolve("stdout"))
-      err  <- read(request.work.resolve("stderr"))
-    yield TestOutcome(code, out, err)
+    yield code
 
   private def require(request: TestRequest): IO[TestError, Unit] =
     for
@@ -197,8 +238,6 @@ object TestProcess:
       val env = builder.environment()
       env.clear()
       request.environment.foreach((key, value) => env.put(key, value))
-      builder.redirectOutput(request.work.resolve("stdout").toFile)
-      builder.redirectError(request.work.resolve("stderr").toFile)
       builder.redirectInput(ProcessBuilder.Redirect.PIPE)
       builder.start()
     }.mapError(_ => TestError.Io(TestIo.Spawn))
