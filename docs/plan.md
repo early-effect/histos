@@ -57,7 +57,7 @@ trait Tasks:
 
 Phase 0 `run` executes `Inspect`. Any other id is `TaskError.NoRunner`. `cancel` drops a fiber from a `Ref` registry. A test installs a slow task and cancels it. No compile task is pretended.
 
-MCP tools are `graph`, `run`, and `cancel`. They call `Loader` and `Tasks`. The handler has no build logic. `./histos mcp` is the process the client owns. It is not a daemon. `./histos server` and BSP wait for the BSP layer.
+MCP tools are `graph`, `run`, and `cancel`. They call `Loader` and `Tasks`. The handler has no build logic. `./histos mcp` is the process the client owns. It is not a daemon.
 
 ## Stacks
 
@@ -138,7 +138,7 @@ Stack D, after this repo builds itself:
 
 25. `histos/bsp`: BSP 2.2 over stdio for Metals. `./histos bsp` speaks `Content-Length` frames and answers `build/initialize`, `workspace/buildTargets`, `buildTarget/sources`, `buildTarget/scalacOptions`, and `buildTarget/compile`, then `build/shutdown` and `build/exit`. `.bsp/histos.json` names that command. One JVM target per module and Scala version. Js and Native are omitted. Compile names that cell, not the module's other versions. A missing lock is a protocol error. Compile failure is status 2. The server does not advertise test or run, and it does not publish diagnostics. Depends on: compile.
     Verify: `./histos test app` against a BSP client fixture.
-26. `histos/server`: `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: layer 25, so Metals and the batch command share Zinc.
+26. `histos/server`: `./histos server` is the opt-in daemon. `compile`, `test`, and `bsp` attach when the Histos version and the fingerprint of `histos.scala` plus the dependency lock match. A missing server, a dead socket, or a stale record runs in-process. Depends on: layer 25, so Metals and the batch command share one process and the on-disk analysis. Zinc 2.0.4's compiler cache is a fresh compiler on every compile.
     Verify: `./histos test app` attaches a second command to a running server and misses a stale fingerprint.
 27. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
     Verify: `./histos test app`

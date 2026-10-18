@@ -9,7 +9,7 @@ import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Option
 /** zio-cli grammar. The wire value still has the raw task token. [[parse]] turns that token into a [[TaskId]]. */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Acp, Bsp, CachePath, CacheList, Toolchain
+    case Version, Graph, Mcp, Acp, Bsp, Server, CachePath, CacheList, Toolchain
     case Run(id: String)
     case Test(projects: List[String])
     case Compile(projects: List[String])
@@ -33,6 +33,7 @@ object Grammar:
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
   private val acp       = CliCommand("acp").map(_ => Wire.Acp)
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
+  private val server    = CliCommand("server").map(_ => Wire.Server)
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
   private val path      = CliCommand("path").map(_ => Wire.CachePath)
   private val list      = CliCommand("list").map(_ => Wire.CacheList)
@@ -48,7 +49,7 @@ object Grammar:
     }
   private val root      =
     CliCommand("histos").subcommands(
-      version | graph | run | test | compile | assembly | publish | mcp | acp | bsp | toolchain | cache | resolve | workflow,
+      version | graph | run | test | compile | assembly | publish | mcp | acp | bsp | server | toolchain | cache | resolve | workflow,
     )
 
   def parse(args: List[String]): IO[CliParseError, Command] =
@@ -64,6 +65,7 @@ object Grammar:
       case Wire.Mcp                => ZIO.succeed(Command.Mcp)
       case Wire.Acp                => ZIO.succeed(Command.Acp)
       case Wire.Bsp                => ZIO.succeed(Command.Bsp)
+      case Wire.Server            => ZIO.succeed(Command.Server)
       case Wire.CachePath          => ZIO.succeed(Command.CachePath)
       case Wire.CacheList          => ZIO.succeed(Command.CacheList)
       case Wire.Toolchain          => ZIO.succeed(Command.Toolchain)

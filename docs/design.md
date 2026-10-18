@@ -46,7 +46,7 @@ The name comes from Ancient Greek ἱστός (*histós*): loom, mast, warp, web
 3. **Resource-safe execution.** File I/O, processes, and network calls are ZIO. Interruption cleans up. Partial outputs are not cached.
 4. **Declared inputs.** Cache keys are content hashes of the inputs a task declares, plus the resolved toolchain. A task that does not declare an input does not get to upload an output.
 5. **The build describes CI.** The workflow file is a render of the graph. Drift between the file and the graph fails the build.
-6. **One-shot by default.** `./histos test` runs in-process and exits. A long-lived server exists for BSP and MCP.
+6. **One-shot by default.** `./histos test` runs in-process and exits. `./histos server` is opt-in. `compile`, `test`, and `bsp` attach to it. MCP stays the process its client owns.
 
 ## 5. Architecture
 
@@ -233,7 +233,7 @@ Cache keys include source contents, the sha256 of each resolved artifact in clas
 
 `./histos mcp` and `./histos bsp` are the processes their clients own over stdio. Neither is a daemon. Metals starts `./histos bsp` from `.bsp/histos.json`. Messages are `Content-Length` frames, the language-server base protocol, not newline JSON. The session compiles one JVM cell at a time, lists sources, and reports scalac options. It does not advertise test or run, and it does not publish diagnostics.
 
-A later layer adds `./histos server`. When that server is already running for this repo, and the build fingerprint and Histos version match, a batch command attaches so Zinc is shared with Metals. Until that layer, every batch command runs in-process. A missing or stale server falls back to batch.
+`./histos server` is the opt-in daemon. It listens on a Unix socket and writes `.histos/server.json` with the Histos version and a fingerprint of `histos.scala` and the dependency lock. `compile`, `test`, and `bsp` attach when that record matches. A missing server, a dead socket, a different version, or a different fingerprint runs the command in-process. Zinc 2.0.4 builds a fresh compiler for every compile, so the daemon shares the process and the on-disk analysis. It is the compiler Metals and the batch command both use.
 
 The entry point is the frozen script, not a native image. It downloads the pinned JVM assembly, verifies the checksum, and execs it. When no `java` is on `PATH`, the script fetches the locked JDK first. The engine then applies the toolchain policy and re-execs onto the chosen JDK. Scala Native is not the launcher. It is the toolchain for a project that targets Native.
 
@@ -241,8 +241,8 @@ The entry point is the frozen script, not a native image. It downloads the pinne
 
 | Surface | Role | Transport |
 |---------|------|-----------|
-| **CLI** | One-shot commands. Until the shared server exists, every command runs in-process. | Local process |
-| **BSP** | Metals launches `./histos bsp` from `.bsp/histos.json`. Frames are `Content-Length`. The server compiles one JVM cell, lists sources, and reports scalac options. It does not advertise test or run. | Build Server Protocol |
+| **CLI** | `compile`, `test`, and `bsp` attach to a matching server. The other commands, including `publish`, run in-process. | Local process |
+| **BSP** | Metals launches `./histos bsp`. A matching server compiles. Otherwise the command runs in-process. Frames are `Content-Length`. It does not advertise test or run. | Build Server Protocol |
 | **MCP** | Agents. Tools are the graph, run, cancel, and toolchain. | MCP over stdio |
 | **ACP** | Handshake, then the same capabilities. | Agent Client Protocol |
 
