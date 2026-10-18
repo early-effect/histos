@@ -6,7 +6,7 @@ import histos.task.TaskKind
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 
-import zio.{IO, UIO, ZIO}
+import zio.{Chunk, IO, UIO, ZIO}
 
 /** A cache-key name. Empty is not a name. */
 opaque type InputName = String
@@ -69,6 +69,9 @@ object Digest:
 
   def from(raw: String): Option[Digest] =
     if raw.length == 64 && raw.forall(isHex) then Some(raw) else None
+
+  def ofBytes(bytes: Chunk[Byte]): Digest =
+    Sha256.of(bytes).value
 
   def of(action: Action, dependencyDigests: Map[ActionId, Digest]): Digest =
     val inputs = action.inputs.sortBy(_.name.value).map(input => s"${input.name.value}=${input.value.canonical}").mkString("\n")
