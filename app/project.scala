@@ -6,9 +6,15 @@
 //> using dep dev.zio::zio:2.1.27
 //> using dep org.scala-lang::scala3-compiler:3.10.0
 //> using dep org.scala-sbt::zinc:2.0.4
+// Zinc 2.0.4 and zio-cli 0.8.2 still request jars whose lazy vals call Unsafe.
+//> using dep org.scala-sbt::sbinary:0.6.0
+//> using dep org.scala-lang.modules::scala-parser-combinators:2.5.0
 //> using dep io.get-coursier::coursier:2.1.26
+//> using dep org.ow2.asm:asm:9.11.1
+//> using dep org.ow2.asm:asm-tree:9.11.1
 //> using dep rocks.earlyeffect::heddle-mcp:0.12.0
 //> using dep dev.zio::zio-cli:0.8.2
+//> using dep dev.zio::zio-process:0.8.1
 //> using test.dep dev.zio::zio-test:2.1.27
 //> using test.dep dev.zio::zio-test-sbt:2.1.27
 //> using test.framework zio.test.sbt.ZTestFramework

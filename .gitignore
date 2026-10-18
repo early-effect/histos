@@ -6,4 +6,12 @@
 dist/
 target/
 .histos/toolchain.local
+.histos/classes
+.histos/analysis
+.histos/test-classes
+.histos/test-analysis
+.histos/test-work
+.histos/provider-src
+.histos/jars
 *.class
+*.semanticdb

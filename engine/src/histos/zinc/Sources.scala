@@ -31,7 +31,7 @@ object ScalaSeries:
     else if name.startsWith(prefix) then name.drop(prefix.length).toIntOption.map(ScalaSeries.Scala2(_))
     else None
 
-/** A directory name that filters sources. Anything else is shared. */
+/** A directory name that filters sources. A package directory with the same name does not. */
 enum SourceFilter:
   case PlatformDir(platform: Platform)
   case SeriesDir(series: ScalaSeries)
@@ -84,8 +84,17 @@ object Sources:
       case Some(name) if name.endsWith(".java")  => platform == Platform.Jvm
       case _                                      => false
 
+  /** Filters apply before the first package directory. `src` and `main` are layout, not packages. */
   private def allows(root: Path, path: Path, version: ScalaVersion, platform: Platform): Boolean =
-    root.relativize(path).iterator.asScala.map(_.toString).forall: name =>
-      SourceFilter.parse(name) match
-        case None         => true
-        case Some(filter) => SourceFilter.allows(filter, version, platform)
+    prefix(root.relativize(path).iterator.asScala.map(_.toString).toList.dropRight(1))
+      .forall(filter => SourceFilter.allows(filter, version, platform))
+
+  private val layout = Set("src", "main")
+
+  private def prefix(directories: List[String]): List[SourceFilter] =
+    directories match
+      case Nil => Nil
+      case name :: rest =>
+        SourceFilter.parse(name) match
+          case Some(filter) => filter :: prefix(rest)
+          case None         => if layout.contains(name) then prefix(rest) else Nil

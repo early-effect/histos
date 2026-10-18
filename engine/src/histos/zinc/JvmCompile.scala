@@ -187,17 +187,17 @@ object JvmCompile:
       else None
     }.mapError(_ => CompileError.Io(CompileIo.Read))
 
+  /** A classes directory is a `dependsOn` output. It may contain the build trait. A compiler jar is a declared library. */
   private def directoryBan(path: Path): Option[ClasspathBan] =
     ClassMarker.userBans.collectFirst:
-      case marker if Files.isRegularFile(marker.under(path)) => marker.classpathBan
+      case marker if marker != ClassMarker.HistosBuild && Files.isRegularFile(marker.under(path)) => marker.classpathBan
     .flatten
 
+  /** The packaged build API is not a module dependency. `histos.scala` is compiled against it on its own. */
   private def jarBan(path: Path): Option[ClasspathBan] =
     val zip = new ZipFile(path.toFile)
     try
-      ClassMarker.userBans.collectFirst:
-        case marker if marker.present(zip) => marker.classpathBan
-      .flatten
+      if ClassMarker.HistosBuild.present(zip) then Some(ClasspathBan.Histos) else None
     finally zip.close()
 
   private def hashSources(sources: List[Path]): IO[CompileError, Sha256] =
@@ -207,6 +207,13 @@ object JvmCompile:
         Chunk.fromArray(path.toString.getBytes(StandardCharsets.UTF_8)) ++ Chunk.single(0.toByte) ++ Chunk.fromArray(body)
       }.mapError(_ => CompileError.Io(CompileIo.Read))
     .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
+
+  /** The standard library the compiler linked against. A test run puts it ahead of locked jars. */
+  private[histos] def runtime(version: ScalaVersion): IO[CompileError, List[Path]] =
+    ScalaSeries.of(version) match
+      case Some(ScalaSeries.Scala3)     => Scala3.jars(version).map(_.runtime)
+      case Some(ScalaSeries.Scala2(13)) => Scala213.jars(version).map(jars => List(jars.library))
+      case _                            => ZIO.fail(CompileError.UnsupportedScala(version))
 
   /** Scala 3, any patch. Scala 2.13, any patch. Nothing older. */
   private def supported(version: ScalaVersion): Boolean =

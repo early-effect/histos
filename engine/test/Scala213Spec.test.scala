@@ -57,6 +57,60 @@ object Scala213Spec extends ZIOSpecDefault:
             "src/main/scala/Shared.scala",
           ),
         )
+    ,
+    test("a package named native is shared, and src/main filters still apply"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- ZIO.attempt(write(root, "histos/native/Bridge.scala", only("Bridge")))
+          _ <- ZIO.attempt(write(root, "src/histos/native/Nested.scala", only("Nested")))
+          _ <- ZIO.attempt(write(root, "native/OnlyNative.scala", only("OnlyNative")))
+          _ <- ZIO.attempt(write(root, "main/scala-2.13/FromMain.scala", only("FromMain")))
+          _ <- ZIO.attempt(write(root, "src/main/scala/Shared.scala", shared))
+          _ <- ZIO.attempt(write(root, "src/main/scala-2.13/Only213.scala", only("Only213")))
+          _ <- ZIO.attempt(write(root, "src/main/scala-3/Only3.scala", "enum Only3 { case A }\n"))
+          _ <- ZIO.attempt(write(root, "src/main/jvm/OnJvm.scala", only("OnJvm")))
+          _ <- ZIO.attempt(write(root, "src/main/js/OnJs.scala", only("OnJs")))
+          for213 <- Sources.select(root, v213, Platform.Jvm)
+          for3 <- Sources.select(root, v390, Platform.Jvm)
+          forNative <- Sources.select(root, v390, Platform.Native)
+          forJs <- Sources.select(root, v213, Platform.Js)
+          names213 = for213.map(root.relativize(_).toString)
+          names3 = for3.map(root.relativize(_).toString)
+          namesNative = forNative.map(root.relativize(_).toString)
+          namesJs = forJs.map(root.relativize(_).toString)
+        yield assertTrue(
+          names213 == List(
+            "histos/native/Bridge.scala",
+            "main/scala-2.13/FromMain.scala",
+            "src/histos/native/Nested.scala",
+            "src/main/jvm/OnJvm.scala",
+            "src/main/scala-2.13/Only213.scala",
+            "src/main/scala/Shared.scala",
+          ),
+          names3 == List(
+            "histos/native/Bridge.scala",
+            "src/histos/native/Nested.scala",
+            "src/main/jvm/OnJvm.scala",
+            "src/main/scala-3/Only3.scala",
+            "src/main/scala/Shared.scala",
+          ),
+          namesNative == List(
+            "histos/native/Bridge.scala",
+            "native/OnlyNative.scala",
+            "src/histos/native/Nested.scala",
+            "src/main/scala-3/Only3.scala",
+            "src/main/scala/Shared.scala",
+          ),
+          namesJs == List(
+            "histos/native/Bridge.scala",
+            "main/scala-2.13/FromMain.scala",
+            "src/histos/native/Nested.scala",
+            "src/main/js/OnJs.scala",
+            "src/main/scala-2.13/Only213.scala",
+            "src/main/scala/Shared.scala",
+          ),
+        )
   )
 
   private val compile = suite("scala 2.13.16")(
@@ -106,7 +160,7 @@ object Scala213Spec extends ZIOSpecDefault:
           ran.map(_.map(_.out.text)) == Some(Right("1\nhi\n")),
         )
     ,
-    test("the Scala 2 compiler is not a user dependency"):
+    test("a declared Scala 2 compiler is a library"):
       ZIO.scoped:
         for
           root <- temp
@@ -121,7 +175,7 @@ object Scala213Spec extends ZIOSpecDefault:
                    root.resolve("analysis"),
                    Nil,
                  )).either
-        yield assertTrue(out == Left(CompileError.Banned(compiler, ClasspathBan.Scala2Compiler)))
+        yield assertTrue(out == Left(CompileError.NoSources))
     ,
     test("the engine classpath cannot see the Scala 2 compiler"):
       val loader = getClass.getClassLoader

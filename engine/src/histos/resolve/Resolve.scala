@@ -120,6 +120,14 @@ final case class ResolvedArtifact(
 
 final case class Eviction(organization: String, name: String, requested: String, selected: String)
 
+object Eviction:
+  /** The lock is whitespace-separated. An empty or spaced field cannot be read back. */
+  def printable(eviction: Eviction): Boolean =
+    List(eviction.organization, eviction.name, eviction.requested, eviction.selected).forall(token)
+
+  private def token(value: String): Boolean =
+    value.nonEmpty && !value.exists(_.isWhitespace)
+
 final case class Classpath(artifacts: List[ResolvedArtifact], evictions: List[Eviction])
 
 enum RepositoryIo:
