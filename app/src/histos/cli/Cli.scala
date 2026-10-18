@@ -2,6 +2,7 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.acp.Acp
+import histos.bsp.{Bsp, Frame}
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
@@ -17,7 +18,7 @@ import histos.workflow.{Workflow, WorkflowAction}
 import histos.central.Publisher
 import histos.publish.LocalPublish
 import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestStatus, TestedCell}
-import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
 import histos.{Aggregate, Module, Project}
 
 import java.nio.file.{Files, Path}
@@ -35,6 +36,7 @@ enum Command:
   case Publish(repository: String, projects: List[String])
   case Mcp
   case Acp
+  case Bsp
   case Toolchain
   case CachePath
   case CacheList
@@ -80,7 +82,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | bsp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -99,6 +101,7 @@ object Cli:
           case Command.Publish(repository, projects) => publish(repo, apiJar, repository, projects)
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
+          case Command.Bsp              => bsp(repo, apiJar)
           case Command.Toolchain        => toolchain(repo, apiJar)
           case Command.CachePath        => cachePath
           case Command.CacheList        => cacheList
@@ -130,10 +133,14 @@ object Cli:
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
-        GraphCompile.jdkHere.flatMap(jdk => GraphCompile.run(repo, loaded.graph, projects, jdk)).mapBoth(
-          error => Completed(CliExit.CompileFailed, "", error.message),
-          cells => Completed(CliExit.Success, cells.map(cell => compiledLine(repo, cell)).mkString("\n"), ""),
-        ).merge
+        GraphCompile.jdkHere.foldZIO(
+          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+          jdk =>
+            GraphCompile.console(repo, loaded.graph, projects, jdk).foreach(showCompile(repo, _)).foldZIO(
+              error => ZIO.succeed(Completed(CliExit.CompileFailed, "", compileReport(error))),
+              _ => ZIO.succeed(Completed(CliExit.Success, "", "")),
+            ),
+        )
 
   private def assembly(repo: Path, apiJar: Path, destination: Option[String]): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
@@ -180,6 +187,18 @@ object Cli:
     val full = path.toAbsolutePath.normalize
     (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
 
+  /** Diagnostics are already on the console. A compile failure keeps the one-line summary here. */
+  private def compileReport(error: GraphCompileError): String =
+    error match
+      case GraphCompileError.Failed(module, version, _) =>
+        s"'${module.value}' ${version.value} failed to compile"
+      case other => other.message
+
+  private def showCompile(repo: Path, feed: CompileFeed): UIO[Unit] =
+    feed match
+      case CompileFeed.Diagnostic(text) => sayError(text)
+      case CompileFeed.Done(cell)       => say(compiledLine(repo, cell))
+
   /** `<module> <scala> jvm <class files> <classes dir>`. The directory is the classpath root, relative to the repo. */
   private def compiledLine(repo: Path, cell: CompiledCell): String =
     val base = repo.toAbsolutePath.normalize
@@ -223,7 +242,14 @@ object Cli:
           val ran =
             for
               jdk <- GraphCompile.jdkHere.mapError(ModuleTestError.Compile(_))
-              _ <- ModuleTest.console(repo, loaded.graph, projects, jdk).foreach {
+              cells <- GraphCompile.console(repo, loaded.graph, projects, jdk).mapError(ModuleTestError.Compile(_)).mapZIO { feed =>
+                         showCompile(repo, feed).as {
+                           feed match
+                             case CompileFeed.Done(cell) => Some(cell)
+                             case CompileFeed.Diagnostic(_) => None
+                         }
+                       }.collectSome.runCollect
+              _ <- ModuleTest.suites(repo, loaded.graph, projects, jdk, cells.toList).foreach {
                      case TestFeed.Begin(module, version) => say(s"${module.value} ${version.value} jvm")
                      case TestFeed.Out(text)              => say(text)
                      case TestFeed.Err(text)              => sayError(text)
@@ -351,6 +377,34 @@ object Cli:
       err => Completed(CliExit.LoadFailed, "", err.message),
       _ => Completed(CliExit.Success, "", ""),
     )
+
+  private def bsp(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
+      error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+      loaded =>
+        GraphCompile.jdkHere.foldZIO(
+          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+          jdk =>
+            Bsp.open(repo, loaded.graph, jdk).flatMap: session =>
+              speak(session).foldZIO(
+                error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+                code => ZIO.succeed(Completed(if code == 0 then CliExit.Success else CliExit.TaskFailed, "", "")),
+              ),
+        ),
+    )
+
+  private def speak(session: Bsp.Session): ZIO[Resolve, Frame.FrameError, Int] =
+    val input = java.lang.System.in
+    val output = java.lang.System.out
+    def loop: ZIO[Resolve, Frame.FrameError, Int] =
+      Frame.read(input).flatMap:
+        case None => ZIO.succeed(1)
+        case Some(payload) =>
+          session.answer(payload).flatMap:
+            case Bsp.Answer.Reply(text) => Frame.write(output, text) *> loop
+            case Bsp.Answer.Quiet       => loop
+            case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
+    loop
 
   private def acp: UIO[Completed] =
     def loop: UIO[Completed] =

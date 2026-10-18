@@ -24,7 +24,7 @@ app/      CLI, MCP, ACP. One ZIOApp.
 
 Tests are ZIO Test (`zio-test` and `zio-test-sbt` as test deps, framework `zio.test.sbt.ZTestFramework`). The api jar does not depend on ZIO. Verify with `./histos test`. There is no sbt, so `testFull` does not apply. No CI cost until dogfood: each layer is proven locally. Do not add required checks before a workflow exists, or the stack cannot merge.
 
-Packages: `histos.*` is the DSL. Engine code is `histos.load`, `histos.task`, and later `histos.cache`, `histos.zinc`, `histos.resolve`, `histos.native`. App code is `histos.cli`, `histos.mcp`, `histos.acp`.
+Packages: `histos.*` is the DSL. Engine code is `histos.load`, `histos.task`, and later `histos.cache`, `histos.zinc`, `histos.resolve`, `histos.native`. App code is `histos.cli`, `histos.mcp`, `histos.acp`, and `histos.bsp`.
 
 Errors are enums. `BuildError` (pure graph), `LoadError` (compiler and IO), `TaskError` (run and cancel), `ResolveError` (resolution and the dependency lock). No `Either[String, _]`, no `throw`, no partial accessors, no `asInstanceOf`.
 
@@ -136,12 +136,14 @@ Self-build comes before stack D. A published local assembly has to compile, test
 
 Stack D, after this repo builds itself:
 
-25. `histos/bsp`: BSP server for Metals on the same task API. `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: compile and test.
-    Verify: `scala-cli test app` against a BSP client fixture.
-26. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
-    Verify: `scala-cli test app`
-27. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
-    Verify: `scala-cli test engine` against an in-process fake cache. No real remote service.
+25. `histos/bsp`: BSP 2.2 over stdio for Metals. `./histos bsp` speaks `Content-Length` frames and answers `build/initialize`, `workspace/buildTargets`, `buildTarget/sources`, `buildTarget/scalacOptions`, and `buildTarget/compile`, then `build/shutdown` and `build/exit`. `.bsp/histos.json` names that command. One JVM target per module and Scala version. Js and Native are omitted. Compile names that cell, not the module's other versions. A missing lock is a protocol error. Compile failure is status 2. The server does not advertise test or run, and it does not publish diagnostics. Depends on: compile.
+    Verify: `./histos test app` against a BSP client fixture.
+26. `histos/server`: `./histos server` is the opt-in daemon. A batch command attaches when the fingerprint and Histos version match, otherwise it runs in-process. Depends on: layer 25, so Metals and the batch command share Zinc.
+    Verify: `./histos test app` attaches a second command to a running server and misses a stale fingerprint.
+27. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
+    Verify: `./histos test app`
+28. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
+    Verify: `./histos test engine` against an in-process fake cache. No real remote service.
 
 Not in any of these stacks:
 
@@ -155,5 +157,5 @@ Not in any of these stacks:
 
 ## After approval
 
-Stacks A through C landed as those layers. The active sequence is the self-build, layers 20 through 24, one branch at a time. Stack D follows. Do not merge. You merge.
+Stacks A through C landed as those layers. Self-build, layers 20 through 24, has merged. The active sequence is stack D. Do not merge. You merge.
 

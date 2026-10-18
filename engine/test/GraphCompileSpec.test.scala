@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO, durationInt}
+import zio.{Chunk, Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
 object GraphCompileSpec extends ZIOSpecDefault:
@@ -58,6 +58,40 @@ object GraphCompileSpec extends ZIOSpecDefault:
             ("app", List("App$.class", "App.class", "App.tasty")),
             ("core", List("Core$.class", "Core.class", "Core.tasty")),
           )
+    ,
+    test("the console finishes the upstream cell before the module that depends on it"):
+      ZIO.scoped:
+        for
+          root <- temp
+          built <- ZIO.attempt {
+                     val core = module("core", Jvm)(ScalaVersion("3.9.0"))
+                     val app = module("app", Jvm)(ScalaVersion("3.9.0")).dependsOn(core)
+                     write(root, "core/src/main/scala/Core.scala", "object Core:\n  def n: Int = 1\n")
+                     write(root, "app/src/main/scala/App.scala", "object App:\n  def x: Int = Core.n\n")
+                     write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\ncell app 3.9.0 jvm\n")
+                     Projects(core, app)
+                   }.flatMap(graph => ZIO.fromEither(graph).mapError(error => new IllegalStateException(error.message)))
+          names <- GraphCompile.console(root, built, List("app"), jdk).collect {
+                     case CompileFeed.Done(cell) => cell.module.value
+                   }.runCollect.provide(Resolve.live(root.resolve("coursier")))
+        yield assertTrue(names.toList == List("core", "app"))
+    ,
+    test("a compile diagnostic is on the console before the cell fails"):
+      ZIO.scoped:
+        for
+          root <- temp
+          built <- ZIO.attempt {
+                     write(root, "src/Bad.scala", "object Bad:\n  def n: Int = missing\n")
+                     write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+                     Projects(module("core", Jvm)(ScalaVersion("3.9.0")))
+                   }.flatMap(graph => ZIO.fromEither(graph).mapError(error => new IllegalStateException(error.message)))
+          seen <- Ref.make(Chunk.empty[String])
+          result <- GraphCompile.console(root, built, Nil, jdk).tap {
+                      case CompileFeed.Diagnostic(text) => seen.update(_ :+ text)
+                      case CompileFeed.Done(_)         => ZIO.unit
+                    }.runDrain.either.provide(Resolve.live(root.resolve("coursier")))
+          lines <- seen.get
+        yield assertTrue(result.isLeft, lines.exists(_.contains("missing")))
     ,
     test("an upstream built for another Scala version is not a classpath"):
       ZIO.scoped:
