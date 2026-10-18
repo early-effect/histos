@@ -9,8 +9,7 @@ import histos.load.BuildClasspath
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled, Sha256, Startup, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
-import histos.native.{ClangProbe, NativeDeclaration, NativeProject}
-import histos.node.{Node, NodeToolchain}
+import histos.toolchain.Survey
 import histos.mcp.HistosMcp
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.task.{TaskError, TaskId, Tasks}
@@ -367,39 +366,23 @@ object Cli:
 
   private def toolchain(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
-      Toolchain.explain(machine).either.flatMap:
-        case Left(err) => ZIO.succeed(Completed(CliExit.ToolchainFailed, "", err.message))
-        case Right(jdkText) =>
-          ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
-            case Left(LoadError.MissingFile(_)) => ZIO.succeed(Completed(CliExit.Success, jdkText, ""))
-            case Left(error)                    => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
-            case Right(loaded) =>
-              val afterNode =
-                if !Node.required(loaded.graph) then ZIO.succeed(Completed(CliExit.Success, jdkText, ""))
-                else
-                  NodeToolchain.explain(machine).mapBoth(
-                    err => Completed(CliExit.ToolchainFailed, jdkText, err.message),
-                    text => Completed(CliExit.Success, s"$jdkText\n$text", ""),
-                  ).merge
-              afterNode.flatMap: soFar =>
-                if soFar.exit != CliExit.Success then ZIO.succeed(soFar)
-                else clang(loaded.graph, machine, soFar.out)
+      ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+        case Left(LoadError.MissingFile(_)) =>
+          Toolchain.explain(machine).mapBoth(
+            err => Completed(CliExit.ToolchainFailed, "", err.message),
+            found => Completed(CliExit.Success, Toolchain.text(found), ""),
+          ).merge
+        case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+        case Right(loaded) =>
+          Survey.read(machine, loaded.graph).mapBoth(
+            err => Completed(CliExit.ToolchainFailed, Survey.shown(err), err.message),
+            found => Completed(CliExit.Success, Survey.text(found), ""),
+          ).merge
     }
-
-  private def clang(graph: histos.ProjectGraph, machine: Machine, text: String): URIO[Any, Completed] =
-    NativeProject.declaration(graph) match
-      case NativeDeclaration.NotNative => ZIO.succeed(Completed(CliExit.Success, text, ""))
-      case other @ (NativeDeclaration.Missing(_) | NativeDeclaration.Disagree(_, _)) =>
-        ZIO.succeed(Completed(CliExit.ToolchainFailed, text, other.message))
-      case NativeDeclaration.Major(major) =>
-        ClangProbe.resolve(major, machine.env).mapBoth(
-          err => Completed(CliExit.ToolchainFailed, text, err.message),
-          found => Completed(CliExit.Success, s"$text\nchosen clang ${found.version.value} ${found.target.value} ${found.clang}", ""),
-        ).merge
 
   private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
-      HistosMcp.serve(repo, apiJar, LinePipe.standard, machine.env).fold(
+      HistosMcp.serve(repo, apiJar, LinePipe.standard, machine).fold(
       err => Completed(CliExit.LoadFailed, "", err.message),
       _ => Completed(CliExit.Success, "", ""),
     )

@@ -287,7 +287,7 @@ Node follows the same rules, and only when a Js task needs Node. The build names
 
 A Native project declares a clang major. Histos checks `clang` on `PATH` and does not provision one. The cache key includes the full version of the binary that matched. A miss is a typed error that lists what was found and how to install it.
 
-`histos toolchain` prints every candidate considered, why it was rejected or chosen, the version, the path, and whether the decision came from the lock or a local override. `histos toolchain use --lock` rewrites the committed lock. `histos toolchain use --local` writes `.histos/toolchain.local`, which is gitignored. CI does not read that file. When a local override is active, the build prints one line. An unchanged lock hit stays quiet. The first time a private JDK or Node is provisioned, one line names the path and `histos cache clean`.
+`histos toolchain` prints every candidate considered, why it was rejected or chosen, the version, the path, and whether the decision came from the lock or a local override. The MCP tool `toolchain` returns that same decision. The CLI prints it. `histos toolchain use --lock` rewrites the committed lock. `histos toolchain use --local` writes `.histos/toolchain.local`, which is gitignored. CI does not read that file. When a local override is active, the build prints one line. An unchanged lock hit stays quiet. The first time a private JDK or Node is provisioned, one line names the path and `histos cache clean`.
 
 ### 5.7 Plugins
 

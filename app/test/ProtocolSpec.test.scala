@@ -4,6 +4,7 @@ import heddle.LinePipe
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
 import histos.acp.Acp
 import histos.cli.Command
+import histos.jdk.{Machine, Os, Settled}
 import histos.load.{LoadError, LoadIo, Loader}
 
 import java.nio.file.{Files, Path}
@@ -56,6 +57,24 @@ object ProtocolSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.ignore
 
+  private def machine(dir: Path, env: Map[String, String] = Map.empty): Machine =
+    Machine(env, dir.toString, Os.Linux, dir.resolve("cache"), dir, None, Settled.No)
+
+  private def writeJdk(dir: Path): Unit =
+    val jdk = dir.resolve("jdk")
+    Files.createDirectories(jdk.resolve("bin"))
+    Files.createDirectories(dir.resolve(".histos"))
+    Files.writeString(jdk.resolve("bin").resolve("javac"), "")
+    Files.writeString(jdk.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
+    Files.writeString(
+      dir.resolve(".histos").resolve("jdk.lock"),
+      """major 21
+        |version 21.0.2
+        |url https://example.test/jdk.zip
+        |sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        |""".stripMargin,
+    )
+
   private def readLines(pipe: LinePipe, n: Int): UIO[List[String]] =
     if n <= 0 then ZIO.succeed(Nil)
     else
@@ -75,7 +94,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           jar               <- apiJar
           dir               <- repo
           (client, server)  <- LinePipe.connected
-          done              <- HistosMcp.serve(dir, jar, server, Map.empty).provideSome[Scope](Loader.live).forkScoped
+          done              <- HistosMcp.serve(dir, jar, server, machine(dir)).provideSome[Scope](Loader.live).forkScoped
           _                 <- client.writeLine(req("server/discover", obj(), 1).toJson)
           _                 <- client.writeLine(req("tools/call", obj("name" -> Json.Str("graph"), "arguments" -> obj()), 2).toJson)
           _                 <- client.writeLine(req("tools/call", obj("name" -> Json.Str("run"), "arguments" -> obj("id" -> Json.Str("inspect"))), 3).toJson)
@@ -86,6 +105,79 @@ object ProtocolSpec extends ZIOSpecDefault:
         yield
           val text = lines.mkString("\n")
           assertTrue(text.contains("core jvm 3.9.0"), text.contains("no run"))
+    ,
+    test("toolchain returns the chosen jdk"):
+      ZIO.scoped:
+        for
+          jar              <- apiJar
+          dir              <- repo
+          _                <- ZIO.attempt(writeJdk(dir)).mapError(t => LoadError.Io(LoadIo.Temp))
+          (client, server) <- LinePipe.connected
+          done             <- HistosMcp.serve(dir, jar, server, machine(dir, Map("JAVA_HOME" -> dir.resolve("jdk").toString)))
+                                .provideSome[Scope](Loader.live)
+                                .forkScoped
+          _                <- client.writeLine(req("server/discover", obj(), 1).toJson)
+          _                <- client.writeLine(req("tools/call", obj("name" -> Json.Str("toolchain"), "arguments" -> obj()), 2).toJson)
+          _                <- client.close
+          _                <- done.join
+          lines            <- readLines(client, 2)
+        yield
+          val text = lines.mkString("\n")
+          assertTrue(
+            text.contains(""""origin":"JavaHome""""),
+            text.contains(""""version":"21.0.2""""),
+            !text.contains(""""isError":true"""),
+          )
+    ,
+    test("toolchain reports a missing jdk lock"):
+      ZIO.scoped:
+        for
+          jar              <- apiJar
+          dir              <- repo
+          (client, server) <- LinePipe.connected
+          done             <- HistosMcp.serve(dir, jar, server, machine(dir)).provideSome[Scope](Loader.live).forkScoped
+          _                <- client.writeLine(req("server/discover", obj(), 1).toJson)
+          _                <- client.writeLine(req("tools/call", obj("name" -> Json.Str("toolchain"), "arguments" -> obj()), 2).toJson)
+          _                <- client.close
+          _                <- done.join
+          lines            <- readLines(client, 2)
+        yield
+          val text = lines.mkString("\n")
+          assertTrue(text.contains(""""isError":true"""), text.contains("jdk.lock"))
+    ,
+    test("a js graph without a node lock keeps the jdk decision"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          _ <- ZIO.attempt {
+                 writeJdk(dir)
+                 Files.writeString(
+                   dir.resolve("histos.scala"),
+                   """import histos.*
+                     |object build extends HistosBuild:
+                     |  def graph =
+                     |    val core = module("core", Js)(scala"3.9.0")
+                     |    Projects(core)
+                     |""".stripMargin,
+                 )
+               }.mapError(t => LoadError.Io(LoadIo.Temp))
+          (client, server) <- LinePipe.connected
+          done             <- HistosMcp.serve(dir, jar, server, machine(dir, Map("JAVA_HOME" -> dir.resolve("jdk").toString)))
+                                .provideSome[Scope](Loader.live)
+                                .forkScoped
+          _                <- client.writeLine(req("server/discover", obj(), 1).toJson)
+          _                <- client.writeLine(req("tools/call", obj("name" -> Json.Str("toolchain"), "arguments" -> obj()), 2).toJson)
+          _                <- client.close
+          _                <- done.join
+          lines            <- readLines(client, 2)
+        yield
+          val text = lines.mkString("\n")
+          assertTrue(
+            text.contains(""""isError":true"""),
+            text.contains("node.lock"),
+            text.contains(""""origin":"JavaHome""""),
+          )
     ,
     test("acp answers initialize and nothing else"):
       val init = """{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}"""

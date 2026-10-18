@@ -140,7 +140,7 @@ Stack D, after this repo builds itself:
     Verify: `./histos test app` against a BSP client fixture.
 26. `histos/server`: `./histos server` is the opt-in daemon. `compile`, `test`, and `bsp` attach when the Histos version and the fingerprint of `histos.scala` plus the dependency lock match. A missing server, a dead socket, or a stale record runs in-process. Depends on: layer 25, so Metals and the batch command share one process and the on-disk analysis. Zinc 2.0.4's compiler cache is a fresh compiler on every compile.
     Verify: `./histos test app` attaches a second command to a running server and misses a stale fingerprint.
-27. `histos/mcp-toolchain`: MCP gains `toolchain`. Depends on: the JDK and Node resolvers, and layer 6 for the server.
+27. `histos/mcp-toolchain`: MCP gains `toolchain`. The tool returns the JDK decision, and the Node or clang decision when the graph needs them. The CLI prints that same decision. Depends on: the JDK and Node resolvers, and layer 6 for the server.
     Verify: `./histos test app`
 28. `histos/remote-cache`: Opt-in remote cache for sendable compile actions. Miss runs locally. Read-only is the default. Publish, tests, `Network`, and `Docker` are not uploaded. A custom closure is not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. Depends on: the local cache and Zinc.
     Verify: `./histos test engine` against an in-process fake cache. No real remote service.

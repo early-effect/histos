@@ -6,12 +6,18 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
+/** The lock that was read and the decision it produced. Printing is [[NodeToolchain.text]]. */
+final case class NodeSurvey(lock: NodeLock, resolution: NodeResolution)
+
 object NodeToolchain:
-  /** Print the Node decision. Does not download. A missing lock is an error: the caller already knows Js needs Node. */
-  def explain(machine: Machine): IO[NodeError, String] =
+  /** Read the Node decision. Does not download. A missing lock is an error: the caller already knows Js needs Node. */
+  def explain(machine: Machine): IO[NodeError, NodeSurvey] =
     readLock(machine.repo).flatMap:
       case None       => ZIO.fail(NodeError.NoLock(lockPath(machine.repo)))
-      case Some(lock) => resolution(machine, lock).map(found => render(lock, found))
+      case Some(lock) => resolution(machine, lock).map(found => NodeSurvey(lock, found))
+
+  def text(survey: NodeSurvey): String =
+    render(survey.lock, survey.resolution)
 
   def render(lock: NodeLock, resolution: NodeResolution): String =
     val tail = resolution match
