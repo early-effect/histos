@@ -1,5 +1,8 @@
 package histos.schedule
 
+import java.nio.ByteBuffer
+import java.nio.charset.{CharsetDecoder, CodingErrorAction, StandardCharsets}
+
 import zio.*
 
 enum ScheduleError[+E]:
@@ -10,6 +13,7 @@ enum ScheduleError[+E]:
   case DuplicateInput(action: ActionId, name: InputName)
   case Failed(action: ActionId, error: E)
   case Cache(error: CacheError)
+  case Remote(error: RemoteError)
 
   def message: String = this match
     case UnknownAction(id)              => s"no action '${id.value}'"
@@ -20,14 +24,16 @@ enum ScheduleError[+E]:
     case DuplicateInput(action, name)   => s"'${action.value}' declares input '${name.value}' twice"
     case Failed(action, _)              => s"'${action.value}' failed"
     case Cache(error)                   => error.message
+    case Remote(error)                  => error.message
 
 trait Scheduler:
-  /** Run `root` after its dependencies. A cache hit is the stored text. A miss runs `local`. */
+  /** Run `root` after its dependencies. A remote hit is the stored output. A miss runs `local`. A write cache uploads only a sendable action. */
   def execute[E](
       root: ActionId,
       actions: List[Action],
       local: Action => IO[E, String],
-  ): ZIO[ActionCache, ScheduleError[E], String]
+      verdict: Action => Verdict = Sendable.ofAction,
+  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String]
 
 object Scheduler:
   val live: ULayer[Scheduler] = ZLayer.succeed(SchedulerLive)
@@ -37,10 +43,12 @@ private object SchedulerLive extends Scheduler:
       root: ActionId,
       actions: List[Action],
       local: Action => IO[E, String],
-  ): ZIO[ActionCache, ScheduleError[E], String] =
+      verdict: Action => Verdict,
+  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
     ZIO.serviceWithZIO[ActionCache]: cache =>
-      ZIO.fromEither(prepare(root, actions)).flatMap: ready =>
-        run(root, ready, cache, local)
+      ZIO.serviceWithZIO[RemoteCache]: remote =>
+        ZIO.fromEither(prepare(root, actions)).flatMap: ready =>
+          run(root, ready, cache, remote, local, verdict)
 
   private final case class Ready(byId: Map[ActionId, Action], order: List[ActionId], digests: Map[ActionId, Digest])
 
@@ -111,11 +119,13 @@ private object SchedulerLive extends Scheduler:
       root: ActionId,
       ready: Ready,
       cache: ActionCache,
+      remote: RemoteCache,
       local: Action => IO[E, String],
+      verdict: Action => Verdict,
   ): IO[ScheduleError[E], String] =
     for
       gates <- ZIO.foreach(ready.order)(id => Promise.make[ScheduleError[E], String].map(id -> _)).map(_.toMap)
-      _     <- ZIO.foreachParDiscard(ready.order)(id => publish(id, ready, gates, cache, local))
+      _     <- ZIO.foreachParDiscard(ready.order)(id => publish(id, ready, gates, cache, remote, local, verdict))
       out   <- gate(gates, root).flatMap(_.await)
     yield out
 
@@ -124,19 +134,25 @@ private object SchedulerLive extends Scheduler:
       ready: Ready,
       gates: Map[ActionId, Promise[ScheduleError[E], String]],
       cache: ActionCache,
+      remote: RemoteCache,
       local: Action => IO[E, String],
+      verdict: Action => Verdict,
   ): IO[ScheduleError[E], Unit] =
     val compute =
       for
         action <- ZIO.fromEither(ready.byId.get(id).toRight(ScheduleError.UnknownAction(id)))
         _      <- ZIO.foreachParDiscard(action.dependencies)(dep => gate(gates, dep).flatMap(_.await))
         digest <- ZIO.fromEither(ready.digests.get(id).toRight(ScheduleError.UnknownAction(id)))
-        hit    <- cache.get(digest).mapError(ScheduleError.Cache(_))
-        out    <- hit match
-                    case Some(value) => ZIO.succeed(value)
-                    case None        =>
-                      local(action).mapError(ScheduleError.Failed(id, _)).flatMap: value =>
-                        cache.put(digest, value).mapError(ScheduleError.Cache(_)).as(value)
+        remoteHit <- lookup(remote, digest)
+        out <- remoteHit match
+                 case Some(value) => ZIO.succeed(value)
+                 case None =>
+                   cache.get(digest).mapError(ScheduleError.Cache(_)).flatMap:
+                     case Some(value) => ZIO.succeed(value)
+                     case None =>
+                       local(action).mapError(ScheduleError.Failed(id, _)).flatMap: value =>
+                         cache.put(digest, value).mapError(ScheduleError.Cache(_)) *>
+                           upload(remote, verdict(action), digest, value).as(value)
       yield out
     compute.exit.flatMap: exit =>
       val resumed = exit match
@@ -144,6 +160,29 @@ private object SchedulerLive extends Scheduler:
         case Exit.Failure(cause) => ZIO.failCause(cause)
       gate(gates, id).flatMap(_.done(exit)) *> resumed
     .unit
+
+  private def lookup(remote: RemoteCache, digest: Digest): IO[ScheduleError[Nothing], Option[String]] =
+    remote.mode match
+      case RemoteMode.Off => ZIO.none
+      case RemoteMode.Read | RemoteMode.Write =>
+        remote.find(digest).mapError(ScheduleError.Remote(_)).flatMap:
+          case None        => ZIO.none
+          case Some(bytes) => decode(digest, bytes).mapError(ScheduleError.Remote(_)).map(Some(_))
+
+  private def upload(remote: RemoteCache, verdict: Verdict, digest: Digest, value: String): IO[ScheduleError[Nothing], Unit] =
+    (remote.mode, verdict) match
+      case (RemoteMode.Write, Verdict.Send) =>
+        val bytes = Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8))
+        remote.store(digest, bytes).mapError(ScheduleError.Remote(_))
+      case _ => ZIO.unit
+
+  private def decode(action: Digest, bytes: Chunk[Byte]): IO[RemoteError, String] =
+    ZIO.attempt(decoder.decode(ByteBuffer.wrap(bytes.toArray)).toString).mapError(_ => RemoteError.Text(action))
+
+  private def decoder: CharsetDecoder =
+    StandardCharsets.UTF_8.newDecoder
+      .onMalformedInput(CodingErrorAction.REPORT)
+      .onUnmappableCharacter(CodingErrorAction.REPORT)
 
   private def gate[E](
       gates: Map[ActionId, Promise[ScheduleError[E], String]],

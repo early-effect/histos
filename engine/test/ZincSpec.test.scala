@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.jdk.{JdkMajor, JdkVersion, Sha256}
-import histos.schedule.{ActionCache, ActionId, CacheError, Digest, Scheduler}
+import histos.schedule.{ActionCache, ActionId, CacheError, Digest, RemoteCache, Scheduler}
 import histos.{Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -92,14 +92,14 @@ object ZincSpec extends ZIOSpecDefault:
           local   = (_: histos.schedule.Action) => calls.update(_ + 1) *> JvmCompile.compile(req).map(_.classFiles.toString)
           run     = (actionKey: Sha256) =>
             ZIO.serviceWithZIO[Scheduler](_.execute(id, List(CompileKey.action(id, actionKey)), local))
-          first <- run(key).provide(Scheduler.live, ZLayer.succeed(cache))
+          first <- run(key).provide(Scheduler.live, ZLayer.succeed(cache), RemoteCache.off)
           once  <- calls.get
           exists = Files.isRegularFile(root.resolve("classes").resolve("Hello.class"))
-          second <- run(key).provide(Scheduler.live, ZLayer.succeed(cache))
+          second <- run(key).provide(Scheduler.live, ZLayer.succeed(cache), RemoteCache.off)
           still  <- calls.get
           _      <- ZIO.attempt(Files.writeString(source, hello + "\n"))
           changed <- JvmCompile.sourceDigest(req.sources).map(CompileKey.of(req, _))
-          _       <- run(changed).provide(Scheduler.live, ZLayer.succeed(cache))
+          _       <- run(changed).provide(Scheduler.live, ZLayer.succeed(cache), RemoteCache.off)
           thrice  <- calls.get
         yield assertTrue(once == 1 && exists && second == first && still == 1 && thrice == 2 && changed != key)
     ,

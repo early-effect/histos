@@ -20,7 +20,8 @@ object SchedulerSpec extends ZIOSpecDefault:
     action => ZIO.succeed(action.id.value)
 
   private def execute(root: ActionId, actions: List[Action], local: Action => IO[TaskError, String] = localOk) =
-    ZIO.serviceWithZIO[Scheduler](_.execute(root, actions, local)).provide(Scheduler.live, ZLayer.succeed(ActionCache.miss))
+    ZIO.serviceWithZIO[Scheduler](_.execute(root, actions, local))
+      .provide(Scheduler.live, ZLayer.succeed(ActionCache.miss), RemoteCache.off)
 
   private val schedule = suite("scheduler")(
     test("a miss runs the action after its dependencies, and only those"):
@@ -59,7 +60,7 @@ object SchedulerSpec extends ZIOSpecDefault:
             )
           ).timeoutFail(ScheduleError.UnknownAction(a))(5.seconds)
       yield assertTrue(out == "a")
-    ).provide(Scheduler.live, ZLayer.succeed(ActionCache.miss)),
+    ).provide(Scheduler.live, ZLayer.succeed(ActionCache.miss), RemoteCache.off),
     test("a cycle runs nothing"):
       for
         ran <- Ref.make(false)
@@ -86,7 +87,7 @@ object SchedulerSpec extends ZIOSpecDefault:
         out <- ZIO.serviceWithZIO[Scheduler](_.execute(a, List(action(a)), _ => called.set(true) *> ZIO.succeed("local"))).either
         did <- called.get
       yield assertTrue(out == Right("cached") && !did)
-    ).provide(Scheduler.live, ZLayer.succeed(hit)),
+    ).provide(Scheduler.live, ZLayer.succeed(hit), RemoteCache.off),
     test("changing an input changes the digest"):
       val first  = action(a)
       val second = first.copy(inputs = List(Input(InputName.trusted("src"), InputValue.Text("other"))))

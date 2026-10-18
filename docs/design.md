@@ -201,7 +201,7 @@ Core runners (compile, test, publish) live in the daemon. A custom task in the b
 
 A generator (protobuf, OpenAPI, or anything else that writes sources) is a task node. Compile depends on its outputs. It does not run during load.
 
-Execution is one action type. The same action is the unit for local execution, the local content-addressed cache, a later remote cache, and a later remote executor.
+Execution is one action type. The same action is the unit for local execution, the local content-addressed cache, the remote cache, and a later remote executor.
 
 ```text
 digest the action
@@ -211,7 +211,7 @@ digest the action
   -> if the cache is read-write and the action is sendable, upload
 ```
 
-Sendable, for the first remote cache, means a core compile: a known runner, declared inputs, no build-file closure. Publish never leaves the machine. Custom closures run locally and are not uploaded. A plugin runner is sendable only when the plugin says it is hermetic.
+Sendable, for the first remote cache, means a core compile: a known runner, declared inputs, no build-file closure. Publish never leaves the machine. Custom closures run locally and are not uploaded. A plugin runner is sendable only when the plugin says it is hermetic. The process default configures no remote cache. A configured cache is read-only until it is opened for write. `histos compile` does not configure one: Zinc's analysis file is still that command's incrementality. There is no network client. A test supplies an in-process store.
 
 A test task runs as one subprocess for that project, Scala version, and platform. It does not run inside the server, and it does not fork once per test case. The process gets a fresh work directory, the declared classpath, and an environment that contains only `HISTOS_REPO` and `PATH`. `HISTOS_REPO` is the repository. `PATH` is how a test sees a toolchain. The jail that drops `PATH` arrives when a test is sendable. Interruption kills the process group, so `System.exit` in a test cannot take Metals down.
 
