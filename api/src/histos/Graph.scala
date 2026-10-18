@@ -6,19 +6,59 @@ sealed trait Project:
   def name: ProjectName
   def position: SourcePos
 
+/** An upstream module. No platforms means every platform the depender builds. */
+final case class ProjectDep(name: ProjectName, platforms: Option[List[Platform]]):
+  def applies(platform: Platform): Boolean =
+    platforms match
+      case None         => true
+      case Some(chosen) => chosen.contains(platform)
+
 final case class Module(
     name: ProjectName,
     platforms: Platforms,
     versions: ScalaVersions,
     dependencies: List[Dep],
-    dependsOn: List[ProjectName],
+    dependsOn: List[ProjectDep],
     position: SourcePos,
     clang: ClangPin = ClangPin.Unused,
     test: Option[TestMain] = None,
     testDependencies: List[Dep] = Nil,
     provider: Option[TestProvider] = None,
     nativeVersion: Option[NativeVersion] = None,
-) extends Project
+    directory: Option[ProjectPath] = None,
+    jsEnv: JsEnv = JsEnv.Node,
+    jsModule: JsModuleKind = JsModuleKind.NoModule,
+    application: Option[MainClass] = None,
+) extends Project:
+  /** `<directory>/src`, or `<name>/src` when the module does not name a directory. */
+  def baseDirectory: String =
+    directory match
+      case Some(path) => path.value
+      case None       => name.value
+
+  /** Upstream names on `platform`. Empty when this module does not build that platform. */
+  def upstream(platform: Platform): List[ProjectName] =
+    if platforms.all.contains(platform) then dependsOn.filter(_.applies(platform)).map(_.name)
+    else Nil
+
+  /** Every upstream name, whichever platform the edge names. */
+  def upstreamNames: List[ProjectName] =
+    dependsOn.map(_.name)
+
+object Module:
+  /** Upstream modules on `platform`, each dependency before the module that uses it. */
+  def chain(module: Module, modules: List[Module], platform: Platform): List[Module] =
+    val byName = modules.map(item => item.name -> item).toMap
+    def walk(names: List[ProjectName], seen: Set[ProjectName], acc: List[Module]): (Set[ProjectName], List[Module]) =
+      names.foldLeft((seen, acc)):
+        case ((have, built), name) if have.contains(name) => (have, built)
+        case ((have, built), name) =>
+          byName.get(name) match
+            case None => (have + name, built)
+            case Some(dependency) =>
+              val (next, below) = walk(dependency.upstream(platform), have + name, built)
+              (next, below :+ dependency)
+    walk(module.upstream(platform), Set(module.name), Nil)._2
 
 final case class Aggregate(
     name: ProjectName,
@@ -109,6 +149,7 @@ object Projects:
       _     <- duplicates(named)
       _     <- shape(named)
       built <- links(named)
+      _     <- directories(built)
       _     <- cycle(built)
       ships <- ShipLink.catalog(catalog, built)
       _     <- uniqueResolvers(resolvers)
@@ -151,7 +192,7 @@ object Projects:
       case m: ModuleDef    =>
         duplicate(m.platforms.all).map(BuildError.DuplicatePlatform(n.name, _, m.position)).orElse(
           duplicate(m.versions.all).map(BuildError.DuplicateScalaVersion(n.name, _, m.position))
-        ).orElse(clangOf(n.name, m)).orElse(nativeVersionOf(n.name, m))
+        ).orElse(clangOf(n.name, m)).orElse(nativeVersionOf(n.name, m)).orElse(jsEnvOf(n.name, m)).orElse(jsModuleOf(n.name, m))
       case a: AggregateDef =>
         val children = a.children.map(_.name)
         if children.contains(a.name) then Some(BuildError.AggregateIncludesItself(n.name, a.position))
@@ -171,15 +212,17 @@ object Projects:
       case a: AggregateDef => linkAggregate(n, a, byName)
 
   private def linkModule(n: Named, m: ModuleDef, byName: Map[String, Named]): Either[BuildError, Project] =
-    m.dependsOn.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, dep) =>
-      acc.flatMap: names =>
-        lookup(dep, byName) match
+    m.dependsOn.foldLeft[Either[BuildError, List[ProjectDep]]](Right(Nil)): (acc, edge) =>
+      acc.flatMap: deps =>
+        lookup(edge.project, byName) match
           case Left(err)                               => Left(err)
           case Right(target) if target.name == n.name => Left(BuildError.SelfDependency(n.name, m.position))
           case Right(target)                          =>
             target.defn match
               case _: AggregateDef => Left(BuildError.DependsOnAggregate(n.name, target.name, m.position))
-              case _: ModuleDef    => Right(names :+ target.name)
+              case upstream: ModuleDef =>
+                if deps.exists(_.name == target.name) then Left(BuildError.DuplicateDependency(n.name, target.name, m.position))
+                else accept(n.name, m, target.name, upstream, edge).map(deps :+ _)
     .flatMap: deps =>
       (m.test, m.provider) match
         case (Some(_), Some(_)) => Left(BuildError.MixedTest(n.name, m.position))
@@ -196,6 +239,10 @@ object Projects:
             m.testDependencies,
             m.provider,
             m.nativeVersion,
+            m.directory,
+            m.jsEnv,
+            m.jsModule,
+            m.application,
           ))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
@@ -217,12 +264,55 @@ object Projects:
       case Some(_) if !native => Some(BuildError.NativeVersionWithoutNative(name, module.position))
       case _                  => None
 
+  private def jsEnvOf(name: ProjectName, module: ModuleDef): Option[BuildError] =
+    val js = module.platforms.all.contains(Platform.Js)
+    module.jsEnv match
+      case JsEnv.Node    => None
+      case _ if !js      => Some(BuildError.JsEnvWithoutJs(name, module.position))
+      case _             => None
+
+  private def jsModuleOf(name: ProjectName, module: ModuleDef): Option[BuildError] =
+    val js = module.platforms.all.contains(Platform.Js)
+    module.jsModule match
+      case JsModuleKind.NoModule => None
+      case _ if !js              => Some(BuildError.JsModuleWithoutJs(name, module.position))
+      case _                     => None
+
+  private def directories(projects: List[Project]): Either[BuildError, Unit] =
+    val modules = projects.collect { case module: Module => module }
+    modules.foldLeft[Either[BuildError, List[Module]]](Right(Nil)): (acc, module) =>
+      acc.flatMap: seen =>
+        seen.find(_.baseDirectory == module.baseDirectory) match
+          case Some(first) => Left(BuildError.DuplicateDirectory(module.name, first.name, module.baseDirectory))
+          case None        => Right(seen :+ module)
+    .map(_ => ())
+
+  /** The platforms an edge actually builds. An unscoped edge is every platform of the depender. */
+  private def accept(
+      module: ProjectName,
+      depender: ModuleDef,
+      target: ProjectName,
+      upstream: ModuleDef,
+      edge: ProjectEdge,
+  ): Either[BuildError, ProjectDep] =
+    val wanted = edge.platforms match
+      case Some(chosen) => chosen
+      case None         => depender.platforms.all
+    wanted.find(platform => !depender.platforms.all.contains(platform)) match
+      case Some(platform) => Left(BuildError.EdgeWithoutPlatform(module, platform, depender.position))
+      case None =>
+        wanted.find(platform => !upstream.platforms.all.contains(platform)) match
+          case Some(platform) => Left(BuildError.UpstreamMissingPlatform(module, target, platform, depender.position))
+          case None           => Right(ProjectDep(target, edge.platforms))
+
   private def cycle(projects: List[Project]): Either[BuildError, Unit] =
-    val edges = projects.collect:
-      case m: Module => m.name -> m.dependsOn
-    findCycle(edges) match
-      case Some(path) => Left(BuildError.Cycle(path))
-      case None       => Right(())
+    val modules = projects.collect { case module: Module => module }
+    List(Platform.Jvm, Platform.Js, Platform.Native).foldLeft[Either[BuildError, Unit]](Right(())): (acc, platform) =>
+      acc.flatMap: _ =>
+        val edges = modules.map(module => module.name -> module.upstream(platform))
+        findCycle(edges) match
+          case Some(path) => Left(BuildError.Cycle(platform, path))
+          case None       => Right(())
 
   /** `path` is newest-first. A name already on it is the cycle. */
   private def findCycle(edges: List[(ProjectName, List[ProjectName])]): Option[List[ProjectName]] =

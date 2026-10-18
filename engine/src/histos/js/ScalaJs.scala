@@ -11,6 +11,10 @@ import zio.{IO, ZIO}
 object ScalaJs:
   private val Javalib: String = "1.22.0"
 
+  /** The jars the linker reads `.sjsir` from. The compiler uses the same list as its library classpath. */
+  def libraries(version: ScalaVersion): IO[CompileError, List[Path]] =
+    library(version)
+
   def compile(request: CompileRequest, hear: String => Unit = _ => ()): IO[CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Js then ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else

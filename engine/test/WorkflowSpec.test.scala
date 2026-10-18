@@ -1,7 +1,7 @@
 package histos.workflow
 
 import histos.version.{Catalog, Ship, ShipName, ShipNumber}
-import histos.{Axis, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos, Splits}
+import histos.{Axis, Module, Platform, Platforms, ProjectDep, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos, Splits}
 
 import java.nio.file.{Files, Path}
 
@@ -135,7 +135,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       Platforms(platform, Nil),
       ScalaVersions(v390, Nil),
       Nil,
-      depends,
+      depends.map(name => ProjectDep(name, None)),
       SourcePos("histos.scala", 1, 1),
     )
 

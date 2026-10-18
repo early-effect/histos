@@ -50,6 +50,16 @@ private object FrameworkClassMacro:
           case Left(err) => report.errorAndAbort(err.message, raw)
           case Right(_)  => '{ FrameworkClass.trusted(${ Expr(text) }) }
 
+private object MainClassMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[MainClass] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("MainClass(...) takes a literal. Use MainClass.from at runtime.", raw)
+      case Some(text) =>
+        MainClass.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ MainClass.trusted(${ Expr(text) }) }
+
 private object TestMainMacro:
   def literal(raw: Expr[String])(using Quotes): Expr[TestMain] =
     import quotes.reflect.report
@@ -118,6 +128,13 @@ private object LiteralMacro:
         report.errorAndAbort(err)
       case Right(raw) => OrganizationMacro.literal(Expr(raw))
 
+  def projectPath(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[ProjectPath] =
+    onePart(sc, args, "path") match
+      case Left(err)  =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => ProjectPathMacro.literal(Expr(raw))
+
   def shipNumber(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ShipNumber] =
     onePart(sc, args, "ship") match
       case Left(err)  =>
@@ -138,6 +155,16 @@ private object LiteralMacro:
           case Some(raw) => Right(raw)
           case None      => Left(s"""$what"..." takes a literal""")
       case _ => Left(s"""$what"..." takes no arguments""")
+
+private object ProjectPathMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ProjectPath] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("ProjectPath(...) takes a literal. Use ProjectPath.from at runtime.", raw)
+      case Some(text) =>
+        ProjectPath.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ ProjectPath.trusted(${ Expr(text) }) }
 
 private object ClangMajorMacro:
   def literal(raw: Expr[Int])(using Quotes): Expr[ClangMajor] =

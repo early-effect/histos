@@ -216,16 +216,18 @@ object Resolve:
   def cells(graph: ProjectGraph, repositories: Repositories): List[ResolveCell] =
     graph.projects.flatMap:
       case Aggregate(_, _, _) => Nil
-      case Module(name, platforms, versions, dependencies, _, _, _, _, testDependencies, _, _) =>
+      case Module(name, platforms, versions, dependencies, _, _, _, _, testDependencies, _, _, _, _, _, _) =>
         platforms.all.flatMap: platform =>
           versions.all.flatMap: version =>
-            val compile = ResolveCell(name, dependencies, version, platform, repositories, ClasspathScope.Compile)
+            val compileDeps = Dep.select(dependencies, platform)
+            val testDeps = Dep.select(testDependencies, platform)
+            val compile = ResolveCell(name, compileDeps, version, platform, repositories, ClasspathScope.Compile)
             val tests =
-              if testDependencies.isEmpty then Nil
+              if testDeps.isEmpty then Nil
               else
                 List(ResolveCell(
                   name,
-                  dependencies ++ testDependencies,
+                  compileDeps ++ testDeps,
                   version,
                   platform,
                   repositories,

@@ -17,9 +17,10 @@ import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.central.Publisher
 import histos.publish.LocalPublish
-import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestStatus, TestedCell}
+import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestStatus, TestedCell}
+import histos.watch.SourceWatch
 import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
-import histos.{Aggregate, Module, Project}
+import histos.{Aggregate, Module, Platform, Project}
 
 import java.nio.file.{Files, Path}
 import java.time.Instant
@@ -29,8 +30,11 @@ import zio.*
 enum Command:
   case Version
   case Graph
-  case Run(id: TaskId)
+  case Run(id: TaskId, platform: Option[Platform])
   case Test(projects: List[String])
+  case TestOnly(modules: List[String], patterns: List[SuitePattern])
+  case TestQuick(modules: List[String], patterns: List[SuitePattern])
+  case Watch(command: Command)
   case Compile(projects: List[String])
   case Assembly(destination: Option[String])
   case Publish(repository: String, projects: List[String])
@@ -54,20 +58,34 @@ enum CliParseError:
   case MissingArgument
   case UnexpectedArguments
   case BadTaskId
+  case BadPlatform(detail: String)
+  case TaskPlatform(name: String)
+  case MissingPattern
+  case Pattern(detail: String)
+  case WatchCommand(detail: String)
   case Rejected
 
   def message: String = this match
     case Help | UnknownCommand | Rejected => Cli.usageText
-    case MissingArgument                  => "run needs one task id"
+    case MissingArgument                  => "run needs one name"
     case UnexpectedArguments              => Cli.usageText
     case BadTaskId                        => "a task id is not empty"
+    case BadPlatform(detail)              => detail
+    case TaskPlatform(name)               => s"run $name does not take a platform"
+    case MissingPattern                   => "testOnly needs a pattern"
+    case Pattern(detail)                  => detail
+    case WatchCommand(detail)             => detail
 
 enum CliExit:
   case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed, WorkflowFailed, TestFailed, CompileFailed, PublishFailed
+  case Program(status: Int)
+  case Interrupted
 
   def code: Int = this match
     case Success         => 0
     case TaskFailed      => 1
+    case Program(status) => status
+    case Interrupted     => 130
     case Usage           => 2
     case LoadFailed      => 3
     case ToolchainFailed => 4
@@ -98,7 +116,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | bsp | server | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | bsp | server | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -106,12 +124,18 @@ object Cli:
   def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     parse(args).foldZIO(
       detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message)),
-      command =>
-        command match
+      command => perform(repo, apiJar, command),
+    )
+
+  private def perform(repo: Path, apiJar: Path, command: Command): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    command match
           case Command.Version          => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
           case Command.Graph            => graph(repo, apiJar)
-          case Command.Run(id)          => run(repo, apiJar, id)
-          case Command.Test(projects)   => test(repo, apiJar, projects)
+          case Command.Run(id, platform) => run(repo, apiJar, id, platform)
+          case Command.Test(projects)   => test(repo, apiJar, projects, Nil, quick = false)
+          case Command.TestOnly(modules, patterns) => test(repo, apiJar, modules, patterns, quick = false)
+          case Command.TestQuick(modules, patterns) => test(repo, apiJar, modules, patterns, quick = true)
+          case Command.Watch(inner)     => watch(repo, apiJar, inner)
           case Command.Compile(projects) => compile(repo, apiJar, projects)
           case Command.Assembly(destination) => assembly(repo, apiJar, destination)
           case Command.Publish(repository, projects) => publish(repo, apiJar, repository, projects)
@@ -124,27 +148,111 @@ object Cli:
           case Command.CacheList        => cacheList
           case Command.CacheClean(dry)  => cacheClean(dry)
           case Command.Resolve(action)  => resolve(repo, apiJar, action)
-          case Command.Workflow(action) => workflow(repo, apiJar, action),
-    )
+          case Command.Workflow(action) => workflow(repo, apiJar, action)
+
+  /**
+   * Run `inner`, then again after a source save. A save during a run waits until that run finishes.
+   * Interrupt while a run is in flight exits 130. Interrupt while waiting exits 0.
+   */
+  private def watch(repo: Path, apiJar: Path, inner: Command): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    Ref.make(false).flatMap { running =>
+      def loop: URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+        running.set(true) *>
+          perform(repo, apiJar, inner).flatMap { _ =>
+            running.set(false) *>
+              say("watching") *>
+              watchRoots(repo, apiJar, inner).flatMap { paths =>
+                SourceWatch.changed(paths).foldZIO(
+                  error => ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message)),
+                  _ => loop,
+                )
+              }
+          }
+      loop.foldCauseZIO(
+        cause =>
+          if cause.isInterruptedOnly then
+            running.get.map(on => Completed(if on then CliExit.Interrupted else CliExit.Success, "", ""))
+          else ZIO.succeed(Completed(CliExit.TaskFailed, "", "watch stopped")),
+        done => ZIO.succeed(done),
+      )
+    }
+
+  private def watchRoots(repo: Path, apiJar: Path, command: Command): URIO[Loader & Scope, List[Path]] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
+      case Left(_) => List(repo.resolve("histos.scala"))
+      case Right(loaded) =>
+        val modules = loaded.graph.projects.collect { case module: Module => module }
+        val named = watchedProjects(command)
+        val chosen = if named.isEmpty then modules else modules.filter(module => named.contains(module.name.value))
+        SourceWatch.roots(repo, chosen)
+    }
+
+  private def watchedProjects(command: Command): List[String] =
+    command match
+      case Command.Test(projects)              => projects
+      case Command.TestOnly(modules, _)        => modules
+      case Command.TestQuick(modules, _)       => modules
+      case Command.Compile(projects)           => projects
+      case Command.Run(id, _)
+          if id != histos.task.TaskId.Inspect && id != histos.task.TaskId.Versions =>
+        List(id.value)
+      case _ => Nil
 
   private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map:
       case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
       case Right(loaded) => Completed(CliExit.Success, render(loaded.graph.projects), "")
 
-  private def run(repo: Path, apiJar: Path, id: TaskId): URIO[Loader & Scope & Machine, Completed] =
+  private def run(repo: Path, apiJar: Path, id: TaskId, platform: Option[Platform]): URIO[Loader & Scope & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
           case Left(err) => ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
           case Right(loaded) =>
-            ZIO.serviceWithZIO[Machine]: machine =>
-              val runners = Map(TaskId.Versions -> VersionTask.fromRepo(loaded.graph, repo, machine.env))
-              ZIO.scoped:
-                for
-                  run <- ZIO.serviceWithZIO[Tasks](_.run(id))
-                  out <- run.await
-                yield Completed(CliExit.Success, out.text, "")
-              .provide(Tasks.live(loaded.graph, runners))
-              .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+            if id == TaskId.Inspect || id == TaskId.Versions then task(repo, loaded, id)
+            else program(repo, loaded, id.value, platform)
+
+  /** `inspect` and `versions` stay tasks. Any other id is a module name. */
+  private def task(repo: Path, loaded: histos.load.LoadedBuild, id: TaskId): URIO[Machine & Scope, Completed] =
+    ZIO.serviceWithZIO[Machine]: machine =>
+      val runners = Map(TaskId.Versions -> VersionTask.fromRepo(loaded.graph, repo, machine.env))
+      ZIO.scoped:
+        for
+          run <- ZIO.serviceWithZIO[Tasks](_.run(id))
+          out <- run.await
+        yield Completed(CliExit.Success, out.text, "")
+      .provide(Tasks.live(loaded.graph, runners))
+      .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
+
+  /** Compile the main classpath of one platform, link when that platform needs it, and run the named class. */
+  private def program(repo: Path, loaded: histos.load.LoadedBuild, name: String, platform: Option[Platform]): URIO[Machine & Resolve, Completed] =
+    ZIO.serviceWithZIO[Machine]: machine =>
+      Ref.make(0).flatMap: status =>
+        val ran =
+          for
+            jdk <- GraphCompile.jdkHere.mapError(histos.program.ProgramError.Compile(_))
+            _ <- histos.program.Program.console(repo, loaded.graph, name, jdk, machine.env, platform).foreach:
+              case histos.program.ProgramFeed.Begin(module, version, target) =>
+                say(s"${module.value} ${version.value} ${target.token}")
+              case histos.program.ProgramFeed.Out(text) => say(text)
+              case histos.program.ProgramFeed.Err(text) => sayError(text)
+              case histos.program.ProgramFeed.Exited(_, _, _, code) =>
+                ZIO.when(code != 0)(status.set(code))
+            code <- status.get
+          yield Completed(if code == 0 then CliExit.Success else CliExit.Program(code), "", "")
+        ran.foldZIO(
+          error => ZIO.succeed(Completed(programExit(error), "", error.message)),
+          done => ZIO.succeed(done),
+        )
+
+  private def programExit(error: histos.program.ProgramError): CliExit =
+    error match
+      case histos.program.ProgramError.Compile(GraphCompileError.Lock(_) | GraphCompileError.LockRead(_)) =>
+        CliExit.ResolveFailed
+      case histos.program.ProgramError.Lock(_) | histos.program.ProgramError.LockRead(_) =>
+        CliExit.ResolveFailed
+      case histos.program.ProgramError.Compile(_) =>
+        CliExit.CompileFailed
+      case _ =>
+        CliExit.TaskFailed
 
   private def compile(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
@@ -256,13 +364,15 @@ object Cli:
     s"${line.group.value} ${line.artifact} ${line.revision} $shown"
 
   /** Compile, then one subprocess per Scala version. `no tests` is success and is not a passing suite. */
-  private def test(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =
+  private def test(repo: Path, apiJar: Path, projects: List[String], patterns: List[SuitePattern], quick: Boolean): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
-        attach(repo, Call.Test(projects), testLocal(repo, loaded, projects))
+        val local = testLocal(repo, loaded, projects, patterns, quick)
+        if quick then local
+        else attach(repo, Call.Test(projects), local)
 
-  private def testLocal(repo: Path, loaded: histos.load.LoadedBuild, projects: List[String]): URIO[Resolve, Completed] =
+  private def testLocal(repo: Path, loaded: histos.load.LoadedBuild, projects: List[String], patterns: List[SuitePattern], quick: Boolean): URIO[Resolve, Completed] =
     Ref.make(false).flatMap { failed =>
           val ran =
             for
@@ -274,10 +384,11 @@ object Cli:
                              case CompileFeed.Diagnostic(_) => None
                          }
                        }.collectSome.runCollect
-              _ <- ModuleTest.suites(repo, loaded.graph, projects, jdk, cells.toList).foreach {
-                     case TestFeed.Begin(module, version) => say(Lines.begin(module, version))
+              _ <- ModuleTest.suites(repo, loaded.graph, projects, jdk, cells.toList, patterns, quick).foreach {
+                     case TestFeed.Begin(module, version, platform) => say(Lines.begin(module, version, platform))
                      case TestFeed.Out(text)              => say(text)
                      case TestFeed.Err(text)              => sayError(text)
+                     case TestFeed.Cached(module, version, platform, suite) => say(Lines.cached(module, version, platform, suite))
                      case TestFeed.Done(cell) =>
                        ZIO.when(failedCell(cell.status))(failed.set(true)) *>
                          say(testedLine(cell)) *>
@@ -313,7 +424,7 @@ object Cli:
   private def failedCell(status: TestStatus): Boolean =
     status match
       case TestStatus.Failed(_, _, _)        => true
-      case TestStatus.NoTests | TestStatus.Passed(_, _) => false
+      case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed(_, _) => false
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store => Completed(CliExit.Success, store.root.toString, ""))
@@ -492,7 +603,7 @@ object Cli:
 
   private def render(projects: List[Project]): String =
     projects.map:
-      case Module(name, platforms, versions, _, _, _, _, _, _, _, _) =>
+      case Module(name, platforms, versions, _, _, _, _, _, _, _, _, _, _, _, _) =>
         s"${name.value} ${platforms.all.map(_.toString.toLowerCase).mkString(",")} ${versions.all.map(_.value).mkString(",")}"
       case Aggregate(name, children, _) =>
         s"${name.value} aggregate ${children.map(_.value).mkString(",")}"

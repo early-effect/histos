@@ -14,6 +14,7 @@ target/
 .histos/test-classes
 .histos/test-analysis
 .histos/test-work
+.histos/test-quick
 .histos/provider-src
 .histos/jars
 .histos/server.json

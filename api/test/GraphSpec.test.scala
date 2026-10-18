@@ -32,8 +32,8 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _, _),
-                    Module(_, _, _, _, testDeps, _, _, _, _, _, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _, _, _, _, _, _),
+                    Module(_, _, _, _, testDeps, _, _, _, _, _, _, _, _, _, _),
                   ),
                   Splits.aggregate,
                   _,
@@ -46,16 +46,41 @@ object GraphSpec extends ZIOSpecDefault:
             versions.all == List(scala3, scala2) &&
             dependencies == List(zioDep) &&
             coreDeps.isEmpty &&
-            testDeps.map(_.value) == List("core") &&
+            testDeps.map(_.name.value) == List("core") &&
             clang == ClangMajor(21)
           case other => summary(other) == "core module"
+    ,
+    test("a module stores the class histos run starts"):
+      val core = module("core", Jvm)(scala3).main(MainClass("demo.Check"))
+      val built = Projects(core)
+      assertTrue(
+        built match
+          case Right(graph) =>
+            graph.projects.collect { case module: Module => module.application.map(_.value) } == List(Some("demo.Check"))
+          case Left(_) => false
+        ,
+        MainClass.from("demo.Check").exists(_.value == "demo.Check"),
+        MainClass.from("") == Left(MainClassError.Empty),
+        MainClass.from("1bad") == Left(MainClassError.Bad("1bad")),
+      )
+    ,
+    test("a platform token is jvm, js, or native"):
+      assertTrue(
+        Platform.from("jvm") == Right(Jvm),
+        Platform.from("js") == Right(Js),
+        Platform.from("native") == Right(Native),
+        Jvm.token == "jvm" && Js.token == "js" && Native.token == "native",
+        Platform.from("JVM") == Left(PlatformError.Unknown("JVM")),
+        Platform.from("scala") == Left(PlatformError.Unknown("scala")),
+        PlatformError.Unknown("scala").message.contains("not a platform"),
+      )
     ,
     test("a module stores one test main"):
       val core = module("core", Jvm)(scala3).test(TestMain("demo.Check"))
       val built = Projects(core)
       assertTrue(
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None, None)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None, None, _, _, _, _)), _, _, _, _)) =>
             main.value == "demo.Check"
           case other => summary(other) == "stored"
         ,
@@ -80,13 +105,29 @@ object GraphSpec extends ZIOSpecDefault:
         ProviderLibrary.from("", "munit") == Left(ProviderLibraryError.Empty),
       )
     ,
+    test("a js module names its environment and module kind"):
+      val ui = module("ui", Js)(scala3).jsEnv(JsEnv.Jsdom).jsModule(JsModuleKind.ESModule)
+      val firefox = module("browser", Js)(scala3).jsEnv(JsEnv.Firefox)
+      val jvm = module("core", Jvm)(scala3).jsEnv(JsEnv.Node)
+      val refused = module("core", Jvm)(scala3).jsModule(JsModuleKind.CommonJS)
+      assertTrue(
+        Projects(ui, firefox) match
+          case Right(graph) =>
+            graph.projects.collect { case module: Module => (module.name.value, module.jsEnv, module.jsModule) } ==
+              List(("ui", JsEnv.Jsdom, JsModuleKind.ESModule), ("browser", JsEnv.Firefox, JsModuleKind.NoModule))
+          case Left(_) => false
+        ,
+        Projects(jvm).fold(_ => false, graph => graph.projects.collect { case module: Module => module.jsEnv } == List(JsEnv.Node)),
+        Projects(refused).fold(_.message, _ => "").contains("names a js module kind and does not target js"),
+      )
+    ,
     test("test dependencies stay off the compile classpath"):
       val tests = dep"dev.zio::zio-test:2.1.27"
       val core = module("core", Jvm)(scala3).libraryDependencies(zioDep).testDependencies(tests)
       val built = Projects(core)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None, None)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None, None, _, _, _, _)), _, _, _, _)) =>
             dependencies == List(zioDep) && testDependencies == List(tests)
           case other => summary(other) == "split"
     ,
@@ -146,6 +187,85 @@ object GraphSpec extends ZIOSpecDefault:
     test("rejects an aggregate that lists a child twice"):
       val core = module("core", Jvm)(scala3)
       assertTrue(summary(Projects(aggregate("root", core, core), core)).contains("twice")),
+    test("a library coordinate can name its platforms"):
+      val time = dep"io.github.cquiroz::scala-java-time:2.7.0".on(Js, Native)
+      val core = module("core", Jvm, Js, Native)(scala3).libraryDependencies(zioDep, time).clang(ClangMajor(21))
+      val built = Projects(core)
+      assertTrue:
+        built match
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, _, _, _, _, _, _, _)), _, _, _, _)) =>
+            Dep.select(dependencies, Jvm) == List(zioDep) &&
+            Dep.select(dependencies, Js) == List(zioDep, time) &&
+            Dep.select(dependencies, Native) == List(zioDep, time)
+          case other => summary(other) == "scoped library"
+    ,
+    test("an upstream edge can name its platforms"):
+      val types = module("types", Jvm, Js, Native)(scala3).clang(ClangMajor(21))
+      val facade = module("facade", Js)(scala3).dependsOn(types)
+      val core = module("core", Jvm, Js, Native)(scala3).clang(ClangMajor(21)).dependsOn(types).dependsOn(Js)(facade)
+      val built = Projects(types, facade, core)
+      val recorded = built.map(_.projects.collect:
+        case module: Module if module.name.value == "core" =>
+          (
+            module.dependsOn.map(edge => (edge.name.value, edge.platforms)),
+            module.upstream(Jvm).map(_.value),
+            module.upstream(Js).map(_.value),
+            module.upstream(Native).map(_.value),
+          )
+      )
+      assertTrue:
+        recorded == Right(List((
+          List(("types", None), ("facade", Some(List(Js)))),
+          List("types"),
+          List("types", "facade"),
+          List("types"),
+        )))
+    ,
+    test("an unscoped edge requires every platform the depender builds"):
+      val facade = module("facade", Js)(scala3)
+      val core = module("core", Jvm, Js)(scala3).dependsOn(facade)
+      assertTrue(summary(Projects(facade, core)).contains("'facade' does not build it"))
+    ,
+    test("a scoped edge cannot name a platform either side lacks"):
+      val types = module("types", Jvm)(scala3)
+      val facade = module("facade", Js)(scala3)
+      val missingHere = summary(Projects(facade, module("core", Js)(scala3).dependsOn(Jvm)(facade)))
+      val missingThere = summary(Projects(types, module("core", Jvm, Js)(scala3).dependsOn(Js)(types)))
+      assertTrue(
+        missingHere.contains("depends on jvm and does not build it"),
+        missingThere.contains("'types' does not build it"),
+      )
+    ,
+    test("the same upstream twice is refused"):
+      val types = module("types", Jvm)(scala3)
+      val core = module("core", Jvm)(scala3).dependsOn(types).dependsOn(Js)(types)
+      assertTrue(summary(Projects(types, core)).contains("depends on 'types' twice"))
+    ,
+    test("edges on different platforms are not a cycle, and one platform still is"):
+      val left = module("left", Jvm, Js)(scala3)
+      val right = module("right", Jvm, Js)(scala3)
+      val split = Projects(left.dependsOn(Js)(right), right.dependsOn(Jvm)(left))
+      val loop = summary(Projects(left.dependsOn(Js)(right), right.dependsOn(Js)(left)))
+      assertTrue(split.isRight, loop.contains("cycle on js"))
+    ,
+    test("a module can live under a directory that is not its name"):
+      val todo = module("todo", Js)(scala3).in(path"example/todo-conduit")
+      val built = Projects(todo)
+      val shared = summary(Projects(module("core", Jvm)(scala3), module("app", Jvm)(scala3).in(path"core")))
+      assertTrue(
+        built match
+          case Right(ProjectGraph(List(found: Module), _, _, _, _)) =>
+            found.baseDirectory == "example/todo-conduit" && found.directory == Some(path"example/todo-conduit")
+          case other => summary(other) == "nested"
+        ,
+        shared.contains("both use directory core"),
+        ProjectPath.from("example/todo-conduit").exists(_.value == "example/todo-conduit"),
+        ProjectPath.from("../secret") == Left(ProjectPathError.Escapes("../secret")),
+        ProjectPath.from("/tmp/secret") == Left(ProjectPathError.Escapes("/tmp/secret")),
+        ProjectPath.from("") == Left(ProjectPathError.Empty),
+        ProjectPath.from("example//todo") == Left(ProjectPathError.Escapes("example//todo")),
+      )
+    ,
     test("a ring of modules is a cycle"):
       check(Gen.int(2, 6)): n =>
         val message = summary(ring(n))
@@ -157,7 +277,7 @@ object GraphSpec extends ZIOSpecDefault:
       val jvm = summary(Projects(module("core", Jvm)(scala3).nativeVersion(NativeVersion("0.5.12"))))
       assertTrue(
         native match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, _, _, _, Some(version))), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, _, _, _, Some(version), _, _, _, _)), _, _, _, _)) =>
             version.value == "0.5.13-SNAPSHOT"
           case other => summary(other) == "native version"
         ,
@@ -171,7 +291,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _, _)), _, _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _, _, _, _, _, _)), _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),

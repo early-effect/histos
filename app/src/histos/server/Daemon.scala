@@ -328,9 +328,12 @@ object Daemon:
                      sent.as(compiledCell(feed))
                    }.collectSome.runCollect
           _ <- ModuleTest.suites(repo, graph, projects, jdk, cells.toList).foreach {
-                 case TestFeed.Begin(module, version) => write(output, wire(Message.Out(Lines.begin(module, version))))
+                 case TestFeed.Begin(module, version, platform) =>
+                   write(output, wire(Message.Out(Lines.begin(module, version, platform))))
                  case TestFeed.Out(text)              => write(output, wire(Message.Out(text)))
                  case TestFeed.Err(text)              => write(output, wire(Message.Err(text)))
+                 case TestFeed.Cached(module, version, platform, suite) =>
+                   write(output, wire(Message.Out(histos.cli.Lines.cached(module, version, platform, suite))))
                  case TestFeed.Done(cell) =>
                    ZIO.when(failedTest(cell.status))(failed.set(true)) *>
                      write(output, wire(Message.Out(Lines.tested(cell)))) *>
@@ -376,7 +379,7 @@ object Daemon:
   private def failedTest(status: TestStatus): Boolean =
     status match
       case TestStatus.Failed(_, _, _)                 => true
-      case TestStatus.NoTests | TestStatus.Passed(_, _) => false
+      case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed(_, _) => false
 
   private def wire(message: Message): String =
     message.toJson

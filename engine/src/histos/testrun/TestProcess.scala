@@ -128,6 +128,23 @@ object TestProcess:
         yield console(process) ++ ZStream.fromZIO(finish(request, process).map(TestEvent.Exited(_)))
       }
 
+  /** A linked program: `node`, or a native binary. No JVM bootstrap. Interrupt destroys the process. */
+  def command(
+      argv: List[String],
+      work: Path,
+      environment: Map[String, String],
+  ): ZStream[Any, TestError, TestEvent] =
+    argv match
+      case Nil => ZStream.fail(TestError.Io(TestIo.Spawn))
+      case _ =>
+        ZStream.unwrapScoped {
+          for
+            _ <- directory(work, TestError.Work(work))
+            process <- startCommand(argv, work, environment)
+            _ <- ZIO.addFinalizer(stop(process))
+          yield console(process) ++ ZStream.fromZIO(wait(process).map(TestEvent.Exited(_)))
+        }
+
   /** Collect [[events]] for a caller that wants the text after the process ends. */
   def run(request: TestRequest): IO[TestError, TestOutcome] =
     events(request).runFold(Captured("", "", None))(capture).flatMap: captured =>
@@ -221,6 +238,21 @@ object TestProcess:
       if code == 0 then ZIO.succeed(classes)
       else ZIO.fail(TestError.Bootstrap(ProcessOutput.from(text)))
     }
+
+  private def startCommand(
+      argv: List[String],
+      work: Path,
+      environment: Map[String, String],
+  ): IO[TestError, Process] =
+    ZIO.attemptBlocking {
+      val builder = new ProcessBuilder(argv.asJava)
+      builder.directory(work.toFile)
+      val env = builder.environment()
+      env.clear()
+      environment.foreach((key, value) => env.put(key, value))
+      builder.redirectInput(ProcessBuilder.Redirect.PIPE)
+      builder.start()
+    }.mapError(_ => TestError.Io(TestIo.Spawn))
 
   private def start(request: TestRequest, entry: Path): IO[TestError, Process] =
     ZIO.attemptBlocking {

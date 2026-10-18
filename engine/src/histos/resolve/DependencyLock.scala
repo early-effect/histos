@@ -39,18 +39,9 @@ final case class LockedCell(
 final case class DependencyLock(cells: List[LockedCell])
 
 object PlatformToken:
-  def render(platform: Platform): String =
-    platform match
-      case Platform.Jvm    => "jvm"
-      case Platform.Js     => "js"
-      case Platform.Native => "native"
+  def render(platform: Platform): String = platform.token
 
-  def parse(raw: String): Option[Platform] =
-    raw match
-      case "jvm"    => Some(Platform.Jvm)
-      case "js"     => Some(Platform.Js)
-      case "native" => Some(Platform.Native)
-      case _        => None
+  def parse(raw: String): Option[Platform] = Platform.from(raw).toOption
 
 object DependencyLock:
   def parse(text: String): Either[LockError, DependencyLock] =

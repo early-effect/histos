@@ -7,7 +7,22 @@ enum DepKind:
   case Java, Binary, Full
 
 /** A library coordinate written the way sbt writes it. The Scala suffix is not resolved here. */
-final case class Dep @publicInBinary private (organization: String, name: String, revision: String, kind: DepKind)
+/** `platforms` empty of a value means every platform. `Some` is only those platforms. */
+final case class Dep @publicInBinary private (
+    organization: String,
+    name: String,
+    revision: String,
+    kind: DepKind,
+    platforms: Option[List[Platform]] = None,
+):
+  /** This dependency is resolved only on the named platforms. */
+  def on(platform: Platform, rest: Platform*): Dep =
+    copy(platforms = Some((platform :: rest.toList).distinct))
+
+  def applies(platform: Platform): Boolean =
+    platforms match
+      case None         => true
+      case Some(chosen) => chosen.contains(platform)
 
 object Dep:
   /** A literal (`Dep("dev.zio::zio:2.1.26")`). A bad shape is a compile error. */
@@ -42,6 +57,9 @@ object Dep:
       kind: DepKind,
   ): Dep =
     new Dep(organization, name, revision, kind)
+
+  def select(deps: List[Dep], platform: Platform): List[Dep] =
+    deps.filter(_.applies(platform))
 
   private def coordinate(
       organization: String,

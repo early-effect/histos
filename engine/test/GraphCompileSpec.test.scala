@@ -3,7 +3,7 @@ package histos.zinc
 import histos.jdk.{JdkMajor, JdkVersion}
 import histos.resolve.{Resolve, ResolveError}
 import histos.workflow.CiError
-import histos.{Js, Jvm, Module, Projects, ScalaVersion, module}
+import histos.{Js, Jvm, Module, ProjectPath, Projects, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
 
@@ -112,6 +112,55 @@ object GraphCompileSpec extends ZIOSpecDefault:
               module.value == "app" && dependency.value == "core" && version.value == "3.9.0" && platform == Jvm
             case _ => false
     ,
+    test("a js-only upstream is on the js classpath and not the jvm one"):
+      ZIO.scoped:
+        for
+          root <- temp
+          built <- ZIO.attempt {
+                     val types = module("types", Jvm, Js)(ScalaVersion("3.9.0"))
+                     val facade = module("facade", Js)(ScalaVersion("3.9.0")).dependsOn(types)
+                     val core = module("core", Jvm, Js)(ScalaVersion("3.9.0")).dependsOn(types).dependsOn(Js)(facade)
+                     write(root, "types/src/main/scala/Types.scala", "object Types:\n  def n: Int = 1\n")
+                     write(root, "facade/src/main/scala/Facade.scala", "object Facade:\n  def n: Int = Types.n\n")
+                     write(root, "core/src/main/scala/Core.scala", "object Core:\n  def n: Int = Types.n\n")
+                     write(root, "core/src/main/scalajs/UseFacade.scala", "object UseFacade:\n  def n: Int = Facade.n\n")
+                     write(
+                       root,
+                       ".histos/dependencies.lock",
+                       "cell types 3.9.0 jvm\ncell types 3.9.0 js\ncell facade 3.9.0 js\ncell core 3.9.0 jvm\ncell core 3.9.0 js\n",
+                     )
+                     Projects(types, facade, core)
+                   }.flatMap(graph => ZIO.fromEither(graph).mapError(error => new IllegalStateException(error.message)))
+          cells <- GraphCompile.run(root, built, List("core"), jdk).provide(Resolve.live(root.resolve("coursier")))
+        yield
+          val names = cells.map(cell => (cell.module.value, cell.platform))
+          val useFacade = cells.collect:
+            case cell if cell.module.value == "core" && cell.platform == Js => entries(cell.classes)
+          assertTrue(
+            !names.contains(("facade", Jvm)),
+            names.contains(("facade", Js)),
+            names.contains(("core", Jvm)),
+            names.contains(("core", Js)),
+            useFacade.exists(_.exists(_.contains("UseFacade"))),
+          )
+    ,
+    test("sources can live under a directory that is not the module name"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- ZIO.attempt {
+                 write(root, "example/todo/src/main/scala/Todo.scala", "object Todo:\n  def n: Int = 1\n")
+                 write(root, ".histos/dependencies.lock", "cell todo 3.9.0 jvm\n")
+               }
+          built <- ZIO.fromEither(
+                     Projects(module("todo", Jvm)(ScalaVersion("3.9.0")).in(ProjectPath("example/todo"))),
+                   ).mapError(error => new IllegalStateException(error.message))
+          cells <- GraphCompile.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
+        yield assertTrue:
+          cells match
+            case cell :: Nil => cell.module.value == "todo" && cell.platform == Jvm && cell.classFiles > 0
+            case _           => false
+    ,
     test("a js module compiles to sjsir, and its tests are not on that classpath"):
       ZIO.scoped:
         for
@@ -199,6 +248,33 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built.projects.collectFirst { case module: Module => module.name } match
             case Some(name) => out == Left(GraphCompileError.NoRoot(name))
             case None       => false
+    ,
+    test("tests alone compile an empty main, and another platform's tests do not"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- ZIO.attempt {
+                 write(root, "e2e/src/test/scala/Only.scala", "object Only:\n  def n: Int = missing\n")
+                 write(root, "probe/src/test/scalajs/JsOnly.scala", "object JsOnly:\n  def n: Int = 1\n")
+                 write(root, ".histos/dependencies.lock", "cell e2e 3.9.0 jvm\ncell probe 3.9.0 jvm\n")
+               }
+          built <- ZIO.fromEither(
+                     Projects(module("e2e", Jvm)(ScalaVersion("3.9.0")), module("probe", Jvm)(ScalaVersion("3.9.0"))),
+                   ).mapError(error => new IllegalStateException(error.message))
+          compiled <- GraphCompile.run(root, built, List("e2e"), jdk).provide(Resolve.live(root.resolve("coursier")))
+          refused <- GraphCompile.run(root, built, List("probe"), jdk).provide(Resolve.live(root.resolve("coursier"))).either
+          files <- ZIO.attempt(entries(root.resolve(".histos/classes/e2e/3.9.0/jvm")))
+        yield assertTrue(
+          compiled match
+            case cell :: Nil => cell.module.value == "e2e" && cell.platform == Jvm && cell.classFiles == 0
+            case _           => false
+          ,
+          files.isEmpty,
+          refused match
+            case Left(GraphCompileError.NoSources(module, _)) => module.value == "probe"
+            case _                                            => false
+          ,
+        )
     ,
     test("an empty source root is refused"):
       ZIO.scoped:

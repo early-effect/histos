@@ -21,7 +21,13 @@ object NativeBridge:
        |    Files.createDirectories(base)
        |    val binary = Scope.apply { scope =>
        |      val config = Config.empty
-       |        .withLogger(Logger.nullLogger)
+       |        .withLogger(Logger(
+       |          (_: Throwable) => (),
+       |          (_: String) => (),
+       |          (_: String) => (),
+       |          (_: String) => (),
+       |          (msg: String) => System.err.println(msg)
+       |        ))
        |        .withBaseDir(base)
        |        .withModuleName("${escape(module)}")
        |        .withMainClass(Some("${escape(main)}"))
