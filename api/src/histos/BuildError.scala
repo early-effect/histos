@@ -13,7 +13,10 @@ enum BuildError:
   case MissingProject(name: String, referencedFrom: SourcePos)
   case DependsOnAggregate(module: ProjectName, aggregate: ProjectName, position: SourcePos)
   case SelfDependency(name: ProjectName, position: SourcePos)
-  case Cycle(path: List[ProjectName])
+  case DuplicateDependency(module: ProjectName, dependency: ProjectName, position: SourcePos)
+  case EdgeWithoutPlatform(module: ProjectName, platform: Platform, position: SourcePos)
+  case UpstreamMissingPlatform(module: ProjectName, dependency: ProjectName, platform: Platform, position: SourcePos)
+  case Cycle(platform: Platform, path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
   case ClangWithoutNative(name: ProjectName, position: SourcePos)
   case NativeVersionWithoutNative(name: ProjectName, position: SourcePos)
@@ -26,6 +29,9 @@ enum BuildError:
   case MixedScheme(position: SourcePos)
   case DuplicateResolver(token: String)
   case MixedTest(name: ProjectName, position: SourcePos)
+  case DuplicateDirectory(name: ProjectName, other: ProjectName, directory: String)
+  case JsEnvWithoutJs(name: ProjectName, position: SourcePos)
+  case JsModuleWithoutJs(name: ProjectName, position: SourcePos)
 
   def message: String = this match
     case EmptyName(position)                 => s"a project name is not empty (${position.line}:${position.column})"
@@ -45,7 +51,14 @@ enum BuildError:
     case DependsOnAggregate(module, aggregate, _) =>
       s"'${module.value}' depends on aggregate '${aggregate.value}'"
     case SelfDependency(name, _)             => s"'${name.value}' depends on itself"
-    case Cycle(path)                         => s"dependency cycle ${path.map(_.value).mkString(" -> ")}"
+    case DuplicateDependency(module, dependency, _) =>
+      s"'${module.value}' depends on '${dependency.value}' twice"
+    case EdgeWithoutPlatform(module, platform, _) =>
+      s"'${module.value}' depends on ${platform.toString.toLowerCase} and does not build it"
+    case UpstreamMissingPlatform(module, dependency, platform, _) =>
+      s"'${module.value}' depends on '${dependency.value}' on ${platform.toString.toLowerCase}, and '${dependency.value}' does not build it"
+    case Cycle(platform, path) =>
+      s"dependency cycle on ${platform.toString.toLowerCase} ${path.map(_.value).mkString(" -> ")}"
     case MissingClang(name, position)        =>
       s"project '${name.value}' targets Native and does not name a clang major (${position.line}:${position.column})"
     case ClangWithoutNative(name, position)  =>
@@ -69,3 +82,9 @@ enum BuildError:
     case DuplicateResolver(token) => s"repository $token is listed twice"
     case MixedTest(name, position) =>
       s"'${name.value}' names a test main and a test provider (${position.line}:${position.column})"
+    case DuplicateDirectory(name, other, directory) =>
+      s"'${name.value}' and '${other.value}' both use directory $directory"
+    case JsEnvWithoutJs(name, position) =>
+      s"project '${name.value}' names a js environment and does not target js (${position.line}:${position.column})"
+    case JsModuleWithoutJs(name, position) =>
+      s"project '${name.value}' names a js module kind and does not target js (${position.line}:${position.column})"

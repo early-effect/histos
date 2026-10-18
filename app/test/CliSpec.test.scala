@@ -111,6 +111,50 @@ object CliSpec extends ZIOSpecDefault:
         named  <- Cli.parse(List("compile", "core"))
       yield assertTrue(entire == Command.Compile(Nil), named == Command.Compile(List("core")))
     ,
+    test("testQuick and watch parse"):
+      for
+        all <- Cli.parse(List("testQuick"))
+        scoped <- Cli.parse(List("testQuick", "--module", "engine", "com.acme.Foo*"))
+        watched <- Cli.parse(List("~", "testQuick", "com.acme.Foo*"))
+        empty <- Cli.parse(List("~")).either
+        nested <- Cli.parse(List("~", "~", "test")).either
+      yield assertTrue(
+        all match
+          case Command.TestQuick(Nil, Nil) => true
+          case _                           => false
+        ,
+        scoped match
+          case Command.TestQuick(List("engine"), patterns) => patterns.map(_.value) == List("com.acme.Foo*")
+          case _                                           => false
+        ,
+        watched match
+          case Command.Watch(Command.TestQuick(Nil, patterns)) => patterns.map(_.value) == List("com.acme.Foo*")
+          case _                                               => false
+        ,
+        empty == Left(CliParseError.WatchCommand("watch needs a command")),
+        nested == Left(CliParseError.WatchCommand("watch does not nest")),
+      )
+    ,
+    test("testOnly selects suites by name"):
+      for
+        plain <- Cli.parse(List("testOnly", "com.acme.Foo*"))
+        scoped <- Cli.parse(List("testOnly", "--module", "engine", "--module", "app", "com.acme.*", "com.acme.Foo?"))
+        missing <- Cli.parse(List("testOnly")).either
+        flag <- Cli.parse(List("testOnly", "--nope", "com.acme.Foo*")).either
+      yield assertTrue(
+        plain match
+          case Command.TestOnly(Nil, patterns) => patterns.map(_.value) == List("com.acme.Foo*")
+          case _                               => false
+        ,
+        scoped match
+          case Command.TestOnly(modules, patterns) =>
+            modules == List("engine", "app") && patterns.map(_.value) == List("com.acme.*", "com.acme.Foo?")
+          case _ => false
+        ,
+        missing == Left(CliParseError.MissingPattern),
+        flag == Left(CliParseError.Pattern("testOnly does not take --nope")),
+      )
+    ,
     test("test takes project names"):
       for
         entire <- Cli.parse(List("test"))
@@ -302,6 +346,76 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for done <- invoke(List("run", "compile"))
         yield assertTrue(done.exit == CliExit.TaskFailed && done.exit.code == 1 && done.err.contains("compile"))
+    ,
+    test("run of a module without a main does not link"):
+      ZIO.scoped:
+        for done <- invoke(List("run", "core"))
+        yield assertTrue(done.exit == CliExit.TaskFailed && done.err.contains("does not name a main"))
+    ,
+    test("run takes one platform and refuses a token that is not one"):
+      for
+        plain <- Cli.parse(List("run", "app"))
+        jvm   <- Cli.parse(List("run", "app", "jvm"))
+        bad   <- Cli.parse(List("run", "app", "scala")).either
+        task  <- Cli.parse(List("run", "versions", "jvm")).either
+        inspect <- Cli.parse(List("run", "inspect", "native")).either
+      yield assertTrue(
+        plain match
+          case Command.Run(id, None) => id.value == "app"
+          case _                     => false
+        ,
+        jvm match
+          case Command.Run(id, Some(histos.Jvm)) => id.value == "app"
+          case _                                 => false
+        ,
+        bad == Left(CliParseError.BadPlatform(histos.PlatformError.Unknown("scala").message)),
+        task == Left(CliParseError.TaskPlatform("versions")),
+        inspect == Left(CliParseError.TaskPlatform("inspect")),
+      )
+    ,
+    test("a multi-platform module names no platform and does not start"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          _ <- ZIO.attempt(
+            Files.writeString(
+              dir.resolve("histos.scala"),
+              """import histos.*
+                |object build extends HistosBuild:
+                |  def graph =
+                |    val app = module("app", Jvm, Js)(scala"3.9.0").main(MainClass("demo.Check"))
+                |    Projects(app)
+                |""".stripMargin,
+            )
+          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          done <- Cli.execute(List("run", "app"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          done.exit == CliExit.TaskFailed,
+          done.err.contains("histos run app jvm"),
+          done.out.isEmpty,
+        )
+    ,
+    test("a platform the module does not build is refused before it starts"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          _ <- ZIO.attempt(
+            Files.writeString(
+              dir.resolve("histos.scala"),
+              """import histos.*
+                |object build extends HistosBuild:
+                |  def graph =
+                |    val app = module("app", Jvm)(scala"3.9.0").main(MainClass("demo.Check"))
+                |    Projects(app)
+                |""".stripMargin,
+            )
+          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          done <- Cli.execute(List("run", "app", "native"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          done.exit == CliExit.TaskFailed && done.err.contains("does not build native") && done.out.isEmpty,
+        )
     ,
     test("a missing build is a load failure"):
       ZIO.scoped:

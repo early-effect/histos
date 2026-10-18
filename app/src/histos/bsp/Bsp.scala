@@ -2,7 +2,7 @@ package histos.bsp
 
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Resolve, ResolveCell, ResolveError}
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk, ScalaSeries}
-import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -171,13 +171,13 @@ object Bsp:
     private def classpath(module: Module, version: ScalaVersion): ZIO[Resolve, BspError, List[Path]] =
       val cell = ResolveCell(
         module.name,
-        module.dependencies,
+        Dep.select(module.dependencies, Platform.Jvm),
         version,
         Platform.Jvm,
         BuildResolvers(graph.resolvers),
         ClasspathScope.Compile,
       )
-      val upstream = module.dependsOn.map(dependency => GraphCompile.classesDir(repo, dependency, version))
+      val upstream = module.upstream(Platform.Jvm).map(dependency => GraphCompile.classesDir(repo, dependency, version))
       for
         lock    <- readLock
         jars    <- Resolve.materialize(cell, lock).mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
@@ -215,7 +215,7 @@ object Bsp:
       Rpc.BuildTarget(
         Rpc.TargetId(uri),
         cell.module.name.value,
-        directoryUri(repo.resolve(cell.module.name.value)),
+        directoryUri(repo.resolve(cell.module.baseDirectory)),
         List("library"),
         List("scala"),
         dependencyUris(cell.module, cell.version).map(Rpc.TargetId(_)),
@@ -236,7 +236,7 @@ object Bsp:
         .sortBy(cell => (cell.module.name.value, cell.version.value))
 
     private def dependencyUris(module: Module, version: ScalaVersion): List[String] =
-      module.dependsOn.flatMap: name =>
+      module.upstream(Platform.Jvm).flatMap: name =>
         graph.get(name) match
           case Some(dependency: Module)
               if dependency.platforms.all.contains(Platform.Jvm) && dependency.versions.all.exists(_.value == version.value) =>

@@ -11,11 +11,14 @@ object Lines:
   def compiled(repo: Path, cell: CompiledCell): String =
     s"${cell.module.value} ${cell.version.value} ${token(cell.platform)} ${cell.classFiles} ${relative(repo, cell.classes)}"
 
-  def begin(module: ProjectName, version: ScalaVersion): String =
-    s"${module.value} ${version.value} jvm"
+  def begin(module: ProjectName, version: ScalaVersion, platform: Platform): String =
+    s"${module.value} ${version.value} ${token(platform)}"
 
   def tested(cell: TestedCell): String =
-    s"${cell.module.value} ${cell.version.value} jvm ${cell.status.label}"
+    s"${cell.module.value} ${cell.version.value} ${token(cell.platform)} ${cell.status.label}"
+
+  def cached(module: ProjectName, version: ScalaVersion, platform: Platform, suite: String): String =
+    s"${module.value} ${version.value} ${token(platform)} $suite cached"
 
   private def token(platform: Platform): String =
     platform match

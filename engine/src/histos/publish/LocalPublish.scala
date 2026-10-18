@@ -6,7 +6,7 @@ import histos.resolve.ArtifactName
 import histos.version.{CiVersion, Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.workflow.{CiError, TestTarget, Workflow}
 import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
-import histos.{Module, Organization, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Dep, Module, Organization, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -126,7 +126,7 @@ object LocalPublish:
       else
         val next = more.flatMap: name =>
           graph.get(name) match
-            case Some(module: Module) => module.dependsOn.filter(members.contains).toSet
+            case Some(module: Module) => module.upstream(Platform.Jvm).filter(members.contains).toSet
             case _                    => Set.empty
         step(seen ++ more, next -- seen)
     step(Set.empty, asked)
@@ -139,7 +139,7 @@ object LocalPublish:
         case _                    => Nil
     modules.foldLeft[Either[LocalPublishError, Unit]](Right(())): (acc, module) =>
       acc.flatMap: _ =>
-        module.dependsOn.find(dependency => !chosen.contains(dependency)) match
+        module.upstream(Platform.Jvm).find(dependency => !chosen.contains(dependency)) match
           case Some(dependency) => Left(LocalPublishError.UnpublishedDependency(module.name, dependency))
           case None             => Right(())
 
@@ -182,10 +182,10 @@ object LocalPublish:
   ): Either[LocalPublishError, List[MavenDependency]] =
     graph.get(module) match
       case Some(found: Module) =>
-        val internal = found.dependsOn.foldLeft[Either[LocalPublishError, List[MavenDependency]]](Right(Nil)): (acc, dependency) =>
+        val internal = found.upstream(Platform.Jvm).foldLeft[Either[LocalPublishError, List[MavenDependency]]](Right(Nil)): (acc, dependency) =>
           acc.flatMap: seen =>
             coordinate(group, ArtifactName.published(dependency, version, Platform.Jvm), revision.render).map(seen :+ _)
-        val external = found.dependencies.foldLeft[Either[LocalPublishError, List[MavenDependency]]](Right(Nil)): (acc, dependency) =>
+        val external = Dep.select(found.dependencies, Platform.Jvm).foldLeft[Either[LocalPublishError, List[MavenDependency]]](Right(Nil)): (acc, dependency) =>
           acc.flatMap: seen =>
             externalCoordinate(dependency.organization, ArtifactName.of(dependency, version, Platform.Jvm), dependency.revision).map(seen :+ _)
         for

@@ -4,7 +4,7 @@ import histos.load.BuildClasspath
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, Assembled, ClassJar, JarError, MainClass}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, RepositoryIo, Resolve, ResolveCell, ResolveError}
 import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError, ResolvedJdk}
-import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -59,7 +59,7 @@ object Assemble:
     graph.projects.collect { case found: Module => found.name -> found }.toMap
 
   private def closure(module: Module, modules: Map[ProjectName, Module]): Either[AssembleError, List[Module]] =
-    module.dependsOn.foldLeft[Either[AssembleError, List[Module]]](Right(Nil)): (acc, name) =>
+    module.upstream(Platform.Jvm).foldLeft[Either[AssembleError, List[Module]]](Right(Nil)): (acc, name) =>
       acc.flatMap: seen =>
         modules.get(name) match
           case None       => Left(AssembleError.NoModule(name.value))
@@ -90,7 +90,7 @@ object Assemble:
       lock: DependencyLock,
   ): ZIO[Resolve, AssembleError, List[Path]] =
     ZIO.foldLeft(ordered)(List.empty[Path]): (acc, module) =>
-      val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories, ClasspathScope.Compile)
+      val cell = ResolveCell(module.name, Dep.select(module.dependencies, Platform.Jvm), version, Platform.Jvm, repositories, ClasspathScope.Compile)
       Resolve.materialize(cell, lock).mapBoth(
         AssembleError.Resolve(_),
         classpath =>

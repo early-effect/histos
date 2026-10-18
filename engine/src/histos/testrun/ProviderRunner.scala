@@ -11,7 +11,10 @@ object ProviderRunner:
   /** The child uses this status when the framework discovers nothing. It is not `no tests`. */
   val NoneFound: Int = 2
 
-  def source(framework: String, classes: Path): String =
+  /** Suites were discovered, and none of them matched the pattern. */
+  val NoneMatched: Int = 3
+
+  def source(framework: String, classes: Path, patterns: List[SuitePattern]): String =
     val frameworkLit = escape(framework)
     val classesLit = escape(classes.toAbsolutePath.toString)
     s"""package subprocess
@@ -27,8 +30,8 @@ object ProviderRunner:
        |    val loader = getClass.getClassLoader
        |    val raw = Class.forName(frameworkName, true, loader).getDeclaredConstructor().newInstance()
        |    val framework = classOf[Framework].cast(raw)
-       |    val discovered = discover(classes, framework.fingerprints, loader)
-       |    if (discovered.isEmpty) System.exit($NoneFound)
+       |    val discovered = discover(classes, framework.fingerprints, loader).filter(task => suiteAllowed(task.fullyQualifiedName()))
+       |    if (discovered.isEmpty) System.exit(if (suitePatterns.length == 0) $NoneFound else $NoneMatched)
        |    val runner = framework.runner(Array.empty[String], Array.empty[String], loader)
        |    val failed = new AtomicBoolean(false)
        |    run(runner.tasks(discovered.toArray), failed)
@@ -63,6 +66,7 @@ object ProviderRunner:
        |    def trace(thrown: Throwable): Unit = thrown.printStackTrace(System.err)
        |  }
        |
+       |__SUITES__
        |  private def discover(root: java.nio.file.Path, fingerprints: Array[Fingerprint], loader: ClassLoader): List[TaskDef] = {
        |    val names = classNames(root)
        |    fingerprints.toList.flatMap {
@@ -121,7 +125,7 @@ object ProviderRunner:
        |    }
        |  }
        |}
-       |""".stripMargin
+       |""".stripMargin.replace("__SUITES__", SuitePattern.embed(patterns))
 
   private def escape(raw: String): String =
     raw.flatMap {

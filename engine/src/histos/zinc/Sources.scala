@@ -63,20 +63,27 @@ object SourceFilter:
       case SeriesDir(required)   => ScalaSeries.of(version).contains(required)
 
 object Sources:
-  /** `.scala` sources, and `.java` sources on the JVM, whose path filters match. */
+  /** Main sources. `src/test` is not main. `.scala`, and `.java` on the JVM, whose path filters match. */
   def select(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
-    ZIO.attempt(list(root, version, platform)).mapError(_ => CompileError.Io(CompileIo.Read))
+    collect(root, version, platform, Tree.Main)
 
-  private def list(root: Path, version: ScalaVersion, platform: Platform): List[Path] =
+  /** `src/test` for this platform. A package named `test` under `scala` is main code, so it is absent here. */
+  def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
+    collect(root, version, platform, Tree.Test)
+
+  private def collect(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): IO[CompileError, List[Path]] =
+    ZIO.attempt(list(root, version, platform, tree)).mapError(_ => CompileError.Io(CompileIo.Read))
+
+  private def list(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): List[Path] =
     if !Files.isDirectory(root) then Nil
     else
       val walk = Files.walk(root)
       try
-        walk.iterator.asScala.filter(path => include(root, path, version, platform)).toList.sortBy(_.toString)
+        walk.iterator.asScala.filter(path => include(root, path, version, platform, tree)).toList.sortBy(_.toString)
       finally walk.close()
 
-  private def include(root: Path, path: Path, version: ScalaVersion, platform: Platform): Boolean =
-    Files.isRegularFile(path) && source(path, platform) && allows(root, path, version, platform)
+  private def include(root: Path, path: Path, version: ScalaVersion, platform: Platform, tree: Tree): Boolean =
+    Files.isRegularFile(path) && source(path, platform) && allows(root, path, version, platform, tree)
 
   private def source(path: Path, platform: Platform): Boolean =
     Option(path.getFileName).map(_.toString) match
@@ -85,21 +92,33 @@ object Sources:
       case _                                      => false
 
   /** Filters apply before the first package directory. `src` and `main` are layout, not packages. */
-  private def allows(root: Path, path: Path, version: ScalaVersion, platform: Platform): Boolean =
-    prefix(root.relativize(path).iterator.asScala.map(_.toString).toList.dropRight(1)) match
+  private def allows(root: Path, path: Path, version: ScalaVersion, platform: Platform, tree: Tree): Boolean =
+    prefix(root.relativize(path).iterator.asScala.map(_.toString).toList.dropRight(1), tree, seenTest = false) match
       case None          => false
       case Some(filters) => filters.forall(filter => SourceFilter.allows(filter, version, platform))
 
   private val layout = Set("src", "main")
 
-  /** `src/test` is the test tree. A package named `test` under `scala` is not, because `scala` already ended the layout. */
-  private val excluded = Set("test")
+  private enum Tree:
+    case Main, Test
 
-  private def prefix(directories: List[String]): Option[List[SourceFilter]] =
+  /** `test` ends main selection and starts the test tree. After a package directory it is just a package. */
+  private def prefix(directories: List[String], tree: Tree, seenTest: Boolean): Option[List[SourceFilter]] =
     directories match
-      case Nil => Some(Nil)
-      case name :: _ if excluded.contains(name) => None
+      case Nil =>
+        tree match
+          case Tree.Main => Some(Nil)
+          case Tree.Test => if seenTest then Some(Nil) else None
+      case "test" :: rest if !seenTest =>
+        tree match
+          case Tree.Main => None
+          case Tree.Test => prefix(rest, tree, seenTest = true)
       case name :: rest =>
         SourceFilter.parse(name) match
-          case Some(filter) => prefix(rest).map(filter :: _)
-          case None         => if layout.contains(name) then prefix(rest) else Some(Nil)
+          case Some(filter) => prefix(rest, tree, seenTest).map(filter :: _)
+          case None         =>
+            if layout.contains(name) then prefix(rest, tree, seenTest)
+            else
+              tree match
+                case Tree.Main => Some(Nil)
+                case Tree.Test => if seenTest then Some(Nil) else None

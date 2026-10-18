@@ -146,7 +146,7 @@ object Workflow:
   private def close(modules: List[Module], roots: Set[ProjectName]): List[ProjectName] =
     def step(have: Set[ProjectName]): Set[ProjectName] =
       val extra = modules.collect {
-        case module if module.dependsOn.exists(have.contains) => module.name
+        case module if module.upstreamNames.exists(have.contains) => module.name
       }.toSet
       if extra.subsetOf(have) then have else step(have ++ extra)
     val grown = step(roots)

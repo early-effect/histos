@@ -75,7 +75,7 @@ enum NativeDeclaration:
 object NativeProject:
   def declaration(graph: ProjectGraph): NativeDeclaration =
     val pins = graph.projects.flatMap:
-      case histos.Module(name, platforms, _, _, _, _, clang, _, _, _, _) if platforms.all.contains(Platform.Native) =>
+      case histos.Module(name, platforms, _, _, _, _, clang, _, _, _, _, _, _, _, _) if platforms.all.contains(Platform.Native) =>
         clang match
           case histos.ClangPin.Major(major) => List(name -> Some(major))
           case histos.ClangPin.Unused       => List(name -> None)
@@ -111,6 +111,23 @@ object NativeLink:
       binary <- invoke(clang, main, revision, compiled.classes :: libs.libraries, work, jdk, toolchain)
     yield Linked(binary, NativeKey.of(JvmCompile.Scala390, clang.version, clang.target, digest, hashes))
 
+  /** Link `.nir` that is already compiled. The native libraries are added after `classpath`. */
+  def linkClasspath(
+      major: histos.ClangMajor,
+      revision: NativeVersion,
+      env: Map[String, String],
+      classpath: List[Path],
+      work: Path,
+      jdk: ResolvedJdk,
+      main: MainClass,
+  ): IO[NativeError, Path] =
+    for
+      clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
+      toolchain <- ZIO.fromEither(NativeToolchain.resolve(revision, env)).mapError(NativeError.Toolchain(_))
+      libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
+      binary <- invoke(clang, main, revision, withoutLibraries(classpath, libs.libraries) ++ libs.libraries, work, jdk, toolchain)
+    yield binary
+
   private def compile(
       sources: List[Path],
       libs: NativeClasspath,
@@ -126,6 +143,11 @@ object NativeLink:
       Nil,
     )
     JvmCompile.compilePrepared(request, List(libs.plugin))
+
+  /** The toolchain appends its own native libraries. A resolved test jar of the same file is the same library. */
+  private def withoutLibraries(classpath: List[Path], libraries: List[Path]): List[Path] =
+    val names = libraries.flatMap(path => Option(path.getFileName).map(_.toString)).toSet
+    classpath.filterNot(path => Option(path.getFileName).exists(name => names.contains(name.toString)))
 
   /** Compiles the bridge against this revision's tools, then links in a child JVM. */
   private def invoke(

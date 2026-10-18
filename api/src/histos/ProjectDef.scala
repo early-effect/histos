@@ -15,45 +15,76 @@ sealed trait ProjectDef:
   def name: String
   def position: SourcePos
 
+/** One upstream, before [[Projects]] checks it. No platforms means every platform of the depender. */
+final case class ProjectEdge(project: ProjectDef, platforms: Option[List[Platform]])
+
 final case class ModuleDef private (
     name: String,
     platforms: Platforms,
     versions: ScalaVersions,
     dependencies: List[Dep],
     testDependencies: List[Dep],
-    dependsOn: List[ProjectDef],
+    dependsOn: List[ProjectEdge],
     clang: ClangPin,
     test: Option[TestMain],
     position: SourcePos,
     provider: Option[TestProvider],
     nativeVersion: Option[NativeVersion],
+    directory: Option[ProjectPath],
+    jsEnv: JsEnv = JsEnv.Node,
+    jsModule: JsModuleKind = JsModuleKind.NoModule,
+    application: Option[MainClass] = None,
 ) extends ProjectDef:
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies ++ deps.toList, testDependencies, dependsOn, clang, test, position, provider, nativeVersion)
+    copy(dependencies = dependencies ++ deps.toList)
 
   /** Test classpath only. Compile does not see them, and publish does not write them. */
   def testDependencies(deps: Dep*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies ++ deps.toList, dependsOn, clang, test, position, provider, nativeVersion)
+    copy(testDependencies = testDependencies ++ deps.toList)
 
   def dependsOn(projects: ProjectDef*): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn ++ projects.toList, clang, test, position, provider, nativeVersion)
+    add(projects.toList.map(project => ProjectEdge(project, None)))
+
+  /** These upstreams are on the classpath only for the named platforms. */
+  def dependsOn(platform: Platform, rest: Platform*)(projects: ProjectDef*): ModuleDef =
+    val chosen = (platform :: rest.toList).distinct
+    add(projects.toList.map(project => ProjectEdge(project, Some(chosen))))
+
+  private def add(edges: List[ProjectEdge]): ModuleDef =
+    copy(dependsOn = dependsOn ++ edges)
 
   /** The clang major this Native module must find on `PATH`. */
   def clang(major: ClangMajor): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, ClangPin.Major(major), test, position, provider, nativeVersion)
+    copy(clang = ClangPin.Major(major))
 
   /** Opt out of the test provider and run this main. */
   def test(main: TestMain): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, Some(main), position, provider, nativeVersion)
+    copy(test = Some(main))
 
   /** Run this framework in the child. `TestProvider.Zio` is the one `histos test` uses when this is unset. */
   def testProvider(provider: TestProvider): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, test, position, Some(provider), nativeVersion)
+    copy(provider = Some(provider))
 
   /** The Scala Native toolchain this module links with. Unset means the engine default. */
   def nativeVersion(version: NativeVersion): ModuleDef =
-    new ModuleDef(name, platforms, versions, dependencies, testDependencies, dependsOn, clang, test, position, provider, Some(version))
+    copy(nativeVersion = Some(version))
+
+  /** Sources live in `<directory>/src` instead of `<name>/src`. */
+  def in(directory: ProjectPath): ModuleDef =
+    copy(directory = Some(directory))
+
+  /** Node, jsdom, or Firefox. A module that does not target Js stays on Node. */
+  def jsEnv(env: JsEnv): ModuleDef =
+    copy(jsEnv = env)
+
+  /** `NoModule` is the linker default. Ascent's ES modules name [[JsModuleKind.ESModule]]. */
+  def jsModule(kind: JsModuleKind): ModuleDef =
+    copy(jsModule = kind)
+
+  /** The class `histos run` starts. A module that does not name one is not linked. */
+  def main(main: MainClass): ModuleDef =
+    copy(application = Some(main))
 
 object ModuleDef:
   /** Spliced by `module`. Source code outside this package cannot call it. */
@@ -63,7 +94,7 @@ object ModuleDef:
       versions: ScalaVersions,
       position: SourcePos,
   ): ModuleDef =
-    new ModuleDef(name, platforms, versions, Nil, Nil, Nil, ClangPin.Unused, None, position, None, None)
+    new ModuleDef(name, platforms, versions, Nil, Nil, Nil, ClangPin.Unused, None, position, None, None, None)
 
 final case class AggregateDef private (
     name: String,
