@@ -16,5 +16,8 @@ target/
 .histos/test-work
 .histos/provider-src
 .histos/jars
+.histos/server.json
+.histos/server.json.tmp
+.histos/server.sock
 *.class
 *.semanticdb

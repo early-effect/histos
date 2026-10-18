@@ -3,6 +3,7 @@ package histos.cli
 import heddle.LinePipe
 import histos.acp.Acp
 import histos.bsp.{Bsp, Frame}
+import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
@@ -37,6 +38,7 @@ enum Command:
   case Mcp
   case Acp
   case Bsp
+  case Server
   case Toolchain
   case CachePath
   case CacheList
@@ -76,13 +78,28 @@ enum CliExit:
     case CompileFailed   => 8
     case PublishFailed   => 9
 
+object CliExit:
+  def fromCode(code: Int): CliExit =
+    code match
+      case 0 => Success
+      case 1 => TaskFailed
+      case 2 => Usage
+      case 3 => LoadFailed
+      case 4 => ToolchainFailed
+      case 5 => ResolveFailed
+      case 6 => WorkflowFailed
+      case 7 => TestFailed
+      case 8 => CompileFailed
+      case 9 => PublishFailed
+      case _ => TaskFailed
+
 final case class Completed(exit: CliExit, out: String, err: String)
 
 object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | bsp | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <id> | test [project ...] | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | bsp | server | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -102,6 +119,7 @@ object Cli:
           case Command.Mcp              => mcp(repo, apiJar)
           case Command.Acp              => acp
           case Command.Bsp              => bsp(repo, apiJar)
+          case Command.Server          => serve(repo, apiJar)
           case Command.Toolchain        => toolchain(repo, apiJar)
           case Command.CachePath        => cachePath
           case Command.CacheList        => cacheList
@@ -133,14 +151,17 @@ object Cli:
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
-        GraphCompile.jdkHere.foldZIO(
-          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
-          jdk =>
-            GraphCompile.console(repo, loaded.graph, projects, jdk).foreach(showCompile(repo, _)).foldZIO(
-              error => ZIO.succeed(Completed(CliExit.CompileFailed, "", compileReport(error))),
-              _ => ZIO.succeed(Completed(CliExit.Success, "", "")),
-            ),
-        )
+        attach(repo, Call.Compile(projects), compileLocal(repo, loaded, projects))
+
+  private def compileLocal(repo: Path, loaded: histos.load.LoadedBuild, projects: List[String]): URIO[Resolve, Completed] =
+    GraphCompile.jdkHere.foldZIO(
+      error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+      jdk =>
+        GraphCompile.console(repo, loaded.graph, projects, jdk).foreach(showCompile(repo, _)).foldZIO(
+          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", compileReport(error))),
+          _ => ZIO.succeed(Completed(CliExit.Success, "", "")),
+        ),
+    )
 
   private def assembly(repo: Path, apiJar: Path, destination: Option[String]): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
@@ -188,6 +209,12 @@ object Cli:
     (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
 
   /** Diagnostics are already on the console. A compile failure keeps the one-line summary here. */
+  private[histos] def compileFailure(error: GraphCompileError): String =
+    compileReport(error)
+
+  private[histos] def testFailure(error: ModuleTestError): (Int, String) =
+    (testExit(error).code, error.message)
+
   private def compileReport(error: GraphCompileError): String =
     error match
       case GraphCompileError.Failed(module, version, _) =>
@@ -199,12 +226,8 @@ object Cli:
       case CompileFeed.Diagnostic(text) => sayError(text)
       case CompileFeed.Done(cell)       => say(compiledLine(repo, cell))
 
-  /** `<module> <scala> jvm <class files> <classes dir>`. The directory is the classpath root, relative to the repo. */
   private def compiledLine(repo: Path, cell: CompiledCell): String =
-    val base = repo.toAbsolutePath.normalize
-    val full = cell.classes.toAbsolutePath.normalize
-    val shown = (if full.startsWith(base) then base.relativize(full) else full).toString.replace('\\', '/')
-    s"${cell.module.value} ${cell.version.value} jvm ${cell.classFiles} $shown"
+    Lines.compiled(repo, cell)
 
   private def publish(repo: Path, apiJar: Path, directory: String, projects: List[String]): URIO[Loader & Scope & Resolve & Machine, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
@@ -238,7 +261,10 @@ object Cli:
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
-        Ref.make(false).flatMap { failed =>
+        attach(repo, Call.Test(projects), testLocal(repo, loaded, projects))
+
+  private def testLocal(repo: Path, loaded: histos.load.LoadedBuild, projects: List[String]): URIO[Resolve, Completed] =
+    Ref.make(false).flatMap { failed =>
           val ran =
             for
               jdk <- GraphCompile.jdkHere.mapError(ModuleTestError.Compile(_))
@@ -250,7 +276,7 @@ object Cli:
                          }
                        }.collectSome.runCollect
               _ <- ModuleTest.suites(repo, loaded.graph, projects, jdk, cells.toList).foreach {
-                     case TestFeed.Begin(module, version) => say(s"${module.value} ${version.value} jvm")
+                     case TestFeed.Begin(module, version) => say(Lines.begin(module, version))
                      case TestFeed.Out(text)              => say(text)
                      case TestFeed.Err(text)              => sayError(text)
                      case TestFeed.Done(cell) =>
@@ -283,7 +309,7 @@ object Cli:
     Console.printLineError(text).orElseSucceed(())
 
   private def testedLine(cell: TestedCell): String =
-    s"${cell.module.value} ${cell.version.value} jvm ${cell.status.label}"
+    Lines.tested(cell)
 
   private def failedCell(status: TestStatus): Boolean =
     status match
@@ -379,6 +405,61 @@ object Cli:
     )
 
   private def bsp(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+    Attach.decide(repo, VersionText).flatMap:
+      case Decision.Open(socket) =>
+        Client.splice(socket).foldZIO(
+          {
+            case ServerError.Unreachable(_) | ServerError.Stale => bspLocal(repo, apiJar)
+            case error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+          },
+          code => ZIO.succeed(Completed(if code == 0 then CliExit.Success else CliExit.TaskFailed, "", "")),
+        )
+      case Decision.Absent | Decision.Stale(_) => bspLocal(repo, apiJar)
+
+  private def serve(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
+      error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+      loaded =>
+        GraphCompile.jdkHere.foldZIO(
+          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+          jdk =>
+            Daemon.open(repo, loaded.graph, jdk, VersionText).flatMap { record =>
+              say(record.socket.toString) *> ZIO.never
+            }.foldCauseZIO(
+              cause =>
+                cause.failureOrCause match
+                  case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                  case Right(rest) => ZIO.failCause(rest)
+              ,
+              _ => ZIO.succeed(Completed(CliExit.Success, "", "")),
+            ),
+        ),
+    )
+
+  /** A matching server runs the command. Anything else, including a dead socket, runs here. */
+  private def attach(repo: Path, call: Call, local: URIO[Resolve, Completed]): URIO[Resolve, Completed] =
+    Attach.decide(repo, VersionText).flatMap:
+      case Decision.Open(socket) =>
+        remote(socket, call).foldZIO(
+          {
+            case ServerError.Unreachable(_) | ServerError.Stale => local
+            case error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+          },
+          done => ZIO.succeed(done),
+        )
+      case Decision.Absent | Decision.Stale(_) => local
+
+  private def remote(socket: java.nio.file.Path, call: Call): ZIO[Any, ServerError, Completed] =
+    zio.Ref.make(Completed(CliExit.Success, "", "")).flatMap { result =>
+      Client.talk(socket, call).foreach {
+        case histos.server.Feed.Out(text) => say(text)
+        case histos.server.Feed.Err(text) => sayError(text)
+        case histos.server.Feed.Exit(code, err) =>
+          result.set(Completed(CliExit.fromCode(code), "", err))
+      } *> result.get
+    }
+
+  private def bspLocal(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
       error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
       loaded =>
