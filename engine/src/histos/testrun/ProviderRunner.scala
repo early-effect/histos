@@ -81,15 +81,15 @@ object ProviderRunner:
        |    }
        |  }
        |
-       |  private def matched(name: String, module: Boolean, superclass: String, loader: ClassLoader): Option[Class[_]] =
+       |  private def matched(name: String, module: Boolean, superclass: String, loader: ClassLoader): Option[Class[?]] =
        |    loaded(if (module) name + "$$" else name, loader).filter { cls =>
        |      loaded(superclass, loader).exists(parent => parent.isAssignableFrom(cls) && (cls != parent))
        |    }
        |
-       |  private def hasAnnotation(cls: Class[_], annotation: String, loader: ClassLoader): Boolean =
+       |  private def hasAnnotation(cls: Class[?], annotation: String, loader: ClassLoader): Boolean =
        |    loaded(annotation, loader).exists(mark => cls.getAnnotations.exists(found => mark.isInstance(found)))
        |
-       |  private def loaded(name: String, loader: ClassLoader): Option[Class[_]] =
+       |  private def loaded(name: String, loader: ClassLoader): Option[Class[?]] =
        |    try Some(Class.forName(name, false, loader))
        |    catch { case _: ClassNotFoundException | _: NoClassDefFoundError => None }
        |

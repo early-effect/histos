@@ -21,7 +21,8 @@ object CliSpec extends ZIOSpecDefault:
       |""".stripMargin
 
   private val apiJar: IO[LoadError, Path] =
-    val candidates = List(Path.of("dist/histos-api.jar"), Path.of("../dist/histos-api.jar"))
+    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+    val candidates = root.toList.map(_.resolve("dist/histos-api.jar")) ++ List(Path.of("dist/histos-api.jar"), Path.of("../dist/histos-api.jar"))
     ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
       case Some(jar) => ZIO.succeed(jar)
       case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))

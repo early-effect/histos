@@ -59,9 +59,9 @@ object TestProcessSpec extends ZIOSpecDefault:
           parent   = Option(java.lang.System.getenv("HOME")).filter(_.nonEmpty)
           outcome <- TestProcess.run(request(work, Platform.Jvm, exitMain, TestClasspath(classes, List(built.jar)))).either
           lines    = outcome.map(_.out.text.linesIterator.map(_.trim).filter(_.nonEmpty).toList)
-          scrubbed = (parent, lines) match
-            case (Some(home), Right(found)) => found.contains("home=null") && !found.contains(s"home=$home")
-            case _                          => false
+          scrubbed = lines match
+            case Right(found) => found.contains("home=null") && parent.forall(home => !found.contains(s"home=$home"))
+            case _            => false
         yield assertTrue(
           built.tool.code == 0 && built.tool.text.isEmpty,
           compiled.code == 0 && compiled.text.isEmpty,

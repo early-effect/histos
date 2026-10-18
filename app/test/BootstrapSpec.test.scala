@@ -16,7 +16,8 @@ object BootstrapSpec extends ZIOSpecDefault:
     digest.map(b => f"${b & 0xff}%02x").mkString
 
   private def script: Path =
-    val candidates = List(Path.of("histos"), Path.of("../histos"))
+    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+    val candidates = root.toList.map(_.resolve("histos")) ++ List(Path.of("histos"), Path.of("../histos"))
     candidates.find(Files.isRegularFile(_)) match
       case Some(path) => path
       case None       => Path.of("histos")

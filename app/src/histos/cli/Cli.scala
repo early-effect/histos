@@ -5,7 +5,7 @@ import histos.acp.Acp
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
-import histos.jdk.{Machine, Os, Settled, Startup, Toolchain, ToolchainError}
+import histos.jdk.{Machine, Os, Settled, Sha256, Startup, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
 import histos.native.{ClangProbe, NativeDeclaration, NativeProject}
 import histos.node.{Node, NodeToolchain}
@@ -16,11 +16,11 @@ import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.central.Publisher
 import histos.publish.LocalPublish
-import histos.testrun.{ModuleTest, ModuleTestError, TestStatus, TestedCell}
+import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestStatus, TestedCell}
 import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError}
 import histos.{Aggregate, Module, Project}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.time.Instant
 
 import zio.*
@@ -145,13 +145,26 @@ object Cli:
             GraphCompile.jdkHere.either.flatMap:
               case Left(error) => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message))
               case Right(jdk) =>
-                Assemble
-                  .run(repo, loaded.graph, jdk, path)
-                  .mapBoth(
-                    error => Completed(CliExit.CompileFailed, "", error.message),
-                    assembled => Completed(CliExit.Success, relative(repo, assembled.path), ""),
-                  )
-                  .merge
+                Assemble.run(repo, loaded.graph, jdk, path).either.flatMap:
+                  case Left(error) => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message))
+                  case Right(assembled) =>
+                    pin(repo, assembled.path).foldZIO(
+                      message => ZIO.succeed(Completed(CliExit.CompileFailed, "", message)),
+                      _ => ZIO.succeed(Completed(CliExit.Success, relative(repo, assembled.path), "")),
+                    )
+
+  /** The launcher verifies this checksum of `dist/histos.jar`. Another destination is not that jar. */
+  private def pin(repo: Path, jar: Path): IO[String, Unit] =
+    val pinned = repo.resolve("dist").resolve("histos.jar").toAbsolutePath.normalize
+    if jar.toAbsolutePath.normalize != pinned then ZIO.unit
+    else
+      ZIO.attempt {
+        val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value
+        val dir = repo.resolve(".histos")
+        Files.createDirectories(dir)
+        Files.writeString(dir.resolve("assembly.sha256"), sha + "\n")
+        ()
+      }.mapError(_ => s"could not write ${repo.resolve(".histos").resolve("assembly.sha256")}")
 
   private def target(repo: Path, destination: Option[String]): Option[Path] =
     destination match
@@ -206,14 +219,26 @@ object Cli:
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
-        GraphCompile.jdkHere
-          .mapError(ModuleTestError.Compile(_))
-          .flatMap(jdk => ModuleTest.run(repo, loaded.graph, projects, jdk))
-          .mapBoth(
-            error => Completed(testExit(error), "", error.message),
-            cells => tested(cells),
+        Ref.make(false).flatMap { failed =>
+          val ran =
+            for
+              jdk <- GraphCompile.jdkHere.mapError(ModuleTestError.Compile(_))
+              _ <- ModuleTest.console(repo, loaded.graph, projects, jdk).foreach {
+                     case TestFeed.Begin(module, version) => say(s"${module.value} ${version.value} jvm")
+                     case TestFeed.Out(text)              => say(text)
+                     case TestFeed.Err(text)              => sayError(text)
+                     case TestFeed.Done(cell) =>
+                       ZIO.when(failedCell(cell.status))(failed.set(true)) *>
+                         say(testedLine(cell)) *>
+                         say("")
+                   }
+              bad <- failed.get
+            yield Completed(if bad then CliExit.TestFailed else CliExit.Success, "", "")
+          ran.foldZIO(
+            error => ZIO.succeed(Completed(testExit(error), "", error.message)),
+            done => ZIO.succeed(done),
           )
-          .merge
+        }
 
   /** A missing lock is still a resolve failure. A test result, including a non-zero main, is not. */
   private def testExit(error: ModuleTestError): CliExit =
@@ -225,26 +250,19 @@ object Cli:
       case _ =>
         CliExit.TestFailed
 
-  private def tested(cells: List[TestedCell]): Completed =
-    val out = cells.map(testedLine).mkString("\n")
-    val err = cells.flatMap(failureText).mkString("\n")
-    val exit = if cells.exists(cell => failed(cell.status)) then CliExit.TestFailed else CliExit.Success
-    Completed(exit, out, err)
+  private def say(text: String): UIO[Unit] =
+    Console.printLine(text).orElseSucceed(())
+
+  private def sayError(text: String): UIO[Unit] =
+    Console.printLineError(text).orElseSucceed(())
 
   private def testedLine(cell: TestedCell): String =
     s"${cell.module.value} ${cell.version.value} jvm ${cell.status.label}"
 
-  private def failed(status: TestStatus): Boolean =
+  private def failedCell(status: TestStatus): Boolean =
     status match
-      case TestStatus.Failed(_, _, _)              => true
-      case TestStatus.NoTests | TestStatus.Passed => false
-
-  private def failureText(cell: TestedCell): Option[String] =
-    cell.status match
-      case TestStatus.Failed(_, out, err) =>
-        val body = List(out, err).filter(_.nonEmpty).mkString("\n")
-        if body.isEmpty then Some(testedLine(cell)) else Some(s"${testedLine(cell)}\n$body")
-      case TestStatus.NoTests | TestStatus.Passed => None
+      case TestStatus.Failed(_, _, _)        => true
+      case TestStatus.NoTests | TestStatus.Passed(_, _) => false
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store => Completed(CliExit.Success, store.root.toString, ""))

@@ -43,12 +43,12 @@ object ModuleTestSpec extends ZIOSpecDefault:
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/app/3.10.0/jvm")))
           testEntries <- ZIO.attempt(entries(root.resolve(".histos/test-classes/app/3.10.0/jvm")))
         yield assertTrue(
-          cells.map(cell => (cell.module.value, cell.status)) == List(
-            ("app", TestStatus.Passed),
-            ("core", TestStatus.NoTests),
-            ("extra", TestStatus.NoTests),
+          cells.map(cell => (cell.module.value, cell.status.label)) == List(
+            ("app", "passed"),
+            ("core", "no tests"),
+            ("extra", "no tests"),
           ),
-          named.map(cell => (cell.module.value, cell.status)) == List(("app", TestStatus.Passed)),
+          named.map(cell => (cell.module.value, cell.status.label)) == List(("app", "passed")),
           !mainEntries.exists(_.endsWith("Check.class")),
           testEntries.exists(_.endsWith("Check.class")),
         )
@@ -65,7 +65,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))).mapError(error => new IllegalStateException(error.message))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
-          cells.map(cell => (cell.module.value, cell.version.value, cell.status)) == List(("core", "3.10.0", TestStatus.Passed))
+          cells.map(cell => (cell.module.value, cell.version.value, cell.status.label)) == List(("core", "3.10.0", "passed"))
     ,
     test("a non-zero main is a failed cell and its output is kept"):
       ZIO.scoped:
@@ -105,8 +105,8 @@ object ModuleTestSpec extends ZIOSpecDefault:
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
           cells match
-            case List(TestedCell(failed, _, TestStatus.Failed(exit, out, err)), TestedCell(passed, _, TestStatus.Passed)) =>
-              failed.value == "bad" && passed.value == "core" && exit == 1 && (out + err).contains("nope")
+            case List(TestedCell(failed, _, TestStatus.Failed(exit, out, err)), TestedCell(passed, _, TestStatus.Passed(report, _))) =>
+              failed.value == "bad" && passed.value == "core" && exit == 1 && (out + err).contains("nope") && report.contains("adds")
             case _ => false
   )
 

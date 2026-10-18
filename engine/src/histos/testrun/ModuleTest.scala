@@ -22,20 +22,28 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{Chunk, IO, ZIO}
+import zio.stream.ZStream
 
 final case class TestedCell(module: ProjectName, version: ScalaVersion, status: TestStatus)
 
 /** What one cell did. `NoTests` means there was nothing to run. It is not a passing suite. */
 enum TestStatus:
   case NoTests
-  case Passed
+  case Passed(out: String, err: String)
   case Failed(exit: Int, out: String, err: String)
 
   def label: String = this match
     case NoTests            => "no tests"
-    case Passed             => "passed"
+    case Passed(_, _)       => "passed"
     case Failed(exit, _, _) => s"failed $exit"
+
+/** What the test console is doing. Suites are not merged: one tree finishes, then the next starts. */
+enum TestFeed:
+  case Begin(module: ProjectName, version: ScalaVersion)
+  case Out(text: String)
+  case Err(text: String)
+  case Done(cell: TestedCell)
 
 enum ModuleTestError:
   case Target(error: CiError)
@@ -97,14 +105,28 @@ object ModuleTest:
       names: List[String],
       jdk: ResolvedJdk,
   ): ZIO[Resolve, ModuleTestError, List[TestedCell]] =
+    console(repo, graph, names, jdk).collect { case TestFeed.Done(cell) => cell }.runCollect.map(_.toList)
+
+  /**
+   * Test compiles stay parallel. The console is `concatAll`: one suite's lines, then the next,
+   * in module name order. Merging the trees would make them unreadable.
+   */
+  def console(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[String],
+      jdk: ResolvedJdk,
+  ): ZStream[Resolve, ModuleTestError, TestFeed] =
     val repositories = BuildResolvers(graph.resolvers)
-    for
-      wanted <- ZIO.fromEither(requested(graph, names).left.map(ModuleTestError.Target(_)))
-      compiled <- GraphCompile.run(repo, graph, names, jdk).mapError(ModuleTestError.Compile(_))
-      lock <- readLock(repo)
-      cells = compiled.filter(cell => wanted.contains(cell.module))
-      tested <- ZIO.foreachPar(cells)(cell => one(repo, graph, cell, jdk, lock, repositories))
-    yield tested.sortBy(cell => (cell.module.value, cell.version.value))
+    ZStream.unwrap {
+      for
+        wanted <- ZIO.fromEither(requested(graph, names).left.map(ModuleTestError.Target(_)))
+        compiled <- GraphCompile.run(repo, graph, names, jdk).mapError(ModuleTestError.Compile(_))
+        lock <- readLock(repo)
+        cells = compiled.filter(cell => wanted.contains(cell.module)).sortBy(cell => (cell.module.value, cell.version.value))
+        streams <- ZIO.foreachPar(cells)(cell => prepare(repo, graph, cell, jdk, lock, repositories))
+      yield ZStream.concatAll(Chunk.fromIterable(streams))
+    }
 
   private def requested(graph: ProjectGraph, names: List[String]): Either[CiError, Set[ProjectName]] =
     val modules = graph.projects.collect { case module: Module => module.name }.toSet
@@ -114,41 +136,47 @@ object ModuleTest:
         case TestTarget.Entire             => modules
         case TestTarget.Named(first, rest) => (first :: rest).toSet
 
-  private def one(
+  private def prepare(
       repo: Path,
       graph: ProjectGraph,
       cell: CompiledCell,
       jdk: ResolvedJdk,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, ModuleTestError, TestedCell] =
+  ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     val modules = graph.projects.collect { case module: Module => module }
     graph.get(cell.module) match
-      case Some(module: Module) =>
-        testBase(repo, module, modules).flatMap:
-          case None =>
-            module.test match
-              case None       => ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.NoTests))
-              case Some(main) => ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
-          case Some(root) =>
-            Sources
-              .select(root, cell.version, Platform.Jvm)
-              .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
-              .flatMap: sources =>
-                (sources, module.test, module.provider) match
-                  case (_, Some(_), Some(_))     => ZIO.fail(ModuleTestError.Mixed(cell.module))
-                  case (Nil, None, None)         => ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.NoTests))
-                  case (Nil, Some(main), None)   => ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
-                  case (Nil, None, Some(provider)) =>
-                    ZIO.fail(ModuleTestError.MissingProvider(cell.module, provider))
-                  case (_, Some(main), None) => execute(repo, module, cell, sources, main, jdk, lock, repositories)
-                  case (_, None, provider) =>
-                    provide(repo, module, cell, sources, provider.getOrElse(TestProvider.Zio), jdk, lock, repositories)
-      case _ =>
-        ZIO.fail(ModuleTestError.Absent(cell.module))
+        case Some(module: Module) =>
+          testBase(repo, module, modules).flatMap:
+            case None =>
+              module.test match
+                case None       => ZIO.succeed(finished(cell, TestStatus.NoTests))
+                case Some(main) => ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
+            case Some(root) =>
+              Sources
+                .select(root, cell.version, Platform.Jvm)
+                .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
+                .flatMap: sources =>
+                  (sources, module.test, module.provider) match
+                    case (_, Some(_), Some(_)) => ZIO.fail(ModuleTestError.Mixed(cell.module))
+                    case (Nil, None, None)     => ZIO.succeed(finished(cell, TestStatus.NoTests))
+                    case (Nil, Some(main), None) =>
+                      ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
+                    case (Nil, None, Some(provider)) =>
+                      ZIO.fail(ModuleTestError.MissingProvider(cell.module, provider))
+                    case (_, Some(main), None) =>
+                      execute(repo, modules, module, cell, sources, main, jdk, lock, repositories)
+                    case (_, None, provider) =>
+                      provide(repo, modules, module, cell, sources, provider.getOrElse(TestProvider.Zio), jdk, lock, repositories)
+        case _ =>
+          ZIO.fail(ModuleTestError.Absent(cell.module))
+
+  private def finished(cell: CompiledCell, status: TestStatus): ZStream[Any, Nothing, TestFeed] =
+    ZStream.succeed(TestFeed.Done(TestedCell(cell.module, cell.version, status)))
 
   private def execute(
       repo: Path,
+      modules: List[Module],
       module: Module,
       cell: CompiledCell,
       sources: List[Path],
@@ -156,12 +184,12 @@ object ModuleTest:
       jdk: ResolvedJdk,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, ModuleTestError, TestedCell] =
+  ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     val classes = testClasses(repo, module.name, cell.version)
     val analysis = testAnalysis(repo, module.name, cell.version)
     for
       binary <- ZIO.fromEither(MainClass.from(main.value).left.map(ModuleTestError.Main(_)))
-      linked <- runtimeClasspath(repo, module, cell, lock, repositories)
+      linked <- runtimeClasspath(repo, modules, module, cell, lock, repositories)
       _ <- JvmCompile
         .compile(CompileRequest(
           CompileToolchain(cell.version, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -173,19 +201,11 @@ object ModuleTest:
         ))
         .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       work <- fresh(testWork(repo, module.name, cell.version))
-      outcome <- TestProcess
-        .run(TestRequest(
-          Platform.Jvm,
-          jdk.home.resolve("bin").resolve("java"),
-          TestClasspath(classes, linked.paths),
-          binary,
-          work,
-        ))
-        .mapError(error => ModuleTestError.Process(cell.module, cell.version, error))
-    yield TestedCell(cell.module, cell.version, status(outcome))
+    yield session(module.name, cell.version, None, request(repo, jdk, classes, linked.paths, binary, work))
 
   private def provide(
       repo: Path,
+      modules: List[Module],
       module: Module,
       cell: CompiledCell,
       sources: List[Path],
@@ -193,13 +213,13 @@ object ModuleTest:
       jdk: ResolvedJdk,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, ModuleTestError, TestedCell] =
+  ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     val classes = testClasses(repo, module.name, cell.version)
     val analysis = testAnalysis(repo, module.name, cell.version)
     val runner = providerSource(repo, module.name, cell.version)
     for
       _ <- ZIO.unless(satisfied(module, provider))(ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider)))
-      linked <- runtimeClasspath(repo, module, cell, lock, repositories)
+      linked <- runtimeClasspath(repo, modules, module, cell, lock, repositories)
       _ <- writeRunner(runner, ProviderRunner.source(provider.framework.value, classes))
       _ <- JvmCompile
         .compile(CompileRequest(
@@ -212,23 +232,65 @@ object ModuleTest:
         ))
         .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       work <- fresh(testWork(repo, module.name, cell.version))
-      outcome <- TestProcess
-        .run(TestRequest(
-          Platform.Jvm,
-          jdk.home.resolve("bin").resolve("java"),
-          TestClasspath(classes, linked.paths),
-          ProviderRunner.Main,
-          work,
-        ))
-        .mapError(error => ModuleTestError.Process(cell.module, cell.version, error))
-      tested <- outcome.exit.value match
-        case 0 =>
-          ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.Passed))
-        case ProviderRunner.NoneFound =>
-          ZIO.fail(ModuleTestError.NoneDiscovered(cell.module, provider))
-        case code =>
-          ZIO.succeed(TestedCell(cell.module, cell.version, TestStatus.Failed(code, outcome.out.text, outcome.err.text)))
-    yield tested
+    yield session(module.name, cell.version, Some(provider), request(repo, jdk, classes, linked.paths, ProviderRunner.Main, work))
+
+  private def request(
+      repo: Path,
+      jdk: ResolvedJdk,
+      classes: Path,
+      classpath: List[Path],
+      main: MainClass,
+      work: Path,
+  ): TestRequest =
+    TestRequest(
+      Platform.Jvm,
+      jdk.home.resolve("bin").resolve("java"),
+      TestClasspath(classes, classpath),
+      main,
+      work,
+      suiteEnv(repo),
+    )
+
+  private final case class Transcript(out: String, err: String)
+
+  /** Header, then lines as the process writes them, then the cell. `NoneFound` fails the stream. */
+  private def session(
+      module: ProjectName,
+      version: ScalaVersion,
+      provider: Option[TestProvider],
+      request: TestRequest,
+  ): ZStream[Any, ModuleTestError, TestFeed] =
+    ZStream.succeed(TestFeed.Begin(module, version)) ++
+      TestProcess.events(request).mapError(error => ModuleTestError.Process(module, version, error)).mapAccumZIO(Transcript("", "")) {
+        (acc, event) => hear(module, version, provider, acc, event)
+      }
+
+  private def hear(
+      module: ProjectName,
+      version: ScalaVersion,
+      provider: Option[TestProvider],
+      acc: Transcript,
+      event: TestEvent,
+  ): ZIO[Any, ModuleTestError, (Transcript, TestFeed)] =
+    event match
+      case TestEvent.Out(text) =>
+        val next = acc.copy(out = join(acc.out, text))
+        ZIO.succeed((next, TestFeed.Out(text)))
+      case TestEvent.Err(text) =>
+        val next = acc.copy(err = join(acc.err, text))
+        ZIO.succeed((next, TestFeed.Err(text)))
+      case TestEvent.Exited(code) =>
+        provider match
+          case Some(found) if code.value == ProviderRunner.NoneFound =>
+            ZIO.fail(ModuleTestError.NoneDiscovered(module, found))
+          case _ =>
+            val status =
+              if code.value == 0 then TestStatus.Passed(acc.out, acc.err)
+              else TestStatus.Failed(code.value, acc.out, acc.err)
+            ZIO.succeed((acc, TestFeed.Done(TestedCell(module, version, status))))
+
+  private def join(have: String, line: String): String =
+    s"$have$line\n"
 
   private def satisfied(module: Module, provider: TestProvider): Boolean =
     val library = provider.library
@@ -245,9 +307,12 @@ object ModuleTest:
       ()
     }.mapError(_ => ModuleTestError.Runner(path))
 
-  private def status(outcome: TestOutcome): TestStatus =
-    if outcome.exit.value == 0 then TestStatus.Passed
-    else TestStatus.Failed(outcome.exit.value, outcome.out.text, outcome.err.text)
+  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds a toolchain. */
+  private def suiteEnv(repo: Path): Map[String, String] =
+    val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
+    sys.env.get("PATH").filter(_.nonEmpty) match
+      case Some(path) => root + ("PATH" -> path)
+      case None       => root
 
   /** `<module>/test` wins. The repository `test` is only for a graph with one module. */
   private def testBase(repo: Path, module: Module, modules: List[Module]): IO[ModuleTestError, Option[Path]] =
@@ -277,6 +342,7 @@ object ModuleTest:
 
   private def runtimeClasspath(
       repo: Path,
+      modules: List[Module],
       module: Module,
       cell: CompiledCell,
       lock: DependencyLock,
@@ -285,11 +351,34 @@ object ModuleTest:
     for
       fetched <- classpath(module, cell.version, lock, repositories).mapError(ModuleTestError.Lock(_))
       upstream <- upstreamClasses(repo, module, cell.version)
+      libraries <- dependencyJars(module, modules, cell.version, lock, repositories)
       library <- JvmCompile.runtime(cell.version).mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
-    yield Linked(
-      cell.classes :: (upstream ++ library ++ fetched.paths.filterNot(library.toSet.contains)),
-      fetched.hashes,
-    )
+      jars = (fetched.paths ++ libraries).distinct.filterNot(library.toSet.contains)
+    yield Linked(cell.classes :: (upstream ++ library ++ jars), fetched.hashes)
+
+  /** Compile jars of `dependsOn`, not their tests. The child runs those classes. */
+  private def dependencyJars(
+      module: Module,
+      modules: List[Module],
+      version: ScalaVersion,
+      lock: DependencyLock,
+      repositories: Repositories,
+  ): ZIO[Resolve, ModuleTestError, List[Path]] =
+    val byName = modules.map(item => item.name -> item).toMap
+    def grow(have: Set[ProjectName]): Set[ProjectName] =
+      val extra = have.flatMap(name => byName.get(name).toList.flatMap(_.dependsOn))
+      if extra.subsetOf(have) then have else grow(have ++ extra)
+    val found = grow(module.dependsOn.toSet).toList.flatMap(byName.get)
+    ZIO.foreach(found)(compileArtifacts(_, version, lock, repositories)).map(_.flatten.distinct)
+
+  private def compileArtifacts(
+      module: Module,
+      version: ScalaVersion,
+      lock: DependencyLock,
+      repositories: Repositories,
+  ): ZIO[Resolve, ModuleTestError, List[Path]] =
+    val cell = ResolveCell(module.name, module.dependencies, version, Platform.Jvm, repositories, ClasspathScope.Compile)
+    Resolve.materialize(cell, lock).mapBoth(ModuleTestError.Lock(_), _.artifacts.map(_.path))
 
   private def classpath(
       module: Module,

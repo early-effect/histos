@@ -145,10 +145,9 @@ object WorkflowSpec extends ZIOSpecDefault:
       case Left(_)     => project("core")
 
   private def text(name: String): ZIO[Any, Throwable, String] =
-    val candidates = List(
-      Path.of("engine/test/fixtures/ci").resolve(name),
-      Path.of("test/fixtures/ci").resolve(name),
-    )
+    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+    val relative = List(Path.of("engine/test/fixtures/ci").resolve(name), Path.of("test/fixtures/ci").resolve(name))
+    val candidates = root.toList.map(_.resolve("engine/test/fixtures/ci").resolve(name)) ++ relative
     ZIO.attempt(candidates.find(Files.isRegularFile(_))).flatMap:
       case Some(file) => ZIO.attempt(Files.readString(file))
       case None       => ZIO.fail(new java.io.FileNotFoundException(name))

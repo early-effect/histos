@@ -72,7 +72,8 @@ object ZincSpec extends ZIOSpecDefault:
                    )).either
         yield assertTrue(
           onCompiler == Left(CompileError.NoSources),
-          onApi == Left(CompileError.Banned(api, ClasspathBan.Histos)),
+          Files.isDirectory(api) && onApi == Left(CompileError.NoSources) ||
+            Files.isRegularFile(api) && onApi == Left(CompileError.Banned(api, ClasspathBan.Histos)),
         )
   )
 

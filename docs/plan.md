@@ -5,9 +5,9 @@ The design in `docs/design.md` stands, with the amendments below. The first four
 ## Amendments
 
 1. The launcher is the frozen `./histos` and `histos.bat`. They download the pinned JVM assembly, verify it, and exec it. There is no Scala Native launcher and no Rust launcher. A native image is bloat for a downloader, and a second language is the same cost. JDK policy lives in the JVM engine. The script only fetches the locked Temurin when no `java` exists, then the engine re-checks the lock and re-execs if needed.
-2. Histos itself is built with scala-cli 1.18 (Scala 3.10.0) until it can build itself. A module is compiled by the compiler it names, fetched with Coursier: any Scala 3 version, any Scala 2.13 patch, and nothing older. No sbt. No zipx. No GitHub Actions on this repo until dogfood.
+2. Histos builds itself. `./histos test` and `./histos assembly` are the build. `dist/histos.jar` is local and is not committed. A module is compiled by the compiler it names, fetched with Coursier: any Scala 3 version, any Scala 2.13 patch, and nothing older. No sbt. No zipx. No scala-cli. No GitHub Actions on this repo until dogfood.
 3. The engine is a JVM process. ZIO, load, Zinc, MCP, and the Scala Native linker (`tools_3`) run there.
-4. Scala Native is a target toolchain, not a build plugin. The jars already in `~/.ivy2/local` are `org.scala-native` `0.5.13-SNAPSHOT` (`tools_3`, `nir_3`, `util_3`, `nscplugin_3.9.0`, `nativelib_native0.5_3`, `scala3lib` / `scalalib` at `3.9.0+0.5.13-SNAPSHOT`). That nativelib is the Mac Mini M6 unwind fix (scala-native#5109). The native layer resolves them with `//> using repository ivy2Local` while Histos is built by scala-cli. When that layer of Histos itself fetches them, it adds `IvyLocal` to the repository list for that resolve. `IvyLocal` is not a default repository. When 0.5.13 is on Maven Central, that layer drops `IvyLocal` and the snapshot pin.
+4. Scala Native is a target toolchain, not a build plugin. The jars already in `~/.ivy2/local` are `org.scala-native` `0.5.13-SNAPSHOT` (`tools_3`, `nir_3`, `util_3`, `nscplugin_3.9.0`, `nativelib_native0.5_3`, `scala3lib` / `scalalib` at `3.9.0+0.5.13-SNAPSHOT`). That nativelib is the Mac Mini M6 unwind fix (scala-native#5109). Histos fetches those jars. `IvyLocal` is added for that resolve and is not a default repository. `IvyLocal` is not a default repository. When 0.5.13 is on Maven Central, that layer drops `IvyLocal` and the snapshot pin.
 5. Library resolution is Coursier linked as a library. The `cs` program is not a resolver. The specification is section 5.2 of the design. The layer sits after Zinc and before the test subprocess, because a classpath of real dependencies has to exist before a test is defined as running on one.
 
 `heddle-mcp` is the MCP server. ACP `initialize` is a small handshake in histos. There is no ACP library.
@@ -20,9 +20,9 @@ engine/   Load, tasks, later scheduler, cache, Zinc, resolution, native link.
 app/      CLI, MCP, ACP. One ZIOApp.
 ```
 
-Each directory is its own scala-cli project (`project.scala` only; source files carry no directives). `engine` and `app` pull sources with `//> using file ../api/src` and `//> using file ../engine/src`. The build-file compiler does not see those sources. It sees the api jar from `scala-cli --power package api --library`.
+`histos.scala` is the build. `api`, `central`, `engine`, and `app` are modules. `dependsOn` is the classpath. There is no `project.scala`.
 
-Tests are ZIO Test (`zio-test` and `zio-test-sbt` as test deps, framework `zio.test.sbt.ZTestFramework`). The api jar does not depend on ZIO. Verify with `scala-cli test <dir>`. There is no sbt, so `testFull` does not apply. No CI cost until dogfood: each layer is proven locally. Do not add required checks before a workflow exists, or the stack cannot merge.
+Tests are ZIO Test (`zio-test` and `zio-test-sbt` as test deps, framework `zio.test.sbt.ZTestFramework`). The api jar does not depend on ZIO. Verify with `./histos test`. There is no sbt, so `testFull` does not apply. No CI cost until dogfood: each layer is proven locally. Do not add required checks before a workflow exists, or the stack cannot merge.
 
 Packages: `histos.*` is the DSL. Engine code is `histos.load`, `histos.task`, and later `histos.cache`, `histos.zinc`, `histos.resolve`, `histos.native`. App code is `histos.cli`, `histos.mcp`, `histos.acp`.
 
@@ -131,7 +131,7 @@ Self-build comes before stack D. A published local assembly has to compile, test
     Verify: `scala-cli test engine` links with the default, fetches a second revision, and the engine classloader cannot see the linker.
 23. `histos/assembly`: Package `app` and its runtime classpath into the one jar `./histos` execs, with main `histos.cli.Main`. Application classes and dependency entries share that jar: application classes win, the first dependency wins, `META-INF/services` entries are concatenated, and signature files and `module-info.class` are omitted. Scala Native tools are not in the jar. The launcher and a JDK re-exec pass `--enable-native-access=ALL-UNNAMED`. Depends on: the class jar.
     Verify: `scala-cli test app` execs that jar far enough to print the version.
-24. `histos/self`: A root `histos.scala` for `api`, `central`, `engine`, and `app`, wired with `dependsOn` instead of `//> using file` and the hand-built api jar. One scala-cli build writes the first assembly. That assembly rebuilds the next one. The `project.scala` files go away only after that loop is green. Depends on: layers 20 through 23.
+24. `histos/self`: A root `histos.scala` for `api`, `central`, `engine`, and `app`, wired with `dependsOn`. `./histos test` runs the suites. `project.scala` is gone. Depends on: layers 20 through 23.
     Verify: the rebuilt assembly prints the same version, and `./histos test` runs these suites.
 
 Stack D, after this repo builds itself:
