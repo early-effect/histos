@@ -1,6 +1,9 @@
 package histos
 
+import histos.plugin.{DeclaredInput, EntryName, HistosPlugin, ModuleNote, PluginId, RegisteredPlugin, TaskDep, TaskName}
 import histos.version.Catalog
+
+import _root_.scala.util.control.NonFatal
 
 sealed trait Project:
   def name: ProjectName
@@ -29,6 +32,7 @@ final case class Module(
     jsEnv: JsEnv = JsEnv.Node,
     jsModule: JsModuleKind = JsModuleKind.NoModule,
     application: Option[MainClass] = None,
+    notes: List[ModuleNote] = Nil,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory. */
   def baseDirectory: String =
@@ -73,6 +77,7 @@ final case class ProjectGraph private (
     catalog: Catalog,
     organization: Option[Organization],
     resolvers: List[Resolver],
+    plugins: List[RegisteredPlugin] = Nil,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -101,8 +106,9 @@ object ProjectGraph:
       catalog: Catalog,
       organization: Option[Organization],
       resolvers: List[Resolver],
+      plugins: List[RegisteredPlugin] = Nil,
   ): ProjectGraph =
-    new ProjectGraph(projects, splits, catalog, organization, resolvers)
+    new ProjectGraph(projects, splits, catalog, organization, resolvers, plugins)
 
 trait HistosBuild:
   def graph: Either[BuildError, ProjectGraph]
@@ -128,14 +134,27 @@ object Projects:
   def apply(splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     build(None, Nil, splits, catalog, defs.toList)
 
+  def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList, uses)
+
+  def apply(uses: Uses, splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    build(None, Nil, splits, CatalogSpec.empty, defs.toList, uses)
+
+  def apply(uses: Uses, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    build(None, Nil, Splits.aggregate, catalog, defs.toList, uses)
+
+  def apply(uses: Uses, splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    build(None, Nil, splits, catalog, defs.toList, uses)
+
   private[histos] def assemble(
       organization: Option[Organization],
       resolvers: List[Resolver],
       splits: Splits,
       catalog: CatalogSpec,
       listed: List[ProjectDef],
+      uses: Uses = Uses(Nil),
   ): Either[BuildError, ProjectGraph] =
-    build(organization, resolvers, splits, catalog, listed)
+    build(organization, resolvers, splits, catalog, listed, uses)
 
   private def build(
       organization: Option[Organization],
@@ -143,17 +162,21 @@ object Projects:
       splits: Splits,
       catalog: CatalogSpec,
       listed: List[ProjectDef],
+      uses: Uses = Uses(Nil),
   ): Either[BuildError, ProjectGraph] =
     for
-      named <- nameAll(listed)
-      _     <- duplicates(named)
-      _     <- shape(named)
-      built <- links(named)
-      _     <- directories(built)
-      _     <- cycle(built)
-      ships <- ShipLink.catalog(catalog, built)
-      _     <- uniqueResolvers(resolvers)
-    yield ProjectGraph.trusted(built, splits, ships, organization, resolvers)
+      registered <- registerAll(uses)
+      _          <- checkPlugins(registered)
+      named      <- nameAll(listed)
+      _          <- duplicates(named)
+      _          <- shape(named)
+      built      <- links(named)
+      _          <- directories(built)
+      _          <- cycle(built)
+      _          <- bindPlugins(registered, built)
+      ships      <- ShipLink.catalog(catalog, built)
+      _          <- uniqueResolvers(resolvers)
+    yield ProjectGraph.trusted(built, splits, ships, organization, resolvers, registered)
 
   private def uniqueResolvers(resolvers: List[Resolver]): Either[BuildError, Unit] =
     resolvers.foldLeft[Either[BuildError, List[Resolver]]](Right(Nil)): (acc, resolver) =>
@@ -192,7 +215,9 @@ object Projects:
       case m: ModuleDef    =>
         duplicate(m.platforms.all).map(BuildError.DuplicatePlatform(n.name, _, m.position)).orElse(
           duplicate(m.versions.all).map(BuildError.DuplicateScalaVersion(n.name, _, m.position))
-        ).orElse(clangOf(n.name, m)).orElse(nativeVersionOf(n.name, m)).orElse(jsEnvOf(n.name, m)).orElse(jsModuleOf(n.name, m))
+        ).orElse(clangOf(n.name, m)).orElse(nativeVersionOf(n.name, m)).orElse(jsEnvOf(n.name, m)).orElse(
+          jsModuleOf(n.name, m)
+        ).orElse(duplicateNote(n.name, m))
       case a: AggregateDef =>
         val children = a.children.map(_.name)
         if children.contains(a.name) then Some(BuildError.AggregateIncludesItself(n.name, a.position))
@@ -243,6 +268,7 @@ object Projects:
             m.jsEnv,
             m.jsModule,
             m.application,
+            m.notes,
           ))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
@@ -355,6 +381,120 @@ object Projects:
         if seen.contains(item) then (seen, Some(item)) else (item :: seen, None)
     ._2
 
+  private def duplicateNote(name: ProjectName, module: ModuleDef): Option[BuildError] =
+    duplicate(module.notes.map(note => (note.plugin, note.key))) match
+      case Some((plugin, key)) => Some(BuildError.DuplicateNote(name, plugin, key))
+      case None                => None
+
+  private def registerAll(uses: Uses): Either[BuildError, List[RegisteredPlugin]] =
+    uses.plugins.foldLeft[Either[BuildError, List[RegisteredPlugin]]](Right(Nil)): (acc, plugin) =>
+      acc.flatMap(soFar => register(plugin).map(soFar :+ _))
+
+  private def register(plugin: HistosPlugin): Either[BuildError, RegisteredPlugin] =
+    val contributed =
+      try Right(plugin.contribute)
+      catch case NonFatal(err) => Left(BuildError.PluginDefect(plugin.id, err.getClass.getName))
+    contributed.flatMap: contribution =>
+      EntryName.fromClass(plugin.getClass) match
+        case Right(entry) => Right(RegisteredPlugin(plugin.id, entry, contribution))
+        case Left(_)      => Left(BuildError.PluginDefect(plugin.id, plugin.getClass.getName))
+
+  private def checkPlugins(registered: List[RegisteredPlugin]): Either[BuildError, Unit] =
+    for
+      _ <- uniquePlugins(registered)
+      _ <- each(registered)(checkOne)
+      _ <- uniqueNames(registered.flatMap(_.contribution.commands.map(_.name)), BuildError.DuplicateCommand(_))
+      _ <- uniqueNames(registered.flatMap(_.contribution.jobs.map(_.name)), BuildError.DuplicateJob(_))
+    yield ()
+
+  private def uniquePlugins(registered: List[RegisteredPlugin]): Either[BuildError, Unit] =
+    registered.foldLeft[Either[BuildError, List[PluginId]]](Right(Nil)): (acc, plugin) =>
+      acc.flatMap: seen =>
+        if seen.contains(plugin.id) then Left(BuildError.DuplicatePlugin(plugin.id))
+        else Right(seen :+ plugin.id)
+    .map(_ => ())
+
+  private def each[A](items: List[A])(check: A => Either[BuildError, Unit]): Either[BuildError, Unit] =
+    items.foldLeft[Either[BuildError, Unit]](Right(())): (acc, item) =>
+      acc.flatMap(_ => check(item))
+
+  private def uniqueNames[A](names: List[A], error: A => BuildError): Either[BuildError, Unit] =
+    duplicate(names) match
+      case Some(name) => Left(error(name))
+      case None       => Right(())
+
+  private def checkOne(plugin: RegisteredPlugin): Either[BuildError, Unit] =
+    val tasks = plugin.contribution.tasks.map(_.name)
+    val missing = plugin.contribution.tasks.flatMap(_.dependsOn).collect:
+      case TaskDep.Same(name) if !tasks.contains(name) => name
+    duplicate(tasks).map(BuildError.DuplicatePluginTask(plugin.id, _))
+      .orElse(missing.headOption.map(BuildError.UnknownPluginTask(plugin.id, _)))
+      .orElse(commandProblem(plugin, tasks))
+      .orElse(jobProblem(plugin, tasks)) match
+      case Some(err) => Left(err)
+      case None      => Right(())
+
+  private def commandProblem(plugin: RegisteredPlugin, tasks: List[TaskName]): Option[BuildError] =
+    plugin.contribution.commands.collectFirst:
+      case spec if spec.name.isReserved        => BuildError.CommandShadow(spec.name)
+      case spec if !tasks.contains(spec.task)  => BuildError.UnknownPluginTask(plugin.id, spec.task)
+
+  private def jobProblem(plugin: RegisteredPlugin, tasks: List[TaskName]): Option[BuildError] =
+    plugin.contribution.jobs.collectFirst:
+      case job if job.name.isReserved       => BuildError.ReservedJob(job.name)
+      case job if !tasks.contains(job.task) => BuildError.UnknownPluginTask(plugin.id, job.task)
+
+  private def bindPlugins(registered: List[RegisteredPlugin], projects: List[Project]): Either[BuildError, Unit] =
+    val modules = projects.collect { case module: Module => module.name -> module }.toMap
+    val problem = registered.flatMap: plugin =>
+      plugin.contribution.tasks.flatMap: task =>
+        task.inputs.flatMap(inputOf(plugin, modules, _)) ++ task.dependsOn.flatMap(depOf(plugin, modules, _))
+    problem.headOption match
+      case Some(err) => Left(err)
+      case None      => Right(())
+
+  private def inputOf(
+      plugin: RegisteredPlugin,
+      modules: Map[ProjectName, Module],
+      input: DeclaredInput,
+  ): Option[BuildError] =
+    input match
+      case DeclaredInput.File(_) | DeclaredInput.Directory(_) | DeclaredInput.Text(_, _) | DeclaredInput.Env(_) =>
+        None
+      case DeclaredInput.Module(name, version, platform) =>
+        cellOf(plugin, modules, name, version, platform)
+      case DeclaredInput.Note(name, key) =>
+        modules.get(name) match
+          case None => Some(BuildError.PluginMissingModule(plugin.id, name))
+          case Some(module) =>
+            val present = module.notes.exists(note => note.plugin == plugin.id && note.key == key)
+            if present then None else Some(BuildError.MissingNote(name, plugin.id, key))
+
+  private def depOf(
+      plugin: RegisteredPlugin,
+      modules: Map[ProjectName, Module],
+      dep: TaskDep,
+  ): Option[BuildError] =
+    dep match
+      case TaskDep.Same(_) => None
+      case TaskDep.Compile(name, version, platform) =>
+        cellOf(plugin, modules, name, version, platform)
+
+  private def cellOf(
+      plugin: RegisteredPlugin,
+      modules: Map[ProjectName, Module],
+      name: ProjectName,
+      version: Option[ScalaVersion],
+      platform: Option[Platform],
+  ): Option[BuildError] =
+    modules.get(name) match
+      case None => Some(BuildError.PluginMissingModule(plugin.id, name))
+      case Some(module) =>
+        val versionOk = version.forall(module.versions.all.contains)
+        val platformOk = platform.forall(module.platforms.all.contains)
+        if versionOk && platformOk then None
+        else Some(BuildError.PluginMissingCell(plugin.id, module.name, version, platform))
+
   private final case class Named(name: ProjectName, defn: ProjectDef)
 end Projects
 
@@ -377,3 +517,15 @@ final class Organized(organization: Option[Organization], resolvers: List[Resolv
 
   def apply(splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(organization, resolvers, splits, catalog, defs.toList)
+
+  def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    Projects.assemble(organization, resolvers, Splits.aggregate, CatalogSpec.empty, defs.toList, uses)
+
+  def apply(uses: Uses, splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    Projects.assemble(organization, resolvers, splits, CatalogSpec.empty, defs.toList, uses)
+
+  def apply(uses: Uses, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    Projects.assemble(organization, resolvers, Splits.aggregate, catalog, defs.toList, uses)
+
+  def apply(uses: Uses, splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
+    Projects.assemble(organization, resolvers, splits, catalog, defs.toList, uses)

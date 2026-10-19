@@ -2,6 +2,8 @@ package histos
 
 import _root_.scala.annotation.publicInBinary
 
+import histos.plugin.{ModuleNote, NoteKey, NoteText, PluginId}
+
 /** One or more platforms. The builder requires the first, so empty is not representable. */
 final case class Platforms(first: Platform, rest: List[Platform]):
   def all: List[Platform] = first :: rest
@@ -34,6 +36,7 @@ final case class ModuleDef private (
     jsEnv: JsEnv = JsEnv.Node,
     jsModule: JsModuleKind = JsModuleKind.NoModule,
     application: Option[MainClass] = None,
+    notes: List[ModuleNote] = Nil,
 ) extends ProjectDef:
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef =
@@ -85,6 +88,14 @@ final case class ModuleDef private (
   /** The class `histos run` starts. A module that does not name one is not linked. */
   def main(main: MainClass): ModuleDef =
     copy(application = Some(main))
+
+  /** Apply a function this module already has. A plugin publishes `ModuleDef => ModuleDef`. */
+  def pipe(f: ModuleDef => ModuleDef): ModuleDef =
+    f(this)
+
+  /** Leave plugin-owned text on this module. A repeated plugin and key is refused later. */
+  def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef =
+    copy(notes = notes :+ ModuleNote(plugin, key, value))
 
 object ModuleDef:
   /** Spliced by `module`. Source code outside this package cannot call it. */

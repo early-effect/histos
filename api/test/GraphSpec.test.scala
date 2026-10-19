@@ -32,13 +32,14 @@ object GraphSpec extends ZIOSpecDefault:
                 ProjectGraph(
                   List(
                     Aggregate(_, children, _),
-                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _, _, _, _, _, _),
-                    Module(_, _, _, _, testDeps, _, _, _, _, _, _, _, _, _, _),
+                    Module(_, platforms, versions, dependencies, coreDeps, _, ClangPin.Major(clang), _, _, _, _, _, _, _, _, _),
+                    Module(_, _, _, _, testDeps, _, _, _, _, _, _, _, _, _, _, _),
                   ),
                   Splits.aggregate,
                   _,
                   None,
                   Nil,
+                  _,
                 )
               ) =>
             children.map(_.value) == List("core", "tests") &&
@@ -80,7 +81,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue(
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None, None, _, _, _, _)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, Some(main), Nil, None, None, _, _, _, _, _)), _, _, _, _, _)) =>
             main.value == "demo.Check"
           case other => summary(other) == "stored"
         ,
@@ -127,7 +128,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None, None, _, _, _, _)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, testDependencies, None, None, _, _, _, _, _)), _, _, _, _, _)) =>
             dependencies == List(zioDep) && testDependencies == List(tests)
           case other => summary(other) == "split"
     ,
@@ -193,7 +194,7 @@ object GraphSpec extends ZIOSpecDefault:
       val built = Projects(core)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, _, _, _, _, _, _, _)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, dependencies, _, _, _, _, _, _, _, _, _, _, _, _)), _, _, _, _, _)) =>
             Dep.select(dependencies, Jvm) == List(zioDep) &&
             Dep.select(dependencies, Js) == List(zioDep, time) &&
             Dep.select(dependencies, Native) == List(zioDep, time)
@@ -254,7 +255,7 @@ object GraphSpec extends ZIOSpecDefault:
       val shared = summary(Projects(module("core", Jvm)(scala3), module("app", Jvm)(scala3).in(path"core")))
       assertTrue(
         built match
-          case Right(ProjectGraph(List(found: Module), _, _, _, _)) =>
+          case Right(ProjectGraph(List(found: Module), _, _, _, _, _)) =>
             found.baseDirectory == "example/todo-conduit" && found.directory == Some(path"example/todo-conduit")
           case other => summary(other) == "nested"
         ,
@@ -277,7 +278,7 @@ object GraphSpec extends ZIOSpecDefault:
       val jvm = summary(Projects(module("core", Jvm)(scala3).nativeVersion(NativeVersion("0.5.12"))))
       assertTrue(
         native match
-          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, _, _, _, Some(version), _, _, _, _)), _, _, _, _)) =>
+          case Right(ProjectGraph(List(Module(_, _, _, _, _, _, _, _, _, _, Some(version), _, _, _, _, _)), _, _, _, _, _)) =>
             version.value == "0.5.13-SNAPSHOT"
           case other => summary(other) == "native version"
         ,
@@ -291,7 +292,7 @@ object GraphSpec extends ZIOSpecDefault:
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
       val extra   = summary(Projects(module("core", Jvm)(scala3).clang(ClangMajor(21))))
       val pin = named match
-        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _, _, _, _, _, _)), _, _, _, _)) => clang
+        case Right(ProjectGraph(List(Module(_, _, _, _, _, _, clang, _, _, _, _, _, _, _, _, _)), _, _, _, _, _)) => clang
         case _                                                              => ClangPin.Unused
       assertTrue(
         missing.contains("clang major"),
