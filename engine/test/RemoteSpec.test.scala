@@ -1,5 +1,6 @@
 package histos.schedule
 
+import histos.plugin.{Need, Seal}
 import histos.task.TaskKind
 
 import java.nio.charset.StandardCharsets

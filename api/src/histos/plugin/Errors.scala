@@ -1,0 +1,81 @@
+package histos.plugin
+
+import histos.{ProjectName, ProjectPath}
+
+/** What fails while loading a plugin. The throwable is not a payload. `binary` is an exception class name. */
+enum PluginLoadError:
+  case BadCoordinate(raw: String)
+  case Misplaced(line: Int)
+  case Unlocked(coordinate: String)
+  case NoEntry(coordinate: String)
+  case AmbiguousEntry(coordinate: String)
+  case Unversioned(coordinate: String)
+  case VersionMismatch(plugin: PluginId, pluginApi: ApiDigest, launcher: ApiDigest)
+  case ApiLink(plugin: PluginId)
+  case NoSource(plugin: PluginId, pluginApi: ApiDigest, launcher: ApiDigest)
+  case PathIsSource(path: ProjectPath)
+  case ReservedPackage(binary: String)
+  case EngineLeak(plugin: PluginId, binary: String)
+  case ForeignEntry(plugin: PluginId, entry: EntryName)
+  case NotEntry(plugin: PluginId, entry: EntryName, expected: EntryName)
+  case IdMismatch(declared: PluginId, found: PluginId)
+  case Undeclared(plugin: PluginId)
+  case Defect(plugin: PluginId, binary: String)
+  case Io(op: PluginIo)
+
+  def message: String = this match
+    case BadCoordinate(raw) => s"'$raw' is not an exact plugin coordinate"
+    case Misplaced(line) => s"plugin(...) on line $line is outside the header"
+    case Unlocked(coordinate) => s"plugin $coordinate is not in the lock"
+    case NoEntry(coordinate) => s"plugin $coordinate does not contain ${HistosPlugin.entryResource}"
+    case AmbiguousEntry(coordinate) =>
+      s"plugin $coordinate has more than one line in ${HistosPlugin.entryResource}"
+    case Unversioned(coordinate) => s"plugin $coordinate does not contain ${ApiDigest.resource}"
+    case VersionMismatch(plugin, pluginApi, launcher) =>
+      s"plugin ${plugin.value} was built against api ${pluginApi.value} and this process loads ${launcher.value}"
+    case ApiLink(plugin) => s"plugin ${plugin.value} uses LinkStrategy.Api, which is refused"
+    case NoSource(plugin, pluginApi, launcher) =>
+      s"plugin ${plugin.value} needs sources for api ${pluginApi.value} and this process loads ${launcher.value}"
+    case PathIsSource(path) => s"plugin path '${path.value}' is source and does not take that link strategy"
+    case ReservedPackage(binary) => s"'$binary' is in a reserved package"
+    case EngineLeak(plugin, binary) => s"plugin ${plugin.value} links '$binary'"
+    case ForeignEntry(plugin, entry) =>
+      s"plugin ${plugin.value} entry ${entry.value} was not defined by its header jar"
+    case NotEntry(plugin, entry, expected) =>
+      s"plugin ${plugin.value} entry ${entry.value} does not match ${expected.value}"
+    case IdMismatch(declared, found) => s"plugin ${declared.value} loaded as ${found.value}"
+    case Undeclared(plugin) => s"plugin ${plugin.value} is used and is not in the header"
+    case Defect(plugin, binary) => s"plugin ${plugin.value} failed while loading ($binary)"
+    case Io(op) => s"plugin ${op.word} failed"
+
+enum PluginIo:
+  case Read, Resolve, Compile, Open
+
+  def word: String = this match
+    case Read     => "read"
+    case Resolve  => "resolve"
+    case Compile  => "compile"
+    case Open     => "open"
+
+/** What `run` fails with. Interruption is not one of these. */
+enum PluginRunError:
+  case Failed(detail: PluginDetail)
+  case MissingOutput(name: OutputName)
+  case ExtraOutput(path: String)
+  case MissingArg(name: ParamName)
+  case MissingNote(module: ProjectName, key: NoteKey)
+  case Unknown(id: PluginTaskId)
+  case Defect(binary: String)
+  case EngineLeak(binary: String)
+  case Linkage(binary: String)
+
+  def message: String = this match
+    case Failed(detail) => detail.value
+    case MissingOutput(name) => s"plugin output ${name.value} was not written"
+    case ExtraOutput(path) => s"plugin wrote '$path', which was not declared"
+    case MissingArg(name) => s"plugin argument ${name.value} is missing"
+    case MissingNote(module, key) => s"module ${module.value} has no note ${key.value}"
+    case Unknown(id) => s"plugin task ${id.render} is not in the graph"
+    case Defect(binary) => s"plugin task failed ($binary)"
+    case EngineLeak(binary) => s"plugin task links '$binary'"
+    case Linkage(binary) => s"plugin task is missing class $binary"

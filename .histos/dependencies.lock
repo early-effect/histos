@@ -1,18 +1,29 @@
 cell api 3.10.0 jvm
-test api 3.10.0 jvm
-direct dev.zio zio-test 2.1.27 binary
-direct dev.zio zio-test-sbt 2.1.27 binary
-artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
-artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
+direct dev.zio zio 2.1.27 binary
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
-artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
-artifact org.scala-lang scala3-library_3 3.3.8 2c6eace9158df8ee4485a06128a479d968c1ebfc83ae9b1a394b58429f0d1492 central
-artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
-artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
 artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
 artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
+artifact org.scala-lang scala3-library_3 3.3.8 2c6eace9158df8ee4485a06128a479d968c1ebfc83ae9b1a394b58429f0d1492 central
 artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082bfe976af9d8139bb0c8ea0664 central
 artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
+evict org.scala-lang scala3-library_3 3.3.6 3.3.8
+test api 3.10.0 jvm
+direct dev.zio zio 2.1.27 binary
+direct dev.zio zio-test 2.1.27 binary
+direct dev.zio zio-test-sbt 2.1.27 binary
+artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
+artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
+artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
+artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
+artifact org.scala-lang scala3-library_3 3.3.8 2c6eace9158df8ee4485a06128a479d968c1ebfc83ae9b1a394b58429f0d1492 central
+artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082bfe976af9d8139bb0c8ea0664 central
+artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
+artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
+artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
+artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
 artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
 artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
 evict org.scala-lang scala-library 2.13.4 2.13.18

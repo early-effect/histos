@@ -1,5 +1,6 @@
 package histos.schedule
 
+import histos.plugin.{Need, Seal}
 import histos.task.TaskKind
 
 /** Who runs the action. A closure is the build file. A plugin is sendable only when it says so. */
@@ -11,15 +12,6 @@ enum Runner:
   case Publish
   case Closure
   case Plugin(seal: Seal)
-
-enum Seal:
-  case Hermetic
-  case Open
-
-/** A declared need that keeps the action on this machine. */
-enum Need:
-  case Network
-  case Docker
 
 enum Hold:
   case Inspect

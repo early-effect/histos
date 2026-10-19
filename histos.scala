@@ -6,7 +6,7 @@ object build extends HistosBuild:
     val zio = dep"dev.zio::zio:2.1.27"
     val zioTest = dep"dev.zio::zio-test:2.1.27"
     val zioTestSbt = dep"dev.zio::zio-test-sbt:2.1.27"
-    val api = module("api", Jvm)(scala3).testDependencies(zioTest, zioTestSbt)
+    val api = module("api", Jvm)(scala3).libraryDependencies(zio).testDependencies(zioTest, zioTestSbt)
     val central = module("central", Jvm)(scala3)
       .dependsOn(api)
       .libraryDependencies(zio)
