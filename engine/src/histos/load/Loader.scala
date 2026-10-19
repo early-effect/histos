@@ -53,7 +53,7 @@ private object LoaderLive extends Loader:
       build    <- select(builds)
       graph    <- graphOf(opened.build, build, matched)
       _        <- checkUses(opened.build, matched, graph.plugins)
-    yield LoadedBuild(graph, PluginRuntime(links(matched, live, launcher)))
+    yield LoadedBuild(graph, PluginRuntime.loaded(repo, graph, opened.build, live, links(matched, live, launcher), launcher))
 
   private def materialize(
       repo: Path,

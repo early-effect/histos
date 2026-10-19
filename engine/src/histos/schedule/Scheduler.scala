@@ -143,16 +143,16 @@ private object SchedulerLive extends Scheduler:
         action <- ZIO.fromEither(ready.byId.get(id).toRight(ScheduleError.UnknownAction(id)))
         _      <- ZIO.foreachParDiscard(action.dependencies)(dep => gate(gates, dep).flatMap(_.await))
         digest <- ZIO.fromEither(ready.digests.get(id).toRight(ScheduleError.UnknownAction(id)))
-        remoteHit <- lookup(remote, digest)
+        remoteHit <- lookup(remote, action, digest)
         out <- remoteHit match
                  case Some(value) => ZIO.succeed(value)
                  case None =>
                    cache.get(digest).mapError(ScheduleError.Cache(_)).flatMap:
-                     case Some(value) => ZIO.succeed(value)
-                     case None =>
-                       local(action).mapError(ScheduleError.Failed(id, _)).flatMap: value =>
-                         cache.put(digest, value).mapError(ScheduleError.Cache(_)) *>
-                           upload(remote, verdict(action), digest, value).as(value)
+                     case Some(value) =>
+                       accept(action, value).flatMap:
+                         case true  => ZIO.succeed(value)
+                         case false => miss(action, digest, cache, remote, local, verdict)
+                     case None => miss(action, digest, cache, remote, local, verdict)
       yield out
     compute.exit.flatMap: exit =>
       val resumed = exit match
@@ -161,13 +161,50 @@ private object SchedulerLive extends Scheduler:
       gate(gates, id).flatMap(_.done(exit)) *> resumed
     .unit
 
-  private def lookup(remote: RemoteCache, digest: Digest): IO[ScheduleError[Nothing], Option[String]] =
+  /**
+   * `Policy.Core` stores every local success. A plugin stores only a sendable result.
+   * A stayed plugin result is returned and not written.
+   */
+  private def miss[E](
+      action: Action,
+      digest: Digest,
+      cache: ActionCache,
+      remote: RemoteCache,
+      local: Action => IO[E, String],
+      verdict: Action => Verdict,
+  ): IO[ScheduleError[E], String] =
+    local(action).mapError(ScheduleError.Failed(action.id, _)).flatMap: value =>
+      val store = action.policy match
+        case Policy.Core => true
+        case Policy.Plugin(_, _, _, _) =>
+          verdict(action) match
+            case Verdict.Send    => true
+            case Verdict.Stay(_) => false
+      if store then
+        cache.put(digest, value).mapError(ScheduleError.Cache(_)) *>
+          upload(remote, verdict(action), digest, value).as(value)
+      else ZIO.succeed(value)
+
+  /** A plugin hit whose declared file is missing or different is a miss. Core text is not checked. */
+  private def accept(action: Action, stored: String): UIO[Boolean] =
+    action.policy match
+      case Policy.Core => ZIO.succeed(true)
+      case Policy.Plugin(_, _, root, outputs) =>
+        if outputs.isEmpty then ZIO.succeed(true)
+        else
+          root match
+            case None      => ZIO.succeed(false)
+            case Some(dir) => PluginManifest.accept(stored, dir, outputs)
+
+  private def lookup(remote: RemoteCache, action: Action, digest: Digest): IO[ScheduleError[Nothing], Option[String]] =
     remote.mode match
       case RemoteMode.Off => ZIO.none
       case RemoteMode.Read | RemoteMode.Write =>
         remote.find(digest).mapError(ScheduleError.Remote(_)).flatMap:
-          case None        => ZIO.none
-          case Some(bytes) => decode(digest, bytes).mapError(ScheduleError.Remote(_)).map(Some(_))
+          case None => ZIO.none
+          case Some(bytes) =>
+            decode(digest, bytes).mapError(ScheduleError.Remote(_)).flatMap: text =>
+              accept(action, text).map(ok => if ok then Some(text) else None)
 
   private def upload(remote: RemoteCache, verdict: Verdict, digest: Digest, value: String): IO[ScheduleError[Nothing], Unit] =
     (remote.mode, verdict) match

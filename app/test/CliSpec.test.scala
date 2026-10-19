@@ -1,12 +1,15 @@
 package histos.cli
 
 import histos.jdk.{Machine, Os, Settled}
+import histos.load.PluginLink
+import histos.plugin.*
 import histos.workflow.WorkflowAction
 import histos.load.{LoadError, LoadIo}
+import histos.*
 
 import java.nio.file.{Files, Path}
 
-import scala.jdk.CollectionConverters.*
+import _root_.scala.jdk.CollectionConverters.*
 
 import zio.*
 import zio.test.*
@@ -26,6 +29,34 @@ object CliSpec extends ZIOSpecDefault:
     ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
       case Some(jar) => ZIO.succeed(jar)
       case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+
+  private final class Listed extends HistosPlugin:
+    val id: PluginId = PluginId("dev.example")
+
+    def contribute: Contribution =
+      Contribution(
+        List(
+          DeclaredTask(
+            TaskName("echo"),
+            Seal.Open,
+            Set(Need.Network),
+            List(DeclaredInput.Directory(RepoPath("docs")), DeclaredInput.Env(EnvName("TOKEN"))),
+            Nil,
+            Nil,
+          )
+        ),
+        List(CommandSpec(CommandName("list"), Nil, TaskName("echo"), PluginDetail("lists the site"))),
+        List(CiJob(JobName("nightly"), TaskName("echo"), JobWhen.Always)),
+      )
+
+    def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      ZIO.succeed(PluginOutput("", Nil))
+
+  private def bare: ZIO[Scope, LoadError, Path] =
+    for
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-bare")).mapError(t => LoadError.Io(LoadIo.Temp))
+      _   <- ZIO.addFinalizer(delete(dir))
+    yield dir
 
   private def repo: ZIO[Scope, LoadError, Path] =
     for
@@ -425,6 +456,117 @@ object CliSpec extends ZIOSpecDefault:
           _    <- ZIO.addFinalizer(delete(dir))
           done <- Cli.execute(List("graph"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(done.exit == CliExit.LoadFailed && done.exit.code == 3 && done.err.contains("histos.scala"))
+    ,
+    test("a slash id is a plugin task and a typo is an unknown root"):
+      for
+        plain    <- Cli.parse(List("run", "dev.example/echo"))
+        platform <- Cli.parse(List("run", "dev.example/echo", "jvm")).either
+        broken   <- Cli.parse(List("run", "a/b/c")).either
+        site     <- Cli.parse(List("~", "site")).either
+        watched  <- Cli.parse(List("~", "test"))
+        cache    <- Cli.parse(List("cache", "nope")).either
+        flag     <- Cli.parse(List("test", "--nope")).either
+        list     <- Cli.parse(List("list")).either
+      yield assertTrue(
+        plain == Command.Plugin(PluginTaskId(PluginId("dev.example"), TaskName("echo")), PluginArgs.empty),
+        platform == Left(CliParseError.TaskPlatform("dev.example/echo")),
+        broken match
+          case Left(CliParseError.BadPluginTask(_)) => true
+          case _                                    => false,
+        site == Left(CliParseError.UnknownRoot),
+        watched == Command.Watch(Command.Test(Nil)),
+        cache == Left(CliParseError.UnknownCommand),
+        flag match
+          case Left(CliParseError.UnknownRoot) => false
+          case Left(_)                         => true
+          case Right(_)                        => false,
+        list == Left(CliParseError.UnknownRoot),
+      )
+    ,
+    test("built-in failures do not load, and an unknown root does"):
+      ZIO.scoped:
+        for
+          jar     <- apiJar
+          empty   <- bare
+          cache   <- Cli.execute(List("cache", "nope"), empty, jar).provideSome[Scope](layers(empty))
+          flag    <- Cli.execute(List("test", "--nope"), empty, jar).provideSome[Scope](layers(empty))
+          typo    <- Cli.execute(List("tst"), empty, jar).provideSome[Scope](layers(empty))
+          dir     <- repo
+          usage   <- Cli.execute(List("tst"), dir, jar).provideSome[Scope](layers(dir))
+          missing <- Cli.execute(List("run", "dev.example/echo"), dir, jar).provideSome[Scope](layers(dir))
+          list    <- Cli.execute(List("list"), dir, jar).provideSome[Scope](layers(dir))
+          watched <- Cli.execute(List("~", "site"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          cache.exit == CliExit.Usage && cache.exit.code == 2,
+          flag.exit == CliExit.Usage,
+          typo.exit == CliExit.LoadFailed && typo.exit.code == 3,
+          usage.exit == CliExit.Usage && usage.err.contains("usage:"),
+          missing.exit == CliExit.TaskFailed && missing.err.contains("plugin task") && !missing.err.contains("is not a module"),
+          list.exit == CliExit.Usage && list.err.contains("usage:"),
+          watched.exit == CliExit.Usage && watched.err.contains("usage:"),
+        )
+    ,
+    test("an api link prints the load error"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- bare
+          _ <- ZIO.attempt(
+            Files.writeString(
+              dir.resolve("histos.scala"),
+              """plugin(dep"dev.example::echo:1.0.0").link(Api)
+                |import histos.*
+                |object build extends HistosBuild:
+                |  def graph = Projects(module("core", Jvm)(scala"3.9.0"))
+                |""".stripMargin,
+            )
+          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          done <- Cli.execute(List("graph"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(done.exit == CliExit.LoadFailed && done.err.contains("LinkStrategy.Api"))
+    ,
+    test("graph text prints the contribution and not an env value"):
+      Projects(use(Listed()), module("core", Jvm)(scala"3.9.0")) match
+        case Left(err) => assertTrue(err.message == "built")
+        case Right(built) =>
+          val api = ApiDigest.trusted("ab" * 32)
+          val other = ApiDigest.trusted("cd" * 32)
+          val binary = GraphText.render(built, List(PluginLink(PluginId("dev.example"), PluginLinked.FromBinary(api), Nil)))
+          val source = GraphText.render(
+            built,
+            List(PluginLink(PluginId("dev.example"), PluginLinked.FromSource(api, other), Nil)),
+          )
+          assertTrue(
+            binary.contains("core jvm 3.9.0"),
+            binary.contains("plugin dev.example binary"),
+            binary.contains("task dev.example/echo Open Network docs"),
+            binary.contains("command list"),
+            binary.contains("job nightly"),
+            !binary.contains("TOKEN"),
+            source.contains("plugin dev.example source"),
+          )
+    ,
+    test("a contributed command parses its own argv"):
+      val bound = BoundCommand(
+        PluginId("dev.example"),
+        CommandSpec(
+          CommandName("list"),
+          List(CliParam.Text(ParamName("out")), CliParam.Flag(FlagName("all"))),
+          TaskName("echo"),
+          PluginDetail("lists the site"),
+        ),
+      )
+      val parsed = PluginCommands.parse(List(bound), List("list", "docs", "--all"))
+      val usage = PluginCommands.usage(List(bound))
+      assertTrue(
+        parsed == Right(
+          (
+            PluginTaskId(PluginId("dev.example"), TaskName("echo")),
+            PluginArgs(List(NamedText(ParamName("out"), "docs")), Set(FlagName("all"))),
+          )
+        ),
+        usage.contains("list") && usage.contains("lists the site"),
+        PluginCommands.parse(List(bound), List("nope")) == Left(CliParseError.UnknownCommand),
+      )
   )
 
   private def layers(dir: Path, env: Map[String, String] = Map.empty) =

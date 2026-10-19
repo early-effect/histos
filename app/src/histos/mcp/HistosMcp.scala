@@ -3,13 +3,17 @@ package histos.mcp
 import heddle.LinePipe
 import heddle.endpoint.Schema
 import heddle.mcp.{Mcp, McpBuildError}
+import histos.cache.ContentStore
+import histos.cli.GraphText
 import histos.jdk.Machine
 import histos.load.{LoadError, Loader}
+import histos.plugin.{PluginRunError, PluginTaskId}
 import histos.resolve.Resolve
+import histos.schedule.RemoteCache
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.toolchain.Survey
 import histos.version.VersionTask
-import histos.{Aggregate, Module, Project, ProjectGraph}
+import histos.ProjectGraph
 
 import java.nio.file.Path
 
@@ -33,19 +37,26 @@ object HistosMcp:
       case Build(errors) => errors.map(_.message).mkString("\n")
       case Stdio         => "the mcp pipe failed"
 
-  def serve(repo: Path, apiJar: Path, pipe: LinePipe, machine: Machine): ZIO[Loader & Scope & Resolve, ServeError, Unit] =
+  def serve(repo: Path, apiJar: Path, pipe: LinePipe, machine: Machine): ZIO[Loader & Scope & Resolve & ContentStore, ServeError, Unit] =
     for
       loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).mapError(ServeError.Load(_))
-      runners = Map(TaskId.Versions -> VersionTask.fromRepo(loaded.graph, repo, machine.env))
+      store  <- ZIO.service[ContentStore]
+      bound  <- loaded.plugins.bind.provide(ZLayer.succeed(ContentStore.actions(store)), RemoteCache.off)
+      runners = Map(TaskId.Versions -> VersionTask.fromRepo(loaded.graph, repo, machine.env)) ++ bound
       tasks  <- Tasks.live(loaded.graph, runners).build.map(_.get[Tasks])
-      mcp    <- ZIO.fromEither(tools(loaded.graph, tasks, machine)).mapError(ServeError.Build(_))
+      mcp    <- ZIO.fromEither(tools(loaded.graph, tasks, machine, loaded.plugins.links)).mapError(ServeError.Build(_))
       _      <- mcp.stdio(pipe).mapError(_ => ServeError.Stdio)
     yield ()
 
-  def tools(graph: ProjectGraph, tasks: Tasks, machine: Machine): Either[NonEmptyChunk[McpBuildError], Mcp[Scope]] =
+  def tools(
+      graph: ProjectGraph,
+      tasks: Tasks,
+      machine: Machine,
+      links: List[histos.load.PluginLink] = Nil,
+  ): Either[NonEmptyChunk[McpBuildError], Mcp[Scope]] =
     for
       base    <- Mcp.from()
-      listed  <- base.tool[NoArgs]("graph", "Show the project graph")(_ => ZIO.succeed(render(graph.projects)))
+      listed  <- base.tool[NoArgs]("graph", "Show the project graph")(_ => ZIO.succeed(GraphText.render(graph, links)))
       running <- listed.tool[RunArgs]("run", "Run a task and return its text")(args => run(tasks, args.id))
       stopped <- running.tool[CancelArgs]("cancel", "Cancel a run")(args => cancel(tasks, args.id))
       ready   <- stopped.tool[NoArgs](
@@ -56,19 +67,19 @@ object HistosMcp:
 
   private def run(tasks: Tasks, raw: String): ZIO[Scope, ToolFailure, String] =
     ZIO.fromEither(TaskId.from(raw)).mapError(failed).flatMap: id =>
-      tasks.run(id).mapError(failed).flatMap(run => run.await.mapError(failed).map(_.text))
+      tasks.run(id).mapError(missed(raw, _)).flatMap(started => started.await.mapError(missed(raw, _)).map(_.text))
+
+  private def missed(raw: String, err: TaskError): ToolFailure =
+    err match
+      case TaskError.NoRunner(_) =>
+        PluginTaskId.parse(raw) match
+          case Right(id) => ToolFailure(PluginRunError.Unknown(id).message)
+          case Left(_)   => failed(err)
+      case other => failed(other)
 
   private def cancel(tasks: Tasks, raw: String): ZIO[Any, ToolFailure, String] =
     ZIO.fromEither(histos.task.RunId.from(raw)).mapError(failed).flatMap: id =>
       tasks.cancel(id).mapError(failed).as("cancelled")
 
   private def failed(err: TaskError): ToolFailure = ToolFailure(err.message)
-
-  private def render(projects: List[Project]): String =
-    projects.map:
-      case Module(name, platforms, versions, _, _, _, _, _, _, _, _, _, _, _, _, _) =>
-        s"${name.value} ${platforms.all.map(_.toString.toLowerCase).mkString(",")} ${versions.all.map(_.value).mkString(",")}"
-      case Aggregate(name, children, _) =>
-        s"${name.value} aggregate ${children.map(_.value).mkString(",")}"
-    .mkString("\n")
 end HistosMcp

@@ -9,6 +9,8 @@ import histos.load.BuildClasspath
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled, Sha256, Startup, Toolchain, ToolchainError}
 import histos.load.{LoadError, LoadedBuild, Loader}
+import histos.plugin.{PluginArgs, PluginTaskId}
+import histos.schedule.RemoteCache
 import histos.toolchain.Survey
 import histos.mcp.HistosMcp
 import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
@@ -20,7 +22,7 @@ import histos.publish.LocalPublish
 import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestStatus, TestedCell}
 import histos.watch.SourceWatch
 import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
-import histos.{Aggregate, Module, Platform, Project}
+import histos.{Module, Platform}
 
 import java.nio.file.{Files, Path}
 import java.time.Instant
@@ -31,6 +33,7 @@ enum Command:
   case Version
   case Graph
   case Run(id: TaskId, platform: Option[Platform])
+  case Plugin(id: PluginTaskId, args: PluginArgs)
   case Test(projects: List[String])
   case TestOnly(modules: List[String], patterns: List[SuitePattern])
   case TestQuick(modules: List[String], patterns: List[SuitePattern])
@@ -55,9 +58,11 @@ enum ResolveAction:
 enum CliParseError:
   case Help
   case UnknownCommand
+  case UnknownRoot
   case MissingArgument
   case UnexpectedArguments
   case BadTaskId
+  case BadPluginTask(detail: String)
   case BadPlatform(detail: String)
   case TaskPlatform(name: String)
   case MissingPattern
@@ -66,10 +71,11 @@ enum CliParseError:
   case Rejected
 
   def message: String = this match
-    case Help | UnknownCommand | Rejected => Cli.usageText
-    case MissingArgument                  => "run needs one name"
-    case UnexpectedArguments              => Cli.usageText
-    case BadTaskId                        => "a task id is not empty"
+    case Help | UnknownCommand | UnknownRoot | Rejected => Cli.usageText
+    case MissingArgument                                 => "run needs one name"
+    case UnexpectedArguments                             => Cli.usageText
+    case BadTaskId                                       => "a task id is not empty"
+    case BadPluginTask(detail)                           => detail
     case BadPlatform(detail)              => detail
     case TaskPlatform(name)               => s"run $name does not take a platform"
     case MissingPattern                   => "testOnly needs a pattern"
@@ -123,7 +129,10 @@ object Cli:
 
   def execute(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     parse(args).foldZIO(
-      detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message)),
+      {
+        case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
+        case detail                    => ZIO.succeed(Completed(CliExit.Usage, "", detail.message))
+      },
       command => perform(repo, apiJar, command),
     )
 
@@ -132,6 +141,7 @@ object Cli:
           case Command.Version          => ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
           case Command.Graph            => graph(repo, apiJar)
           case Command.Run(id, platform) => run(repo, apiJar, id, platform)
+          case Command.Plugin(id, pluginArgs) => plugin(repo, apiJar, id, pluginArgs)
           case Command.Test(projects)   => test(repo, apiJar, projects, Nil, quick = false)
           case Command.TestOnly(modules, patterns) => test(repo, apiJar, modules, patterns, quick = false)
           case Command.TestQuick(modules, patterns) => test(repo, apiJar, modules, patterns, quick = true)
@@ -201,7 +211,7 @@ object Cli:
   private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map:
       case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
-      case Right(loaded) => Completed(CliExit.Success, render(loaded.graph.projects), "")
+      case Right(loaded) => Completed(CliExit.Success, GraphText.render(loaded.graph, loaded.plugins.links), "")
 
   private def run(repo: Path, apiJar: Path, id: TaskId, platform: Option[Platform]): URIO[Loader & Scope & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
@@ -506,7 +516,7 @@ object Cli:
           ).merge
     }
 
-  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine & Resolve, Completed] =
+  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine & Resolve & ContentStore, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
       HistosMcp.serve(repo, apiJar, LinePipe.standard, machine).fold(
       err => Completed(CliExit.LoadFailed, "", err.message),
@@ -613,16 +623,46 @@ object Cli:
 
   private def taskExit(err: TaskError): CliExit =
     err match
-      case TaskError.EmptyId | TaskError.NoRunner(_) | TaskError.UnknownRun(_) | TaskError.Version(_) =>
+      case TaskError.EmptyId | TaskError.NoRunner(_) | TaskError.UnknownRun(_) | TaskError.Version(_) | TaskError.Plugin(_) =>
         CliExit.TaskFailed
 
-  private def render(projects: List[Project]): String =
-    projects.map:
-      case Module(name, platforms, versions, _, _, _, _, _, _, _, _, _, _, _, _, _) =>
-        s"${name.value} ${platforms.all.map(_.toString.toLowerCase).mkString(",")} ${versions.all.map(_.value).mkString(",")}"
-      case Aggregate(name, children, _) =>
-        s"${name.value} aggregate ${children.map(_.value).mkString(",")}"
-    .mkString("\n")
+  private def contributed(args: List[String], repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    val (watched, tokens) = args match
+      case "~" :: rest => (true, rest)
+      case other       => (false, other)
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(err) => ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
+      case Right(loaded) =>
+        val commands = loaded.graph.plugins.flatMap: plugin =>
+          plugin.contribution.commands.map(BoundCommand(plugin.id, _))
+        PluginCommands.parse(commands, tokens) match
+          case Left(_) => ZIO.succeed(Completed(CliExit.Usage, "", PluginCommands.usage(commands)))
+          case Right((id, pluginArgs)) =>
+            val command = Command.Plugin(id, pluginArgs)
+            perform(repo, apiJar, if watched then Command.Watch(command) else command)
+
+  private def plugin(
+      repo: Path,
+      apiJar: Path,
+      id: PluginTaskId,
+      args: PluginArgs,
+  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+      case Left(err) => ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
+      case Right(loaded) =>
+        ZIO.serviceWithZIO[ContentStore]: store =>
+          loaded.plugins
+            .run(id, args)
+            .provide(ZLayer.succeed(ContentStore.actions(store)), RemoteCache.off)
+            .foldCauseZIO(
+              cause =>
+                if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Interrupted, "", ""))
+                else
+                  cause.failureOption match
+                    case Some(err) => ZIO.succeed(Completed(CliExit.TaskFailed, "", err.message))
+                    case None      => ZIO.succeed(Completed(CliExit.TaskFailed, "", "plugin task failed")),
+              output => ZIO.succeed(Completed(CliExit.Success, output.text, "")),
+            )
 
 object Main extends ZIOAppDefault:
   def run =

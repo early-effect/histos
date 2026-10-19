@@ -1,9 +1,10 @@
 package histos.cli
 
-import histos.{Platform, ProjectName}
+import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.task.TaskId
 import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction
+import histos.{Platform, ProjectName}
 
 import zio.{IO, ZIO}
 import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Options, ValidationError, ValidationErrorType}
@@ -61,15 +62,21 @@ object Grammar:
       version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | acp | bsp | server | toolchain | cache | resolve | workflow,
     )
 
+  /** Words the built-in grammar owns. `path`, `list`, and `clean` stay free so a plugin can take them. */
+  private val roots: Set[String] = Set(
+    "version", "graph", "run", "test", "testOnly", "testQuick", "compile", "assembly", "publish",
+    "mcp", "acp", "bsp", "server", "toolchain", "cache", "resolve", "workflow",
+  )
+
   def parse(args: List[String]): IO[CliParseError, Command] =
     args match
       case "~" :: Nil     => ZIO.fail(CliParseError.WatchCommand("watch needs a command"))
       case "~" :: "~" :: _ => ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
-      case "~" :: rest    => parse(rest).map(Command.Watch(_))
+      case "~" :: rest    => parseRoot(rest).map(Command.Watch(_))
       case _              => parseRoot(args)
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
-    root.parse("histos" :: args, CliConfig.default).mapError(reject).flatMap:
+    root.parse("histos" :: args, CliConfig.default).mapError(error => reject(error, args)).flatMap:
       case CommandDirective.UserDefined(Nil, wire) => command(wire)
       case CommandDirective.UserDefined(_, _)      => ZIO.fail(CliParseError.UnexpectedArguments)
       case CommandDirective.BuiltIn(_)             => ZIO.fail(CliParseError.Help)
@@ -96,7 +103,10 @@ object Grammar:
       case Wire.Workflow(true, true) => ZIO.fail(CliParseError.Rejected)
       case Wire.Workflow(_, update) =>
         ZIO.succeed(Command.Workflow(if update then WorkflowAction.Update else WorkflowAction.Check))
-      case Wire.Test(projects) => ZIO.succeed(Command.Test(projects))
+      case Wire.Test(projects) =>
+        projects.find(_.startsWith("-")) match
+          case Some(flag) => ZIO.fail(CliParseError.Pattern(s"test does not take $flag"))
+          case None       => ZIO.succeed(Command.Test(projects))
       case Wire.TestOnly(args) => ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map {
         case (modules, patterns) => Command.TestOnly(modules, patterns)
       }
@@ -107,16 +117,18 @@ object Grammar:
       case Wire.Assembly(destination) => ZIO.succeed(Command.Assembly(destination))
       case Wire.Publish(repository, projects) => ZIO.succeed(Command.Publish(repository, projects))
       case Wire.Run(raw, token) =>
-        ZIO.fromEither(TaskId.from(raw)).mapError(_ => CliParseError.BadTaskId).flatMap: id =>
-          val task = id == TaskId.Inspect || id == TaskId.Versions
-          token match
-            case Some(_) if task => ZIO.fail(CliParseError.TaskPlatform(id.value))
-            case None            => ZIO.succeed(Command.Run(id, None))
-            case Some(text) =>
-              ZIO.fromEither(Platform.from(text)).mapBoth(
-                error => CliParseError.BadPlatform(error.message),
-                platform => Command.Run(id, Some(platform)),
-              )
+        if raw.contains('/') then pluginTask(raw, token)
+        else
+          ZIO.fromEither(TaskId.from(raw)).mapError(_ => CliParseError.BadTaskId).flatMap: id =>
+            val task = id == TaskId.Inspect || id == TaskId.Versions
+            token match
+              case Some(_) if task => ZIO.fail(CliParseError.TaskPlatform(id.value))
+              case None            => ZIO.succeed(Command.Run(id, None))
+              case Some(text) =>
+                ZIO.fromEither(Platform.from(text)).mapBoth(
+                  error => CliParseError.BadPlatform(error.message),
+                  platform => Command.Run(id, Some(platform)),
+                )
 
   private def selection(
       command: String,
@@ -152,10 +164,22 @@ object Grammar:
   private def distinct(names: List[String]): List[String] =
     names.foldLeft(List.empty[String])((acc, name) => if acc.contains(name) then acc else acc :+ name)
 
-  private def reject(error: ValidationError): CliParseError =
+  private def pluginTask(raw: String, token: Option[String]): IO[CliParseError, Command] =
+    token match
+      case Some(_) => ZIO.fail(CliParseError.TaskPlatform(raw))
+      case None =>
+        ZIO.fromEither(PluginTaskId.parse(raw)).mapBoth(
+          error => CliParseError.BadPluginTask(error.message),
+          id => Command.Plugin(id, PluginArgs.empty),
+        )
+
+  private def reject(error: ValidationError, args: List[String]): CliParseError =
     error.validationErrorType match
-      case ValidationErrorType.CommandMismatch                     => CliParseError.UnknownCommand
+      case ValidationErrorType.CommandMismatch =>
+        args match
+          case head :: _ if roots.contains(head) => CliParseError.UnknownCommand
+          case _                                 => CliParseError.UnknownRoot
       case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>
         CliParseError.MissingArgument
-      case _                                                       => CliParseError.Rejected
+      case _ => CliParseError.Rejected
 

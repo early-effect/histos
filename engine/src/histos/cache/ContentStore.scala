@@ -1,7 +1,8 @@
 package histos.cache
 
-import histos.schedule.{CacheError, CacheOp, Digest}
+import histos.schedule.{ActionCache, CacheError, CacheOp, Digest}
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.time.{Duration, Instant}
 import scala.jdk.CollectionConverters.*
@@ -24,6 +25,15 @@ object ContentStore:
   val Retention: Duration = Duration.ofDays(30)
 
   def in(root: Path): ContentStore = DiskStore(root)
+
+  /** Plugin manifests are UTF-8 blobs in this store. The stamp is wall time. `ActionCache.put` has no clock. */
+  def actions(store: ContentStore): ActionCache = new ActionCache:
+    def get(digest: Digest): IO[CacheError, Option[String]] =
+      store.read(digest).map(_.map(bytes => new String(bytes.toArray, StandardCharsets.UTF_8)))
+
+    override def put(digest: Digest, value: String): IO[CacheError, Unit] =
+      val bytes = Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8))
+      store.put(digest, bytes, Instant.now)
 
   def home(xdgCache: Option[String], userHome: String): Path =
     xdgCache.filter(_.nonEmpty) match

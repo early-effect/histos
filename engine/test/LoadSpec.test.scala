@@ -5,6 +5,7 @@ import dotty.tools.dotc.reporting.StoreReporter
 import histos.jdk.Sha256
 import histos.plugin.*
 import histos.resolve.*
+import histos.schedule.{ActionCache, RemoteCache}
 import histos.{BuildError, Dep, ProjectPath}
 
 import java.nio.file.{Files, Path}
@@ -314,7 +315,7 @@ object LoadSpec extends ZIOSpecDefault:
               coordinate == PluginCoordinate.Published(echo) && binary == "histos.schedule.Sendable"
             case _ => false
     ,
-    test("an exact-binary plugin contributes, links from the jar, and run is unknown"):
+    test("an exact-binary plugin contributes, links from the jar, and run returns its text"):
       ZIO.scoped:
         for
           jar <- apiJar
@@ -325,7 +326,8 @@ object LoadSpec extends ZIOSpecDefault:
           _ <- writeLock(repo, sha)
           loaded <- loadWith(repo, jar, Holding(packed, sha)).flatMap(ZIO.fromEither)
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
-          ran <- loaded.plugins.run(task, PluginArgs.empty).either
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+          bound <- loaded.plugins.bind.provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
         yield assertTrue(
           loaded.graph.projects.map(_.name.value) == List("core"),
           loaded.graph.plugins match
@@ -340,8 +342,8 @@ object LoadSpec extends ZIOSpecDefault:
               id == PluginId("dev.example") && digest.value == hex && artifacts == List(packed.toString)
             case _ => false
           ,
-          loaded.plugins.bind.isEmpty,
-          ran == Left(PluginRunError.Unknown(task)),
+          bound.keys.map(_.value).toList == List(task.render),
+          ran == PluginOutput("", Nil),
         )
     ,
     test("a plugin object defined by the build file is a foreign entry"):

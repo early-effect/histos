@@ -1,9 +1,11 @@
 package histos.schedule
 
 import histos.jdk.Sha256
+import histos.plugin.{Need, RepoPath, Seal}
 import histos.task.TaskKind
 
 import java.nio.charset.StandardCharsets
+import java.nio.file.Path
 import java.security.MessageDigest
 
 import zio.{Chunk, IO, UIO, ZIO}
@@ -53,12 +55,22 @@ object ActionId:
 enum ActionIdError:
   case Empty
 
-/** A task node the scheduler can run. The effect is not stored here. */
+/**
+ * Whether the scheduler may send the action.
+ * A plugin hit also names the repo and the declared output files. Those two are not part of the digest.
+ * An empty output list stores the task text and does not check a file.
+ */
+enum Policy:
+  case Core
+  case Plugin(seal: Seal, needs: Set[Need], root: Option[Path] = None, outputs: List[RepoPath] = Nil)
+
+/** A task node the scheduler can run. The effect is not stored here. `Core` keeps compile keys stable. */
 final case class Action(
     id: ActionId,
     kind: TaskKind,
     inputs: List[Input],
     dependencies: List[ActionId],
+    policy: Policy = Policy.Core,
 )
 
 /** Identity of an action and of the actions it depends on. The cache layer stores bytes under this key. */
@@ -79,7 +91,13 @@ object Digest:
       .map(id => s"${id.value}=${dependencyDigests.getOrElse(id, "")}")
       .sorted
       .mkString("\n")
-    val text = s"${action.kind}\n${action.id.value}\n$inputs\n$deps"
+    val body = s"${action.kind}\n${action.id.value}\n$inputs\n$deps"
+    val text = action.policy match
+      case Policy.Core => body
+      case Policy.Plugin(seal, needs, _, _) =>
+        val listed = needs.toList.map(_.toString).sorted.mkString(",")
+        val need = if listed.isEmpty then "" else s" $listed"
+        s"$body\nplugin $seal$need"
     val bytes = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8))
     bytes.map(b => f"${b & 0xff}%02x").mkString
 

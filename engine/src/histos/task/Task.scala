@@ -8,6 +8,7 @@ enum TaskKind:
   case Inspect
   case Compile
   case Versions
+  case Plugin
 
 opaque type TaskId = String
 
@@ -40,12 +41,14 @@ enum TaskError:
   case NoRunner(id: TaskId)
   case UnknownRun(id: RunId)
   case Version(error: histos.version.VersionError)
+  case Plugin(error: histos.plugin.PluginRunError)
 
   def message: String = this match
     case EmptyId        => "a task id is not empty"
     case NoRunner(id)   => s"no runner for '${id.value}'"
     case UnknownRun(id) => s"no run '${id.value}'"
     case Version(error) => error.message
+    case Plugin(error)  => error.message
 
 final case class TaskResult(kind: TaskKind, text: String)
 

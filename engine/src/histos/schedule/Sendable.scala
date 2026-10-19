@@ -42,8 +42,13 @@ object Sendable:
         case Runner.Versions              => Verdict.Stay(Hold.Versions)
 
   def ofAction(action: Action): Verdict =
-    val runner = action.kind match
-      case TaskKind.Compile  => Runner.Compile
-      case TaskKind.Inspect  => Runner.Inspect
-      case TaskKind.Versions => Runner.Versions
-    decide(runner, Set.empty)
+    action.policy match
+      case Policy.Core =>
+        val runner = action.kind match
+          case TaskKind.Compile  => Runner.Compile
+          case TaskKind.Inspect  => Runner.Inspect
+          case TaskKind.Versions => Runner.Versions
+          case TaskKind.Plugin   => Runner.Plugin(Seal.Open)
+        decide(runner, Set.empty)
+      case Policy.Plugin(seal, needs, _, _) =>
+        decide(Runner.Plugin(seal), needs)
