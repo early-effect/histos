@@ -6,6 +6,8 @@ import histos.acp.Acp
 import histos.cli.Command
 import histos.jdk.{Machine, Os, Settled}
 import histos.load.{LoadError, LoadIo, Loader}
+import histos.resolve.{Classpath, LockedArtifact, Repositories, Resolve, ResolveCell, ResolveError, ResolvedArtifact, RepositoryIo}
+import histos.Dep
 
 import java.nio.file.{Files, Path}
 
@@ -17,6 +19,17 @@ import zio.json.ast.Json
 import zio.test.*
 
 object ProtocolSpec extends ZIOSpecDefault:
+  private object IdleResolve extends Resolve:
+    def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+    def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+    def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+  private val loading = Loader.live ++ ZLayer.succeed(IdleResolve)
   private val source =
     """import histos.*
       |object build extends HistosBuild:
@@ -94,7 +107,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           jar               <- apiJar
           dir               <- repo
           (client, server)  <- LinePipe.connected
-          done              <- HistosMcp.serve(dir, jar, server, machine(dir)).provideSome[Scope](Loader.live).forkScoped
+          done              <- HistosMcp.serve(dir, jar, server, machine(dir)).provideSome[Scope](loading).forkScoped
           _                 <- client.writeLine(req("server/discover", obj(), 1).toJson)
           _                 <- client.writeLine(req("tools/call", obj("name" -> Json.Str("graph"), "arguments" -> obj()), 2).toJson)
           _                 <- client.writeLine(req("tools/call", obj("name" -> Json.Str("run"), "arguments" -> obj("id" -> Json.Str("inspect"))), 3).toJson)
@@ -114,7 +127,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           _                <- ZIO.attempt(writeJdk(dir)).mapError(t => LoadError.Io(LoadIo.Temp))
           (client, server) <- LinePipe.connected
           done             <- HistosMcp.serve(dir, jar, server, machine(dir, Map("JAVA_HOME" -> dir.resolve("jdk").toString)))
-                                .provideSome[Scope](Loader.live)
+                                .provideSome[Scope](loading)
                                 .forkScoped
           _                <- client.writeLine(req("server/discover", obj(), 1).toJson)
           _                <- client.writeLine(req("tools/call", obj("name" -> Json.Str("toolchain"), "arguments" -> obj()), 2).toJson)
@@ -135,7 +148,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           jar              <- apiJar
           dir              <- repo
           (client, server) <- LinePipe.connected
-          done             <- HistosMcp.serve(dir, jar, server, machine(dir)).provideSome[Scope](Loader.live).forkScoped
+          done             <- HistosMcp.serve(dir, jar, server, machine(dir)).provideSome[Scope](loading).forkScoped
           _                <- client.writeLine(req("server/discover", obj(), 1).toJson)
           _                <- client.writeLine(req("tools/call", obj("name" -> Json.Str("toolchain"), "arguments" -> obj()), 2).toJson)
           _                <- client.close
@@ -164,7 +177,7 @@ object ProtocolSpec extends ZIOSpecDefault:
                }.mapError(t => LoadError.Io(LoadIo.Temp))
           (client, server) <- LinePipe.connected
           done             <- HistosMcp.serve(dir, jar, server, machine(dir, Map("JAVA_HOME" -> dir.resolve("jdk").toString)))
-                                .provideSome[Scope](Loader.live)
+                                .provideSome[Scope](loading)
                                 .forkScoped
           _                <- client.writeLine(req("server/discover", obj(), 1).toJson)
           _                <- client.writeLine(req("tools/call", obj("name" -> Json.Str("toolchain"), "arguments" -> obj()), 2).toJson)

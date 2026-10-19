@@ -279,17 +279,17 @@ enum PluginLoadError:
   case NoEntry(coordinate: String)
   case AmbiguousEntry(coordinate: String)
   case Unversioned(coordinate: String)
-  case VersionMismatch(plugin: PluginId, pluginApi: ApiDigest, launcher: ApiDigest)
-  case ApiLink(plugin: PluginId)
-  case NoSource(plugin: PluginId, pluginApi: ApiDigest, launcher: ApiDigest)
+  case VersionMismatch(dependency: Dep, pluginApi: ApiDigest, launcher: ApiDigest)
+  case ApiLink(dependency: Dep)
+  case NoSource(coordinate: PluginCoordinate)
   case PathIsSource(path: ProjectPath)
   case ReservedPackage(binary: String)
-  case EngineLeak(plugin: PluginId, binary: String)
+  case EngineLeak(coordinate: PluginCoordinate, binary: String)
   case ForeignEntry(plugin: PluginId, entry: EntryName)
   case NotEntry(plugin: PluginId, entry: EntryName, expected: EntryName)
   case IdMismatch(declared: PluginId, found: PluginId)
   case Undeclared(plugin: PluginId)
-  case Defect(plugin: PluginId, binary: String)
+  case Defect(coordinate: PluginCoordinate, binary: String)
   case Io(op: PluginIo)
 
   def message: String
@@ -311,7 +311,7 @@ enum PluginIo:
   case Read, Resolve, Compile, Open
 ```
 
-Every new enum has `message`, the same way `BuildError` and `LoadError` do. `message` names the plugin and both digests when the failure is a mismatch. It does not include an exception message. `Defect` carries the exception class name (`getClass.getName`) and nothing else.
+Every new enum has `message`, the same way `BuildError` and `LoadError` do. `ApiLink`, `VersionMismatch`, `NoSource`, `EngineLeak`, and `Defect` fire before the plugin object exists, so they name the header coordinate (`PluginCoordinate.Published` or `Path`) and do not invent a `PluginId`. `VersionMismatch` also names both digests. `NoSource` does not. `message` does not include an exception message. `Defect` carries the exception class name (`getClass.getName`) and nothing else. `IdMismatch`, `ForeignEntry`, `NotEntry`, and `Undeclared` still name a `PluginId`, because those run only after the object exists.
 
 `Projects` still returns `Either[BuildError, ProjectGraph]`. Checks that need only the `use` values are `BuildError` cases, added next to the ones in `api/src/histos/BuildError.scala`: `DuplicatePlugin`, `DuplicatePluginTask`, `DuplicateCommand`, `DuplicateJob`, `ReservedJob`, `DuplicateNote`, `MissingNote`, `PluginMissingModule`, `PluginMissingCell`, `UnknownPluginTask` (a `Same` dep or a `CiJob.task` that is not a `DeclaredTask` of that plugin), `CommandShadow`, and `PluginDefect` (a throw from `contribute`). `CommandName.reserved` lives in the api. The CLI grammar test asserts its root subcommand words equal that set. Those names are not repeated on `PluginLoadError`.
 
@@ -933,7 +933,7 @@ Histos has no metrics stack. Do not add one for plugins. The signals are the CLI
 
 - Exact digest match: quiet.
 - `PluginLinked.FromSource`: one line, plugin id, the digest in the plugin jar, the digest of the api jar being loaded.
-- `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, `Unlocked`: the error `message`, which names the plugin and both digests when the api jar is the point. Exit `CliExit.LoadFailed` (3), via `LoadError.Plugin` or `LoadError.BrokenGraph`.
+- `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, `Unlocked`: the error `message`, which names the header coordinate. `VersionMismatch` also names both digests. Exit `CliExit.LoadFailed` (3), via `LoadError.Plugin` or `LoadError.BrokenGraph`.
 - A plugin task failure, including `PluginRunError.Unknown` and `PluginRunError.Defect`: plugin id, task name, `message`. Exit `CliExit.TaskFailed` (1). Interruption: 130.
 - `histos graph` and MCP graph text print each plugin id, link status, task id, seal, needs, declared input paths (not env values), command names, and job names. Agents use the existing graph and `run` tools. Both printers grow the lines. There is no new MCP tool.
 - A cache hit is quiet, same as a compile cache hit. A `Stay` task does not log a cache decision beyond the normal run.

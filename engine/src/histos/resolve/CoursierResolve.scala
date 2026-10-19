@@ -1,6 +1,7 @@
 package histos.resolve
 
 import histos.jdk.Sha256
+import histos.{Dep, Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -15,8 +16,12 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
     Resolve.prepare(cell) *> {
       if cell.dependencies.isEmpty then ZIO.succeed(Classpath(Nil, Nil))
-      else solve(cell)
+      else solve(cell.dependencies, cell.scalaVersion, cell.platform, cell.repositories)
     }
+
+  def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
+    if Resolve.ranged(dependency) then ZIO.fail(ResolveError.Range(dependency))
+    else solve(List(dependency), Resolve.pluginScala, Platform.Jvm, repositories)
 
   def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
     for
@@ -31,16 +36,21 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
         else ZIO.fail(ResolveError.Checksum(path, artifact.sha256, sha))
     yield out
 
-  private def solve(cell: ResolveCell): IO[ResolveError, Classpath] =
-    val dependencies = cell.dependencies.map(dep =>
-      dependency(dep.organization, ArtifactName.of(dep, cell.scalaVersion, cell.platform), dep.revision),
+  private def solve(
+      dependencies: List[Dep],
+      version: ScalaVersion,
+      platform: Platform,
+      repositories: Repositories,
+  ): IO[ResolveError, Classpath] =
+    val requested = dependencies.map(dep =>
+      dependency(dep.organization, ArtifactName.of(dep, version, platform), dep.revision),
     )
-    val repositories = Repositories.ordered(cell.repositories).map(toCoursier)
+    val coursierRepositories = Repositories.ordered(repositories).map(toCoursier)
     for
       base   <- session
-      result <- execute(base.withRepositories(repositories).withDependencies(dependencies))
-      rows   <- ZIO.fromEither(classpathRows(cell, result))
-      hashed <- ZIO.foreach(rows)(row => place(cell, row))
+      result <- execute(base.withRepositories(coursierRepositories).withDependencies(requested))
+      rows   <- ZIO.fromEither(classpathRows(dependencies, version, platform, result))
+      hashed <- ZIO.foreach(rows)(row => place(repositories, row))
     yield Classpath(hashed, evictions(result.resolution))
 
   private def session: IO[ResolveError, coursier.Fetch[coursier.util.Task]] =
@@ -54,21 +64,26 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
       case Left(error)   => ZIO.fail(lift(error))
       case Right(result) => ZIO.succeed(result)
 
-  private def place(cell: ResolveCell, row: Row): IO[ResolveError, ResolvedArtifact] =
-    Repository.recorded(row.url, Repositories.ordered(cell.repositories)) match
+  private def place(repositories: Repositories, row: Row): IO[ResolveError, ResolvedArtifact] =
+    Repository.recorded(row.url, Repositories.ordered(repositories)) match
       case None => ZIO.fail(ResolveError.Repository(RepositoryIo.Metadata))
       case Some(repository) =>
         digest(row.path).map(sha => ResolvedArtifact(row.organization, row.name, row.revision, row.path, sha, repository))
 
-  private def classpathRows(cell: ResolveCell, result: coursier.Fetch.Result): Either[ResolveError, List[Row]] =
+  private def classpathRows(
+      dependencies: List[Dep],
+      version: ScalaVersion,
+      platform: Platform,
+      result: coursier.Fetch.Result,
+  ): Either[ResolveError, List[Row]] =
     rows(result).flatMap: found =>
       if found.nonEmpty then Right(found)
       else
-        cell.dependencies match
+        dependencies match
           case dependency :: _ =>
             Left(ResolveError.NotFound(
               dependency.organization,
-              ArtifactName.of(dependency, cell.scalaVersion, cell.platform),
+              ArtifactName.of(dependency, version, platform),
               dependency.revision,
             ))
           case Nil => Right(Nil)

@@ -8,10 +8,10 @@ import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled, Sha256, Startup, Toolchain, ToolchainError}
-import histos.load.{LoadError, Loader}
+import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.toolchain.Survey
 import histos.mcp.HistosMcp
-import histos.resolve.{BuildResolvers, Resolve}
+import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
@@ -177,7 +177,7 @@ object Cli:
       )
     }
 
-  private def watchRoots(repo: Path, apiJar: Path, command: Command): URIO[Loader & Scope, List[Path]] =
+  private def watchRoots(repo: Path, apiJar: Path, command: Command): URIO[Loader & Scope & Resolve, List[Path]] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
       case Left(_) => List(repo.resolve("histos.scala"))
       case Right(loaded) =>
@@ -198,7 +198,7 @@ object Cli:
         List(id.value)
       case _ => Nil
 
-  private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope, Completed] =
+  private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map:
       case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
       case Right(loaded) => Completed(CliExit.Success, render(loaded.graph.projects), "")
@@ -451,19 +451,34 @@ object Cli:
     ).merge
 
   private def resolve(repo: Path, apiJar: Path, action: ResolveAction): URIO[Loader & Scope & Resolve, Completed] =
-    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
+    ZIO.serviceWithZIO[Loader](_.scan(repo)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
-      case Right(loaded) =>
-        val effect = action match
-          case ResolveAction.Verify => Resolve.verify(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers))
-          case ResolveAction.Update => Resolve.update(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers))
-          case ResolveAction.Check  => Resolve.check(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers))
-        effect.mapBoth(
-          error => Completed(CliExit.ResolveFailed, "", error.message),
+      case Right(scanned) =>
+        val followed: ZIO[Loader & Scope & Resolve, LoadError | ResolveError, String] = action match
+          case ResolveAction.Update =>
+            Resolve.updatePlugins(repo, scanned.requests, Repositories.central) *>
+              afterLoad(repo, apiJar)(loaded => Resolve.update(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers)))
+          case ResolveAction.Check =>
+            Resolve.requirePlugins(repo, scanned.requests) *>
+              Resolve.checkPlugins(repo, scanned.requests, Repositories.central) *>
+              afterLoad(repo, apiJar)(loaded => Resolve.check(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers)))
+          case ResolveAction.Verify =>
+            Resolve.requirePlugins(repo, scanned.requests) *>
+              afterLoad(repo, apiJar)(loaded => Resolve.verify(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers)))
+        followed.fold(
+          {
+            case error: LoadError    => Completed(CliExit.LoadFailed, "", error.message)
+            case error: ResolveError => Completed(CliExit.ResolveFailed, "", error.message)
+          },
           text => Completed(CliExit.Success, text, ""),
-        ).merge
+        )
 
-  private def workflow(repo: Path, apiJar: Path, action: WorkflowAction): URIO[Loader & Scope, Completed] =
+  private def afterLoad(repo: Path, apiJar: Path)(
+      continue: LoadedBuild => ZIO[Resolve, ResolveError, String],
+  ): ZIO[Loader & Scope & Resolve, LoadError | ResolveError, String] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).flatMap(continue)
+
+  private def workflow(repo: Path, apiJar: Path, action: WorkflowAction): URIO[Loader & Scope & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
@@ -475,7 +490,7 @@ object Cli:
           file => Completed(CliExit.Success, file.toString, ""),
         ).merge
 
-  private def toolchain(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine, Completed] =
+  private def toolchain(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
       ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
         case Left(LoadError.MissingFile(_)) =>
@@ -491,7 +506,7 @@ object Cli:
           ).merge
     }
 
-  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine, Completed] =
+  private def mcp(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
       HistosMcp.serve(repo, apiJar, LinePipe.standard, machine).fold(
       err => Completed(CliExit.LoadFailed, "", err.message),

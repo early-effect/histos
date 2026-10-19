@@ -1,6 +1,8 @@
 package histos.resolve
 
 import histos.jdk.{JdkMajor, JdkVersion, Sha256}
+import histos.load.PluginRequest
+import histos.plugin.LinkStrategy
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.{Dep, DepKind, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
@@ -69,7 +71,7 @@ object ResolveSpec extends ZIOSpecDefault:
       DependencyLock.parse(text) match
         case Right(lock) =>
           val again = DependencyLock.parse(DependencyLock.render(lock))
-          assertTrue(again == Right(lock), lock.cells.length == 1)
+          assertTrue(again == Right(lock), lock.cells.length == 1, lock.plugins.isEmpty)
         case Left(_) => assertTrue(false)
     ,
     test("an eviction with an empty requested version is not written"):
@@ -130,6 +132,56 @@ object ResolveSpec extends ZIOSpecDefault:
             DependencyLock.parse(twice) == Left(LockError.DuplicateCell(core, v390, Platform.Jvm, ClasspathScope.Test)),
           )
         case Left(_) => assertTrue(false)
+    ,
+    test("a plugin cell is a lock, and api is not a strategy token"):
+      def cell(strategy: String) =
+        s"""plugin dev.example echo 1.0.0 $strategy
+           |direct dev.example echo 1.0.0 binary
+           |artifact dev.example echo_3 1.0.0 ${digest.value} central
+           |""".stripMargin
+      val exact = DependencyLock.parse(cell("exact-binary"))
+      val source = DependencyLock.parse(cell("source"))
+      val either = DependencyLock.parse(cell("binary-or-source"))
+      assertTrue(
+        exact.exists(lock => lock.cells.isEmpty && lock.plugins.map(_.link) == List(LinkStrategy.ExactBinary)),
+        source.exists(_.plugins.map(_.link) == List(LinkStrategy.Source)),
+        either.exists(_.plugins.map(_.link) == List(LinkStrategy.BinaryOrSource)),
+        DependencyLock.parse(cell("api")) == Left(LockError.BadLine("plugin dev.example echo 1.0.0 api")),
+        LinkToken.parse("api").isEmpty,
+      )
+    ,
+    test("a source line belongs to the open plugin"):
+      val text =
+        s"""plugin dev.example echo 1.0.0 binary-or-source
+           |source dev.example echo_3 1.0.0 ${digest.value} central
+           |""".stripMargin
+      DependencyLock.parse(text) match
+        case Right(lock) =>
+          assertTrue:
+            lock.cells.isEmpty &&
+              (lock.plugins match
+                case plugin :: Nil =>
+                  plugin.link == LinkStrategy.BinaryOrSource &&
+                    plugin.source.exists(artifact => artifact.name == "echo_3" && artifact.sha256 == digest)
+                case _ => false
+              )
+        case Left(_) => assertTrue(false)
+    ,
+    test("a plugin cell refuses an eviction, a duplicate, and a source with no plugin"):
+      val evict =
+        """plugin dev.example echo 1.0.0 exact-binary
+          |evict dev.zio zio_3 2.1.20 2.1.26
+          |""".stripMargin
+      val twice =
+        """plugin dev.example echo 1.0.0 exact-binary
+          |plugin dev.example echo 1.0.0 source
+          |""".stripMargin
+      val bare = s"source dev.example echo_3 1.0.0 ${digest.value} central"
+      assertTrue(
+        DependencyLock.parse(evict) == Left(LockError.BadLine("evict dev.zio zio_3 2.1.20 2.1.26")),
+        DependencyLock.parse(twice) == Left(LockError.DuplicatePlugin("dev.example", "echo", "1.0.0")),
+        DependencyLock.parse(bare) == Left(LockError.Missing(LockField.Plugin)),
+      )
   )
 
   private val fetch = suite("file repository")(
@@ -342,6 +394,67 @@ object ResolveSpec extends ZIOSpecDefault:
           materialized.isRight && compiled.isRight && classFile && detail.isEmpty,
           missing == Left(ResolveError.NoLock(Resolve.lockPath(open.root.resolve("absent")))),
         )
+    ,
+    test("a module update keeps plugin cells"):
+      ZIO.scoped:
+        for
+          open <- opened
+          pluginOnly =
+            s"""plugin dev.example echo 1.0.0 exact-binary
+               |direct dev.example echo 1.0.0 binary
+               |artifact dev.example echo_3 1.0.0 ${digest.value} central
+               |""".stripMargin
+          _ <- ZIO.attempt {
+                 Files.createDirectories(open.root.resolve(".histos"))
+                 Files.writeString(Resolve.lockPath(open.root), pluginOnly)
+               }
+          _ <- Resolve.update(open.root, graph(open.cell.dependencies), open.repositories).provide(Resolve.live(open.cache))
+          text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
+          parsed = DependencyLock.parse(text)
+        yield assertTrue:
+          parsed match
+            case Right(lock) =>
+              lock.cells.nonEmpty &&
+                lock.plugins.exists(plugin =>
+                  plugin.organization == "dev.example" &&
+                    plugin.name == "echo" &&
+                    plugin.revision == "1.0.0" &&
+                    plugin.link == LinkStrategy.ExactBinary
+                )
+            case Left(_) => false
+    ,
+    test("updatePlugins writes an exact-binary cell and no source line"):
+      ZIO.scoped:
+        for
+          open <- opened
+          _ <- ZIO.attempt(writeMaven(
+                 open.maven,
+                 "dev.example",
+                 "echo_3",
+                 "1.0.0",
+                 emptyJar,
+                 pom("dev.example", "echo_3", "1.0.0", None),
+               ))
+          dependency = Dep.trusted("dev.example", "echo", "1.0.0", DepKind.Binary)
+          _ <- Resolve.updatePlugins(
+                 open.root,
+                 List(PluginRequest.Dep(dependency, LinkStrategy.ExactBinary)),
+                 open.repositories,
+               ).provide(Resolve.live(open.cache))
+          text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
+          parsed = DependencyLock.parse(text)
+        yield assertTrue:
+          parsed match
+            case Right(lock) =>
+              lock.plugins match
+                case plugin :: Nil =>
+                  plugin.link == LinkStrategy.ExactBinary &&
+                    plugin.source.isEmpty &&
+                    plugin.directs == List(LockedDirect("dev.example", "echo", "1.0.0", DepKind.Binary)) &&
+                    plugin.artifacts.exists(_.name == "echo_3") &&
+                    !text.contains("\nsource ")
+                case _ => false
+            case Left(_) => false
   )
 
   private val app =

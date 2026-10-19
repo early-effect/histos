@@ -1,6 +1,8 @@
 package histos.resolve
 
 import histos.jdk.Sha256
+import histos.load.{LoadError, PluginRequest}
+import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
 import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
@@ -134,15 +136,17 @@ enum RepositoryIo:
   case Read, Fetch, Metadata, Write
 
 enum LockField:
-  case Cell, Test, Direct, Artifact, Evict
+  case Cell, Test, Plugin, Direct, Artifact, Source, Evict
 
 object LockField:
   def from(raw: String): Option[LockField] =
     raw match
       case "cell"     => Some(LockField.Cell)
       case "test"     => Some(LockField.Test)
+      case "plugin"   => Some(LockField.Plugin)
       case "direct"   => Some(LockField.Direct)
       case "artifact" => Some(LockField.Artifact)
+      case "source"   => Some(LockField.Source)
       case "evict"    => Some(LockField.Evict)
       case _          => None
 
@@ -150,14 +154,17 @@ object LockField:
     field match
       case LockField.Cell     => "cell"
       case LockField.Test     => "test"
+      case LockField.Plugin   => "plugin"
       case LockField.Direct   => "direct"
       case LockField.Artifact => "artifact"
+      case LockField.Source   => "source"
       case LockField.Evict    => "evict"
 
 enum LockError:
   case Empty
   case BadLine(line: String)
   case DuplicateCell(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform, scope: ClasspathScope)
+  case DuplicatePlugin(organization: String, name: String, revision: String)
   case Missing(field: LockField)
   case BadSha256(raw: String)
   case BadRepository(raw: String)
@@ -167,6 +174,8 @@ enum LockError:
     case BadLine(line) => s"dependency lock line is not a field: $line"
     case DuplicateCell(module, version, platform, scope) =>
       s"dependency lock repeats ${scope.header} ${module.value} ${version.value} ${PlatformToken.render(platform)}"
+    case DuplicatePlugin(organization, name, revision) =>
+      s"dependency lock repeats plugin $organization $name $revision"
     case Missing(field)       => s"dependency lock is missing ${LockField.token(field)}"
     case BadSha256(raw)       => s"dependency lock sha256 is not 64 hex digits: $raw"
     case BadRepository(raw)   => s"dependency lock repository is not central, ivy-local, or a maven url: $raw"
@@ -176,6 +185,7 @@ enum ResolveError:
   case NotFound(organization: String, name: String, revision: String)
   case Checksum(path: Path, expected: Sha256, actual: Sha256)
   case LockDrift(module: ProjectName, scalaVersion: ScalaVersion, platform: Platform, scope: ClasspathScope)
+  case PluginDrift(dependency: Dep)
   case NoLock(path: Path)
   case UnsupportedPlatform(platform: Platform)
   case Lock(error: LockError)
@@ -187,6 +197,7 @@ enum ResolveError:
     case ResolveError.Checksum(path, _, _) => s"checksum of $path does not match the lock"
     case ResolveError.LockDrift(module, version, platform, scope) =>
       s"${scope.header} ${module.value} ${version.value} ${PlatformToken.render(platform)} does not match the dependency lock"
+    case ResolveError.PluginDrift(dependency) => s"${shown(dependency)} does not match the dependency lock"
     case ResolveError.NoLock(path)                  => s"no dependency lock at $path"
     case ResolveError.UnsupportedPlatform(platform) => s"resolve does not fetch ${PlatformToken.render(platform)}"
     case ResolveError.Lock(error)                   => error.message
@@ -204,6 +215,8 @@ trait Resolve:
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath]
   /** Download one locked artifact from the repository the lock recorded. No transitive solve. */
   def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact]
+  /** Resolve one plugin coordinate as a Scala 3 JVM binary. Plugins are not module cells. */
+  def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath]
 
 object Resolve:
   def live(cache: Path): ULayer[Resolve] =
@@ -254,7 +267,14 @@ object Resolve:
         solved <- ZIO.foreach(planned): cell =>
           ZIO.serviceWithZIO[Resolve](_.resolve(cell)).map(classpath => lockCell(cell, classpath))
         path = lockPath(repo)
-        _ <- write(path, DependencyLock(solved))
+        prior <- read(path).foldZIO(
+          {
+            case ResolveError.NoLock(_) => ZIO.succeed(DependencyLock(Nil))
+            case other                   => ZIO.fail(other)
+          },
+          ZIO.succeed,
+        )
+        _ <- write(path, DependencyLock(solved, prior.plugins))
       yield path.toString
 
   def check(repo: Path, graph: ProjectGraph, repositories: Repositories): ZIO[Resolve, ResolveError, String] =
@@ -271,6 +291,67 @@ object Resolve:
             _      <- ZIO.fromEither(agree(cell, fresh, locked))
           yield describe(cell)
       yield lines.mkString("\n")
+
+  /**
+   * Resolve each header coordinate and write those plugin cells, keeping module cells already there.
+   * The write happens only after every coordinate resolves. A failure leaves the previous file.
+   */
+  def updatePlugins(repo: Path, requests: List[PluginRequest], repositories: Repositories): ZIO[Resolve, ResolveError, String] =
+    val requested = requests.collect { case PluginRequest.Dep(dependency, link) => (dependency, link) }
+    if requested.isEmpty then ZIO.succeed("")
+    else
+      for
+        solved <- ZIO.foreach(requested): (dependency, link) =>
+          ZIO.serviceWithZIO[Resolve](_.resolvePlugin(dependency, repositories)).map: classpath =>
+            lockPlugin(dependency, link, classpath)
+        path = lockPath(repo)
+        prior <- read(path).foldZIO(
+          {
+            case ResolveError.NoLock(_) => ZIO.succeed(DependencyLock(Nil))
+            case other                   => ZIO.fail(other)
+          },
+          ZIO.succeed,
+        )
+        _ <- write(path, DependencyLock(prior.cells, solved))
+      yield path.toString
+
+  /** A missing plugin cell is `Unlocked` and does not compile. An absent lock is the same refusal. */
+  def requirePlugins(repo: Path, requests: List[PluginRequest]): ZIO[Resolve, LoadError, Unit] =
+    requests.collectFirst { case PluginRequest.Path(path) => path } match
+      case Some(path) => ZIO.fail(LoadError.Plugin(PluginLoadError.NoSource(PluginCoordinate.Path(path))))
+      case None       =>
+        val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
+        if dependencies.isEmpty then ZIO.unit
+        else
+          read(lockPath(repo)).mapError(absent(dependencies)).flatMap: lock =>
+            ZIO.foreachDiscard(dependencies): dependency =>
+              ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(LoadError.Plugin(_))
+
+  /** Re-resolve plugin cells and fail when the fresh classpath disagrees with the lock. */
+  def checkPlugins(repo: Path, requests: List[PluginRequest], repositories: Repositories): ZIO[Resolve, ResolveError, Unit] =
+    val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
+    if dependencies.isEmpty then ZIO.unit
+    else
+      for
+        lock <- read(lockPath(repo))
+        _ <- ZIO.foreachDiscard(dependencies): dependency =>
+          lock.plugins.find(plugin =>
+            plugin.organization == dependency.organization &&
+              plugin.name == dependency.name &&
+              plugin.revision == dependency.revision
+          ) match
+            case None =>
+              ZIO.fail(ResolveError.NotFound(
+                dependency.organization,
+                ArtifactName.of(dependency, pluginScala, Platform.Jvm),
+                dependency.revision,
+              ))
+            case Some(locked) =>
+              for
+                fresh <- ZIO.serviceWithZIO[Resolve](_.resolvePlugin(dependency, repositories))
+                _     <- ZIO.fromEither(agreePlugin(dependency, fresh, locked))
+              yield ()
+      yield ()
 
   /** Compare directs, then download each locked jar. Does not re-solve. */
   def materialize(cell: ResolveCell, lock: DependencyLock): ZIO[Resolve, ResolveError, Classpath] =
@@ -340,7 +421,45 @@ object Resolve:
       case ClasspathScope.Compile => base
       case ClasspathScope.Test    => s"$base test"
 
-  private def ranged(dependency: Dep): Boolean =
+  private[histos] def readLock(repo: Path): IO[ResolveError, DependencyLock] =
+    read(lockPath(repo))
+
+  private def absent(dependencies: List[Dep])(error: ResolveError): LoadError =
+    error match
+      case ResolveError.NoLock(_) =>
+        dependencies match
+          case head :: _ => LoadError.Plugin(PluginLoadError.Unlocked(PluginCoordinate.Published(head).render))
+          case Nil       => LoadError.Io(histos.load.LoadIo.Stat)
+      case other => LoadError.Resolve(other)
+
+  private def lockPlugin(dependency: Dep, link: LinkStrategy, classpath: Classpath): LockedPlugin =
+    LockedPlugin(
+      dependency.organization,
+      dependency.name,
+      dependency.revision,
+      link,
+      List(LockedDirect(dependency.organization, dependency.name, dependency.revision, dependency.kind)),
+      classpath.artifacts.map(artifact =>
+        LockedArtifact(artifact.organization, artifact.name, artifact.revision, artifact.sha256, artifact.repository),
+      ),
+      None,
+    )
+
+  private def agreePlugin(dependency: Dep, fresh: Classpath, locked: LockedPlugin): Either[ResolveError, Unit] =
+    val got = fresh.artifacts.map(artifact => (artifact.organization, artifact.name, artifact.revision, artifact.repository))
+    val want = locked.artifacts.map(artifact => (artifact.organization, artifact.name, artifact.revision, artifact.repository))
+    if got != want then Left(ResolveError.PluginDrift(dependency))
+    else
+      fresh.artifacts.zip(locked.artifacts).collectFirst:
+        case (artifact, lockedArtifact) if artifact.sha256 != lockedArtifact.sha256 =>
+          ResolveError.Checksum(artifact.path, lockedArtifact.sha256, artifact.sha256)
+      match
+        case Some(error) => Left(error)
+        case None        => Right(())
+
+  private[resolve] val pluginScala: ScalaVersion = ScalaVersion.trusted("3.10.0")
+
+  private[histos] def ranged(dependency: Dep): Boolean =
     val revision = dependency.revision
     revision.startsWith("latest") || revision.exists(marked)
 

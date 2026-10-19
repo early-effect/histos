@@ -161,19 +161,31 @@ object PluginSpec extends ZIOSpecDefault:
   )
 
   private val contract = suite("contract")(
-    test("LinkStrategy.Api is a case, and a mismatch names both digests"):
-      val plugin = PluginId("test.echo")
+    test("a load error names the header until the plugin object exists"):
+      val dependency = Dep("dev.earlyeffect::specular:0.2.0")
+      val path = ProjectPath("tools/docs-preview")
       val built = ApiDigest.from(digest)
       val loaded = ApiDigest.from(other)
       (built, loaded) match
         case (Right(pluginApi), Right(launcher)) =>
-          val mismatch = PluginLoadError.VersionMismatch(plugin, pluginApi, launcher).message
+          val mismatch = PluginLoadError.VersionMismatch(dependency, pluginApi, launcher).message
+          val missing = PluginLoadError.NoSource(PluginCoordinate.Published(dependency)).message
+          val pathMissing = PluginLoadError.NoSource(PluginCoordinate.Path(path)).message
           assertTrue(
             linkName(LinkStrategy.Api) == "refused",
-            mismatch.contains(plugin.value),
+            mismatch.contains("dev.earlyeffect::specular:0.2.0"),
             mismatch.contains(pluginApi.value),
             mismatch.contains(launcher.value),
-            PluginLoadError.ApiLink(plugin).message.contains(plugin.value),
+            !mismatch.contains("test.echo"),
+            PluginLoadError.ApiLink(dependency).message.contains("dev.earlyeffect::specular:0.2.0"),
+            missing.contains("dev.earlyeffect::specular:0.2.0"),
+            !missing.contains(pluginApi.value),
+            pathMissing.contains("tools/docs-preview"),
+            !pathMissing.contains(pluginApi.value),
+            PluginLoadError.EngineLeak(PluginCoordinate.Published(dependency), "histos.schedule.Sendable").message
+              .contains("histos.schedule.Sendable"),
+            PluginLoadError.Defect(PluginCoordinate.Path(path), "java.lang.ExceptionInInitializerError").message
+              .contains("tools/docs-preview"),
             PluginRunError.Defect("java.lang.RuntimeException").message.contains("java.lang.RuntimeException"),
           )
         case _ => assertTrue(false)

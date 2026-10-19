@@ -11,6 +11,7 @@ private[zinc] enum ClassMarker:
   case XsbtBridge
   case JavaUniverse
   case HistosBuild
+  case PluginEntry
 
   def entry: String = this match
     case DottyDriver  => "dotty/tools/dotc/Driver.class"
@@ -19,6 +20,7 @@ private[zinc] enum ClassMarker:
     case XsbtBridge   => "scala/tools/xsbt/CompilerBridge.class"
     case JavaUniverse => "scala/reflect/runtime/JavaUniverse.class"
     case HistosBuild  => "histos/HistosBuild.class"
+    case PluginEntry  => "META-INF/histos/plugin"
 
   def under(root: Path): Path =
     entry.split("/").foldLeft(root)(_.resolve(_))
@@ -32,9 +34,9 @@ private[zinc] enum ClassMarker:
   def classpathBan: Option[ClasspathBan] = this match
     case DottyDriver                          => Some(ClasspathBan.Scala3Compiler)
     case NscGlobal                            => Some(ClasspathBan.Scala2Compiler)
-    case HistosBuild                          => Some(ClasspathBan.Histos)
+    case HistosBuild | PluginEntry           => Some(ClasspathBan.Histos)
     case DottyBridge | XsbtBridge | JavaUniverse => None
 
 private[zinc] object ClassMarker:
   val userBans: List[ClassMarker] =
-    List(ClassMarker.DottyDriver, ClassMarker.NscGlobal, ClassMarker.HistosBuild)
+    List(ClassMarker.DottyDriver, ClassMarker.NscGlobal, ClassMarker.HistosBuild, ClassMarker.PluginEntry)

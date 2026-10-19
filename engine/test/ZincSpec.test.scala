@@ -5,6 +5,7 @@ import histos.schedule.{ActionCache, ActionId, CacheError, Digest, RemoteCache, 
 import histos.{Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
+import java.util.jar.{JarEntry, JarOutputStream}
 
 import scala.jdk.CollectionConverters.*
 
@@ -74,6 +75,38 @@ object ZincSpec extends ZIOSpecDefault:
           onCompiler == Left(CompileError.NoSources),
           Files.isDirectory(api) && onApi == Left(CompileError.NoSources) ||
             Files.isRegularFile(api) && onApi == Left(CompileError.Banned(api, ClasspathBan.Histos)),
+        )
+    ,
+    test("a plugin marker is banned in a jar and in a classes directory"):
+      ZIO.scoped:
+        for
+          root <- temp
+          jar = root.resolve("plugin.jar")
+          classes = root.resolve("marked")
+          _ <- ZIO.attempt {
+                 val output = new JarOutputStream(Files.newOutputStream(jar))
+                 try
+                   output.putNextEntry(new JarEntry("META-INF/histos/plugin"))
+                   output.write("dev.example.Echo$\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                   output.closeEntry()
+                 finally output.close()
+                 val marker = classes.resolve("META-INF").resolve("histos")
+                 Files.createDirectories(marker)
+                 Files.writeString(marker.resolve("plugin"), "dev.example.Echo$\n")
+               }
+          onJar <- JvmCompile.compile(sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390).copy(
+                     classes = root.resolve("c1"),
+                     analysis = root.resolve("a1"),
+                     classpath = List(jar),
+                   )).either
+          onDir <- JvmCompile.compile(sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390).copy(
+                     classes = root.resolve("c2"),
+                     analysis = root.resolve("a2"),
+                     classpath = List(classes),
+                   )).either
+        yield assertTrue(
+          onJar == Left(CompileError.Banned(jar, ClasspathBan.Histos)),
+          onDir == Left(CompileError.Banned(classes, ClasspathBan.Histos)),
         )
   )
 

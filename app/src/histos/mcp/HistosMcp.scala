@@ -5,6 +5,7 @@ import heddle.endpoint.Schema
 import heddle.mcp.{Mcp, McpBuildError}
 import histos.jdk.Machine
 import histos.load.{LoadError, Loader}
+import histos.resolve.Resolve
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.toolchain.Survey
 import histos.version.VersionTask
@@ -32,7 +33,7 @@ object HistosMcp:
       case Build(errors) => errors.map(_.message).mkString("\n")
       case Stdio         => "the mcp pipe failed"
 
-  def serve(repo: Path, apiJar: Path, pipe: LinePipe, machine: Machine): ZIO[Loader & Scope, ServeError, Unit] =
+  def serve(repo: Path, apiJar: Path, pipe: LinePipe, machine: Machine): ZIO[Loader & Scope & Resolve, ServeError, Unit] =
     for
       loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).mapError(ServeError.Load(_))
       runners = Map(TaskId.Versions -> VersionTask.fromRepo(loaded.graph, repo, machine.env))
