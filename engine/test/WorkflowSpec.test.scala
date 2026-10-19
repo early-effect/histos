@@ -1,5 +1,6 @@
 package histos.workflow
 
+import histos.plugin.{CiJob, Contribution, Cron, EntryName, JobName, JobPermissions, JobWhen, PluginId, RegisteredPlugin, TaskName}
 import histos.version.{Catalog, Ship, ShipName, ShipNumber}
 import histos.{Axis, Module, Platform, Platforms, ProjectDep, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos, Splits}
 
@@ -163,4 +164,135 @@ object WorkflowSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("workflow")(render, affected)
+  private val plugins = suite("plugins")(
+    test("an always job is rendered after test and before workflow, and the plugin supplies no yaml"):
+      for
+        golden <- text("plugin-always.yml")
+        rendered = Workflow.render(withJobs(List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always))))
+      yield assertTrue(rendered == Right(golden))
+    ,
+    test("render stays the ci.yml body and a schedule is a separate file"):
+      val nightly = CiJob(JobName("nightly"), TaskName("site"), JobWhen.Schedule(Cron("0 6 * * 1")))
+      val built = withJobs(List(nightly))
+      val all = Workflow.renderAll(built)
+      val one = Workflow.render(built)
+      val plain = Workflow.render(graph(Splits.aggregate))
+      assertTrue:
+        (all, one, plain) match
+          case (Right(RenderedWorkflow("ci.yml", body) :: RenderedWorkflow(name, scheduled) :: Nil), Right(text), Right(untouched)) =>
+            body == text && body == untouched && name == "histos-nightly.yml" &&
+              scheduled ==
+                """name: histos-nightly
+                  |on:
+                  |  schedule:
+                  |    - cron: "0 6 * * 1"
+                  |permissions:
+                  |  contents: read
+                  |jobs:
+                  |  nightly:
+                  |    runs-on: ubuntu-latest
+                  |    permissions:
+                  |      contents: read
+                  |    steps:
+                  |      - uses: actions/checkout@v4
+                  |      - run: "./histos run dev.example/site"
+                  |""".stripMargin &&
+              !body.contains("schedule:") && !body.contains("cron:")
+          case _ => false
+    ,
+    test("an always job sits after versions and contents write stays on the job"):
+      val job = CiJob(JobName("docs"), TaskName("site"), JobWhen.Always, JobPermissions.ContentsWrite)
+      val rendered = (ShipName.from("libs"), ShipNumber.from("1.4.2")) match
+        case (Right(name), Right(number)) =>
+          Catalog.from(List(Ship.Line(name, number, ::(core, Nil)))) match
+            case Right(catalog) =>
+              val built = ProjectGraph.trusted(
+                List(module("core", Platform.Jvm, Nil)),
+                Splits.aggregate,
+                catalog,
+                None,
+                Nil,
+                List(registered(List(job))),
+              )
+              Workflow.render(built) match
+                case Right(yaml) =>
+                  val versionsAt = yaml.indexOf("  versions:")
+                  val docsAt = yaml.indexOf("  docs:")
+                  val workflowAt = yaml.indexOf("  workflow:")
+                  versionsAt >= 0 && docsAt > versionsAt && workflowAt > docsAt &&
+                    yaml.contains("    permissions:\n      contents: write\n") &&
+                    yaml.contains("permissions:\n  contents: read\n") &&
+                    yaml.contains("\"./histos run dev.example/site\"") &&
+                    !yaml.contains("id-token")
+                case Left(_) => false
+            case Left(_) => false
+        case _ => false
+      assertTrue(rendered)
+    ,
+    test("a scheduled contents write overrides the job and leaves the workflow header read"):
+      val job = CiJob(
+        JobName("nightly"),
+        TaskName("site"),
+        JobWhen.Schedule(Cron("0 6 * * 1")),
+        JobPermissions.ContentsWrite,
+      )
+      val rendered = Workflow.renderAll(withJobs(List(job)))
+      assertTrue:
+        rendered match
+          case Right(_ :: RenderedWorkflow("histos-nightly.yml", body) :: Nil) =>
+            body.contains("permissions:\n  contents: read\n") &&
+              body.contains("    permissions:\n      contents: write\n") &&
+              !body.contains("id-token")
+          case _ => false
+    ,
+    test("a missing scheduled file is drift and check does not rewrite ci.yml"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- Workflow.update(root, graph(Splits.aggregate))
+          nightly = CiJob(JobName("nightly"), TaskName("site"), JobWhen.Schedule(Cron("0 6 * * 1")))
+          checked <- Workflow.check(root, withJobs(List(nightly))).either
+          ci <- ZIO.attempt(Files.readString(Workflow.path(root)))
+          plain <- ZIO.fromEither(Workflow.render(graph(Splits.aggregate)))
+        yield assertTrue(checked == Left(CiError.Drift), ci == plain)
+    ,
+    test("update deletes an orphan histos workflow and leaves an unrelated file"):
+      ZIO.scoped:
+        for
+          root <- temp
+          nightly = CiJob(JobName("nightly"), TaskName("site"), JobWhen.Schedule(Cron("0 6 * * 1")))
+          _ <- Workflow.update(root, withJobs(List(nightly)))
+          orphan = Workflow.file(root, "histos-retired.yml")
+          other = Workflow.file(root, "release.yml")
+          _ <- ZIO.attempt(Files.writeString(orphan, "orphan\n"))
+          _ <- ZIO.attempt(Files.writeString(other, "release\n"))
+          drifted <- Workflow.check(root, withJobs(List(nightly))).either
+          _ <- Workflow.update(root, graph(Splits.aggregate))
+          gone = !Files.exists(Workflow.file(root, "histos-nightly.yml")) && !Files.exists(orphan)
+          kept <- ZIO.attempt(Files.readString(other))
+          clean <- Workflow.check(root, graph(Splits.aggregate))
+        yield assertTrue(
+          drifted == Left(CiError.Drift),
+          gone && kept == "release\n",
+          clean == Workflow.path(root),
+        )
+  )
+
+  private def withJobs(jobs: List[CiJob]): ProjectGraph =
+    ProjectGraph.trusted(
+      List(module("core", Platform.Jvm, Nil), module("tests", Platform.Jvm, List(core))),
+      Splits.aggregate,
+      Catalog.empty,
+      None,
+      Nil,
+      List(registered(jobs)),
+    )
+
+  private def registered(jobs: List[CiJob]): RegisteredPlugin =
+    RegisteredPlugin(
+      PluginId("dev.example"),
+      EntryName.trusted("dev.example.Echo$"),
+      Contribution(Nil, Nil, jobs),
+    )
+
+  def spec = suite("workflow")(render, affected, plugins)
