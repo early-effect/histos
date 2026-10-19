@@ -2,10 +2,20 @@ package histos.load
 
 import dotty.tools.dotc.Driver
 import dotty.tools.dotc.reporting.StoreReporter
+import histos.cache.ContentStore
 import histos.jdk.Sha256
-import histos.plugin.{ApiDigest, HistosPlugin, PluginCoordinate, PluginLinked, PluginLoadError, RegisteredPlugin}
-import histos.resolve.{ArtifactName, DependencyLock, PluginCells, Resolve, ResolveError, ResolvedArtifact}
-import histos.{Dep, HistosBuild, Platform, ScalaVersion}
+import histos.plugin.{
+  ApiDigest,
+  EntryName,
+  HistosPlugin,
+  LinkStrategy,
+  PluginCoordinate,
+  PluginLinked,
+  PluginLoadError,
+  RegisteredPlugin,
+}
+import histos.resolve.{ArtifactName, DependencyLock, LockedPlugin, PluginCells, Resolve, ResolveError, ResolvedArtifact}
+import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -15,15 +25,17 @@ import zio.{Chunk, IO, Scope, UIO, ZIO}
 
 trait Loader:
   def scan(repo: Path): IO[LoadError, ScannedBuild]
-  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve, LoadError, LoadedBuild]
+  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]
 
 object Loader:
   val live: zio.ULayer[Loader] = zio.ZLayer.succeed(LoaderLive)
 
 private final case class Matched(
-    artifacts: List[ResolvedArtifact],
-    direct: Path,
-    inspected: Inspected,
+    classpath: List[Path],
+    origin: Path,
+    entry: EntryName,
+    coordinate: PluginCoordinate,
+    linked: PluginLinked,
 )
 
 private final case class Opened(build: BuildLoader)
@@ -37,12 +49,12 @@ private object LoaderLive extends Loader:
       out  <- ZIO.fromEither(HeaderScan.scan(text)).mapError(LoadError.Plugin(_))
     yield out
 
-  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve, LoadError, LoadedBuild] =
+  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild] =
     for
       scanned  <- scan(repo)
       launcher <- digestOf(apiJar)
-      matched  <- materialize(repo, scanned.requests, launcher)
       boundary <- Boundary.jars(apiJar)
+      matched  <- materialize(repo, scanned.requests, launcher, boundary)
       out      <- ZIO.acquireRelease(tempDir("histos-classes"))(deleteTree)
       source   <- ZIO.acquireRelease(writeTemp(scanned.source))(deleteFile)
       jars      = pluginJars(matched)
@@ -53,30 +65,113 @@ private object LoaderLive extends Loader:
       build    <- select(builds)
       graph    <- graphOf(opened.build, build, matched)
       _        <- checkUses(opened.build, matched, graph.plugins)
-    yield LoadedBuild(graph, PluginRuntime.loaded(repo, graph, opened.build, live, links(matched, live, launcher), launcher))
+    yield LoadedBuild(graph, PluginRuntime.loaded(repo, graph, opened.build, live, links(matched, live), launcher))
 
   private def materialize(
       repo: Path,
       requests: List[PluginRequest],
       launcher: ApiDigest,
-  ): ZIO[Resolve, LoadError, List[Matched]] =
-    requests.collectFirst { case PluginRequest.Path(path) => path } match
-      case Some(path) => ZIO.fail(LoadError.Plugin(PluginLoadError.NoSource(PluginCoordinate.Path(path))))
-      case None       =>
-        val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
-        if dependencies.isEmpty then ZIO.succeed(Nil)
-        else
-          Resolve.readLock(repo).mapError(absent(dependencies)).flatMap: lock =>
-            ZIO.foreach(dependencies)(dependency => one(lock, dependency, launcher))
+      boundary: List[Path],
+  ): ZIO[Resolve & ContentStore, LoadError, List[Matched]] =
+    val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
+    val locked =
+      if dependencies.isEmpty then ZIO.succeed(DependencyLock(Nil))
+      else Resolve.readLock(repo).mapError(absent(dependencies))
+    locked.flatMap: lock =>
+      ZIO.foreach(requests):
+        case PluginRequest.Path(path)       => pathPlugin(repo, path, launcher, boundary)
+        case PluginRequest.Dep(dependency, _) => one(lock, dependency, launcher, boundary)
 
-  private def one(lock: DependencyLock, dependency: Dep, launcher: ApiDigest): ZIO[Resolve, LoadError, Matched] =
+  private def one(
+      lock: DependencyLock,
+      dependency: Dep,
+      launcher: ApiDigest,
+      boundary: List[Path],
+  ): ZIO[Resolve & ContentStore, LoadError, Matched] =
     ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(LoadError.Plugin(_)).flatMap: locked =>
       for
         artifacts <- ZIO.foreach(locked.artifacts): artifact =>
           ZIO.serviceWithZIO[Resolve](_.fetch(artifact)).mapError(LoadError.Resolve(_))
         direct <- ZIO.fromEither(directJar(dependency, artifacts)).mapError(LoadError.Plugin(_))
-        inspected <- PluginJar.inspect(dependency, direct.path, launcher)
-      yield Matched(artifacts, direct.path, inspected)
+        read   <- PluginJar.read(dependency, direct.path)
+        linked <- ZIO.fromEither(decide(dependency, locked, read, launcher)).mapError(LoadError.Plugin(_))
+        row    <- link(dependency, locked, read, launcher, boundary, artifacts, direct.path, linked)
+      yield row
+
+  /** The lock strategy wins. A header change without `--update` does not retarget this cell. */
+  private def decide(
+      dependency: Dep,
+      locked: LockedPlugin,
+      read: ReadPlugin,
+      launcher: ApiDigest,
+  ): Either[PluginLoadError, PluginLinked] =
+    val coordinate = PluginCoordinate.Published(dependency)
+    locked.link match
+      case LinkStrategy.Api => Left(PluginLoadError.ApiLink(dependency))
+      case LinkStrategy.ExactBinary =>
+        if read.published == launcher then Right(PluginLinked.FromBinary(launcher))
+        else Left(PluginLoadError.VersionMismatch(dependency, read.published, launcher))
+      case LinkStrategy.Source =>
+        if locked.source.isEmpty then Left(PluginLoadError.NoSource(coordinate))
+        else Right(PluginLinked.FromSource(read.published, launcher))
+      case LinkStrategy.BinaryOrSource =>
+        if read.published == launcher then Right(PluginLinked.FromBinary(launcher))
+        else if locked.source.isEmpty then Left(PluginLoadError.NoSource(coordinate))
+        else Right(PluginLinked.FromSource(read.published, launcher))
+
+  private def link(
+      dependency: Dep,
+      locked: LockedPlugin,
+      read: ReadPlugin,
+      launcher: ApiDigest,
+      boundary: List[Path],
+      artifacts: List[ResolvedArtifact],
+      direct: Path,
+      linked: PluginLinked,
+  ): ZIO[Resolve & ContentStore, LoadError, Matched] =
+    val coordinate = PluginCoordinate.Published(dependency)
+    linked match
+      case PluginLinked.FromBinary(_) =>
+        read.leak match
+          case Some(binary) => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(coordinate, binary)))
+          case None =>
+            val classpath = artifacts.filterNot(artifact => Boundary.supplied(artifact.name)).map(_.path)
+            ZIO.succeed(Matched(classpath, direct, read.entry, coordinate, linked))
+      case PluginLinked.FromSource(_, _) =>
+        locked.source match
+          case None => ZIO.fail(LoadError.Plugin(PluginLoadError.NoSource(coordinate)))
+          case Some(source) =>
+            val libraries = artifacts.filter(artifact => !same(artifact.path, direct) && !Boundary.supplied(artifact.name)).map(_.path)
+            for
+              fetched <- ZIO.serviceWithZIO[Resolve](_.sources(source.organization, source.name, source.revision, source.repository))
+                .mapError(LoadError.Resolve(_))
+              _ <-
+                if fetched.sha256 == source.sha256 then ZIO.unit
+                else ZIO.fail(LoadError.Resolve(ResolveError.Checksum(fetched.path, source.sha256, fetched.sha256)))
+              classes <- PluginCompile.fromJar(launcher, fetched.path, locked.artifacts.map(_.sha256.value), boundary ++ libraries)
+              _       <- refuseLeak(classes, coordinate)
+            yield Matched(classes :: libraries, classes, read.entry, coordinate, linked)
+
+  private def pathPlugin(
+      repo: Path,
+      path: ProjectPath,
+      launcher: ApiDigest,
+      boundary: List[Path],
+  ): ZIO[ContentStore, LoadError, Matched] =
+    val root = repo.resolve(path.value)
+    val coordinate = PluginCoordinate.Path(path)
+    for
+      present <- ZIO.attempt(Files.isDirectory(root)).mapError(failed(LoadIo.Stat))
+      _       <- ZIO.unless(present)(ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(coordinate.render))))
+      classes <- PluginCompile.fromTree(launcher, root, boundary)
+      entry   <- PluginJar.readTree(coordinate, classes)
+      _       <- refuseLeak(classes, coordinate)
+    yield Matched(List(classes), classes, entry, coordinate, PluginLinked.FromSource(launcher, launcher))
+
+  private def refuseLeak(classes: Path, coordinate: PluginCoordinate): IO[LoadError, Unit] =
+    ZIO.attempt(PluginCompile.engineClass(classes)).mapError(failed(LoadIo.Walk)).flatMap:
+      case Some(binary) => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(coordinate, binary)))
+      case None         => ZIO.unit
 
   private def directJar(dependency: Dep, artifacts: List[ResolvedArtifact]): Either[PluginLoadError, ResolvedArtifact] =
     val published = ArtifactName.of(dependency, ScalaVersion.trusted("3.10.0"), Platform.Jvm)
@@ -89,7 +184,7 @@ private object LoaderLive extends Loader:
       case None           => Left(PluginLoadError.NoEntry(PluginCoordinate.Published(dependency).render))
 
   private def pluginJars(matched: List[Matched]): List[Path] =
-    matched.flatMap(_.artifacts).filterNot(artifact => Boundary.supplied(artifact.name)).map(_.path).distinct
+    matched.flatMap(_.classpath).distinct
 
   private def absent(dependencies: List[Dep])(error: ResolveError): LoadError =
     error match
@@ -100,27 +195,27 @@ private object LoaderLive extends Loader:
       case other => LoadError.Resolve(other)
 
   private def define(loader: BuildLoader, row: Matched): IO[LoadError, HistosPlugin] =
-    ZIO.attempt(loader.loadClass(row.inspected.entry.value)).mapError(blown(loader, row, _)).flatMap: cls =>
+    ZIO.attempt(loader.loadClass(row.entry.value)).mapError(blown(loader, row, _)).flatMap: cls =>
       pluginOf(cls) match
         case Some(plugin) => ZIO.succeed(plugin)
-        case None         => ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(row.inspected.coordinate.render)))
+        case None         => ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(row.coordinate.render)))
 
   private def blown(loader: BuildLoader, row: Matched, err: Throwable): LoadError =
     loader.takeRefused match
-      case Some(binary) => LoadError.Plugin(PluginLoadError.EngineLeak(row.inspected.coordinate, binary))
+      case Some(binary) => LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, binary))
       case None         =>
         err match
           case _: IllegalAccessException | _: java.lang.reflect.InaccessibleObjectException =>
-            LoadError.Plugin(PluginLoadError.NoEntry(row.inspected.coordinate.render))
+            LoadError.Plugin(PluginLoadError.NoEntry(row.coordinate.render))
           case _ =>
-            LoadError.Plugin(PluginLoadError.Defect(row.inspected.coordinate, err.getClass.getName))
+            LoadError.Plugin(PluginLoadError.Defect(row.coordinate, err.getClass.getName))
 
   private def graphOf(loader: BuildLoader, build: HistosBuild, matched: List[Matched]): IO[LoadError, histos.ProjectGraph] =
     withContext(loader, ZIO.fromEither(build.graph).mapError(LoadError.BrokenGraph(_))).either.flatMap: outcome =>
       loader.takeRefused match
         case Some(binary) =>
           matched match
-            case row :: _ => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(row.inspected.coordinate, binary)))
+            case row :: _ => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, binary)))
             case Nil      => outcome.fold(error => ZIO.fail(error), value => ZIO.succeed(value))
         case None => outcome.fold(error => ZIO.fail(error), value => ZIO.succeed(value))
 
@@ -139,13 +234,13 @@ private object LoaderLive extends Loader:
   private def checkOne(loader: BuildLoader, matched: List[Matched], plugin: RegisteredPlugin): IO[LoadError, Unit] =
     ZIO.attempt(loader.loadClass(plugin.entry.value)).mapError(missed(loader, matched, plugin, _)).flatMap: cls =>
       val source = Boundary.codeSource(cls)
-      matched.find(row => source.exists(path => same(path, row.direct))) match
+      matched.find(row => source.exists(path => same(path, row.origin))) match
         case None => ZIO.fail(LoadError.Plugin(PluginLoadError.ForeignEntry(plugin.id, plugin.entry)))
-        case Some(row) if plugin.entry != row.inspected.entry =>
-          ZIO.fail(LoadError.Plugin(PluginLoadError.NotEntry(plugin.id, plugin.entry, row.inspected.entry)))
+        case Some(row) if plugin.entry != row.entry =>
+          ZIO.fail(LoadError.Plugin(PluginLoadError.NotEntry(plugin.id, plugin.entry, row.entry)))
         case Some(row) =>
           pluginOf(cls) match
-            case None => ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(row.inspected.coordinate.render)))
+            case None => ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(row.coordinate.render)))
             case Some(found) if found.id != plugin.id =>
               ZIO.fail(LoadError.Plugin(PluginLoadError.IdMismatch(plugin.id, found.id)))
             case Some(_) => ZIO.unit
@@ -154,14 +249,14 @@ private object LoaderLive extends Loader:
     loader.takeRefused match
       case Some(binary) =>
         matched match
-          case row :: _ => LoadError.Plugin(PluginLoadError.EngineLeak(row.inspected.coordinate, binary))
+          case row :: _ => LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, binary))
           case Nil      => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
       case None =>
         err match
           case _: ClassNotFoundException => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
           case _                         =>
             matched match
-              case row :: _ => LoadError.Plugin(PluginLoadError.Defect(row.inspected.coordinate, err.getClass.getName))
+              case row :: _ => LoadError.Plugin(PluginLoadError.Defect(row.coordinate, err.getClass.getName))
               case Nil      => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
 
   private def pluginOf(cls: Class[?]): Option[HistosPlugin] =
@@ -176,9 +271,9 @@ private object LoaderLive extends Loader:
           case _                    => None
       catch case _: IllegalAccessException | _: java.lang.reflect.InaccessibleObjectException => None
 
-  private def links(matched: List[Matched], instances: List[HistosPlugin], launcher: ApiDigest): List[PluginLink] =
+  private def links(matched: List[Matched], instances: List[HistosPlugin]): List[PluginLink] =
     matched.zip(instances).map: (row, plugin) =>
-      PluginLink(plugin.id, PluginLinked.FromBinary(launcher), row.artifacts.map(_.path.toString))
+      PluginLink(plugin.id, row.linked, row.classpath.map(_.toString))
 
   private def same(left: Path, right: Path): Boolean =
     try Files.isSameFile(left, right)

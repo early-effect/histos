@@ -62,15 +62,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
         }.mapError(io(CacheOp.Read)).map(Some(_))
 
   def list: IO[CacheError, List[CacheEntry]] =
-    val cas = root.resolve("cas")
-    ZIO.attempt {
-      if !Files.isDirectory(cas) then Nil
-      else
-        val walk = Files.walk(cas)
-        try
-          walk.iterator.asScala.filter(Files.isRegularFile(_)).flatMap(entryOf).toList
-        finally walk.close()
-    }.mapError(io(CacheOp.List))
+    ZIO.attempt(casEntries ++ pluginEntries).mapError(io(CacheOp.List))
 
   def remember(digest: Digest): IO[CacheError, Unit] =
     ZIO.attempt {
@@ -130,7 +122,45 @@ private final class DiskStore(val root: Path) extends ContentStore:
     ZIO.attempt(Files.setLastModifiedTime(path, java.nio.file.attribute.FileTime.from(at))).mapError(io(CacheOp.Stamp)).unit
 
   private def delete(path: Path): IO[CacheError, Unit] =
-    ZIO.attempt(Files.deleteIfExists(path)).mapError(io(CacheOp.Delete)).unit
+    ZIO.attempt {
+      if Files.isDirectory(path) then
+        val walk = Files.walk(path)
+        val paths =
+          try walk.iterator.asScala.toList
+          finally walk.close()
+        paths.sortBy(_.getNameCount).reverse.foreach(file => Files.deleteIfExists(file))
+      else Files.deleteIfExists(path)
+      ()
+    }.mapError(io(CacheOp.Delete))
+
+  private def casEntries: List[CacheEntry] =
+    val cas = root.resolve("cas")
+    if !Files.isDirectory(cas) then Nil
+    else
+      val walk = Files.walk(cas)
+      try walk.iterator.asScala.filter(Files.isRegularFile(_)).flatMap(entryOf).toList
+      finally walk.close()
+
+  /** Complete and incomplete plugin class directories. A `.partial-` directory is not a digest. */
+  private def pluginEntries: List[CacheEntry] =
+    val plugins = root.resolve("plugins")
+    if !Files.isDirectory(plugins) then Nil
+    else
+      val listed = Files.list(plugins)
+      try listed.iterator.asScala.flatMap(pluginEntry).toList
+      finally listed.close()
+
+  private def pluginEntry(path: Path): Option[CacheEntry] =
+    val name = Option(path.getFileName).map(_.toString).getOrElse("")
+    if !Files.isDirectory(path) then None
+    else
+      Digest.from(name).map: digest =>
+        CacheEntry(digest, path, treeBytes(path), Files.getLastModifiedTime(path).toInstant)
+
+  private def treeBytes(path: Path): Long =
+    val walk = Files.walk(path)
+    try walk.iterator.asScala.filter(Files.isRegularFile(_)).map(Files.size).sum
+    finally walk.close()
 
   private def entryOf(path: Path): Option[CacheEntry] =
     val parent = Option(path.getParent).flatMap(dir => Option(dir.getFileName)).map(_.toString)

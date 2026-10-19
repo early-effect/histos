@@ -455,6 +455,41 @@ object ResolveSpec extends ZIOSpecDefault:
                     !text.contains("\nsource ")
                 case _ => false
             case Left(_) => false
+    ,
+    test("updatePlugins records a source line for binary-or-source"):
+      ZIO.scoped:
+        for
+          open <- opened
+          _ <- ZIO.attempt {
+                 writeMaven(
+                   open.maven,
+                   "dev.example",
+                   "echo_3",
+                   "1.0.0",
+                   emptyJar,
+                   pom("dev.example", "echo_3", "1.0.0", None),
+                 )
+                 val dir = open.maven.resolve("dev").resolve("example").resolve("echo_3").resolve("1.0.0")
+                 val name = "echo_3-1.0.0-sources.jar"
+                 Files.write(dir.resolve(name), emptyJar)
+                 Files.writeString(dir.resolve(s"$name.sha1"), sha1(emptyJar) + "\n")
+               }
+          dependency = Dep.trusted("dev.example", "echo", "1.0.0", DepKind.Binary)
+          _ <- Resolve.updatePlugins(
+                 open.root,
+                 List(PluginRequest.Dep(dependency, LinkStrategy.BinaryOrSource)),
+                 open.repositories,
+               ).provide(Resolve.live(open.cache))
+          text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
+          parsed = DependencyLock.parse(text)
+        yield assertTrue:
+          parsed match
+            case Right(lock) =>
+              lock.plugins match
+                case plugin :: Nil =>
+                  plugin.link == LinkStrategy.BinaryOrSource && plugin.source.isDefined && text.contains("\nsource ")
+                case _ => false
+            case Left(_) => false
   )
 
   private val app =

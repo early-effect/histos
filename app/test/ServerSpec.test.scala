@@ -46,6 +46,34 @@ object ServerSpec extends ZIOSpecDefault:
           drifted == Decision.Stale(Drift.Fingerprint),
           absent == Decision.Absent,
         ),
+    test("editing a path plugin source is fingerprint drift"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- ZIO.attempt {
+                 write(root, "histos.scala", "plugin(path\"tools/docs\")\nobject build\n")
+                 write(root, "tools/docs/Echo.scala", "object Echo\n")
+                 write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+               }
+          fingerprint <- Fingerprint.read(root)
+          socket = root.resolve("missing.sock").toAbsolutePath.normalize
+          _ <- Record.write(root, Cli.VersionText, fingerprint, socket)
+          matched <- Attach.decide(root, Cli.VersionText)
+          beforeScala <- ZIO.attempt(Files.readString(root.resolve("histos.scala")))
+          beforeLock <- ZIO.attempt(Files.readString(root.resolve(".histos").resolve("dependencies.lock")))
+          _ <- ZIO.attempt(write(root, "tools/docs/Echo.scala", "object Echo\n// edited\n"))
+          drifted <- Attach.decide(root, Cli.VersionText)
+          afterScala <- ZIO.attempt(Files.readString(root.resolve("histos.scala")))
+          afterLock <- ZIO.attempt(Files.readString(root.resolve(".histos").resolve("dependencies.lock")))
+        yield assertTrue(
+          matched match
+            case Decision.Open(_) => true
+            case _                => false
+          ,
+          drifted == Decision.Stale(Drift.Fingerprint),
+          beforeScala == afterScala,
+          beforeLock == afterLock,
+        ),
   )
 
   private val attached = suite("daemon")(
@@ -81,6 +109,25 @@ object ServerSpec extends ZIOSpecDefault:
               classFile,
               refused == Left(ServerError.Stale),
             )
+          program.provideSome[Scope](Resolve.live(root.resolve("coursier")))
+    ,
+    test("a path plugin edit stays stale on a second call"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- ZIO.fromEither(Projects(module("demo", Jvm)(ScalaVersion("3.10.0"))))
+              _ <- ZIO.attempt {
+                     write(root, "histos.scala", "plugin(path\"tools/docs\")\nobject build\n")
+                     write(root, "tools/docs/Echo.scala", "object Echo\n")
+                     write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+                   }
+              jdk <- GraphCompile.jdkHere
+              record <- Daemon.open(root, built, jdk, Cli.VersionText)
+              _ <- ZIO.attempt(write(root, "tools/docs/Echo.scala", "object Echo\n// edited\n"))
+              first <- Client.talk(record.socket, Call.Compile(Nil)).runDrain.either
+              second <- Client.talk(record.socket, Call.Compile(Nil)).runDrain.either
+            yield assertTrue(first == Left(ServerError.Stale), second == Left(ServerError.Stale))
           program.provideSome[Scope](Resolve.live(root.resolve("coursier")))
     ,
     test("the daemon answers bsp initialize, and exit before shutdown is status 1"):

@@ -1,9 +1,11 @@
 package histos.cache
 
+import histos.jdk.Sha256
 import histos.schedule.{Action, ActionId, Digest, Input, InputName, InputValue}
 import histos.task.TaskKind
 
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.FileTime
 import java.time.Instant
 
 import scala.jdk.CollectionConverters.*
@@ -79,6 +81,41 @@ object CacheSpec extends ZIOSpecDefault:
           kept <- saved.read(hold)
         yield assertTrue(removed.map(_.digest) == List(drop) && gone.isEmpty && kept.contains(bytes))
     ,
+    test("clean lists an old plugin class directory, keeps a remembered one, and deletes the rest"):
+      ZIO.scoped:
+        for
+          saved <- store
+          old = pluginDigest("plugin-old")
+          held = pluginDigest("plugin-held")
+          fresh = pluginDigest("plugin-fresh")
+          _ <- plant(saved, old, at)
+          _ <- plant(saved, held, at)
+          _ <- saved.remember(held)
+          partial = saved.root.resolve("plugins").resolve(".partial-old")
+          _ <- ZIO.attempt {
+                 Files.createDirectories(partial)
+                 Files.writeString(partial.resolve("Echo.class"), "class")
+               }
+          preview <- saved.clean(later, ContentStore.Retention, dryRun = true)
+          still <- ZIO.attempt(Files.isDirectory(saved.root.resolve("plugins").resolve(old.value)))
+          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          gone <- ZIO.attempt(Files.exists(saved.root.resolve("plugins").resolve(old.value)))
+          kept <- ZIO.attempt(Files.isDirectory(saved.root.resolve("plugins").resolve(held.value)))
+          _ <- plant(saved, fresh, later)
+          after <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          remains <- ZIO.attempt(Files.isDirectory(saved.root.resolve("plugins").resolve(fresh.value)))
+          partialLeft <- ZIO.attempt(Files.isDirectory(partial))
+        yield assertTrue(
+          preview.map(_.digest) == List(old),
+          still,
+          removed.map(_.digest) == List(old),
+          !gone,
+          kept,
+          after.isEmpty,
+          remains,
+          partialLeft,
+        )
+    ,
     test("a fresh entry is kept"):
       ZIO.scoped:
         for
@@ -95,5 +132,18 @@ object CacheSpec extends ZIOSpecDefault:
         ContentStore.home(None, "/home/me") == Path.of("/home/me/.cache/histos"),
       ),
   )
+
+  private def pluginDigest(label: String): Digest =
+    val hex = Sha256.of(Chunk.fromArray(label.getBytes(java.nio.charset.StandardCharsets.UTF_8))).value
+    Digest.from(hex).getOrElse(digest(label))
+
+  private def plant(saved: ContentStore, key: Digest, at: Instant): zio.Task[Unit] =
+    ZIO.attempt {
+      val dir = saved.root.resolve("plugins").resolve(key.value)
+      Files.createDirectories(dir)
+      Files.writeString(dir.resolve("Echo.class"), "class")
+      Files.setLastModifiedTime(dir, FileTime.from(at))
+      ()
+    }
 
   def spec = cache

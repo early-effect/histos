@@ -187,7 +187,7 @@ object Cli:
       )
     }
 
-  private def watchRoots(repo: Path, apiJar: Path, command: Command): URIO[Loader & Scope & Resolve, List[Path]] =
+  private def watchRoots(repo: Path, apiJar: Path, command: Command): URIO[Loader & Scope & ContentStore & Resolve, List[Path]] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
       case Left(_) => List(repo.resolve("histos.scala"))
       case Right(loaded) =>
@@ -208,12 +208,12 @@ object Cli:
         List(id.value)
       case _ => Nil
 
-  private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+  private def graph(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map:
       case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
       case Right(loaded) => Completed(CliExit.Success, GraphText.render(loaded.graph, loaded.plugins.links), "")
 
-  private def run(repo: Path, apiJar: Path, id: TaskId, platform: Option[Platform]): URIO[Loader & Scope & Machine & Resolve, Completed] =
+  private def run(repo: Path, apiJar: Path, id: TaskId, platform: Option[Platform]): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
           case Left(err) => ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
           case Right(loaded) =>
@@ -264,7 +264,7 @@ object Cli:
       case _ =>
         CliExit.TaskFailed
 
-  private def compile(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & Resolve, Completed] =
+  private def compile(repo: Path, apiJar: Path, projects: List[String]): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
@@ -280,7 +280,7 @@ object Cli:
         ),
     )
 
-  private def assembly(repo: Path, apiJar: Path, destination: Option[String]): URIO[Loader & Scope & Resolve, Completed] =
+  private def assembly(repo: Path, apiJar: Path, destination: Option[String]): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
@@ -346,7 +346,7 @@ object Cli:
   private def compiledLine(repo: Path, cell: CompiledCell): String =
     Lines.compiled(repo, cell)
 
-  private def publish(repo: Path, apiJar: Path, directory: String, projects: List[String]): URIO[Loader & Scope & Resolve & Machine, Completed] =
+  private def publish(repo: Path, apiJar: Path, directory: String, projects: List[String]): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
@@ -374,7 +374,7 @@ object Cli:
     s"${line.group.value} ${line.artifact} ${line.revision} $shown"
 
   /** Compile, then one subprocess per Scala version. `no tests` is success and is not a passing suite. */
-  private def test(repo: Path, apiJar: Path, projects: List[String], patterns: List[SuitePattern], quick: Boolean): URIO[Loader & Scope & Resolve, Completed] =
+  private def test(repo: Path, apiJar: Path, projects: List[String], patterns: List[SuitePattern], quick: Boolean): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
@@ -460,11 +460,11 @@ object Cli:
         Completed(CliExit.Success, text, ""),
     ).merge
 
-  private def resolve(repo: Path, apiJar: Path, action: ResolveAction): URIO[Loader & Scope & Resolve, Completed] =
+  private def resolve(repo: Path, apiJar: Path, action: ResolveAction): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.scan(repo)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(scanned) =>
-        val followed: ZIO[Loader & Scope & Resolve, LoadError | ResolveError, String] = action match
+        val followed: ZIO[Loader & Scope & ContentStore & Resolve, LoadError | ResolveError, String] = action match
           case ResolveAction.Update =>
             Resolve.updatePlugins(repo, scanned.requests, Repositories.central) *>
               afterLoad(repo, apiJar)(loaded => Resolve.update(repo, loaded.graph, BuildResolvers(loaded.graph.resolvers)))
@@ -485,10 +485,10 @@ object Cli:
 
   private def afterLoad(repo: Path, apiJar: Path)(
       continue: LoadedBuild => ZIO[Resolve, ResolveError, String],
-  ): ZIO[Loader & Scope & Resolve, LoadError | ResolveError, String] =
+  ): ZIO[Loader & Scope & ContentStore & Resolve, LoadError | ResolveError, String] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).flatMap(continue)
 
-  private def workflow(repo: Path, apiJar: Path, action: WorkflowAction): URIO[Loader & Scope & Resolve, Completed] =
+  private def workflow(repo: Path, apiJar: Path, action: WorkflowAction): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
       case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
       case Right(loaded) =>
@@ -500,7 +500,7 @@ object Cli:
           file => Completed(CliExit.Success, file.toString, ""),
         ).merge
 
-  private def toolchain(repo: Path, apiJar: Path): URIO[Loader & Scope & Machine & Resolve, Completed] =
+  private def toolchain(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
       ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap:
         case Left(LoadError.MissingFile(_)) =>
@@ -523,7 +523,7 @@ object Cli:
       _ => Completed(CliExit.Success, "", ""),
     )
 
-  private def bsp(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+  private def bsp(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     Attach.decide(repo, VersionText).flatMap:
       case Decision.Open(socket) =>
         Client.splice(socket).foldZIO(
@@ -535,7 +535,7 @@ object Cli:
         )
       case Decision.Absent | Decision.Stale(_) => bspLocal(repo, apiJar)
 
-  private def serve(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+  private def serve(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
       error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
       loaded =>
@@ -578,7 +578,7 @@ object Cli:
       } *> result.get
     }
 
-  private def bspLocal(repo: Path, apiJar: Path): URIO[Loader & Scope & Resolve, Completed] =
+  private def bspLocal(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
       error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
       loaded =>

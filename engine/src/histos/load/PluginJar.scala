@@ -3,57 +3,62 @@ package histos.load
 import histos.plugin.{ApiDigest, EntryName, HistosPlugin, PluginCoordinate, PluginIo, PluginLoadError}
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** The direct jar passed the entry, version, and package checks. The class is not loaded yet. */
-private[load] final case class Inspected(entry: EntryName, coordinate: PluginCoordinate)
+/** The direct jar's entry, the api digest it was built against, and a reserved class if one is present. */
+private[load] final case class ReadPlugin(entry: EntryName, published: ApiDigest, leak: Option[String])
 
 /** Reads `META-INF/histos/plugin` and `META-INF/histos/version` from the direct jar only. */
 private[load] object PluginJar:
-  def inspect(dependency: histos.Dep, jar: Path, launcher: ApiDigest): IO[LoadError, Inspected] =
-    ZIO.attempt(read(dependency, jar, launcher)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Open))).flatMap:
-      case Left(error)      => ZIO.fail(LoadError.Plugin(error))
-      case Right(inspected) => ZIO.succeed(inspected)
+  def read(dependency: histos.Dep, jar: Path): IO[LoadError, ReadPlugin] =
+    ZIO.attempt(open(dependency, jar)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Open))).flatMap:
+      case Left(error) => ZIO.fail(LoadError.Plugin(error))
+      case Right(read) => ZIO.succeed(read)
 
-  private def read(dependency: histos.Dep, jar: Path, launcher: ApiDigest): Either[PluginLoadError, Inspected] =
+  /** The entry resource copied into a path plugin's class directory. There is no version resource. */
+  def readTree(coordinate: PluginCoordinate, classes: Path): IO[LoadError, EntryName] =
+    ZIO.attempt(tree(coordinate, classes)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read))).flatMap:
+      case Left(error) => ZIO.fail(LoadError.Plugin(error))
+      case Right(name) => ZIO.succeed(name)
+
+  private def open(dependency: histos.Dep, jar: Path): Either[PluginLoadError, ReadPlugin] =
     val coordinate = PluginCoordinate.Published(dependency)
     val zip = new ZipFile(jar.toFile)
-    try entry(zip, coordinate).flatMap(name => version(zip, dependency, coordinate, launcher, name))
+    try entry(zip, coordinate).flatMap(name => version(zip, coordinate, name))
     finally zip.close()
+
+  private def tree(coordinate: PluginCoordinate, classes: Path): Either[PluginLoadError, EntryName] =
+    val file = classes.resolve(HistosPlugin.entryResource)
+    if !Files.isRegularFile(file) then Left(PluginLoadError.NoEntry(coordinate.render))
+    else named(coordinate, Files.readString(file).split("\n", -1).toList.map(_.trim).filter(_.nonEmpty))
 
   private def entry(zip: ZipFile, coordinate: PluginCoordinate): Either[PluginLoadError, EntryName] =
     lines(zip, HistosPlugin.entryResource) match
-      case None | Some(Nil)        => Left(PluginLoadError.NoEntry(coordinate.render))
-      case Some(_ :: _ :: _)       => Left(PluginLoadError.AmbiguousEntry(coordinate.render))
-      case Some(line :: Nil)       =>
-        EntryName.from(line) match
-          case Left(_)                              => Left(PluginLoadError.NoEntry(coordinate.render))
-          case Right(name) if reserved(name.value)  => Left(PluginLoadError.ReservedPackage(name.value))
-          case Right(name)                          => Right(name)
+      case None        => Left(PluginLoadError.NoEntry(coordinate.render))
+      case Some(found) => named(coordinate, found)
 
-  private def version(
-      zip: ZipFile,
-      dependency: histos.Dep,
-      coordinate: PluginCoordinate,
-      launcher: ApiDigest,
-      entry: EntryName,
-  ): Either[PluginLoadError, Inspected] =
+  private def named(coordinate: PluginCoordinate, found: List[String]): Either[PluginLoadError, EntryName] =
+    found match
+      case Nil            => Left(PluginLoadError.NoEntry(coordinate.render))
+      case _ :: _ :: _    => Left(PluginLoadError.AmbiguousEntry(coordinate.render))
+      case line :: Nil    =>
+        EntryName.from(line) match
+          case Left(_)                             => Left(PluginLoadError.NoEntry(coordinate.render))
+          case Right(name) if reserved(name.value) => Left(PluginLoadError.ReservedPackage(name.value))
+          case Right(name)                         => Right(name)
+
+  private def version(zip: ZipFile, coordinate: PluginCoordinate, entry: EntryName): Either[PluginLoadError, ReadPlugin] =
     lines(zip, ApiDigest.resource) match
       case None | Some(Nil) | Some(_ :: _ :: _) => Left(PluginLoadError.Unversioned(coordinate.render))
       case Some(line :: Nil)                    =>
         ApiDigest.from(line) match
-          case Left(_) => Left(PluginLoadError.Unversioned(coordinate.render))
-          case Right(published) if published != launcher =>
-            Left(PluginLoadError.VersionMismatch(dependency, published, launcher))
-          case Right(_) =>
-            leaked(zip) match
-              case Some(binary) => Left(PluginLoadError.EngineLeak(coordinate, binary))
-              case None         => Right(Inspected(entry, coordinate))
+          case Left(_)          => Left(PluginLoadError.Unversioned(coordinate.render))
+          case Right(published) => Right(ReadPlugin(entry, published, leaked(zip)))
 
   private def lines(zip: ZipFile, name: String): Option[List[String]] =
     Option(zip.getEntry(name)).map: entry =>

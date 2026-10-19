@@ -7,7 +7,7 @@ import histos.cli.Command
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled}
 import histos.load.{LoadError, LoadIo, Loader}
-import histos.resolve.{Classpath, LockedArtifact, Repositories, Resolve, ResolveCell, ResolveError, ResolvedArtifact, RepositoryIo}
+import histos.resolve.{Classpath, LockedArtifact, Repositories, Repository, Resolve, ResolveCell, ResolveError, ResolvedArtifact, RepositoryIo}
 import histos.Dep
 
 import java.nio.file.{Files, Path}
@@ -28,6 +28,9 @@ object ProtocolSpec extends ZIOSpecDefault:
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
     def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+    def sources(organization: String, name: String, revision: String, repository: Repository): IO[ResolveError, ResolvedArtifact] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
   private def loading(dir: Path) =

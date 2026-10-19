@@ -2,6 +2,7 @@ package histos.load
 
 import dotty.tools.dotc.Driver
 import dotty.tools.dotc.reporting.StoreReporter
+import histos.cache.ContentStore
 import histos.jdk.Sha256
 import histos.plugin.*
 import histos.resolve.*
@@ -44,7 +45,7 @@ object LoadSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  private def load(source: String): ZIO[Loader & Scope & Resolve, LoadError, LoadedBuild] =
+  private def load(source: String): ZIO[Loader & Scope & ContentStore & Resolve, LoadError, LoadedBuild] =
     for
       jar <- apiJar
       dir <- withRepo(source)
@@ -149,12 +150,12 @@ object LoadSpec extends ZIOSpecDefault:
       val text = "import histos.*\nobject build extends HistosBuild"
       assertTrue(HeaderScan.scan(text) == Right(ScannedBuild(Nil, text)))
     ,
-    test("comments and blank lines stay, and a plugin line is blanked as exact-binary"):
+    test("comments and blank lines stay, and a plugin line is blanked as binary-or-source"):
       val text = "\n// note\nplugin(dep\"dev.example::echo:1.0.0\")\nimport histos.*\n"
       HeaderScan.scan(text) match
         case Right(scanned) =>
           assertTrue(
-            scanned.requests == List(PluginRequest.Dep(echo, LinkStrategy.ExactBinary)),
+            scanned.requests == List(PluginRequest.Dep(echo, LinkStrategy.BinaryOrSource)),
             scanned.source == "\n// note\n\nimport histos.*\n",
             !scanned.source.contains("plugin("),
           )
@@ -166,29 +167,31 @@ object LoadSpec extends ZIOSpecDefault:
           assertTrue(scanned.requests == List(PluginRequest.Dep(echo, LinkStrategy.ExactBinary)), scanned.source == "")
         case Left(_) => assertTrue(false)
     ,
-    test("Api, Source, and BinaryOrSource are refused before a lock exists"):
+    test("Api is refused at scan, and Source and BinaryOrSource are requests"):
       val api = HeaderScan.scan("plugin(dep\"dev.example::echo:1.0.0\").link(Api)")
       val source = HeaderScan.scan("plugin(dep\"dev.example::echo:1.0.0\").link(Source)")
       val either = HeaderScan.scan("plugin(dep\"dev.example::echo:1.0.0\").link(BinaryOrSource)")
-      val coordinate = PluginCoordinate.Published(echo)
       assertTrue(
         api == Left(PluginLoadError.ApiLink(echo)),
-        source == Left(PluginLoadError.NoSource(coordinate)),
-        either == Left(PluginLoadError.NoSource(coordinate)),
-        told(source) == s"plugin ${coordinate.render} needs sources, and this loader does not have them",
+        source == Right(ScannedBuild(List(PluginRequest.Dep(echo, LinkStrategy.Source)), "")),
+        either == Right(ScannedBuild(List(PluginRequest.Dep(echo, LinkStrategy.BinaryOrSource)), "")),
       )
     ,
-    test("a path plugin needs sources, and a binary link on a path is refused"):
+    test("a path plugin is a path request, and a binary link on a path is refused"):
       val path = ProjectPath("tools/docs")
       val bare = HeaderScan.scan("plugin(path\"tools/docs\")")
       val sourced = HeaderScan.scan("plugin(path\"tools/docs\").link(Source)")
       val binary = HeaderScan.scan("plugin(path\"tools/docs\").link(ExactBinary)")
+      val either = HeaderScan.scan("plugin(path\"tools/docs\").link(BinaryOrSource)")
       val api = HeaderScan.scan("plugin(path\"tools/docs\").link(Api)")
       assertTrue(
-        bare == Left(PluginLoadError.NoSource(PluginCoordinate.Path(path))),
-        sourced == Left(PluginLoadError.NoSource(PluginCoordinate.Path(path))),
+        bare == Right(ScannedBuild(List(PluginRequest.Path(path)), "")),
+        sourced == Right(ScannedBuild(List(PluginRequest.Path(path)), "")),
         binary == Left(PluginLoadError.PathIsSource(path)),
+        either == Left(PluginLoadError.PathIsSource(path)),
         api == Left(PluginLoadError.PathIsSource(path)),
+        HeaderScan.paths("plugin(path\"tools/docs\")\nplugin(dep\"dev.example::echo:1.0.0\")") == List(path),
+        HeaderScan.paths("plugin(dep\"dev.example::echo:1.+\")") == Nil,
       )
     ,
     test("a range, a trailing semicolon, and a plugin after the header are refused"):
@@ -239,7 +242,7 @@ object LoadSpec extends ZIOSpecDefault:
               coordinate == PluginCoordinate.Published(echo).render && !Files.exists(Resolve.lockPath(dir))
             case _ => false
     ,
-    test("Api and a missing source write no lock"):
+    test("Api writes no lock, and a missing path directory is no entry"):
       val api =
         """plugin(dep"dev.example::echo:1.0.0").link(Api)
           |import histos.*
@@ -261,7 +264,7 @@ object LoadSpec extends ZIOSpecDefault:
           pathOut <- ZIO.serviceWithZIO[Loader](_.load(pathDir, jar)).either
         yield assertTrue(
           apiOut == Left(LoadError.Plugin(PluginLoadError.ApiLink(echo))),
-          pathOut == Left(LoadError.Plugin(PluginLoadError.NoSource(PluginCoordinate.Path(ProjectPath("tools/docs"))))),
+          pathOut == Left(LoadError.Plugin(PluginLoadError.NoEntry(PluginCoordinate.Path(ProjectPath("tools/docs")).render))),
           !Files.exists(Resolve.lockPath(apiDir)),
           !Files.exists(Resolve.lockPath(pathDir)),
         )
@@ -376,6 +379,146 @@ object LoadSpec extends ZIOSpecDefault:
                      ))
           probed <- ZIO.attempt(probe(boundary, vendor))
         yield assertTrue(probed == Refused(Some("histos.schedule.Sendable"), true, true))
+    ,
+    test("a matching binary-or-source cell loads the jar and does not compile sources"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          hex <- apiHex(jar)
+          packed <- compilePlugin(jar, hex)
+          repo <- withRepo(usingEcho)
+          sha <- fileSha(packed)
+          _ <- writeCell(repo, "binary-or-source", sha, None)
+          loaded <- loadWith(repo, jar, Holding(packed, sha)).flatMap(ZIO.fromEither)
+          task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+        yield assertTrue(
+          loaded.plugins.links match
+            case PluginLink(_, PluginLinked.FromBinary(digest), artifacts) :: Nil =>
+              digest.value == hex && artifacts == List(packed.toString)
+            case _ => false
+          ,
+          ran == PluginOutput("", Nil),
+        )
+    ,
+    test("binary-or-source compiles the locked sources jar when the api digest differs"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          hex <- apiHex(jar)
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-fallback")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          _ <- ZIO.addFinalizer(deleteTree(dir))
+          wrong = "ab" * 32
+          packed <- textJar(dir.resolve("echo.jar"), List(
+                       HistosPlugin.entryResource -> "dev.example.Echo$\n",
+                       ApiDigest.resource -> s"$wrong\n",
+                     ))
+          sources <- textJar(dir.resolve("echo-sources.jar"), List("Echo.scala" -> echoSource))
+          repo <- withRepo(usingEcho)
+          binarySha <- fileSha(packed)
+          sourceSha <- fileSha(sources)
+          _ <- writeCell(repo, "binary-or-source", binarySha, Some(sourceSha))
+          loaded <- loadWith(repo, jar, Sourced(packed, binarySha, sources, sourceSha, allowSources = true)).flatMap(ZIO.fromEither)
+          task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+        yield assertTrue(
+          loaded.plugins.links match
+            case PluginLink(_, PluginLinked.FromSource(published, running), artifacts) :: Nil =>
+              published.value == wrong && running.value == hex && artifacts.forall(underPlugins) && !artifacts.contains(packed.toString)
+            case _ => false
+          ,
+          ran == PluginOutput("", Nil),
+        )
+    ,
+    test("exact-binary does not fall back when a source line is present"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-exact")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          _ <- ZIO.addFinalizer(deleteTree(dir))
+          wrong = "ab" * 32
+          packed <- textJar(dir.resolve("echo.jar"), List(
+                       HistosPlugin.entryResource -> "dev.example.Echo$\n",
+                       ApiDigest.resource -> s"$wrong\n",
+                     ))
+          sources <- textJar(dir.resolve("echo-sources.jar"), List("Echo.scala" -> echoSource))
+          repo <- withRepo(pluginBuild)
+          binarySha <- fileSha(packed)
+          sourceSha <- fileSha(sources)
+          _ <- writeCell(repo, "exact-binary", binarySha, Some(sourceSha))
+          out <- loadWith(repo, jar, Sourced(packed, binarySha, sources, sourceSha, allowSources = false))
+        yield assertTrue:
+          out match
+            case Left(LoadError.Plugin(PluginLoadError.VersionMismatch(dependency, pluginApi, _))) =>
+              dependency == echo && pluginApi.value == wrong
+            case _ => false
+    ,
+    test("binary-or-source with no source line is NoSource and does not fetch"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-nosource")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          _ <- ZIO.addFinalizer(deleteTree(dir))
+          wrong = "cd" * 32
+          packed <- textJar(dir.resolve("echo.jar"), List(
+                       HistosPlugin.entryResource -> "dev.example.Echo$\n",
+                       ApiDigest.resource -> s"$wrong\n",
+                     ))
+          repo <- withRepo(pluginBuild)
+          binarySha <- fileSha(packed)
+          _ <- writeCell(repo, "binary-or-source", binarySha, None)
+          out <- loadWith(repo, jar, Sourced(packed, binarySha, packed, binarySha, allowSources = false))
+        yield assertTrue:
+          out match
+            case Left(error @ LoadError.Plugin(PluginLoadError.NoSource(coordinate))) =>
+              coordinate == PluginCoordinate.Published(echo) &&
+                error.message == s"plugin ${coordinate.render} needs sources, and this loader does not have them"
+            case _ => false
+    ,
+    test("link Source compiles even when the api digests match"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          hex <- apiHex(jar)
+          packed <- compilePlugin(jar, hex)
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-source-link")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          _ <- ZIO.addFinalizer(deleteTree(dir))
+          sources <- textJar(dir.resolve("echo-sources.jar"), List("Echo.scala" -> echoSource))
+          repo <- withRepo(usingEcho)
+          binarySha <- fileSha(packed)
+          sourceSha <- fileSha(sources)
+          _ <- writeCell(repo, "source", binarySha, Some(sourceSha))
+          loaded <- loadWith(repo, jar, Sourced(packed, binarySha, sources, sourceSha, allowSources = true)).flatMap(ZIO.fromEither)
+        yield assertTrue:
+          loaded.plugins.links match
+            case PluginLink(_, PluginLinked.FromSource(published, running), artifacts) :: Nil =>
+              published.value == hex && running.value == hex && artifacts.forall(underPlugins) && !artifacts.contains(packed.toString)
+            case _ => false
+    ,
+    test("a path plugin compiles from the tree and does not write a lock"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          hex <- apiHex(jar)
+          repo <- withRepo(usingPath)
+          _ <- ZIO.attempt {
+                 val root = repo.resolve("tools").resolve("docs")
+                 Files.createDirectories(root.resolve("META-INF").resolve("histos"))
+                 Files.writeString(root.resolve("Echo.scala"), echoSource)
+                 Files.writeString(root.resolve("META-INF").resolve("histos").resolve("plugin"), "dev.example.Echo$\n")
+               }.mapError(_ => LoadError.Io(LoadIo.Temp))
+          loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
+          task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+        yield assertTrue(
+          !Files.exists(Resolve.lockPath(repo)),
+          loaded.plugins.links match
+            case PluginLink(id, PluginLinked.FromSource(published, running), artifacts) :: Nil =>
+              id == PluginId("dev.example") && published.value == hex && running.value == hex && artifacts.forall(underPlugins)
+            case _ => false
+          ,
+          ran == PluginOutput("", Nil),
+        )
   )
 
   private val pluginBuild =
@@ -412,6 +555,14 @@ object LoadSpec extends ZIOSpecDefault:
       |  def graph = Projects(use(Local), module("core", Jvm)(scala"3.9.0"))
       |""".stripMargin
 
+  private val usingPath =
+    """plugin(path"tools/docs")
+      |import histos.*
+      |import dev.example.Echo
+      |object build extends HistosBuild:
+      |  def graph = Projects(use(Echo), module("core", Jvm)(scala"3.9.0"))
+      |""".stripMargin
+
   private object IdleResolve extends Resolve:
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
@@ -420,6 +571,9 @@ object LoadSpec extends ZIOSpecDefault:
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
     def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+    def sources(organization: String, name: String, revision: String, repository: Repository): IO[ResolveError, ResolvedArtifact] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
   private final class Holding(jar: Path, sha: Sha256) extends Resolve:
@@ -434,12 +588,32 @@ object LoadSpec extends ZIOSpecDefault:
     def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
-  private final case class Refused(name: Option[String], listFromParent: Boolean, buildFromParent: Boolean)
+    def sources(organization: String, name: String, revision: String, repository: Repository): IO[ResolveError, ResolvedArtifact] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
-  private def told(scanned: Either[PluginLoadError, ScannedBuild]): String =
-    scanned match
-      case Left(error) => error.message
-      case Right(_)    => ""
+  private final class Sourced(
+      binary: Path,
+      binarySha: Sha256,
+      sources: Path,
+      sourcesSha: Sha256,
+      allowSources: Boolean,
+  ) extends Resolve:
+    def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+    def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
+      if artifact.sha256 == binarySha then
+        ZIO.succeed(ResolvedArtifact(artifact.organization, artifact.name, artifact.revision, binary, binarySha, artifact.repository))
+      else ZIO.fail(ResolveError.Checksum(binary, artifact.sha256, binarySha))
+
+    def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+    def sources(organization: String, name: String, revision: String, repository: Repository): IO[ResolveError, ResolvedArtifact] =
+      if allowSources then ZIO.succeed(ResolvedArtifact(organization, name, revision, sources, sourcesSha, repository))
+      else ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+
+  private final case class Refused(name: Option[String], listFromParent: Boolean, buildFromParent: Boolean)
 
   private def probe(boundary: List[Path], vendor: Path): Refused =
     val platform = ClassLoader.getPlatformClassLoader
@@ -459,8 +633,8 @@ object LoadSpec extends ZIOSpecDefault:
       build.close()
       api.close()
 
-  private def loadWith(repo: Path, jar: Path, resolve: Resolve): ZIO[Loader & Scope, LoadError, Either[LoadError, LoadedBuild]] =
-    ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either.provideSome[Loader & Scope](ZLayer.succeed(resolve))
+  private def loadWith(repo: Path, jar: Path, resolve: Resolve): ZIO[Loader & Scope & ContentStore, LoadError, Either[LoadError, LoadedBuild]] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either.provideSome[Loader & Scope & ContentStore](ZLayer.succeed(resolve))
 
   private def apiHex(jar: Path): IO[LoadError, String] =
     ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(LoadIo.Stat))
@@ -469,16 +643,25 @@ object LoadSpec extends ZIOSpecDefault:
     ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(path)))).mapError(_ => LoadError.Io(LoadIo.Stat))
 
   private def writeLock(repo: Path, sha: Sha256): IO[LoadError, Unit] =
+    writeCell(repo, "exact-binary", sha, None)
+
+  private def writeCell(repo: Path, link: String, binary: Sha256, source: Option[Sha256]): IO[LoadError, Unit] =
+    val sourceLine = source match
+      case None      => ""
+      case Some(sha) => s"source dev.example echo_3 1.0.0 ${sha.value} central\n"
     val text =
-      s"""plugin dev.example echo 1.0.0 exact-binary
-         |direct dev.example echo 1.0.0 binary
-         |artifact dev.example echo_3 1.0.0 ${sha.value} central
-         |""".stripMargin
+      s"plugin dev.example echo 1.0.0 $link\n" +
+        "direct dev.example echo 1.0.0 binary\n" +
+        s"artifact dev.example echo_3 1.0.0 ${binary.value} central\n" +
+        sourceLine
     ZIO.attempt {
       Files.createDirectories(repo.resolve(".histos"))
       Files.writeString(Resolve.lockPath(repo), text)
       ()
     }.mapError(_ => LoadError.Io(LoadIo.Write))
+
+  private def underPlugins(path: String): Boolean =
+    Option(Path.of(path).getParent).flatMap(parent => Option(parent.getFileName)).exists(_.toString == "plugins")
 
   private def compilePlugin(api: Path, hex: String): ZIO[Scope, LoadError, Path] =
     for
@@ -542,4 +725,7 @@ object LoadSpec extends ZIOSpecDefault:
           output.closeEntry()
     finally walk.close()
 
-  def spec = suite("load")(loads, header, plugins).provideShared(Loader.live ++ ZLayer.succeed(IdleResolve)) @@ TestAspect.sequential
+  private val pluginStore: ZLayer[Any, Nothing, ContentStore] =
+    ZLayer.succeed(ContentStore.in(Files.createTempDirectory("histos-plugin-cache")))
+
+  def spec = suite("load")(loads, header, plugins).provideShared(Loader.live ++ ZLayer.succeed(IdleResolve) ++ pluginStore) @@ TestAspect.sequential

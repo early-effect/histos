@@ -28,8 +28,8 @@ object GraphText:
 
   private def lines(plugin: RegisteredPlugin, links: List[PluginLink]): List[String] =
     val kind = links.collectFirst { case link if link.id == plugin.id => link.linked } match
-      case Some(PluginLinked.FromSource(_, _)) => "source"
-      case _                                    => "binary"
+      case Some(PluginLinked.FromSource(published, running)) => s"source ${published.value} ${running.value}"
+      case _                                                  => "binary"
     val tasks = plugin.contribution.tasks.map: task =>
       val needs = listed(task.needs.toList.map(_.toString).sorted)
       val paths = listed(task.inputs.collect:

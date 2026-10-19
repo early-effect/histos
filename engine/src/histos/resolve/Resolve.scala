@@ -217,6 +217,8 @@ trait Resolve:
   def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact]
   /** Resolve one plugin coordinate as a Scala 3 JVM binary. Plugins are not module cells. */
   def resolvePlugin(dependency: Dep, repositories: Repositories): IO[ResolveError, Classpath]
+  /** Download the sources jar of one locked coordinate. The caller compares the checksum. */
+  def sources(organization: String, name: String, revision: String, repository: Repository): IO[ResolveError, ResolvedArtifact]
 
 object Resolve:
   def live(cache: Path): ULayer[Resolve] =
@@ -302,7 +304,7 @@ object Resolve:
     else
       for
         solved <- ZIO.foreach(requested): (dependency, link) =>
-          ZIO.serviceWithZIO[Resolve](_.resolvePlugin(dependency, repositories)).map: classpath =>
+          ZIO.serviceWithZIO[Resolve](_.resolvePlugin(dependency, repositories)).flatMap: classpath =>
             lockPlugin(dependency, link, classpath)
         path = lockPath(repo)
         prior <- read(path).foldZIO(
@@ -315,17 +317,14 @@ object Resolve:
         _ <- write(path, DependencyLock(prior.cells, solved))
       yield path.toString
 
-  /** A missing plugin cell is `Unlocked` and does not compile. An absent lock is the same refusal. */
+  /** A missing plugin cell is `Unlocked` and does not compile. A path plugin has no cell. */
   def requirePlugins(repo: Path, requests: List[PluginRequest]): ZIO[Resolve, LoadError, Unit] =
-    requests.collectFirst { case PluginRequest.Path(path) => path } match
-      case Some(path) => ZIO.fail(LoadError.Plugin(PluginLoadError.NoSource(PluginCoordinate.Path(path))))
-      case None       =>
-        val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
-        if dependencies.isEmpty then ZIO.unit
-        else
-          read(lockPath(repo)).mapError(absent(dependencies)).flatMap: lock =>
-            ZIO.foreachDiscard(dependencies): dependency =>
-              ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(LoadError.Plugin(_))
+    val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
+    if dependencies.isEmpty then ZIO.unit
+    else
+      read(lockPath(repo)).mapError(absent(dependencies)).flatMap: lock =>
+        ZIO.foreachDiscard(dependencies): dependency =>
+          ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(LoadError.Plugin(_))
 
   /** Re-resolve plugin cells and fail when the fresh classpath disagrees with the lock. */
   def checkPlugins(repo: Path, requests: List[PluginRequest], repositories: Repositories): ZIO[Resolve, ResolveError, Unit] =
@@ -350,6 +349,7 @@ object Resolve:
               for
                 fresh <- ZIO.serviceWithZIO[Resolve](_.resolvePlugin(dependency, repositories))
                 _     <- ZIO.fromEither(agreePlugin(dependency, fresh, locked))
+                _     <- checkSource(locked)
               yield ()
       yield ()
 
@@ -432,18 +432,52 @@ object Resolve:
           case Nil       => LoadError.Io(histos.load.LoadIo.Stat)
       case other => LoadError.Resolve(other)
 
-  private def lockPlugin(dependency: Dep, link: LinkStrategy, classpath: Classpath): LockedPlugin =
-    LockedPlugin(
-      dependency.organization,
-      dependency.name,
-      dependency.revision,
-      link,
-      List(LockedDirect(dependency.organization, dependency.name, dependency.revision, dependency.kind)),
-      classpath.artifacts.map(artifact =>
-        LockedArtifact(artifact.organization, artifact.name, artifact.revision, artifact.sha256, artifact.repository),
-      ),
-      None,
-    )
+  private def lockPlugin(
+      dependency: Dep,
+      link: LinkStrategy,
+      classpath: Classpath,
+  ): ZIO[Resolve, ResolveError, LockedPlugin] =
+    sourceOf(dependency, link, classpath).map: source =>
+      LockedPlugin(
+        dependency.organization,
+        dependency.name,
+        dependency.revision,
+        link,
+        List(LockedDirect(dependency.organization, dependency.name, dependency.revision, dependency.kind)),
+        classpath.artifacts.map(artifact =>
+          LockedArtifact(artifact.organization, artifact.name, artifact.revision, artifact.sha256, artifact.repository),
+        ),
+        source,
+      )
+
+  /** `Source` and `BinaryOrSource` record the sources classifier. `ExactBinary` omits the line. */
+  private def sourceOf(
+      dependency: Dep,
+      link: LinkStrategy,
+      classpath: Classpath,
+  ): ZIO[Resolve, ResolveError, Option[LockedArtifact]] =
+    link match
+      case LinkStrategy.Source | LinkStrategy.BinaryOrSource =>
+        val published = ArtifactName.of(dependency, pluginScala, Platform.Jvm)
+        classpath.artifacts.find(artifact =>
+          artifact.organization == dependency.organization &&
+            artifact.name == published &&
+            artifact.revision == dependency.revision
+        ) match
+          case None => ZIO.fail(ResolveError.NotFound(dependency.organization, published, dependency.revision))
+          case Some(direct) =>
+            ZIO.serviceWithZIO[Resolve](_.sources(direct.organization, direct.name, direct.revision, direct.repository)).map: fetched =>
+              Some(LockedArtifact(fetched.organization, fetched.name, fetched.revision, fetched.sha256, fetched.repository))
+      case LinkStrategy.ExactBinary | LinkStrategy.Api => ZIO.succeed(None)
+
+  /** Re-fetch a recorded sources line. A cell with no line does not touch the network. */
+  private def checkSource(locked: LockedPlugin): ZIO[Resolve, ResolveError, Unit] =
+    locked.source match
+      case None => ZIO.unit
+      case Some(source) =>
+        ZIO.serviceWithZIO[Resolve](_.sources(source.organization, source.name, source.revision, source.repository)).flatMap: fetched =>
+          if fetched.sha256 == source.sha256 then ZIO.unit
+          else ZIO.fail(ResolveError.Checksum(fetched.path, source.sha256, fetched.sha256))
 
   private def agreePlugin(dependency: Dep, fresh: Classpath, locked: LockedPlugin): Either[ResolveError, Unit] =
     val got = fresh.artifacts.map(artifact => (artifact.organization, artifact.name, artifact.revision, artifact.repository))

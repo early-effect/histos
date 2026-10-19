@@ -3,6 +3,7 @@ package histos.server
 import histos.bsp.{Bsp, Frame}
 import histos.cli.{Cli, Lines}
 import histos.jdk.Sha256
+import histos.load.HeaderScan
 import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestStatus}
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, ResolvedJdk}
 import histos.ProjectGraph
@@ -10,7 +11,10 @@ import histos.ProjectGraph
 import java.io.{InputStream, OutputStream}
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
 import java.nio.channels.{Channels, ServerSocketChannel, SocketChannel}
-import java.nio.file.{Files, Path, StandardCopyOption}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
+
+import scala.jdk.CollectionConverters.*
 
 import zio.json.*
 import zio.stream.ZStream
@@ -80,10 +84,12 @@ object Fingerprint:
   given CanEqual[Fingerprint, Fingerprint] = CanEqual.derived
 
   def read(repo: Path): IO[ServerError, Fingerprint] =
+    val build = repo.resolve("histos.scala")
     for
-      build <- tagged(repo.resolve("histos.scala"))
+      built <- tagged(build)
       lock  <- tagged(repo.resolve(".histos").resolve("dependencies.lock"))
-    yield Sha256.of(build ++ Chunk.single(0.toByte) ++ lock).value
+      extra <- pathBytes(repo, build)
+    yield Sha256.of(built ++ Chunk.single(0.toByte) ++ lock ++ extra).value
 
   private[server] def trusted(raw: String): Fingerprint = raw
 
@@ -94,6 +100,32 @@ object Fingerprint:
       if Files.isRegularFile(path) then Chunk.single(1.toByte) ++ Chunk.fromArray(Files.readAllBytes(path))
       else Chunk.single(0.toByte)
     }.mapError(_ => ServerError.Io(ServerIo.Read))
+
+  /** Regular files under each header path, after the lock. No path plugin leaves the old hash. */
+  private def pathBytes(repo: Path, build: Path): IO[ServerError, Chunk[Byte]] =
+    ZIO.attemptBlocking {
+      if !Files.isRegularFile(build) then Chunk.empty
+      else
+        val paths = HeaderScan.paths(Files.readString(build))
+        if paths.isEmpty then Chunk.empty
+        else
+          val files = paths.flatMap(tree(repo, _)).sortBy(relative(repo, _))
+          files.foldLeft(Chunk.single(0.toByte)): (acc, path) =>
+            val name = relative(repo, path).getBytes(StandardCharsets.UTF_8)
+            acc ++ Chunk.fromArray(name) ++ Chunk.single(0.toByte) ++
+              Chunk.fromArray(Files.readAllBytes(path)) ++ Chunk.single(0.toByte)
+    }.mapError(_ => ServerError.Io(ServerIo.Read))
+
+  private def tree(repo: Path, project: histos.ProjectPath): List[Path] =
+    val root = repo.resolve(project.value)
+    if !Files.isDirectory(root) then Nil
+    else
+      val walk = Files.walk(root)
+      try walk.iterator.asScala.filter(path => Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)).toList
+      finally walk.close()
+
+  private def relative(repo: Path, path: Path): String =
+    repo.relativize(path).toString.replace('\\', '/')
 
 object Record:
   final case class Written(version: String, fingerprint: Fingerprint, socket: Path)

@@ -14,6 +14,5 @@ object PluginCells:
       case None => Left(PluginLoadError.Unlocked(PluginCoordinate.Published(dependency).render))
       case Some(plugin) =>
         plugin.link match
-          case LinkStrategy.ExactBinary => Right(plugin)
-          case LinkStrategy.Api         => Left(PluginLoadError.ApiLink(dependency))
-          case _                        => Left(PluginLoadError.NoSource(PluginCoordinate.Published(dependency)))
+          case LinkStrategy.Api => Left(PluginLoadError.ApiLink(dependency))
+          case _                => Right(plugin)

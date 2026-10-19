@@ -159,11 +159,19 @@ private[load] object PluginInputs:
       Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8)))
     }.orElseFail(PluginRunError.Failed(PluginDetail.trusted(s"could not read $label")))
 
+  private enum PluginFile:
+    case Absent, Directory, Jar
+
   private def jarInput(path: String): IO[PluginRunError, Input] =
     val file = Path.of(path)
-    ZIO.attempt(Files.isRegularFile(file)).orElseFail(missing(path)).flatMap:
-      case false => ZIO.fail(missing(path))
-      case true =>
+    ZIO.attempt {
+      if Files.isDirectory(file, LinkOption.NOFOLLOW_LINKS) then PluginFile.Directory
+      else if Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) then PluginFile.Jar
+      else PluginFile.Absent
+    }.orElseFail(missing(path)).flatMap:
+      case PluginFile.Absent => ZIO.fail(missing(path))
+      case PluginFile.Directory => dirHash(file, path).flatMap(sha => named(s"plugin.jar:$path", InputValue.Hash(sha)))
+      case PluginFile.Jar =>
         ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(file)))).orElseFail(missing(path)).flatMap: sha =>
           named(s"plugin.jar:$path", InputValue.Hash(sha))
 

@@ -1,10 +1,10 @@
 package histos.load
 
-import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
+import histos.plugin.{LinkStrategy, PluginLoadError}
 import histos.resolve.Resolve
 import histos.{Dep, ProjectPath}
 
-/** A header the loader can put on the build classpath. `Path` is not produced until source compile exists. */
+/** A header the loader can put on the build classpath. */
 enum PluginRequest:
   case Dep(dependency: histos.Dep, link: LinkStrategy)
   case Path(path: ProjectPath)
@@ -13,9 +13,15 @@ enum PluginRequest:
 final case class ScannedBuild(requests: List[PluginRequest], source: String)
 
 /** Text scan of the `histos.scala` prefix. It does not resolve, lock, or compile. */
-private[load] object HeaderScan:
+private[histos] object HeaderScan:
   def scan(text: String): Either[PluginLoadError, ScannedBuild] =
     walk(text.split("\n", -1).toList, 1, header = true, Nil, Nil)
+
+  /** Path-plugin directories. A failed scan contributes none: the build file bytes already changed. */
+  def paths(text: String): List[ProjectPath] =
+    scan(text) match
+      case Right(scanned) => scanned.requests.collect { case PluginRequest.Path(path) => path }
+      case Left(_)        => Nil
 
   @scala.annotation.tailrec
   private def walk(
@@ -74,24 +80,21 @@ private[load] object HeaderScan:
       case "Api"            => Some(LinkStrategy.Api)
       case _                => None
 
-  /** A dep with no `.link` is recorded as `ExactBinary` until source compile exists. */
+  /** A dep with no `.link` is `BinaryOrSource`. `Api` is refused here and writes no lock cell. */
   private def depRequest(raw: String, link: Option[LinkStrategy]): Either[PluginLoadError, PluginRequest] =
     Dep.from(raw) match
-      case Left(_)                              => Left(PluginLoadError.BadCoordinate(raw))
+      case Left(_)                                         => Left(PluginLoadError.BadCoordinate(raw))
       case Right(dependency) if Resolve.ranged(dependency) => Left(PluginLoadError.BadCoordinate(raw))
-      case Right(dependency)                     =>
+      case Right(dependency)                               =>
         link match
-          case None | Some(LinkStrategy.ExactBinary) =>
-            Right(PluginRequest.Dep(dependency, LinkStrategy.ExactBinary))
-          case Some(LinkStrategy.Source) | Some(LinkStrategy.BinaryOrSource) =>
-            Left(PluginLoadError.NoSource(PluginCoordinate.Published(dependency)))
-          case Some(LinkStrategy.Api) =>
-            Left(PluginLoadError.ApiLink(dependency))
+          case Some(LinkStrategy.Api) => Left(PluginLoadError.ApiLink(dependency))
+          case Some(chosen)           => Right(PluginRequest.Dep(dependency, chosen))
+          case None                   => Right(PluginRequest.Dep(dependency, LinkStrategy.BinaryOrSource))
 
   private def pathRequest(raw: String, link: Option[LinkStrategy]): Either[PluginLoadError, PluginRequest] =
     ProjectPath.from(raw) match
-      case Left(_)       => Left(PluginLoadError.BadCoordinate(raw))
+      case Left(_)     => Left(PluginLoadError.BadCoordinate(raw))
       case Right(path) =>
         link match
-          case None | Some(LinkStrategy.Source) => Left(PluginLoadError.NoSource(PluginCoordinate.Path(path)))
+          case None | Some(LinkStrategy.Source) => Right(PluginRequest.Path(path))
           case Some(_)                          => Left(PluginLoadError.PathIsSource(path))

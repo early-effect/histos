@@ -28,13 +28,24 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
       base   <- session
       single  = dependency(artifact.organization, artifact.name, artifact.revision).copy(transitive = false)
       result <- execute(base.withRepositories(Seq(toCoursier(artifact.repository))).withDependencies(Seq(single)))
-      path   <- ZIO.fromEither(jar(artifact, result))
+      path   <- ZIO.fromEither(located(artifact.organization, artifact.name, artifact.revision, result))
       sha    <- digest(path)
       out    <-
         if sha == artifact.sha256 then
           ZIO.succeed(ResolvedArtifact(artifact.organization, artifact.name, artifact.revision, path, sha, artifact.repository))
         else ZIO.fail(ResolveError.Checksum(path, artifact.sha256, sha))
     yield out
+
+  def sources(organization: String, name: String, revision: String, repository: Repository): IO[ResolveError, ResolvedArtifact] =
+    val single = dependency(organization, name, revision)
+      .copy(transitive = false)
+      .withAttributes(coursier.core.Attributes(coursier.core.Type.jar, coursier.core.Classifier.sources))
+    for
+      base   <- session
+      result <- execute(base.withRepositories(Seq(toCoursier(repository))).withDependencies(Seq(single)))
+      path   <- ZIO.fromEither(located(organization, name, revision, result))
+      sha    <- digest(path)
+    yield ResolvedArtifact(organization, name, revision, path, sha, repository)
 
   private def solve(
       dependencies: List[Dep],
@@ -88,11 +99,16 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
             ))
           case Nil => Right(Nil)
 
-  private def jar(artifact: LockedArtifact, result: coursier.Fetch.Result): Either[ResolveError, Path] =
+  private def located(
+      organization: String,
+      name: String,
+      revision: String,
+      result: coursier.Fetch.Result,
+  ): Either[ResolveError, Path] =
     rows(result).flatMap: found =>
-      found.find(row => row.organization == artifact.organization && row.name == artifact.name && row.revision == artifact.revision) match
+      found.find(row => row.organization == organization && row.name == name && row.revision == revision) match
         case Some(row) => Right(row.path)
-        case None      => Left(ResolveError.NotFound(artifact.organization, artifact.name, artifact.revision))
+        case None      => Left(ResolveError.NotFound(organization, name, revision))
 
   private def rows(result: coursier.Fetch.Result): Either[ResolveError, List[Row]] =
     result.detailedArtifacts0.toList.foldLeft[Either[ResolveError, List[Row]]](Right(Nil)):
