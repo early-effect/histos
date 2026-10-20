@@ -101,6 +101,28 @@ object Rpc:
   final case class ScalacOptionsResult(items: List[ScalacOptionsItem]) derives JsonCodec
   final case class CompileResult(statusCode: Int, originId: Option[String] = None) derives JsonCodec
 
+  final case class TextDocument(uri: String) derives JsonCodec
+  final case class Position(line: Int, character: Int) derives JsonCodec
+  final case class Range(start: Position, end: Position) derives JsonCodec
+  final case class Diagnostic(range: Range, severity: Int, source: String, message: String) derives JsonCodec
+  final case class PublishDiagnostics(
+      textDocument: TextDocument,
+      buildTarget: TargetId,
+      diagnostics: List[Diagnostic],
+      reset: Boolean,
+  ) derives JsonCodec
+  final case class LogMessage(`type`: Int, message: String) derives JsonCodec
+  final case class DependencySourcesItem(target: TargetId, sources: List[String]) derives JsonCodec
+  final case class DependencySourcesResult(items: List[DependencySourcesItem]) derives JsonCodec
+
+  final case class RpcNote[A](jsonrpc: String, method: String, params: A)
+
+  object RpcNote:
+    given [A: JsonCodec]: JsonCodec[RpcNote[A]] = JsonCodec.derived
+
+  def note[A: JsonCodec](method: String, params: A): String =
+    RpcNote("2.0", method, params).toJson
+
   def ok[A: JsonCodec](id: RpcId, result: A): String =
     RpcOk("2.0", id, result).toJson
 

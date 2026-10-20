@@ -15,6 +15,7 @@ import histos.plugin.{
   RegisteredPlugin,
 }
 import histos.resolve.{ArtifactName, DependencyLock, LockedPlugin, PluginCells, Resolve, ResolveError, ResolvedArtifact}
+import histos.zinc.{CompileProblem, CompileSeverity, PositionBase}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -23,9 +24,14 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, Scope, UIO, ZIO}
 
+/** Diagnostics from compiling `histos.scala`. Positions are 0-based dotty positions. */
+final case class BuildNotes(failed: Boolean, problems: List[CompileProblem])
+
 trait Loader:
   def scan(repo: Path): IO[LoadError, ScannedBuild]
   def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]
+  def buildClasspath(apiJar: Path): IO[LoadError, List[Path]]
+  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes]
 
 object Loader:
   val live: zio.ULayer[Loader] = zio.ZLayer.succeed(LoaderLive)
@@ -41,6 +47,21 @@ private final case class Matched(
 private final case class Opened(build: BuildLoader)
 
 private object LoaderLive extends Loader:
+  def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
+    Boundary.jars(apiJar)
+
+  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes] =
+    val display = repo.resolve("histos.scala")
+    for
+      _        <- ZIO.unlessZIO(exists(display))(ZIO.fail(LoadError.MissingFile(display)))
+      text     <- ZIO.attempt(Files.readString(display)).mapError(failed(LoadIo.Stat))
+      boundary <- Boundary.jars(apiJar)
+      out      <- tempDir("histos-bsp-build")
+      file     <- writeTemp(text)
+      notes    <- drive(file, boundary, out).map(reporter => notesOf(reporter, display, file))
+                    .ensuring(deleteFile(file) *> deleteTree(out))
+    yield notes
+
   def scan(repo: Path): IO[LoadError, ScannedBuild] =
     val source = repo.resolve("histos.scala")
     for
@@ -302,6 +323,12 @@ private object LoaderLive extends Loader:
     ZIO.attempt(Files.deleteIfExists(path)).ignore
 
   private def compile(source: Path, classpath: List[Path], out: Path): IO[LoadError, Unit] =
+    drive(source, classpath, out).flatMap: reporter =>
+      if reporter.hasErrors then
+        ZIO.fail(LoadError.CompileFailed(reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source)))))
+      else ZIO.unit
+
+  private def drive(source: Path, classpath: List[Path], out: Path): IO[LoadError, StoreReporter] =
     ZIO.attempt {
       val reporter = new StoreReporter(null)
       new Driver().process(
@@ -315,10 +342,30 @@ private object LoaderLive extends Loader:
         ),
         reporter,
       )
-      if reporter.hasErrors then
-        Left(LoadError.CompileFailed(reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source)))))
-      else Right(())
-    }.mapError(failed(LoadIo.Compile)).flatMap(ZIO.fromEither)
+      reporter
+    }.mapError(failed(LoadIo.Compile))
+
+  private def notesOf(reporter: StoreReporter, display: Path, temp: Path): BuildNotes =
+    val problems = reporter.allErrors.map(error => noted(error, display, temp))
+    BuildNotes(reporter.hasErrors, problems)
+
+  private def noted(diagnostic: dotty.tools.dotc.reporting.Diagnostic, display: Path, temp: Path): CompileProblem =
+    val pos = diagnostic.pos
+    val severity = diagnostic.level match
+      case 2 => CompileSeverity.Error
+      case 1 => CompileSeverity.Warn
+      case _ => CompileSeverity.Info
+    val placed = pos.exists
+    CompileProblem(
+      rewrite(diagnostic.message, temp),
+      if placed then Some(display) else None,
+      severity,
+      if placed then Some(pos.startLine) else None,
+      if placed then Some(pos.startColumn) else None,
+      if placed then Some(pos.endLine) else None,
+      if placed then Some(pos.endColumn) else None,
+      PositionBase.Dotty,
+    )
 
   private def rewrite(message: String, temp: Path): String =
     List(temp.toString, temp.toAbsolutePath.toString).distinct.foldLeft(message)((text, from) => text.replace(from, "histos.scala"))

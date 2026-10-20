@@ -92,7 +92,7 @@ object ServerSpec extends ZIOSpecDefault:
                      write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
                    }
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(root, built, jdk, Cli.VersionText)
+              record <- Daemon.open(root, built, jdk, Cli.VersionText, Nil, ZIO.succeed(histos.load.BuildNotes(false, Nil)))
               feeds <- Client.talk(record.socket, Call.Compile(Nil)).runCollect
               classFile <- ZIO.attempt(Files.isRegularFile(GraphCompile.classesDir(root, name, ScalaVersion("3.10.0")).resolve("Hello.class")))
               _ <- ZIO.attempt(write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\nchanged\n"))
@@ -123,7 +123,7 @@ object ServerSpec extends ZIOSpecDefault:
                      write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
                    }
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(root, built, jdk, Cli.VersionText)
+              record <- Daemon.open(root, built, jdk, Cli.VersionText, Nil, ZIO.succeed(histos.load.BuildNotes(false, Nil)))
               _ <- ZIO.attempt(write(root, "tools/docs/Echo.scala", "object Echo\n// edited\n"))
               first <- Client.talk(record.socket, Call.Compile(Nil)).runDrain.either
               second <- Client.talk(record.socket, Call.Compile(Nil)).runDrain.either
@@ -138,7 +138,7 @@ object ServerSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(ScalaVersion("3.10.0"))))
               _ <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(root, built, jdk, Cli.VersionText)
+              record <- Daemon.open(root, built, jdk, Cli.VersionText, Nil, ZIO.succeed(histos.load.BuildNotes(false, Nil)))
               heard <- bsp(record.socket)
             yield assertTrue(
               heard.result.displayName == "histos",

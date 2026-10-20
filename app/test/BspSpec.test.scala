@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 
 import zio.json.*
 import zio.json.ast.Json
-import zio.{Scope, ZIO, durationInt}
+import zio.{Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
 object BspSpec extends ZIOSpecDefault:
@@ -118,32 +118,39 @@ object BspSpec extends ZIOSpecDefault:
               compiled <- open.answer(targeted("buildTarget/compile", 5, uri, Some("metals-1")))
               classes = GraphCompile.classesDir(root, demo, scala3)
               other = GraphCompile.classesDir(root, demo, scala2)
-              source = root.resolve("demo").resolve("src").toAbsolutePath.normalize
+              source = root.resolve("demo").resolve("src").resolve("Hello.scala").toAbsolutePath.normalize
               found <- ZIO.attempt(entries(classes))
               otherGone <- ZIO.attempt(!Files.exists(other))
+              flagsOn = scalacFlags(options)
             yield assertTrue(
-              displayNames(listed) == List("demo", "demo"),
-              versions(listed) == List("2.13.16", "3.10.0"),
-              binaries(listed) == List("2.13", "3"),
-              platforms(listed) == List(1, 1),
-              languages(listed) == List(List("scala"), List("scala")),
-              tags(listed) == List(List("library"), List("library")),
+              displayNames(listed) == List("demo", "demo", "histos.scala"),
+              versions(listed) == List("2.13.16", "3.10.0", "3.10.0"),
+              binaries(listed) == List("2.13", "3", "3"),
+              platforms(listed) == List(1, 1, 1),
+              tags(listed) == List(List("library"), List("library"), List("library")),
               jars(listed, "3.10.0").exists(_.contains("scala-library")),
               jars(listed, "3.10.0").exists(_.contains("scala3-compiler")),
               jars(listed, "2.13.16").exists(_.contains("scala-library")),
               jars(listed, "2.13.16").exists(_.contains("scala-compiler")),
-              flags(listed, "canCompile") == List(true, true),
-              flags(listed, "canTest") == List(false, false),
-              flags(listed, "canRun") == List(false, false),
+              flags(listed, "canCompile") == List(true, true, true),
+              flags(listed, "canTest") == List(false, false, false),
+              flags(listed, "canRun") == List(false, false, false),
+              uri.contains("platform=jvm"),
+              uri.contains("scope=main"),
               sourcePaths(sources) == List(source),
-              sourceKinds(sources) == List(2),
+              sourceKinds(sources) == List(1),
               generated(sources) == List(false),
               classpath(options).exists(_.contains("scala-library")),
+              flagsOn.contains("-Xsemanticdb"),
+              flagsOn.contains("-sourceroot"),
               classDirs(options) == List(classes.toAbsolutePath.normalize),
               status(compiled).contains(1),
               origin(compiled).contains("metals-1"),
               code(compiled).isEmpty,
-              found == List("Hello$.class", "Hello.class", "Hello.tasty"),
+              found.contains("Hello$.class"),
+              found.contains("Hello.class"),
+              found.contains("Hello.tasty"),
+              found.exists(_.contains("semanticdb")),
               otherGone,
             )
           program.provide(Resolve.live(root.resolve("coursier"))),
@@ -165,6 +172,30 @@ object BspSpec extends ZIOSpecDefault:
               message(unknown).exists(_.contains("unknown build target")),
               code(missing).contains(-32603),
               message(missing).exists(_.contains("no dependency lock")),
+            )
+          program.provide(Resolve.live(root.resolve("coursier"))),
+    test("a compile failure publishes the range and then status 2"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
+              _ <- ZIO.attempt {
+                     write(root, "demo/src/Hello.scala", "object Hello {\n  def n: Int = missing\n}\n")
+                     write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+                   }
+              notes <- Ref.make(List.empty[String])
+              jdk <- GraphCompile.jdkHere
+              open <- Bsp.open(root, built, jdk, Nil, line => notes.update(_ :+ line))
+              _ <- open.answer(request("build/initialize", 1))
+              listed <- open.answer(request("workspace/buildTargets", 2))
+              uri <- one(listed, "3.10.0")
+              compiled <- open.answer(targeted("buildTarget/compile", 3, uri))
+              seen <- notes.get
+            yield assertTrue(
+              status(compiled).contains(2),
+              seen.exists(_.contains(""""reset":true""")),
+              seen.exists(line => line.contains("build/publishDiagnostics") && line.contains("missing") && line.contains(""""line":1""")),
             )
           program.provide(Resolve.live(root.resolve("coursier"))),
     test("a compile failure is status 2"):
@@ -314,6 +345,9 @@ object BspSpec extends ZIOSpecDefault:
     resultOf(answer).flatMap(field(_, "items")) match
       case Some(Json.Arr(values)) => values.toList
       case _                      => Nil
+
+  private def scalacFlags(answer: Bsp.Answer): List[String] =
+    optionItems(answer).flatMap(item => strings(item, "options"))
 
   private def classpath(answer: Bsp.Answer): List[String] =
     optionItems(answer).flatMap(item => strings(item, "classpath"))

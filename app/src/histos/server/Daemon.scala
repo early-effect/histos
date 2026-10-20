@@ -244,10 +244,12 @@ object Daemon:
       graph: ProjectGraph,
       jdk: ResolvedJdk,
       version: String,
+      buildClasspath: List[Path],
+      build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[Scope & histos.resolve.Resolve, ServerError, Record.Written] =
     for
       listening <- Promise.make[ServerError, Record.Written]
-      _ <- run(repo, graph, jdk, version, listening).forkScoped
+      _ <- run(repo, graph, jdk, version, buildClasspath, build, listening).forkScoped
       record <- listening.await
     yield record
 
@@ -256,6 +258,8 @@ object Daemon:
       graph: ProjectGraph,
       jdk: ResolvedJdk,
       version: String,
+      buildClasspath: List[Path],
+      build: IO[histos.load.LoadError, histos.load.BuildNotes],
       listening: Promise[ServerError, Record.Written],
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
     val socket = Record.socket(repo)
@@ -269,7 +273,7 @@ object Daemon:
             _ <- Record.write(repo, version, fingerprint, socket)
             _ <- ZIO.addFinalizer(remove(repo, socket))
             _ <- listening.succeed(Record.Written(version, fingerprint, socket.toAbsolutePath.normalize)).unit
-            _ <- accept(channel, repo, graph, jdk, fingerprint)
+            _ <- accept(channel, repo, graph, jdk, fingerprint, buildClasspath, build)
           yield ()
         },
     )
@@ -292,10 +296,12 @@ object Daemon:
       graph: ProjectGraph,
       jdk: ResolvedJdk,
       fingerprint: Fingerprint,
+      buildClasspath: List[Path],
+      build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
     def loop: ZIO[histos.resolve.Resolve, ServerError, Unit] =
       ZIO.attemptBlockingInterrupt(server.accept()).mapError(_ => ServerError.Io(ServerIo.Accept)).flatMap { socket =>
-        handle(socket, repo, graph, jdk, fingerprint).ensuring(ZIO.attempt(socket.close()).ignore).ignore *> loop
+        handle(socket, repo, graph, jdk, fingerprint, buildClasspath, build).ensuring(ZIO.attempt(socket.close()).ignore).ignore *> loop
       }
     loop
 
@@ -305,6 +311,8 @@ object Daemon:
       graph: ProjectGraph,
       jdk: ResolvedJdk,
       fingerprint: Fingerprint,
+      buildClasspath: List[Path],
+      build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
     val input = Channels.newInputStream(socket)
     val output = Channels.newOutputStream(socket)
@@ -320,7 +328,7 @@ object Daemon:
                 write(output, wire(Message.Ready)) *> (asked match
                   case Call.Compile(projects) => compile(repo, graph, projects, jdk, output)
                   case Call.Test(projects)    => test(repo, graph, projects, jdk, output)
-                  case Call.Bsp               => bsp(repo, graph, jdk, input, output)
+                  case Call.Bsp               => bsp(repo, graph, jdk, buildClasspath, build, input, output)
                 )
             }
 
@@ -332,7 +340,7 @@ object Daemon:
       output: OutputStream,
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
     GraphCompile.console(repo, graph, projects, jdk).mapZIO {
-      case CompileFeed.Diagnostic(text) => write(output, wire(Message.Err(text)))
+      case CompileFeed.Diagnostic(_, _, _, problem) => write(output, wire(Message.Err(problem.text)))
       case CompileFeed.Done(cell)       => write(output, wire(Message.Out(Lines.compiled(repo, cell))))
     }.runDrain.foldZIO(
       {
@@ -355,7 +363,7 @@ object Daemon:
         for
           cells <- GraphCompile.console(repo, graph, projects, jdk).mapError(ModuleTestError.Compile(_)).mapZIO { feed =>
                      val sent = feed match
-                       case CompileFeed.Diagnostic(text) => write(output, wire(Message.Err(text)))
+                       case CompileFeed.Diagnostic(_, _, _, problem) => write(output, wire(Message.Err(problem.text)))
                        case CompileFeed.Done(cell)       => write(output, wire(Message.Out(Lines.compiled(repo, cell))))
                      sent.as(compiledCell(feed))
                    }.collectSome.runCollect
@@ -388,10 +396,13 @@ object Daemon:
       repo: Path,
       graph: ProjectGraph,
       jdk: ResolvedJdk,
+      buildClasspath: List[Path],
+      build: IO[histos.load.LoadError, histos.load.BuildNotes],
       input: InputStream,
       output: OutputStream,
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
-    Bsp.open(repo, graph, jdk).flatMap { session =>
+    val notify = (line: String) => Frame.write(output, line).mapError(_ => ServerError.Io(ServerIo.Write)).ignore
+    Bsp.open(repo, graph, jdk, buildClasspath, notify, build).flatMap { session =>
       def loop: ZIO[histos.resolve.Resolve, ServerError, Int] =
         Frame.read(input).mapError(_ => ServerError.Io(ServerIo.Read)).flatMap:
           case None => ZIO.succeed(1)
@@ -406,7 +417,7 @@ object Daemon:
   private def compiledCell(feed: CompileFeed): Option[histos.zinc.CompiledCell] =
     feed match
       case CompileFeed.Done(cell)    => Some(cell)
-      case CompileFeed.Diagnostic(_) => None
+      case CompileFeed.Diagnostic(_, _, _, _) => None
 
   private def failedTest(status: TestStatus): Boolean =
     status match

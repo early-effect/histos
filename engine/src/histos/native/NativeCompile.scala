@@ -1,6 +1,6 @@
 package histos.native
 
-import histos.zinc.{CompileError, CompileOutput, CompileRequest, JvmCompile}
+import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JvmCompile}
 import histos.{NativeVersion, Platform}
 
 import zio.{IO, ZIO}
@@ -10,7 +10,8 @@ object NativeCompile:
   def compile(
       request: CompileRequest,
       revision: NativeVersion,
-      hear: String => Unit = _ => (),
+      extra: List[String] = Nil,
+      hear: CompileProblem => Unit = _ => (),
   ): IO[CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Native then ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else if request.toolchain.version != JvmCompile.Scala390 then
@@ -22,6 +23,7 @@ object NativeCompile:
         compiled <- JvmCompile.compilePrepared(
                       request.copy(classpath = libs.libraries ++ request.classpath),
                       List(libs.plugin),
+                      extra,
                       hear,
                     )
       yield compiled

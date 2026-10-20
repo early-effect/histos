@@ -7,6 +7,7 @@ import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositor
 import histos.workflow.{CiError, TestTarget, Workflow}
 import histos.zinc.{
   CompileError,
+  CompileProblem,
   CompileRequest,
   CompileToolchain,
   CompiledCell,
@@ -15,6 +16,7 @@ import histos.zinc.{
   JvmCompile,
   ResolvedJdk,
   ScalacFlags,
+  SemanticDb,
   Sources,
 }
 import histos.pack.{MainClass, MainClassError}
@@ -643,7 +645,7 @@ object ModuleTest:
       case None       => root
 
   /** `src/test` inside the source root, plus `<module>/test`. The repository `test` is only for a graph with one module. */
-  private def testSources(
+  private[histos] def testSources(
       repo: Path,
       module: Module,
       modules: List[Module],
@@ -693,9 +695,9 @@ object ModuleTest:
   private final case class Fetched(paths: List[Path], hashes: List[Sha256])
 
   /** Compiler library first, then locked jars. The first jar on the classpath defines `scala.*`. */
-  private final case class Linked(paths: List[Path], hashes: List[Sha256])
+  private[histos] final case class Linked(paths: List[Path], hashes: List[Sha256])
 
-  private def runtimeClasspath(
+  private[histos] def runtimeClasspath(
       repo: Path,
       modules: List[Module],
       module: Module,
@@ -718,7 +720,7 @@ object ModuleTest:
         JvmCompile.runtime(cell.version).mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       case Platform.Js | Platform.Native => ZIO.succeed(Nil)
 
-  private def compiledTests(
+  private[histos] def compiledTests(
       repo: Path,
       modules: List[Module],
       module: Module,
@@ -727,6 +729,7 @@ object ModuleTest:
       jdk: ResolvedJdk,
       lock: DependencyLock,
       repositories: Repositories,
+      hear: CompileProblem => Unit = _ => (),
   ): ZIO[Resolve, ModuleTestError, Linked] =
     val classes = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
@@ -740,16 +743,21 @@ object ModuleTest:
         analysis,
         linked.hashes,
       )
-      _ <- compileSuite(module, request)
+      _ <- compileSuite(module, request, SemanticDb.argv(repo, cell.version), hear)
     yield linked
 
-  private def compileSuite(module: Module, request: CompileRequest): IO[ModuleTestError, Unit] =
+  private def compileSuite(
+      module: Module,
+      request: CompileRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): IO[ModuleTestError, Unit] =
     val compiled = request.toolchain.platform match
-      case Platform.Jvm => JvmCompile.compile(request)
-      case Platform.Js => ScalaJs.compile(request)
+      case Platform.Jvm => JvmCompile.compile(request, extra, hear)
+      case Platform.Js => ScalaJs.compile(request, extra, hear)
       case Platform.Native =>
         val revision = module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
-        NativeCompile.compile(request, revision)
+        NativeCompile.compile(request, revision, extra, hear)
     compiled.mapError(error => ModuleTestError.Sources(module.name, request.toolchain.version, error)).unit
 
   /** Compile jars of `dependsOn`, not their tests. The child runs those classes. */
@@ -809,7 +817,7 @@ object ModuleTest:
       work
     }.mapError(_ => ModuleTestError.Work(work))
 
-  private def testClasses(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =
+  private[histos] def testClasses(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =
     repo.resolve(".histos").resolve("test-classes").resolve(module.value).resolve(version.value).resolve(platformToken(platform))
 
   private def testAnalysis(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =

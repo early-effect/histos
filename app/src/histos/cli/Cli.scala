@@ -340,7 +340,7 @@ object Cli:
 
   private def showCompile(repo: Path, feed: CompileFeed): UIO[Unit] =
     feed match
-      case CompileFeed.Diagnostic(text) => sayError(text)
+      case CompileFeed.Diagnostic(_, _, _, problem) => sayError(problem.text)
       case CompileFeed.Done(cell)       => say(compiledLine(repo, cell))
 
   private def compiledLine(repo: Path, cell: CompiledCell): String =
@@ -391,7 +391,7 @@ object Cli:
                          showCompile(repo, feed).as {
                            feed match
                              case CompileFeed.Done(cell) => Some(cell)
-                             case CompileFeed.Diagnostic(_) => None
+                             case CompileFeed.Diagnostic(_, _, _, _) => None
                          }
                        }.collectSome.runCollect
               _ <- ModuleTest.suites(repo, loaded.graph, projects, jdk, cells.toList, patterns, quick).foreach {
@@ -536,24 +536,29 @@ object Cli:
       case Decision.Absent | Decision.Stale(_) => bspLocal(repo, apiJar)
 
   private def serve(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
-      error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
-      loaded =>
-        GraphCompile.jdkHere.foldZIO(
-          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
-          jdk =>
-            Daemon.open(repo, loaded.graph, jdk, VersionText).flatMap { record =>
-              say(record.socket.toString) *> ZIO.never
-            }.foldCauseZIO(
-              cause =>
-                cause.failureOrCause match
-                  case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
-                  case Right(rest) => ZIO.failCause(rest)
-              ,
-              _ => ZIO.succeed(Completed(CliExit.Success, "", "")),
-            ),
-        ),
-    )
+    ZIO.serviceWithZIO[Loader]: loader =>
+      loader.load(repo, apiJar).foldZIO(
+        error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+        loaded =>
+          GraphCompile.jdkHere.foldZIO(
+            error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+            jdk =>
+              loader.buildClasspath(apiJar).foldZIO(
+                error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+                classpath =>
+                  Daemon.open(repo, loaded.graph, jdk, VersionText, classpath, loader.reportBuild(repo, apiJar)).flatMap { record =>
+                    say(record.socket.toString) *> ZIO.never
+                  }.foldCauseZIO(
+                    cause =>
+                      cause.failureOrCause match
+                        case Left(error) => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                        case Right(rest) => ZIO.failCause(rest)
+                    ,
+                    _ => ZIO.succeed(Completed(CliExit.Success, "", "")),
+                  ),
+              ),
+          ),
+      )
 
   /** A matching server runs the command. Anything else, including a dead socket, runs here. */
   private def attach(repo: Path, call: Call, local: URIO[Resolve, Completed]): URIO[Resolve, Completed] =
@@ -579,19 +584,26 @@ object Cli:
     }
 
   private def bspLocal(repo: Path, apiJar: Path): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).foldZIO(
-      error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
-      loaded =>
-        GraphCompile.jdkHere.foldZIO(
-          error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
-          jdk =>
-            Bsp.open(repo, loaded.graph, jdk).flatMap: session =>
-              speak(session).foldZIO(
+    ZIO.serviceWithZIO[Loader]: loader =>
+      loader.load(repo, apiJar).foldZIO(
+        error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+        loaded =>
+          GraphCompile.jdkHere.foldZIO(
+            error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+            jdk =>
+              loader.buildClasspath(apiJar).foldZIO(
                 error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
-                code => ZIO.succeed(Completed(if code == 0 then CliExit.Success else CliExit.TaskFailed, "", "")),
+                classpath =>
+                  val output = java.lang.System.out
+                  val notify = (line: String) => histos.bsp.Frame.write(output, line).ignore
+                  Bsp.open(repo, loaded.graph, jdk, classpath, notify, loader.reportBuild(repo, apiJar)).flatMap: session =>
+                    speak(session).foldZIO(
+                      error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+                      code => ZIO.succeed(Completed(if code == 0 then CliExit.Success else CliExit.TaskFailed, "", "")),
+                    ),
               ),
-        ),
-    )
+          ),
+      )
 
   private def speak(session: Bsp.Session): ZIO[Resolve, Frame.FrameError, Int] =
     val input = java.lang.System.in

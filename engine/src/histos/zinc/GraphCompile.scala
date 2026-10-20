@@ -23,7 +23,7 @@ final case class CompiledCell(module: ProjectName, version: ScalaVersion, platfo
 
 /** One cell's console. Diagnostics stay with that cell. Parallel cells are not interleaved. */
 enum CompileFeed:
-  case Diagnostic(text: String)
+  case Diagnostic(module: ProjectName, version: ScalaVersion, platform: Platform, problem: CompileProblem)
   case Done(cell: CompiledCell)
 
 enum GraphCompileError:
@@ -42,7 +42,7 @@ enum GraphCompileError:
 
   def message: String = this match
     case Target(error) => error.message
-    case UnknownCell(module, version) => s"'${module.value}' ${version.value} is not a JVM cell"
+    case UnknownCell(module, version) => s"'${module.value}' ${version.value} is not a cell on the requested platform"
     case NoRoot(module) =>
       s"'${module.value}' has no source root. Expected ${module.value}/src, or src when it is the only module"
     case NoSources(module, root) => s"'${module.value}' has no main or test sources under $root"
@@ -97,6 +97,19 @@ object GraphCompile:
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
     collected(watch(repo, graph, chooseCells(graph, cells), Some(cells.map(_._2.value).toSet), None, jdk))
 
+  /**
+   * Compile these cells on `platform`, plus their upstream closure, at the requested Scala versions.
+   * A class directory from an earlier call does not satisfy `upstreamClasses`. The closure is compiled in this call.
+   */
+  def cellFeed(
+      repo: Path,
+      graph: ProjectGraph,
+      cells: List[(ProjectName, ScalaVersion)],
+      platform: Platform,
+      jdk: ResolvedJdk,
+  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+    watch(repo, graph, pickCells(graph, cells, platform), Some(cells.map(_._2.value).toSet), Some(platform), jdk)
+
   private def collected(feeds: ZStream[Resolve, GraphCompileError, CompileFeed]): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
     feeds.collect { case CompileFeed.Done(cell) => cell }.runCollect.map: cells =>
       cells.toList.sortBy(cell => (cell.module.value, cell.version.value, platformToken(cell.platform)))
@@ -132,6 +145,22 @@ object GraphCompile:
           case TestTarget.Entire                 => modules.map(_.name).toSet
           case TestTarget.Named(first, rest)     => (first :: rest).toSet
         upstream(modules, roots)
+
+  private def pickCells(
+      graph: ProjectGraph,
+      cells: List[(ProjectName, ScalaVersion)],
+      platform: Platform,
+  ): Either[GraphCompileError, List[Module]] =
+    val modules = modulesOf(graph)
+    val byName = modules.map(module => module.name -> module).toMap
+    def known(name: ProjectName, version: ScalaVersion): Boolean =
+      byName.get(name) match
+        case Some(module) =>
+          module.platforms.all.contains(platform) && module.versions.all.exists(_.value == version.value)
+        case None => false
+    cells.collectFirst { case (name, version) if !known(name, version) => GraphCompileError.UnknownCell(name, version) } match
+      case Some(error) => Left(error)
+      case None        => Right(upstream(modules, cells.map(_._1).toSet))
 
   private def chooseCells(
       graph: ProjectGraph,
@@ -198,7 +227,7 @@ object GraphCompile:
   private type CellKey = (ProjectName, ScalaVersion, Platform)
 
   private def slots(modules: List[Module], only: Option[Set[String]], platform: Option[Platform]): Map[CellKey, CellNotes] =
-    modules.flatMap(module => cellsOf(module, only, platform).map(key => key -> CellNotes())).toMap
+    modules.flatMap(module => cellsOf(module, only, platform).map(key => key -> CellNotes(key))).toMap
 
   private def cellsOf(module: Module, only: Option[Set[String]], platform: Option[Platform]): List[CellKey] =
     wanted(module, only).flatMap(version => platforms(module, platform).map(chosen => (module.name, version, chosen)))
@@ -241,12 +270,12 @@ object GraphCompile:
     case Stop
     case Broken(error: GraphCompileError)
 
-  private final class CellNotes:
+  private final class CellNotes(key: CellKey):
     private val notes = new LinkedBlockingQueue[Note]()
     private val closed = new AtomicBoolean(false)
 
-    def hear(text: String): Unit =
-      text.split("\n", -1).iterator.filter(_.nonEmpty).foreach(line => notes.put(Note.Feed(CompileFeed.Diagnostic(line))))
+    def hear(problem: CompileProblem): Unit =
+      notes.put(Note.Feed(CompileFeed.Diagnostic(key._1, key._2, key._3, problem)))
 
     def succeed(cell: CompiledCell): Unit =
       notes.put(Note.Feed(CompileFeed.Done(cell)))
@@ -316,7 +345,7 @@ object GraphCompile:
       lock: DependencyLock,
       jdk: ResolvedJdk,
       repositories: Repositories,
-      hear: String => Unit,
+      hear: CompileProblem => Unit,
   ): ZIO[Resolve, GraphCompileError, CompiledCell] =
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain = Module.chain(module, modules, platform)
@@ -339,7 +368,7 @@ object GraphCompile:
               analysis(repo, module.name, version, platform),
               fetched.hashes,
             )
-            compiled <- compile(module, request, hear).mapError(failed)
+            compiled <- compile(module, request, SemanticDb.argv(repo, version), hear).mapError(failed)
           yield CompiledCell(module.name, version, platform, compiled.classes, compiled.classFiles)
     yield compiled
 
@@ -363,14 +392,15 @@ object GraphCompile:
   private def compile(
       module: Module,
       request: CompileRequest,
-      hear: String => Unit,
+      extra: List[String],
+      hear: CompileProblem => Unit,
   ): IO[CompileError, CompileOutput] =
     request.toolchain.platform match
-      case Platform.Jvm => JvmCompile.compile(request, hear)
-      case Platform.Js  => ScalaJs.compile(request, hear)
+      case Platform.Jvm => JvmCompile.compile(request, extra, hear)
+      case Platform.Js  => ScalaJs.compile(request, extra, hear)
       case Platform.Native =>
         val revision = module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
-        NativeCompile.compile(request, revision, hear)
+        NativeCompile.compile(request, revision, extra, hear)
 
   private def upstreamClasses(
       module: Module,

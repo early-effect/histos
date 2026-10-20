@@ -34,7 +34,17 @@ object GraphCompileSpec extends ZIOSpecDefault:
           cells <- GraphCompile.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
           found <- ZIO.attempt(cells.map(cell => (cell.module.value, cell.version.value, cell.classFiles, entries(cell.classes))))
         yield assertTrue:
-          found == List(("core", "3.9.0", 2, List("demo/Hello$.class", "demo/Hello.class", "demo/Hello.tasty")))
+          found == List((
+            "core",
+            "3.9.0",
+            2,
+            List(
+              "META-INF/semanticdb/src/main/scala/demo/Hello.scala.semanticdb",
+              "demo/Hello$.class",
+              "demo/Hello.class",
+              "demo/Hello.tasty",
+            ),
+          ))
     ,
     test("a named module compiles its upstream, from each module directory"):
       ZIO.scoped:
@@ -55,8 +65,24 @@ object GraphCompileSpec extends ZIOSpecDefault:
           found <- ZIO.attempt(cells.map(cell => (cell.module.value, entries(cell.classes))))
         yield assertTrue:
           found == List(
-            ("app", List("App$.class", "App.class", "App.tasty")),
-            ("core", List("Core$.class", "Core.class", "Core.tasty")),
+            (
+              "app",
+              List(
+                "App$.class",
+                "App.class",
+                "App.tasty",
+                "META-INF/semanticdb/app/src/main/scala/App.scala.semanticdb",
+              ),
+            ),
+            (
+              "core",
+              List(
+                "Core$.class",
+                "Core.class",
+                "Core.tasty",
+                "META-INF/semanticdb/core/src/main/scala/Core.scala.semanticdb",
+              ),
+            ),
           )
     ,
     test("the console finishes the upstream cell before the module that depends on it"):
@@ -87,7 +113,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                    }.flatMap(graph => ZIO.fromEither(graph).mapError(error => new IllegalStateException(error.message)))
           seen <- Ref.make(Chunk.empty[String])
           result <- GraphCompile.console(root, built, Nil, jdk).tap {
-                      case CompileFeed.Diagnostic(text) => seen.update(_ :+ text)
+                      case CompileFeed.Diagnostic(_, _, _, problem) => seen.update(_ :+ problem.text)
                       case CompileFeed.Done(_)         => ZIO.unit
                     }.runDrain.either.provide(Resolve.live(root.resolve("coursier")))
           lines <- seen.get

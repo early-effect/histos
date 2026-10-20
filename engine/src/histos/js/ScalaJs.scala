@@ -1,6 +1,6 @@
 package histos.js
 
-import histos.zinc.{CompileError, CompileOutput, CompileRequest, JsLibraryMiss, JvmCompile, ScalaSeries}
+import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JsLibraryMiss, JvmCompile, ScalaSeries}
 import histos.{Platform, ScalaVersion}
 
 import java.nio.file.Path
@@ -15,13 +15,17 @@ object ScalaJs:
   def libraries(version: ScalaVersion): IO[CompileError, List[Path]] =
     library(version)
 
-  def compile(request: CompileRequest, hear: String => Unit = _ => ()): IO[CompileError, CompileOutput] =
+  def compile(
+      request: CompileRequest,
+      extra: List[String] = Nil,
+      hear: CompileProblem => Unit = _ => (),
+  ): IO[CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Js then ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else
       ScalaSeries.of(request.toolchain.version) match
         case Some(ScalaSeries.Scala3) =>
           library(request.toolchain.version).flatMap: jars =>
-            JvmCompile.compileWith(request, jars, Nil, List("-scalajs"), hear)
+            JvmCompile.compileWith(request, jars, Nil, List("-scalajs") ++ extra, hear)
         case _ => ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
 
   private def library(version: ScalaVersion): IO[CompileError, List[Path]] =

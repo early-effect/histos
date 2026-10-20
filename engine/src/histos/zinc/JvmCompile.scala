@@ -12,6 +12,7 @@ import java.util.Optional
 import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
 import sbt.internal.inc.{IncrementalCompilerImpl, Locate, MappedFileConverter, ScalaInstance, Stamps, ZincUtil}
@@ -149,6 +150,62 @@ final case class CompileRequest(
 
 final case class CompileOutput(classes: Path, classFiles: Int)
 
+/** Zinc positions are 1-based. Dotty positions are already 0-based. */
+enum PositionBase:
+  case Zinc
+  case Dotty
+
+enum CompileSeverity:
+  case Error, Warn, Info
+
+/** One compiler message. A missing path is a log line, not a squiggle. */
+final case class CompileProblem(
+    message: String,
+    path: Option[Path],
+    severity: CompileSeverity,
+    startLine: Option[Int],
+    startColumn: Option[Int],
+    endLine: Option[Int],
+    endColumn: Option[Int],
+    base: PositionBase,
+):
+  def text: String = message
+
+object CompileProblem:
+  def text(message: String): CompileProblem =
+    CompileProblem(message, None, CompileSeverity.Error, None, None, None, None, PositionBase.Zinc)
+
+  def fromZinc(problem: xsbti.Problem): CompileProblem =
+    val position = problem.position
+    CompileProblem(
+      problem.message,
+      position.sourcePath.toScala.map(Path.of(_)),
+      severity(problem.severity),
+      opt(position.startLine),
+      opt(position.startColumn),
+      opt(position.endLine),
+      opt(position.endColumn),
+      PositionBase.Zinc,
+    )
+
+  private def severity(level: xsbti.Severity): CompileSeverity =
+    level match
+      case xsbti.Severity.Error => CompileSeverity.Error
+      case xsbti.Severity.Warn  => CompileSeverity.Warn
+      case xsbti.Severity.Info  => CompileSeverity.Info
+
+  private def opt(value: java.util.Optional[Integer]): Option[Int] =
+    value.toScala.map(_.intValue)
+
+/** SemanticDB flags beside `ScalacFlags.argv`. They are not flag cases: `-sourceroot` carries a path. */
+object SemanticDb:
+  def argv(repo: Path, version: ScalaVersion): List[String] =
+    val root = repo.toAbsolutePath.normalize.toString
+    ScalaSeries.of(version) match
+      case Some(ScalaSeries.Scala3)     => List("-Xsemanticdb", "-sourceroot", root)
+      case Some(ScalaSeries.Scala2(_))  => List("-Yrangepos", s"-P:semanticdb:sourceroot:$root")
+      case None                          => Nil
+
 object CompileKey:
   /** Identity of a compile. The classes directory is not part of it. Artifact checksums are. */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
@@ -171,21 +228,26 @@ object JvmCompile:
 
   def sourceDigest(sources: List[Path]): IO[CompileError, Sha256] = hashSources(sources)
 
-  def compile(request: CompileRequest, hear: String => Unit = _ => ()): IO[CompileError, CompileOutput] =
+  def compile(
+      request: CompileRequest,
+      extra: List[String] = Nil,
+      hear: CompileProblem => Unit = _ => (),
+  ): IO[CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else compilePrepared(request, Nil, hear)
+    else compilePrepared(request, Nil, extra, hear)
 
   /** Compile with the Scala compiler the request names. Plugins are not user dependencies. `hear` is called on the compiler thread for each diagnostic. */
   private[histos] def compilePrepared(
       request: CompileRequest,
       plugins: List[Path],
-      hear: String => Unit = _ => (),
+      extra: List[String] = Nil,
+      hear: CompileProblem => Unit = _ => (),
   ): IO[CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg), hear))
+       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg) ++ extra, hear))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -254,7 +316,7 @@ object JvmCompile:
       stdlib: List[Path],
       plugins: List[Path],
       extra: List[String],
-      hear: String => Unit = _ => (),
+      hear: CompileProblem => Unit = _ => (),
   ): IO[CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
@@ -265,7 +327,7 @@ object JvmCompile:
   private def invoke(
       request: CompileRequest,
       extra: List[String],
-      hear: String => Unit,
+      hear: CompileProblem => Unit,
       stdlib: Option[List[Path]] = None,
   ): IO[CompileError, CompileOutput] =
     val version = request.toolchain.version
@@ -278,7 +340,7 @@ object JvmCompile:
       case _ =>
         ZIO.fail(CompileError.UnsupportedScala(version))
 
-  private def invoke213(request: CompileRequest, hear: String => Unit): IO[CompileError, CompileOutput] =
+  private def invoke213(request: CompileRequest, hear: CompileProblem => Unit): IO[CompileError, CompileOutput] =
     Scala213.jars(request.toolchain.version).flatMap: jars =>
       ZIO.attemptBlockingInterrupt(runZinc213(request, jars, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
 
@@ -286,7 +348,7 @@ object JvmCompile:
       request: CompileRequest,
       extra: List[String],
       toolchain: Scala3.Toolchain,
-      hear: String => Unit,
+      hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
   ): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader(getClass.getClassLoader)
@@ -308,7 +370,7 @@ object JvmCompile:
         Left(CompileError.Failed(List(CompileDiagnostic.fromCompiler(s"$text\n$trace"))))
     finally loader.close()
 
-  private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain, hear: String => Unit): Either[CompileError, CompileOutput] =
+  private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain, hear: CompileProblem => Unit): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader()
     try
       compileOne(
@@ -331,7 +393,7 @@ object JvmCompile:
       compiler: List[Path],
       compilerLoader: ClassLoader,
       extra: List[String],
-      hear: String => Unit,
+      hear: CompileProblem => Unit,
   ): Either[CompileError, CompileOutput] =
     val versionText = version.value
     val libraryLoader = new URLClassLoader(libraries.map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader)
@@ -405,7 +467,7 @@ object JvmCompile:
             case None       => false
       finally walk.close()
 
-private final class CollectingReporter(hear: String => Unit) extends xsbti.Reporter:
+private final class CollectingReporter(hear: CompileProblem => Unit) extends xsbti.Reporter:
   private var found: List[xsbti.Problem] = Nil
 
   def diagnostics: List[CompileDiagnostic] =
@@ -418,6 +480,6 @@ private final class CollectingReporter(hear: String => Unit) extends xsbti.Repor
   def problems(): Array[xsbti.Problem] = found.reverse.toArray
   def log(problem: xsbti.Problem): Unit =
     found = problem :: found
-    problem.message.split("\n", -1).iterator.filter(_.nonEmpty).foreach(hear)
+    hear(CompileProblem.fromZinc(problem))
   def comment(position: xsbti.Position, message: String): Unit = ()
 end CollectingReporter
