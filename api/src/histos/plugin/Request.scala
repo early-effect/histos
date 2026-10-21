@@ -1,6 +1,6 @@
 package histos.plugin
 
-import histos.ProjectName
+import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
 
@@ -44,12 +44,26 @@ final case class WrittenFile(name: OutputName, path: RepoPath)
 
 final case class PluginOutput(text: String, files: List[WrittenFile])
 
+/** Classpath of one cell after `TaskDep.Compile`.
+  *
+  * `compile` is the main class directory, upstream class directories, the JVM standard library, and compile-scope jars.
+  * `test` is that list. When the module has test sources, the test class directory is first and test-scope jars follow.
+  */
+final case class CellClasspath(
+    module: ProjectName,
+    version: ScalaVersion,
+    platform: Platform,
+    compile: List[Path],
+    test: List[Path],
+)
+
 final case class RunRequest(
     id: PluginTaskId,
     repo: Path,
     modules: List[ModuleView],
     args: PluginArgs,
     inputs: List[MaterialInput],
+    compiled: List[CellClasspath] = Nil,
 )
 
 /** The contribution stored on the graph. Not the trait, the classloader, or a function. */

@@ -18,6 +18,7 @@ import histos.plugin.{
 }
 import histos.schedule.{Action, ActionCache, ActionId, Input, PluginManifest, Policy, RemoteCache, ScheduleError, Scheduler}
 import histos.task.{TaskError, TaskId, TaskKind, TaskResult}
+import histos.resolve.Resolve
 import histos.{Module, ProjectGraph}
 
 import java.nio.file.{Files, LinkOption, Path}
@@ -31,8 +32,8 @@ final case class PluginLink(id: PluginId, linked: PluginLinked, artifacts: List[
  * `run` uses an inner `Scope`, so a plugin's finalizer runs when the task ends, including on interrupt.
  */
 trait PluginRuntime:
-  def run(id: PluginTaskId, args: PluginArgs): ZIO[ActionCache & RemoteCache, PluginRunError, PluginOutput]
-  def bind: ZIO[ActionCache & RemoteCache, Nothing, Map[TaskId, IO[TaskError, TaskResult]]]
+  def run(id: PluginTaskId, args: PluginArgs): ZIO[ActionCache & RemoteCache & Resolve, PluginRunError, PluginOutput]
+  def bind: ZIO[ActionCache & RemoteCache & Resolve, Nothing, Map[TaskId, IO[TaskError, TaskResult]]]
   def links: List[PluginLink]
 
 object PluginRuntime:
@@ -54,46 +55,61 @@ object PluginRuntime:
       val links: List[PluginLink],
       launcher: ApiDigest,
   ) extends PluginRuntime:
-    def run(id: PluginTaskId, args: PluginArgs): ZIO[ActionCache & RemoteCache, PluginRunError, PluginOutput] =
+    def run(id: PluginTaskId, args: PluginArgs): ZIO[ActionCache & RemoteCache & Resolve, PluginRunError, PluginOutput] =
       taskOf(id) match
         case None => ZIO.fail(PluginRunError.Unknown(id))
         case Some(_) =>
           for
-            made    <- Ref.make(Map.empty[String, PluginOutput])
-            planned <- plan
-            stored  <- planned.find(_.id.value == id.render) match
-                         case None => ZIO.fail(PluginRunError.Unknown(id))
-                         case Some(root) =>
-                           ZIO.serviceWithZIO[Scheduler](_.execute(root.id, planned, local(id, args, made)))
-                             .provideSome[ActionCache & RemoteCache](Scheduler.live)
-                             .mapError(blown)
+            compiled <- classpaths(id)
+            made     <- Ref.make(Map.empty[String, PluginOutput])
+            planned  <- plan
+            stored   <- planned.find(_.id.value == id.render) match
+                          case None => ZIO.fail(PluginRunError.Unknown(id))
+                          case Some(root) =>
+                            ZIO.serviceWithZIO[Scheduler](_.execute(root.id, planned, local(id, args, made, compiled)))
+                              .provideSome[ActionCache & RemoteCache](Scheduler.live)
+                              .mapError(blown)
             output <- made.get.map(_.get(id.render)).flatMap:
                         case Some(found) => ZIO.succeed(found)
                         case None        => ZIO.succeed(cached(id, stored))
           yield output
 
-    def bind: ZIO[ActionCache & RemoteCache, Nothing, Map[TaskId, IO[TaskError, TaskResult]]] =
-      ZIO.service[ActionCache].zip(ZIO.service[RemoteCache]).map: (cache, remote) =>
+    def bind: ZIO[ActionCache & RemoteCache & Resolve, Nothing, Map[TaskId, IO[TaskError, TaskResult]]] =
+      for
+        cache   <- ZIO.service[ActionCache]
+        remote  <- ZIO.service[RemoteCache]
+        resolve <- ZIO.service[Resolve]
+      yield
         val bound = tasks.flatMap: (id, _) =>
           TaskId.from(id.render).toOption.toList.map: key =>
             key -> run(id, PluginArgs.empty)
-              .provide(ZLayer.succeed(cache), ZLayer.succeed(remote))
+              .provide(ZLayer.succeed(cache), ZLayer.succeed(remote), ZLayer.succeed(resolve))
               .map(out => TaskResult(TaskKind.Plugin, out.text))
               .mapError(TaskError.Plugin(_))
         bound.toMap
+
+    private def classpaths(root: PluginTaskId): ZIO[Resolve, PluginRunError, Map[String, List[histos.plugin.CellClasspath]]] =
+      val found = reachable(root)
+      PluginCells.prepare(repo, graph, found.map(_._2)) *>
+        ZIO.foreach(found): (id, task) =>
+          PluginCells.classpath(repo, graph, task).map(id.render -> _)
+        .map(_.toMap)
 
     private def local(
         root: PluginTaskId,
         args: PluginArgs,
         made: Ref[Map[String, PluginOutput]],
+        compiled: Map[String, List[histos.plugin.CellClasspath]],
     )(action: Action): IO[PluginRunError, String] =
-      PluginTaskId.parse(action.id.value) match
-        case Left(_) => ZIO.fail(PluginRunError.Defect("ActionId"))
-        case Right(id) =>
-          val passed = if id == root then args else PluginArgs.empty
-          (taskOf(id), instance(id.plugin)) match
-            case (Some(task), Some(plugin)) => produce(id, task, plugin, passed, made)
-            case _                          => ZIO.fail(PluginRunError.Unknown(id))
+      if action.kind == TaskKind.Compile then ZIO.succeed("compiled")
+      else
+        PluginTaskId.parse(action.id.value) match
+          case Left(_) => ZIO.fail(PluginRunError.Defect("ActionId"))
+          case Right(id) =>
+            val passed = if id == root then args else PluginArgs.empty
+            (taskOf(id), instance(id.plugin)) match
+              case (Some(task), Some(plugin)) => produce(id, task, plugin, passed, made, compiled.getOrElse(id.render, Nil))
+              case _                          => ZIO.fail(PluginRunError.Unknown(id))
 
     private def produce(
         id: PluginTaskId,
@@ -101,10 +117,11 @@ object PluginRuntime:
         plugin: HistosPlugin,
         args: PluginArgs,
         made: Ref[Map[String, PluginOutput]],
+        compiled: List[histos.plugin.CellClasspath],
     ): IO[PluginRunError, String] =
       for
         hashed <- PluginInputs.hash(repo, graph, id.plugin, task, id, jars(id.plugin), launcher)
-        output <- invoke(plugin, RunRequest(id, repo, views(id.plugin), args, hashed.material))
+        output <- invoke(plugin, RunRequest(id, repo, views(id.plugin), args, hashed.material, compiled))
         _      <- check(task, output)
         text   <- record(task, output)
         _      <- made.update(_ + (id.render -> output))
@@ -150,11 +167,14 @@ object PluginRuntime:
         }.orElseFail(PluginRunError.Defect("PluginManifest"))
 
     private def plan: IO[PluginRunError, List[Action]] =
-      ZIO.foreach(tasks): (id, task) =>
-        for
-          hashed <- PluginInputs.hash(repo, graph, id.plugin, task, id, jars(id.plugin), launcher)
-          action <- ZIO.fromEither(actionOf(id, task, hashed.inputs))
-        yield action
+      for
+        built <- ZIO.foreach(tasks): (id, task) =>
+          for
+            hashed <- PluginInputs.hash(repo, graph, id.plugin, task, id, jars(id.plugin), launcher)
+            action <- ZIO.fromEither(actionOf(id, task, hashed.inputs))
+          yield action
+        compiled <- ZIO.fromEither(compileActions)
+      yield compiled ++ built
 
     private def actionOf(id: PluginTaskId, task: DeclaredTask, inputs: List[Input]): Either[PluginRunError, Action] =
       for
@@ -165,9 +185,36 @@ object PluginRuntime:
     private def dependencies(plugin: PluginId, task: DeclaredTask): Either[PluginRunError, List[ActionId]] =
       task.dependsOn.foldLeft[Either[PluginRunError, List[ActionId]]](Right(Nil)):
         case (Left(err), _) => Left(err)
-        case (Right(acc), histos.plugin.TaskDep.Compile(_, _, _)) => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Compile(name, version, platform)) =>
+          PluginCells.named(graph, name, version, platform).flatMap: cells =>
+            cells.foldLeft[Either[PluginRunError, List[ActionId]]](Right(acc)): (inner, cell) =>
+              inner.flatMap: ids =>
+                ActionId.from(PluginCells.id(cell)).left.map(_ => PluginRunError.Defect("ActionId")).map(ids :+ _)
         case (Right(acc), histos.plugin.TaskDep.Same(name)) =>
           ActionId.from(PluginTaskId(plugin, name).render).left.map(_ => PluginRunError.Defect("ActionId")).map(dep => acc :+ dep)
+
+    private def compileActions: Either[PluginRunError, List[Action]] =
+      tasks.map(_._2).foldLeft[Either[PluginRunError, List[Action]]](Right(Nil)): (acc, task) =>
+        acc.flatMap: soFar =>
+          PluginCells.selected(graph, task).flatMap: cells =>
+            cells.foldLeft[Either[PluginRunError, List[Action]]](Right(soFar)): (inner, cell) =>
+              inner.flatMap: actions =>
+                if actions.exists(_.id.value == PluginCells.id(cell)) then Right(actions)
+                else
+                  ActionId.from(PluginCells.id(cell)).left.map(_ => PluginRunError.Defect("ActionId")).map: id =>
+                    actions :+ Action(id, TaskKind.Compile, Nil, Nil)
+
+    private def reachable(root: PluginTaskId): List[(PluginTaskId, DeclaredTask)] =
+      def walk(id: PluginTaskId, seen: Set[String]): List[(PluginTaskId, DeclaredTask)] =
+        if seen.contains(id.render) then Nil
+        else
+          taskOf(id) match
+            case None => Nil
+            case Some(task) =>
+              val rest = task.dependsOn.collect:
+                case histos.plugin.TaskDep.Same(name) => PluginTaskId(id.plugin, name)
+              (id, task) :: rest.flatMap(next => walk(next, seen + id.render))
+      walk(root, Set.empty)
 
     private def cached(id: PluginTaskId, stored: String): PluginOutput =
       taskOf(id) match

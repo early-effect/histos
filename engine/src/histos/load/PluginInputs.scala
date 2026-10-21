@@ -87,7 +87,7 @@ private[load] object PluginInputs:
             MaterialInput.Module(name, content(sha)),
           )
 
-  /** Class directories of `TaskDep.Compile`. They change the digest. They do not schedule the compiler. */
+  /** Class directories of `TaskDep.Compile`. The compiler has already written them. The hash is the plugin cache key. */
   def compileInputs(
       repo: Path,
       graph: ProjectGraph,

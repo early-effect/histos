@@ -498,11 +498,11 @@ object Calls:
       plugins: PluginRuntime,
       id: PluginTaskId,
       say: Say
-  ): ZIO[ContentStore, ServerError, Unit] =
+  ): ZIO[ContentStore & Resolve, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>
       plugins
         .run(id, PluginArgs.empty)
-        .provide(
+        .provideSome[Resolve](
           ZLayer.succeed(ContentStore.actions(store)),
           RemoteCache.off
         )
@@ -639,14 +639,14 @@ object Calls:
         id: PluginTaskId,
         args: PluginArgs
     ): ZIO[
-      histos.schedule.ActionCache & RemoteCache,
+      histos.schedule.ActionCache & RemoteCache & Resolve,
       PluginRunError,
       histos.plugin.PluginOutput
     ] =
       ZIO.fail(PluginRunError.Unknown(id))
 
     def bind: ZIO[
-      histos.schedule.ActionCache & RemoteCache,
+      histos.schedule.ActionCache & RemoteCache & Resolve,
       Nothing,
       Map[TaskId, IO[TaskError, TaskResult]]
     ] =

@@ -122,7 +122,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                         ZLayer.succeed(ContentStore.in(work.resolve("store"))),
                       )
             id = PluginTaskId(PluginId("dev.earlyeffect.specular"), TaskName("site"))
-            ran <- loaded.plugins.run(id, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+            ran <- loaded.plugins.run(id, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, IdleResolve.layer)
             lockText <- ZIO.attempt(Files.readString(Resolve.lockPath(project))).mapError(_ => LoadError.Io(LoadIo.Stat))
           yield
             val linked = loaded.plugins.links match

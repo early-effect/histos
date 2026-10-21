@@ -622,11 +622,17 @@ object Cli:
                     jdk,
                     machine.env,
                     directory,
-                    showCompile(repo, _),
+                    showCompile(repo, _)
                   )
                   .mapBoth(
-                    failure => Completed(CliExit.PublishFailed, "", failure.message),
-                    report => Completed(CliExit.Success, report.lines.mkString("\n"), ""),
+                    failure =>
+                      Completed(CliExit.PublishFailed, "", failure.message),
+                    report =>
+                      Completed(
+                        CliExit.Success,
+                        report.lines.mkString("\n"),
+                        ""
+                      )
                   )
                   .merge
 
@@ -671,7 +677,8 @@ object Cli:
                     case CompileFeed.Done(cell)    => ZIO.succeed(Some(cell))
                     case CompileFeed.Failed(error) =>
                       failedCompile.update(_ :+ error).as(None)
-                    case CompileFeed.Began(_, _, _) | CompileFeed.Diagnostic(_, _, _, _) =>
+                    case CompileFeed.Began(_, _, _) |
+                        CompileFeed.Diagnostic(_, _, _, _) =>
                       ZIO.succeed(None))
               }
               .collectSome
@@ -685,7 +692,8 @@ object Cli:
                 cells.toList,
                 patterns,
                 quick,
-                (module, version, platform) => say(Lines.compilingTests(module, version, platform)),
+                (module, version, platform) =>
+                  say(Lines.compilingTests(module, version, platform))
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>
@@ -1343,7 +1351,7 @@ object Cli:
           ZIO.serviceWithZIO[ContentStore]: store =>
             loaded.plugins
               .run(id, args)
-              .provide(
+              .provideSome[Resolve](
                 ZLayer.succeed(ContentStore.actions(store)),
                 RemoteCache.off
               )

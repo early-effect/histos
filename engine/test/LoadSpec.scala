@@ -326,8 +326,8 @@ object LoadSpec extends ZIOSpecDefault:
           _ <- writeLock(repo, sha)
           loaded <- loadWith(repo, jar, Holding(packed, sha)).flatMap(ZIO.fromEither)
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
-          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
-          bound <- loaded.plugins.bind.provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
+          bound <- loaded.plugins.bind.provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
         yield assertTrue(
           loaded.graph.projects.map(_.name.value) == List("core"),
           loaded.graph.plugins match
@@ -388,7 +388,7 @@ object LoadSpec extends ZIOSpecDefault:
           _ <- writeCell(repo, "binary-or-source", sha, None)
           loaded <- loadWith(repo, jar, Holding(packed, sha)).flatMap(ZIO.fromEither)
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
-          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
         yield assertTrue(
           loaded.plugins.links match
             case PluginLink(_, PluginLinked.FromBinary(digest), artifacts) :: Nil =>
@@ -417,7 +417,7 @@ object LoadSpec extends ZIOSpecDefault:
           _ <- writeCell(repo, "binary-or-source", binarySha, Some(sourceSha))
           loaded <- loadWith(repo, jar, Sourced(packed, binarySha, sources, sourceSha, allowSources = true)).flatMap(ZIO.fromEither)
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
-          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
         yield assertTrue(
           loaded.plugins.links match
             case PluginLink(_, PluginLinked.FromSource(published, running), artifacts) :: Nil =>
@@ -506,7 +506,7 @@ object LoadSpec extends ZIOSpecDefault:
                }.mapError(_ => LoadError.Io(LoadIo.Temp))
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
-          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+          ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
         yield assertTrue(
           !Files.exists(Resolve.lockPath(repo)),
           loaded.plugins.links match

@@ -642,6 +642,7 @@ final case class RunRequest(
     modules: List[ModuleView],
     args: PluginArgs,
     inputs: List[MaterialInput],
+    compiled: List[CellClasspath] = Nil,
 )
 
 final case class ModuleView(
@@ -670,7 +671,7 @@ The executor:
 
 Remote file bytes (a generated site, a coverage report) are not transferred in this series. Another machine that received the manifest and does not have the files treats the lookup as a miss and runs locally. Shipping output bytes through `RemoteCache` as a binary CAS is later, with the remote-execution client, not a second cache. The verdict is still recorded so a test can show a hermetic plugin is `Send` and an open one is not in the remote store.
 
-`TaskDep.Compile` is an action dependency on the cells named in that dep: every cell of the module when both `Option`s are empty, or the one cell when they are set. The digest is those class directories. An unknown module, or an aggregate, is `BuildError.PluginMissingModule`. A `Some` that is not a cell that module builds is `BuildError.PluginMissingCell`. `TaskDep.Same` is another task of this plugin. A cycle is `ScheduleError.Cycle`. A missing sibling is `BuildError.UnknownPluginTask`.
+`TaskDep.Compile` is an action dependency on the cells named in that dep: every cell of the module when both `Option`s are empty, or the one cell when they are set. Those cells are compiled before the task is hashed. `RunRequest.compiled` then carries each cell's compile classpath and test classpath. The digest is those class directories. An unknown module, or an aggregate, is `BuildError.PluginMissingModule`. A `Some` that is not a cell that module builds is `BuildError.PluginMissingCell`. `TaskDep.Same` is another task of this plugin. A cycle is `ScheduleError.Cycle`. A missing sibling is `BuildError.UnknownPluginTask`.
 
 ### Failure and cancellation
 
