@@ -29,6 +29,15 @@ object TestProcessSpec extends ZIOSpecDefault:
         MainClass.from("1bad") == Left(MainClassError.Bad("1bad")),
       )
     ,
+    test("a suite keeps the repo, PATH, and HOME"):
+      val env = ModuleTest.suiteEnv(Path.of("/repo"))
+      assertTrue(
+        env.get("HISTOS_REPO").contains(Path.of("/repo").toAbsolutePath.normalize.toString),
+        env.get("PATH") == sys.env.get("PATH").filter(_.nonEmpty),
+        env.get("HOME") == sys.env.get("HOME").filter(_.nonEmpty),
+        !env.contains("USER"),
+      )
+    ,
     test("js is rejected before a process starts"):
       ZIO.scoped:
         for

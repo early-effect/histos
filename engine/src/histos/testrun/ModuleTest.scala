@@ -1150,14 +1150,12 @@ object ModuleTest:
         if satisfied(module, provider) then Right(Some(provider))
         else Left(ModuleTestError.ProviderDependency(module.name, provider))
 
-  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH`
-    * finds a toolchain.
-    */
+  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds node and clang. `HOME` finds the Playwright cache. */
   private[histos] def suiteEnv(repo: Path): Map[String, String] =
     val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
-    sys.env.get("PATH").filter(_.nonEmpty) match
-      case Some(path) => root + ("PATH" -> path)
-      case None       => root
+    val kept = List("PATH", "HOME", "XDG_CACHE_HOME").flatMap: key =>
+      sys.env.get(key).filter(_.nonEmpty).map(key -> _)
+    root ++ kept
 
   /** `src/test` inside the source root, plus `<module>/test`. The repository
     * `test` is only for a graph with one module.

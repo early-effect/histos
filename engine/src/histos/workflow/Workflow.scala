@@ -285,7 +285,7 @@ object Workflow:
     )
 
   /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action.
-    * Firefox is the Playwright revision pinned by chekhov-jsenv 0.1.3.
+    * Chekhov 0.1.3 reads Playwright 1.62.1 from `~/.cache/chekhov`, not from an npx cache.
     */
   private val tools: List[String] =
     List(
@@ -295,8 +295,12 @@ object Workflow:
       "      - uses: KyleMayes/install-llvm-action@v2.0.9",
       "        with:",
       "          version: \"21.1.8\"",
-      "      - run: npx --yes playwright@1.62.1 install-deps firefox",
-      "      - run: npx --yes playwright@1.62.1 install firefox",
+      "      - run: |",
+      "          dir=\"$HOME/.cache/chekhov/playwright/1.62.1\"",
+      "          mkdir -p \"$dir\"",
+      "          npm install --prefix \"$dir\" --no-fund --no-audit --no-progress playwright@1.62.1",
+      "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
+      "          node \"$dir/node_modules/playwright/cli.js\" install firefox",
     )
 
   private def testJob(jobs: List[TestJob], setup: Boolean): List[String] =
