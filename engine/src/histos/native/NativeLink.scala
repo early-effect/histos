@@ -149,6 +149,12 @@ object NativeLink:
     val names = libraries.flatMap(path => Option(path.getFileName).map(_.toString)).toSet
     classpath.filterNot(path => Option(path.getFileName).exists(name => names.contains(name.toString)))
 
+  /** The linker JVM is a fresh environment. Linux clang finds `ld` on `PATH`. An empty environment makes that exec fail. */
+  private[histos] def linkerEnv(env: Map[String, String]): Map[String, String] =
+    env.get("PATH").filter(_.nonEmpty) match
+      case Some(path) => Map("PATH" -> path)
+      case None       => Map.empty
+
   /** Compiles the bridge against this revision's tools, then links in a child JVM. */
   private def invoke(
       clang: Clang,
@@ -182,6 +188,7 @@ object NativeLink:
                   TestClasspath(classes, jars),
                   bridge,
                   child,
+                  linkerEnv(sys.env),
                 )).mapError(error => NativeError.Link(LinkError.Linker(error.message)))
       linked <- binary.exit.value match
         case 0 => readBinary(child.resolve("binary.path"))

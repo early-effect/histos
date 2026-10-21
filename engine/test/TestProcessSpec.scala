@@ -105,7 +105,7 @@ object TestProcessSpec extends ZIOSpecDefault:
       readPid(path) match
         case Some(pid) => ZIO.succeed(Some(pid))
         case None      => ZIO.sleep(20.millis) *> awaitPid(path)
-    }.timeout(5.seconds).map(_.flatten)
+    }.timeout(2.seconds).map(_.flatten)
 
   private def readPid(path: Path): Option[Long] =
     if !Files.isRegularFile(path) then None
@@ -118,7 +118,7 @@ object TestProcessSpec extends ZIOSpecDefault:
   private def awaitDead(pid: Long): ZIO[Any, Nothing, Boolean] =
     ZIO.suspendSucceed {
       if alive(pid) then ZIO.sleep(20.millis) *> awaitDead(pid) else ZIO.succeed(true)
-    }.timeout(5.seconds).map(_.getOrElse(false))
+    }.timeout(1.second).map(_.getOrElse(false))
 
   private val exitSource =
     """package demo;
@@ -146,9 +146,9 @@ object TestProcessSpec extends ZIOSpecDefault:
       |public final class Sleeper {
       |  public static void main(String[] args) throws Exception {
       |    Files.writeString(Path.of("self.pid"), Long.toString(ProcessHandle.current().pid()));
-      |    Process child = new ProcessBuilder("/bin/sleep", "60").start();
+      |    Process child = new ProcessBuilder("/bin/sleep", "2").start();
       |    Files.writeString(Path.of("child.pid"), Long.toString(child.pid()));
-      |    Thread.sleep(60_000L);
+      |    Thread.sleep(2_000L);
       |  }
       |}
       |""".stripMargin
@@ -200,4 +200,4 @@ object TestProcessSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("test subprocess")(types, process) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(2.minutes)
+  def spec = suite("test subprocess")(types, process) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)

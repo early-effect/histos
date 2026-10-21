@@ -17,17 +17,17 @@ object ApiJar:
       case Some(jar) => ZIO.succeed(jar)
       case None =>
         compiled(roots) match
-          case Some(root, classes) => jarOf(root, classes)
-          case None                => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+          case Some(classes) => jarOf(classes)
+          case None          => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
 
   private def repoRoots: List[Path] =
     val named = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
     val cwd = Path.of("").toAbsolutePath.normalize
     (named.toList :+ cwd).distinct
 
-  private def compiled(roots: List[Path]): Option[(Path, Path)] =
-    roots.foldLeft(Option.empty[(Path, Path)]): (found, root) =>
-      found.orElse(classesOf(root).map(classes => (root, classes)))
+  private def compiled(roots: List[Path]): Option[Path] =
+    roots.foldLeft(Option.empty[Path]): (found, root) =>
+      found.orElse(classesOf(root))
 
   private def classesOf(root: Path): Option[Path] =
     val api = root.resolve(".histos").resolve("classes").resolve("api")
@@ -44,6 +44,9 @@ object ApiJar:
         case only :: Nil => Some(only)
         case _           => None
 
-  private def jarOf(root: Path, classes: Path): IO[LoadError, Path] =
-    val dest = root.resolve(".histos").resolve("jars").resolve("histos-api.jar")
-    ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(LoadIo.Temp), _.path)
+  private def jarOf(classes: Path): IO[LoadError, Path] =
+    ZIO.attemptBlocking {
+      val dir = Files.createTempDirectory("histos-api-jar")
+      dir.resolve("histos-api.jar")
+    }.mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: dest =>
+      ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(LoadIo.Temp), _.path)

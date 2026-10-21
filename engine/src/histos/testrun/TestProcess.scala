@@ -7,11 +7,12 @@ import histos.pack.MainClass
 import java.io.InputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
-import zio.stream.{ZPipeline, ZStream}
+import zio.stream.ZStream
 
 /** The status the operating system reported. Zero and non-zero are both statuses. */
 opaque type ProcessExit = Int
@@ -168,12 +169,35 @@ object TestProcess:
     text(process.getInputStream).map(TestEvent.Out(_))
       .merge(text(process.getErrorStream).map(TestEvent.Err(_)))
 
+  /**
+   * One line at a time. Interrupting closes the stream, because `InputStream.read` does not
+   * return on `Thread.interrupt`.
+   */
   private def text(input: InputStream): ZStream[Any, TestError, String] =
-    ZStream
-      .fromInputStream(input, 4096)
-      .via(ZPipeline.utf8Decode)
-      .mapError(_ => TestError.Io(TestIo.Read))
-      .via(ZPipeline.splitLines)
+    val reader = new java.io.BufferedReader(new java.io.InputStreamReader(input, StandardCharsets.UTF_8))
+    ZStream.repeatZIOOption(line(reader, input))
+
+  private def line(reader: java.io.BufferedReader, input: InputStream): ZIO[Any, Option[TestError], String] =
+    ZIO.asyncInterrupt[Any, Option[TestError], String] { callback =>
+      val open = new AtomicBoolean(true)
+      val worker = new Thread(() =>
+        try
+          val found = reader.readLine()
+          if open.get() then
+            if found == null then callback(ZIO.fail(None))
+            else callback(ZIO.succeed(found))
+        catch case _: java.io.IOException =>
+          if open.get() then callback(ZIO.fail(None))
+      , "histos-test-read")
+      worker.setDaemon(true)
+      worker.start()
+      Left(ZIO.succeed {
+        open.set(false)
+        try input.close()
+        catch case _: java.io.IOException => ()
+        worker.interrupt()
+      })
+    }
 
   private def finish(request: TestRequest, process: Process): IO[TestError, ProcessExit] =
     for
@@ -286,9 +310,16 @@ object TestProcess:
 
   private def stop(process: Process): zio.UIO[Unit] =
     ZIO.attemptBlocking {
+      close(process.getInputStream)
+      close(process.getErrorStream)
+      close(process.getOutputStream)
       if process.isAlive then
         val pid = process.pid()
         if pid > 0 && pid <= Int.MaxValue then Posix.killGroup(pid.toInt)
         process.destroyForcibly()
         process.waitFor()
     }.ignore
+
+  private def close(stream: java.io.Closeable): Unit =
+    try stream.close()
+    catch case _: java.io.IOException => ()

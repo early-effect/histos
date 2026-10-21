@@ -52,7 +52,7 @@ object SchedulerSpec extends ZIOSpecDefault:
                  )
         ran <- count.get
       yield assertTrue(ran.getOrElse("d", 0) == 1 && ran.getOrElse("a", 0) == 1),
-    test("independent dependencies overlap"):
+    test("independent dependencies overlap")(
       (for
         startedB <- Promise.make[Nothing, Unit]
         startedC <- Promise.make[Nothing, Unit]
@@ -66,9 +66,9 @@ object SchedulerSpec extends ZIOSpecDefault:
                 else if action.id == c then startedC.succeed(()) *> startedB.await.as("c")
                 else ZIO.succeed("a"),
             )
-          ).timeoutFail(ScheduleError.UnknownAction(a))(5.seconds)
-      yield assertTrue(out == "a")
-    ).provide(Scheduler.live, ZLayer.succeed(ActionCache.miss), RemoteCache.off),
+          )
+      yield assertTrue(out == "a")).provide(Scheduler.live, ZLayer.succeed(ActionCache.miss), RemoteCache.off)
+    ) @@ TestAspect.timeout(2.seconds),
     test("a cycle runs nothing"):
       for
         ran <- Ref.make(false)
@@ -220,4 +220,4 @@ object SchedulerSpec extends ZIOSpecDefault:
     val bytes = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8))
     bytes.map(b => f"${b & 0xff}%02x").mkString
 
-  def spec = schedule @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
+  def spec = schedule @@ TestAspect.timeout(10.seconds)

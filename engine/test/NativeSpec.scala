@@ -34,6 +34,13 @@ object NativeSpec extends ZIOSpecDefault:
         ClangReport.parse("") == Left(ClangText.Empty),
       )
     ,
+    test("the linker child keeps PATH and nothing else"):
+      assertTrue(
+        NativeLink.linkerEnv(Map("PATH" -> "/usr/bin", "HOME" -> "/tmp")) == Map("PATH" -> "/usr/bin"),
+        NativeLink.linkerEnv(Map("HOME" -> "/tmp")).isEmpty,
+        NativeLink.linkerEnv(Map("PATH" -> "")).isEmpty,
+      )
+    ,
     test("the link key changes when the clang version or the target changes"):
       val sources = histos.jdk.Sha256.of(zio.Chunk.fromArray("src".getBytes(StandardCharsets.UTF_8)))
       val target = ClangTarget.from("arm64-apple-darwin27.0.0")

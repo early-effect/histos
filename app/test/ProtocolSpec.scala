@@ -341,7 +341,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           dir <- repo
           checked <- acpTexts(dir, jar).provideSome[Scope](loading(dir))
         yield checked
-  ) @@ TestAspect.timeout(60.seconds) @@ TestAspect.withLiveClock
+  ) @@ TestAspect.timeout(15.seconds)
 
   private def acpTexts(dir: Path, jar: Path) =
     for
