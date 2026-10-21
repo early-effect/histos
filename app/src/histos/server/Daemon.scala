@@ -1,11 +1,9 @@
 package histos.server
 
 import histos.bsp.{Bsp, Frame}
-import histos.cli.{Cli, Lines}
 import histos.jdk.Sha256
 import histos.load.HeaderScan
-import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestStatus}
-import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, ResolvedJdk}
+import histos.zinc.ResolvedJdk
 import histos.ProjectGraph
 
 import java.io.{InputStream, OutputStream}
@@ -18,7 +16,19 @@ import scala.jdk.CollectionConverters.*
 
 import zio.json.*
 import zio.stream.ZStream
-import zio.{Chunk, Exit, Fiber, IO, Promise, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
+import zio.{
+  Chunk,
+  Exit,
+  Fiber,
+  IO,
+  Promise,
+  Ref,
+  Scope,
+  Semaphore,
+  UIO,
+  ZIO,
+  ZLayer
+}
 
 /** What a batch command found in `.histos/server.json`. A stale record does not
   * attach.
@@ -404,7 +414,9 @@ object Daemon:
             held <- Scope.make
             uses <- Ref.make[Uses](Uses.Live(0))
             graphs <- Ref.make(graph)
-            live <- Ref.make(Generation(graph, plugins, fingerprint, held, uses))
+            live <- Ref.make(
+              Generation(graph, plugins, fingerprint, held, uses)
+            )
             reloading <- Semaphore.make(1)
             spliced <- Ref.make(Option.empty[Bsp.Session])
             warm = Warm(live, graphs, reloading, spliced)
@@ -470,7 +482,9 @@ object Daemon:
       uses: Ref[Uses]
   )
 
-  /** The graph ref is what a BSP splice reads. The lock makes one reload at a time. */
+  /** The graph ref is what a BSP splice reads. The lock makes one reload at a
+    * time.
+    */
   private final case class Warm(
       live: Ref[Generation],
       graphs: Ref[ProjectGraph],
@@ -573,19 +587,20 @@ object Daemon:
                     )
                   )
                 case Right(held) =>
+                  val say = Say.frames(output)
                   val ran =
                     asked match
                       case Call.Compile(projects) =>
-                        compile(repo, held.graph, projects, jdk, output)
+                        Calls.compile(repo, held.graph, projects, jdk, say)
                       case Call.Test(projects, patterns, quick) =>
-                        test(
+                        Calls.test(
                           repo,
                           held.graph,
                           projects,
                           patterns,
                           quick,
                           jdk,
-                          output
+                          say
                         )
                       case Call.Publish(repository, projects) =>
                         Calls.publish(
@@ -595,12 +610,12 @@ object Daemon:
                           jdk,
                           repository,
                           projects,
-                          output
+                          say
                         )
                       case Call.Graph =>
-                        Calls.graph(held.graph, held.plugins, output)
+                        Calls.graph(held.graph, held.plugins, say)
                       case Call.Run(id, platform) =>
-                        Calls.tracked(runs, id, output)(
+                        Calls.tracked(runs, id, say)(
                           Calls.run(
                             repo,
                             held.graph,
@@ -608,35 +623,35 @@ object Daemon:
                             machine,
                             id,
                             platform,
-                            output
+                            say
                           )
                         )
                       case Call.Task(id) =>
-                        Calls.tracked(runs, id, output)(
+                        Calls.tracked(runs, id, say)(
                           Calls.task(
                             repo,
                             held.graph,
                             held.plugins,
                             machine,
                             id,
-                            output
+                            say
                           )
                         )
                       case Call.Cancel(id) =>
-                        Calls.cancel(runs, id, output)
+                        Calls.cancel(runs, id, say)
                       case Call.Toolchain =>
-                        Calls.toolchain(machine, held.graph, output)
+                        Calls.toolchain(machine, held.graph, say)
                       case Call.Resolve(action) =>
-                        Calls.resolve(repo, held.graph, action, output)
+                        Calls.resolve(repo, held.graph, action, say)
                       case Call.Workflow(action) =>
-                        Calls.workflow(repo, held.graph, action, output)
+                        Calls.workflow(repo, held.graph, action, say)
                       case Call.Assembly(destination) =>
                         Calls.assembly(
                           repo,
                           held.graph,
                           jdk,
                           destination,
-                          output
+                          say
                         )
                       case Call.Reload =>
                         write(
@@ -747,7 +762,9 @@ object Daemon:
           yield Right(next)
     yield result
 
-  /** The caller holds one use. A retired generation closes when the last use ends. */
+  /** The caller holds one use. A retired generation closes when the last use
+    * ends.
+    */
   private def acquire(generation: Generation): UIO[Unit] =
     generation.uses.update {
       case Uses.Live(n)    => Uses.Live(n + 1)
@@ -755,22 +772,26 @@ object Daemon:
     }
 
   private def release(generation: Generation): UIO[Unit] =
-    generation.uses.modify {
-      case Uses.Live(n) if n > 0 => (false, Uses.Live(n - 1))
-      case Uses.Live(n)          => (false, Uses.Live(n))
-      case Uses.Retired(n) if n > 1 => (false, Uses.Retired(n - 1))
-      case Uses.Retired(_)       => (true, Uses.Retired(0))
-    }.flatMap { close =>
-      ZIO.when(close)(generation.scope.close(Exit.unit)).unit
-    }
+    generation.uses
+      .modify {
+        case Uses.Live(n) if n > 0    => (false, Uses.Live(n - 1))
+        case Uses.Live(n)             => (false, Uses.Live(n))
+        case Uses.Retired(n) if n > 1 => (false, Uses.Retired(n - 1))
+        case Uses.Retired(_)          => (true, Uses.Retired(0))
+      }
+      .flatMap { close =>
+        ZIO.when(close)(generation.scope.close(Exit.unit)).unit
+      }
 
   private def retire(generation: Generation): UIO[Unit] =
-    generation.uses.modify {
-      case Uses.Live(n)          => (n == 0, Uses.Retired(n))
-      case retired: Uses.Retired => (false, retired)
-    }.flatMap { close =>
-      ZIO.when(close)(generation.scope.close(Exit.unit)).unit
-    }
+    generation.uses
+      .modify {
+        case Uses.Live(n)          => (n == 0, Uses.Retired(n))
+        case retired: Uses.Retired => (false, retired)
+      }
+      .flatMap { close =>
+        ZIO.when(close)(generation.scope.close(Exit.unit)).unit
+      }
 
   private def occupy[R, E](permit: Semaphore, call: Call)(
       body: ZIO[R, E, Unit]
@@ -808,143 +829,6 @@ object Daemon:
       _ <- ZIO.attemptBlocking(server.close()).ignore
     yield ()
 
-  private def compile(
-      repo: Path,
-      graph: ProjectGraph,
-      projects: List[String],
-      jdk: ResolvedJdk,
-      output: OutputStream
-  ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
-    GraphCompile
-      .console(repo, graph, projects, jdk)
-      .mapZIO {
-        case CompileFeed.Diagnostic(_, _, _, problem) =>
-          write(output, wire(Message.Err(problem.text)))
-        case CompileFeed.Done(cell) =>
-          write(output, wire(Message.Out(Lines.compiled(repo, cell))))
-        case CompileFeed.Failed(error) =>
-          write(output, wire(Message.Err(error.message)))
-      }
-      .runDrain
-      .foldZIO(
-        {
-          case error: GraphCompileError =>
-            write(
-              output,
-              wire(
-                Message.Exit(
-                  histos.cli.CliExit.CompileFailed.code,
-                  Cli.compileFailure(error)
-                )
-              )
-            )
-          case error: ServerError => ZIO.fail(error)
-        },
-        _ =>
-          write(output, wire(Message.Exit(histos.cli.CliExit.Success.code, "")))
-      )
-
-  private def test(
-      repo: Path,
-      graph: ProjectGraph,
-      projects: List[String],
-      patterns: List[String],
-      quick: Boolean,
-      jdk: ResolvedJdk,
-      output: OutputStream
-  ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
-    zio.Ref.make(false).flatMap { failed =>
-      zio.Ref.make(List.empty[String]).flatMap { missed =>
-        val ran =
-          for
-            cells <- GraphCompile
-              .console(repo, graph, projects, jdk)
-              .mapError(ModuleTestError.Compile(_))
-              .mapZIO { feed =>
-                val sent = feed match
-                  case CompileFeed.Diagnostic(_, _, _, problem) =>
-                    write(output, wire(Message.Err(problem.text)))
-                  case CompileFeed.Done(cell) =>
-                    write(output, wire(Message.Out(Lines.compiled(repo, cell))))
-                  case CompileFeed.Failed(error) =>
-                    missed.update(_ :+ error.message) *> write(
-                      output,
-                      wire(Message.Err(error.message))
-                    )
-                sent.as(compiledCell(feed))
-              }
-              .collectSome
-              .runCollect
-            parsed <- ZIO
-              .fromEither(
-                patterns.foldLeft[Either[histos.testrun.SuitePatternError, List[
-                  histos.testrun.SuitePattern
-                ]]](Right(Nil)) { (acc, raw) =>
-                  acc.flatMap(have =>
-                    histos.testrun.SuitePattern.from(raw).map(have :+ _)
-                  )
-                }
-              )
-              .mapError(error =>
-                ModuleTestError.Compile(
-                  GraphCompileError
-                    .Target(histos.workflow.CiError.BadName(error.message))
-                )
-              )
-            _ <- ModuleTest
-              .suites(repo, graph, projects, jdk, cells.toList, parsed, quick)
-              .foreach {
-                case TestFeed.Begin(module, version, platform) =>
-                  write(
-                    output,
-                    wire(Message.Out(Lines.begin(module, version, platform)))
-                  )
-                case TestFeed.Out(text) =>
-                  write(output, wire(Message.Out(text)))
-                case TestFeed.Err(text) =>
-                  write(output, wire(Message.Err(text)))
-                case TestFeed.Cached(module, version, platform, suite) =>
-                  write(
-                    output,
-                    wire(
-                      Message.Out(
-                        histos.cli.Lines
-                          .cached(module, version, platform, suite)
-                      )
-                    )
-                  )
-                case TestFeed.Done(cell) =>
-                  ZIO.when(failedTest(cell.status))(failed.set(true)) *>
-                    write(output, wire(Message.Out(Lines.tested(cell)))) *>
-                    write(output, wire(Message.Out("")))
-              }
-            bad <- failed.get
-            compileErrors <- missed.get
-          yield
-            if compileErrors.nonEmpty then
-              (histos.cli.CliExit.TestFailed.code, compileErrors.mkString("\n"))
-            else if bad then (histos.cli.CliExit.TestFailed.code, "")
-            else (histos.cli.CliExit.Success.code, "")
-        ran.foldZIO(
-          {
-            case error: ServerError     => ZIO.fail(error)
-            case error: ModuleTestError =>
-              missed.get.flatMap: compileErrors =>
-                val (code, message) = error match
-                  case ModuleTestError.NoneMatched(_)
-                      if compileErrors.nonEmpty =>
-                    (
-                      histos.cli.CliExit.TestFailed.code,
-                      compileErrors.mkString("\n")
-                    )
-                  case other => Cli.testFailure(other)
-                write(output, wire(Message.Exit(code, message)))
-          },
-          outcome => write(output, wire(Message.Exit(outcome._1, outcome._2)))
-        )
-      }
-    }
-
   private def bsp(
       repo: Path,
       jdk: ResolvedJdk,
@@ -981,7 +865,7 @@ object Daemon:
                 .read(input)
                 .mapError(_ => ServerError.Io(ServerIo.Read))
                 .flatMap:
-                  case None => ZIO.succeed(1)
+                  case None          => ZIO.succeed(1)
                   case Some(payload) =>
                     warm.reloading
                       .withPermit(
@@ -1003,21 +887,6 @@ object Daemon:
           }
       }
     }
-
-  private def compiledCell(
-      feed: CompileFeed
-  ): Option[histos.zinc.CompiledCell] =
-    feed match
-      case CompileFeed.Done(cell)             => Some(cell)
-      case CompileFeed.Diagnostic(_, _, _, _) => None
-      case CompileFeed.Failed(_)              => None
-
-  private def failedTest(status: TestStatus): Boolean =
-    status match
-      case TestStatus.Failed(_, _, _) => true
-      case TestStatus.NoTests | TestStatus.Unmatched |
-          TestStatus.Passed(_, _) =>
-        false
 
   private def wire(message: Message): String =
     message.toJson

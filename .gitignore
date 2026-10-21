@@ -8,7 +8,10 @@
 dist/
 target/
 .histos/toolchain.local
+.histos/node.local
 .histos/assembly.sha256
+.histos/run
+.histos/link
 .histos/classes
 .histos/analysis
 .histos/test-classes

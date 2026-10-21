@@ -2,6 +2,7 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.acp.Acp
+import histos.client.Session
 import histos.bsp.{Bsp, Frame}
 import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
@@ -185,7 +186,7 @@ object Cli:
       case Command.Publish(repository, projects) =>
         publish(repo, apiJar, repository, projects)
       case Command.Mcp              => mcp(repo, apiJar)
-      case Command.Acp              => acp
+      case Command.Acp              => acp(repo, apiJar)
       case Command.Bsp              => bsp(repo, apiJar)
       case Command.Server           => serve(repo, apiJar)
       case Command.Toolchain        => toolchain(repo, apiJar)
@@ -1273,26 +1274,47 @@ object Cli:
                 case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
     loop
 
-  private def acp: UIO[Completed] =
-    def loop: UIO[Completed] =
-      LinePipe.standard.readLine.foldZIO(
-        _ =>
-          ZIO.succeed(Completed(CliExit.LoadFailed, "", "the acp pipe failed")),
-        {
-          case None       => ZIO.succeed(Completed(CliExit.Success, "", ""))
-          case Some(line) =>
-            LinePipe.standard
-              .writeLine(Acp.answer(line))
-              .foldZIO(
-                _ =>
-                  ZIO.succeed(
-                    Completed(CliExit.LoadFailed, "", "the acp pipe failed")
-                  ),
-                _ => loop
-              )
+  private def acp(
+      repo: Path,
+      apiJar: Path
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    ZIO.serviceWithZIO[Machine] { machine =>
+      Session.desk.flatMap { desk =>
+        ZIO.addFinalizer(
+          desk.held.get.flatMap {
+            case Some(held) => held.scope.close(Exit.unit)
+            case None       => ZIO.unit
+          }
+        ) *> {
+          def loop: URIO[Loader & ContentStore & Resolve, Completed] =
+            LinePipe.standard.readLine.foldZIO(
+              _ =>
+                ZIO.succeed(
+                  Completed(CliExit.LoadFailed, "", "the acp pipe failed")
+                ),
+              {
+                case None => ZIO.succeed(Completed(CliExit.Success, "", ""))
+                case Some(line) =>
+                  Acp
+                    .answer(repo, apiJar, machine, desk, line)
+                    .flatMap(text => LinePipe.standard.writeLine(text))
+                    .foldZIO(
+                      _ =>
+                        ZIO.succeed(
+                          Completed(
+                            CliExit.LoadFailed,
+                            "",
+                            "the acp pipe failed"
+                          )
+                        ),
+                      _ => loop
+                    )
+              }
+            )
+          loop
         }
-      )
-    loop
+      }
+    }
 
   private def taskExit(err: TaskError): CliExit =
     err match

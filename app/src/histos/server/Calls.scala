@@ -3,7 +3,15 @@ package histos.server
 import histos.assembly.Assemble
 import histos.cache.ContentStore
 import histos.central.Publisher
-import histos.cli.{CliExit, GraphText}
+import histos.cli.{Cli, CliExit, GraphText, Lines}
+import histos.testrun.{
+  ModuleTest,
+  ModuleTestError,
+  SuitePattern,
+  TestFeed,
+  TestStatus
+}
+import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, ResolvedJdk}
 import histos.jdk.{Machine, Os, Settled}
 import histos.jdk.Sha256
 import histos.load.{LoadError, PluginLink, PluginRuntime}
@@ -15,15 +23,33 @@ import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.toolchain.Survey
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.zinc.{GraphCompileError, ResolvedJdk}
 import histos.{Platform, ProjectGraph}
 
 import zio.json.*
+import zio.{Chunk, Fiber, IO, Ref, ZIO, ZLayer}
 
 import java.io.OutputStream
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, Fiber, IO, Ref, ZIO, ZLayer}
+/** One CLI message, sent as a frame or kept for a tool result. */
+final class Say(private val send: Message => IO[ServerError, Unit]):
+  def apply(message: Message): IO[ServerError, Unit] = send(message)
+
+object Say:
+  def frames(stream: OutputStream): Say =
+    new Say(message =>
+      histos.bsp.Frame
+        .write(stream, message.toJson)
+        .mapError(_ => ServerError.Io(ServerIo.Write))
+    )
+
+  def record(feeds: Ref[Chunk[Feed]]): Say =
+    new Say({
+      case Message.Out(text)       => feeds.update(_ :+ Feed.Out(text))
+      case Message.Err(text)       => feeds.update(_ :+ Feed.Err(text))
+      case Message.Exit(code, err) => feeds.update(_ :+ Feed.Exit(code, err))
+      case _                       => ZIO.unit
+    })
 
 /** One graph command, written as the CLI would print it. */
 object Calls:
@@ -43,10 +69,10 @@ object Calls:
   def graph(
       graph: ProjectGraph,
       plugins: PluginRuntime,
-      output: OutputStream
+      say: Say
   ): IO[ServerError, Unit] =
-    told(output, GraphText.render(graph, plugins.links)) *> done(
-      output,
+    told(say, GraphText.render(graph, plugins.links)) *> done(
+      say,
       CliExit.Success.code,
       ""
     )
@@ -58,24 +84,23 @@ object Calls:
       jdk: ResolvedJdk,
       repository: String,
       projects: List[String],
-      output: OutputStream
+      say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     placed(repo, repository) match
       case None =>
-        done(output, CliExit.PublishFailed.code, s"'$repository' is not a path")
+        done(say, CliExit.PublishFailed.code, s"'$repository' is not a path")
       case Some(destination) =>
         LocalPublish
           .run(repo, graph, projects, jdk, machine.env)
           .provideSome[Resolve](Publisher.local(destination))
           .foldZIO(
-            failure =>
-              done(output, CliExit.PublishFailed.code, failure.message),
+            failure => done(say, CliExit.PublishFailed.code, failure.message),
             written =>
               val lines =
                 written.skipped ++ written.modules
                   .map(line => published(destination, line))
-              told(output, lines.mkString("\n")) *> done(
-                output,
+              told(say, lines.mkString("\n")) *> done(
+                say,
                 CliExit.Success.code,
                 ""
               )
@@ -88,10 +113,10 @@ object Calls:
       machine: Machine,
       id: String,
       platform: Option[String],
-      output: OutputStream
+      say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     chosen(platform) match
-      case Left(message) => done(output, CliExit.TaskFailed.code, message)
+      case Left(message) => done(say, CliExit.TaskFailed.code, message)
       case Right(choice) =>
         Ref.make(0).flatMap { status =>
           histos.program.Program
@@ -99,25 +124,25 @@ object Calls:
             .foreach {
               case histos.program.ProgramFeed.Begin(module, version, target) =>
                 told(
-                  output,
+                  say,
                   s"${module.value} ${version.value} ${target.token}"
                 )
-              case histos.program.ProgramFeed.Out(text) => told(output, text)
+              case histos.program.ProgramFeed.Out(text) => told(say, text)
               case histos.program.ProgramFeed.Err(text) =>
-                emit(output, Message.Err(text))
+                emit(say, Message.Err(text))
               case histos.program.ProgramFeed.Exited(_, _, _, code) =>
                 ZIO.when(code != 0)(status.set(code)).unit
             }
             .foldZIO(
               {
                 case error: histos.program.ProgramError =>
-                  done(output, programCode(error), error.message)
+                  done(say, programCode(error), error.message)
                 case error: ServerError => ZIO.fail(error)
               },
               _ =>
                 status.get.flatMap(code =>
                   done(
-                    output,
+                    say,
                     if code == 0 then CliExit.Success.code else code,
                     ""
                   )
@@ -131,13 +156,13 @@ object Calls:
       plugins: PluginRuntime,
       machine: Machine,
       id: String,
-      output: OutputStream
+      say: Say
   ): ZIO[Resolve & histos.load.Loader & ContentStore, ServerError, Unit] =
     TaskId.from(id) match
-      case Left(error) => done(output, CliExit.TaskFailed.code, error.message)
+      case Left(error) => done(say, CliExit.TaskFailed.code, error.message)
       case Right(found) if found == TaskId.Inspect =>
-        told(output, graph.projects.map(_.name.value).mkString(",")) *> done(
-          output,
+        told(say, graph.projects.map(_.name.value).mkString(",")) *> done(
+          say,
           CliExit.Success.code,
           ""
         )
@@ -145,10 +170,10 @@ object Calls:
         VersionTask
           .fromRepo(graph, repo, machine.env)
           .foldZIO(
-            error => done(output, CliExit.TaskFailed.code, error.message),
+            error => done(say, CliExit.TaskFailed.code, error.message),
             result =>
-              told(output, result.text) *> done(
-                output,
+              told(say, result.text) *> done(
+                say,
                 CliExit.Success.code,
                 ""
               )
@@ -156,26 +181,26 @@ object Calls:
       case Right(_) =>
         PluginTaskId.parse(id) match
           case Left(error) =>
-            done(output, CliExit.TaskFailed.code, error.message)
-          case Right(taskId) => plugin(plugins, taskId, output)
+            done(say, CliExit.TaskFailed.code, error.message)
+          case Right(taskId) => plugin(plugins, taskId, say)
 
   def toolchain(
       machine: Machine,
       graph: ProjectGraph,
-      output: OutputStream
+      say: Say
   ): IO[ServerError, Unit] =
     Survey
       .read(machine, graph)
       .foldZIO(
         error =>
-          told(output, Survey.shown(error)) *> done(
-            output,
+          told(say, Survey.shown(error)) *> done(
+            say,
             CliExit.ToolchainFailed.code,
             error.message
           ),
         found =>
-          told(output, Survey.text(found)) *> done(
-            output,
+          told(say, Survey.text(found)) *> done(
+            say,
             CliExit.Success.code,
             ""
           )
@@ -185,18 +210,18 @@ object Calls:
       repo: Path,
       graph: ProjectGraph,
       action: String,
-      output: OutputStream
+      say: Say
   ): ZIO[Resolve & histos.load.Loader, ServerError, Unit] =
     resolveAction(action) match
       case None =>
-        done(output, CliExit.Usage.code, s"'$action' is not a resolve action")
+        done(say, CliExit.Usage.code, s"'$action' is not a resolve action")
       case Some(kind) =>
         ZIO
           .serviceWithZIO[histos.load.Loader](_.scan(repo))
           .either
           .flatMap:
             case Left(error) =>
-              done(output, CliExit.LoadFailed.code, error.message)
+              done(say, CliExit.LoadFailed.code, error.message)
             case Right(scanned) =>
               val followed: ZIO[
                 Resolve,
@@ -239,32 +264,31 @@ object Calls:
               followed.foldZIO(
                 {
                   case error: LoadError =>
-                    done(output, CliExit.LoadFailed.code, error.message)
+                    done(say, CliExit.LoadFailed.code, error.message)
                   case error: ResolveError =>
-                    done(output, CliExit.ResolveFailed.code, error.message)
+                    done(say, CliExit.ResolveFailed.code, error.message)
                 },
-                text =>
-                  told(output, text) *> done(output, CliExit.Success.code, "")
+                text => told(say, text) *> done(say, CliExit.Success.code, "")
               )
 
   def workflow(
       repo: Path,
       graph: ProjectGraph,
       action: String,
-      output: OutputStream
+      say: Say
   ): IO[ServerError, Unit] =
     workflowAction(action) match
       case None =>
-        done(output, CliExit.Usage.code, s"'$action' is not a workflow action")
+        done(say, CliExit.Usage.code, s"'$action' is not a workflow action")
       case Some(kind) =>
         val effect = kind match
           case WorkflowAction.Check  => Workflow.check(repo, graph)
           case WorkflowAction.Update => Workflow.update(repo, graph)
         effect.foldZIO(
-          error => done(output, CliExit.WorkflowFailed.code, error.message),
+          error => done(say, CliExit.WorkflowFailed.code, error.message),
           file =>
-            told(output, file.toString) *> done(
-              output,
+            told(say, file.toString) *> done(
+              say,
               CliExit.Success.code,
               ""
             )
@@ -275,46 +299,160 @@ object Calls:
       graph: ProjectGraph,
       jdk: ResolvedJdk,
       destination: Option[String],
-      output: OutputStream
+      say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     placed(repo, destination) match
       case None =>
-        done(output, CliExit.CompileFailed.code, "assembly path is not a path")
+        done(say, CliExit.CompileFailed.code, "assembly path is not a path")
       case Some(path) =>
         Assemble
           .run(repo, graph, jdk, path)
           .foldZIO(
-            error => done(output, CliExit.CompileFailed.code, error.message),
+            error => done(say, CliExit.CompileFailed.code, error.message),
             assembled =>
               pin(repo, assembled.path).foldZIO(
-                message => done(output, CliExit.CompileFailed.code, message),
+                message => done(say, CliExit.CompileFailed.code, message),
                 _ =>
-                  told(output, relative(repo, assembled.path)) *> done(
-                    output,
+                  told(say, relative(repo, assembled.path)) *> done(
+                    say,
                     CliExit.Success.code,
                     ""
                   )
               )
           )
 
+  def compile(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      jdk: ResolvedJdk,
+      say: Say
+  ): ZIO[Resolve, ServerError, Unit] =
+    GraphCompile
+      .console(repo, graph, projects, jdk)
+      .mapZIO {
+        case CompileFeed.Diagnostic(_, _, _, problem) =>
+          say(Message.Err(problem.text))
+        case CompileFeed.Done(cell) =>
+          say(Message.Out(Lines.compiled(repo, cell)))
+        case CompileFeed.Failed(error) =>
+          say(Message.Err(error.message))
+      }
+      .runDrain
+      .foldZIO(
+        {
+          case error: GraphCompileError =>
+            done(say, CliExit.CompileFailed.code, Cli.compileFailure(error))
+          case error: ServerError => ZIO.fail(error)
+        },
+        _ => done(say, CliExit.Success.code, "")
+      )
+
+  def test(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      patterns: List[String],
+      quick: Boolean,
+      jdk: ResolvedJdk,
+      say: Say
+  ): ZIO[Resolve, ServerError, Unit] =
+    Ref.make(false).flatMap { failed =>
+      Ref.make(List.empty[String]).flatMap { missed =>
+        val ran =
+          for
+            cells <- GraphCompile
+              .console(repo, graph, projects, jdk)
+              .mapError(ModuleTestError.Compile(_))
+              .mapZIO { feed =>
+                val sent = feed match
+                  case CompileFeed.Diagnostic(_, _, _, problem) =>
+                    say(Message.Err(problem.text))
+                  case CompileFeed.Done(cell) =>
+                    say(Message.Out(Lines.compiled(repo, cell)))
+                  case CompileFeed.Failed(error) =>
+                    missed.update(_ :+ error.message) *> say(
+                      Message.Err(error.message)
+                    )
+                sent.as(compiled(feed))
+              }
+              .collectSome
+              .runCollect
+            parsed <- ZIO
+              .fromEither(
+                patterns.foldLeft[Either[
+                  histos.testrun.SuitePatternError,
+                  List[SuitePattern]
+                ]](Right(Nil)) { (acc, raw) =>
+                  acc.flatMap(have => SuitePattern.from(raw).map(have :+ _))
+                }
+              )
+              .mapError(error =>
+                ModuleTestError.Compile(
+                  GraphCompileError.Target(
+                    histos.workflow.CiError.BadName(error.message)
+                  )
+                )
+              )
+            _ <- ModuleTest
+              .suites(repo, graph, projects, jdk, cells.toList, parsed, quick)
+              .foreach {
+                case TestFeed.Begin(module, version, platform) =>
+                  say(Message.Out(Lines.begin(module, version, platform)))
+                case TestFeed.Out(text) => say(Message.Out(text))
+                case TestFeed.Err(text) => say(Message.Err(text))
+                case TestFeed.Cached(module, version, platform, suite) =>
+                  say(
+                    Message.Out(Lines.cached(module, version, platform, suite))
+                  )
+                case TestFeed.Done(cell) =>
+                  ZIO.when(failedSuite(cell.status))(failed.set(true)) *>
+                    say(Message.Out(Lines.tested(cell))) *>
+                    say(Message.Out(""))
+              }
+            bad <- failed.get
+            compileErrors <- missed.get
+          yield
+            if compileErrors.nonEmpty then
+              (CliExit.TestFailed.code, compileErrors.mkString("\n"))
+            else if bad then (CliExit.TestFailed.code, "")
+            else (CliExit.Success.code, "")
+        ran.foldZIO(
+          {
+            case error: ServerError     => ZIO.fail(error)
+            case error: ModuleTestError =>
+              missed.get.flatMap { compileErrors =>
+                val (code, message) = error match
+                  case ModuleTestError.NoneMatched(_)
+                      if compileErrors.nonEmpty =>
+                    (CliExit.TestFailed.code, compileErrors.mkString("\n"))
+                  case other => Cli.testFailure(other)
+                done(say, code, message)
+              }
+          },
+          outcome => done(say, outcome._1, outcome._2)
+        )
+      }
+    }
+
   def cancel(
       runs: Ref[Map[String, Fiber[ServerError, Unit]]],
       id: String,
-      output: OutputStream
+      say: Say
   ): IO[ServerError, Unit] =
     RunId.from(id) match
-      case Left(error)  => done(output, CliExit.TaskFailed.code, error.message)
+      case Left(error)  => done(say, CliExit.TaskFailed.code, error.message)
       case Right(runId) =>
         runs.modify(map => (map.get(id), map - id)).flatMap {
           case Some(fiber) =>
-            fiber.interrupt *> told(output, "cancelled") *> done(
-              output,
+            fiber.interrupt *> told(say, "cancelled") *> done(
+              say,
               CliExit.Success.code,
               ""
             )
           case None =>
             done(
-              output,
+              say,
               CliExit.TaskFailed.code,
               TaskError.UnknownRun(runId).message
             )
@@ -323,7 +461,7 @@ object Calls:
   def tracked[R](
       runs: Ref[Map[String, Fiber[ServerError, Unit]]],
       id: String,
-      output: OutputStream
+      say: Say
   )(body: ZIO[R, ServerError, Unit]): ZIO[R, ServerError, Unit] =
     body.fork.flatMap { fiber =>
       runs.update(_ + (id -> fiber)) *>
@@ -331,12 +469,12 @@ object Calls:
           cause =>
             runs.update(_ - id) *>
               (if cause.isInterruptedOnly then
-                 done(output, CliExit.Interrupted.code, "")
+                 done(say, CliExit.Interrupted.code, "")
                else
                  cause.failureOrCause match
                    case Left(error) => ZIO.fail(error)
                    case Right(_)    =>
-                     done(output, CliExit.TaskFailed.code, "the run failed")),
+                     done(say, CliExit.TaskFailed.code, "the run failed")),
           _ => runs.update(_ - id)
         )
     }
@@ -344,7 +482,7 @@ object Calls:
   private def plugin(
       plugins: PluginRuntime,
       id: PluginTaskId,
-      output: OutputStream
+      say: Say
   ): ZIO[ContentStore, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>
       plugins
@@ -354,9 +492,9 @@ object Calls:
           RemoteCache.off
         )
         .foldZIO(
-          error => done(output, CliExit.TaskFailed.code, error.message),
+          error => done(say, CliExit.TaskFailed.code, error.message),
           result =>
-            told(output, result.text) *> done(output, CliExit.Success.code, "")
+            told(say, result.text) *> done(say, CliExit.Success.code, "")
         )
     }
 
@@ -447,23 +585,34 @@ object Calls:
           s"could not write ${repo.resolve(".histos").resolve("assembly.sha256")}"
         )
 
-  private def told(output: OutputStream, text: String): IO[ServerError, Unit] =
-    if text.isEmpty then ZIO.unit else emit(output, Message.Out(text))
+  private def compiled(feed: CompileFeed): Option[histos.zinc.CompiledCell] =
+    feed match
+      case CompileFeed.Done(cell)             => Some(cell)
+      case CompileFeed.Diagnostic(_, _, _, _) => None
+      case CompileFeed.Failed(_)              => None
+
+  private def failedSuite(status: TestStatus): Boolean =
+    status match
+      case TestStatus.Failed(_, _, _) => true
+      case TestStatus.NoTests | TestStatus.Unmatched |
+          TestStatus.Passed(_, _) =>
+        false
+
+  private def told(say: Say, text: String): IO[ServerError, Unit] =
+    if text.isEmpty then ZIO.unit else emit(say, Message.Out(text))
 
   private def done(
-      output: OutputStream,
+      say: Say,
       code: Int,
       err: String
   ): IO[ServerError, Unit] =
-    emit(output, Message.Exit(code, err))
+    emit(say, Message.Exit(code, err))
 
   private def emit(
-      output: OutputStream,
+      say: Say,
       message: Message
   ): IO[ServerError, Unit] =
-    histos.bsp.Frame
-      .write(output, message.toJson)
-      .mapError(_ => ServerError.Io(ServerIo.Write))
+    say(message)
 
   private object Quiet extends PluginRuntime:
     def run(

@@ -6,7 +6,7 @@ The design is [design.md](design.md). This file points at that design. It is not
 
 Stacks A through D, and the platform follow-ups, are on main through pull request #41 (`c31b8c4`).
 
-That includes self-build (`./histos` execs `dist/histos.jar`; `histos.scala` wires `api`, `central`, `engine`, and `app`), the task API, zio-cli, MCP (the tools in this tree are `graph`, `run`, `cancel`, and `toolchain`; [design.md](design.md) widens MCP and ACP to the server commands and returns the CLI text), ACP `initialize`, the scheduler, the content-addressed cache, the JDK and Coursier locks, Zinc for Scala 3 and Scala 2.13, the test subprocess (`TestProvider`, `testOnly`, `testQuick`, watch), Scala.js and Scala Native, local Maven publish, the version catalog, CI render, BSP 2.2 as the as-built section describes it, the opt-in server, and the opt-in remote cache. There is no GitHub Actions file in this repo. There is no sbt and no scala-cli.
+That includes self-build (`./histos` execs `dist/histos.jar`; `histos.scala` wires `api`, `central`, `engine`, and `app`), the task API, zio-cli, the scheduler, the content-addressed cache, the JDK and Coursier locks, Zinc for Scala 3 and Scala 2.13, the test subprocess (`TestProvider`, `testOnly`, `testQuick`, watch), Scala.js and Scala Native, local Maven publish, the version catalog, CI render, BSP 2.2, the opt-in server, and the opt-in remote cache. There is no sbt and no scala-cli.
 
 The plugin loader is in this tree (`engine/src/histos/load`). `ApiBoundary` is parented on the platform loader. Boundary names load from the engine host that defined `HistosBuild`. A second api `URLClassLoader` that defines `ProjectGraph` again is not the work. The spec is [plugins.md](plugins.md), and it follows that rule.
 
@@ -42,7 +42,7 @@ trait Loader:
 
 The `Scope` closes the build classloader. The Scala `3.10.0` compiler loads `histos.scala` against the api jar, the code source of `scala.collection.immutable.Nil` (`scala-library`), and the code source of `scala.quoted.Quotes` (`scala3-library`). It is not the compiler that compiles a module. `buildClasspath` is `Boundary.jars` (those libraries plus ZIO, `zio-stacktracer`, and `izumi-reflect`). Do not narrow it back to the api jar, and do not discover plugins by scanning the module classpath. Enablement stays the header. `ApiBoundary` is parented on the platform loader. Boundary names load from the engine host that defined `HistosBuild`, so `ProjectGraph` stays one class. Do not add a second api `URLClassLoader` that defines those classes again.
 
-`ScalacFlag` produces compiler text (`JvmCompile`). The build file does not pass a raw `List[String]` into Zinc. Production compiles pass `ScalacFlags.empty`. The `EncodingUtf8` case exists and is not on that path. The ascent flag work adds enum cases. It does not open the argv. `-Xsemanticdb` and `-sourceroot <repo>` are appended beside `flags.argv`. They are not enum cases. `-Xfatal-warnings`, if a later case adds it, stays on the CLI argv and is dropped from the BSP copy of that list.
+`ScalacFlag` produces compiler text (`JvmCompile`). The build file does not pass a raw `List[String]` into Zinc. `Module.flags` defaults to `ScalacFlags.empty`, and `ModuleDef.scalac` replaces that list. Compile and BSP pass `module.flags.argv`, then the SemanticDB append. The `EncodingUtf8` case is `-encoding` and `UTF-8`. The ascent flag work adds enum cases. It does not open the argv. `-Xfatal-warnings`, if a later case adds it, stays on the CLI argv and is dropped from the BSP copy of that list.
 
 Artifact suffixes stay one function: `_3` or `_2.13`, `_sjs1`, `_native0.5`. `_native0.5` is the ABI. The toolchain revision is `nativeVersion`, default `0.5.12`.
 
@@ -54,17 +54,10 @@ ZIO is `2.1.27`, the revision `histos.scala` pins. `heddle-mcp` is `0.12.0`. `zi
 
 ## Remaining work
 
-The detail is `## Commits` in [design.md](design.md). The JVM session and the plugin loader are already in this tree, so they are not on this list. The order is that commit list:
+Commits 1 through 9 of [design.md](design.md) are in this working tree. They are not a release. The JVM session and the plugin loader were already in the tree, so they were not on that list.
 
-1. `.histos/bsp-platforms`: `js` and `native` only, read on each `workspace/buildTargets`, a bad token fails the request, a platform id only for a module that builds it, and the compile does not link.
-2. Scala 2.13 SemanticDB: `-Xplugin:` of `org.scalameta` / `semanticdb-scalac_<scala>` / `4.17.3`, beside the existing `-Yrangepos` and `-P:semanticdb:sourceroot`.
-3. `aggregate` takes `ModuleDef`. One selector for compile, test, testOnly, testQuick, and publish. `histos run` still refuses an aggregate.
-4. A failed cell does not cancel an independent sibling. The command fails after the last cell.
-5. `Call` covers every command that loads a graph, including test patterns and `quick`. `cache` and `version` stay in-process.
-6. Reload after `Loader.load` succeeds. BSP reads a ref and sends `buildTarget/didChange`. Reboot is a new JVM.
-7. MCP and ACP are clients and return CLI text, including toolchain.
-8. `Module.flags` and `ModuleDef.scalac`, with no new `ScalacFlag` cases.
-9. `.github/workflows/ci.yml` from the empty-split render (`TestJob.Aggregate` is that split, not a project aggregate). No `--platform` or `--scala`.
+What remains waits on names that are not chosen yet:
+
 10. The ascent copy's tests, mains, and flags. This waits until the `ScalacFlag` cases are chosen.
 11. A Specular `HistosPlugin` in the Specular repo. This waits. The plugin id, task id, `JobWhen`, and snapshot coordinate stay unnamed.
 12. One Scala.js host module. This waits. The module name, vscode coordinate, and command list stay unnamed. It does not own completion.

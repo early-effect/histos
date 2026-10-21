@@ -168,25 +168,25 @@ trait Tasks:
 flowchart TD
   script["./histos script"] --> jar["dist/histos.jar or cached assembly"]
   jar --> cli["histos.cli"]
-  cli --> batch["in-process batch"]
-  cli --> attach{"server.json matches version and fingerprint?"}
-  attach -->|compile, test, testOnly, bsp| server["./histos server"]
-  attach -->|no| batch
+  cli --> record{"server.json matches this version?"}
+  record -->|yes| server["./histos server"]
+  record -->|absent or dead socket| batch["in-process graph"]
+  record -->|different version| reboot["error: histos reboot"]
   metals["Metals or Cursor"] --> bsp["./histos bsp stdio"]
-  bsp --> attach
-  agent["MCP client"] --> mcp["./histos mcp stdio"]
-  mcp --> batch
+  bsp --> record
+  agent["MCP or ACP"] --> client["re-read server.json on each call"]
+  client --> record
 ```
 
 Batch is the default. `./histos test` does not leave a process behind. A successful ZIO `run` is process status 0, so the command exits with its status.
 
-`./histos server` is opt-in. It listens on a Unix socket and writes `.histos/server.json` with `Cli.VersionText` (`histos 0.0.1-SNAPSHOT`) and a fingerprint. BSP's own version field is the bare `0.0.1-SNAPSHOT`. The two strings are not compared to each other. The fingerprint is `histos.scala`, `.histos/dependencies.lock`, and regular files under each header `plugin(path)` (`Fingerprint.read`). `compile`, `test`, and `bsp` attach when the record matches. A missing server, a dead socket, a different version, or a different fingerprint runs the command in-process. The server calls are `Call.Compile`, `Call.Test`, and `Call.Bsp`. Publish, resolve, workflow, run, and MCP do not attach.
+`./histos server` is opt-in. It listens on a Unix socket and writes `.histos/server.json` with `Cli.VersionText` (`histos 0.0.1-SNAPSHOT`) and a fingerprint. BSP's own version field is the bare `0.0.1-SNAPSHOT`. The two strings are not compared to each other. The fingerprint is `histos.scala`, `.histos/dependencies.lock`, and regular files under each header `plugin(path)` (`Fingerprint.read`). Every command that loads a graph attaches when the version matches. `cache` and `version` stay in-process. A missing server or a dead socket runs the command in-process. A different version fails with `ServerError.DifferentVersion` and does not load a second graph. The server reloads when the fingerprint changes, and a live BSP splice receives `buildTarget/didChange`. `Call` is compile, test (patterns and quick), publish, graph, run, task, cancel, toolchain, resolve, workflow, assembly, reload, reboot, and bsp.
 
-`testQuick` does not attach. It compiles in-process and reads the same on-disk Zinc analysis the server writes. `testOnly` does attach, and `Call.Test` carries project names only. A live server therefore drops the `testOnly` pattern and runs the unfiltered suites. That is a defect. BSP test execution must not copy it.
+`testQuick` attaches. `Call.Test` carries the suite patterns. MCP and ACP send that same `Call` and return the CLI text. They do not splice into the BSP session.
 
-`./histos mcp` and `./histos bsp` are the processes their clients own. MCP does not attach to the server. BSP does, by splicing stdio, when the fingerprint matches. Frames are `Content-Length` (`app/src/histos/bsp/Frame.scala`), with an 8 MiB body limit. They are not newline JSON.
+`./histos mcp` and `./histos bsp` are the processes their clients own. BSP splices stdio onto the server when the version matches. Server and BSP frames are `Content-Length` (`app/src/histos/bsp/Frame.scala`), with an 8 MiB body limit. MCP and ACP are newline JSON.
 
-`./histos ~ <command>` watches sources and reruns. Ctrl-C stops the in-flight work.
+`./histos ~ <command>` stays in the client. Each iteration sends the inner `Call` and does not load a graph while the server matches. Ctrl-C stops the in-flight work.
 
 Zinc `2.0.4` builds a fresh compiler for every compile. The server exists so Metals and the batch command share a process and the analysis files under `.histos/analysis/<module>/<scala>/<platform>`.
 
@@ -202,7 +202,7 @@ The artifact suffix is one function of kind, Scala version, and platform: `_3` o
 
 `histos compile` compiles every platform a module names. Outputs land at `.histos/classes/<module>/<scala>/<platform>`. Sources are `<directory>/src`, or the repository `src` when the graph has one module. `.in(path"...")` sets the directory. `src/test` is tests. A package named `test` under `scala` stays main. Platform directories (`jvm`, `js`, `native`, and the `scala*` aliases) and `scala-2.13` or `scala-3` filter only while they are still layout. `dependsOn` and `Dep.on` are platform-scoped. An unscoped edge applies to every platform the module builds.
 
-Production compiles pass `ScalacFlags.empty`. `GraphCompile.compileVersion` and `ModuleTest.compiledTests` both construct `CompileToolchain(..., ScalacFlags.empty)`. `JvmCompile.compile` calls `compilePrepared` with no plugins. `compileOne` applies `flags.argv ++ extra`, which is `Nil`. The enum has one case, `EncodingUtf8` (`-encoding`, `UTF-8`). Nothing on the compile path passes it. `ZincSpec` constructs the case in samples. BSP `options` is `Nil`, which matches the empty argv, not the unused case. Reporting `-encoding` from the enum would make the IDE compile differently from `./histos compile`. `Module` has no scalac-options field. There is no `-Xfatal-warnings`. The text, when a case is actually held, is produced in `JvmCompile`, not accepted from the build.
+`Module.flags` defaults to `ScalacFlags.empty`. `ModuleDef.scalac` replaces that list. Compile, test compile, and BSP `scalacOptions` pass `module.flags.argv`, then the SemanticDB append. `.scalac(EncodingUtf8)` is `-encoding` and `UTF-8`. The enum still has that one case. There is no `-Xfatal-warnings`. The text is produced in `JvmCompile`, not accepted as a raw `List[String]` from the build.
 
 A test cell is one subprocess, not one process per case, and not a thread inside the server. The work directory is `.histos/test-work/<module>/<scala>/<platform>`. Test classes are `.histos/test-classes/...`, analysis `.histos/test-analysis/...`. The child environment is `HISTOS_REPO` and `PATH` only (`suiteEnv`). `runtimeClasspath`, `suiteEnv`, `testClasses`, and `testWork` are private. `runtimeClasspath` returns `cell.classes :: (upstream ++ library ++ jars)`. `cell.classes` is the main class directory of the `CompiledCell`. `library` is `JvmCompile.runtime`. `jars` is the module's locked artifacts plus upstream compile jars (`dependencyJars`), with the standard library removed. The module's artifacts are `ClasspathScope.Test` when `testDependencies` is non-empty, otherwise `ClasspathScope.Compile`. That is not a separate "compile jars, then test jars" sort. The JVM that runs is `TestClasspath(testClasses, linked.paths)` in `TestProcess.scala`, so the entries are the test class directory and then that list. A provider run's main class is `ProviderRunner.Main`, after `compiledTests` writes `Provider.scala` and compiles it into the test classes. `compiledTests` passes `ScalacFlags.empty`. The default provider is `TestProvider.Zio` (`zio.test.sbt.ZTestFramework`, library `dev.zio` / `zio-test-sbt`). The engine does not load it. Another provider names a framework class and a test-scoped library. `.test(TestMain(...))` opts out. A main and a provider together are `BuildError.MixedTest`. A module with no test sources reports `no tests`, which is success and not a passing suite.
 
@@ -218,13 +218,13 @@ JDK selection is read-only against `JAVA_HOME`, `PATH`, an existing Coursier or 
 
 ### BSP today
 
-`.bsp/histos.json` names `./histos bsp`, BSP `2.2.0`, language `scala`. The session is `app/src/histos/bsp/Bsp.scala` and `Rpc.scala`. `Bsp.open` stores the graph by value. Frames are `Content-Length` (`Frame.scala`), with an 8 MiB body limit.
+`.bsp/histos.json` names `./histos bsp`, BSP `2.2.0`, language `scala`. The session is `app/src/histos/bsp/Bsp.scala` and `Rpc.scala`. `Bsp.open` reads the graph from a ref. A successful reload swaps that ref and, when a splice is open, sends `buildTarget/didChange`. Frames are `Content-Length` (`Frame.scala`), with an 8 MiB body limit. Outgoing frames on one splice share one writer.
 
 | Method | Behavior |
 | --- | --- |
-| `build/initialize` | Display name `histos`, version `0.0.1-SNAPSHOT`, BSP `2.2.0`. Capabilities are `compileProvider` for `scala`, `dependencySourcesProvider`, `jvmRunEnvironmentProvider`, and `jvmTestEnvironmentProvider`. No debug provider. |
+| `build/initialize` | Display name `histos`, version `0.0.1-SNAPSHOT`, BSP `2.2.0`. Capabilities are `compileProvider` for `scala`, `dependencySourcesProvider`, `jvmRunEnvironmentProvider`, `jvmTestEnvironmentProvider`, and `buildTargetChangedProvider`. No debug provider. |
 | `build/initialized` | Ignored. |
-| `workspace/buildTargets` | `jvmCells`: one main target per JVM module and Scala version, a test target when `ModuleTest.testSources` is non-empty, and `?build=histos.scala`. Sorted by name, then version. Js and Native are not published. |
+| `workspace/buildTargets` | One main target per module and Scala version on JVM, plus `js` or `native` when `.histos/bsp-platforms` names that token and the module builds it. A test target when `ModuleTest.testSources` is non-empty, and `?build=histos.scala`. Sorted by name, then version, then platform. Absent or empty allow-list publishes JVM only. A bad token fails the request. |
 | `buildTarget/sources` | Kind 1 file URIs. Main uses `Sources.select`. Test uses `ModuleTest.testSources`. The build target is the one file `histos.scala`. |
 | `buildTarget/scalacOptions` | `SemanticDb.argv` for that Scala version. Production `ScalacFlags` stay empty, so the list is those SemanticDB flags. Main classpath is `JvmCompile.runtime`, the locked compile jars without a second standard library, and upstream class directories. Test classpath names that order (`main` classes, upstream classes, runtime, locked jars) and does not require the directories to exist. The build-file classpath is `Loader.buildClasspath`. `ScalaBuildTarget.jars` is `JvmCompile.scalaJars`. |
 | `buildTarget/dependencySources` | `Resolve.sources` for each locked artifact, from `LockedArtifact.repository` only. Standard-library sources use `Repository.Central` only. A miss is omitted. |
@@ -239,17 +239,17 @@ Anything else, including `debugSession/start`, is `bsp does not handle <method>`
 
 A module id is `directoryUri(repo)`, the module name, and `?scala=<version>&platform=<token>&scope=main` or `&scope=test`. Example shape: `file:///.../histos/api?scala=3.10.0&platform=jvm&scope=main`. The build id is `directoryUri(repo) + "?build=histos.scala"`, matched first. Missing `platform` or `scope` is an unknown target. Upstream dependencies are the same query. A test id depends on that module's main id.
 
-`SemanticDb.argv` for Scala 2.13 is `-Yrangepos` and `-P:semanticdb:sourceroot:<repo>`. `invoke213` does not pass a plugin jar, and `runZinc213` passes `Nil` as the extra argv. A 2.13 cell does not get `semanticdb-scalac` yet. This repo is Scala `3.10.0`.
+`SemanticDb.argv` for Scala 2.13 is `-Xplugin:` of `org.scalameta` / `semanticdb-scalac_<scala>` / `4.17.3`, then `-Yrangepos` and `-P:semanticdb:sourceroot:<repo>`. Scala 3 stays `-Xsemanticdb` with no plugin jar. This repo is Scala `3.10.0`.
 
-`jvmCells` is the whole target list. `.histos/bsp-platforms` is not read. `cellFeed` already takes the platform, so publishing a Js or Native id does not need another compile entry.
+`workspace/buildTargets` reads `.histos/bsp-platforms` on every request. `buildTarget/compile` passes that platform to `cellFeed` and does not link.
 
 `JvmCompile.compileOne` builds a new `ScalaInstance` and `CompilerCache.fresh` on every compile. The server's value is one JVM, one loaded graph, and one writer of `.histos/analysis`.
 
 ### Other protocol surfaces
 
-The CLI is a zio-cli grammar (`app/src/histos/cli/Grammar.scala`) that parses into `Command`. The old note that zio-cli was waiting is false. Roots are `version`, `graph`, `run`, `test`, `testOnly`, `testQuick`, `compile`, `assembly`, `publish`, `mcp`, `acp`, `bsp`, `server`, `toolchain`, `cache`, `resolve`, and `workflow`.
+The CLI is a zio-cli grammar (`app/src/histos/cli/Grammar.scala`) that parses into `Command`. The old note that zio-cli was waiting is false. Roots are `version`, `graph`, `run`, `test`, `testOnly`, `testQuick`, `compile`, `assembly`, `publish`, `mcp`, `acp`, `bsp`, `server`, `reload`, `reboot`, `toolchain`, `cache`, `resolve`, and `workflow`.
 
-MCP (`heddle`) exposes `graph`, `run`, `cancel`, and `toolchain`. The handler calls `Loader` and `Tasks`. ACP answers `initialize` (protocol version 1, empty capabilities) and rejects every other method. Neither protocol contains build logic.
+MCP (`heddle`) and ACP expose `graph`, `compile`, `test`, `publish`, `run`, `cancel`, and `toolchain`. Each call re-reads `.histos/server.json` and sends `Call` when the version matches. Success and failure are both the CLI text. ACP `initialize` is protocol version 1 and lists those commands. An unknown ACP method is still `acp does not handle <method>`.
 
 `histos publish <repository>` writes a local Maven directory for modules the version decision publishes. Development (`-ci`) writes nothing. The artifact id uses the binary suffix. The pom lists library dependencies and published `dependsOn` modules. Credentials and signing are not this publisher. `central` is still that in-tree module.
 

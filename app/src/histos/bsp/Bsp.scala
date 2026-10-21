@@ -381,9 +381,8 @@ object Bsp:
       }
 
     private def compileTest(id: Id.Test): ZIO[Resolve, Nothing, Int] =
-      request.get.flatMap {
-        graph =>
-          val modules = modulesOf(graph)
+      request.get.flatMap { graph =>
+        val modules = modulesOf(graph)
         val uri = targetUri(id)
         val heard =
           new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
@@ -395,26 +394,28 @@ object Bsp:
             .classesDir(repo, id.module.name, id.version, id.platform),
           0
         )
-        (clear(uri) *>
-          (for
-            lock <- readLock
-            sources <- ModuleTest
-              .testSources(repo, id.module, modules, id.version, id.platform)
-              .mapError(BspError.Tests(_))
-            _ <- ModuleTest
-              .compiledTests(
-                repo,
-                modules,
-                id.module,
-                cell,
-                sources,
-                jdk,
-                lock,
-                BuildResolvers(graph.resolvers),
-                problem => heard.add(problem)
-              )
-              .mapError(BspError.Tests(_))
-          yield ())).either.flatMap { result =>
+        val ran =
+          clear(uri) *>
+            (for
+              lock <- readLock
+              sources <- ModuleTest
+                .testSources(repo, id.module, modules, id.version, id.platform)
+                .mapError(BspError.Tests(_))
+              _ <- ModuleTest
+                .compiledTests(
+                  repo,
+                  modules,
+                  id.module,
+                  cell,
+                  sources,
+                  jdk,
+                  lock,
+                  BuildResolvers(graph.resolvers),
+                  problem => heard.add(problem)
+                )
+                .mapError(BspError.Tests(_))
+            yield ())
+        ran.either.flatMap { result =>
           ZIO.foreachDiscard(heard.asScala.toList)(problem =>
             publish(uri, problem)
           ) *> statusOf(result)
@@ -504,16 +505,15 @@ object Bsp:
         version: ScalaVersion,
         platform: Platform
     ): ZIO[Resolve, BspError, List[Path]] =
-      request.get.flatMap {
-        graph =>
-          val cell = ResolveCell(
-            module.name,
-            Dep.select(module.dependencies, platform),
-            version,
-            platform,
-            BuildResolvers(graph.resolvers),
-            ClasspathScope.Compile
-          )
+      request.get.flatMap { graph =>
+        val cell = ResolveCell(
+          module.name,
+          Dep.select(module.dependencies, platform),
+          version,
+          platform,
+          BuildResolvers(graph.resolvers),
+          ClasspathScope.Compile
+        )
         val upstream = module
           .upstream(platform)
           .map(dependency =>
@@ -532,9 +532,8 @@ object Bsp:
       * Import runs before compile.
       */
     private def testClasspath(id: Id.Test): ZIO[Resolve, BspError, List[Path]] =
-      request.get.flatMap {
-        graph =>
-          val modules = modulesOf(graph)
+      request.get.flatMap { graph =>
+        val modules = modulesOf(graph)
         val main =
           GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
         val upstream = Module
@@ -544,8 +543,10 @@ object Bsp:
               .classesDir(repo, dependency.name, id.version, id.platform)
           )
         val dependencies =
-          Dep.select(id.module.dependencies, id.platform) ++ Dep
-            .select(id.module.testDependencies, id.platform)
+          Dep.select(id.module.dependencies, id.platform) ++ Dep.select(
+            id.module.testDependencies,
+            id.platform
+          )
         val scope =
           if Dep.select(id.module.testDependencies, id.platform).isEmpty then
             ClasspathScope.Compile

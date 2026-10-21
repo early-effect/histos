@@ -345,21 +345,76 @@ object ProtocolSpec extends ZIOSpecDefault:
             .contains("plugin task dev.example/echo is not in the graph")
         )
     ,
-    test("acp answers initialize and nothing else"):
-      val init =
-        """{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}"""
-      val other = """{"jsonrpc":"2.0","id":8,"method":"run","params":{}}"""
-      val initAnswer = Acp.answer(init)
-      val otherAnswer = Acp.answer(other)
-      assertTrue(
-        initAnswer.contains(""""protocolVersion":1""") && initAnswer.contains(
-          """"id":7"""
-        ),
-        otherAnswer.contains("acp does not handle run") && otherAnswer.contains(
-          """"id":8"""
-        ),
-        Acp.answer("not json").contains("parse error")
-      )
+    test("acp lists the commands and returns toolchain text"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          checked <- acpTexts(dir, jar).provideSome[Scope](loading(dir))
+        yield checked
   ) @@ TestAspect.timeout(60.seconds) @@ TestAspect.withLiveClock
+
+  private def acpTexts(dir: Path, jar: Path) =
+    for
+      desk <- histos.client.Session.desk
+      here = machine(dir)
+      init <- Acp.answer(
+        dir,
+        jar,
+        here,
+        desk,
+        """{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}"""
+      )
+      missing <- Acp.answer(
+        dir,
+        jar,
+        here,
+        desk,
+        """{"jsonrpc":"2.0","id":8,"method":"toolchain","params":{}}"""
+      )
+      unknown <- Acp.answer(
+        dir,
+        jar,
+        here,
+        desk,
+        """{"jsonrpc":"2.0","id":9,"method":"nope","params":{}}"""
+      )
+      bad <- Acp.answer(dir, jar, here, desk, "not json")
+      _ <- ZIO.attempt(writeJdk(dir)).mapError(t => LoadError.Io(LoadIo.Temp))
+      chosen <- Acp.answer(
+        dir,
+        jar,
+        machine(dir, Map("JAVA_HOME" -> dir.resolve("jdk").toString)),
+        desk,
+        """{"jsonrpc":"2.0","id":10,"method":"toolchain","params":{}}"""
+      )
+    yield assertTrue(
+      init.contains(""""protocolVersion":1"""),
+      init.contains(""""id":7"""),
+      init.contains("compile"),
+      init.contains("toolchain"),
+      resultValue(missing).exists(_.contains("jdk.lock")),
+      !missing.contains(""""jdk""""),
+      unknown.contains("acp does not handle nope"),
+      bad.contains("parse error"),
+      resultValue(chosen).exists(_.contains("JavaHome")),
+      resultValue(chosen).exists(_.contains("21.0.2"))
+    )
+
+  private def resultValue(line: String): Option[String] =
+    for
+      json <- line.fromJson[Json].toOption
+      result <- jsonField(json, "result")
+      value <- jsonField(result, "value")
+      text <- value match
+        case Json.Str(found) => Some(found)
+        case _               => None
+    yield text
+
+  private def jsonField(json: Json, name: String): Option[Json] =
+    json match
+      case Json.Obj(fields) =>
+        fields.collectFirst { case (`name`, value) => value }
+      case _ => None
 
   def spec = protocol
