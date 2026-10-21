@@ -39,6 +39,16 @@ object BspSpec extends ZIOSpecDefault:
           strings(json, "argv") == List("./histos", "bsp"),
           strings(json, "languages") == List("scala"),
         ),
+    test("a swapped target list marks created, changed, and deleted"):
+      val events = Bsp.events(List("a", "b"), List("b", "c"))
+      assertTrue(
+        events.map(event => (event.target.uri, event.kind)) == List(
+          ("c", 1),
+          ("b", 2),
+          ("a", 3)
+        )
+      )
+    ,
     test("a frame round-trips payloads, including a newline"):
       val first = "{\"method\":\"build/initialized\"}\r\n"
       val second = "{\"id\":1}"
@@ -89,6 +99,7 @@ object BspSpec extends ZIOSpecDefault:
           caps(init).flatMap(field(_, "dependencySourcesProvider")).contains(Json.Bool(true)),
           caps(init).flatMap(field(_, "jvmRunEnvironmentProvider")).contains(Json.Bool(true)),
           caps(init).flatMap(field(_, "jvmTestEnvironmentProvider")).contains(Json.Bool(true)),
+          caps(init).flatMap(field(_, "buildTargetChangedProvider")).contains(Json.Bool(true)),
           caps(init).flatMap(field(_, "testProvider")).isEmpty,
           caps(init).flatMap(field(_, "runProvider")).isEmpty,
           code(unknown).contains(-32601),

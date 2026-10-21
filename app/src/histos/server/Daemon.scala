@@ -402,7 +402,12 @@ object Daemon:
               ZIO.whenZIO(armed.get)(remove(repo, socket)).unit
             )
             held <- Scope.make
-            live <- Ref.make(Generation(graph, plugins, fingerprint, held))
+            uses <- Ref.make[Uses](Uses.Live(0))
+            graphs <- Ref.make(graph)
+            live <- Ref.make(Generation(graph, plugins, fingerprint, held, uses))
+            reloading <- Semaphore.make(1)
+            spliced <- Ref.make(Option.empty[Bsp.Session])
+            warm = Warm(live, graphs, reloading, spliced)
             permit <- Semaphore.make(1)
             runs <- Ref.make(Map.empty[String, Fiber[ServerError, Unit]])
             _ <- listening
@@ -422,7 +427,7 @@ object Daemon:
               apiJar,
               socket,
               armed,
-              live,
+              warm,
               permit,
               runs,
               machine,
@@ -453,11 +458,24 @@ object Daemon:
         .mapError(_ => ServerError.Io(ServerIo.Bind))
     yield channel
 
+  private enum Uses:
+    case Live(n: Int)
+    case Retired(n: Int)
+
   private final case class Generation(
       graph: ProjectGraph,
       plugins: histos.load.PluginRuntime,
       fingerprint: Fingerprint,
-      scope: Scope.Closeable
+      scope: Scope.Closeable,
+      uses: Ref[Uses]
+  )
+
+  /** The graph ref is what a BSP splice reads. The lock makes one reload at a time. */
+  private final case class Warm(
+      live: Ref[Generation],
+      graphs: Ref[ProjectGraph],
+      reloading: Semaphore,
+      spliced: Ref[Option[Bsp.Session]]
   )
 
   private def accept(
@@ -468,7 +486,7 @@ object Daemon:
       apiJar: Path,
       bound: Path,
       armed: Ref[Boolean],
-      live: Ref[Generation],
+      warm: Warm,
       permit: Semaphore,
       runs: Ref[Map[String, Fiber[ServerError, Unit]]],
       machine: histos.jdk.Machine,
@@ -499,7 +517,7 @@ object Daemon:
             bound,
             server,
             armed,
-            live,
+            warm,
             permit,
             runs,
             machine,
@@ -520,7 +538,7 @@ object Daemon:
       bound: Path,
       server: ServerSocketChannel,
       armed: Ref[Boolean],
-      live: Ref[Generation],
+      warm: Warm,
       permit: Semaphore,
       runs: Ref[Map[String, Fiber[ServerError, Unit]]],
       machine: histos.jdk.Machine,
@@ -544,8 +562,8 @@ object Daemon:
             case Some(asked) =>
               val loaded =
                 asked match
-                  case Call.Reload => force(repo, apiJar, version, bound, live)
-                  case _           => adopt(repo, apiJar, version, bound, live)
+                  case Call.Reload => force(repo, apiJar, version, bound, warm)
+                  case _           => adopt(repo, apiJar, version, bound, warm)
               loaded.flatMap:
                 case Left(message) =>
                   write(output, wire(Message.Ready)) *> write(
@@ -555,7 +573,7 @@ object Daemon:
                     )
                   )
                 case Right(held) =>
-                  write(output, wire(Message.Ready)) *> occupy(permit, asked)(
+                  val ran =
                     asked match
                       case Call.Compile(projects) =>
                         compile(repo, held.graph, projects, jdk, output)
@@ -632,14 +650,20 @@ object Daemon:
                       case Call.Bsp =>
                         bsp(
                           repo,
-                          held.graph,
                           jdk,
+                          warm,
                           permit,
                           buildClasspath,
                           build,
                           input,
                           output
                         )
+                  val leased =
+                    asked match
+                      case Call.Bsp => release(held) *> ran
+                      case _        => ran.ensuring(release(held))
+                  write(output, wire(Message.Ready)) *> occupy(permit, asked)(
+                    leased
                   )
 
   /** A fingerprint change loads the build. Failure keeps the previous graph and
@@ -650,42 +674,46 @@ object Daemon:
       apiJar: Path,
       version: String,
       bound: Path,
-      live: Ref[Generation]
+      warm: Warm
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
     Either[String, Generation]
   ] =
-    for
-      now <- Fingerprint.read(repo)
-      generation <- live.get
-      held <-
-        if now == generation.fingerprint then
-          ZIO.succeed(Right(generation))
-        else loadInto(repo, apiJar, version, bound, live, now)
-    yield held
+    warm.reloading.withPermit {
+      for
+        now <- Fingerprint.read(repo)
+        generation <- warm.live.get
+        held <-
+          if now == generation.fingerprint then
+            acquire(generation).as(Right(generation))
+          else loadInto(repo, apiJar, version, bound, warm, now)
+      yield held
+    }
 
   private def force(
       repo: Path,
       apiJar: Path,
       version: String,
       bound: Path,
-      live: Ref[Generation]
+      warm: Warm
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
     Either[String, Generation]
   ] =
-    Fingerprint
-      .read(repo)
-      .flatMap(now => loadInto(repo, apiJar, version, bound, live, now))
+    warm.reloading.withPermit {
+      Fingerprint
+        .read(repo)
+        .flatMap(now => loadInto(repo, apiJar, version, bound, warm, now))
+    }
 
   private def loadInto(
       repo: Path,
       apiJar: Path,
       version: String,
       bound: Path,
-      live: Ref[Generation],
+      warm: Warm,
       now: Fingerprint
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
@@ -706,12 +734,43 @@ object Daemon:
         case Right(found) =>
           for
             _ <- Record.write(repo, version, now, bound)
-            previous <- live.getAndSet(
-              Generation(found.graph, found.plugins, now, scope)
-            )
-            _ <- previous.scope.close(Exit.unit)
-          yield Right(Generation(found.graph, found.plugins, now, scope))
+            uses <- Ref.make[Uses](Uses.Live(1))
+            next = Generation(found.graph, found.plugins, now, scope, uses)
+            previous <- warm.live.getAndSet(next)
+            _ <- warm.graphs.set(found.graph)
+            _ <- retire(previous)
+            _ <- warm.spliced.get.flatMap {
+              case Some(session) =>
+                session.changed(previous.graph, found.graph)
+              case None => ZIO.unit
+            }
+          yield Right(next)
     yield result
+
+  /** The caller holds one use. A retired generation closes when the last use ends. */
+  private def acquire(generation: Generation): UIO[Unit] =
+    generation.uses.update {
+      case Uses.Live(n)    => Uses.Live(n + 1)
+      case Uses.Retired(n) => Uses.Retired(n + 1)
+    }
+
+  private def release(generation: Generation): UIO[Unit] =
+    generation.uses.modify {
+      case Uses.Live(n) if n > 0 => (false, Uses.Live(n - 1))
+      case Uses.Live(n)          => (false, Uses.Live(n))
+      case Uses.Retired(n) if n > 1 => (false, Uses.Retired(n - 1))
+      case Uses.Retired(_)       => (true, Uses.Retired(0))
+    }.flatMap { close =>
+      ZIO.when(close)(generation.scope.close(Exit.unit)).unit
+    }
+
+  private def retire(generation: Generation): UIO[Unit] =
+    generation.uses.modify {
+      case Uses.Live(n)          => (n == 0, Uses.Retired(n))
+      case retired: Uses.Retired => (false, retired)
+    }.flatMap { close =>
+      ZIO.when(close)(generation.scope.close(Exit.unit)).unit
+    }
 
   private def occupy[R, E](permit: Semaphore, call: Call)(
       body: ZIO[R, E, Unit]
@@ -888,45 +947,61 @@ object Daemon:
 
   private def bsp(
       repo: Path,
-      graph: ProjectGraph,
       jdk: ResolvedJdk,
+      warm: Warm,
       permit: Semaphore,
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       input: InputStream,
       output: OutputStream
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
-    val notify = (line: String) =>
-      Frame
-        .write(output, line)
-        .mapError(_ => ServerError.Io(ServerIo.Write))
-        .ignore
-    Bsp
-      .open(
-        repo,
-        graph,
-        jdk,
-        buildClasspath,
-        notify,
-        build,
-        effect => permit.withPermit(effect)
-      )
-      .flatMap {
-      session =>
-        def loop: ZIO[histos.resolve.Resolve, ServerError, Int] =
+    Semaphore.make(1).flatMap { writer =>
+      def send(payload: String): IO[ServerError, Unit] =
+        writer.withPermit(
           Frame
-            .read(input)
-            .mapError(_ => ServerError.Io(ServerIo.Read))
-            .flatMap:
-              case None          => ZIO.succeed(1)
-              case Some(payload) =>
-                session
-                  .answer(payload)
-                  .flatMap:
-                    case Bsp.Answer.Reply(text) => write(output, text) *> loop
-                    case Bsp.Answer.Quiet       => loop
-                    case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
-        loop.flatMap(code => write(output, wire(Message.Marker(code))))
+            .write(output, payload)
+            .mapError(_ => ServerError.Io(ServerIo.Write))
+        )
+      val notify = (line: String) => send(line).ignore
+      warm.live.get.flatMap { generation =>
+        Bsp
+          .open(
+            repo,
+            generation.graph,
+            jdk,
+            buildClasspath,
+            notify,
+            build,
+            effect => permit.withPermit(effect),
+            Some(warm.graphs)
+          )
+          .flatMap { session =>
+            def loop: ZIO[histos.resolve.Resolve, ServerError, Int] =
+              Frame
+                .read(input)
+                .mapError(_ => ServerError.Io(ServerIo.Read))
+                .flatMap:
+                  case None => ZIO.succeed(1)
+                  case Some(payload) =>
+                    warm.reloading
+                      .withPermit(
+                        warm.live.get.flatMap(gen => acquire(gen).as(gen))
+                      )
+                      .flatMap { gen =>
+                        session
+                          .answer(gen.graph, payload)
+                          .ensuring(release(gen))
+                      }
+                      .flatMap:
+                        case Bsp.Answer.Reply(text) => send(text) *> loop
+                        case Bsp.Answer.Quiet       => loop
+                        case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
+            warm.spliced.set(Some(session)) *>
+              loop
+                .ensuring(warm.spliced.set(None))
+                .flatMap(code => send(wire(Message.Marker(code))))
+          }
+      }
     }
 
   private def compiledCell(

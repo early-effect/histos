@@ -110,7 +110,7 @@ object Bsp:
       case Build(error)          => error.message
       case NotTest               => "jvmTestEnvironment needs a test target"
       case NotMain               => "jvmRunEnvironment needs a main target"
-      case Platforms(text)      => text
+      case Platforms(text)       => text
 
   def open(
       repo: Path,
@@ -120,56 +120,91 @@ object Bsp:
       notify: String => UIO[Unit] = _ => ZIO.unit,
       build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
       gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int] = effect =>
-        effect
+        effect,
+      shared: Option[Ref[ProjectGraph]] = None
   ): UIO[Session] =
-    Ref
-      .make[Phase](Phase.New)
-      .map(phase =>
-        Session.start(
-          repo,
-          graph,
-          jdk,
-          buildClasspath,
-          notify,
-          build,
-          phase,
-          gate
-        )
-      )
+    for
+      phase <- Ref.make[Phase](Phase.New)
+      current <- shared match
+        case Some(ref) => ZIO.succeed(ref)
+        case None      => Ref.make(graph)
+      request <- Ref.make(graph)
+    yield Session.start(
+      repo,
+      jdk,
+      buildClasspath,
+      notify,
+      build,
+      phase,
+      gate,
+      current,
+      request
+    )
 
   object Session:
     private[Bsp] def start(
         repo: Path,
-        graph: ProjectGraph,
         jdk: ResolvedJdk,
         buildClasspath: List[Path],
         notify: String => UIO[Unit],
         build: IO[LoadError, BuildNotes],
         phase: Ref[Phase],
-        gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int]
+        gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
+        current: Ref[ProjectGraph],
+        request: Ref[ProjectGraph]
     ): Session =
       new Session(
         repo,
-        graph,
         jdk,
         buildClasspath,
         notify,
         build,
         phase,
-        gate
+        gate,
+        current,
+        request
       )
 
   final class Session private (
       repo: Path,
-      graph: ProjectGraph,
       jdk: ResolvedJdk,
       buildClasspath: List[Path],
       notify: String => UIO[Unit],
       build: IO[LoadError, BuildNotes],
       phase: Ref[Phase],
-      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int]
+      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
+      current: Ref[ProjectGraph],
+      request: Ref[ProjectGraph]
   ):
+    /** One request sees the graph it started with. A later swap does not
+      * rewrite it.
+      */
     def answer(payload: String): ZIO[Resolve, Nothing, Answer] =
+      current.get.flatMap(graph => answer(graph, payload))
+
+    def answer(
+        seen: ProjectGraph,
+        payload: String
+    ): ZIO[Resolve, Nothing, Answer] =
+      request.set(seen) *> read(payload)
+
+    /** Kinds are BSP's created (1), changed (2), and deleted (3). */
+    def changed(
+        previous: ProjectGraph,
+        next: ProjectGraph
+    ): ZIO[Resolve, Nothing, Unit] =
+      targetUris(previous).either.zip(targetUris(next).either).flatMap {
+        case (Right(before), Right(after)) =>
+          notify(
+            Rpc.note(
+              "buildTarget/didChange",
+              Rpc.DidChange(Bsp.events(before, after))
+            )
+          )
+        case _ => ZIO.unit
+      }
+
+    private def read(payload: String): ZIO[Resolve, Nothing, Answer] =
       payload.fromJson[zio.json.ast.Json] match
         case Left(_) =>
           ZIO.succeed(Answer.Reply(failure(Rpc.RpcId.Absent, BspError.Parse)))
@@ -280,15 +315,18 @@ object Bsp:
         .foldZIO(
           error => ZIO.succeed(Answer.Reply(failure(id, error))),
           params =>
-            val found = params.targets.map(_.uri)
-            val ids = found.flatMap(parse)
-            if ids.length != found.length then
-              ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
-            else
-              gate(runCompile(ids)).map(status =>
-                Answer
-                  .Reply(Rpc.ok(id, Rpc.CompileResult(status, params.originId)))
-              )
+            request.get.flatMap { graph =>
+              val found = params.targets.map(_.uri)
+              val ids = found.flatMap(uri => identify(uri, graph))
+              if ids.length != found.length then
+                ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
+              else
+                gate(runCompile(ids)).map(status =>
+                  Answer.Reply(
+                    Rpc.ok(id, Rpc.CompileResult(status, params.originId))
+                  )
+                )
+            }
         )
 
     private def runCompile(ids: List[Id]): ZIO[Resolve, Nothing, Int] =
@@ -313,73 +351,85 @@ object Bsp:
         group: List[Id.Main]
     ): ZIO[Resolve, Nothing, Int] =
       val cells = group.map(id => id.module.name -> id.version)
-      Ref.make(false).flatMap: failed =>
-        (ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
-          GraphCompile
-            .cellFeed(repo, graph, cells, platform, jdk)
-            .mapError(BspError.Sources(_))
-            .foreach {
-              case histos.zinc.CompileFeed.Diagnostic(
-                    module,
-                    version,
-                    chosen,
-                    problem
-                  ) =>
-                publish(
-                  s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
-                  problem
-                )
-              case histos.zinc.CompileFeed.Done(_) => ZIO.unit
-              case histos.zinc.CompileFeed.Failed(_) => failed.set(true)
-            } *> failed.get).either.flatMap:
-          case Left(error) => statusOf(Left(error))
-          case Right(true) => ZIO.succeed(2)
-          case Right(false) => ZIO.succeed(1)
+      request.get.flatMap { graph =>
+        Ref.make(false).flatMap { failed =>
+          val ran =
+            ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
+              GraphCompile
+                .cellFeed(repo, graph, cells, platform, jdk)
+                .mapError(BspError.Sources(_))
+                .foreach {
+                  case histos.zinc.CompileFeed.Diagnostic(
+                        module,
+                        version,
+                        chosen,
+                        problem
+                      ) =>
+                    publish(
+                      s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
+                      problem
+                    )
+                  case histos.zinc.CompileFeed.Done(_)   => ZIO.unit
+                  case histos.zinc.CompileFeed.Failed(_) => failed.set(true)
+                } *> failed.get
+          ran.either.flatMap {
+            case Left(error)  => statusOf(Left(error))
+            case Right(true)  => ZIO.succeed(2)
+            case Right(false) => ZIO.succeed(1)
+          }
+        }
+      }
 
     private def compileTest(id: Id.Test): ZIO[Resolve, Nothing, Int] =
-      val modules = graphModules
-      val uri = targetUri(id)
-      val heard =
-        new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
-      val cell = CompiledCell(
-        id.module.name,
-        id.version,
-        id.platform,
-        GraphCompile.classesDir(repo, id.module.name, id.version, id.platform),
-        0
-      )
-      (clear(uri) *>
-        (for
-          lock <- readLock
-          sources <- ModuleTest
-            .testSources(repo, id.module, modules, id.version, id.platform)
-            .mapError(BspError.Tests(_))
-          _ <- ModuleTest
-            .compiledTests(
-              repo,
-              modules,
-              id.module,
-              cell,
-              sources,
-              jdk,
-              lock,
-              BuildResolvers(graph.resolvers),
-              problem => heard.add(problem)
-            )
-            .mapError(BspError.Tests(_))
-        yield ())).either.flatMap: result =>
-        ZIO.foreachDiscard(heard.asScala.toList)(problem =>
-          publish(uri, problem)
-        ) *> statusOf(result)
+      request.get.flatMap {
+        graph =>
+          val modules = modulesOf(graph)
+        val uri = targetUri(id)
+        val heard =
+          new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
+        val cell = CompiledCell(
+          id.module.name,
+          id.version,
+          id.platform,
+          GraphCompile
+            .classesDir(repo, id.module.name, id.version, id.platform),
+          0
+        )
+        (clear(uri) *>
+          (for
+            lock <- readLock
+            sources <- ModuleTest
+              .testSources(repo, id.module, modules, id.version, id.platform)
+              .mapError(BspError.Tests(_))
+            _ <- ModuleTest
+              .compiledTests(
+                repo,
+                modules,
+                id.module,
+                cell,
+                sources,
+                jdk,
+                lock,
+                BuildResolvers(graph.resolvers),
+                problem => heard.add(problem)
+              )
+              .mapError(BspError.Tests(_))
+          yield ())).either.flatMap { result =>
+          ZIO.foreachDiscard(heard.asScala.toList)(problem =>
+            publish(uri, problem)
+          ) *> statusOf(result)
+        }
+      }
 
     private def compileBuild: ZIO[Resolve, Nothing, Int] =
       val uri = buildUri
-      (clear(uri) *> build.mapError(BspError.Build(_))).either.flatMap:
+      (clear(uri) *> build.mapError(BspError.Build(_))).either.flatMap {
         case Left(error)  => log(CompileSeverity.Error, error.message).as(2)
         case Right(notes) =>
           ZIO
             .foreachDiscard(notes.problems)(problem => publish(uri, problem))
             .as(if notes.failed then 2 else 1)
+      }
 
     private def statusOf(result: Either[BspError, Unit]): UIO[Int] =
       result match
@@ -406,7 +456,7 @@ object Bsp:
     private def scalac(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.ScalacOptionsItem] =
-      parse(uri) match
+      parsed(uri) {
         case None           => ZIO.fail(BspError.UnknownTarget)
         case Some(Id.Build) =>
           ZIO.succeed(
@@ -448,73 +498,81 @@ object Bsp:
               )
             )
 
+      }
     private def classpath(
         module: Module,
         version: ScalaVersion,
         platform: Platform
     ): ZIO[Resolve, BspError, List[Path]] =
-      val cell = ResolveCell(
-        module.name,
-        Dep.select(module.dependencies, platform),
-        version,
-        platform,
-        BuildResolvers(graph.resolvers),
-        ClasspathScope.Compile
-      )
-      val upstream = module
-        .upstream(platform)
-        .map(dependency =>
-          GraphCompile.classesDir(repo, dependency, version, platform)
-        )
-      for
-        lock <- readLock
-        jars <- Resolve
-          .materialize(cell, lock)
-          .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-        library <- JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
-      yield (library ++ dropStdlib(jars) ++ upstream).distinct
+      request.get.flatMap {
+        graph =>
+          val cell = ResolveCell(
+            module.name,
+            Dep.select(module.dependencies, platform),
+            version,
+            platform,
+            BuildResolvers(graph.resolvers),
+            ClasspathScope.Compile
+          )
+        val upstream = module
+          .upstream(platform)
+          .map(dependency =>
+            GraphCompile.classesDir(repo, dependency, version, platform)
+          )
+        for
+          lock <- readLock
+          jars <- Resolve
+            .materialize(cell, lock)
+            .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
+          library <- JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
+        yield (library ++ dropStdlib(jars) ++ upstream).distinct
+      }
 
     /** The `runtimeClasspath` order, naming directories that are not there yet.
       * Import runs before compile.
       */
     private def testClasspath(id: Id.Test): ZIO[Resolve, BspError, List[Path]] =
-      val modules = graphModules
-      val main =
-        GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
-      val upstream = Module
-        .chain(id.module, modules, id.platform)
-        .map(dependency =>
-          GraphCompile
-            .classesDir(repo, dependency.name, id.version, id.platform)
+      request.get.flatMap {
+        graph =>
+          val modules = modulesOf(graph)
+        val main =
+          GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
+        val upstream = Module
+          .chain(id.module, modules, id.platform)
+          .map(dependency =>
+            GraphCompile
+              .classesDir(repo, dependency.name, id.version, id.platform)
+          )
+        val dependencies =
+          Dep.select(id.module.dependencies, id.platform) ++ Dep
+            .select(id.module.testDependencies, id.platform)
+        val scope =
+          if Dep.select(id.module.testDependencies, id.platform).isEmpty then
+            ClasspathScope.Compile
+          else ClasspathScope.Test
+        val cell = ResolveCell(
+          id.module.name,
+          dependencies,
+          id.version,
+          id.platform,
+          BuildResolvers(graph.resolvers),
+          scope
         )
-      val dependencies = Dep.select(id.module.dependencies, id.platform) ++ Dep
-        .select(id.module.testDependencies, id.platform)
-      val scope =
-        if Dep.select(id.module.testDependencies, id.platform).isEmpty then
-          ClasspathScope.Compile
-        else ClasspathScope.Test
-      val cell = ResolveCell(
-        id.module.name,
-        dependencies,
-        id.version,
-        id.platform,
-        BuildResolvers(graph.resolvers),
-        scope
-      )
-      for
-        lock <- readLock
-        jars <- Resolve
-          .materialize(cell, lock)
-          .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-        library <- JvmCompile
-          .runtime(id.version)
-          .mapError(BspError.Toolchain(_))
-      yield main :: (upstream ++ library ++ dropStdlib(jars))
+        for
+          lock <- readLock
+          jars <- Resolve
+            .materialize(cell, lock)
+            .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
+          library <- JvmCompile
+            .runtime(id.version)
+            .mapError(BspError.Toolchain(_))
+        yield main :: (upstream ++ library ++ dropStdlib(jars))
+      }
 
     private def sourceJars(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.DependencySourcesItem] =
-      parse(uri) match
+      parsed(uri) {
         case None     => ZIO.fail(BspError.UnknownTarget)
         case Some(id) =>
           jarsOf(id)
@@ -522,6 +580,7 @@ object Bsp:
             .map: sources =>
               Rpc.DependencySourcesItem(Rpc.TargetId(uri), sources.map(fileUri))
 
+      }
     private def jarsOf(id: Id): ZIO[Resolve, BspError, List[SourceAsk]] =
       id match
         case Id.Build =>
@@ -661,7 +720,7 @@ object Bsp:
     private def mainClassItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.ScalaMainClassesItem] =
-      parse(uri) match
+      parsed(uri) {
         case Some(id: Id.Main) =>
           val named = id.module.application.toList.map(_.value)
           val classes = GraphCompile.classesDir(
@@ -682,10 +741,11 @@ object Bsp:
           ZIO.succeed(Rpc.ScalaMainClassesItem(Rpc.TargetId(uri), Nil))
         case None => ZIO.fail(BspError.UnknownTarget)
 
+      }
     private def testClassItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.ScalaTestClassesItem] =
-      parse(uri) match
+      parsed(uri) {
         case Some(id: Id.Test) =>
           suites(id).map: found =>
             Rpc.ScalaTestClassesItem(
@@ -697,10 +757,11 @@ object Bsp:
           ZIO.succeed(Rpc.ScalaTestClassesItem(Rpc.TargetId(uri), Nil, None))
         case None => ZIO.fail(BspError.UnknownTarget)
 
+      }
     private def runItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
-      parse(uri) match
+      parsed(uri) {
         case Some(id: Id.Main) =>
           val classes = GraphCompile.classesDir(
             repo,
@@ -714,14 +775,16 @@ object Bsp:
             Program.workDir(repo, id.module.name, id.version, id.platform)
           for
             lock <- readLock
+            modules <- graphModules
+            seen <- request.get
             paths <- Program
               .classpath(
                 repo,
-                graphModules,
+                modules,
                 id.module,
                 cell,
                 lock,
-                BuildResolvers(graph.resolvers)
+                BuildResolvers(seen.resolvers)
               )
               .mapError(BspError.Run(_))
             _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
@@ -735,10 +798,11 @@ object Bsp:
         case Some(_) => ZIO.fail(BspError.NotMain)
         case None    => ZIO.fail(BspError.UnknownTarget)
 
+      }
     private def testItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
-      parse(uri) match
+      parsed(uri) {
         case Some(id: Id.Test) =>
           val work =
             ModuleTest.testWork(repo, id.module.name, id.version, id.platform)
@@ -761,14 +825,16 @@ object Bsp:
               .fromEither(ModuleTest.launchProvider(id.module))
               .mapError(BspError.Tests(_))
             lock <- readLock
+            modules <- graphModules
+            seen <- request.get
             linked <- ModuleTest
               .runtimeClasspath(
                 repo,
-                graphModules,
+                modules,
                 id.module,
                 cell,
                 lock,
-                BuildResolvers(graph.resolvers)
+                BuildResolvers(seen.resolvers)
               )
               .mapError(BspError.Tests(_))
             _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
@@ -781,6 +847,7 @@ object Bsp:
           )
         case Some(_) => ZIO.fail(BspError.NotTest)
         case None    => ZIO.fail(BspError.UnknownTarget)
+      }
 
     private final case class Suites(
         names: List[String],
@@ -808,31 +875,39 @@ object Bsp:
                   .classesDir(repo, id.module.name, id.version, id.platform),
                 0
               )
-              readLock.flatMap: lock =>
-                ModuleTest
-                  .runtimeClasspath(
-                    repo,
-                    graphModules,
-                    id.module,
-                    cell,
-                    lock,
-                    BuildResolvers(graph.resolvers)
-                  )
-                  .either
-                  .flatMap:
-                    case Left(_)       => ZIO.succeed(Suites(Nil, None))
-                    case Right(linked) =>
-                      SuiteNames
-                        .discover(
-                          classes,
-                          linked.paths,
-                          provider.framework.value
-                        )
-                        .either
-                        .map:
-                          case Right(SuiteNames.Found.Suites(names)) =>
-                            Suites(names, Some(frameworkName(provider)))
-                          case _ => Suites(Nil, Some(frameworkName(provider)))
+              readLock.flatMap { lock =>
+                graphModules.flatMap { modules =>
+                  request.get.flatMap { seen =>
+                    ModuleTest
+                      .runtimeClasspath(
+                        repo,
+                        modules,
+                        id.module,
+                        cell,
+                        lock,
+                        BuildResolvers(seen.resolvers)
+                      )
+                      .either
+                      .flatMap {
+                        case Left(_)       => ZIO.succeed(Suites(Nil, None))
+                        case Right(linked) =>
+                          SuiteNames
+                            .discover(
+                              classes,
+                              linked.paths,
+                              provider.framework.value
+                            )
+                            .either
+                            .map {
+                              case Right(SuiteNames.Found.Suites(names)) =>
+                                Suites(names, Some(frameworkName(provider)))
+                              case _ =>
+                                Suites(Nil, Some(frameworkName(provider)))
+                            }
+                      }
+                  }
+                }
+              }
 
     private def frameworkName(provider: TestProvider): String =
       if provider.framework.value == TestProvider.Zio.framework.value then
@@ -840,7 +915,7 @@ object Bsp:
       else provider.framework.value
 
     private def sourceItem(uri: String): IO[BspError, Rpc.SourcesItem] =
-      parse(uri) match
+      parsed(uri) {
         case None     => ZIO.fail(BspError.UnknownTarget)
         case Some(id) =>
           filesOf(id).map: paths =>
@@ -849,6 +924,7 @@ object Bsp:
               paths.map(path => Rpc.SourceItem(fileUri(path), 1, false))
             )
 
+      }
     private def filesOf(id: Id): IO[BspError, List[Path]] =
       id match
         case Id.Build =>
@@ -858,47 +934,76 @@ object Bsp:
             .orDie
             .map(present => if present then List(file) else Nil)
         case Id.Main(module, version, platform) =>
-          GraphCompile
-            .sourceBase(repo, module, graphModules)
-            .mapError(BspError.Sources(_))
-            .flatMap:
-              case None       => ZIO.succeed(Nil)
-              case Some(root) =>
-                histos.zinc.Sources
-                  .select(root, version, platform)
-                  .mapError(BspError.Toolchain(_))
+          graphModules.flatMap { modules =>
+            GraphCompile
+              .sourceBase(repo, module, modules)
+              .mapError(BspError.Sources(_))
+              .flatMap {
+                case None       => ZIO.succeed(Nil)
+                case Some(root) =>
+                  histos.zinc.Sources
+                    .select(root, version, platform)
+                    .mapError(BspError.Toolchain(_))
+              }
+          }
         case Id.Test(module, version, platform) =>
-          ModuleTest
-            .testSources(repo, module, graphModules, version, platform)
-            .mapError(BspError.Tests(_))
+          graphModules.flatMap: modules =>
+            ModuleTest
+              .testSources(repo, module, modules, version, platform)
+              .mapError(BspError.Tests(_))
 
     private def targets: ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
+      request.get.flatMap(graph => targetList(graph))
+
+    private def targetUris(
+        graph: ProjectGraph
+    ): ZIO[Resolve, BspError, List[String]] =
+      targetList(graph).map(_.targets.map(_.id.uri))
+
+    private def targetList(
+        graph: ProjectGraph
+    ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
       for
         extra <- allowed
-        cells = cellsOf(extra)
+        cells = cellsOf(graph, extra)
         versions = (cells.map(_.version) :+ BuildScala).distinct
-        result <- listed(cells, versions)
+        result <- listed(graph, cells, versions)
       yield result
 
-    /** JVM is always published. `js` and `native` are added only when the allow-list names them. */
+    /** JVM is always published. `js` and `native` are added only when the
+      * allow-list names them.
+      */
     private def allowed: IO[BspError, Set[Platform]] =
       val path = repo.resolve(".histos").resolve("bsp-platforms")
-      ZIO.attemptBlocking(Files.exists(path)).mapError(_ => BspError.Platforms(s"could not read $path")).flatMap:
-        case false => ZIO.succeed(Set.empty)
-        case true =>
-          ZIO.attemptBlocking(Files.readString(path)).mapError(_ => BspError.Platforms(s"could not read $path")).flatMap: text =>
-            ZIO.fromEither(parsePlatforms(text)).mapError(BspError.Platforms(_))
+      ZIO
+        .attemptBlocking(Files.exists(path))
+        .mapError(_ => BspError.Platforms(s"could not read $path"))
+        .flatMap:
+          case false => ZIO.succeed(Set.empty)
+          case true  =>
+            ZIO
+              .attemptBlocking(Files.readString(path))
+              .mapError(_ => BspError.Platforms(s"could not read $path"))
+              .flatMap: text =>
+                ZIO
+                  .fromEither(parsePlatforms(text))
+                  .mapError(BspError.Platforms(_))
 
     private def parsePlatforms(text: String): Either[String, Set[Platform]] =
       val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-      lines.foldLeft[Either[String, Set[Platform]]](Right(Set.empty)): (acc, token) =>
-        acc.flatMap: have =>
-          token match
-            case "js"     => Right(have + Platform.Js)
-            case "native" => Right(have + Platform.Native)
-            case other    => Left(s"'$other' is not a bsp platform")
+      lines.foldLeft[Either[String, Set[Platform]]](Right(Set.empty)):
+        (acc, token) =>
+          acc.flatMap: have =>
+            token match
+              case "js"     => Right(have + Platform.Js)
+              case "native" => Right(have + Platform.Native)
+              case other    => Left(s"'$other' is not a bsp platform")
 
-    private def listed(cells: List[Cell], versions: List[ScalaVersion]): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
+    private def listed(
+        graph: ProjectGraph,
+        cells: List[Cell],
+        versions: List[ScalaVersion]
+    ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
       for
         jars <- ZIO
           .foreach(versions)(version =>
@@ -913,7 +1018,7 @@ object Bsp:
             .testSources(
               repo,
               cell.module,
-              graphModules,
+              modulesOf(graph),
               cell.version,
               cell.platform
             )
@@ -924,15 +1029,19 @@ object Bsp:
         )
       yield
         val mains = cells.map(cell =>
-          shown(Id.Main(cell.module, cell.version, cell.platform), jars)
+          shown(graph, Id.Main(cell.module, cell.version, cell.platform), jars)
         )
         val suites = tests.flatten.map(cell =>
-          shown(Id.Test(cell.module, cell.version, cell.platform), jars)
+          shown(graph, Id.Test(cell.module, cell.version, cell.platform), jars)
         )
-        val file = shown(Id.Build, jars)
+        val file = shown(graph, Id.Build, jars)
         Rpc.BuildTargetsResult(mains ++ suites ++ List(file))
 
-    private def shown(id: Id, jars: Map[String, List[Path]]): Rpc.BuildTarget =
+    private def shown(
+        graph: ProjectGraph,
+        id: Id,
+        jars: Map[String, List[Path]]
+    ): Rpc.BuildTarget =
       val (name, base, tags, version, platform, dependencies, canTest, canRun) =
         id match
           case Id.Main(module, version, platform) =>
@@ -942,7 +1051,7 @@ object Bsp:
               List("library"),
               version,
               platformCode(platform),
-              dependencyUris(module, version, platform),
+              dependencyUris(graph, module, version, platform),
               false,
               true
             )
@@ -990,18 +1099,26 @@ object Bsp:
         )
       )
 
-    private def cellsOf(extra: Set[Platform]): List[Cell] =
+    private def cellsOf(graph: ProjectGraph, extra: Set[Platform]): List[Cell] =
       val wanted = Set[Platform](Platform.Jvm) ++ extra
       val order = List(Platform.Jvm, Platform.Js, Platform.Native)
       graph.projects
         .collect { case module: Module => module }
         .flatMap: module =>
           module.versions.all.flatMap: version =>
-            order.filter(platform => wanted.contains(platform) && module.platforms.all.contains(platform)).map: platform =>
-              Cell(module, version, platform)
-        .sortBy(cell => (cell.module.name.value, cell.version.value, cell.platform.token))
+            order
+              .filter(platform =>
+                wanted.contains(platform) && module.platforms.all
+                  .contains(platform)
+              )
+              .map: platform =>
+                Cell(module, version, platform)
+        .sortBy(cell =>
+          (cell.module.name.value, cell.version.value, cell.platform.token)
+        )
 
     private def dependencyUris(
+        graph: ProjectGraph,
         module: Module,
         version: ScalaVersion,
         platform: Platform
@@ -1017,7 +1134,12 @@ object Bsp:
               Some(targetUri(Id.Main(dependency, version, platform)))
             case _ => None
 
-    private def parse(uri: String): Option[Id] =
+    private def parsed[R, E, A](uri: String)(
+        use: Option[Id] => ZIO[R, E, A]
+    ): ZIO[R, E, A] =
+      request.get.flatMap(graph => use(identify(uri, graph)))
+
+    private def identify(uri: String, graph: ProjectGraph): Option[Id] =
       if uri == buildUri then Some(Id.Build)
       else
         val prefix = directoryUri(repo)
@@ -1043,7 +1165,7 @@ object Bsp:
               .get("platform")
               .flatMap(raw => Platform.from(raw).toOption)
             scope <- query.get("scope")
-            module <- graphModules.find(_.name.value == name)
+            module <- modulesOf(graph).find(_.name.value == name)
           yield (module, version, platform, scope)
           found match
             case Some(module, version, platform, "main") =>
@@ -1052,8 +1174,11 @@ object Bsp:
               Some(Id.Test(module, version, platform))
             case _ => None
 
-    private def graphModules: List[Module] =
+    private def modulesOf(graph: ProjectGraph): List[Module] =
       graph.projects.collect { case module: Module => module }
+
+    private def graphModules: UIO[List[Module]] =
+      request.get.map(modulesOf)
 
     private def targetUri(id: Id): String =
       id match
@@ -1075,14 +1200,15 @@ object Bsp:
           Rpc.CompileProvider(List("scala")),
           dependencySourcesProvider = true,
           jvmRunEnvironmentProvider = true,
-          jvmTestEnvironmentProvider = true
+          jvmTestEnvironmentProvider = true,
+          buildTargetChangedProvider = true
         )
       )
 
     /** Metals rejects a target id as a text document. Reset each source file.
       */
     private def clear(target: String): IO[BspError, Unit] =
-      parse(target) match
+      parsed(target) {
         case None     => ZIO.unit
         case Some(id) =>
           filesOf(id).flatMap: files =>
@@ -1098,6 +1224,8 @@ object Bsp:
                   )
                 )
               )
+
+      }
 
     /** The compiler library is `JvmCompile.runtime`. A locked copy of either
       * standard library is a second version.
@@ -1187,6 +1315,22 @@ object Bsp:
             )
           )
         case _ => None
+
+  /** Created is 1, changed is 2, deleted is 3. An id in both lists is changed.
+    */
+  def events(
+      before: List[String],
+      after: List[String]
+  ): List[Rpc.BuildTargetEvent] =
+    val previous = before.toSet
+    val next = after.toSet
+    val created = (next -- previous).toList.sorted.map(event(_, 1))
+    val changed = previous.intersect(next).toList.sorted.map(event(_, 2))
+    val deleted = (previous -- next).toList.sorted.map(event(_, 3))
+    created ++ changed ++ deleted
+
+  private def event(uri: String, kind: Int): Rpc.BuildTargetEvent =
+    Rpc.BuildTargetEvent(Rpc.TargetId(uri), kind)
 
   private def fileUri(path: Path): String =
     path.toAbsolutePath.normalize.toUri.toString

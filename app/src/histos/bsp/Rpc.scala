@@ -64,7 +64,10 @@ object Rpc:
       dependencySourcesProvider: Boolean,
       jvmRunEnvironmentProvider: Boolean,
       jvmTestEnvironmentProvider: Boolean,
+      buildTargetChangedProvider: Boolean,
   ) derives JsonCodec
+  final case class BuildTargetEvent(target: TargetId, kind: Int) derives JsonCodec
+  final case class DidChange(changes: List[BuildTargetEvent]) derives JsonCodec
   final case class InitializeResult(
       displayName: String,
       version: String,
