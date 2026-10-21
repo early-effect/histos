@@ -11,6 +11,7 @@ enum BuildError:
   case DuplicateScalaVersion(name: ProjectName, version: ScalaVersion, position: SourcePos)
   case DuplicateChild(name: ProjectName, child: ProjectName, position: SourcePos)
   case AggregateIncludesItself(name: ProjectName, position: SourcePos)
+  case AggregateChild(aggregate: ProjectName, child: ProjectName, position: SourcePos)
   case MissingProject(name: String, referencedFrom: SourcePos)
   case DependsOnAggregate(module: ProjectName, aggregate: ProjectName, position: SourcePos)
   case SelfDependency(name: ProjectName, position: SourcePos)
@@ -64,6 +65,8 @@ enum BuildError:
     case DuplicateChild(name, child, _)      =>
       s"aggregate '${name.value}' lists '${child.value}' twice"
     case AggregateIncludesItself(name, _)    => s"aggregate '${name.value}' includes itself"
+    case AggregateChild(aggregate, child, _) =>
+      s"aggregate '${aggregate.value}' lists '${child.value}', which is not a module"
     case MissingProject(name, at)            =>
       s"'$name' is referenced but not passed to Projects (${at.line}:${at.column})"
     case DependsOnAggregate(module, aggregate, _) =>

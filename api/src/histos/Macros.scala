@@ -189,8 +189,8 @@ private object BuilderMacro:
 
   def aggregate(
       name: Expr[String],
-      project: Expr[ProjectDef],
-      projects: Expr[Seq[ProjectDef]],
+      project: Expr[ModuleDef],
+      projects: Expr[Seq[ModuleDef]],
   )(using Quotes): Expr[AggregateDef] =
     val at = pos
     '{ AggregateDef.make($name, $project :: $projects.toList, $at) }

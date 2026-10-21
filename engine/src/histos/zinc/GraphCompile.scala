@@ -4,7 +4,7 @@ import histos.jdk.Sha256
 import histos.js.ScalaJs
 import histos.native.{NativeCompile, NativeToolchain}
 import histos.resolve.{BuildResolvers, Classpath, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
-import histos.workflow.{CiError, TestTarget, Workflow}
+import histos.workflow.CiError
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -25,6 +25,7 @@ final case class CompiledCell(module: ProjectName, version: ScalaVersion, platfo
 enum CompileFeed:
   case Diagnostic(module: ProjectName, version: ScalaVersion, platform: Platform, problem: CompileProblem)
   case Done(cell: CompiledCell)
+  case Failed(error: GraphCompileError)
 
 enum GraphCompileError:
   case Target(error: CiError)
@@ -38,6 +39,7 @@ enum GraphCompileError:
   case RootRead(path: Path)
   case Output(path: Path)
   case Failed(module: ProjectName, version: ScalaVersion, platform: Platform, error: CompileError)
+  case Cells(first: GraphCompileError, rest: List[GraphCompileError])
   case Jdk(home: Path)
 
   def message: String = this match
@@ -55,6 +57,7 @@ enum GraphCompileError:
     case Output(path) => s"could not write $path"
     case Failed(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platformToken(platform)} failed to compile\n${error.message}"
+    case Cells(first, rest) => (first :: rest).map(_.message).mkString("\n")
     case Jdk(home) => s"could not read the JDK release file under $home"
 
 object GraphCompile:
@@ -111,8 +114,13 @@ object GraphCompile:
     watch(repo, graph, pickCells(graph, cells, platform), Some(cells.map(_._2.value).toSet), Some(platform), jdk)
 
   private def collected(feeds: ZStream[Resolve, GraphCompileError, CompileFeed]): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
-    feeds.collect { case CompileFeed.Done(cell) => cell }.runCollect.map: cells =>
-      cells.toList.sortBy(cell => (cell.module.value, cell.version.value, platformToken(cell.platform)))
+    feeds.runCollect.flatMap: chunk =>
+      val failed = chunk.collect { case CompileFeed.Failed(error) => error }
+      val cells = chunk.collect { case CompileFeed.Done(cell) => cell }.toList
+        .sortBy(cell => (cell.module.value, cell.version.value, platformToken(cell.platform)))
+      failed.toList match
+        case Nil => ZIO.succeed(cells)
+        case head :: rest => ZIO.fail(GraphCompileError.Cells(head, rest))
 
   def jdkHere: IO[GraphCompileError, ResolvedJdk] =
     val home = Option(java.lang.System.getProperty("java.home")).filter(_.nonEmpty).map(Path.of(_))
@@ -138,13 +146,8 @@ object GraphCompile:
 
   private def choose(graph: ProjectGraph, names: List[String]): Either[GraphCompileError, List[Module]] =
     val modules = modulesOf(graph)
-    if names.isEmpty then Right(modules)
-    else
-      Workflow.target(graph, names).left.map(GraphCompileError.Target(_)).map: target =>
-        val roots = target match
-          case TestTarget.Entire                 => modules.map(_.name).toSet
-          case TestTarget.Named(first, rest)     => (first :: rest).toSet
-        upstream(modules, roots)
+    histos.select.Selection.select(graph, names).left.map(GraphCompileError.Target(_)).map: selected =>
+      upstream(modules, selected.modules.map(_.name).toSet)
 
   private def pickCells(
       graph: ProjectGraph,
@@ -281,6 +284,11 @@ object GraphCompile:
       notes.put(Note.Feed(CompileFeed.Done(cell)))
       finish(Note.Stop)
 
+    /** A cell failed. Siblings keep running. The stream records the failure and this slot stops. */
+    def failed(error: GraphCompileError): Unit =
+      notes.put(Note.Feed(CompileFeed.Failed(error)))
+      finish(Note.Stop)
+
     def fail(error: GraphCompileError): Unit =
       finish(Note.Broken(error))
 
@@ -325,14 +333,28 @@ object GraphCompile:
     val builds = platform.forall(module.platforms.all.contains)
     if !builds then ZIO.succeed(Nil)
     else sourceBase(repo, module, all).flatMap:
-      case None => ZIO.fail(GraphCompileError.NoRoot(module.name))
+      case None =>
+        ZIO.foreachDiscard(runs)((_, slot) => ZIO.succeed(slot.failed(GraphCompileError.NoRoot(module.name)))).as(Nil)
       case Some(base) =>
         ZIO.foreachPar(runs):
           case ((_, version, chosen), slot) =>
             compileVersion(repo, all, module, version, chosen, base, done, lock, jdk, repositories, slot.hear).foldZIO(
-              error => ZIO.succeed(slot.fail(error)) *> ZIO.fail(error),
-              cell => ZIO.succeed(slot.succeed(cell)).as(cell),
+              error =>
+                kept(error) match
+                  case Some(cellError) => ZIO.succeed(slot.failed(cellError)).as(None)
+                  case None            => ZIO.succeed(slot.fail(error)) *> ZIO.fail(error)
+              ,
+              cell => ZIO.succeed(slot.succeed(cell)).as(Some(cell)),
             )
+        .map(_.flatten.toList)
+
+  /** These stay on the feed. The others still fail the compile. */
+  private def kept(error: GraphCompileError): Option[GraphCompileError] =
+    error match
+      case GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) | GraphCompileError.MissingUpstream(_, _, _, _) |
+          GraphCompileError.RootRead(_) | GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) =>
+        Some(error)
+      case _ => None
 
   private def compileVersion(
       repo: Path,
@@ -359,14 +381,15 @@ object GraphCompile:
           for
             upstreamClasses <- ZIO.fromEither(upstreamClasses(module, chain, version, platform, done))
             fetched <- ZIO.foreach(chain :+ module)(item => classpathOf(item, version, platform, lock, repositories)).map(merge)
+            kept = if platform == Platform.Jvm then withoutStdlib(fetched) else fetched
             classes = classesDir(repo, module.name, version, platform)
             request = CompileRequest(
-              CompileToolchain(version, platform, jdk, ScalacFlags.empty),
+              CompileToolchain(version, platform, jdk, module.flags),
               sources,
-              upstreamClasses ++ fetched.paths,
+              upstreamClasses ++ kept.paths,
               classes,
               analysis(repo, module.name, version, platform),
-              fetched.hashes,
+              kept.hashes,
             )
             compiled <- compile(module, request, SemanticDb.argv(repo, version), hear).mapError(failed)
           yield CompiledCell(module.name, version, platform, compiled.classes, compiled.classFiles)
@@ -414,6 +437,11 @@ object GraphCompile:
         done.get((dependency.name, version, platform)) match
           case Some(classes) => Right(paths :+ classes)
           case None          => Left(GraphCompileError.MissingUpstream(module.name, dependency.name, version, platform))
+
+  /** JVM compile prepends `JvmCompile.runtime`. The lock's copy of that library has to stay off. */
+  private def withoutStdlib(fetched: Fetched): Fetched =
+    val kept = fetched.paths.zip(fetched.hashes).filterNot((path, _) => JvmCompile.isStandardLibrary(path))
+    Fetched(kept.map(_._1), kept.map(_._2))
 
   private def merge(fetched: List[Fetched]): Fetched =
     val paired = fetched.flatMap(item => item.paths.zip(item.hashes))

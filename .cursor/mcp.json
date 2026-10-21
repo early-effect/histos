@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "histos": {
+      "command": "./histos",
+      "args": [
+        "mcp"
+      ]
+    },
+    "histos-metals": {
+      "url": "http://localhost:56775/mcp"
+    }
+  }
+}

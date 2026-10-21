@@ -6,17 +6,21 @@
 **Repo:** `early-effect/histos`
 **Author:** placeholder
 
-This document describes the tree on main at `c31b8c4` (pull request #41) and the unmerged local branch `histos/plugins` (seven commits, no pull request). It replaces the 2026-10-16 draft. Work that has merged is stated in the present tense. The next stack is the PR plan at the bottom.
+This document describes this tree. What the code does is stated in the present tense. The commits at the bottom are the remaining work.
 
-The plugin contract stays in [plugins.md](plugins.md). This file only summarizes it. The loader that contract describes is not on main.
+The plugin contract stays in [plugins.md](plugins.md). This file only summarizes it. That file follows the loader in this tree: platform parent, boundary names from the engine host, no second api `URLClassLoader`.
 
 ## Overview
 
-Histos is a pre-release Scala 3 and ZIO build tool. Evaluating `histos.scala` produces an immutable project graph. Tasks run as ZIO effects. The CLI, BSP, MCP, and ACP call that graph. They do not each grow a second build.
+Histos is a ZIO build tool for the person who runs it and for the agent that calls it. CI is the command the repo already runs, and an independent failure does not hide the next one. Effects are values. Errors are typed enums. Selection, compile, test, publish, and the server are ZIO programs over one immutable graph. A protocol handler does not hide a second build. A test does not load another module's classes inside the server JVM.
+
+sbt's split is the familiar one: `dependsOn` is the classpath, and `aggregate` is which projects' tasks also run (`Project.dependencies` and `Project.aggregate`). Mill's familiar idea is that each module runs its own task. Histos keeps separate classpaths and one subprocess per module, Scala version, and platform, and it finishes the cells that do not depend on a failure so every one of those failures is visible. It does not add an sbt setting key, a Mill query language, a merged classpath, or a classloader-isolated test inside the server to look like either tool.
+
+Evaluating `histos.scala` produces that immutable graph. Tasks run as ZIO effects. The CLI, BSP, MCP, and ACP call that graph.
 
 A clone builds with `./histos`. The frozen script verifies a JVM assembly and execs it. The engine is that JVM process. Scala Native is a target platform, not the launcher.
 
-Main already compiles and tests this repository, speaks a thin BSP 2.2 session, and can attach `compile`, `test`, and `bsp` to an opt-in server. The editor cannot live on that session yet: scalac options are empty, diagnostics are dropped, main and test share one target, and there is no target for `histos.scala`. The next stack makes Metals (and therefore Cursor) use the same compile Histos uses, then carries that session to the ascent proof, lands the plugin branch, and generates CI for this repo.
+Main already compiles and tests this repository. The JVM BSP session publishes a main target and a test target per module and Scala version, a target for `histos.scala`, SemanticDB, diagnostics, and `buildTarget/jvmTestEnvironment`. `compile`, `test`, and `bsp` can attach to an opt-in server. Js and Native targets are not in that list. An aggregate name still fails as `CiError.NotModule`. MCP loads its own graph. The commits at the bottom are the rest of this work.
 
 ## Background and Motivation
 
@@ -24,12 +28,17 @@ sbt-zipx was the previous build for early-effect libraries. Histos replaces it f
 
 The first dogfood is this repo. It builds itself. The second is a local copy of ascent at `~/projects/early-effect/ascent-histos`. That copy compiles under `./histos`. Its tests, named mains, scalac flags, and publish coordinates are not wired, and it has no pull request. This design does not edit that tree.
 
-Editors are the gap that blocks daily use. Metals keeps a presentation compiler and asks a build server for the classpath, the scalac options, and compile. Histos already writes `.bsp/histos.json`, but the process it starts cannot feed navigation or a test lens. Mill's answer was a BSP server that shares the build's output and daemon, not a VS Code extension and not a Bloop export. That is the path here.
+Editors are the gap that blocks daily use. Metals keeps a presentation compiler and asks a build server for the classpath, the scalac options, and compile. Histos writes `.bsp/histos.json`. The JVM session reports the classpath, the scalac options, diagnostics, and `buildTarget/jvmTestEnvironment`. Js and Native targets are not in that list. Mill's answer was a BSP server that shares the build's output and daemon, not a VS Code extension and not a Bloop export. That is the path here.
+
+An aggregate is the other gap. `inline def aggregate` takes `ProjectDef`, so a nested aggregate typechecks. `Workflow.target` rejects an aggregate name with `CiError.NotModule`. `GraphCompile.choose`, `ModuleTest.requested`, and `LocalPublish.choose` all call that function, so `histos test abc` fails with `'abc' is not a module` when abc's children are a, b, and c. sbt keeps `dependsOn` (classpath) and `aggregate` (which tasks also run) as separate lists (`Project.dependencies` and `Project.aggregate` in `main-settings/src/main/scala/sbt/Project.scala`). `root / test` runs each aggregated project's own test task. Mill's `__.test` selects each module's own task. Neither merges classpaths. Histos keeps that split. One Histos module already owns several platforms, so the aggregate selects modules and each module still expands to its own cells.
 
 ## Goals
 
 - **Effect-native.** Task execution is a ZIO effect with typed errors, resource safety, interruption, and structured concurrency. The graph stores descriptions, not the effects.
 - **One task surface.** CLI, BSP, MCP, and ACP inspect the graph, run a task, or cancel a run. Protocol handlers do not contain build logic.
+- **An aggregate is a list of modules.** It selects those modules. It has no cell and no classpath. A nested aggregate does not compile.
+- **One warm JVM.** `./histos server` holds the loaded graph. A command that loads a `ProjectGraph` attaches when `.histos/server.json` matches. A second load is the fallback when that server is absent or the socket is dead. A different `Cli.VersionText` asks for `histos reboot` and does not start a second writer.
+- **Familiar, then honest.** The aggregate and the per-module task are the ideas people already know from sbt and Mill. The Histos rule is the classpath split above, not a copy of either tool's warts.
 - **Zero-install for a clone.** `./histos` downloads the pinned assembly, and a JDK when no `java` is on `PATH`.
 - **Exact Scala.** A module names full versions, such as `3.10.0` or `2.13.16`. A series such as `3` is not a pin.
 - **The IDE compiles the way the CLI compiles.** Same Zinc analysis, same lock, same options, aside from flags that must not reach the presentation compiler.
@@ -47,7 +56,13 @@ Editors are the gap that blocks daily use. Metals keeps a presentation compiler 
 - A DAP server and breakpoints in the first test slice.
 - Loading `central` through the plugin classloader. It stays an in-tree module.
 - Remote execution, a test filesystem or network jail, an sbt importer, and publishing Histos itself.
-- A non-snapshot release. Nothing in this stack tags a version.
+- A non-snapshot release. Nothing here tags a version.
+- One test process per Scala version and platform with a merged classpath. Classpaths stay per module. Js links per module. Native links per module.
+- `histos run` on an aggregate. A main needs one module, and a platform argument when that module builds more than one platform.
+- Nested aggregates, and a runtime flatten that would accept them.
+- Routing Metals test execution through `Call.Test`. Editor tests stay on `buildTarget/jvmTestEnvironment`.
+- Turning on workflow `--platform` and `--scala`. The CLI grammar rejects those flags.
+- Hot-swapping `dist/histos.jar` inside reload. A new jar is `histos reboot`.
 
 ## Key Decisions
 
@@ -57,11 +72,23 @@ Editors are the gap that blocks daily use. Metals keeps a presentation compiler 
 
 3. **BSP follows Mill's native path, not Bloop and not a custom extension.** `.bsp/histos.json` already names `./histos bsp`. Metals and IntelliJ's Scala plugin spawn that process and speak BSP over stdio. Cursor is the same Metals extension. Histos is not in Metals' hardcoded build-tool list, so there is no Bloop preference to override. The presentation compiler stays Metals'. `scala3-presentation-compiler_3:3.10.0` is the compiler it should load. Histos does not ship one.
 
-4. **Plugins are libraries on `histos.api`.** `contribute` is data. `run` is `ZIO[Scope, PluginRunError, PluginOutput]`. The graph does not store the effect. The spec is [plugins.md](plugins.md). The implementation is `histos/plugins`, unmerged.
+4. **Plugins are libraries on `histos.api`.** `contribute` is data. `run` is `ZIO[Scope, PluginRunError, PluginOutput]`. The graph does not store the effect. The spec is [plugins.md](plugins.md). The loader is in this tree.
 
 5. **The Specular plugin lives in the Specular repo.** This repo's fixture is a fixture. Docs have to be generated from Specular itself, as a Histos module, not from a copy of Specular inside Histos.
 
-6. **JVM-only BSP first.** The default target list is one JVM main cell per module and Scala version, a JVM test cell, and a synthetic target for `histos.scala`. Every module id carries `&platform=jvm`, including while Js and Native are unpublished, so a later allow-list line cannot reuse that URI. Js and Native targets are published only when `.histos/bsp-platforms` names them, and their ids use `&platform=js` or `&platform=native`. That file is absent by default. It is not a field on `Module`. `histos compile` still builds every platform the module names. `buildTarget/compile` passes the platform from the id and does not link.
+6. **JVM targets are the default BSP list.** One JVM main cell per module and Scala version, a JVM test cell when the module has test sources, and a synthetic target for `histos.scala`. Every module id carries `&platform=jvm` and `&scope=`. Js and Native targets are published only when `.histos/bsp-platforms` names them. That file is absent by default. It is not a field on `Module`. `histos compile` still builds every platform the module names. `buildTarget/compile` passes the platform from the id and does not link. `workspace/buildTargets` reads the file on every request. Absent or empty publishes JVM only.
+
+7. **Aggregate children are modules.** `aggregate` takes `ModuleDef`. A nested aggregate does not compile. There is no runtime flatten. An aggregate has no cell. `dependsOn` stays a compile edge.
+
+8. **One selector.** `compile`, `test`, `testOnly`, `testQuick`, and `publish` share it. Empty names are the whole graph. A module name is that module. An aggregate name is its direct members. A repeated module is `CiError.Duplicate`. `Workflow.target` stays the CI name parser and keeps rejecting aggregates. `TestJob.Aggregate` is the empty split set, not a project aggregate.
+
+9. **A failed cell does not cancel an independent sibling.** The command fails after the last cell if any cell failed. `histos run` on an aggregate stays `ProgramError.Aggregate`.
+
+10. **The server is the warm process.** `Call` covers every command that loads a `ProjectGraph`: compile, test (patterns and quick), publish, graph, run (a main, with a platform when needed), a task (`inspect`, `versions`, or `plugin/task`), cancel, toolchain, resolve, workflow, and assembly. `cache` and `version` do not load a graph and stay in-process. CLI, MCP, and ACP re-read `.histos/server.json` on every call. They do not splice into the Metals stdio session. MCP and ACP become clients in the later commit. Until then the CLI and BSP are the clients.
+
+11. **Reload stays in the same JVM.** `Loader.load` is the check. Success swaps the graph. Failure keeps the last good graph. The BSP session reads the graph from a ref and sends `buildTarget/didChange`. `histos reboot` is a new JVM, because `Cli.VersionText` does not change when `dist/histos.jar` is rebuilt.
+
+12. **MCP and ACP return the CLI text.** Success and failure structured content are both `{value: string}`. That includes toolchain.
 
 ## As-Built Architecture
 
@@ -87,14 +114,14 @@ flowchart LR
 
 | Module | Path | Role |
 | --- | --- | --- |
-| `api` | `api/src/histos` | Graph, builder, literals, versions. On main it has no ZIO library dependency. |
+| `api` | `api/src/histos` | Graph, builder, literals, versions, `HistosPlugin`. Depends on ZIO `2.1.27` because `run` is a ZIO. The jar does not shade ZIO. |
 | `central` | `central/src/histos/central` | Local Maven publisher. Not a plugin. |
 | `engine` | `engine/src/histos` | Load, tasks, scheduler, cache, JDK, Node, Zinc, resolve, test, Js, Native, workflow. |
 | `app` | `app/src/histos` | CLI, MCP, ACP, BSP, server. One `ZIOApp`. |
 
 Pinned coordinates in `histos.scala`: ZIO `2.1.27`, Zinc `2.0.4`, Coursier `2.1.26`, `heddle-mcp` `0.12.0`, `zio-cli` `0.8.2`. The tool compiles with `scala3-compiler` `3.10.0`. That compiler loads `histos.scala`. It does not compile the modules. A module compile fetches the compiler the module names. Scala 3 and Scala 2.13 are accepted. Scala 2.12 and older are `CompileError.UnsupportedScala`.
 
-On main, `Loader.load` is `ZIO[Scope, LoadError, LoadedBuild]`. The `Scope` closes the build classloader. The plugins branch widens the environment to `Scope & Resolve & ContentStore` and adds `scan`. BSP work that lands before that branch must keep compiling against the main signature.
+`Loader.load` is `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build classloader. `scan` reads the plugin header before that load. `buildClasspath` is `Boundary.jars`.
 
 ```scala
 inline def module(name: String, platform: Platform, platforms: Platform*)(
@@ -123,9 +150,9 @@ Errors are enums with `message`. They are not `Either[String, _]`, and they do n
 | `ServerError` | `app/server` | Dead socket, stale fingerprint, bad frame. |
 | `RemoteError` | `engine/schedule` | Cache off, read-only, dangling output. |
 
-The plugins branch adds `PluginLoadError` and `PluginRunError`, and `LoadError.Plugin`, `TaskError.Plugin`, `BuildError` cases for duplicate plugins, missing notes, and a `contribute` defect. Those cases are not on main.
+`PluginLoadError`, `PluginRunError`, `LoadError.Plugin`, `TaskError.Plugin`, and the `BuildError` cases for duplicate plugins, missing notes, and a `contribute` defect are in this tree.
 
-`TaskId.Inspect` is `"inspect"`. `TaskId.Versions` is `"versions"`. On main, `TaskKind` is `Inspect`, `Compile`, and `Versions`. A plugin task id is a different string (`plugin/task`) and must not occupy those two.
+`TaskId.Inspect` is `"inspect"`. `TaskId.Versions` is `"versions"`. `TaskKind` is `Inspect`, `Compile`, `Versions`, and `Plugin`. A plugin task id is a different string (`plugin/task`) and must not occupy the two built-in strings.
 
 ```scala
 trait Tasks:
@@ -153,7 +180,7 @@ flowchart TD
 
 Batch is the default. `./histos test` does not leave a process behind. A successful ZIO `run` is process status 0, so the command exits with its status.
 
-`./histos server` is opt-in. It listens on a Unix socket and writes `.histos/server.json` with `Cli.VersionText` (`histos 0.0.1-SNAPSHOT`) and a fingerprint. BSP's own version field is the bare `0.0.1-SNAPSHOT`. The two strings are not compared to each other. On main the fingerprint is `histos.scala` plus `.histos/dependencies.lock`. The plugins branch also hashes regular files under each header `plugin(path)`. `compile`, `test`, and `bsp` attach when the record matches. A missing server, a dead socket, a different version, or a different fingerprint runs the command in-process. The server calls are `Call.Compile`, `Call.Test`, and `Call.Bsp`. Publish, resolve, workflow, run, and MCP do not attach.
+`./histos server` is opt-in. It listens on a Unix socket and writes `.histos/server.json` with `Cli.VersionText` (`histos 0.0.1-SNAPSHOT`) and a fingerprint. BSP's own version field is the bare `0.0.1-SNAPSHOT`. The two strings are not compared to each other. The fingerprint is `histos.scala`, `.histos/dependencies.lock`, and regular files under each header `plugin(path)` (`Fingerprint.read`). `compile`, `test`, and `bsp` attach when the record matches. A missing server, a dead socket, a different version, or a different fingerprint runs the command in-process. The server calls are `Call.Compile`, `Call.Test`, and `Call.Bsp`. Publish, resolve, workflow, run, and MCP do not attach.
 
 `testQuick` does not attach. It compiles in-process and reads the same on-disk Zinc analysis the server writes. `testOnly` does attach, and `Call.Test` carries project names only. A live server therefore drops the `testOnly` pattern and runs the unfiltered suites. That is a defect. BSP test execution must not copy it.
 
@@ -191,25 +218,32 @@ JDK selection is read-only against `JAVA_HOME`, `PATH`, an existing Coursier or 
 
 ### BSP today
 
-`.bsp/histos.json` names `./histos bsp`, BSP `2.2.0`, language `scala`. The session is `app/src/histos/bsp/Bsp.scala` and `Rpc.scala`.
-
-What it answers:
+`.bsp/histos.json` names `./histos bsp`, BSP `2.2.0`, language `scala`. The session is `app/src/histos/bsp/Bsp.scala` and `Rpc.scala`. `Bsp.open` stores the graph by value. Frames are `Content-Length` (`Frame.scala`), with an 8 MiB body limit.
 
 | Method | Behavior |
 | --- | --- |
-| `build/initialize` | Display name `histos`, version `0.0.1-SNAPSHOT`, BSP `2.2.0`. Capability is `compileProvider` for `scala` only. No test, run, or debug provider. |
+| `build/initialize` | Display name `histos`, version `0.0.1-SNAPSHOT`, BSP `2.2.0`. Capabilities are `compileProvider` for `scala`, `dependencySourcesProvider`, `jvmRunEnvironmentProvider`, and `jvmTestEnvironmentProvider`. No debug provider. |
 | `build/initialized` | Ignored. |
-| `workspace/buildTargets` | One target per module that builds JVM, per Scala version. Sorted by name, then version. |
-| `buildTarget/sources` | One directory item (kind 2) for the source base: `<module>/src`, or the repository `src` when the graph has one module. |
-| `buildTarget/scalacOptions` | `options` is `Nil`. Classpath is the Scala runtime, the locked compile jars, and upstream class directories. `classDirectory` is `.histos/classes/<module>/<scala>/jvm`. |
-| `buildTarget/compile` | Calls `GraphCompile.runCells`. That passes `platform = None` into `watch`, and `platforms` then returns every platform the module builds. On this repo every module is JVM, so the session looks JVM-only. Status `1` on success, `2` on any `GraphCompileError`. `originId` is echoed. `collected` keeps only `CompileFeed.Done`, so the diagnostic feed is discarded. |
+| `workspace/buildTargets` | `jvmCells`: one main target per JVM module and Scala version, a test target when `ModuleTest.testSources` is non-empty, and `?build=histos.scala`. Sorted by name, then version. Js and Native are not published. |
+| `buildTarget/sources` | Kind 1 file URIs. Main uses `Sources.select`. Test uses `ModuleTest.testSources`. The build target is the one file `histos.scala`. |
+| `buildTarget/scalacOptions` | `SemanticDb.argv` for that Scala version. Production `ScalacFlags` stay empty, so the list is those SemanticDB flags. Main classpath is `JvmCompile.runtime`, the locked compile jars without a second standard library, and upstream class directories. Test classpath names that order (`main` classes, upstream classes, runtime, locked jars) and does not require the directories to exist. The build-file classpath is `Loader.buildClasspath`. `ScalaBuildTarget.jars` is `JvmCompile.scalaJars`. |
+| `buildTarget/dependencySources` | `Resolve.sources` for each locked artifact, from `LockedArtifact.repository` only. Standard-library sources use `Repository.Central` only. A miss is omitted. |
+| `buildTarget/compile` | Mains call `GraphCompile.cellFeed` with the platform on the ids and the requested versions. `picked` is those modules plus the upstream closure. Tests call `ModuleTest.compiledTests` with a `CompiledCell` whose classes directory is the main output and `classFiles` 0. The build id runs `Loader.reportBuild`. `build/publishDiagnostics` carries the Zinc range (`PositionBase.Zinc` subtracts one) or the dotty range unchanged. `clear` sends `reset: true` per source file at the start. Status `1` or `2`. `originId` is echoed. The compile does not link. |
+| `buildTarget/jvmTestEnvironment` | Test classes, then `runtimeClasspath`. Working directory is `testWork`. Environment is `suiteEnv` (`HISTOS_REPO` and `PATH`). `jvmOptions` is empty. `canTest` is true on the test target. |
+| `buildTarget/jvmRunEnvironment` | `Program.classpath` for a main id. `canRun` is true on the main target. |
+| `buildTarget/scalaMainClasses` | The module's `.main`, plus `EntryPoints.mains` on the classes directory. |
+| `buildTarget/scalaTestClasses` | Compiled suite names when the test classes directory exists. An uncompiled target is an empty list. |
 | `build/shutdown`, `build/exit` | Shutdown returns JSON null. `exit` stops the process, status 0 only after shutdown. |
 
-Anything else, including `buildTarget/dependencySources`, `buildTarget/jvmTestEnvironment`, and `debugSession/start`, is `bsp does not handle <method>` (`-32601`).
+Anything else, including `debugSession/start`, is `bsp does not handle <method>` (`-32601`). There is no JDWP listener.
 
-Each target id is the repository directory URI, the module name, and `?scala=<version>`. Example shape: `file:///.../histos/api?scala=3.10.0`. `ScalaBuildTarget.platform` is `1` (JVM). Tags are `library`. `canCompile` is true. `canTest` and `canRun` are false. Dependencies are upstream JVM modules of the same Scala version. Js and Native cells are omitted from the target list. They are not omitted from `runCells`: a module that also builds Js or Native still compiles those platforms, because `runCells` never passes `Some(Platform.Jvm)`. That compile is `ScalaJs.compile` or `NativeCompile`, not `JsLink` or `NativeLink`. There is no test target, so main and test under that one directory share a target. There is no target for `histos.scala`. A missing lock fails `scalacOptions` as a JSON-RPC error (`-32603`). `compile` folds the same failure into status `2`.
+A module id is `directoryUri(repo)`, the module name, and `?scala=<version>&platform=<token>&scope=main` or `&scope=test`. Example shape: `file:///.../histos/api?scala=3.10.0&platform=jvm&scope=main`. The build id is `directoryUri(repo) + "?build=histos.scala"`, matched first. Missing `platform` or `scope` is an unknown target. Upstream dependencies are the same query. A test id depends on that module's main id.
 
-This is enough for Metals to connect. It is not enough for navigation, diagnostics, or a test lens.
+`SemanticDb.argv` for Scala 2.13 is `-Yrangepos` and `-P:semanticdb:sourceroot:<repo>`. `invoke213` does not pass a plugin jar, and `runZinc213` passes `Nil` as the extra argv. A 2.13 cell does not get `semanticdb-scalac` yet. This repo is Scala `3.10.0`.
+
+`jvmCells` is the whole target list. `.histos/bsp-platforms` is not read. `cellFeed` already takes the platform, so publishing a Js or Native id does not need another compile entry.
+
+`JvmCompile.compileOne` builds a new `ScalaInstance` and `CompilerCache.fresh` on every compile. The server's value is one JVM, one loaded graph, and one writer of `.histos/analysis`.
 
 ### Other protocol surfaces
 
@@ -221,19 +255,15 @@ MCP (`heddle`) exposes `graph`, `run`, `cancel`, and `toolchain`. The handler ca
 
 The version model is the zipx pin strings, as tasks, not as an sbt session. A ship number lives on the catalog. Everyday development compiles `<ship>-ci` and does not publish it. A clean commit stores `<ship>-<12 lowercase hex>-SNAPSHOT`. The default branch also names a `<ship>-SNAPSHOT` pointer, which is not a pin. `manual("app", manual"1.2.3")` states a coordinate and does not read git or `.histos/releases`. One catalog does not mix the two schemes. This repo's `histos.scala` has an empty catalog and no organization, so it does not publish.
 
-`Workflow.render` writes `.github/workflows/ci.yml`. An empty split set is Aggregate and is the default: a `test` job (`./histos test`) and a `workflow` job (`./histos workflow --check`), `contents: read`, `actions/checkout@v4`, no `setup-java`. A non-empty catalog adds `./histos run versions`. This repo has no catalog, so that job is absent. The renderer can emit `--platform` and `--scala` for a matrix. The CLI grammar rejects those flags. This repo's graph uses the default empty set, so the command it would commit is `./histos test`, which the CLI accepts. Do not turn split axes on until the CLI accepts the flags. No workflow file is committed here.
+`Workflow.render` writes `.github/workflows/ci.yml`. An empty split set is `TestJob.Aggregate` and is the default: a `test` job (`./histos test`) and a `workflow` job (`./histos workflow --check`), `contents: read`, `actions/checkout@v4`, no `setup-java`. A non-empty catalog adds `./histos run versions`. This repo has no catalog, so that job is absent. The renderer can emit `--platform` and `--scala` for a matrix. The CLI grammar rejects those flags. This repo's graph uses the default empty set, so the command it would commit is `./histos test`, which the CLI accepts. Do not turn split axes on until the CLI accepts the flags. No workflow file is committed here. `TestJob.Aggregate` is the empty split set (`Splits.aggregate`). It is not a project aggregate. The two names stay separate. `Workflow.target` stays the CI name parser and keeps rejecting a project aggregate with `CiError.NotModule`. CI does not go through the module selector below.
 
-### Plugins, unmerged
+### Plugins
 
-`histos/plugins` is seven commits ahead of `c31b8c4`. There is no pull request. Main does not load a plugin.
+The loader is `engine/src/histos/load` (`HeaderScan`, `ApiBoundary`, `BuildLoader`). `central` is not a plugin.
 
-The spec is still [plugins.md](plugins.md). This summary does not replace those rules. That file's opening sentence, which says the types are absent, is stale. The types are `api/src/histos/plugin`. Its citations of design sections 2, 3, 4, 5.7, and 5.3 through 5.11 refer to the retired 2026-10-16 draft. Those section numbers are gone.
+The spec is still [plugins.md](plugins.md). This summary does not replace the task, seal, and CI rules there. The types are `api/src/histos/plugin`. Its citations of design sections 2, 3, 4, 5.7, and 5.3 through 5.11 refer to the retired 2026-10-16 draft. Those section numbers are gone. The classloader and fingerprint sentences in that file match this design.
 
-The loader on the branch is `engine/src/histos/load` (`HeaderScan`, `ApiBoundary`, `BuildLoader`). `central` is still not loaded as a plugin. The branch does not match the classloader section of `plugins.md`.
-
-`plugins.md` specifies `BuildLoader`, then `ApiBoundary`, then an api `URLClassLoader` whose URLs are the loader classpath plus ZIO 2.1.27, parented on the platform loader. The engine calls across. That parent is not `getClass.getClassLoader`.
-
-`LoaderLive.open` sets `host` to `classOf[HistosBuild].getClassLoader`, which is the engine loader, and constructs `new ApiBoundary(host)`. `ApiBoundary` loads boundary names from that host (`BuildLoader.scala`). Refusing non-api `histos.*` is implemented (`ClassHome.Refused`). Loading `zio.*`, `scala.*`, and root `histos.*` from the engine loader is not the api `URLClassLoader` the spec names. The plugin pull request closes that gap to the spec. It does not accept the engine loader as the parent, and it does not redesign `HistosPlugin`.
+`LoaderLive.open` sets `host` to `classOf[HistosBuild].getClassLoader` and constructs `new ApiBoundary(host)`. `ApiBoundary` is parented on the platform loader. Boundary names load from that host: a second `ProjectGraph` from the api jar would be a different class, and the build object would not match. Refused `histos.*` names are thrown before a plugin URL is searched (`ClassHome.Refused`). That is the loader. Do not add another api `URLClassLoader` that defines those boundary classes again.
 
 ```scala
 trait HistosPlugin:
@@ -242,184 +272,196 @@ trait HistosPlugin:
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput]
 ```
 
-`contribute` is not a `ZIO`. `Projects` copies `RegisteredPlugin` onto the graph and does not store the trait. A header line `plugin(dep"...")` or `plugin(path"...")` is the enablement. Exact-binary linking compares `ApiDigest` (sha256 of the api jar, resource `META-INF/histos/version`) to the jar this process loads. It does not compare `0.0.1-SNAPSHOT`. `LinkStrategy.Api` is `PluginLoadError.ApiLink`. Source and path plugins compile against the running api. Boundary names are `histos` (no subpackage), `histos.plugin`, `histos.version`, `zio.*`, and `scala.*`. The spec loads those from the api `URLClassLoader`. The branch loads them from the engine loader, which is the divergence above. Every other `histos.*` name is refused.
+`contribute` is not a `ZIO`. `Projects` copies `RegisteredPlugin` onto the graph and does not store the trait. A header line `plugin(dep"...")` or `plugin(path"...")` is the enablement. Exact-binary linking compares `ApiDigest` (sha256 of the api jar, resource `META-INF/histos/version`) to the jar this process loads. It does not compare `0.0.1-SNAPSHOT`. `LinkStrategy.Api` is `PluginLoadError.ApiLink`. Source and path plugins compile against the running api. Boundary names are `histos` (no subpackage), `histos.plugin`, `histos.version`, `zio.*`, and `scala.*`. They load from the engine host, as `ApiBoundary` does. Every other `histos.*` name is refused.
 
 `histos run plugin/task` and MCP `run` execute that task inside the plugin `Scope`. `Workflow.renderAll` puts `JobWhen.Always` jobs in `ci.yml` and a `JobWhen.Schedule` job in `histos-<job>.yml`. The argv is `./histos run <plugin>/<task>`. The plugin does not write YAML.
 
-The worked example is `engine/test/SpecularFixtureSpec.test.scala`. It is not the Specular repository.
+The worked example is `engine/test/SpecularFixtureSpec.scala`. It is not the Specular repository.
 
-Because `run` mentions ZIO, this branch adds `dev.zio::zio:2.1.27` to the api module. The api jar does not shade ZIO. Plugins depend on `histos.api` only.
+`HistosPlugin.run` is a ZIO, so the api module depends on `dev.zio::zio:2.1.27`. The api jar does not shade ZIO. Plugins depend on `histos.api` only.
 
 ## Proposed Design
 
-The next work is editor dogfood, then the plugin series that is already written, then the ascent proof and CI. None of it is a later phase.
+The JVM session, `buildTarget/jvmTestEnvironment`, and the plugin loader are in this tree. The sections below are what is not. The commit list is the order. Each commit compiles, and its tests cover what it adds.
 
-### BSP Metals can live on
+### Scala 2.13 SemanticDB
 
-Metals requires `workspace/buildTargets`, `buildTarget/sources`, `buildTarget/scalacOptions`, `buildTarget/dependencySources`, and `buildTarget/compile`. During compile it reads the notification `build/publishDiagnostics`. The integration page still says `buildTarget/publishDiagnostics`. That name is stale. Metals does not parse it. This server must not emit it.
+`SemanticDb.argv` emits `-Yrangepos` and `-P:semanticdb:sourceroot:<repo>` for Scala 2.13. Those `-P:` strings are plugin options. They do nothing until that compiler loads `semanticdb-scalac` as a plugin. `JvmCompile.invoke213` calls `runZinc213` with `Nil` extra argv. `compilePrepared` turns plugin jars into `-Xplugin:` on the Scala 3 path only, and Scala 3 does not use this jar.
 
-Diagnostics and formatting work without SemanticDB. Goto-definition and find-references do not. SemanticDB flags go on the compiler argv and on the list `scalacOptions` reports, so the files exist after the compile Metals asked for.
+The jar is `org.scalameta` / `semanticdb-scalac_<full Scala version>` / `4.17.3`. The Scala version in the artifact name is the module's pin (`semanticdb-scalac_2.13.16` when the module names `2.13.16`). `4.17.3` is one exact revision, the scalameta pin in the Metals tree this repo already reads. It is not a range. A later bump changes the constant. The commit fetches that jar and passes `-Xplugin:<jar>` in the 2.13 extra argv, beside `-Yrangepos` and `-P:semanticdb:sourceroot:<repo>`. Those strings are not `ScalacFlag` cases and they are not on the user classpath. Scala 3 stays `-Xsemanticdb` and `-sourceroot` with no plugin jar. This repo's modules are Scala `3.10.0`. The engine fixture compiles a 2.13 cell and finds `META-INF/semanticdb` under the class directory.
 
-Production argv is empty (`ScalacFlags.empty`). The navigation PR adds one shared list, used by `GraphCompile`, by `ModuleTest.compiledTests`, and by `scalacOptions`: whatever `flags.argv` the toolchain actually holds, then `-Xsemanticdb`, `-sourceroot`, and the absolute repository path. Those SemanticDB flags are appended beside `flags.argv`. They are not `ScalacFlag` cases. `-sourceroot` takes a path, and a parameterless case cannot hold it. Do not report `-encoding` `UTF-8` unless the same PR starts passing `ScalacFlag.EncodingUtf8` into the CLI compile. Today it does not.
+### Aggregates select modules
 
-| Cell | Flags | Where the files go |
-| --- | --- | --- |
-| Scala 3 | The shared list. `-Xsemanticdb` and `-sourceroot <absolute workspace>` appended beside `flags.argv`. | `<classDirectory>/META-INF/semanticdb`. No plugin jar. |
-| Scala 2.13 | `-Yrangepos` and `-P:semanticdb:sourceroot:<absolute workspace>` on `flags.argv`, plus a `semanticdb-scalac` plugin jar on the compiler classpath. | Same relative layout. |
+`inline def aggregate` takes `ProjectDef`, so a nested aggregate typechecks (`Builder.scala`, `BuilderMacro.aggregate`, `AggregateDef.make`). `Workflow.target` returns `CiError.NotModule` (`'<name>' is not a module`). `GraphCompile.choose`, `ModuleTest.requested`, and `LocalPublish.choose` all call it. `histos compile abc` and `histos test abc` fail that way when abc's children are a, b, and c.
 
-This repo is Scala `3.10.0` only, so the first PR's cells are Scala 3. The 2.13 row is the rule for a later cell. `compilePrepared` already accepts plugin jars and turns them into `-Xplugin:` on the Scala 3 path (`plugins.map(pluginArg)`). Scala 2.13 drops that list: `invoke` calls `invoke213` without it, and `runZinc213` passes `Nil` as the extra argv while still applying `flags.argv`. A `semanticdb-scalac` jar is a later change to that 2.13 path, not a `ScalacFlag` case and not something `compilePrepared`'s signature alone delivers. The ascent proof file names `3.9.0` only. It does not, today, create a 2.13 BSP cell.
-
-When a later `ScalacFlag` case adds `-Xfatal-warnings`, the CLI `GraphCompile` and the CLI test compile keep it. The copy `scalacOptions` reports, and the argv a BSP compile passes, drop it. The presentation compiler must not see it. The SemanticDB append does not include it.
-
-`CompileFeed.Diagnostic` is a string today. `CollectingReporter.log` stores the `xsbti.Problem` and then calls `hear` with `problem.message` only. `CellNotes.hear` splits that message on newlines. Scalac messages usually do not include the path. The position was already dropped. The navigation PR carries the path and the range from `xsbti.Problem`. It does not parse `problem.message`. `xsbti.Position` exposes `startLine`, `startColumn`, `endLine`, and `endColumn`. Those optionals are 1-based. A BSP range has a start and an end, and both are 0-based. Publish all four, and subtract one from each present number. A missing end, or an end that equals the start, becomes a one-character span on that line. A range whose start equals its end does not paint a squiggle. `xsbti.Severity.Error`, `Warn`, and `Info` map to BSP diagnostic severities 1, 2, and 3. A problem whose position has no source is `build/logMessage`, not a diagnostic with a guessed range.
-
-At the start of each target's compile, publish `build/publishDiagnostics` for that target with `reset: true` and an empty diagnostic list, so Metals drops stale squiggles. Later publishes for that same compile use `reset: false`. The compile result status stays `1` or `2`.
-
-`Session.answer` returns one `Answer` (`Reply`, `Quiet`, or `Stop`). `Cli.speak` and `Daemon.bsp` each write one frame for that answer. A notification is another frame, written while compile is still running, before the result. The navigation PR passes a sink, `String => UIO[Unit]`, into `Bsp.open`. `speak` implements it with `Frame.write`. The server splice implements it with the writer `Daemon.bsp` already uses. The session calls the sink from the fiber that is collecting the feed. `hear` runs on the compiler thread (`JvmCompile.compile`). Do not write a frame from `hear`. `answer` still returns the compile result as one `Reply`.
-
-`runCells` is the wrong entry. It passes `platform = None`, and `collected` keeps only `CompileFeed.Done`. `GraphCompile.console` is also the wrong entry. It calls `watch` with `only = None`, so every Scala version of the named modules is compiled, even when `platform` is `Some(Platform.Jvm)`. `watch` is private. It takes `picked: Either[GraphCompileError, List[Module]]`. That list is what `layersOf` schedules.
-
-The navigation PR adds `GraphCompile.cellFeed(repo, graph, cells, platform, jdk): ZStream[Resolve, GraphCompileError, CompileFeed]`. `platform` is required. `None` is how `console` compiles every platform, so this entry does not offer it. The stream passes `Some(platform)` and the version set `runCells` already computes (`Some(cells.map(_._2.value).toSet)`) into `watch`, and it does not call `collected`. `picked` is the requested modules plus the upstream closure `upstream` already returns. `chooseCells` returns that list after its check. Passing only the requested modules is the wrong list. A JVM `buildTarget/compile` calls `cellFeed` with `Platform.Jvm` and the versions on the requested ids.
-
-`compileLayers` starts from an empty `done` map and records a class directory only when that module is compiled inside the same call. `GraphCompile.upstreamClasses` reads that map and returns `MissingUpstream` when the dependency is absent. It does not read `.histos/classes`. A directory left by an earlier BSP request does not satisfy it. `layersOf` treats a dependency outside `picked` as already satisfied (`!names.contains(dependency)`), so a short list compiles the requested module immediately and then fails in `upstreamClasses`. A save of `engine` includes `api` and `central` in `picked`. `layersOf` compiles them first, and their class directories are in `done` when `engine` compiles.
-
-`chooseCells` is not that picker. Its `known` requires `Platform.Jvm` and otherwise returns `UnknownCell`. A Js-only module would fail it. `cellFeed` keeps the closure and replaces that check: each requested module must build the `platform` argument and the requested Scala version, or the result is `UnknownCell`. The navigation PR only publishes JVM, so the check is JVM there. Item 3 passes `Platform.Js` or `Platform.Native` through the same method. Do not call `chooseCells`.
-
-A test id does not use `cellFeed`, and it does not call `GraphCompile.run` or `ModuleTest.console`. `ModuleTest.console` calls `GraphCompile.run` with no platform, which compiles every platform and then runs suites. The test compile calls `compiledTests`. That method is unqualified `private` on `object ModuleTest` today (`ModuleTest.scala`, around line 721). `Bsp` is `package histos.bsp` and cannot see it. PR 1 widens it to `private[histos]` and keeps the signature: `CompiledCell` and the test sources, plus the repo, modules, module, JDK, lock, and repositories it already takes. It reads `cell.classes`, `cell.version`, and `cell.platform`. It does not read `classFiles`, and it does not compile main sources. Build the cell as `CompiledCell(name, version, platform, GraphCompile.classesDir(repo, name, version, platform), 0)`. The classes directory is the main output. Metals has already compiled the main id, because the test id depends on it. `compiledTests` then writes `.histos/test-classes` with the shared SemanticDB list and publishes the same structured diagnostics. It does not run the test.
-
-Loader diagnostics are a second grammar. The build file is compiled by dotty `Driver` and `StoreReporter`, not by Zinc. The code today keeps `error.message` only. `LoaderLive.rewrite` already replaces the temp path with `histos.scala`. Scala 3.10 `SourcePosition.line`, `column`, `startLine`, `startColumn`, `endLine`, and `endColumn` are 0-based. `showLineColumn` prints `line + 1` and `column + 1`. Subtracting one places the squiggle on the previous line. Publish those four numbers unchanged. A point span, where start equals end, gets the same one-character extension as a Zinc range with no end. `Diagnostic.level` is the `scala3-interfaces` constant, not a BSP severity and not `xsbti.Severity`: `ERROR` is 2, `WARNING` is 1, `INFO` is 0. Map those to BSP severities 1, 2, and 3. Do not copy `level` through. The published URI is workspace `histos.scala`, after `rewrite`. Do not parse the message for a file name. A diagnostic with no position is `build/logMessage`.
-
-`buildTarget/dependencySources` may download. It does not add a `source` line to a module cell. `DependencyLock.sourceOnly` returns `LockError.BadLine` for a `source` line on an open module cell, and it accepts one only on a plugin cell. `histos compile` and `histos test` stay lock readers. This request is the exception.
-
-For each locked artifact on the target's cell, call `Resolve.sources` with that artifact's organization, name, revision, and `LockedArtifact.repository`. No other repository, and no fallthrough. `Resolve.sources` returns a digest. There is no module source checksum to compare, so this request does not refuse on digest. A `ResolveError.NotFound` omits that jar. The BSP item is `{ target, sources: Uri[] }`. A missing jar is absent from `sources`. It is never an empty string. The import still succeeds. Adding checksummed module `source` lines would be a lock-format change, and `sourceOnly` would have to start accepting them. That is not this PR.
-
-`JvmCompile.runtime` is not a lock line. `Scala3.runtimeOf` returns `scala-library` when the library is merged, and `scala-library` plus `scala3-library` when it is not. Metals goto-definition into the standard library needs those sources. Request one sources jar per runtime jar from `Repository.Central` only, through the same `Resolve.sources`. Omit a miss. That Central request is not a fallthrough from a lock line. Do not add a second classifier client, and do not add a lock line for the standard library in this PR. The coordinate is `org.scala-lang` / `scala-library` / the Scala version, and `org.scala-lang` / `scala3-library_3` / the Scala version only for the legacy second jar `runtimeOf` already distinguishes.
-
-Targets for this repo. Match `?build=histos.scala` before any module id. A module id must carry both `platform` and `scope`. Missing either is an unknown target, not a silent JVM main. `cellOf` reads those two tokens. Today's `Cell` is only a module and a Scala version. The session cell gains the platform.
-
-| Target | Id | Sources | Classpath and class directory |
-| --- | --- | --- | --- |
-| Main, one per module, Scala version, and platform | `directoryUri(repo)`, the module name, `?scala=<version>&platform=jvm&scope=main` | Kind 1 file URIs from `Sources.select` on `GraphCompile.sourceBase`. Not the directory. `sourceItem` today returns that directory as kind 2, and the directory contains `src/test`. `Sources.select` already skips `src/test`. | `scalacOptions.classpath` stays `JvmCompile.runtime`, the locked compile jars, and upstream class directories (`Bsp.classpath`). `classDirectory` is `.histos/classes/<module>/<scala>/jvm`. `dependencies` are the upstream main ids, same query, `&platform=jvm&scope=main`. Today's `dependencyUris` has no scope and no platform. Tag `library`. `canCompile` true. |
-| Test, one per module, Scala version, and platform that has test sources | The same prefix with `&platform=jvm&scope=test` | Kind 1 file URIs from `ModuleTest.testSources`, widened to `private[histos]`. That walks `Sources.tests` on the source base, plus `Sources.select` on the sibling root from `testBase`: `<module>/test`, or the repository `test` when the graph has one module. Tests are not only `src/test`. An empty list means no test target. | `scalacOptions.classpath` reports the `runtimeClasspath` order and does not call it: main class directory (`classesDir`), upstream class directories from `Module.chain`, `JvmCompile.runtime`, then the locked-jar tail described above. A missing directory is still named. Do not call `ModuleTest.upstreamClasses`. `classDirectory` is `testClasses`, widened to `private[histos]`: `.histos/test-classes/<module>/<scala>/jvm`. `dependencies` is the one main id of the same module, Scala version, and platform. Tag `test`. `canTest` stays false until the test-run PR. |
-| `histos.scala` | `directoryUri(repo) + "?build=histos.scala"`. No module name. Today's module id is `directoryUri(repo) + name + "?scala=" + version` (`Bsp.targetUri`). This query is matched first, so it cannot collide with `cellOf`. | Kind 1, that file. | See below. |
-
-`Bsp` is in `app`. It reaches engine helpers only when they are `private[histos]`, which is how it already calls `JvmCompile.scalaJars` and `GraphCompile.classesDir`. `testSources`, `runtimeClasspath`, `testClasses`, and `compiledTests` are private today. PR 1 widens those four to `private[histos]`. `suiteEnv` and `testWork` stay private until PR 2. `runtimeClasspath` stays the helper for `compiledTests` and for `jvmTestEnvironment`. Test `scalacOptions` does not call it.
-
-`buildTarget/scalacOptions` is an import request. Metals sends it before any `buildTarget/compile`. `Bsp.options` is `ZIO.foreach` over the requested targets, so one failure fails the reply. `ModuleTest.upstreamClasses` walks `Module.chain`, which is upstream only, and fails `MissingUpstream` when a `dependsOn` class directory is not a directory. `runtimeClasspath` then prepends `cell.classes` with no such check. On a tree with no `.histos/classes`, `api` would succeed and `central`, `engine`, and `app` would fail the import. Name the directories instead, the way `Bsp.classpath` already names a main target's upstream class directory without checking that it exists. Main `scalacOptions` keeps that `Bsp.classpath` order (`JvmCompile.runtime`, locked compile jars, upstream class directories). The test report uses the `runtimeClasspath` order. `MissingUpstream` stays on `compiledTests` and on the test run.
-
-The test-to-main edge is for that later compile. Metals orders `buildTarget/compile` from `BuildTarget.dependencies` (`BuildTarget.getDependencies`). After the main id and the upstream main ids have been compiled, the directories exist and `runtimeClasspath`'s check passes. The edge does not make the import request safe. The test compile does not call `GraphCompile.run` to paper over a missing directory. `GraphCompile.upstreamClasses` is a different check: it reads the in-call `done` map, not the disk, which is why `cellFeed` passes the upstream closure.
-
-Two classpaths, and they are not the same field. `ScalaBuildTarget.jars` is the compiler classpath Metals uses to load `scala3-presentation-compiler`. `Bsp.target` already fills it from `JvmCompile.scalaJars` (compiler jars plus the runtime they linked). The build-file target keeps that, for Scala `3.10.0`. Do not put the api jar in `jars`.
-
-`scalacOptions.classpath` on the build-file target is the user classpath the loader uses to compile `histos.scala`. On main (`c31b8c4`) `LoaderLive.classpath` is the api jar plus the code source of `scala.collection.immutable.Nil` (`scala-library`) and the code source of `scala.quoted.Quotes` (`scala3-library`), distinct. The comment in that file says the build compiles against the api jar and the Scala libraries. After the plugin branch, `Boundary.jars` is the user classpath: that list plus ZIO, `zio-stacktracer`, and `izumi-reflect`. It is never the engine jar, and it is not `ScalaBuildTarget.jars`.
-
-`Bsp.open` today is `(repo, graph, jdk)`. It does not take this list. `bspLocal` holds `apiJar` and does not pass it. `Daemon.bsp` calls `Bsp.open(repo, graph, jdk)` only. `serve` holds `apiJar` and drops it before `Daemon.open`. The navigation PR adds `Loader.buildClasspath(apiJar): IO[LoadError, List[Path]]` on the `Loader` trait, because `bspLocal` has the service and cannot call a method that exists only on `LoaderLive`. `JvmCompile.scalaJars` can stay `private[histos]` on the object. This one cannot. On main the list is the api jar and the two Scala libraries. The plugin branch implements the same method with `Boundary.jars` and must not narrow it back to the api jar. `bspLocal` and the server both pass that list into `Bsp.open`, with the notification sink. `histos.api` does not change. `Bsp.open` does.
-
-`ScalacOptionsItem.classDirectory` is required. For this target it is the repository directory. The loader compile does not write module classes there, and this target is not a Zinc cell under `.histos/classes`. `canCompile` is true. `canTest` and `canRun` stay false. `buildTarget/compile` on this id reruns the loader compile and publishes diagnostics through the dotty path above.
-
-`canTest` on the test target stays false until the test-run PR. Advertising a test button that has no environment is a lie. The test tree is still compiled with the shared SemanticDB list in this PR, because a later gutter discovers suites from that compile.
-
-```mermaid
-sequenceDiagram
-  participant M as Metals
-  participant B as ./histos bsp
-  participant Z as Zinc
-  M->>B: buildTarget/compile
-  B->>Z: compile cell, SemanticDB flags on
-  Z-->>B: path, line, column, severity
-  B-->>M: build/publishDiagnostics
-  Z-->>B: classes and META-INF/semanticdb
-  B-->>M: compile result status 1 or 2
+```scala
+inline def aggregate(name: String, project: ModuleDef, projects: ModuleDef*): AggregateDef
 ```
 
-The proof is opening this repo in VS Code and in Cursor. Metals Doctor is the check. The three bars are separate. Completion in `histos.scala` is the user classpath above (`Loader.buildClasspath`), with `ScalaBuildTarget.jars` still `JvmCompile.scalaJars`. A squiggle on a module file is the Zinc range above (1-based start through end, then minus one, at least one character). A squiggle on `histos.scala` is the dotty range unchanged (already 0-based) with `ERROR` mapped from 2 to BSP severity 1. Neither is a parsed message. Goto-definition on a project symbol needs the SemanticDB files from the shared list. A marketplace Metals from before the `3.10.0` pin may call that compiler a future version. If Doctor warns, pin `metals.serverVersion` to a build that fetches `scala3-presentation-compiler_3:3.10.0`. That is a settings pin, not a compiler we write. Record the bsp trace. That trace does not choose the test protocol. Item 1 sets `canTest` false, so Doctor does not send `debugSession/start` or `jvmTestEnvironment`.
+`AggregateDef.make` takes `List[ModuleDef]`. A nested aggregate does not compile. There is no runtime walk that flattens one. `Projects.linkAggregate` still stores `List[ProjectName]`. The builder only accepts modules, so a build file cannot name an aggregate as a child. `linkAggregate` looks the child up by name. When that project is not a `Module`, the result is `BuildError.AggregateChild` (`aggregate '<name>' lists '<child>', which is not a module`). That case is for a graph that did not come from the builder. `Workflow.target` keeps `CiError.NotModule` for an aggregate name on the CI parser.
 
-### One JVM test from the editor
+`Selection.select` lives in the engine and returns `Either[CiError, Selected]`. It uses `CiError.BadName`, `CiError.Unknown`, and `CiError.Duplicate`. It does not use `CiError.NotModule`. A name the user typed that is an aggregate expands.
 
-Current Metals (`DebugProvider.startDebugSession`) sends `debugSession/start` to the build server only when the server is a debugging provider or sbt. Otherwise Metals starts its own DAP server and reads `buildTarget/jvmTestEnvironment` for the classpath, the working directory, and the environment. metals#7544 is the pull request (June 2025) that records that split and that Metals applies those environment variables. It is not an issue number. This is the Mill path, and it is the protocol this slice implements. The navigation dogfood cannot choose it: item 1 sets `canTest` false, and Doctor does not send either request.
-
-`buildTarget/scalaTestClasses` is deprecated in the BSP Scala extension in favor of `jvmTestEnvironment`. `buildTarget/test` is the generic BSP request. Code lenses and Test Explorer do not use it as the path that actually starts the process.
-
-This slice does not advertise a debug provider. It implements `buildTarget/jvmTestEnvironment` for the JVM test target. Metals has already compiled that target, so the test classes and their SemanticDB files exist. The environment request does not compile.
-
-| Field | Value |
+| Names | Result |
 | --- | --- |
-| `classpath` | The test class directory (`.histos/test-classes/<module>/<scala>/jvm`), then the `runtimeClasspath` list: main class directory, upstream class directories, `JvmCompile.runtime`, then the locked-jar tail. This request runs after compile, so the directory check is the right one. `runtimeClasspath` and `testClasses` are already `private[histos]` from PR 1. This request widens `suiteEnv` and `testWork`. Do not copy any of the four. `runtimeClasspath` alone starts at the main class directory and has no test classes. |
-| `workingDirectory` | `testWork`: `.histos/test-work/<module>/<scala>/jvm` |
-| `environmentVariables` | `suiteEnv`: `HISTOS_REPO` and `PATH` only |
-| `jvmOptions` | Empty. This repo has none. |
+| Empty | Every module, graph order (`graph.projects` collecting `Module`). Expanded set empty. |
+| A module | That module. |
+| An aggregate | Its direct children, in `Aggregate.children` order. |
+| The same name twice | `CiError.Duplicate` on that raw name, before expansion. `abc abc` is `Duplicate(abc)`. |
+| An aggregate and a member, or two aggregates that share a member | `CiError.Duplicate` on the module that appears twice. `abc` plus `a`, when abc contains `a`, is `Duplicate(a)`. |
 
-Metals then runs `TestSuiteDebugAdapter`, not `ProviderRunner`. Suite discovery uses the presentation compiler (`discoverTests` / `buildTargetClasses.getTestClasses`), which needs the SemanticDB files the navigation PR writes on the test compile. `zio-test-sbt` has to be on that classpath. A module on `TestProvider.Zio` already fails with `ModuleTestError.ProviderDependency` unless that library is a test dependency, so the locked test jars include it when the provider check would succeed. Do not add a second copy. Do not put the generated `Provider.scala` on this classpath. Metals is not launching `ProviderRunner.Main`. If the provider check would fail, the environment request fails with that error. It does not invent a classpath that cannot load the framework.
+`dependsOn` is not a member edge. `histos compile abc` compiles a, b, and c and their `dependsOn` upstreams, every Scala version and every platform each of those modules builds. That is `choose` calling `upstream` after `select`, then the existing `platforms` and `wanted`. `histos test abc` compiles that same closure and runs suites only for a, b, and c. A module d that a depends on is tested only when d is a member or is named itself. `testOnly --module abc *Foo*` and `testQuick` use the same selection. `ModuleTest.suites` already treats no match in the whole set as `ModuleTestError.NoneMatched`, and a member with no match does not fail the set when another member matched. `Grammar.walk` keeps every `--module` value and stops calling `distinct`, so a repeated raw name reaches `Selection`. `histos test a a` and `histos compile a a` already pass both names through. Their duplicate check stays in `Selection`. `testOnly --module abc --module abc *Foo*` does too.
 
-The proof is one JVM test from VS Code and from Cursor. Breakpoints stay out. There is no JDWP listener and no DAP implementation. If a later trace shows `debugSession/start`, the only honest follow-up is a real DAP server. This stack excludes that. Do not answer with a URI and no listener. Metals calls `connect(uri)` on the result and times out.
+`histos publish <repository> abc` publishes each member the version decision would publish if that member were named, including the existing `closure` of published `dependsOn` modules. A member with no coordinate is skipped. The line is the existing `LocalPublishError.NotPublished` message (`'<name>' is not in a ship`), on stdout. When at least one member publishes, the exit is success (0) and the skipped lines are printed with the published coordinates. When none of the members publish, the failure stays `LocalPublishError.NothingToPublish` (`nothing publishes`) and nothing is written. Empty names stay the ship members, as `choose` does today, and do not print a skip for every unpublished module. A module named directly, with no coordinate, is `NotPublished` for the whole command: exit `CliExit.PublishFailed` (9), and no artifact is written, including for any other name in that command. `histos run abc` stays `Program.locate`'s `ProgramError.Aggregate`.
+
+`Workflow.target` is unchanged. CI render of an empty split set stays `./histos test` with no names. That command is the whole graph. It is not a project aggregate.
+
+### A failed cell does not cancel its siblings
+
+`compileLayers` is `ZIO.foldLeft` over layers and `ZIO.foreachPar` inside a layer and inside a module's Scala-version and platform cells. A failed effect interrupts the other fibers in that `foreachPar`, `slot.fail` makes `drain` fail the stream, and later layers do not run. `Cli.testLocal` and `Daemon.test` collect `GraphCompile.console` in a for-comprehension, so a compile failure never reaches `ModuleTest.suites`. A non-zero suite is already `TestStatus.Failed`: the CLI sets a flag and continues. A `ModuleTestError` on the suite stream, including `Process`, fails `concatAll` and drops later cells.
+
+Cell failures become data. `compileModule` and `compileLayers` run every cell in the layer to completion. The fiber does not fail, so a sibling is not interrupted. A failed cell is not entered in the `done` map. The next layer runs. A module whose upstream cell failed hits the existing `upstreamClasses` check, `GraphCompileError.MissingUpstream`, and does not compile. Its siblings that do not depend on the failure still compile. `CompileFeed.Failed` carries one `GraphCompileError` for that cell. `GraphCompileError.Cells` holds the non-empty list of those errors. Its `message` is each cell's `message`, one per line.
+
+These cases abort before any cell runs: `Target` (the selector's `CiError`), `UnknownCell`, `Cycle`, `Lock`, `LockRead`, and `Jdk`. `layersOf` reports `Cycle` before `compileLayers` starts. `pickCells` reports `UnknownCell` before `watch` starts.
+
+These cases are `CompileFeed.Failed` and do not cancel an independent sibling: `NoRoot`, `NoSources`, `MissingUpstream`, `RootRead`, `Output`, and `Failed`.
+
+The stream completes after the last cell. `histos compile` prints each failure's `message` (that text includes the platform) and exits `CliExit.CompileFailed` (8) if any cell failed. `GraphCompile.run` fails with `Cells` in that same situation, so `LocalPublish.run` compiles the independent cells, writes no jars, and fails. `cellFeed` uses the same layer loop, so `buildTarget/compile` of several targets publishes every independent cell and then returns status `2` when any requested cell failed. Status `1` means every requested cell compiled. A lock failure is still status `2`, and no cell ran. `BspSpec` asserts the mixed case: one target fails, a sibling target still compiles, and the result status is `2`.
+
+`histos test` keeps the `CompiledCell`s that finished, runs `ModuleTest.suites` for those, and runs later members after a suite error. The command exits `CliExit.TestFailed` (7) after the last cell if any compile cell or suite failed. `NoneMatched` applies only when every selected cell compiled and no suite matched. A compile failure or a suite failure exits 7 and keeps those cell messages. It does not replace them with `NoneMatched`. `Daemon.test` follows the same control flow. `testQuick` does too.
+
+### The server is the warm process
+
+`Call` is `Compile(projects)`, `Test(projects)`, and `Bsp`. `Cli.test` skips `attach` when `quick` is true, and `Call.Test` has no patterns, so a live server drops a `testOnly` filter. `Daemon.accept` runs `handle` to completion before accepting again, so a BSP splice blocks every other client. `Fingerprint.read` on each request returns `Message.Stale` when the hash differs. The client then loads a second graph, including a `histos.scala` that does not compile. The server keeps the old graph. `Loader.reportBuild` only asks the compiler. `Loader.load` compiles, classloads, and builds `Projects`.
+
+```mermaid
+flowchart TD
+  client["CLI, and later MCP or ACP"] --> record["read .histos/server.json"]
+  record -->|version and fingerprint match| socket["Unix socket"]
+  record -->|absent or dead socket| local["in-process graph"]
+  record -->|different version| reboot["error: histos reboot"]
+  socket --> server["server"]
+  server --> fp{"fingerprint changed, or reload asked?"}
+  fp -->|yes| load["Loader.load"]
+  load -->|success| swap["swap the ref and write the fingerprint"]
+  load -->|failure| keep["keep the last graph and return the errors"]
+  fp -->|no| run["run the call"]
+  swap --> run
+  metals["Metals"] --> bsp["./histos bsp splice"]
+  bsp --> server
+  swap --> note["buildTarget/didChange"]
+  note --> metals
+```
+
+A graph-reading command is one that loads a `ProjectGraph`. `Call` is `Compile`, `Test` (pattern strings and `quick`), `Publish`, `Graph`, `Run(id, platform)` for a main, `Task(id)` for `inspect`, `versions`, and `plugin/task` (no platform), `Cancel`, `Toolchain`, `Resolve`, `Workflow`, `Assembly`, and the existing `Bsp`. `Reload` and `Reboot` are added with the reload commit. `cache` and `version` do not load a graph. They stay in-process. `./histos ~ <command>` stays in the client. Each iteration sends the inner command's `Call` and does not load a second graph while the server matches.
+
+The server commit is the CLI and BSP. MCP and ACP keep loading their own graph until the later commit that makes them clients.
+
+The CLI re-reads `.histos/server.json` on every call (`Attach.decide`). When the record matches, it is a client (`Client.talk`) and does not load a second graph. When the server is absent or the socket is dead, the caller runs in-process. When `record.version` differs from `Cli.VersionText`, the command fails with `ServerError.DifferentVersion` (`histos server is a different version. Run histos reboot`) and exits `CliExit.LoadFailed` (3). It does not attach and it does not load a graph. MCP and ACP, once they are clients, use that same rule and reuse one in-process graph only while the server is absent or dead, until a server appears or the fingerprint changes. They do not call `Client.splice`. That splice is the Metals stdio session.
+
+`testQuick` attaches, so it is not a second writer of `.histos/analysis`. `accept` forks each connection on the server scope. A `Semaphore(1)` created in `Daemon.open` is held for compile, test, publish, assembly, `Run` of a main, and `buildTarget/compile`, because those write `.histos/classes` or `.histos/analysis`. `graph`, `toolchain`, `Task`, `cancel`, `resolve`, `workflow`, and reload do not take it. The connection acquires the permit with a release finalizer, so interrupt and a closed socket release it. `Call.Cancel` interrupts the task fiber in the server's registry. Two commands therefore do not write analysis at the same time. Cells inside one command stay parallel, and they write different directories.
+
+### Reload, then reboot
+
+A module source edit does not reload. A fingerprint change, and `histos reload`, call `Loader.load`. Success swaps the ref immediately, writes the new fingerprint, and replaces the runner map. Failure keeps the last graph and returns `LoadError.message` (`CompileFailed` or `BrokenGraph`, among the other cases). The client stays a client. It does not answer that failure by loading the broken file itself. A different `Cli.VersionText` is `ServerError.DifferentVersion`, not `Message.Stale`, and not an in-process load.
+
+A cell reads the ref when it starts and keeps that generation. Cells already running finish on it. The next cell reads the new graph. The build classloader is not on the server's root scope. Each successful load has its own `Scope`. The previous scope closes when the last cell that captured it finishes. A failed load closes the scope it just opened. Two requests that both see a drift take one reload lock, so the check and the load are one critical section. `histos reload` loads even when the fingerprint matches.
+
+The BSP session reads the graph through that ref. `Bsp.open` stops capturing the value `Daemon.bsp` passes today. After a successful swap, if a splice is open, the server sends `buildTarget/didChange`. The id lists are the ones `Session.targets` already builds, for the previous graph and the new graph. An id in both is kind 2. An id only in the new graph is kind 1. An id only in the old graph is kind 3. A classpath-only change still sends kind 2 for the ids that remain, so Metals reimports. `ProjectMetalsLspService.onBuildTargetChanges` cancels compilations and calls `connect(ImportBuildAndIndex)`. The splice stays up. Outgoing frames on that connection, including `build/publishDiagnostics` and this notification, share one writer. `Frame.write` is not safe if two fibers interleave bytes on the stream. `buildTargetChangedProvider` is true from `build/initialize`, which is when BSP 2.2 says the server admits the notification. This is not `workspace/reload`.
+
+`histos reboot` is how a new `dist/histos.jar` is picked up. When a server is running, the order is: stop accepting, run `remove` once (delete `.histos/server.json` and the socket file), disarm that finalizer so process exit does not delete them again, spawn `./histos server`, then exit. The parent's exit leaves the child's socket and record in place. The script checks the assembly checksum and execs the jar. A JVM cannot replace its own image with that script. The observable result is one new server process. The BSP splice dies. Metals' `BuildServerConnection.reconnect` starts `./histos bsp` again. `metals.ask-to-reconnect` defaults to false, so that restart does not prompt. The next MCP call re-reads `server.json`. There is a window where the file is absent and that one call runs in-process. The call after the new record is written attaches. MCP does not restart.
+
+When no server is running, `histos reboot` starts `./histos server`. `histos reload` fails with `ServerError.NoServer` (`no histos server is running`) and exits `CliExit.LoadFailed` (3). It does not load a graph and exit, because that load would be discarded. `ServerSpec` covers both.
+
+`CommandName.reserved` gains `reload` and `reboot`, and the reserved list in [plugins.md](plugins.md) gains the same words, so a plugin cannot take them.
+
+### MCP and ACP
+
+`HistosMcp.tools` registers `graph`, `run`, `cancel`, and `toolchain`. `toolchain` succeeds as `ToolchainReport`, whose schema requires `jdk`. A failure is `ToolchainFault`, an enum. Heddel's `ToolCall.typedFailure` wraps a non-object as `{value: ...}` (`Structured.wrap`). Cursor checks that object against the success schema and reports a missing `jdk`. A missing lock is `ToolchainError.NoLock`: `no jdk lock at <path>`.
+
+Every tool's success type and error type are `String`. A missing jdk lock is that message alone (`Survey.shown` is empty for `SurveyError.Jdk`). Success is `Survey.text`. When a later stage fails, `Survey.shown` is non-empty: the tool string is that stdout, a newline, then `SurveyError.message`. That is the CLI text, stdout then stderr. `graph`, `run`, and `cancel` already return strings. Their error type stops being `ToolFailure`, which is an object and would not wrap as `{value: string}`.
+
+MCP and ACP expose `graph`, `compile`, `test`, `publish`, `run`, `cancel`, and `toolchain`. `resolve`, `workflow`, `assembly`, `reload`, and `reboot` stay CLI calls on the server. They are not tools. `run` params are `id` and an optional `platform`. A slash id is a plugin task and rejects a platform, which is the existing `CliParseError.TaskPlatform`. `inspect` and `versions` reject a platform too.
+
+ACP stays newline JSON-RPC. `initialize` stays protocol version 1. `capabilities` stays an object:
+
+```json
+{"protocolVersion": 1, "capabilities": {"commands": ["graph", "compile", "test", "publish", "run", "cancel", "toolchain"]}}
+```
+
+`graph` and `toolchain` take `{}`. `compile` takes `{"projects": []}` (empty is the whole graph). `test` takes `{"projects": [], "patterns": [], "quick": false}`. `publish` takes `{"repository": "<path>", "projects": []}`. `run` takes `{"id": "<task or module>"}` or `{"id": "<module>", "platform": "jvm"}`. `cancel` takes `{"id": "<run id>"}`. Success and failure results are both `{"value": "<cli text>"}`. An unknown method stays the existing JSON-RPC error (`acp does not handle <method>`). The ACP test parses `result.value` for a toolchain success and for a missing jdk lock, and that failure value is the lock message, not an object with a `jdk` field. Those seven tools are the protocol surface. Each handler sends the matching `Call` and returns that call's CLI text. The handler does not contain its own compile or test implementation.
 
 ### Ascent's JVM modules, then Js and Native
 
 The same session, pointed at `~/projects/early-effect/ascent-histos`, lists JVM targets the way this repo's targets work. That file registers 26 modules, all on Scala `3.9.0`. Nine of them build JVM, Js, and Native. Registering every platform would hand Metals a save-time matrix, and a Native target would relink. Mill did that. Histos does not.
 
-Js and Native targets are omitted unless `.histos/bsp-platforms` names them. The file is repo-local. Absent or empty means only `Platform.Jvm` is published. A line is `js` or `native`. It is not a field on `Module`, not an environment variable, and not a graph flag. `histos compile` does not read it and still builds every platform the module names. The ascent `histos.scala` stays unchanged.
+Js and Native targets are omitted unless `.histos/bsp-platforms` names them. The file is repo-local. It is not a field on `Module`, not an environment variable, and not a graph flag. `histos compile` does not read it and still builds every platform the module names. The ascent `histos.scala` stays unchanged.
 
-The allow-list adds targets. It does not reuse the JVM URI. A `js` line publishes `&platform=js&scope=main`, and `&scope=test` when that module has test sources. A `native` line uses `&platform=native`. Both lines can be present. `buildTarget/compile` passes the platform token into `GraphCompile.cellFeed`, with the version set from the requested ids. `picked` is still the requested modules plus their upstream closure, and the check is that each module builds that platform. A JVM save passes `Platform.Jvm` only and does not compile Js or Native. An allowed Js or Native target runs the compiler `GraphCompile` already runs for that platform and does not call `JsLink` or `NativeLink`. Linking stays on `histos run` and `histos test`. Do not implement that compile with `runCells`, `console`, or `chooseCells`. A save compiles the targets that were published, and each call compiles its upstream closure inside that call. Targets that were not published cannot be relinked.
+The file is one token per line, after trim. A blank line is skipped. A repeated `js` or `native` is one token. The only tokens are `js` and `native`. `jvm` is not a token, because JVM is the default. Any other token is `BspError.Platforms` with message `'<token>' is not a bsp platform`. An unreadable file is the same error with message `could not read <path>`. The targets request fails with that error. It does not fall back to a JVM-only list. The fingerprint does not cover this file, so `workspace/buildTargets` reads it on every request.
 
-Metals can index Scala platform 2 (JS) and 3 (Native). Running them needs a DAP forwarder (Metals pull request 5197). That forwarder is not this stack.
+Absent or empty, after skipping blank lines, publishes JVM only. A `js` line publishes `&platform=js&scope=main` for each module that builds Js, and `&scope=test` when that module has test sources. A module that does not build Js gets no Js id. A `native` line uses `&platform=native` the same way. Both lines can be present.
 
-The default path does not require an edit to the ascent copy. The allow-list is new in this repo, covered by a fixture here: a Js or Native target compiles and does not link. Opening the ascent copy, with the file absent, is the manual proof that a save stays on JVM.
+The allow-list adds targets. It does not reuse the JVM URI. `buildTarget/compile` passes the platform token into `GraphCompile.cellFeed`, with the version set from the requested ids. `picked` is still the requested modules plus their upstream closure, and the check is that each module builds that platform. A JVM save passes `Platform.Jvm` only and does not compile Js or Native. An allowed Js or Native target runs the compiler `GraphCompile` already runs for that platform and does not call `JsLink` or `NativeLink`. Linking stays on `histos run` and `histos test`. Do not implement that compile with `runCells`, `console`, or `chooseCells`. A save compiles the targets that were published, and each call compiles its upstream closure inside that call. Targets that were not published cannot be relinked.
 
-### The plugin series
+Metals can index Scala platform 2 (JS) and 3 (Native). Running them needs a DAP forwarder (Metals pull request 5197). That forwarder is out of scope.
 
-Do not redesign it. Open the existing `histos/plugins` commits as a pull request. The review surface is [plugins.md](plugins.md) and the code on that branch. `central` stays in-tree. Those commits do not match the classloader section. The pull request closes that gap to the spec: an api `URLClassLoader` parented on the platform loader, and the engine calls across. It does not keep `classOf[HistosBuild].getClassLoader` as the boundary host. It does not redesign `HistosPlugin`, the header, or the task id.
-
-Waiting to open that pull request until the BSP pulls are up is stack order. It is not a compile break. The branch already edits `JvmCompile.jarBan` (it also bans `ClassMarker.PluginEntry`). The navigation PR edits `JvmCompile.scala` and adds `Loader.buildClasspath`. Rebase across both. A stalled editor dogfood does not block that rebase.
+The default path does not require an edit to the ascent copy. `BspSpec` covers a bad line (the targets request fails), a Js id that is not the JVM id, and a compile of that id that does not link. Opening the ascent copy, with the file absent, is the manual proof that a save stays on JVM.
 
 ### Specular
 
-After that PR is merged, the Specular repository gains a Histos module that is a `HistosPlugin`. It contributes a docs task and a CI job. It is not an sbt AutoPlugin, and it is not this repo's fixture. Specular pins the snapshot of `histos.api`. This stack does not cut a release so that compile can happen. This design pass does not edit the Specular tree.
+The Specular repository will gain a module that is a `HistosPlugin`, with a docs task and a CI job, pinning a snapshot of `histos.api`. It is not an sbt AutoPlugin, and it is not this repo's fixture. This work does not cut a release so that compile can happen. The commit is in the Specular repository. The loader it compiles against is the one in this tree. That commit waits. The plugin id, the task id, `JobWhen`, and the snapshot coordinate stay unnamed until the Specular work starts. An engineer does not start it now. `SpecularFixtureSpec` stays unchanged. When the names exist, the test in that repo loads the plugin and renders the job argv as `./histos run <plugin>/<task>`.
 
 ### Ascent proof
 
-The local copy compiles. It does not name test dependencies, a test provider, a main class, scalac flags, an organization, or a catalog. The proof PR wires tests, named mains, and scalac flags, then `./histos compile` and `./histos test` on that tree. Central publish stays out.
-
-`Module` has no flag field, and `ScalacFlag` has only `EncodingUtf8`, which production does not pass. The flag text stays produced by the engine. The PR adds cases for the flags that proof needs. It does not take an open `List[String]` from the build file. It depends on the navigation PR, because both change compiler argv. `-Xfatal-warnings`, if one of those cases, stays on the CLI argv and is dropped from the BSP copy of the shared list. The SemanticDB append stays beside `flags.argv`, not a new case.
+The local copy compiles. It does not name test dependencies, a test provider, a main class, scalac flags, an organization, or a catalog. This repo adds `Module.flags: ScalacFlags`, defaulting to `ScalacFlags.empty`, and `ModuleDef.scalac(flag: ScalacFlag, rest: ScalacFlag*)`. One call sets the list. A second call replaces it. Compile, test compile, and BSP `scalacOptions` and `buildTarget/compile` use `module.flags.argv`, then the SemanticDB append. A module that never calls `.scalac` stays on empty argv. `.scalac(EncodingUtf8)` is `-encoding` and `UTF-8` on the CLI and in `scalacOptions`. No new cases are added. If `-Xfatal-warnings` is added later, the CLI argv includes it and `scalacOptions` and `buildTarget/compile` omit it. The ascent-histos commit waits on the cases. It then names test dependencies, mains, and those cases, and runs `./histos compile` and `./histos test`. Central publish stays out.
 
 ### CI for this repo
 
-The renderer already exists. Generate `.github/workflows/ci.yml` from this graph and commit it. The drift check is `./histos workflow --check`. The graph has empty splits and an empty catalog, so the file is the aggregate `test` job and the `workflow` job. Do not enable split axes in that PR. Do not add a publish job. A file repository is not a release.
+The renderer already exists. Generate `.github/workflows/ci.yml` from this graph and commit it. The drift check is `./histos workflow --check`. The graph has empty splits and an empty catalog, so the file is the `TestJob.Aggregate` `test` job (`./histos test`) and the `workflow` job. Do not enable split axes. Do not add a publish job. A file repository is not a release. `Workflow.target` is not the module selector.
 
-### Scala.js host, after the BSP loop is daily
+### Scala.js host
 
-A later module in this repo follows the groks-beard host shape (`~/projects/early-effect/groks-beard`, project `host` in `build.sbt`). Only that module imports `vscode`. It is Scala.js, `ModuleKind.CommonJSModule`, and a `packageVsix` task: full link, then `vsce package`. It is not a `HistosPlugin`. It does not own completion, diagnostics, or the presentation compiler. Commands call BSP or the CLI. It waits until the BSP loop from the first PRs is in daily use. It does not wait on Specular or on the CI file. This design pass does not edit groks-beard.
+One new module in this repo follows the groks-beard host shape (`~/projects/early-effect/groks-beard`, project `host` in `build.sbt`): Scala.js, `ModuleKind.CommonJSModule`, and only that module imports `vscode`. The task is an engine task: full link of that module, then `vsce package`, with a typed error. It is not a `HistosPlugin` and it does not invoke a presentation compiler. That commit waits. The module name, the vscode coordinate, and the command list stay unnamed until the editor surface is designed. An engineer does not start it now. This design pass does not edit groks-beard.
 
 ## API / Interface Changes
 
-`histos.api` does not change in the navigation PR. `Loader` gains `buildClasspath(apiJar): IO[LoadError, List[Path]]`. On main that is the api jar, `scala-library`, and `scala3-library`. `Bsp.open` gains that list and the notification sink. BSP gains `buildTarget/dependencySources` and the structured `build/publishDiagnostics` notifications the session currently cannot emit. Item 1 adds `GraphCompile.cellFeed`. Its `picked` is the requested modules plus the upstream closure, and its check is that the module builds `platform`, not `chooseCells`'s `Platform.Jvm` test. It widens `testSources`, `runtimeClasspath`, `testClasses`, and `compiledTests` to `private[histos]`. The test compile calls `compiledTests` with a `CompiledCell` built from `classesDir` and `classFiles = 0`. The signature still takes that cell and the test sources. Test `scalacOptions` names the `runtimeClasspath` order and does not call `upstreamClasses`. `suiteEnv` and `testWork` stay private until the test PR.
+`Loader.buildClasspath`, `GraphCompile.cellFeed`, `SemanticDb.argv`, and `private[histos]` on `testSources`, `runtimeClasspath`, `testClasses`, `compiledTests`, `suiteEnv`, and `testWork` are in this tree. `Bsp.open` already takes the classpath list and the notification sink. It still takes `graph: ProjectGraph` by value. The reload commit changes that argument to a read of the server's graph ref.
 
-The test PR adds `buildTarget/jvmTestEnvironment` and sets `canTest` on the JVM test target. It widens `suiteEnv` and `testWork` to `private[histos]`. `runtimeClasspath`, `testClasses`, and `compiledTests` are already visible. It does not add `debugProvider`. It does not wait on a trace.
+`aggregate` changes from `ProjectDef` to `ModuleDef`. `module` stays. `AggregateDef.make` takes `List[ModuleDef]`. The graph value stays `Aggregate(name, children: List[ProjectName], position)`. `ship` still takes `ProjectDef`. `BuildError.AggregateShipMember` still rejects an aggregate in a ship.
 
-The ascent BSP PR reads `.histos/bsp-platforms`. Absent or empty publishes JVM only, and those ids still say `&platform=jvm`. A `js` or `native` line publishes that platform under its own id. There is no platform flag on `Module`. `buildTarget/compile` passes the platform token into `cellFeed`, with the upstream closure in `picked`, and does not link. It does not call `chooseCells`.
+`Selection.select(graph, names): Either[CiError, Selected]` is the shared lookup. `Selected` is the modules in request order and the set of member names that came from an aggregate. Empty `names` yields every module and an empty expanded set. `GraphCompile.choose`, `ModuleTest.requested`, and `LocalPublish.choose` call it. `Workflow.target` does not. `Grammar.walk` keeps every `--module` and stops calling `distinct`, so a repeated raw name reaches `Selection`. `CiError.Duplicate` (`'<name>' is listed twice`) is that check.
 
-The plugin PR is the branch that already changed `Loader`, `BuildError`, and the api classpath, rebased across `JvmCompile.jarBan` and `Loader.buildClasspath`. It closes the classloader gap to `plugins.md`. Do not reshape `HistosPlugin`. Do not narrow `buildClasspath` back to the api jar. On that branch the method is `Boundary.jars`.
+`Call` gains `Test(projects, patterns, quick)`, `Publish(repository, projects)`, `Graph`, `Run(id, platform)`, `Task(id)`, `Cancel(id)`, `Toolchain`, `Resolve`, `Workflow`, `Assembly`, `Reload`, and `Reboot`, beside `Compile` and `Bsp`. `Task` is `inspect`, `versions`, or `plugin/task`, and it has no platform. Pattern strings are parsed with `SuitePattern.from`. A bad pattern is that error's message and exit code 2.
 
-The ascent proof adds `ScalacFlag` cases and a place on `Module` to name them. `module` and `aggregate` keep the signatures above.
+`CompileFeed` gains `Failed(error: GraphCompileError)`. The per-cell cases are `NoRoot`, `NoSources`, `MissingUpstream`, `RootRead`, `Output`, and `Failed`. `GraphCompileError.Cells` is the non-empty list of those. Its `message` is one cell message per line. `Target`, `UnknownCell`, `Cycle`, `Lock`, `LockRead`, and `Jdk` still fail before any cell runs. `linkAggregate` gains `BuildError.AggregateChild`.
 
-The editor module is new and isolated. It does not change `histos.api`.
+`Rpc.Capabilities` gains `buildTargetChangedProvider: Boolean`, set true. The notification is BSP 2.2 `buildTarget/didChange`: `params.changes` is `BuildTargetEvent` values, each `{ target: { uri }, kind }`. `kind` is 1 created, 2 changed, 3 deleted. `data` and `dataKind` are not set.
+
+MCP and ACP tool success and tool error are both `String`. Heddel wraps a non-object schema as `{value: string}` (`Structured.Wrapped`). `ToolchainReport` and `ToolchainFault` leave the tool surface.
+
+`Module.flags` defaults to `ScalacFlags.empty`. `ModuleDef.scalac` sets that list. Compile, test compile, and BSP `scalacOptions` and `buildTarget/compile` pass `module.flags.argv`, then the SemanticDB append. No new `ScalacFlag` cases are added. The editor module waits, and it does not change `histos.api`.
 
 ## Data Model Changes
 
 No new on-disk layout for classes, analysis, or the dependency lock. SemanticDB files appear under the class directory that compile already writes. The test target points at `.histos/test-classes`, which test already writes.
 
-`buildTarget/dependencySources` does not add a `source` line to module cells. It may download a sources jar from the repository on that lock line, and a standard-library sources jar from `Repository.Central`. A miss is omitted. Plugin `source` lines stay as they are on the branch.
+`buildTarget/dependencySources` does not add a `source` line to module cells. It may download a sources jar from the repository on that lock line, and a standard-library sources jar from `Repository.Central`. A miss is omitted. Plugin `source` lines stay as the lock writes them.
 
 `.histos/bsp-platforms` is the BSP allow-list. The file is absent by default. `histos compile` does not read it. `.gitignore` does not ignore the whole `.histos` directory. This repo does not commit the file. JVM-only is the absent file, not a committed empty one.
 
-The CI PR adds `.github/workflows/ci.yml`. That is the first workflow file in this repo. `.bsp/histos.json` stays. Its argv stays `./histos bsp`.
+Adding `.github/workflows/ci.yml` is the first workflow file in this repo. `.bsp/histos.json` stays. Its argv stays `./histos bsp`.
 
-The server record stays `.histos/server.json`. The fingerprint function does not grow in the BSP PRs.
+The server record stays `.histos/server.json`. `Fingerprint.read` hashes `histos.scala`, `.histos/dependencies.lock`, and regular files under each header `plugin(path)`. A module source edit is not in that hash, so it does not reload. `Cli.VersionText` stays `histos 0.0.1-SNAPSHOT` across assemblies, so a new `dist/histos.jar` is not a fingerprint change.
 
 ## Alternatives Considered
 
+### sbt's aggregate and Mill's per-module task
+
+sbt keeps two lists. `dependsOn` is who is on the classpath. `aggregate` is which projects also run the task. `root / test` runs each aggregated project's own test task. Mill's `__.test` is the same idea: select each module's task, do not merge the classpaths. Histos keeps that split, and one module already expands to a cell per Scala version and platform. The continuation rule is the part neither tool is copied for: an independent cell still runs after a sibling fails, so the person sees every failure. A query language, an sbt `SettingKey`, and one test process with a merged classpath were the familiar shapes that lose here. A test classloader inside the server JVM would share state across modules. The subprocess stays.
+
 ### Bloop export
 
-Mill's path A, still called preferred on Metals' Mill page: `mill.contrib.bloop.Bloop/install` writes Bloop JSON, and Bloop compiles outside Mill. Histos rejects it. The IDE would compile with a different compiler invocation, a different analysis file, and a different classpath story than `./histos compile`. Two compilers is how "it works in the editor" becomes a bug. The cost of a native BSP session is the work in the PR plan. The cost of Bloop is a second build.
+Mill's path A, still called preferred on Metals' Mill page: `mill.contrib.bloop.Bloop/install` writes Bloop JSON, and Bloop compiles outside Mill. Histos rejects it. The IDE would compile with a different compiler invocation, a different analysis file, and a different classpath story than `./histos compile`. Two compilers is how "it works in the editor" becomes a bug. The cost of a native BSP session is the session this tree already runs. The cost of Bloop is a second build.
 
 ### A Scala.js VSIX as the language client
 
@@ -441,17 +483,19 @@ The launcher refuses to exec an assembly whose sha256 does not match `.histos/as
 
 The test child sees `HISTOS_REPO` and `PATH` only. That is not a jail. Tests are not sendable. Publish writes a local directory and does not take a password. `RemoteCache` has no network client. A future client must keep using `Sendable.decide` and must not upload tests, publish, or a plugin task that declares `Network` or `Docker`.
 
-On the plugin branch, `ApiBoundary` refuses `histos.*` outside the api surface. A plugin that links `histos.schedule` or `histos.zinc` fails the load. The boundary host is the engine loader, which `plugins.md` rejects. The plugin PR parents the api `URLClassLoader` on the platform loader and calls across. Project compiles reject a jar that contains `HistosBuild`. The branch also rejects a jar that contains `ClassMarker.PluginEntry` (`JvmCompile.jarBan`). Plugin classes stay on the build classloader.
+`ApiBoundary` is parented on the platform loader and refuses `histos.*` outside the api surface. Boundary names load from the engine host that defined `HistosBuild`, so `ProjectGraph` is one class. A plugin that links `histos.schedule` or `histos.zinc` fails the load. Project compiles reject a jar that contains `HistosBuild` or `ClassMarker.PluginEntry` (`JvmCompile.jarBan`). Plugin classes stay on the build classloader.
 
-This stack adds no telemetry.
+Reload and reboot stay inside that boundary. Reload calls `Loader.load` in the server process. Reboot starts `./histos`, the frozen script, which checks `.histos/assembly.sha256` and execs the jar. Reboot stops accepting, runs `remove` once, disarms that finalizer, then starts `./histos server`. The parent's exit does not delete the child's socket or `server.json`. There is no network bind.
+
+This work adds no telemetry.
 
 ## Observability
 
-Compile prints one cell at a time: diagnostics, then `<module> <scala> <platform>` and the class directory. Test streams the framework's tree and closes with a summary line. `histos toolchain` and MCP `toolchain` print the JDK decision, and Node or clang when the graph needs them. The server prints its socket path and then waits.
+Compile prints one cell at a time: diagnostics, then `<module> <scala> <platform>` and the class directory. Test streams the framework's tree and closes with a summary line. `histos toolchain` prints the JDK decision, and Node or clang when the graph needs them. The server prints its socket path and then waits.
 
-There is no metrics pipeline. Do not add one in these PRs. The editor signal is `build/publishDiagnostics`, carrying the path and the start-to-end range from `xsbti.Problem`, plus Metals Doctor. The build file uses the 0-based dotty range instead. `reset: true` at the start of a target's compile drops stale squiggles. The dogfood trace is `~/Library/Caches/org.scalameta.metals/bsp.trace.json` on macOS (Metals reads it after a restart). The test PR does not read that trace to pick a protocol. `jvmTestEnvironment` is the protocol. A trace that later shows `debugSession/start` means a real DAP server, which this stack excludes.
+There is no metrics pipeline. Do not add one. The editor signal is `build/publishDiagnostics`, plus Metals Doctor. `jvmTestEnvironment` is the test protocol. A trace that shows `debugSession/start` means a real DAP server, which this work does not add.
 
-BSP today returns status `1` or `2` and drops the feed. `CollectingReporter` already stored the `xsbti.Problem` and then published only `problem.message`. Until the navigation PR, a failed compile in the editor is a status code with no squiggle.
+The server streams `Message.Out`, `Message.Err`, and `Message.Exit`. A failed cell is `Message.Err`. The command's non-zero status is `Message.Exit` after the last cell. A skipped publish member is a `Message.Out` line. A reload failure is `LoadError.message` on `Message.Err` and exit code 3. Tool results are that same text.
 
 ## Risks
 
@@ -461,34 +505,33 @@ BSP today returns status `1` or `2` and drops the feed. `CollectingReporter` alr
 | Diagnostics are published under the stale method name `buildTarget/publishDiagnostics`. | High if wrong | Emit `build/publishDiagnostics` only. A BSP fixture asserts that method string. The integration page is not the spec. |
 | Js and Native targets reuse the JVM id, or a save compiles every platform or every Scala version. | High if wrong | Every module id carries `&platform=` and `&scope=`. `.histos/bsp-platforms` absent publishes JVM only. `buildTarget/compile` calls `cellFeed` with that platform, the requested versions, and the upstream closure in `picked`. It does not call `console` (`only = None`), `runCells` (`platform = None`), or `chooseCells`. It does not call the linker. The ascent proof file is 26 modules, nine of them three platforms. |
 | A save passes only the requested module, or test `scalacOptions` calls `runtimeClasspath` on import. | High if wrong | `compileLayers` starts from an empty `done` map. `GraphCompile.upstreamClasses` does not read disk, so `picked` includes the upstream closure and `layersOf` compiles it first. Test `scalacOptions` names the `runtimeClasspath` order and does not call `ModuleTest.upstreamClasses`. `Bsp.options` is `ZIO.foreach`, so one `MissingUpstream` fails the import. That error stays on `compiledTests` and the test run. `jvmTestEnvironment` still calls `runtimeClasspath` after compile. |
-| `histos/plugins` is described as merged, or as already matching `plugins.md`, or redesigned. | Medium | The loader is not on main. The PR is those seven commits, rebased across `JvmCompile`, and it closes the classloader gap to the spec. It does not accept the engine loader as the parent. `central` stays in-tree. |
-| The ascent copy is treated as a finished dogfood. | Medium | It compiles. Tests, mains, flags, and publish coordinates are unwired. No pull request. This pass does not edit it. Central publish stays out of the proof. |
-| `testOnly` against a live server ignores the pattern, because `Call.Test` has no pattern field. | Low | Recorded above. BSP uses `jvmTestEnvironment` and the suite Metals names. Do not route editor tests through `Call.Test`. |
-| A matrix workflow is committed before the CLI accepts `--platform` and `--scala`. | Low | The CI PR commits the aggregate render only. |
+| `plugins.md` is read as the loader, and a second api `URLClassLoader` is added. | Medium | The loader in this tree parents `ApiBoundary` on the platform loader and loads boundary names from the engine host so `ProjectGraph` is one class. `central` stays in-tree. |
+| The ascent copy is treated as a finished dogfood. | Medium | It compiles. Tests, mains, flags, and publish coordinates are unwired. Central publish stays out of the proof. |
+| `testOnly` against a live server ignores the pattern, because `Call.Test` has no pattern field. | High until the server commit | That commit carries the patterns and `quick`. Editor tests stay on `jvmTestEnvironment`. |
+| `Daemon.accept` stays serial, or a forked accept compiles the same cell twice. | High if wrong | Fork each connection. One semaphore around compile, test, publish, program run, and `buildTarget/compile`. |
+| Reload closes the build classloader while a cell still uses it, or swaps a failed load. | High if wrong | A cell captures the generation it read. The scope closes when that count hits zero. `Loader.load` failure leaves the ref unchanged. |
+| A reload between cells mixes two graphs in one command. | Medium | That is the rule: the next cell reads the new graph, and its upstream classes may be from the previous generation. A failed load does not swap. The whole command does not stay pinned to the graph it started with. |
+| A matrix workflow is committed before the CLI accepts `--platform` and `--scala`. | Low | The workflow file is the empty-split render only. `TestJob.Aggregate` is not a project aggregate. |
 
 ## Rollout Plan
 
-There is no flag service. Opt-in is the existing pattern: the server, the remote cache, and `.histos/bsp-platforms`.
-
-1. Land the navigation PR. `.bsp/histos.json` does not change. Metals reconnects to the same argv. Dogfood this repo in VS Code and Cursor before the next PR. The trace is a record. It does not pick the test protocol.
-2. Land the test PR. It implements `jvmTestEnvironment` and does not wait on that trace. Roll back by reverting. The old session returns `-32601` for the new methods, which is the behavior on main today.
-3. Point the same binary at the ascent copy. Leave `.histos/bsp-platforms` absent. Confirm a save compiles JVM only and does not link.
-4. Open the plugin PR from the existing branch, rebased across the BSP edits to `JvmCompile` and `Loader.buildClasspath`. Close the classloader gap. Do not retarget it onto a rewrite.
-5. Specular consumes a snapshot. No tag.
-6. Wire the ascent proof and run `./histos test` there. No Central publish.
-7. Commit the generated workflow. Drift fails a hand edit. The launcher provisions the JDK. The workflow does not call `setup-java`.
-8. The VSIX waits until step 1 is daily. It is installed by the user. It is not required to compile.
-
-A bad BSP PR breaks the editor until revert. That is why navigation and test execution are separate pulls.
+There is no flag service. Opt-in is the existing pattern: the server, the remote cache, and `.histos/bsp-platforms` once that file is read. `.bsp/histos.json` does not change. The JVM session and `jvmTestEnvironment` are already what Metals talks to. The commit list is the remaining sequence. A snapshot pin is how Specular compiles. Nothing here tags a release.
 
 ## Open Questions
 
-None. Test launch is `buildTarget/jvmTestEnvironment`, with test classes prepended, decided in the test section. Sources jars may download from the lock's repository, decided in the navigation section. Js and Native BSP visibility is `.histos/bsp-platforms`, decided in the ascent section.
+Test launch is `buildTarget/jvmTestEnvironment`. Js and Native visibility is `.histos/bsp-platforms`. Aggregate selection, cell failure, the warm server, reload, reboot, and the MCP string result are decided above. Three items are deferred:
+
+1. **`ScalacFlag` cases.** `Module.flags` and `ModuleDef.scalac` are added with no new cases. The cases are chosen later. This commit does not add `-deprecation`, `-feature`, `-Wunused:all`, `-language:implicitConversions`, or `-Xfatal-warnings`. If `-Xfatal-warnings` is added later, the CLI argv includes it and `scalacOptions` and `buildTarget/compile` omit it. The ascent-histos commit waits on the cases.
+2. **Specular names.** The plugin id, task id, `JobWhen`, and snapshot coordinate stay unnamed until the Specular work starts. That commit is not one an engineer starts now. The shape stays: a `HistosPlugin` in the Specular repo, a docs task, a CI job, a snapshot pin, and this repo's fixture unchanged.
+3. **Host names.** The module name, vscode coordinate, and command list stay unnamed until the editor surface is designed. That commit is not one an engineer starts now. The shape stays: one CommonJS module, vscode only there, full link then `vsce package`, and no presentation compiler.
 
 ## References
 
-- [plugins.md](plugins.md), the plugin spec. The implementation is the unmerged `histos/plugins` branch.
-- [plan.md](plan.md), the landed note and the next stack.
+- [plugins.md](plugins.md), the plugin spec. Its loader and reload rules match this design.
+- [plan.md](plan.md), the landed note. The remaining work is the commit list below.
+- BSP `buildTarget/didChange`: `DidChangeBuildTarget.changes` of `BuildTargetEvent` (`target`, optional `kind` 1, 2, or 3). Spec: <https://build-server-protocol.github.io/docs/specification.html>. Metals handles it in `MetalsBuildClient.onBuildTargetDidChange` and `ProjectMetalsLspService.onBuildTargetChanges`.
+- sbt `Project.aggregate` and `Project.dependencies`: `~/projects/forks/sbt/main-settings/src/main/scala/sbt/Project.scala`.
+- Heddel `Structured.wrap`: `heddle/mcp-protocol/src/main/scala/heddle/mcp/protocol/Structured.scala`. `ToolCall.typedFailure` wraps a non-object error.
 - `.bsp/histos.json`, `app/src/histos/bsp/Bsp.scala`, `Rpc.scala`, `Frame.scala`.
 - `engine/src/histos/zinc/JvmCompile.scala` (`ScalacFlags`, `scalaJars`, `runtime`, `compilePrepared`, `runZinc213`, `CollectingReporter`), `GraphCompile.scala` (`CompileFeed`, `runCells`).
 - `engine/src/histos/testrun/ModuleTest.scala` (`runtimeClasspath`, `compiledTests`, `suiteEnv`, `testSources`), `TestProcess.scala` (`TestClasspath`).
@@ -501,70 +544,110 @@ None. Test launch is `buildTarget/jvmTestEnvironment`, with test classes prepend
 - groks-beard host and `packageVsix`: `~/projects/early-effect/groks-beard/build.sbt`.
 - Ascent proof, local only: `~/projects/early-effect/ascent-histos`. Not the ascent repository. No pull request.
 
-## PR Plan
+## Commits
 
-Ordered. Each pull is reviewable on its own once its dependencies have merged. Item 1 of the stack is two pulls: navigation, then one JVM test. The test protocol is already `jvmTestEnvironment`. The split is so a bad test slice can revert without taking navigation with it. The order is the order to open them. The plugin series waits on that order. The wait is not a compile break.
+The JVM BSP session, `buildTarget/jvmTestEnvironment`, and the plugin loader are already in this tree. They are not commits. Commits 1 through 8, and the workflow file, can be built now. Each of those compiles, and its tests cover what it adds. The ascent copy, the Specular plugin, and the Scala.js host stay at the end and wait. Their names are not invented.
 
-### 1. BSP navigation for this repo
+### 1. Publish Js and Native targets only when the allow-list names them
 
-**Depends on:** main at `c31b8c4`.
+**Message:** Keep a save on JVM unless the repo asks for Js or Native. `cellFeed` already takes a platform. The target list is what still publishes every save as JVM only.
 
-**Files:** `app/src/histos/bsp/Bsp.scala`, `Rpc.scala`, `app/src/histos/cli/Cli.scala` (`bspLocal` passes the classpath and the sink), `app/src/histos/server/Daemon.scala` (the splice does the same), `app/test/BspSpec.test.scala`, `engine/src/histos/load/Loader.scala` (`buildClasspath`), `engine/src/histos/zinc/JvmCompile.scala` (shared argv beside `flags.argv`, structured problems), `GraphCompile.scala` (`cellFeed`: version set, a required platform, the upstream closure as `picked`, no `collected`), `engine/src/histos/testrun/ModuleTest.scala` (widen `testSources`, `runtimeClasspath`, `testClasses`, and `compiledTests` to `private[histos]`; call `compiledTests` with a `CompiledCell` from `classesDir`. The signature stays). `Resolve.sources` is called, not rewritten. No module `source` lock line.
+**Files:** `app/src/histos/bsp/Bsp.scala` (read `.histos/bsp-platforms` inside `workspace/buildTargets`), `BspError.Platforms`, `app/test/BspSpec.scala`. No field on `Module`. No edit to `~/projects/early-effect/ascent-histos`.
 
-**Description:** One shared scalac list: `flags.argv` plus `-Xsemanticdb` and `-sourceroot <repo>`, used by `cellFeed`, by test compile, and by `scalacOptions`. Do not report `-encoding`. Notification `build/publishDiagnostics` from the Zinc range (`startLine` through `endColumn`, minus one, at least one character) or, for `histos.scala`, from the 0-based dotty range with `ERROR`/`WARNING`/`INFO` mapped from 2/1/0 to BSP 1/2/3. `reset: true` at the start of each target compile. A sink so `speak` and the server splice can write that frame before the result. `buildTarget/dependencySources` may download from the lock repository, omits a miss, and never inserts an empty URI. Standard-library sources come from `Repository.Central` the same way. Main ids are `?scala=<version>&platform=jvm&scope=main`. Test ids use `&scope=test` and depend on that main id. Main ids depend on upstream main ids. `canTest` stays false. `cellFeed`'s `picked` is the requested modules plus the upstream closure. The platform check replaces `chooseCells`'s hardcoded `Platform.Jvm`. Test `scalacOptions` reports the `runtimeClasspath` order and names a missing upstream directory. It does not call `ModuleTest.upstreamClasses`. `MissingUpstream` stays on `compiledTests` and the test run. Do not call `console`, `runCells`, `GraphCompile.run`, `chooseCells`, or `ModuleTest.console` from BSP compile. The `histos.scala` target id is `?build=histos.scala`. Its user classpath is `Loader.buildClasspath` (api jar, `scala-library`, `scala3-library` on main). `ScalaBuildTarget.jars` stays `JvmCompile.scalaJars`. Prove by opening this repo in VS Code and in Cursor. Completion in the build file is that user classpath. A squiggle on a module file is the Zinc range. A squiggle in `histos.scala` is the unshifted dotty range. Goto-definition is the SemanticDB files. Record the bsp trace. Do not use it to choose the test protocol.
+**After this lands:** The file is one trimmed token per line. Blank lines are skipped. A repeated `js` or `native` is one token. Any other token, including `jvm`, fails the targets request with `'<token>' is not a bsp platform`. An unreadable file fails with `could not read <path>`. There is no silent JVM fallback. Absent or empty publishes JVM ids that already say `&platform=jvm`. A `js` or `native` line publishes that platform only for a module that builds it, and `&scope=test` only when that module has test sources. The id is not the JVM id. `buildTarget/compile` passes the token to `cellFeed` and does not link. `BspSpec` covers the bad line, the distinct id, and the compile that does not link. `histos compile` does not read the file.
 
-### 2. One JVM test from the editor
+### 2. Write SemanticDB for a Scala 2.13 cell
 
-**Depends on:** PR 1. Not on a trace.
+**Message:** `-P:semanticdb` is a plugin option. Emitting it without loading `semanticdb-scalac` does not write a database.
 
-**Files:** `Bsp.scala`, `Rpc.scala`, `BspSpec.test.scala`, `engine/src/histos/testrun/ModuleTest.scala` (widen `suiteEnv` and `testWork` only). `runtimeClasspath`, `testClasses`, `compiledTests`, and the SemanticDB test compile are already in PR 1.
+**Files:** `engine/src/histos/zinc/JvmCompile.scala` (`invoke213` passes `-Xplugin:` and the SemanticDB argv), an engine fixture on Scala 2.13.
 
-**Description:** `buildTarget/jvmTestEnvironment` as specified above. This request runs after compile. Classpath is test classes, then the `runtimeClasspath` list, including its directory check. `canTest` true on the JVM test target. No debug provider. No DAP URI. Breakpoints stay out. Prove one JVM test from VS Code and from Cursor. Metals runs its own runner, so the test tree must already have been compiled with SemanticDB and `zio-test-sbt` must be on that classpath.
+**After this lands:** The jar is `org.scalameta` / `semanticdb-scalac_<the module's Scala version>` / `4.17.3`, an exact pin. The 2.13 extra argv is `-Xplugin:<jar>`, `-Yrangepos`, and `-P:semanticdb:sourceroot:<repo>`. Those strings are not `ScalacFlag` cases. The fixture finds `META-INF/semanticdb` under the class directory. Scala 3 stays `-Xsemanticdb` with no plugin jar.
 
-### 3. The same BSP for ascent's JVM modules
+### 3. Select the modules an aggregate names
 
-**Depends on:** PR 1. PR 2 if the proof includes a test lens. Does not depend on the plugin branch.
+**Message:** `histos test abc` fails with `'abc' is not a module` even when abc's children are modules. An aggregate should name those modules. It should not become a classpath.
 
-**Files:** BSP target construction, the reader for `.histos/bsp-platforms`, a fixture that a Js or Native target compiles and does not link. No field on `Module`. No edit to `~/projects/early-effect/ascent-histos` for the default.
+**Files:** `api/src/histos/Builder.scala`, `Macros.scala`, `ProjectDef.scala` (`AggregateDef.make`), `BuildError.AggregateChild`, a new `Selection` in the engine, `GraphCompile.choose`, `ModuleTest.requested`, `LocalPublish.choose`, `app/src/histos/cli/Grammar.scala` (`walk` keeps every `--module` and does not call `distinct`), tests in `api/test`, `engine/test`, and `app/test`. `Workflow.target` and `Program.locate` stay.
 
-**Description:** Opening that copy, with the allow-list absent, shows JVM targets whose ids already say `&platform=jvm`. A JVM save calls `cellFeed` with `Platform.Jvm` and the upstream closure in `picked`. It does not compile Js or Native. A `js` or `native` line publishes a different id. That compile does not link. It uses the same closure, with the check that the module builds the platform token. It does not call `chooseCells` (that picker rejects a module that does not build JVM).
+**After this lands:** `aggregate` takes `ModuleDef`. A nested aggregate does not compile. A child that is not a module is `BuildError.AggregateChild` at link time, not `CiError.NotModule`. `Selection` uses `BadName`, `Unknown`, and `Duplicate` only. Empty names are the whole graph. A module name is that module. An aggregate name is its direct members. `histos compile abc` compiles a, b, c and their `dependsOn` upstreams, every Scala version and every platform those modules build. `histos test abc`, `testOnly --module abc`, and `testQuick` run each member on that member's own classpath. A repeated name, including an aggregate plus one of its members, is `CiError.Duplicate`. `histos publish <repository> abc` publishes the members the version decision would publish. A skipped member prints `'<name>' is not in a ship` and the command exits 0 when another member published. None published is `NothingToPublish`. A directly named module with no coordinate is `NotPublished` and writes no artifacts. `histos run abc` is `ProgramError.Aggregate`. `Workflow.target` still rejects an aggregate. `TestJob.Aggregate` is still the empty CI split.
 
-### 4. Land the plugin series
+### 4. Finish the other cells after one cell fails
 
-**Depends on:** a rebase across PR 1's edits to `JvmCompile.scala` and `Loader.buildClasspath`. Not on a green editor dogfood. Open it after PRs 1 to 3 so the stack stays linear. That wait is stack order.
+**Message:** One platform's compile error hides the next platform, and a compile error hides every later test. The person who ran the command should see every independent failure.
 
-**Files:** the seven commits on `histos/plugins`, plus the classloader change that makes `ApiBoundary` parent an api `URLClassLoader` on the platform loader. Spec is `docs/plugins.md`. Do not redesign `HistosPlugin`, the header, or the CI render. Keep `Loader.buildClasspath`, implemented as `Boundary.jars`.
+**Files:** `engine/src/histos/zinc/GraphCompile.scala` (`compileLayers`, `CompileFeed.Failed`, `GraphCompileError.Cells`), `engine/src/histos/testrun/ModuleTest.scala` (`suites`), `app/src/histos/cli/Cli.scala` (`testLocal`), `app/src/histos/server/Daemon.scala` (`test`), `app/test/BspSpec.scala`, and the compile and test specs.
 
-**Description:** Pull request of the branch that already exists, rebased, with the classloader gap closed to the spec. `central` stays in-tree. The fixture stays a fixture. The engine loader is not an accepted parent.
+**After this lands:** `NoRoot`, `NoSources`, `MissingUpstream`, `RootRead`, `Output`, and `Failed` are per-cell data. Siblings that do not depend on them finish. `Target`, `UnknownCell`, `Cycle`, `Lock`, `LockRead`, and `Jdk` still abort before any cell. `Cells.message` is one cell message per line. `histos compile` exits 8 after the last cell if any cell failed. `histos test` exits 7. `NoneMatched` applies only when every selected cell compiled and no suite matched. A BSP compile of several targets returns status 2 when any requested cell failed, after the independent cells have run. Publish writes no jars when any cell failed.
 
-### 5. Specular plugin, in the Specular repo
+### 5. Run every graph load in the server, and keep test filters
 
-**Depends on:** PR 4 merged, and a snapshot of `histos.api`. Not a release.
+**Message:** `Call.Test` drops `testOnly` patterns, `testQuick` writes analysis beside the server, and a BSP splice occupies the only accept loop. A command that loads a graph in a second process is a second writer.
 
-**Files:** a new module in the Specular repository. None in this repo. This design pass does not edit Specular.
+**Files:** `app/src/histos/server/Daemon.scala` (`Call`, `accept`, the compile semaphore, handlers), `app/src/histos/cli/Cli.scala`, `app/test/ServerSpec.scala`.
 
-**Description:** A `HistosPlugin` that contributes a docs task and a CI job, because docs come from Specular itself. This repo's `SpecularFixtureSpec` is unchanged.
+**After this lands:** `Call` is compile, test (patterns and quick), publish, graph, `Run` (a main and an optional platform), `Task` (`inspect`, `versions`, `plugin/task`, no platform), cancel, toolchain, resolve, workflow, assembly, and bsp. `cache` and `version` stay in-process. `~` stays in the client and each iteration sends the inner `Call`. `testQuick` attaches. A different `Cli.VersionText` is `ServerError.DifferentVersion` and exit 3, not an in-process load. Absent and dead stay in-process. A BSP splice does not block the next call. The compile permit covers compile, test, publish, assembly, a main, and `buildTarget/compile`, and interrupt releases it. MCP still loads its own graph.
 
-### 6. Ascent proof: tests, mains, flags
+### 6. Reload the graph in this JVM, and reboot into the next jar
 
-**Depends on:** PR 1, because both change compiler argv. Not on the Specular plugin. Ordered after PR 5 so the stack stays linear. The Specular plugin is not a code dependency.
+**Message:** A fingerprint mismatch tells the client to compile a build file the server has rejected, and `Bsp.open` is holding the graph from splice time. A new `dist/histos.jar` cannot show up in `Cli.VersionText`.
 
-**Files:** `ScalacFlag` and a field on `Module` in this repo. Then `histos.scala` in `~/projects/early-effect/ascent-histos`: test dependencies or a provider, `.main` where a main exists, and the flags that proof needs. No organization and no catalog.
+**Files:** `app/src/histos/server/Daemon.scala` (generation ref, reload lock, reboot order, `Call.Reload`, `Call.Reboot`), `app/src/histos/bsp/Bsp.scala` and `Rpc.scala` (graph read, `buildTargetChangedProvider`, `buildTarget/didChange`), `app/src/histos/cli/Grammar.scala` and `Cli.scala`, `api/src/histos/plugin/Names.scala` (`reload`, `reboot`), the reserved list in `docs/plugins.md`, `app/test/ServerSpec.scala`, `app/test/BspSpec.scala`.
 
-**Description:** `./histos compile` and `./histos test` on that copy. Central publish stays out. Flag text is still produced by the engine. New cases join `flags.argv`. They do not replace the SemanticDB append. `-Xfatal-warnings`, if added, stays on the CLI argv and is dropped from the BSP copy of the shared list.
+**After this lands:** A fingerprint change and `histos reload` call `Loader.load`. Success swaps the ref, writes the fingerprint, and closes the previous build classloader after the cells that captured it finish. The next cell reads the new graph. Failure keeps the last graph. With no server, `histos reload` is `ServerError.NoServer` and exit 3, and `histos reboot` starts `./histos server`. With a server, reboot stops accepting, runs `remove` once, disarms that finalizer, spawns `./histos server`, and exits without deleting the child's socket. BSP sends `buildTarget/didChange` with `target` and `kind` only. The splice stays up. A module source edit does not reload.
 
-### 7. Generated CI for this repo
+### 7. Point MCP and ACP at the server and return the CLI text
 
-**Depends on:** the renderer on main (`engine/src/histos/workflow/Workflow.scala`). No new renderer.
+**Message:** Toolchain's success schema requires `jdk`, so a lock failure is reported as a missing field. MCP also loads a second graph beside the server.
+
+**Files:** `app/src/histos/mcp/HistosMcp.scala`, `ToolchainView.scala` (leaves the tool result), `app/src/histos/acp/Acp.scala`, `app/src/histos/cli/Cli.scala` (the long-lived in-process graph), an MCP test and an ACP test.
+
+**After this lands:** MCP and ACP re-read `.histos/server.json` on every call and send `Call` when it matches. They reuse one in-process graph only while the server is absent or dead. A different version is the reboot error. They do not splice into the BSP session. The seven tools are `graph`, `compile`, `test`, `publish`, `run`, `cancel`, and `toolchain`. Each handler sends the matching `Call` and returns that call's CLI text. It does not contain its own compile or test. Success and failure are both `String`, so structured content is `{value: string}`. A missing jdk lock is that message. ACP `initialize` returns `capabilities.commands` as that list. `run` is `{id, platform?}`. The ACP test parses `result.value`.
+
+### 8. Give a module a typed scalac list
+
+**Message:** Production argv is empty. An open `List[String]` from the build file is the stringly shape this tool refuses. The field can exist before any new case is chosen.
+
+**Files:** `Module.flags: ScalacFlags` (default `ScalacFlags.empty`), `ModuleDef.scalac(flag: ScalacFlag, rest: ScalacFlag*)`, `GraphCompile.compileVersion`, `ModuleTest.compiledTests`, BSP `scalacOptions` and `buildTarget/compile`, a test that `.scalac(EncodingUtf8)` is `-encoding` and `UTF-8` on the CLI argv and in `scalacOptions`. No new `ScalacFlag` cases.
+
+**After this lands:** `flags` defaults to `ScalacFlags.empty`. One `.scalac(...)` call sets that module's flags. A second call replaces the list. It does not append. A module that never calls `.scalac` stays on empty argv. Compile, test compile, and BSP `scalacOptions` and `buildTarget/compile` pass `module.flags.argv`, then the SemanticDB append. `.scalac(EncodingUtf8)` is `-encoding` and `UTF-8` on the CLI and in `scalacOptions`, and the test asserts that. This commit does not add `-deprecation`, `-feature`, `-Wunused:all`, `-language:implicitConversions`, or `-Xfatal-warnings`. If `-Xfatal-warnings` is added later, the CLI argv includes it and `scalacOptions` and `buildTarget/compile` omit it. The SemanticDB append stays beside `flags.argv`.
+
+### 9. Add the generated workflow for this repo
+
+**Message:** The renderer already matches this graph, and the repository has no workflow file, so a hand-written one would drift with nothing to check it against.
 
 **Files:** `.github/workflows/ci.yml`, produced by `./histos workflow --update`.
 
-**Description:** Commit the aggregate render. Drift check on. Empty catalog, so no `versions` job. Do not set split axes. Do not add a publish job.
+**After this lands:** The file is the empty-split render: a `test` job (`./histos test`) and the `workflow` job. That empty split is `TestJob.Aggregate`, which is not a project aggregate. Empty catalog, so no `versions` job. No `--platform` or `--scala`. No publish job. `./histos workflow --check` fails a hand edit.
 
-### 8. Scala.js host and VSIX
+Commits 10, 11, and 12 wait. An engineer does not start them now.
 
-**Depends on:** PRs 1 and 2 in daily use. Not on PRs 5 to 7.
+### 10. Wire the ascent copy's tests, mains, and flags
 
-**Files:** a new module in this repo. Only that module imports `vscode`. CommonJS. A `packageVsix` task shaped like groks-beard's `host` / `packageVsix`. Not a `HistosPlugin`.
+**Waits.** The `ScalacFlag` cases are not chosen. This commit does not start until they are.
 
-**Description:** Commands call BSP or the CLI. Completion stays with Metals. Land it after the BSP loop is daily, not before.
+**Message:** The local copy compiles and does not test or name a main. It should use the cases chosen later, not a second flag spelling.
+
+**Files:** `histos.scala` in `~/projects/early-effect/ascent-histos`. No new flag cases in this repo.
+
+**After this lands:** `./histos compile` and `./histos test` run on that copy. Central publish stays out. No organization and no catalog.
+
+### 11. Add Specular's docs plugin in the Specular repo
+
+**Waits.** The plugin id, task id, `JobWhen`, and snapshot coordinate stay unnamed until the Specular work starts. An engineer does not start this commit now.
+
+**Message:** Docs have to be generated from Specular itself. This repo's fixture is not that module.
+
+**Files:** a new module in the Specular repository. None in this repo.
+
+**After this lands:** That module is a `HistosPlugin` with a docs task and a CI job, on a snapshot of `histos.api`. The test loads the plugin and renders `./histos run <plugin>/<task>`. `SpecularFixtureSpec` is unchanged. No release tag.
+
+### 12. Add the Scala.js host module
+
+**Waits.** The module name, vscode coordinate, and command list stay unnamed until the editor surface is designed. An engineer does not start this commit now.
+
+**Message:** Commands need a place to live once the BSP session is the one Metals uses daily. That module must not become a second presentation compiler.
+
+**Files:** one new module in this repo. Only that module imports `vscode`. CommonJS. An engine task that full-links it and runs `vsce package`, with a typed error. Not a `HistosPlugin`.
+
+**After this lands:** The test checks CommonJS, that no other module depends on vscode, and that the task does not start a presentation compiler. Completion stays with Metals.

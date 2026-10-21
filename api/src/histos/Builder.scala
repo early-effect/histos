@@ -16,7 +16,7 @@ inline def module(name: String, platform: Platform, platforms: Platform*)(
 ): ModuleDef =
   ${ BuilderMacro.module('name, 'platform, 'platforms, 'version, 'versions) }
 
-/** A root that does not compile. It aggregates the projects it is given. */
-inline def aggregate(name: String, project: ProjectDef, projects: ProjectDef*): AggregateDef =
+/** A root that does not compile. It names the modules it is given. A nested aggregate does not compile. */
+inline def aggregate(name: String, project: ModuleDef, projects: ModuleDef*): AggregateDef =
   ${ BuilderMacro.aggregate('name, 'project, 'projects) }
 

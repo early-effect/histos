@@ -9,9 +9,11 @@ import histos.resolve.{
   Repository,
   Resolve,
   ResolveCell,
-  ResolveError,
+  ResolveError
 }
-import histos.testrun.ModuleTest
+import histos.program.{EntryPoints, Program, ProgramError}
+import histos.testrun.{ModuleTest, SuiteNames}
+import histos.TestProvider
 import histos.zinc.{
   CompileError,
   CompileProblem,
@@ -23,7 +25,7 @@ import histos.zinc.{
   PositionBase,
   ResolvedJdk,
   ScalaSeries,
-  SemanticDb,
+  SemanticDb
 }
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -34,7 +36,9 @@ import scala.jdk.CollectionConverters.*
 import zio.json.*
 import zio.{IO, Ref, UIO, ZIO}
 
-/** BSP 2.2 for Metals. JVM targets, a build-file target, and diagnostics. Test running stays out. */
+/** BSP 2.2 for Metals. JVM targets, a build-file target, and diagnostics. Test
+  * running stays out.
+  */
 object Bsp:
   val BspVersion: String = "2.2.0"
   val ServerName: String = "histos"
@@ -71,15 +75,21 @@ object Bsp:
     case Toolchain(error: CompileError)
     case Sources(error: GraphCompileError)
     case Tests(error: histos.testrun.ModuleTestError)
+    case Run(error: ProgramError)
     case Build(error: LoadError)
+    case NotTest
+    case NotMain
+    case Platforms(text: String)
 
     def code: Int = this match
-      case Parse                                  => -32700
-      case NotRequest | NoMethod | ShutDown       => -32600
-      case UnknownMethod(_)                       => -32601
-      case Params(_) | UnknownTarget              => -32602
-      case NotInitialized                         => -32002
-      case Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) | Tests(_) | Build(_) => -32603
+      case Parse                                         => -32700
+      case NotRequest | NoMethod | ShutDown              => -32600
+      case UnknownMethod(_)                              => -32601
+      case Params(_) | UnknownTarget | NotTest | NotMain => -32602
+      case NotInitialized                                => -32002
+      case Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) |
+          Tests(_) | Run(_) | Build(_) | Platforms(_) =>
+        -32603
 
     def message: String = this match
       case Parse                 => "parse error"
@@ -96,7 +106,11 @@ object Bsp:
       case Toolchain(error)      => error.message
       case Sources(error)        => error.message
       case Tests(error)          => error.message
+      case Run(error)            => error.message
       case Build(error)          => error.message
+      case NotTest               => "jvmTestEnvironment needs a test target"
+      case NotMain               => "jvmRunEnvironment needs a main target"
+      case Platforms(text)      => text
 
   def open(
       repo: Path,
@@ -105,8 +119,23 @@ object Bsp:
       buildClasspath: List[Path] = Nil,
       notify: String => UIO[Unit] = _ => ZIO.unit,
       build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
+      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int] = effect =>
+        effect
   ): UIO[Session] =
-    Ref.make[Phase](Phase.New).map(phase => Session.start(repo, graph, jdk, buildClasspath, notify, build, phase))
+    Ref
+      .make[Phase](Phase.New)
+      .map(phase =>
+        Session.start(
+          repo,
+          graph,
+          jdk,
+          buildClasspath,
+          notify,
+          build,
+          phase,
+          gate
+        )
+      )
 
   object Session:
     private[Bsp] def start(
@@ -117,8 +146,18 @@ object Bsp:
         notify: String => UIO[Unit],
         build: IO[LoadError, BuildNotes],
         phase: Ref[Phase],
+        gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int]
     ): Session =
-      new Session(repo, graph, jdk, buildClasspath, notify, build, phase)
+      new Session(
+        repo,
+        graph,
+        jdk,
+        buildClasspath,
+        notify,
+        build,
+        phase,
+        gate
+      )
 
   final class Session private (
       repo: Path,
@@ -128,26 +167,34 @@ object Bsp:
       notify: String => UIO[Unit],
       build: IO[LoadError, BuildNotes],
       phase: Ref[Phase],
+      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int]
   ):
     def answer(payload: String): ZIO[Resolve, Nothing, Answer] =
       payload.fromJson[zio.json.ast.Json] match
-        case Left(_) => ZIO.succeed(Answer.Reply(failure(Rpc.RpcId.Absent, BspError.Parse)))
+        case Left(_) =>
+          ZIO.succeed(Answer.Reply(failure(Rpc.RpcId.Absent, BspError.Parse)))
         case Right(json) =>
           json.as[Rpc.Incoming] match
-            case Left(_) => ZIO.succeed(Answer.Reply(failure(Rpc.RpcId.Absent, BspError.NotRequest)))
+            case Left(_) =>
+              ZIO.succeed(
+                Answer.Reply(failure(Rpc.RpcId.Absent, BspError.NotRequest))
+              )
             case Right(incoming) =>
               val id = Rpc.idOf(incoming)
               incoming.method match
-                case None => ZIO.succeed(Answer.Reply(failure(id, BspError.NoMethod)))
+                case None =>
+                  ZIO.succeed(Answer.Reply(failure(id, BspError.NoMethod)))
                 case Some(name) =>
-                  phase.get.flatMap(current => dispatch(current, id, name, incoming, incoming.id.isEmpty))
+                  phase.get.flatMap(current =>
+                    dispatch(current, id, name, incoming, incoming.id.isEmpty)
+                  )
 
     private def dispatch(
         current: Phase,
         id: Rpc.RpcId,
         name: String,
         incoming: Rpc.Incoming,
-        notification: Boolean,
+        notification: Boolean
     ): ZIO[Resolve, Nothing, Answer] =
       (current, name) match
         case (_, "build/exit") =>
@@ -165,7 +212,9 @@ object Bsp:
         case (Phase.Ready, "build/initialized") =>
           ZIO.succeed(Answer.Quiet)
         case (Phase.Ready, "build/shutdown") if !notification =>
-          phase.set(Phase.Shutdown).as(Answer.Reply(Rpc.ok(id, Rpc.NullResult())))
+          phase
+            .set(Phase.Shutdown)
+            .as(Answer.Reply(Rpc.ok(id, Rpc.NullResult())))
         case (Phase.Ready, "workspace/buildTargets") if !notification =>
           reply(id, targets)
         case (Phase.Ready, "buildTarget/sources") if !notification =>
@@ -176,37 +225,82 @@ object Bsp:
           dependencySources(id, incoming)
         case (Phase.Ready, "buildTarget/compile") if !notification =>
           compile(id, incoming)
+        case (Phase.Ready, "buildTarget/scalaMainClasses") if !notification =>
+          mainClasses(id, incoming)
+        case (Phase.Ready, "buildTarget/scalaTestClasses") if !notification =>
+          testClasses(id, incoming)
+        case (Phase.Ready, "buildTarget/jvmRunEnvironment") if !notification =>
+          runEnvironment(id, incoming)
+        case (Phase.Ready, "buildTarget/jvmTestEnvironment") if !notification =>
+          testEnvironment(id, incoming)
         case (Phase.Ready, _) if notification =>
           ZIO.succeed(Answer.Quiet)
         case (Phase.Ready, other) =>
           ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownMethod(other))))
 
-    private def sources(id: Rpc.RpcId, incoming: Rpc.Incoming): ZIO[Resolve, Nothing, Answer] =
-      reply(id, uris(incoming).flatMap(found => ZIO.foreach(found)(sourceItem).map(Rpc.SourcesResult(_))))
-
-    private def options(id: Rpc.RpcId, incoming: Rpc.Incoming): ZIO[Resolve, Nothing, Answer] =
-      reply(id, uris(incoming).flatMap(found => ZIO.foreach(found)(scalac).map(Rpc.ScalacOptionsResult(_))))
-
-    private def dependencySources(id: Rpc.RpcId, incoming: Rpc.Incoming): ZIO[Resolve, Nothing, Answer] =
-      reply(id, uris(incoming).flatMap(found => ZIO.foreach(found)(sourceJars).map(Rpc.DependencySourcesResult(_))))
-
-    private def compile(id: Rpc.RpcId, incoming: Rpc.Incoming): ZIO[Resolve, Nothing, Answer] =
-      ZIO.fromEither(Rpc.compileParams(incoming.params).left.map(fault)).foldZIO(
-        error => ZIO.succeed(Answer.Reply(failure(id, error))),
-        params =>
-          val found = params.targets.map(_.uri)
-          val ids = found.flatMap(parse)
-          if ids.length != found.length then ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
-          else
-            runCompile(ids).map(status => Answer.Reply(Rpc.ok(id, Rpc.CompileResult(status, params.originId)))),
+    private def sources(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(sourceItem).map(Rpc.SourcesResult(_))
+        )
       )
+
+    private def options(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(scalac).map(Rpc.ScalacOptionsResult(_))
+        )
+      )
+
+    private def dependencySources(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(sourceJars).map(Rpc.DependencySourcesResult(_))
+        )
+      )
+
+    private def compile(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      ZIO
+        .fromEither(Rpc.compileParams(incoming.params).left.map(fault))
+        .foldZIO(
+          error => ZIO.succeed(Answer.Reply(failure(id, error))),
+          params =>
+            val found = params.targets.map(_.uri)
+            val ids = found.flatMap(parse)
+            if ids.length != found.length then
+              ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
+            else
+              gate(runCompile(ids)).map(status =>
+                Answer
+                  .Reply(Rpc.ok(id, Rpc.CompileResult(status, params.originId)))
+              )
+        )
 
     private def runCompile(ids: List[Id]): ZIO[Resolve, Nothing, Int] =
       val mains = ids.collect { case id: Id.Main => id }
       val tests = ids.collect { case id: Id.Test => id }
       val builds = ids.collect { case Id.Build => Id.Build }
       for
-        mainStatus <- ZIO.foreach(mains.groupBy(_.platform).toList) { case (platform, group) => compileMains(platform, group) }.map(worst)
+        mainStatus <- ZIO
+          .foreach(mains.groupBy(_.platform).toList) { case (platform, group) =>
+            compileMains(platform, group)
+          }
+          .map(worst)
         testStatus <- ZIO.foreach(tests)(compileTest).map(worst)
         buildStatus <- ZIO.foreach(builds)(_ => compileBuild).map(worst)
       yield worst(List(mainStatus, testStatus, buildStatus))
@@ -214,47 +308,78 @@ object Bsp:
     private def worst(codes: List[Int]): Int =
       if codes.contains(2) then 2 else 1
 
-    private def compileMains(platform: Platform, group: List[Id.Main]): ZIO[Resolve, Nothing, Int] =
+    private def compileMains(
+        platform: Platform,
+        group: List[Id.Main]
+    ): ZIO[Resolve, Nothing, Int] =
       val cells = group.map(id => id.module.name -> id.version)
-      ZIO.foreachDiscard(group)(id => reset(targetUri(id))) *>
-        GraphCompile.cellFeed(repo, graph, cells, platform, jdk).mapError(BspError.Sources(_)).foreach {
-          case histos.zinc.CompileFeed.Diagnostic(module, version, chosen, problem) =>
-            publish(
-              s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
-              problem,
-            )
-          case histos.zinc.CompileFeed.Done(_) => ZIO.unit
-        }.either.flatMap(statusOf)
+      Ref.make(false).flatMap: failed =>
+        (ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
+          GraphCompile
+            .cellFeed(repo, graph, cells, platform, jdk)
+            .mapError(BspError.Sources(_))
+            .foreach {
+              case histos.zinc.CompileFeed.Diagnostic(
+                    module,
+                    version,
+                    chosen,
+                    problem
+                  ) =>
+                publish(
+                  s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
+                  problem
+                )
+              case histos.zinc.CompileFeed.Done(_) => ZIO.unit
+              case histos.zinc.CompileFeed.Failed(_) => failed.set(true)
+            } *> failed.get).either.flatMap:
+          case Left(error) => statusOf(Left(error))
+          case Right(true) => ZIO.succeed(2)
+          case Right(false) => ZIO.succeed(1)
 
     private def compileTest(id: Id.Test): ZIO[Resolve, Nothing, Int] =
       val modules = graphModules
       val uri = targetUri(id)
-      val heard = new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
-      val cell = CompiledCell(id.module.name, id.version, id.platform, GraphCompile.classesDir(repo, id.module.name, id.version, id.platform), 0)
-      reset(uri) *>
+      val heard =
+        new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
+      val cell = CompiledCell(
+        id.module.name,
+        id.version,
+        id.platform,
+        GraphCompile.classesDir(repo, id.module.name, id.version, id.platform),
+        0
+      )
+      (clear(uri) *>
         (for
           lock <- readLock
-          sources <- ModuleTest.testSources(repo, id.module, modules, id.version, id.platform).mapError(BspError.Tests(_))
-          _ <- ModuleTest.compiledTests(
-                 repo,
-                 modules,
-                 id.module,
-                 cell,
-                 sources,
-                 jdk,
-                 lock,
-                 BuildResolvers(graph.resolvers),
-                 problem => heard.add(problem),
-               ).mapError(BspError.Tests(_))
-        yield ()).either.flatMap: result =>
-          ZIO.foreachDiscard(heard.asScala.toList)(problem => publish(uri, problem)) *> statusOf(result)
+          sources <- ModuleTest
+            .testSources(repo, id.module, modules, id.version, id.platform)
+            .mapError(BspError.Tests(_))
+          _ <- ModuleTest
+            .compiledTests(
+              repo,
+              modules,
+              id.module,
+              cell,
+              sources,
+              jdk,
+              lock,
+              BuildResolvers(graph.resolvers),
+              problem => heard.add(problem)
+            )
+            .mapError(BspError.Tests(_))
+        yield ())).either.flatMap: result =>
+        ZIO.foreachDiscard(heard.asScala.toList)(problem =>
+          publish(uri, problem)
+        ) *> statusOf(result)
 
     private def compileBuild: ZIO[Resolve, Nothing, Int] =
       val uri = buildUri
-      reset(uri) *> build.mapError(BspError.Build(_)).either.flatMap:
-        case Left(error) => log(CompileSeverity.Error, error.message).as(2)
+      (clear(uri) *> build.mapError(BspError.Build(_))).either.flatMap:
+        case Left(error)  => log(CompileSeverity.Error, error.message).as(2)
         case Right(notes) =>
-          ZIO.foreachDiscard(notes.problems)(problem => publish(uri, problem)).as(if notes.failed then 2 else 1)
+          ZIO
+            .foreachDiscard(notes.problems)(problem => publish(uri, problem))
+            .as(if notes.failed then 2 else 1)
 
     private def statusOf(result: Either[BspError, Unit]): UIO[Int] =
       result match
@@ -269,74 +394,133 @@ object Bsp:
         case Rpc.ParamsDecode.Missing  => BspError.Params(ParamFault.Missing)
         case Rpc.ParamsDecode.Rejected => BspError.Params(ParamFault.Rejected)
 
-    private def reply[A: JsonCodec](id: Rpc.RpcId, body: ZIO[Resolve, BspError, A]): ZIO[Resolve, Nothing, Answer] =
-      body.fold(error => Answer.Reply(failure(id, error)), value => Answer.Reply(Rpc.ok(id, value)))
+    private def reply[A: JsonCodec](
+        id: Rpc.RpcId,
+        body: ZIO[Resolve, BspError, A]
+    ): ZIO[Resolve, Nothing, Answer] =
+      body.fold(
+        error => Answer.Reply(failure(id, error)),
+        value => Answer.Reply(Rpc.ok(id, value))
+      )
 
-    private def scalac(uri: String): ZIO[Resolve, BspError, Rpc.ScalacOptionsItem] =
+    private def scalac(
+        uri: String
+    ): ZIO[Resolve, BspError, Rpc.ScalacOptionsItem] =
       parse(uri) match
-        case None => ZIO.fail(BspError.UnknownTarget)
+        case None           => ZIO.fail(BspError.UnknownTarget)
         case Some(Id.Build) =>
-          ZIO.succeed(Rpc.ScalacOptionsItem(
-            Rpc.TargetId(uri),
-            SemanticDb.argv(repo, BuildScala),
-            buildClasspath.map(fileUri),
-            directoryUri(repo),
-          ))
+          ZIO.succeed(
+            Rpc.ScalacOptionsItem(
+              Rpc.TargetId(uri),
+              SemanticDb.argv(repo, BuildScala),
+              buildClasspath.map(fileUri),
+              directoryUri(repo)
+            )
+          )
         case Some(id: Id.Main) =>
           classpath(id.module, id.version, id.platform).map: paths =>
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
-              SemanticDb.argv(repo, id.version),
+              id.module.flags.argv ++ SemanticDb.argv(repo, id.version),
               paths.map(fileUri),
-              fileUri(GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)),
+              fileUri(
+                GraphCompile.classesDir(
+                  repo,
+                  id.module.name,
+                  id.version,
+                  id.platform
+                )
+              )
             )
         case Some(id: Id.Test) =>
           testClasspath(id).map: paths =>
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
-              SemanticDb.argv(repo, id.version),
+              id.module.flags.argv ++ SemanticDb.argv(repo, id.version),
               paths.map(fileUri),
-              fileUri(ModuleTest.testClasses(repo, id.module.name, id.version, id.platform)),
+              fileUri(
+                ModuleTest.testClasses(
+                  repo,
+                  id.module.name,
+                  id.version,
+                  id.platform
+                )
+              )
             )
 
-    private def classpath(module: Module, version: ScalaVersion, platform: Platform): ZIO[Resolve, BspError, List[Path]] =
+    private def classpath(
+        module: Module,
+        version: ScalaVersion,
+        platform: Platform
+    ): ZIO[Resolve, BspError, List[Path]] =
       val cell = ResolveCell(
         module.name,
         Dep.select(module.dependencies, platform),
         version,
         platform,
         BuildResolvers(graph.resolvers),
-        ClasspathScope.Compile,
+        ClasspathScope.Compile
       )
-      val upstream = module.upstream(platform).map(dependency => GraphCompile.classesDir(repo, dependency, version, platform))
+      val upstream = module
+        .upstream(platform)
+        .map(dependency =>
+          GraphCompile.classesDir(repo, dependency, version, platform)
+        )
       for
-        lock    <- readLock
-        jars    <- Resolve.materialize(cell, lock).mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
+        lock <- readLock
+        jars <- Resolve
+          .materialize(cell, lock)
+          .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
         library <- JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
-      yield (library ++ jars ++ upstream).distinct
+      yield (library ++ dropStdlib(jars) ++ upstream).distinct
 
-    /** The `runtimeClasspath` order, naming directories that are not there yet. Import runs before compile. */
+    /** The `runtimeClasspath` order, naming directories that are not there yet.
+      * Import runs before compile.
+      */
     private def testClasspath(id: Id.Test): ZIO[Resolve, BspError, List[Path]] =
       val modules = graphModules
-      val main = GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
-      val upstream = Module.chain(id.module, modules, id.platform).map(dependency =>
-        GraphCompile.classesDir(repo, dependency.name, id.version, id.platform)
+      val main =
+        GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
+      val upstream = Module
+        .chain(id.module, modules, id.platform)
+        .map(dependency =>
+          GraphCompile
+            .classesDir(repo, dependency.name, id.version, id.platform)
+        )
+      val dependencies = Dep.select(id.module.dependencies, id.platform) ++ Dep
+        .select(id.module.testDependencies, id.platform)
+      val scope =
+        if Dep.select(id.module.testDependencies, id.platform).isEmpty then
+          ClasspathScope.Compile
+        else ClasspathScope.Test
+      val cell = ResolveCell(
+        id.module.name,
+        dependencies,
+        id.version,
+        id.platform,
+        BuildResolvers(graph.resolvers),
+        scope
       )
-      val dependencies = Dep.select(id.module.dependencies, id.platform) ++ Dep.select(id.module.testDependencies, id.platform)
-      val scope = if Dep.select(id.module.testDependencies, id.platform).isEmpty then ClasspathScope.Compile else ClasspathScope.Test
-      val cell = ResolveCell(id.module.name, dependencies, id.version, id.platform, BuildResolvers(graph.resolvers), scope)
       for
-        lock    <- readLock
-        jars    <- Resolve.materialize(cell, lock).mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-        library <- JvmCompile.runtime(id.version).mapError(BspError.Toolchain(_))
-      yield main :: (upstream ++ library ++ jars.filterNot(library.toSet.contains))
+        lock <- readLock
+        jars <- Resolve
+          .materialize(cell, lock)
+          .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
+        library <- JvmCompile
+          .runtime(id.version)
+          .mapError(BspError.Toolchain(_))
+      yield main :: (upstream ++ library ++ dropStdlib(jars))
 
-    private def sourceJars(uri: String): ZIO[Resolve, BspError, Rpc.DependencySourcesItem] =
+    private def sourceJars(
+        uri: String
+    ): ZIO[Resolve, BspError, Rpc.DependencySourcesItem] =
       parse(uri) match
-        case None => ZIO.fail(BspError.UnknownTarget)
+        case None     => ZIO.fail(BspError.UnknownTarget)
         case Some(id) =>
-          jarsOf(id).flatMap(paths => ZIO.foreach(paths)(oneSource).map(_.flatten)).map: sources =>
-            Rpc.DependencySourcesItem(Rpc.TargetId(uri), sources.map(fileUri))
+          jarsOf(id)
+            .flatMap(paths => ZIO.foreach(paths)(oneSource).map(_.flatten))
+            .map: sources =>
+              Rpc.DependencySourcesItem(Rpc.TargetId(uri), sources.map(fileUri))
 
     private def jarsOf(id: Id): ZIO[Resolve, BspError, List[SourceAsk]] =
       id match
@@ -351,95 +535,439 @@ object Bsp:
         module: Module,
         version: ScalaVersion,
         platform: Platform,
-        test: Boolean,
+        test: Boolean
     ): ZIO[Resolve, BspError, List[SourceAsk]] =
       for
         lock <- readLock
         library <- JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
       yield
         val scope =
-          if test && Dep.select(module.testDependencies, platform).nonEmpty then ClasspathScope.Test
+          if test && Dep.select(module.testDependencies, platform).nonEmpty then
+            ClasspathScope.Test
           else ClasspathScope.Compile
-        val locked = lock.cells.collectFirst {
-          case cell if cell.module == module.name && cell.scalaVersion == version && cell.platform == platform && cell.scope == scope =>
-            cell.artifacts
-        }.getOrElse(Nil)
+        val locked = lock.cells
+          .collectFirst {
+            case cell
+                if cell.module == module.name && cell.scalaVersion == version && cell.platform == platform && cell.scope == scope =>
+              cell.artifacts
+          }
+          .getOrElse(Nil)
         locked.map(ask) ++ library.flatMap(runtimeAsk(version, _))
 
     private def ask(artifact: LockedArtifact): SourceAsk =
-      SourceAsk(artifact.organization, artifact.name, artifact.revision, artifact.repository)
+      SourceAsk(
+        artifact.organization,
+        artifact.name,
+        artifact.revision,
+        artifact.repository
+      )
 
-    private def runtimeAsk(version: ScalaVersion, path: Path): Option[SourceAsk] =
+    private def runtimeAsk(
+        version: ScalaVersion,
+        path: Path
+    ): Option[SourceAsk] =
       Option(path.getFileName).map(_.toString) match
         case Some(name) if name.startsWith("scala3-library") =>
-          Some(SourceAsk("org.scala-lang", "scala3-library_3", version.value, Repository.Central))
+          Some(
+            SourceAsk(
+              "org.scala-lang",
+              "scala3-library_3",
+              version.value,
+              Repository.Central
+            )
+          )
         case Some(name) if name.startsWith("scala-library") =>
-          Some(SourceAsk("org.scala-lang", "scala-library", version.value, Repository.Central))
+          Some(
+            SourceAsk(
+              "org.scala-lang",
+              "scala-library",
+              version.value,
+              Repository.Central
+            )
+          )
         case _ => None
 
     private def oneSource(ask: SourceAsk): ZIO[Resolve, Nothing, Option[Path]] =
-      ZIO.serviceWithZIO[Resolve](_.sources(ask.organization, ask.name, ask.revision, ask.repository)).either.map:
-        case Right(artifact) => Some(artifact.path)
-        case Left(_)         => None
+      ZIO
+        .serviceWithZIO[Resolve](
+          _.sources(ask.organization, ask.name, ask.revision, ask.repository)
+        )
+        .either
+        .map:
+          case Right(artifact) => Some(artifact.path)
+          case Left(_)         => None
 
     private def readLock: IO[BspError, DependencyLock] =
       val path = repo.resolve(".histos").resolve("dependencies.lock")
-      ZIO.attemptBlocking {
-        if Files.isRegularFile(path) then Right(Files.readString(path))
-        else Left(BspError.Lock(ResolveError.NoLock(path)))
-      }.mapError(_ => BspError.LockRead(path)).flatMap(ZIO.fromEither).flatMap: text =>
-        ZIO.fromEither(DependencyLock.parse(text).left.map(error => BspError.Lock(ResolveError.Lock(error))))
+      ZIO
+        .attemptBlocking {
+          if Files.isRegularFile(path) then Right(Files.readString(path))
+          else Left(BspError.Lock(ResolveError.NoLock(path)))
+        }
+        .mapError(_ => BspError.LockRead(path))
+        .flatMap(ZIO.fromEither)
+        .flatMap: text =>
+          ZIO.fromEither(
+            DependencyLock
+              .parse(text)
+              .left
+              .map(error => BspError.Lock(ResolveError.Lock(error)))
+          )
+
+    private def mainClasses(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(mainClassItem).map(Rpc.ScalaMainClassesResult(_))
+        )
+      )
+
+    private def testClasses(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(testClassItem).map(Rpc.ScalaTestClassesResult(_))
+        )
+      )
+
+    private def runEnvironment(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(runItem).map(Rpc.JvmEnvironmentResult(_))
+        )
+      )
+
+    private def testEnvironment(
+        id: Rpc.RpcId,
+        incoming: Rpc.Incoming
+    ): ZIO[Resolve, Nothing, Answer] =
+      reply(
+        id,
+        uris(incoming).flatMap(found =>
+          ZIO.foreach(found)(testItem).map(Rpc.JvmEnvironmentResult(_))
+        )
+      )
+
+    private def mainClassItem(
+        uri: String
+    ): ZIO[Resolve, BspError, Rpc.ScalaMainClassesItem] =
+      parse(uri) match
+        case Some(id: Id.Main) =>
+          val named = id.module.application.toList.map(_.value)
+          val classes = GraphCompile.classesDir(
+            repo,
+            id.module.name,
+            id.version,
+            id.platform
+          )
+          EntryPoints
+            .mains(classes)
+            .map: found =>
+              val names = (named ++ found).distinct.sorted
+              Rpc.ScalaMainClassesItem(
+                Rpc.TargetId(uri),
+                names.map(name => Rpc.ScalaMainClass(name, Nil, Nil))
+              )
+        case Some(_) =>
+          ZIO.succeed(Rpc.ScalaMainClassesItem(Rpc.TargetId(uri), Nil))
+        case None => ZIO.fail(BspError.UnknownTarget)
+
+    private def testClassItem(
+        uri: String
+    ): ZIO[Resolve, BspError, Rpc.ScalaTestClassesItem] =
+      parse(uri) match
+        case Some(id: Id.Test) =>
+          suites(id).map: found =>
+            Rpc.ScalaTestClassesItem(
+              Rpc.TargetId(uri),
+              found.names,
+              found.framework
+            )
+        case Some(_) =>
+          ZIO.succeed(Rpc.ScalaTestClassesItem(Rpc.TargetId(uri), Nil, None))
+        case None => ZIO.fail(BspError.UnknownTarget)
+
+    private def runItem(
+        uri: String
+    ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
+      parse(uri) match
+        case Some(id: Id.Main) =>
+          val classes = GraphCompile.classesDir(
+            repo,
+            id.module.name,
+            id.version,
+            id.platform
+          )
+          val cell =
+            CompiledCell(id.module.name, id.version, id.platform, classes, 0)
+          val work =
+            Program.workDir(repo, id.module.name, id.version, id.platform)
+          for
+            lock <- readLock
+            paths <- Program
+              .classpath(
+                repo,
+                graphModules,
+                id.module,
+                cell,
+                lock,
+                BuildResolvers(graph.resolvers)
+              )
+              .mapError(BspError.Run(_))
+            _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
+          yield Rpc.JvmEnvironmentItem(
+            Rpc.TargetId(uri),
+            paths.map(fileUri),
+            Nil,
+            work.toAbsolutePath.normalize.toString,
+            ModuleTest.suiteEnv(repo)
+          )
+        case Some(_) => ZIO.fail(BspError.NotMain)
+        case None    => ZIO.fail(BspError.UnknownTarget)
+
+    private def testItem(
+        uri: String
+    ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
+      parse(uri) match
+        case Some(id: Id.Test) =>
+          val work =
+            ModuleTest.testWork(repo, id.module.name, id.version, id.platform)
+          val classes = ModuleTest.testClasses(
+            repo,
+            id.module.name,
+            id.version,
+            id.platform
+          )
+          val cell = CompiledCell(
+            id.module.name,
+            id.version,
+            id.platform,
+            GraphCompile
+              .classesDir(repo, id.module.name, id.version, id.platform),
+            0
+          )
+          for
+            _ <- ZIO
+              .fromEither(ModuleTest.launchProvider(id.module))
+              .mapError(BspError.Tests(_))
+            lock <- readLock
+            linked <- ModuleTest
+              .runtimeClasspath(
+                repo,
+                graphModules,
+                id.module,
+                cell,
+                lock,
+                BuildResolvers(graph.resolvers)
+              )
+              .mapError(BspError.Tests(_))
+            _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
+          yield Rpc.JvmEnvironmentItem(
+            Rpc.TargetId(uri),
+            (classes :: linked.paths).map(fileUri),
+            Nil,
+            work.toAbsolutePath.normalize.toString,
+            ModuleTest.suiteEnv(repo)
+          )
+        case Some(_) => ZIO.fail(BspError.NotTest)
+        case None    => ZIO.fail(BspError.UnknownTarget)
+
+    private final case class Suites(
+        names: List[String],
+        framework: Option[String]
+    )
+
+    /** Compiled suites when the classes directory exists. An uncompiled target
+      * is an empty list, not an error.
+      */
+    private def suites(id: Id.Test): ZIO[Resolve, BspError, Suites] =
+      val classes =
+        ModuleTest.testClasses(repo, id.module.name, id.version, id.platform)
+      id.module.test match
+        case Some(main) => ZIO.succeed(Suites(List(main.value), None))
+        case None       =>
+          ModuleTest.launchProvider(id.module) match
+            case Left(_)               => ZIO.succeed(Suites(Nil, None))
+            case Right(None)           => ZIO.succeed(Suites(Nil, None))
+            case Right(Some(provider)) =>
+              val cell = CompiledCell(
+                id.module.name,
+                id.version,
+                id.platform,
+                GraphCompile
+                  .classesDir(repo, id.module.name, id.version, id.platform),
+                0
+              )
+              readLock.flatMap: lock =>
+                ModuleTest
+                  .runtimeClasspath(
+                    repo,
+                    graphModules,
+                    id.module,
+                    cell,
+                    lock,
+                    BuildResolvers(graph.resolvers)
+                  )
+                  .either
+                  .flatMap:
+                    case Left(_)       => ZIO.succeed(Suites(Nil, None))
+                    case Right(linked) =>
+                      SuiteNames
+                        .discover(
+                          classes,
+                          linked.paths,
+                          provider.framework.value
+                        )
+                        .either
+                        .map:
+                          case Right(SuiteNames.Found.Suites(names)) =>
+                            Suites(names, Some(frameworkName(provider)))
+                          case _ => Suites(Nil, Some(frameworkName(provider)))
+
+    private def frameworkName(provider: TestProvider): String =
+      if provider.framework.value == TestProvider.Zio.framework.value then
+        "ZIO Test"
+      else provider.framework.value
 
     private def sourceItem(uri: String): IO[BspError, Rpc.SourcesItem] =
       parse(uri) match
-        case None => ZIO.fail(BspError.UnknownTarget)
-        case Some(Id.Build) =>
+        case None     => ZIO.fail(BspError.UnknownTarget)
+        case Some(id) =>
+          filesOf(id).map: paths =>
+            Rpc.SourcesItem(
+              Rpc.TargetId(uri),
+              paths.map(path => Rpc.SourceItem(fileUri(path), 1, false))
+            )
+
+    private def filesOf(id: Id): IO[BspError, List[Path]] =
+      id match
+        case Id.Build =>
           val file = repo.resolve("histos.scala")
-          ZIO.attemptBlocking(Files.isRegularFile(file)).orDie.map: present =>
-            val sources = if present then List(Rpc.SourceItem(fileUri(file), 1, false)) else Nil
-            Rpc.SourcesItem(Rpc.TargetId(uri), sources)
-        case Some(id: Id.Main) =>
-          GraphCompile.sourceBase(repo, id.module, graphModules).mapError(BspError.Sources(_)).flatMap:
-            case None => ZIO.succeed(Rpc.SourcesItem(Rpc.TargetId(uri), Nil))
-            case Some(root) =>
-              histos.zinc.Sources.select(root, id.version, id.platform).mapBoth(
-                error => BspError.Toolchain(error),
-                paths => Rpc.SourcesItem(Rpc.TargetId(uri), paths.map(path => Rpc.SourceItem(fileUri(path), 1, false))),
-              )
-        case Some(id: Id.Test) =>
-          ModuleTest.testSources(repo, id.module, graphModules, id.version, id.platform).mapBoth(
-            error => BspError.Tests(error),
-            paths => Rpc.SourcesItem(Rpc.TargetId(uri), paths.map(path => Rpc.SourceItem(fileUri(path), 1, false))),
-          )
+          ZIO
+            .attemptBlocking(Files.isRegularFile(file))
+            .orDie
+            .map(present => if present then List(file) else Nil)
+        case Id.Main(module, version, platform) =>
+          GraphCompile
+            .sourceBase(repo, module, graphModules)
+            .mapError(BspError.Sources(_))
+            .flatMap:
+              case None       => ZIO.succeed(Nil)
+              case Some(root) =>
+                histos.zinc.Sources
+                  .select(root, version, platform)
+                  .mapError(BspError.Toolchain(_))
+        case Id.Test(module, version, platform) =>
+          ModuleTest
+            .testSources(repo, module, graphModules, version, platform)
+            .mapError(BspError.Tests(_))
 
     private def targets: ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
-      val cells = jvmCells
-      val versions = (cells.map(_.version) :+ BuildScala).distinct
       for
-        jars <- ZIO.foreach(versions)(version => JvmCompile.scalaJars(version).map(version.value -> _)).mapBoth(
-                  BspError.Toolchain(_),
-                  _.toMap,
-                )
+        extra <- allowed
+        cells = cellsOf(extra)
+        versions = (cells.map(_.version) :+ BuildScala).distinct
+        result <- listed(cells, versions)
+      yield result
+
+    /** JVM is always published. `js` and `native` are added only when the allow-list names them. */
+    private def allowed: IO[BspError, Set[Platform]] =
+      val path = repo.resolve(".histos").resolve("bsp-platforms")
+      ZIO.attemptBlocking(Files.exists(path)).mapError(_ => BspError.Platforms(s"could not read $path")).flatMap:
+        case false => ZIO.succeed(Set.empty)
+        case true =>
+          ZIO.attemptBlocking(Files.readString(path)).mapError(_ => BspError.Platforms(s"could not read $path")).flatMap: text =>
+            ZIO.fromEither(parsePlatforms(text)).mapError(BspError.Platforms(_))
+
+    private def parsePlatforms(text: String): Either[String, Set[Platform]] =
+      val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+      lines.foldLeft[Either[String, Set[Platform]]](Right(Set.empty)): (acc, token) =>
+        acc.flatMap: have =>
+          token match
+            case "js"     => Right(have + Platform.Js)
+            case "native" => Right(have + Platform.Native)
+            case other    => Left(s"'$other' is not a bsp platform")
+
+    private def listed(cells: List[Cell], versions: List[ScalaVersion]): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
+      for
+        jars <- ZIO
+          .foreach(versions)(version =>
+            JvmCompile.scalaJars(version).map(version.value -> _)
+          )
+          .mapBoth(
+            BspError.Toolchain(_),
+            _.toMap
+          )
         tests <- ZIO.foreach(cells)(cell =>
-                   ModuleTest.testSources(repo, cell.module, graphModules, cell.version, cell.platform).mapBoth(
-                     BspError.Tests(_),
-                     sources => Option.when(sources.nonEmpty)(cell),
-                   )
-                 )
+          ModuleTest
+            .testSources(
+              repo,
+              cell.module,
+              graphModules,
+              cell.version,
+              cell.platform
+            )
+            .mapBoth(
+              BspError.Tests(_),
+              sources => Option.when(sources.nonEmpty)(cell)
+            )
+        )
       yield
-        val mains = cells.map(cell => shown(Id.Main(cell.module, cell.version, cell.platform), jars))
-        val suites = tests.flatten.map(cell => shown(Id.Test(cell.module, cell.version, cell.platform), jars))
+        val mains = cells.map(cell =>
+          shown(Id.Main(cell.module, cell.version, cell.platform), jars)
+        )
+        val suites = tests.flatten.map(cell =>
+          shown(Id.Test(cell.module, cell.version, cell.platform), jars)
+        )
         val file = shown(Id.Build, jars)
         Rpc.BuildTargetsResult(mains ++ suites ++ List(file))
 
     private def shown(id: Id, jars: Map[String, List[Path]]): Rpc.BuildTarget =
-      val (name, base, tags, version, platform, dependencies) = id match
-        case Id.Main(module, version, platform) =>
-          (module.name.value, directoryUri(repo.resolve(module.baseDirectory)), List("library"), version, platformCode(platform), dependencyUris(module, version, platform))
-        case Id.Test(module, version, platform) =>
-          (s"${module.name.value}-test", directoryUri(repo.resolve(module.baseDirectory)), List("test"), version, platformCode(platform), List(targetUri(Id.Main(module, version, platform))))
-        case Id.Build =>
-          ("histos.scala", directoryUri(repo), List("library"), BuildScala, 1, Nil)
+      val (name, base, tags, version, platform, dependencies, canTest, canRun) =
+        id match
+          case Id.Main(module, version, platform) =>
+            (
+              module.name.value,
+              directoryUri(repo.resolve(module.baseDirectory)),
+              List("library"),
+              version,
+              platformCode(platform),
+              dependencyUris(module, version, platform),
+              false,
+              true
+            )
+          case Id.Test(module, version, platform) =>
+            (
+              s"${module.name.value}-test",
+              directoryUri(repo.resolve(module.baseDirectory)),
+              List("test"),
+              version,
+              platformCode(platform),
+              List(targetUri(Id.Main(module, version, platform))),
+              true,
+              false
+            )
+          case Id.Build =>
+            (
+              "histos.scala",
+              directoryUri(repo),
+              List("library"),
+              BuildScala,
+              1,
+              Nil,
+              false,
+              false
+            )
       Rpc.BuildTarget(
         Rpc.TargetId(targetUri(id)),
         name,
@@ -447,29 +975,47 @@ object Bsp:
         tags,
         List("scala"),
         dependencies.map(Rpc.TargetId(_)),
-        Rpc.TargetCapabilities(canCompile = true, canTest = false, canRun = false),
+        Rpc.TargetCapabilities(
+          canCompile = true,
+          canTest = canTest,
+          canRun = canRun
+        ),
         "scala",
         Rpc.ScalaBuildTarget(
           "org.scala-lang",
           version.value,
           binary(version),
           platform,
-          jars.getOrElse(version.value, Nil).map(fileUri),
-        ),
+          jars.getOrElse(version.value, Nil).map(fileUri)
+        )
       )
 
-    private def jvmCells: List[Cell] =
-      graph.projects.collect { case module: Module if module.platforms.all.contains(Platform.Jvm) => module }
-        .flatMap(module => module.versions.all.map(version => Cell(module, version, Platform.Jvm)))
-        .sortBy(cell => (cell.module.name.value, cell.version.value))
+    private def cellsOf(extra: Set[Platform]): List[Cell] =
+      val wanted = Set[Platform](Platform.Jvm) ++ extra
+      val order = List(Platform.Jvm, Platform.Js, Platform.Native)
+      graph.projects
+        .collect { case module: Module => module }
+        .flatMap: module =>
+          module.versions.all.flatMap: version =>
+            order.filter(platform => wanted.contains(platform) && module.platforms.all.contains(platform)).map: platform =>
+              Cell(module, version, platform)
+        .sortBy(cell => (cell.module.name.value, cell.version.value, cell.platform.token))
 
-    private def dependencyUris(module: Module, version: ScalaVersion, platform: Platform): List[String] =
-      module.upstream(platform).flatMap: name =>
-        graph.get(name) match
-          case Some(dependency: Module)
-              if dependency.platforms.all.contains(platform) && dependency.versions.all.exists(_.value == version.value) =>
-            Some(targetUri(Id.Main(dependency, version, platform)))
-          case _ => None
+    private def dependencyUris(
+        module: Module,
+        version: ScalaVersion,
+        platform: Platform
+    ): List[String] =
+      module
+        .upstream(platform)
+        .flatMap: name =>
+          graph.get(name) match
+            case Some(dependency: Module)
+                if dependency.platforms.all.contains(
+                  platform
+                ) && dependency.versions.all.exists(_.value == version.value) =>
+              Some(targetUri(Id.Main(dependency, version, platform)))
+            case _ => None
 
     private def parse(uri: String): Option[Id] =
       if uri == buildUri then Some(Id.Build)
@@ -479,21 +1025,32 @@ object Bsp:
         else
           val rest = uri.drop(prefix.length)
           val name = rest.takeWhile(_ != '?')
-          val query = rest.drop(name.length).drop(1).split("&").toList.flatMap: part =>
-            part.split("=", 2) match
-              case Array(key, value) => Some(key -> value)
-              case _                 => None
-          .toMap
+          val query = rest
+            .drop(name.length)
+            .drop(1)
+            .split("&")
+            .toList
+            .flatMap: part =>
+              part.split("=", 2) match
+                case Array(key, value) => Some(key -> value)
+                case _                 => None
+            .toMap
           val found = for
-            version <- query.get("scala").flatMap(raw => ScalaVersion.from(raw).toOption)
-            platform <- query.get("platform").flatMap(raw => Platform.from(raw).toOption)
+            version <- query
+              .get("scala")
+              .flatMap(raw => ScalaVersion.from(raw).toOption)
+            platform <- query
+              .get("platform")
+              .flatMap(raw => Platform.from(raw).toOption)
             scope <- query.get("scope")
             module <- graphModules.find(_.name.value == name)
           yield (module, version, platform, scope)
           found match
-            case Some(module, version, platform, "main") => Some(Id.Main(module, version, platform))
-            case Some(module, version, platform, "test") => Some(Id.Test(module, version, platform))
-            case _                                       => None
+            case Some(module, version, platform, "main") =>
+              Some(Id.Main(module, version, platform))
+            case Some(module, version, platform, "test") =>
+              Some(Id.Test(module, version, platform))
+            case _ => None
 
     private def graphModules: List[Module] =
       graph.projects.collect { case module: Module => module }
@@ -514,32 +1071,71 @@ object Bsp:
         ServerName,
         ServerVersion,
         BspVersion,
-        Rpc.Capabilities(Rpc.CompileProvider(List("scala"))),
+        Rpc.Capabilities(
+          Rpc.CompileProvider(List("scala")),
+          dependencySourcesProvider = true,
+          jvmRunEnvironmentProvider = true,
+          jvmTestEnvironmentProvider = true
+        )
       )
 
-    private def reset(uri: String): UIO[Unit] =
-      notify(Rpc.note(
-        "build/publishDiagnostics",
-        Rpc.PublishDiagnostics(Rpc.TextDocument(uri), Rpc.TargetId(uri), Nil, true),
-      ))
+    /** Metals rejects a target id as a text document. Reset each source file.
+      */
+    private def clear(target: String): IO[BspError, Unit] =
+      parse(target) match
+        case None     => ZIO.unit
+        case Some(id) =>
+          filesOf(id).flatMap: files =>
+            ZIO.foreachDiscard(files): file =>
+              notify(
+                Rpc.note(
+                  "build/publishDiagnostics",
+                  Rpc.PublishDiagnostics(
+                    Rpc.TextDocument(fileUri(file)),
+                    Rpc.TargetId(target),
+                    Nil,
+                    true
+                  )
+                )
+              )
+
+    /** The compiler library is `JvmCompile.runtime`. A locked copy of either
+      * standard library is a second version.
+      */
+    private def dropStdlib(jars: List[Path]): List[Path] =
+      jars.filterNot(JvmCompile.isStandardLibrary)
 
     private def publish(target: String, problem: CompileProblem): UIO[Unit] =
       Ranges.of(problem) match
-        case None => log(problem.severity, problem.message)
+        case None        => log(problem.severity, problem.message)
         case Some(range) =>
           val file = problem.path.map(fileUri).getOrElse(target)
-          notify(Rpc.note(
-            "build/publishDiagnostics",
-            Rpc.PublishDiagnostics(
-              Rpc.TextDocument(file),
-              Rpc.TargetId(target),
-              List(Rpc.Diagnostic(range, severityCode(problem.severity), "histos", problem.message)),
-              false,
-            ),
-          ))
+          notify(
+            Rpc.note(
+              "build/publishDiagnostics",
+              Rpc.PublishDiagnostics(
+                Rpc.TextDocument(file),
+                Rpc.TargetId(target),
+                List(
+                  Rpc.Diagnostic(
+                    range,
+                    severityCode(problem.severity),
+                    "histos",
+                    problem.message
+                  )
+                ),
+                false
+              )
+            )
+          )
 
     private def log(severity: CompileSeverity, message: String): UIO[Unit] =
-      notify(Rpc.note("build/logMessage", Rpc.LogMessage(severityCode(severity), message)))
+      notify(
+        Rpc.note(
+          "build/logMessage",
+          Rpc.LogMessage(severityCode(severity), message)
+        )
+      )
 
     private def severityCode(severity: CompileSeverity): Int =
       severity match
@@ -555,9 +1151,18 @@ object Bsp:
     case Test(module: Module, version: ScalaVersion, platform: Platform)
     case Build
 
-  private final case class Cell(module: Module, version: ScalaVersion, platform: Platform)
+  private final case class Cell(
+      module: Module,
+      version: ScalaVersion,
+      platform: Platform
+  )
 
-  private final case class SourceAsk(organization: String, name: String, revision: String, repository: Repository)
+  private final case class SourceAsk(
+      organization: String,
+      name: String,
+      revision: String,
+      repository: Repository
+  )
 
   private object Ranges:
     def of(problem: CompileProblem): Option[Rpc.Range] =
@@ -568,11 +1173,19 @@ object Bsp:
             case PositionBase.Dotty => 0
           val startLine = math.max(0, line - shift)
           val startColumn = math.max(0, column - shift)
-          val endLine0 = problem.endLine.fold(startLine)(value => math.max(0, value - shift))
-          val endColumn0 = problem.endColumn.fold(startColumn)(value => math.max(0, value - shift))
+          val endLine0 =
+            problem.endLine.fold(startLine)(value => math.max(0, value - shift))
+          val endColumn0 = problem.endColumn.fold(startColumn)(value =>
+            math.max(0, value - shift)
+          )
           val samePoint = endLine0 == startLine && endColumn0 <= startColumn
           val endColumn = if samePoint then startColumn + 1 else endColumn0
-          Some(Rpc.Range(Rpc.Position(startLine, startColumn), Rpc.Position(endLine0, endColumn)))
+          Some(
+            Rpc.Range(
+              Rpc.Position(startLine, startColumn),
+              Rpc.Position(endLine0, endColumn)
+            )
+          )
         case _ => None
 
   private def fileUri(path: Path): String =

@@ -21,26 +21,8 @@ import xsbti.compile.{CompileOrder, IncOptions, PerClasspathEntryLookup}
 
 import zio.{Chunk, IO, ZIO}
 
-/** One scalac flag. The compiler text is produced here, not accepted from the caller. */
-enum ScalacFlag:
-  case EncodingUtf8
-
-opaque type ScalacFlags = List[ScalacFlag]
-
-object ScalacFlags:
-  val empty: ScalacFlags = Nil
-
-  def of(flag: ScalacFlag, flags: ScalacFlag*): ScalacFlags = flag :: flags.toList
-
-  extension (flags: ScalacFlags)
-    def canonical: String =
-      flags.map:
-        case ScalacFlag.EncodingUtf8 => "encoding-utf8"
-      .mkString(",")
-
-    private[zinc] def argv: List[String] =
-      flags.flatMap:
-        case ScalacFlag.EncodingUtf8 => List("-encoding", "UTF-8")
+export histos.ScalacFlag
+export histos.ScalacFlags
 
 enum ClasspathBan:
   case Scala3Compiler
@@ -88,9 +70,11 @@ enum ToolchainMiss:
   case Duplicated(version: ScalaVersion, part: CompilerPart)
   case Unexpected(version: ScalaVersion, jars: List[Path])
   case Library(requested: ScalaVersion, found: ScalaVersion)
+  case Plugin(version: ScalaVersion)
 
   def message: String = this match
     case Fetch(version)            => s"the ${version.value} compiler could not be fetched"
+    case Plugin(version)           => s"semanticdb-scalac for ${version.value} could not be fetched"
     case Missing(version, part)    => s"the ${version.value} fetch has no ${part.label}"
     case Duplicated(version, part) => s"the ${version.value} fetch has more than one ${part.label}"
     case Unexpected(version, jars) =>
@@ -199,6 +183,29 @@ object CompileProblem:
 
 /** SemanticDB flags beside `ScalacFlags.argv`. They are not flag cases: `-sourceroot` carries a path. */
 object SemanticDb:
+  val Revision: String = "4.17.3"
+
+  /** The Scala 2.13 compiler plugin. Scala 3 emits SemanticDB without this jar. */
+  def plugin(version: ScalaVersion): IO[CompileError, Path] =
+    ZIO.attemptBlockingInterrupt(fetchPlugin(version)).mapError(_ => CompileError.Toolchain(ToolchainMiss.Plugin(version))).flatMap(ZIO.fromEither)
+
+  private def fetchPlugin(version: ScalaVersion): Either[CompileError, Path] =
+    val artifact = s"semanticdb-scalac_${version.value}"
+    val dependency = coursier.Dependency(
+      coursier.Module(coursier.Organization("org.scalameta"), coursier.ModuleName(artifact)),
+      coursier.version.VersionConstraint(Revision),
+    )
+    val got = coursier.Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
+      .addDependencies(dependency)
+      .eitherResult()
+    got match
+      case Left(_) => Left(CompileError.Toolchain(ToolchainMiss.Plugin(version)))
+      case Right(result) =>
+        val found = result.files.map(_.toPath).filter(path => Option(path.getFileName).exists(_.toString.startsWith("semanticdb-scalac_"))).toList
+        found match
+          case path :: Nil => Right(path)
+          case _           => Left(CompileError.Toolchain(ToolchainMiss.Plugin(version)))
+
   def argv(repo: Path, version: ScalaVersion): List[String] =
     val root = repo.toAbsolutePath.normalize.toString
     ScalaSeries.of(version) match
@@ -303,6 +310,13 @@ object JvmCompile:
       case Some(ScalaSeries.Scala2(13)) => Scala213.jars(version).map(jars => List(jars.library))
       case _                            => ZIO.fail(CompileError.UnsupportedScala(version))
 
+  /**
+   * A locked `scala-library` or `scala3-library` is a second copy. The compiler already puts
+   * `runtime` on the classpath, and two versions make `scala.caps` both an object and a package.
+   */
+  private[histos] def isStandardLibrary(path: Path): Boolean =
+    Option(path.getFileName).map(_.toString).exists(name => name.startsWith("scala-library-") || name.startsWith("scala3-library_"))
+
   /** Scala 3, any patch. Scala 2.13, any patch. Nothing older. */
   private def supported(version: ScalaVersion): Boolean =
     ScalaSeries.of(version) match
@@ -336,13 +350,17 @@ object JvmCompile:
         Scala3.jars(version).flatMap: toolchain =>
           ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear, stdlib)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
       case Some(ScalaSeries.Scala2(13)) =>
-        invoke213(request, hear)
+        invoke213(request, extra, hear)
       case _ =>
         ZIO.fail(CompileError.UnsupportedScala(version))
 
-  private def invoke213(request: CompileRequest, hear: CompileProblem => Unit): IO[CompileError, CompileOutput] =
-    Scala213.jars(request.toolchain.version).flatMap: jars =>
-      ZIO.attemptBlockingInterrupt(runZinc213(request, jars, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+  private def invoke213(request: CompileRequest, extra: List[String], hear: CompileProblem => Unit): IO[CompileError, CompileOutput] =
+    for
+      jars <- Scala213.jars(request.toolchain.version)
+      plugin <- SemanticDb.plugin(request.toolchain.version)
+      argv = s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra
+      compiled <- ZIO.attemptBlockingInterrupt(runZinc213(request, jars, argv, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+    yield compiled
 
   private def runZinc3(
       request: CompileRequest,
@@ -370,7 +388,12 @@ object JvmCompile:
         Left(CompileError.Failed(List(CompileDiagnostic.fromCompiler(s"$text\n$trace"))))
     finally loader.close()
 
-  private def runZinc213(request: CompileRequest, toolchain: Scala213.Toolchain, hear: CompileProblem => Unit): Either[CompileError, CompileOutput] =
+  private def runZinc213(
+      request: CompileRequest,
+      toolchain: Scala213.Toolchain,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader()
     try
       compileOne(
@@ -380,7 +403,7 @@ object JvmCompile:
         toolchain.runtime,
         toolchain.compilerClasspath,
         loader,
-        Nil,
+        extra,
         hear,
       )
     finally loader.close()

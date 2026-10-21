@@ -6,9 +6,9 @@
 **Repo:** `early-effect/histos`
 **Author:** placeholder
 
-This document is the implementable spec for [design.md](design.md) section 5.7. That section stays the summary. This file does not replace it, and it does not edit it. Where 5.7 names a rule (`ExactBinary`, `Source`, `BinaryOrSource`, `LinkStrategy.Api`, task nodes, CI jobs), this file says which type carries the rule and which function enforces it.
+This document is the plugin contract. [design.md](design.md) is the product. `HistosPlugin` is `api/src/histos/plugin`. `Seal` and `Need` live on `histos.plugin`. The loader is `engine/src/histos/load`.
 
-There is no `Plugin` trait, no `HistosPlugin`, and no plugin package under `api/src` today. Confirmed against the tree. `Seal` and `Need` exist, but only on the engine, in `engine/src/histos/schedule/Sendable.scala`. They move. They are not redesigned.
+`ApiBoundary` is parented on the platform loader. Boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `scala.*`) load from the engine host that defined `HistosBuild`, so `ProjectGraph` is one class. Do not add a second api `URLClassLoader` that defines those classes again. Refused `histos.*` names are thrown before a plugin URL is searched. `Fingerprint.read` hashes `histos.scala`, `.histos/dependencies.lock`, and regular files under each header `plugin(path)`. The Specular repository is commit 11 in the design. It is not out of scope. Its plugin id and task id are not chosen yet.
 
 ## Overview
 
@@ -16,7 +16,7 @@ A Histos plugin is a Scala 3.9+ library compiled against `histos.api`, plus one 
 
 The build opts in inside `histos.scala`. One file, one list. Nothing is discovered by scanning the dependency classpath, and nothing is applied because a jar happened to be present. Module settings the plugin offers are ordinary functions that return a new `ModuleDef`, the same way `.main`, `.jsEnv`, and `.in` already do.
 
-`central` is the rehearsal, not the loader. `docs/plan.md` says the general plugin classloader is not the Central layer: one in-tree module that only sees `api` is the pattern, and the loader arrives when a second plugin exists. `central/src/histos/central/Publisher.scala` is that module. `Publisher.publish` returns `IO[PublishError, Published]`. It is not a `HistosPlugin`, and this spec does not pretend a loader already exists. `Loader.scala` compiles `histos.scala` against the api jar only.
+`central` stays an in-tree module. `Publisher.publish` returns `IO[PublishError, Published]`. It is not a `HistosPlugin`. The loader already exists and does not load `central`.
 
 The adoption shape this has to make cheap is a later Specular (docs and preview) that is not sbt's AutoPlugin. The worked example at the end is a fixture with that shape. It is not the Specular repository, and it is not part of the engine.
 
@@ -26,11 +26,11 @@ Histos replaces sbt and zipx for a repo that has moved. Design section 2 already
 
 - Tasks are data plus a runner map. `engine/src/histos/task/Task.scala` defines `TaskId.Inspect` (`"inspect"`) and `TaskId.Versions` (`"versions"`). `TaskId.from` accepts any non-empty string. `Tasks.live` looks that string up in a map.
 - Sendability is `Sendable.decide`. A plugin runner is `Runner.Plugin(seal)`. `Seal.Hermetic` with an empty `Need` set is `Verdict.Send`. `Seal.Open`, or any `Need` (`Network`, `Docker`), stays on the machine. `Sendable.ofAction` does not pass needs today: it only matches `TaskKind.Compile`, `Inspect`, and `Versions`, and it calls `decide` with `Set.empty`.
-- `histos.scala` is compiled by `engine/src/histos/load/Loader.scala` against the api jar (`BuildClasspath`, assembly entry `bootstrap/histos-api.jar`). The build classloader's parent is `getClass.getClassLoader`, the engine loader. That parent is wrong for plugins and has to change before any plugin jar is loaded.
+- `histos.scala` is compiled by `engine/src/histos/load/Loader.scala`. `ApiBoundary`'s parent is the platform loader. Boundary names load from the engine host. That is the loader. A second defining classloader for `ProjectGraph` is not a follow-up.
 - Project compiles do not use that loader. `engine/src/histos/zinc/Scala3.scala` `EngineBoundary` shares only `xsbti.*` with the engine. `JvmCompile.jarBan` rejects a jar that contains `histos/HistosBuild.class` (`ClasspathBan.Histos`).
 - The CLI is a closed zio-cli grammar in `app/src/histos/cli/Grammar.scala`. `Cli.parse` runs before `Loader.load`. An unknown command is `CliParseError.UnknownCommand` and never sees the graph.
 - CI is `Workflow.document` in `engine/src/histos/workflow/Workflow.scala`. It emits the `test` job, a `versions` job when the catalog is non-empty, and the `workflow` drift job. It has nowhere to read a plugin job. The plugin must not write YAML.
-- The daemon fingerprint (`app/src/histos/server/Daemon.scala` `Fingerprint.read`) hashes `histos.scala` and `.histos/dependencies.lock` only.
+- The daemon fingerprint (`app/src/histos/server/Daemon.scala` `Fingerprint.read`) hashes `histos.scala`, `.histos/dependencies.lock`, and regular files under each header `plugin(path)`.
 - `ContentStore.clean` walks the `cas` directory. `ContentStore.Retention` is 30 days. Design 5.3 already says compiled plugin sources follow that clean. The code does not clean a plugin-source directory yet, because the directory does not exist.
 
 What hurts in sbt, by name, and what this spec does instead:
@@ -72,7 +72,7 @@ Publishing stays a task a plugin implements (design 5.9). This spec does not mov
 - BSP build targets for plugin tasks. BSP stays JVM compile cells. Agents run a plugin task through MCP `run` after `HistosMcp.serve` installs the bound runner in the `Tasks` map. The tool name does not change. The map does.
 - Cross-plugin task dependencies. A task may depend on another task of the same plugin, or on compiling a named module. It may not name another plugin's task.
 - A second settings language, a context-function front end, or storing closures from `histos.scala` on the graph. `Runner.Closure` stays the non-sendable bucket it already is. This spec does not add build-file closures.
-- Migrating any repo other than the fixture off sbt. The real Specular repo is out of scope.
+- Migrating an arbitrary repo off sbt. The Specular repository is the docs plugin in design commit 11. Its names are not chosen yet. This file does not name them.
 
 ## Proposed Design
 
@@ -168,7 +168,7 @@ enum Need:
   case Docker
 ```
 
-`Sendable` imports them. `decide` stays the policy. Callers in `engine/test/RemoteSpec.test.scala` update the import. No second pair of enums.
+`Sendable` imports them. `decide` stays the policy. Callers in `engine/test/RemoteSpec.scala` update the import. No second pair of enums.
 
 ```scala
 final case class Contribution(
@@ -430,7 +430,7 @@ This is stringly at the storage layer on purpose. `Module` is a closed case clas
 
 ### Classloader
 
-Today `LoaderLive.classLoader` is `new URLClassLoader(Array(out.toUri.toURL), getClass.getClassLoader)`. The parent is the engine. A plugin loaded that way can call `histos.schedule.Sendable`, `histos.zinc.GraphCompile`, and `histos.workflow.Workflow`. That is the bug this spec closes. A stock parent-first `URLClassLoader` is also not enough: if the parent throws `ClassNotFoundException`, the child defines the class from its own jar, so a plugin could vendor `histos/schedule/Sendable.class`.
+`ApiBoundary` is parented on the platform loader, and `BuildLoader` refuses non-api `histos.*` before it searches plugin URLs. A stock parent-first `URLClassLoader` is not enough: if the parent throws `ClassNotFoundException`, the child defines the class from its own jar, so a plugin could vendor `histos/schedule/Sendable.class`. Boundary names load from the engine host. They are not defined a second time from the api jar.
 
 The loader the engine builds:
 
@@ -438,16 +438,14 @@ The loader the engine builds:
 flowchart TD
   build[BuildLoader: compiled histos.scala plus the plugin cell]
   boundary[ApiBoundary]
-  api["api URLClassLoader: Loader.classpath plus zio 2.1.27"]
+  host[Engine host: boundary names, including ProjectGraph]
   platform[Platform class loader]
-  engine[Engine loader]
   build --> boundary
-  boundary --> api
-  api --> platform
-  engine -.->|calls across, never a parent| build
+  boundary --> host
+  boundary --> platform
 ```
 
-The api URLClassLoader's URLs are the jars `Loader.classpath` already discovers, plus the launcher ZIO jar:
+The compile classpath is the jars `Loader.classpath` already discovers, plus the launcher ZIO jar. Those jars are not a second classloader that defines `ProjectGraph`:
 
 - `histos-api.jar`, the `apiJar` `Loader.load` already takes
 - `scala-library`, the code source of `scala.collection.immutable.Nil`
@@ -464,11 +462,11 @@ That parent is the platform loader. It is not `getClass.getClassLoader`. Scala 3
 - `zio.*`
 - `scala.*`
 
-Those load from the api URLClassLoader only, never from a plugin jar, so a plugin cannot shadow `HistosPlugin` or ZIO. Every other name under `histos.` is refused before the plugin jar is searched. That refuses `histos.schedule`, `histos.zinc`, `histos.load`, `histos.task`, `histos.workflow`, `histos.cli`, `histos.central`, and any engine package added later, including a copy vendored inside the plugin jar. The refusal is `ClassNotFoundException` inside the loader, mapped by the caller to `PluginLoadError.EngineLeak` or `PluginRunError.EngineLeak`. The exception is not the api.
+Those load from the engine host only, never from a plugin jar, so a plugin cannot shadow `HistosPlugin` or ZIO. Every other name under `histos.` is refused before the plugin jar is searched. That refuses `histos.schedule`, `histos.zinc`, `histos.load`, `histos.task`, `histos.workflow`, `histos.cli`, `histos.central`, and any engine package added later, including a copy vendored inside the plugin jar. The refusal is `ClassNotFoundException` inside the loader, mapped by the caller to `PluginLoadError.EngineLeak` or `PluginRunError.EngineLeak`. The exception is not the api.
 
 Plugin classes themselves must not live in `histos.*`, `zio.*`, or `scala.*`. Defining one is `PluginLoadError.ReservedPackage`. `central` keeps `histos.central` because it is not loaded as a plugin. A future Central plugin has to pick a package outside `histos` or this rule has to grow an explicit exception. It does not grow one in this series.
 
-Anything else (`dev.earlyeffect.specular.*`, a markdown parser, and the JDK) loads from the plugin URLs on `BuildLoader`, or from the platform loader for JDK types. On `BuildLoader`, parent-first delegation means a transitive `zio.*`, `scala.*`, or api `histos` class does not win over the api URLClassLoader. That is the loader. It is not scalac. A jar `ApiBoundary` already supplies has to be left off the flat `-classpath`, or the published copy is the one `Driver.process` links.
+Anything else (`dev.earlyeffect.specular.*`, a markdown parser, and the JDK) loads from the plugin URLs on `BuildLoader`, or from the platform loader for JDK types. On `BuildLoader`, parent-first delegation means a transitive `zio.*`, `scala.*`, or api `histos` class does not win over the engine host. That is the loader. It is not scalac. A jar `ApiBoundary` already supplies has to be left off the flat `-classpath`, or the published copy is the one `Driver.process` links.
 
 Plugins on one `BuildLoader` can see each other. That is ordinary library visibility, which the build file needs in order to import two plugins. Isolation from the engine, and isolation from project compiles, are the boundaries that matter. Plugin jars are not isolated from each other.
 
@@ -494,9 +492,9 @@ final case class PluginLink(id: PluginId, linked: PluginLinked, artifacts: List[
 
 `plugins` is an engine field. `Cli.render` and `HistosMcp.render` print `graph` and do not print the runtime. CLI and MCP already thread `LoadedBuild`, so they call `loaded.plugins`. `PluginRuntime` lives in `engine/src/histos/load/`. It is not on `histos.api`. `run` loads `MODULE$` through the loader closed over at construction.
 
-`./histos server` keeps that `Scope` for the daemon lifetime. `Daemon` stores the `ProjectGraph` for compile, test, and bsp. It does not store `PluginRuntime`, and it does not run plugin tasks. `Call` is compile, test, and bsp. `histos run` is a new process. `Attach.decide` on a fingerprint mismatch returns `Decision.Stale(Drift.Fingerprint)`, and the client runs in-process and loads again. `Daemon.handle` writes `Stale` and keeps looping with the original `Scope`. This series does not exit the server and does not drop that `Scope`. Path hashing is so `Attach` treats the server as stale. It is PR 6. It does not refresh a runner the daemon never executes.
+`./histos server` holds the loaded graph and reloads it in place. A fingerprint change calls `Loader.load`. Success swaps the ref and closes the previous build classloader after the cells that captured it finish. Failure keeps the last graph. The client stays a client. It does not load a second graph because the fingerprint changed. `Call.Task` runs `inspect`, `versions`, and `plugin/task` in that server. `cache` and `version` do not load a graph.
 
-`Fingerprint.read` today hashes `histos.scala` and `.histos/dependencies.lock` only. Binary plugins are covered once the lock gains plugin cells, because the lock file is already hashed. `plugin(path)` sources are not in those two files. PR 6 hashes every regular file under each header `path`, in sorted relative order. The header scan is enough to know the directories. The loader PR does not.
+`Fingerprint.read` hashes `histos.scala`, `.histos/dependencies.lock`, and every regular file under each header `plugin(path)`, in sorted relative order. Binary plugins are also covered by the lock hash. The header scan is enough to know the directories.
 
 Project compiles do not receive plugin URLs. `GraphCompile` keeps the module classpath it has now (upstream class directories, then locked jars). `JvmCompile.jarBan` and `directoryBan` both reject `META-INF/histos/plugin`. That entry is the marker a direct plugin jar always has and the api jar does not. Presence is `ClasspathBan.Histos`, the same ban as `histos/HistosBuild.class`. `directoryBan` skips `ClassMarker.HistosBuild` on purpose, because a classes directory may contain the build trait. The plugin marker does not get that skip. A classes directory that contains `META-INF/histos/plugin` is banned. A module that lists a plugin coordinate in `libraryDependencies` fails compile for the same reason, and project compiles still do not receive the plugin cell's URLs. `dependsOn` of a plugin output is the same ban.
 
@@ -691,7 +689,7 @@ A defect inside `contribute` is `BuildError.PluginDefect`, then `LoadError.Broke
 `CliParseError.UnknownRoot` is the new case for "no such root command". `Grammar.reject` maps a root `CommandMismatch` to `UnknownRoot`. A `CommandMismatch` under a known command (`histos cache nope`) stays `UnknownCommand`. A bad flag stays `InvalidArgument` / `MissingArgument`, or the existing flag check (`histos test --nope`). Only `UnknownRoot` loads the build.
 
 1. The built-in grammar runs unchanged on the tokens it is given.
-2. A success never consults plugins. `histos test` is the built-in. A plugin cannot contribute that name: `CommandName.reserved` is the root vocabulary (`version`, `graph`, `run`, `test`, `testOnly`, `testQuick`, `compile`, `assembly`, `publish`, `mcp`, `acp`, `bsp`, `server`, `toolchain`, `cache`, `resolve`, `workflow`). `Projects` rejects the shadow. `path`, `list`, and `clean` are cache subcommands. They are intentionally not reserved, so `histos list` can be a plugin command. `histos cache list` stays the built-in, because `cache` matched and the nested word never becomes `UnknownRoot`.
+2. A success never consults plugins. `histos test` is the built-in. A plugin cannot contribute that name: `CommandName.reserved` is the root vocabulary (`version`, `graph`, `run`, `test`, `testOnly`, `testQuick`, `compile`, `assembly`, `publish`, `mcp`, `acp`, `bsp`, `server`, `toolchain`, `cache`, `resolve`, `workflow`, `reload`, `reboot`). `reload` and `reboot` join that set with the server commands. `Projects` rejects the shadow. `path`, `list`, and `clean` are cache subcommands. They are intentionally not reserved, so `histos list` can be a plugin command. `histos cache list` stays the built-in, because `cache` matched and the nested word never becomes `UnknownRoot`.
 3. On `UnknownRoot` only, `Cli.execute` loads the build. `PluginCommands.parse(specs, args)` looks at `args.head` in the flat list of `CommandSpec`s from `graph.plugins`.
 4. A match parses the tail with `CliParam` and becomes `Command.Plugin(id, args)`. No match is usage, and the usage text appends the plugin command names and summaries.
 5. `~` applies that same rule to the inner tokens before `Command.Watch` is built. `Grammar.parse` on `"~" :: rest` runs the built-in parse of `rest`, and on `UnknownRoot` defers to the plugin parse of `rest`, then wraps the resulting command in `Command.Watch`. A watch of a built-in (`~ test`) does not load in order to decide the command. A watch of an unknown root (`~ site`) loads once, the same as `site`.
@@ -853,7 +851,7 @@ Engine:
 - `LoadError.Plugin(PluginLoadError)`.
 - `DependencyLock.plugins: List[LockedPlugin]`, the plugin cell (`plugin`, `direct`, `artifact`, `source`).
 - `Resolve.updatePlugins`, and `Resolve.update` / `check` merging so each side preserves the other's cells.
-- `Fingerprint.read` hashes path-plugin trees in PR 6, so `Attach` goes stale. The daemon `Scope` stays up.
+- `Fingerprint.read` hashes path-plugin trees. A change calls `Loader.load` in the server. Success swaps the ref. Failure keeps the last graph.
 - `JvmCompile.jarBan` and `directoryBan` ban `META-INF/histos/plugin`. `directoryBan` does not skip that marker.
 - `SchedulerLive.lookup` and the `cache.get` arm of `publish`: `Policy.Plugin` checks declared output files. `outputs = Nil` stores text. `Policy.Core` is unchanged. Private `decode` stays the UTF-8 check.
 - `Workflow.pluginJobs` and `renderAll`, including deletion of orphan `histos-<job>.yml`.
@@ -954,7 +952,7 @@ Histos has no metrics stack. Do not add one for plugins. The signals are the CLI
 | `UnknownRoot` loads the build, so a root typo pays for load and a broken build reports exit 3. | Low | Only `UnknownRoot` loads. `histos cache nope` and `histos test --nope` do not. Documented. |
 | ZIO on `api` widens the jar projects might touch. | Medium | Projects are already banned from the api jar via `HistosBuild`. Plugins are banned via `META-INF/histos/plugin` in both `jarBan` and `directoryBan`. Parent-first ZIO is the launcher's copy. |
 | Header scan misses a `plugin(dep)` written as normal Scala. | Medium | The compiler sees blank lines where the header was. `Misplaced` if a later line starts with `plugin(`. Otherwise `use` fails closed (`Undeclared` or a compile error). The header grammar is part of the build-file contract. |
-| `Fingerprint.read` ignores path-plugin sources, so `Attach` treats a stale server as fresh. | Medium | PR 6 hashes those trees. The client then runs in-process. `Daemon.handle` keeps its `Scope`. Plugin `run` is already a new process. |
+| `Fingerprint.read` includes path-plugin sources. A change is a server reload, not a second client load. | Medium | The server calls `Loader.load`. Success swaps the ref. Failure keeps the last graph. `Call.Task` runs the plugin task in that server. |
 | `central` in package `histos.central` cannot later be loaded as a plugin under the package ban. | Low | Central is not a plugin in this series. A later wrapper picks a package outside `histos`, or changes the ban on purpose. |
 | Adding `policy` carelessly to `Digest.of` changes compile cache keys. | Medium | `Digest.of` adds a policy line only for `Policy.Plugin`. `Core` keeps the current text. A test hashes a compile action before and after. |
 | A one-jar loader ships, and the first real plugin fails `Linkage` on a transitive class. | High | PR 3 resolves a cell. PR 7 calls `SiteText.render` from a second jar. `Echo` is not that test. |
@@ -979,7 +977,7 @@ This repo does not enable a plugin in its own `histos.scala` as part of the seri
 
 5. **Task ids are `pluginId/localName`.** `TaskId.from` stays loose for engine tests. `PluginRuntime.bind` inserts plugin keys, and the rendered form always has a slash. `inspect` and `versions` cannot be inserted. `specular/versions` does not shadow `versions`. CLI and MCP share that map. A slash id does not fall through to `program`.
 
-6. **The build classloader's parent is `ApiBoundary`, not the engine loader.** Its jars are `Loader.classpath` plus launcher ZIO: api, `scala-library`, `scala3-library`, ZIO 2.1.27. Allowed packages are the api, `histos.version`, `histos.plugin`, `zio`, and `scala`. Other `histos.*` names are refused before plugin URLs are searched, which stops a vendored engine class. Plugin packages under `histos` are `ReservedPackage`. The system loader under `java -jar` is outside this boundary.
+6. **`ApiBoundary` is parented on the platform loader. Boundary names load from the engine host.** The compile classpath jars are `Loader.classpath` plus launcher ZIO: api, `scala-library`, `scala3-library`, ZIO 2.1.27. Allowed packages are the api, `histos.version`, `histos.plugin`, `zio`, and `scala`, and they load from the host that defined `HistosBuild`. A second api `URLClassLoader` would make `ProjectGraph` a different class. Other `histos.*` names are refused before plugin URLs are searched. Plugin packages under `histos` are `ReservedPackage`. The system loader under `java -jar` is outside this boundary.
 
 7. **Commands dispatch after the built-in grammar, on `UnknownRoot` only.** `Grammar.reject` must not fold every `CommandMismatch` into that case. `~` applies the same rule to the inner tokens before `Command.Watch` is built. `path`, `list`, and `clean` stay free at the root. A dynamic zio-cli tree cannot see specs before load and could shadow `test`. Built-ins win twice: the grammar matches first, and `CommandName.reserved` rejects the shadow at `Projects`. The plugin does not parse argv.
 
@@ -989,7 +987,7 @@ This repo does not enable a plugin in its own `histos.scala` as part of the seri
 
 10. **Until 1.0, binary plugins match `ApiDigest` of the api jar being loaded.** That digest changes when the jar bytes change. `0.0.1-SNAPSHOT` does not, so it is not the token. `Cli.VersionText` and `Bsp.ServerVersion` stay the product label, because BSP advertises an implementation version and the plugin check is a jar identity. `BinaryOrSource` compiles the locked source jar on mismatch, before `Driver.process`, and loads that class directory in place of the direct jar. `.link(Source)` does the same compile even when the digests match. The scalac classpath is the boundary jars plus third-party cell artifacts. `ExactBinary` mismatch is `VersionMismatch`. `LinkStrategy.Api` is `ApiLink` with no success path. `plugin(path)` compiles against the boundary jars, so it matches the running api by construction.
 
-11. **`central` is not loaded by this loader.** It remains the in-tree module that compiles against `api` and not the engine. The first jar the loader proves is a test fixture, then the Specular-shaped fixture. Not Central, and not the real Specular repo.
+11. **`central` is not loaded by this loader.** It remains the in-tree module that compiles against `api` and not the engine. The fixture in this repo stays a fixture. The Specular repository's plugin is design commit 11.
 
 12. **Test providers and `nscplugin` stay outside.** Different seams, already implemented. Folding them in would put `sbt.testing` or a compiler flag API on `HistosPlugin`.
 
@@ -1005,7 +1003,7 @@ Seven PRs, in this order. Each is reviewable on its own. The classloader does no
 
 ### PR 1. `histos/plugin-api`: types on `histos.api`
 
-**Files:** `api/src/histos/plugin/` (`HistosPlugin`, ids, `Contribution`, `DeclaredTask`, `CommandSpec`, `CiJob`, `LinkStrategy`, `PluginLinked`, `ApiDigest`, `RepoPath`, errors with `message`, `PluginFixture`), `Seal` and `Need` moved out of `engine/src/histos/schedule/Sendable.scala`, `Sendable` and `engine/test/RemoteSpec.test.scala` imports, `api` module depends on `dev.zio::zio:2.1.27`.
+**Files:** `api/src/histos/plugin/` (`HistosPlugin`, ids, `Contribution`, `DeclaredTask`, `CommandSpec`, `CiJob`, `LinkStrategy`, `PluginLinked`, `ApiDigest`, `RepoPath`, errors with `message`, `PluginFixture`), `Seal` and `Need` moved out of `engine/src/histos/schedule/Sendable.scala`, `Sendable` and `engine/test/RemoteSpec.scala` imports, `api` module depends on `dev.zio::zio:2.1.27`.
 
 **Depends on:** nothing beyond the current tree.
 
@@ -1017,15 +1015,15 @@ Seven PRs, in this order. Each is reviewable on its own. The classloader does no
 
 Positional extracts gain a field or a wildcard in the same PR. Default arguments do not preserve unapply arity. Construction with fewer arguments keeps compiling when the new fields are last and defaulted. The extracts that do not:
 
-- `api/test/GraphSpec.test.scala` (`Module` patterns, including the ones nested in `ProjectGraph`, and the 5-field `ProjectGraph` patterns)
-- `api/test/Outside.test.scala`
+- `api/test/GraphSpec.scala` (`Module` patterns, including the ones nested in `ProjectGraph`, and the 5-field `ProjectGraph` patterns)
+- `api/test/Outside.scala`
 - `app/src/histos/cli/Cli.scala`
 - `app/src/histos/mcp/HistosMcp.scala`
 - `engine/src/histos/resolve/Resolve.scala`
 - `engine/src/histos/native/NativeLink.scala` (`histos.Module`)
 - `engine/src/histos/node/Node.scala`
 
-`ProjectGraph.trusted` call sites stay source-compatible through the new overload: `engine/test/ResolveSpec.test.scala`, `engine/test/NodeSpec.test.scala`, `engine/test/NativeSpec.test.scala`, `engine/test/WorkflowSpec.test.scala`. `WorkflowSpec`'s `Module(` constructor uses leading fields plus defaults, so a trailing `notes` default does not break that construction. Its unapply, if it names fifteen fields, is updated with the others.
+`ProjectGraph.trusted` call sites stay source-compatible through the new overload: `engine/test/ResolveSpec.scala`, `engine/test/NodeSpec.scala`, `engine/test/NativeSpec.scala`, `engine/test/WorkflowSpec.scala`. `WorkflowSpec`'s `Module(` constructor uses leading fields plus defaults, so a trailing `notes` default does not break that construction. Its unapply, if it names fifteen fields, is updated with the others.
 
 **Depends on:** PR 1.
 
@@ -1041,7 +1039,7 @@ Positional extracts gain a field or a wildcard in the same PR. Default arguments
 
 ### PR 4. `histos/plugin-commands`: CLI, MCP, and `run`
 
-**Files:** `app/src/histos/cli/Grammar.scala` (`UnknownRoot`, `~` peel, slash task ids on `run`), `app/src/histos/cli/Cli.scala` (`Command.Plugin`, `CliParseError.UnknownRoot`, `Cli.render` plugin lines, `Cli.run` does not send a slash id to `program`), new `app/src/histos/cli/PluginCommands.scala`, `app/src/histos/mcp/HistosMcp.scala` (`serve` installs `bind`, `render` prints plugins, `cancel` interrupts that map), `engine/src/histos/load/LoadError.scala` (PR 3 adds `LoadError.Plugin`; this PR's CLI prints that `message` on exit 3 and the test covers it), `engine/src/histos/schedule/Action.scala` (`TaskKind.Plugin`, `Policy`), `engine/src/histos/schedule/Sendable.scala` (`ofAction`), `engine/src/histos/schedule/Scheduler.scala` (`lookup` and the `cache.get` arm of `publish`), the plugin executor (`ZIO.scoped`, manifest, note filter, `Stay` not cached), `app/test/CliSpec.test.scala`, an MCP test, an engine scheduler test.
+**Files:** `app/src/histos/cli/Grammar.scala` (`UnknownRoot`, `~` peel, slash task ids on `run`), `app/src/histos/cli/Cli.scala` (`Command.Plugin`, `CliParseError.UnknownRoot`, `Cli.render` plugin lines, `Cli.run` does not send a slash id to `program`), new `app/src/histos/cli/PluginCommands.scala`, `app/src/histos/mcp/HistosMcp.scala` (`serve` installs `bind`, `render` prints plugins, `cancel` interrupts that map), `engine/src/histos/load/LoadError.scala` (PR 3 adds `LoadError.Plugin`; this PR's CLI prints that `message` on exit 3 and the test covers it), `engine/src/histos/schedule/Action.scala` (`TaskKind.Plugin`, `Policy`), `engine/src/histos/schedule/Sendable.scala` (`ofAction`), `engine/src/histos/schedule/Scheduler.scala` (`lookup` and the `cache.get` arm of `publish`), the plugin executor (`ZIO.scoped`, manifest, note filter, `Stay` not cached), `app/test/CliSpec.scala`, an MCP test, an engine scheduler test.
 
 **Depends on:** PR 3.
 
@@ -1049,7 +1047,7 @@ Positional extracts gain a field or a wildcard in the same PR. Default arguments
 
 ### PR 5. `histos/plugin-ci`: render jobs from the graph
 
-**Files:** `engine/src/histos/workflow/Workflow.scala` (`pluginJobs`, `renderAll`, orphan `histos-*.yml` drift and delete), `engine/test/WorkflowSpec.test.scala` and the golden files under `engine/test/fixtures/ci/`.
+**Files:** `engine/src/histos/workflow/Workflow.scala` (`pluginJobs`, `renderAll`, orphan `histos-*.yml` drift and delete), `engine/test/WorkflowSpec.scala` and the golden files under `engine/test/fixtures/ci/`.
 
 **Depends on:** PR 2 for the data. Land it after PR 4 so a rendered `./histos run` id is one the grammar parses. The renderer itself does not need the classloader.
 
@@ -1061,7 +1059,7 @@ Positional extracts gain a field or a wildcard in the same PR. Default arguments
 
 **Depends on:** PR 3. Independent of PR 4 and PR 5, but stack it after them so the series stays linear.
 
-**Description:** When the api digests differ, or when the header says `.link(Source)`, the loader compiles the locked source jar before `Driver.process` and reports `PluginLinked.FromSource` with both digests. The class directory replaces the direct jar on `BuildLoader` and on the build-file classpath. It is not added beside the jar. Transitive library jars stay. A class loaded from the direct jar under `FromSource` is `ForeignEntry`. `FromBinary` still loads the direct jar and every other cell jar. `ExactBinary` does not fall back. `plugin(path"...")` compiles against the boundary jars only, and its class directory is a legal code source. `.link(Api)` fails even when the digests match. `test` and `compile` do not fetch a sources jar the lock does not checksum. `cache clean --dry-run` lists an old plugin class directory. A path-plugin edit changes the fingerprint, `Attach.decide` returns `Stale`, and the client loads in a new process. `Daemon.handle` does not drop its `Scope`.
+**Description:** When the api digests differ, or when the header says `.link(Source)`, the loader compiles the locked source jar before `Driver.process` and reports `PluginLinked.FromSource` with both digests. The class directory replaces the direct jar on `BuildLoader` and on the build-file classpath. It is not added beside the jar. Transitive library jars stay. A class loaded from the direct jar under `FromSource` is `ForeignEntry`. `FromBinary` still loads the direct jar and every other cell jar. `ExactBinary` does not fall back. `plugin(path"...")` compiles against the boundary jars only, and its class directory is a legal code source. `.link(Api)` fails even when the digests match. `test` and `compile` do not fetch a sources jar the lock does not checksum. `cache clean --dry-run` lists an old plugin class directory. A path-plugin edit changes the fingerprint. The server calls `Loader.load`. Success swaps the ref. Failure keeps the last graph. The client stays a client. `Call.Task` runs the plugin task in that server.
 
 ### PR 7. `histos/plugin-specular-fixture`: the adoption shape, still a fixture
 
@@ -1097,7 +1095,7 @@ None. The trait, the header strip, the classloader parent, the lock cell, the ta
 - `api/src/histos/TestProvider.scala`: the test-framework seam this spec does not absorb.
 - `app/src/histos/cli/Grammar.scala` and `app/src/histos/cli/Cli.scala`: closed grammar, parse before load, `CommandMismatch` mapped to `UnknownCommand`, `~` peeled inside `parse`.
 - `app/src/histos/mcp/HistosMcp.scala`: `serve` builds its own `Tasks` map. `render` prints `name platforms versions`.
-- `app/src/histos/server/Daemon.scala`: `Fingerprint.read`, `Attach.decide`, `Daemon.handle` keeps the `Scope` on `Stale`.
+- `app/src/histos/server/Daemon.scala`: `Fingerprint.read` includes path-plugin files. A fingerprint change calls `Loader.load`. `Call.Task` runs the plugin task.
 - `app/src/histos/bsp/Bsp.scala`: `ServerVersion` stays the product label.
 - `engine/src/histos/workflow/Workflow.scala`: `document`, `versionsJob`, `workflowJob`.
 - `engine/src/histos/zinc/Scala3.scala` `EngineBoundary`, `engine/src/histos/zinc/JvmCompile.scala` `jarBan` and `directoryBan`: project compiles are a different classpath. `directoryBan` skips `ClassMarker.HistosBuild`.

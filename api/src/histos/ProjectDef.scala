@@ -37,6 +37,7 @@ final case class ModuleDef private (
     jsModule: JsModuleKind = JsModuleKind.NoModule,
     application: Option[MainClass] = None,
     notes: List[ModuleNote] = Nil,
+    flags: ScalacFlags = ScalacFlags.empty,
 ) extends ProjectDef:
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef =
@@ -93,6 +94,10 @@ final case class ModuleDef private (
   def pipe(f: ModuleDef => ModuleDef): ModuleDef =
     f(this)
 
+  /** Replace this module's scalac flags. A second call replaces the list. It does not append. */
+  def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef =
+    copy(flags = ScalacFlags.of(flag, rest*))
+
   /** Leave plugin-owned text on this module. A repeated plugin and key is refused later. */
   def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef =
     copy(notes = notes :+ ModuleNote(plugin, key, value))
@@ -109,11 +114,11 @@ object ModuleDef:
 
 final case class AggregateDef private (
     name: String,
-    children: List[ProjectDef],
+    children: List[ModuleDef],
     position: SourcePos,
 ) extends ProjectDef
 
 object AggregateDef:
   /** Spliced by `aggregate`. Source code cannot call it. */
-  @publicInBinary private[histos] def make(name: String, children: List[ProjectDef], position: SourcePos): AggregateDef =
+  @publicInBinary private[histos] def make(name: String, children: List[ModuleDef], position: SourcePos): AggregateDef =
     new AggregateDef(name, children, position)

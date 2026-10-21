@@ -140,7 +140,7 @@ object Program:
       case TestEvent.Exited(code) => ProgramFeed.Exited(cell.module, cell.version, cell.platform, code.value)
 
   /** Main classes, upstream main classes, the JVM library on JVM, then compile jars. */
-  private def classpath(
+  private[histos] def classpath(
       repo: Path,
       modules: List[Module],
       module: Module,
@@ -159,7 +159,11 @@ object Program:
       library <- cell.platform match
         case Platform.Jvm => JvmCompile.runtime(cell.version).mapError(error => ProgramError.Library(error.message))
         case Platform.Js | Platform.Native => ZIO.succeed(Nil)
-      jars = fetched.artifacts.map(_.path).distinct.filterNot(library.toSet.contains)
+      paths = fetched.artifacts.map(_.path).distinct
+      jars =
+        cell.platform match
+          case Platform.Jvm => paths.filterNot(JvmCompile.isStandardLibrary)
+          case Platform.Js | Platform.Native => paths.filterNot(library.toSet.contains)
     yield cell.classes :: (upstream ++ library ++ jars)
 
   private def nativeMajor(module: Module, version: ScalaVersion): IO[ProgramError, histos.ClangMajor] =
@@ -189,9 +193,10 @@ object Program:
     }.mapError(_ => ProgramError.Work(work))
 
   private def workDir(repo: Path, cell: histos.zinc.CompiledCell): Path =
-    repo.resolve(".histos").resolve("run").resolve(cell.module.value).resolve(cell.version.value).resolve(token(cell.platform))
+    workDir(repo, cell.module, cell.version, cell.platform)
 
-  private def token(platform: Platform): String = platform.token
+  private[histos] def workDir(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =
+    repo.resolve(".histos").resolve("run").resolve(module.value).resolve(version.value).resolve(platform.token)
 
 enum ProgramFeed:
   case Begin(module: ProjectName, version: ScalaVersion, platform: Platform)

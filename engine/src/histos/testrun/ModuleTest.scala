@@ -4,7 +4,7 @@ import histos.jdk.Sha256
 import histos.js.{JsLink, JsLinkError, JsSuite, ScalaJs}
 import histos.native.{NativeCompile, NativeLink, NativeSuite, NativeToolchain}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
-import histos.workflow.{CiError, TestTarget, Workflow}
+import histos.workflow.CiError
 import histos.zinc.{
   CompileError,
   CompileProblem,
@@ -175,12 +175,7 @@ object ModuleTest:
     }
 
   private def requested(graph: ProjectGraph, names: List[String]): Either[CiError, Set[ProjectName]] =
-    val modules = graph.projects.collect { case module: Module => module.name }.toSet
-    if names.isEmpty then Right(modules)
-    else
-      Workflow.target(graph, names).map:
-        case TestTarget.Entire             => modules
-        case TestTarget.Named(first, rest) => (first :: rest).toSet
+    histos.select.Selection.select(graph, names).map(selected => selected.modules.map(_.name).toSet)
 
   private def prepare(
       repo: Path,
@@ -637,8 +632,20 @@ object ModuleTest:
       ()
     }.mapError(_ => ModuleTestError.Runner(path))
 
+  /**
+   * The framework a test target launches, or a refusal when that library is not a test dependency.
+   * A named test main opts out of the framework.
+   */
+  private[histos] def launchProvider(module: Module): Either[ModuleTestError, Option[TestProvider]] =
+    module.test match
+      case Some(_) => Right(None)
+      case None =>
+        val provider = module.provider.getOrElse(TestProvider.Zio)
+        if satisfied(module, provider) then Right(Some(provider))
+        else Left(ModuleTestError.ProviderDependency(module.name, provider))
+
   /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds a toolchain. */
-  private def suiteEnv(repo: Path): Map[String, String] =
+  private[histos] def suiteEnv(repo: Path): Map[String, String] =
     val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
     sys.env.get("PATH").filter(_.nonEmpty) match
       case Some(path) => root + ("PATH" -> path)
@@ -710,8 +717,13 @@ object ModuleTest:
       upstream <- upstreamClasses(repo, module, modules, cell.version, cell.platform)
       libraries <- dependencyJars(module, modules, cell.version, cell.platform, lock, repositories)
       library <- standardLibrary(cell)
-      jars = (fetched.paths ++ libraries).distinct.filterNot(library.toSet.contains)
-    yield Linked(cell.classes :: (upstream ++ library ++ jars), fetched.hashes)
+      jvm = cell.platform == Platform.Jvm
+      kept =
+        if jvm then fetched.paths.zip(fetched.hashes).filterNot((path, _) => JvmCompile.isStandardLibrary(path))
+        else fetched.paths.zip(fetched.hashes)
+      tail = if jvm then libraries.filterNot(JvmCompile.isStandardLibrary) else libraries
+      jars = (kept.map(_._1) ++ tail).distinct
+    yield Linked(cell.classes :: (upstream ++ library ++ jars), kept.map(_._2))
 
   /** The JVM suite needs `scala-library` on the child classpath. Js and Native put their own library on the compiler classpath. */
   private def standardLibrary(cell: CompiledCell): ZIO[Any, ModuleTestError, List[Path]] =
@@ -736,7 +748,7 @@ object ModuleTest:
     for
       linked <- runtimeClasspath(repo, modules, module, cell, lock, repositories)
       request = CompileRequest(
-        CompileToolchain(cell.version, cell.platform, jdk, ScalacFlags.empty),
+        CompileToolchain(cell.version, cell.platform, jdk, module.flags),
         sources,
         linked.paths,
         classes,
@@ -823,7 +835,7 @@ object ModuleTest:
   private def testAnalysis(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =
     repo.resolve(".histos").resolve("test-analysis").resolve(module.value).resolve(version.value).resolve(platformToken(platform))
 
-  private def testWork(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =
+  private[histos] def testWork(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =
     repo.resolve(".histos").resolve("test-work").resolve(module.value).resolve(version.value).resolve(platformToken(platform))
 
   private def linkWork(repo: Path, module: ProjectName, version: ScalaVersion, platform: Platform): Path =

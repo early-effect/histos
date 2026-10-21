@@ -4,7 +4,8 @@ import histos.central.{Artifact, ArtifactId, DependencyVersion, MavenDependency,
 import histos.pack.{ClassJar, JarError}
 import histos.resolve.ArtifactName
 import histos.version.{CiVersion, Decision, PublishAction, ShipName, VersionError, VersionTask}
-import histos.workflow.{CiError, TestTarget, Workflow}
+import histos.select.Selection
+import histos.workflow.CiError
 import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
 import histos.{Dep, Module, Organization, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -13,6 +14,9 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, ZIO}
 
 final case class PublishedModule(group: Organization, artifact: String, revision: String, jar: Path)
+
+/** Skipped aggregate members are named. The modules are what was written. */
+final case class PublishOutput(skipped: List[String], modules: List[PublishedModule])
 
 enum LocalPublishError:
   case Version(error: VersionError)
@@ -57,16 +61,19 @@ object LocalPublish:
       names: List[String],
       jdk: ResolvedJdk,
       env: Map[String, String],
-  ): ZIO[histos.resolve.Resolve & Publisher, LocalPublishError, List[PublishedModule]] =
+  ): ZIO[histos.resolve.Resolve & Publisher, LocalPublishError, PublishOutput] =
     for
       decision <- VersionTask.decide(graph, repo, env).mapError(LocalPublishError.Version(_))
       plans    <- ZIO.fromEither(planned(decision, graph.catalog))
-      chosen   <- ZIO.fromEither(choose(graph, names, plans))
-      _        <- ZIO.fromEither(publishedDependencies(graph, chosen))
+      picked   <- ZIO.fromEither(choose(graph, names, plans))
+      _        <- ZIO.fromEither(publishedDependencies(graph, picked.modules))
       group    <- ZIO.fromEither(organization(graph))
-      cells    <- GraphCompile.run(repo, graph, chosen.toList.map(_.value), jdk).mapError(LocalPublishError.Compile(_))
-      written  <- ZIO.foreachPar(jobs(plans, chosen, cells))(job => write(repo, graph, group, job))
-    yield written.sortBy(line => (line.group.value, line.artifact, line.revision))
+      cells    <- GraphCompile.run(repo, graph, picked.modules.toList.map(_.value), jdk).mapError(LocalPublishError.Compile(_))
+      written  <- ZIO.foreachPar(jobs(plans, picked.modules, cells))(job => write(repo, graph, group, job))
+    yield PublishOutput(
+      picked.skipped.map(name => LocalPublishError.NotPublished(name).message),
+      written.sortBy(line => (line.group.value, line.artifact, line.revision)),
+    )
 
   private final case class Planned(revision: Revision, members: List[ProjectName])
 
@@ -107,18 +114,22 @@ object LocalPublish:
       case Some(row) => Right(row.members)
       case None      => Left(LocalPublishError.UnknownShip(ship))
 
-  private def choose(graph: ProjectGraph, names: List[String], plans: List[Planned]): Either[LocalPublishError, Set[ProjectName]] =
+  private final case class Chosen(modules: Set[ProjectName], skipped: List[ProjectName])
+
+  private def choose(graph: ProjectGraph, names: List[String], plans: List[Planned]): Either[LocalPublishError, Chosen] =
     val shipMembers = plans.flatMap(_.members).toSet
-    if names.isEmpty then Right(shipMembers)
+    if names.isEmpty then Right(Chosen(shipMembers, Nil))
     else
-      Workflow.target(graph, names) match
+      Selection.select(graph, names) match
         case Left(error) => Left(LocalPublishError.Target(error))
-        case Right(TestTarget.Entire) => Right(shipMembers)
-        case Right(TestTarget.Named(first, rest)) =>
-          val asked = (first :: rest).toSet
-          asked.find(name => !shipMembers.contains(name)) match
-            case Some(name) => Left(LocalPublishError.NotPublished(name))
-            case None       => Right(closure(graph, asked, shipMembers))
+        case Right(selected) =>
+          val direct = selected.modules.filter(module => !selected.expanded.contains(module.name))
+          direct.find(module => !shipMembers.contains(module.name)) match
+            case Some(module) => Left(LocalPublishError.NotPublished(module.name))
+            case None =>
+              val (keep, skip) = selected.modules.partition(module => shipMembers.contains(module.name))
+              if keep.isEmpty then Left(LocalPublishError.NothingToPublish)
+              else Right(Chosen(closure(graph, keep.map(_.name).toSet, shipMembers), skip.map(_.name)))
 
   private def closure(graph: ProjectGraph, asked: Set[ProjectName], members: Set[ProjectName]): Set[ProjectName] =
     def step(seen: Set[ProjectName], more: Set[ProjectName]): Set[ProjectName] =

@@ -59,7 +59,12 @@ object Rpc:
   final case class CompileParams(targets: List[TargetId], originId: Option[String] = None) derives JsonCodec
 
   final case class CompileProvider(languageIds: List[String]) derives JsonCodec
-  final case class Capabilities(compileProvider: CompileProvider) derives JsonCodec
+  final case class Capabilities(
+      compileProvider: CompileProvider,
+      dependencySourcesProvider: Boolean,
+      jvmRunEnvironmentProvider: Boolean,
+      jvmTestEnvironmentProvider: Boolean,
+  ) derives JsonCodec
   final case class InitializeResult(
       displayName: String,
       version: String,
@@ -114,6 +119,57 @@ object Rpc:
   final case class LogMessage(`type`: Int, message: String) derives JsonCodec
   final case class DependencySourcesItem(target: TargetId, sources: List[String]) derives JsonCodec
   final case class DependencySourcesResult(items: List[DependencySourcesItem]) derives JsonCodec
+
+  /** JSON key `class` is the BSP field. Scala will not use that word as a parameter. */
+  final case class ScalaMainClass(className: String, arguments: List[String], jvmOptions: List[String])
+
+  object ScalaMainClass:
+    given JsonCodec[ScalaMainClass] =
+      JsonCodec[Json].transformOrFail(
+        {
+          case Json.Obj(fields) =>
+            val map = fields.toMap
+            for
+              name <- text(map, "class")
+              arguments <- texts(map, "arguments")
+              options <- texts(map, "jvmOptions")
+            yield ScalaMainClass(name, arguments, options)
+          case _ => Left("a main class is an object")
+        },
+        main =>
+          Json.Obj(
+            "class" -> Json.Str(main.className),
+            "arguments" -> Json.Arr(main.arguments.map(Json.Str(_))*),
+            "jvmOptions" -> Json.Arr(main.jvmOptions.map(Json.Str(_))*),
+          ),
+      )
+
+    private def text(map: Map[String, Json], name: String): Either[String, String] =
+      map.get(name) match
+        case Some(Json.Str(value)) => Right(value)
+        case _                     => Left(s"$name is required")
+
+    private def texts(map: Map[String, Json], name: String): Either[String, List[String]] =
+      map.get(name) match
+        case Some(Json.Arr(values)) =>
+          values.toList.foldLeft[Either[String, List[String]]](Right(Nil)):
+            case (Left(error), _)              => Left(error)
+            case (Right(acc), Json.Str(value)) => Right(acc :+ value)
+            case (Right(_), _)                 => Left(s"$name is a list of strings")
+        case _ => Left(s"$name is required")
+
+  final case class ScalaMainClassesItem(target: TargetId, classes: List[ScalaMainClass]) derives JsonCodec
+  final case class ScalaMainClassesResult(items: List[ScalaMainClassesItem]) derives JsonCodec
+  final case class ScalaTestClassesItem(target: TargetId, classes: List[String], framework: Option[String]) derives JsonCodec
+  final case class ScalaTestClassesResult(items: List[ScalaTestClassesItem]) derives JsonCodec
+  final case class JvmEnvironmentItem(
+      target: TargetId,
+      classpath: List[String],
+      jvmOptions: List[String],
+      workingDirectory: String,
+      environmentVariables: Map[String, String],
+  ) derives JsonCodec
+  final case class JvmEnvironmentResult(items: List[JvmEnvironmentItem]) derives JsonCodec
 
   final case class RpcNote[A](jsonrpc: String, method: String, params: A)
 

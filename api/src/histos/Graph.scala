@@ -33,6 +33,7 @@ final case class Module(
     jsModule: JsModuleKind = JsModuleKind.NoModule,
     application: Option[MainClass] = None,
     notes: List[ModuleNote] = Nil,
+    flags: ScalacFlags = ScalacFlags.empty,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory. */
   def baseDirectory: String =
@@ -269,12 +270,16 @@ object Projects:
             m.jsModule,
             m.application,
             m.notes,
+            m.flags,
           ))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
     a.children.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, child) =>
       acc.flatMap: names =>
-        lookup(child, byName).map(target => names :+ target.name)
+        lookup(child, byName).flatMap: target =>
+          target.defn match
+            case _: ModuleDef => Right(names :+ target.name)
+            case _            => Left(BuildError.AggregateChild(n.name, target.name, a.position))
     .map(children => Aggregate(n.name, children, a.position))
 
   private def clangOf(name: ProjectName, module: ModuleDef): Option[BuildError] =

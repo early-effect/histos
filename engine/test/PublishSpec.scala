@@ -35,12 +35,12 @@ object PublishSpec extends ZIOSpecDefault:
                  write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
                }
           built <- ZIO.fromEither(library).mapError(error => new IllegalStateException(error.message))
-          lines <- LocalPublish.run(root, built, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo))
+          published <- LocalPublish.run(root, built, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo))
           appPom <- ZIO.attempt(Files.readString(repo.resolve("com/example/app_3/1.0.0/app_3-1.0.0.pom")))
           names <- ZIO.attempt(zipNames(repo.resolve("com/example/core_3/1.0.0/core_3-1.0.0.jar")))
           used <- consume(repo, root.resolve("use"), jdk)
         yield assertTrue(
-          lines.map(line => s"${line.group.value} ${line.artifact} ${line.revision}") == List(
+          published.modules.map(line => s"${line.group.value} ${line.artifact} ${line.revision}") == List(
             "com.example app_3 1.0.0",
             "com.example core_3 1.0.0",
           ),

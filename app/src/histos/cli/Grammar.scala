@@ -12,7 +12,7 @@ import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Option
 /** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that name into a [[TaskId]] and, for a module, a platform. */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Acp, Bsp, Server, CachePath, CacheList, Toolchain
+    case Version, Graph, Mcp, Acp, Bsp, Server, CachePath, CacheList, Toolchain, Reload, Reboot
     case Run(name: String, platform: Option[String])
     case Test(projects: List[String])
     case TestOnly(args: List[String])
@@ -45,6 +45,8 @@ object Grammar:
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
   private val server    = CliCommand("server").map(_ => Wire.Server)
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
+  private val reload    = CliCommand("reload").map(_ => Wire.Reload)
+  private val reboot    = CliCommand("reboot").map(_ => Wire.Reboot)
   private val path      = CliCommand("path").map(_ => Wire.CachePath)
   private val list      = CliCommand("list").map(_ => Wire.CacheList)
   private val clean     = CliCommand("clean", Options.boolean("dry-run")).map(Wire.CacheClean(_))
@@ -59,13 +61,13 @@ object Grammar:
     }
   private val root      =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | acp | bsp | server | toolchain | cache | resolve | workflow,
+      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | acp | bsp | server | toolchain | cache | resolve | workflow | reload | reboot,
     )
 
   /** Words the built-in grammar owns. `path`, `list`, and `clean` stay free so a plugin can take them. */
   private val roots: Set[String] = Set(
     "version", "graph", "run", "test", "testOnly", "testQuick", "compile", "assembly", "publish",
-    "mcp", "acp", "bsp", "server", "toolchain", "cache", "resolve", "workflow",
+    "mcp", "acp", "bsp", "server", "toolchain", "cache", "resolve", "workflow", "reload", "reboot",
   )
 
   def parse(args: List[String]): IO[CliParseError, Command] =
@@ -92,6 +94,8 @@ object Grammar:
       case Wire.CachePath          => ZIO.succeed(Command.CachePath)
       case Wire.CacheList          => ZIO.succeed(Command.CacheList)
       case Wire.Toolchain          => ZIO.succeed(Command.Toolchain)
+      case Wire.Reload            => ZIO.succeed(Command.Reload)
+      case Wire.Reboot            => ZIO.succeed(Command.Reboot)
       case Wire.CacheClean(dryRun) => ZIO.succeed(Command.CacheClean(dryRun))
       case Wire.Resolve(true, true) => ZIO.fail(CliParseError.Rejected)
       case Wire.Resolve(update, check) =>
@@ -147,7 +151,7 @@ object Grammar:
     args match
       case Nil =>
         if requirePattern && patterns.isEmpty then Left(CliParseError.MissingPattern)
-        else Right((distinct(modules.reverse), patterns.reverse))
+        else Right((modules.reverse, patterns.reverse))
       case "--module" :: Nil =>
         Left(CliParseError.Pattern(s"$command --module needs a project"))
       case "--module" :: name :: rest =>
@@ -160,9 +164,6 @@ object Grammar:
         SuitePattern.from(token) match
           case Left(error) => Left(CliParseError.Pattern(error.message))
           case Right(pattern) => walk(command, requirePattern, rest, modules, pattern :: patterns)
-
-  private def distinct(names: List[String]): List[String] =
-    names.foldLeft(List.empty[String])((acc, name) => if acc.contains(name) then acc else acc :+ name)
 
   private def pluginTask(raw: String, token: Option[String]): IO[CliParseError, Command] =
     token match

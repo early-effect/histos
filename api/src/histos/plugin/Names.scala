@@ -50,6 +50,8 @@ object CommandName:
     trusted("cache"),
     trusted("resolve"),
     trusted("workflow"),
+    trusted("reload"),
+    trusted("reboot"),
   )
 
   inline def apply(inline raw: String): CommandName = ${ PluginMacros.commandName('raw) }
