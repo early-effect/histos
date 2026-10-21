@@ -96,7 +96,7 @@ object PluginSpec extends ZIOSpecDefault:
       assertTrue(
         CommandName.reserved.map(_.value) == Set(
           "version", "graph", "run", "test", "testOnly", "testQuick", "compile",
-          "assembly", "publish", "mcp", "acp", "bsp", "server", "toolchain",
+          "assembly", "publish", "mcp", "acp", "bsp", "server", "reload", "reboot", "toolchain",
           "cache", "resolve", "workflow",
         ),
         CommandName("list").isReserved == false,
@@ -235,7 +235,7 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects(use(Echo, Quiet), jvm("core"))
       assertTrue:
         built match
-          case Right(ProjectGraph(_, _, _, _, _, List(echo, quiet))) =>
+          case Right(ProjectGraph(_, _, _, _, _, List(echo, quiet), _)) =>
             echo.id == Echo.id &&
             echo.entry == EntryName("histos.plugin.Echo$") &&
             echo.contribution.tasks == List(DeclaredTask(TaskName("echo"), Seal.Open, Set.empty, Nil, Nil, Nil)) &&
@@ -253,7 +253,7 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects(use(Echo), docs)
       assertTrue:
         built match
-          case Right(ProjectGraph(List(found: Module), _, _, _, _, List(plugin))) =>
+          case Right(ProjectGraph(List(found: Module), _, _, _, _, List(plugin), _)) =>
             found.notes == List(ModuleNote(Echo.id, NoteKey("role"), NoteText("site"))) &&
             plugin.id == Echo.id
           case _ => false

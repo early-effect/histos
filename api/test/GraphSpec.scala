@@ -342,7 +342,7 @@ object GraphSpec extends ZIOSpecDefault:
       )
       assertTrue(
         built match
-          case Right(ProjectGraph(List(found: Module), _, _, _, _, _)) =>
+          case Right(ProjectGraph(List(found: Module), _, _, _, _, _, _)) =>
             found.baseDirectory == "example/todo-conduit" && found.directory == Some(
               path"example/todo-conduit"
             )

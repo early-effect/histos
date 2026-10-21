@@ -71,7 +71,7 @@ object Node:
   /** A JVM-only graph does not name Node. An aggregate does not either. */
   def required(graph: ProjectGraph): Boolean =
     graph.projects.exists:
-      case Module(_, platforms, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => platforms.all.contains(Platform.Js)
+      case Module(_, platforms, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => platforms.all.contains(Platform.Js)
       case Aggregate(_, _, _)               => false
 
   def resolve(major: NodeMajor, view: NodeView): NodeResolution =

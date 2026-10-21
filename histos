@@ -2,6 +2,8 @@
 # Frozen entry point. Verifies the pinned JVM assembly and execs it.
 # When java is not on PATH, the locked JDK is fetched, checked, and unpacked first.
 # HISTOS_ASSEMBLY overrides the assembly path so a fixture can be used before a release exists.
+# When dist/histos.jar is absent and the version is a snapshot, the script downloads
+# rocks.earlyeffect:histos from Central snapshots. HISTOS_SNAPSHOTS overrides that repository.
 set -eu
 
 dir=$(dirname "$0") || exit 1
@@ -9,36 +11,6 @@ root=$(CDPATH= cd -- "$dir" && pwd) || exit 1
 version=$(tr -d '[:space:]' < "$root/.histos-version")
 shafile=$root/.histos/assembly.sha256
 cache=${XDG_CACHE_HOME:-$HOME/.cache}
-
-if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
-  jar=$HISTOS_ASSEMBLY
-elif [ -f "$root/dist/histos.jar" ]; then
-  jar=$root/dist/histos.jar
-else
-  jar=$cache/histos/launchers/$version/histos.jar
-fi
-
-if [ ! -f "$jar" ]; then
-  echo "histos $version: no assembly at $jar" >&2
-  exit 1
-fi
-
-if [ ! -f "$shafile" ]; then
-  echo "histos $version: missing $shafile" >&2
-  exit 1
-fi
-
-expected=$(tr -d '[:space:]' < "$shafile")
-if command -v sha256sum >/dev/null 2>&1; then
-  actual=$(sha256sum "$jar" | awk '{print $1}')
-else
-  actual=$(shasum -a 256 "$jar" | awk '{print $1}')
-fi
-
-if [ "$expected" != "$actual" ]; then
-  echo "histos $version: checksum mismatch" >&2
-  exit 1
-fi
 
 hash_of() {
   file=$1
@@ -48,6 +20,94 @@ hash_of() {
     shasum -a 256 "$file" | awk '{print $1}'
   fi
 }
+
+fetch_snapshot() {
+  snapshots=${HISTOS_SNAPSHOTS:-https://central.sonatype.com/repository/maven-snapshots}
+  snapshots=${snapshots%/}
+  meta_url=$snapshots/rocks/earlyeffect/histos/$version/maven-metadata.xml
+  meta=$(curl -fsSL "$meta_url" 2>/dev/null) || {
+    echo "histos $version: no snapshot at $meta_url" >&2
+    return 1
+  }
+  timestamp=$(printf '%s\n' "$meta" | awk -F '[<>]' '/<timestamp>/ { print $3; exit }')
+  build=$(printf '%s\n' "$meta" | awk -F '[<>]' '/<buildNumber>/ { print $3; exit }')
+  if [ -z "$timestamp" ] || [ -z "$build" ]; then
+    echo "histos $version: snapshot metadata has no timestamp" >&2
+    return 1
+  fi
+  base=${version%-SNAPSHOT}
+  unique=$base-$timestamp-$build
+  dest=$cache/histos/launchers/$version/$unique/histos.jar
+  jar_url=$snapshots/rocks/earlyeffect/histos/$version/histos-$unique.jar
+  sha_url=$jar_url.sha256
+  expected=$(curl -fsSL "$sha_url" 2>/dev/null | awk 'NR == 1 { print $1 }') || true
+  if [ -z "${expected:-}" ]; then
+    echo "histos $version: no checksum at $sha_url" >&2
+    return 1
+  fi
+  if [ -f "$dest" ]; then
+    actual=$(hash_of "$dest")
+    if [ "$actual" = "$expected" ]; then
+      printf '%s\n' "$dest"
+      return 0
+    fi
+    rm -f "$dest"
+  fi
+  mkdir -p "$(dirname "$dest")"
+  part=$dest.partial
+  curl -fsSL "$jar_url" -o "$part" 2>/dev/null || {
+    rm -f "$part"
+    echo "histos $version: could not download $jar_url" >&2
+    return 1
+  }
+  actual=$(hash_of "$part")
+  if [ "$expected" != "$actual" ]; then
+    rm -f "$part"
+    echo "histos $version: checksum mismatch" >&2
+    return 1
+  fi
+  mv "$part" "$dest"
+  printf '%s\n' "$dest"
+}
+
+if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
+  jar=$HISTOS_ASSEMBLY
+  check_sha=yes
+elif [ -f "$root/dist/histos.jar" ]; then
+  jar=$root/dist/histos.jar
+  check_sha=yes
+else
+  case $version in
+    *-SNAPSHOT)
+      jar=$(fetch_snapshot) || exit 1
+      check_sha=no
+      ;;
+    *)
+      jar=$cache/histos/launchers/$version/histos.jar
+      check_sha=yes
+      ;;
+  esac
+fi
+
+if [ ! -f "$jar" ]; then
+  echo "histos $version: no assembly at $jar" >&2
+  exit 1
+fi
+
+if [ "$check_sha" = yes ]; then
+  if [ ! -f "$shafile" ]; then
+    echo "histos $version: missing $shafile" >&2
+    exit 1
+  fi
+
+  expected=$(tr -d '[:space:]' < "$shafile")
+  actual=$(hash_of "$jar")
+
+  if [ "$expected" != "$actual" ]; then
+    echo "histos $version: checksum mismatch" >&2
+    exit 1
+  fi
+fi
 
 provision_jdk() {
   lock=$root/.histos/jdk.lock

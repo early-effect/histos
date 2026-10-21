@@ -43,6 +43,11 @@ enum PublishError:
   case NotADirectory(path: Path)
   case Escaped(path: Path)
   case Io(op: PublishIo)
+  case Unauthorized
+  case NotSnapshot(revision: String)
+  case Status(code: Int, detail: String)
+  case Transport(detail: String)
+  case Metadata(detail: String)
 
   def message: String = this match
     case BadArtifact(raw)  => s"'$raw' is not an artifact id"
@@ -52,16 +57,40 @@ enum PublishError:
     case NotADirectory(path) => s"$path is not a directory"
     case Escaped(path)     => s"$path leaves the repository"
     case Io(op)            => s"publish failed while ${op.toString.toLowerCase}"
+    case Unauthorized      => "sonatype rejected the credentials"
+    case NotSnapshot(revision) => s"'$revision' is not a snapshot"
+    case Status(code, detail) =>
+      if detail.isEmpty then s"publish failed with HTTP $code" else s"publish failed with HTTP $code: $detail"
+    case Transport(detail) =>
+      if detail.isEmpty then "could not reach the snapshot repository" else s"could not reach the snapshot repository: $detail"
+    case Metadata(detail)  => detail
 
-final case class Published(jar: Path, pom: Path, jarSha256: String)
+final case class Published(jar: Path, pom: Path, jarSha256: String, unique: Option[String] = None)
 
 /** Where one artifact lands. Every path is under the repository root. */
 final case class MavenPaths(directory: Path, jar: Path, pom: Path, jarSha256: Path, pomSha256: Path)
 
 object Digest:
-  def sha256(bytes: Chunk[Byte]): String =
-    val digest = MessageDigest.getInstance("SHA-256")
-    digest.digest(bytes.toArray).map(byte => f"${byte & 0xff}%02x").mkString
+  def sha256(bytes: Chunk[Byte]): String = digest("SHA-256", bytes)
+
+  def sha1(bytes: Chunk[Byte]): String = digest("SHA-1", bytes)
+
+  def md5(bytes: Chunk[Byte]): String = digest("MD5", bytes)
+
+  private def digest(algorithm: String, bytes: Chunk[Byte]): String =
+    MessageDigest.getInstance(algorithm).digest(bytes.toArray).map(byte => f"${byte & 0xff}%02x").mkString
+
+private[central] object JarCheck:
+  def accept(jar: Chunk[Byte]): Either[PublishError, Chunk[Byte]] =
+    jar match
+      case Chunk()                 => Left(PublishError.EmptyJar)
+      case bytes if zip(bytes)     => Right(bytes)
+      case _                       => Left(PublishError.NotAJar)
+
+  private def zip(bytes: Chunk[Byte]): Boolean =
+    bytes.take(2) match
+      case first +: second +: Chunk() => first == 0x50.toByte && second == 0x4b.toByte
+      case _                          => false
 
 object Layout:
   def paths(root: Path, artifact: Artifact): Either[PublishError, MavenPaths] =
@@ -118,11 +147,15 @@ object Publisher:
   def local(root: Path): ULayer[Publisher] =
     ZLayer.succeed(LocalPublisher(root))
 
+  /** PUT a snapshot to a Maven repository. `clock` stamps the unique version. */
+  def snapshots(base: String, user: String, password: String, clock: java.time.Clock = java.time.Clock.systemUTC()): ULayer[Publisher] =
+    SnapshotLayer(base, user, password, clock)
+
 private final class LocalPublisher(root: Path) extends Publisher:
   def publish(artifact: Artifact): IO[PublishError, Published] =
     for
       _      <- directory
-      jar    <- accept(artifact.jar)
+      jar    <- ZIO.fromEither(JarCheck.accept(artifact.jar))
       paths  <- ZIO.fromEither(Layout.paths(root, artifact))
       pom     = Chunk.fromArray(Layout.pom(artifact).getBytes(java.nio.charset.StandardCharsets.UTF_8))
       digest  = Digest.sha256(jar)
@@ -137,17 +170,6 @@ private final class LocalPublisher(root: Path) extends Publisher:
       if Files.exists(root) && !Files.isDirectory(root) then Left(PublishError.NotADirectory(root))
       else Right(())
     }.mapError(_ => PublishError.Io(PublishIo.Directory)).flatMap(ZIO.fromEither)
-
-  private def accept(jar: Chunk[Byte]): IO[PublishError, Chunk[Byte]] =
-    jar match
-      case Chunk() => ZIO.fail(PublishError.EmptyJar)
-      case bytes if zip(bytes) => ZIO.succeed(bytes)
-      case _ => ZIO.fail(PublishError.NotAJar)
-
-  private def zip(bytes: Chunk[Byte]): Boolean =
-    bytes.take(2) match
-      case first +: second +: Chunk() => first == 0x50.toByte && second == 0x4b.toByte
-      case _                          => false
 
   private def text(hex: String): Chunk[Byte] =
     Chunk.fromArray(s"$hex\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))

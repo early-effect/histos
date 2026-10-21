@@ -1,0 +1,34 @@
+package histos.publish
+
+import histos.zinc.ResolvedJdk
+import histos.ProjectGraph
+
+import java.nio.file.Path
+
+import zio.ZIO
+
+/** One publish, either into a directory or up to Central snapshots. */
+object PublishRun:
+  final class Report(val where: PublishWhere, val output: PublishOutput):
+    def lines: List[String] =
+      val root = where match
+        case PublishWhere.Directory(path) => Some(path)
+        case PublishWhere.Snapshots(_, _) => None
+      output.skipped ++ output.modules.map(_.rendered(root))
+
+  def run(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[String],
+      jdk: ResolvedJdk,
+      env: Map[String, String],
+      repository: String,
+  ): ZIO[histos.resolve.Resolve, LocalPublishError, Report] =
+    ZIO.fromEither(PublishWhere.resolve(repo, repository, env)).flatMap: where =>
+      val body =
+        for
+          _ <- ZIO.fromEither(LauncherPublish.ready(repo, graph))
+          written <- LocalPublish.run(repo, graph, names, jdk, env)
+          done <- LauncherPublish.upload(repo, graph, written)
+        yield Report(where, done)
+      body.provideSome[histos.resolve.Resolve](where.layer)

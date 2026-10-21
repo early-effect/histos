@@ -13,7 +13,26 @@ import java.nio.file.{Files, Path}
 
 import zio.{Chunk, ZIO}
 
-final case class PublishedModule(group: Organization, artifact: String, revision: String, jar: Path)
+final case class PublishedModule(
+    group: Organization,
+    artifact: String,
+    revision: String,
+    jar: Path,
+    unique: Option[String] = None,
+):
+  /** A snapshot prints its unique version. A directory publish prints the jar under `root`. */
+  def rendered(root: Option[Path]): String =
+    val place = unique match
+      case Some(id) => id
+      case None =>
+        root match
+          case None => jar.toString.replace('\\', '/')
+          case Some(base) =>
+            val from = base.toAbsolutePath.normalize
+            val full = jar.toAbsolutePath.normalize
+            val shown = if full.startsWith(from) then from.relativize(full) else full
+            shown.toString.replace('\\', '/')
+    s"${group.value} $artifact $revision $place"
 
 /** Skipped aggregate members are named. The modules are what was written. */
 final case class PublishOutput(skipped: List[String], modules: List[PublishedModule])
@@ -32,6 +51,12 @@ enum LocalPublishError:
   case NotPublished(module: ProjectName)
   case UnpublishedDependency(module: ProjectName, dependency: ProjectName)
   case BadDependency(organization: String, name: String, revision: String)
+  case Credentials
+  case NotAPath(raw: String)
+  case NoAssembly(path: Path)
+  case VersionFile(path: Path)
+  case VersionMismatch(file: String, published: String)
+  case LauncherRevision
 
   def message: String = this match
     case Version(error)  => error.message
@@ -52,6 +77,12 @@ enum LocalPublishError:
       s"'${module.value}' depends on '${dependency.value}', which is not published"
     case BadDependency(organization, name, revision) =>
       s"$organization:$name:$revision is not a publishable dependency"
+    case Credentials => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
+    case NotAPath(raw) => s"'$raw' is not a path"
+    case NoAssembly(path) => s"no assembly at $path"
+    case VersionFile(path) => s"could not read $path"
+    case VersionMismatch(file, published) => s".histos-version is $file and this publish wrote $published"
+    case LauncherRevision => "the launcher publishes one manual version"
 
 object LocalPublish:
   /** Compile the published modules and write them into a local Maven directory. `<ship>-ci` is not written. */
@@ -175,14 +206,14 @@ object LocalPublish:
       job: Job,
   ): ZIO[Publisher, LocalPublishError, PublishedModule] =
     val cell = job.cell
-    val artifact = ArtifactName.published(cell.module, cell.version, Platform.Jvm)
+    val artifact = artifactName(graph, cell.module, cell.version)
     for
       name <- ZIO.fromEither(ArtifactId.from(artifact)).mapError(_ => LocalPublishError.BadDependency(group.value, artifact, job.revision.render))
       deps <- ZIO.fromEither(dependencies(graph, group, cell.module, cell.version, job.revision))
       jar  <- ClassJar.write(cell.classes, jarFile(repo, cell, job.revision)).mapError(error => LocalPublishError.Jar(cell.module, cell.version, error))
       bytes <- ZIO.attemptBlocking(Chunk.fromArray(Files.readAllBytes(jar.path))).mapError(_ => LocalPublishError.Read(jar.path))
       published <- ZIO.serviceWithZIO[Publisher](_.publish(Artifact(group, name, job.revision, bytes, deps))).mapError(LocalPublishError.Publish(_))
-    yield PublishedModule(group, artifact, job.revision.render, published.jar)
+    yield PublishedModule(group, artifact, job.revision.render, published.jar, published.unique)
 
   private def dependencies(
       graph: ProjectGraph,
@@ -195,7 +226,7 @@ object LocalPublish:
       case Some(found: Module) =>
         val internal = found.upstream(Platform.Jvm).foldLeft[Either[LocalPublishError, List[MavenDependency]]](Right(Nil)): (acc, dependency) =>
           acc.flatMap: seen =>
-            coordinate(group, ArtifactName.published(dependency, version, Platform.Jvm), revision.render).map(seen :+ _)
+            coordinate(group, artifactName(graph, dependency, version), revision.render).map(seen :+ _)
         val external = Dep.select(found.dependencies, Platform.Jvm).foldLeft[Either[LocalPublishError, List[MavenDependency]]](Right(Nil)): (acc, dependency) =>
           acc.flatMap: seen =>
             externalCoordinate(dependency.organization, ArtifactName.of(dependency, version, Platform.Jvm), dependency.revision).map(seen :+ _)
@@ -215,6 +246,12 @@ object LocalPublish:
       name    <- ArtifactId.from(artifact).left.map(_ => LocalPublishError.BadDependency(group.value, artifact, revision))
       version <- DependencyVersion.from(revision).left.map(_ => LocalPublishError.BadDependency(group.value, artifact, revision))
     yield MavenDependency(group, name, version)
+
+  private def artifactName(graph: ProjectGraph, name: ProjectName, version: ScalaVersion): String =
+    val base = graph.get(name) match
+      case Some(module: Module) => module.published.fold(module.name.value)(_.value)
+      case _                    => name.value
+    ArtifactName.published(base, version, Platform.Jvm)
 
   private def jarFile(repo: Path, cell: histos.zinc.CompiledCell, revision: Revision): Path =
     val kind = revision match

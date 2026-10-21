@@ -34,6 +34,7 @@ final case class Module(
     application: Option[MainClass] = None,
     notes: List[ModuleNote] = Nil,
     flags: ScalacFlags = ScalacFlags.empty,
+    published: Option[ArtifactBase] = None,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory. */
   def baseDirectory: String =
@@ -79,6 +80,7 @@ final case class ProjectGraph private (
     organization: Option[Organization],
     resolvers: List[Resolver],
     plugins: List[RegisteredPlugin] = Nil,
+    assembly: Option[ArtifactBase] = None,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -108,8 +110,9 @@ object ProjectGraph:
       organization: Option[Organization],
       resolvers: List[Resolver],
       plugins: List[RegisteredPlugin] = Nil,
+      assembly: Option[ArtifactBase] = None,
   ): ProjectGraph =
-    new ProjectGraph(projects, splits, catalog, organization, resolvers, plugins)
+    new ProjectGraph(projects, splits, catalog, organization, resolvers, plugins, assembly)
 
 trait HistosBuild:
   def graph: Either[BuildError, ProjectGraph]
@@ -154,8 +157,9 @@ object Projects:
       catalog: CatalogSpec,
       listed: List[ProjectDef],
       uses: Uses = Uses(Nil),
+      assembly: Option[ArtifactBase] = None,
   ): Either[BuildError, ProjectGraph] =
-    build(organization, resolvers, splits, catalog, listed, uses)
+    build(organization, resolvers, splits, catalog, listed, uses, assembly)
 
   private def build(
       organization: Option[Organization],
@@ -164,6 +168,7 @@ object Projects:
       catalog: CatalogSpec,
       listed: List[ProjectDef],
       uses: Uses = Uses(Nil),
+      assembly: Option[ArtifactBase] = None,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -177,7 +182,7 @@ object Projects:
       _          <- bindPlugins(registered, built)
       ships      <- ShipLink.catalog(catalog, built)
       _          <- uniqueResolvers(resolvers)
-    yield ProjectGraph.trusted(built, splits, ships, organization, resolvers, registered)
+    yield ProjectGraph.trusted(built, splits, ships, organization, resolvers, registered, assembly)
 
   private def uniqueResolvers(resolvers: List[Resolver]): Either[BuildError, Unit] =
     resolvers.foldLeft[Either[BuildError, List[Resolver]]](Right(Nil)): (acc, resolver) =>
@@ -271,6 +276,7 @@ object Projects:
             m.application,
             m.notes,
             m.flags,
+            m.published,
           ))
 
   private def linkAggregate(n: Named, a: AggregateDef, byName: Map[String, Named]): Either[BuildError, Project] =
@@ -504,33 +510,41 @@ object Projects:
 end Projects
 
 /** [[Projects]] with an organization, repositories, or both already chosen. */
-final class Organized(organization: Option[Organization], resolvers: List[Resolver]):
+final class Organized(
+    organization: Option[Organization],
+    resolvers: List[Resolver],
+    assembly: Option[ArtifactBase] = None,
+):
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers)
+    Organized(Some(value), resolvers, assembly)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
-    Organized(organization, resolvers ++ (first :: rest.toList))
+    Organized(organization, resolvers ++ (first :: rest.toList), assembly)
+
+  /** The assembly jar publishes under this artifact id. No Scala suffix, and the pom has no dependencies. */
+  def assembly(name: ArtifactBase): Organized =
+    Organized(organization, resolvers, Some(name))
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, Splits.aggregate, CatalogSpec.empty, defs.toList)
+    Projects.assemble(organization, resolvers, Splits.aggregate, CatalogSpec.empty, defs.toList, assembly = assembly)
 
   def apply(splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, splits, CatalogSpec.empty, defs.toList)
+    Projects.assemble(organization, resolvers, splits, CatalogSpec.empty, defs.toList, assembly = assembly)
 
   def apply(catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, Splits.aggregate, catalog, defs.toList)
+    Projects.assemble(organization, resolvers, Splits.aggregate, catalog, defs.toList, assembly = assembly)
 
   def apply(splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, splits, catalog, defs.toList)
+    Projects.assemble(organization, resolvers, splits, catalog, defs.toList, assembly = assembly)
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, Splits.aggregate, CatalogSpec.empty, defs.toList, uses)
+    Projects.assemble(organization, resolvers, Splits.aggregate, CatalogSpec.empty, defs.toList, uses, assembly)
 
   def apply(uses: Uses, splits: Splits, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, splits, CatalogSpec.empty, defs.toList, uses)
+    Projects.assemble(organization, resolvers, splits, CatalogSpec.empty, defs.toList, uses, assembly)
 
   def apply(uses: Uses, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, Splits.aggregate, catalog, defs.toList, uses)
+    Projects.assemble(organization, resolvers, Splits.aggregate, catalog, defs.toList, uses, assembly)
 
   def apply(uses: Uses, splits: Splits, catalog: CatalogSpec, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(organization, resolvers, splits, catalog, defs.toList, uses)
+    Projects.assemble(organization, resolvers, splits, catalog, defs.toList, uses, assembly)

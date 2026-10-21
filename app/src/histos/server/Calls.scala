@@ -2,7 +2,6 @@ package histos.server
 
 import histos.assembly.Assemble
 import histos.cache.ContentStore
-import histos.central.Publisher
 import histos.cli.{Cli, CliExit, GraphText, Lines}
 import histos.testrun.{
   ModuleTest,
@@ -16,7 +15,7 @@ import histos.jdk.{Machine, Os, Settled}
 import histos.jdk.Sha256
 import histos.load.{LoadError, PluginLink, PluginRuntime}
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
-import histos.publish.LocalPublish
+import histos.publish.PublishRun
 import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
 import histos.schedule.RemoteCache
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
@@ -86,25 +85,13 @@ object Calls:
       projects: List[String],
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
-    placed(repo, repository) match
-      case None =>
-        done(say, CliExit.PublishFailed.code, s"'$repository' is not a path")
-      case Some(destination) =>
-        LocalPublish
-          .run(repo, graph, projects, jdk, machine.env)
-          .provideSome[Resolve](Publisher.local(destination))
-          .foldZIO(
-            failure => done(say, CliExit.PublishFailed.code, failure.message),
-            written =>
-              val lines =
-                written.skipped ++ written.modules
-                  .map(line => published(destination, line))
-              told(say, lines.mkString("\n")) *> done(
-                say,
-                CliExit.Success.code,
-                ""
-              )
-          )
+    PublishRun
+      .run(repo, graph, projects, jdk, machine.env, repository)
+      .foldZIO(
+        failure => done(say, CliExit.PublishFailed.code, failure.message),
+        report =>
+          told(say, report.lines.mkString("\n")) *> done(say, CliExit.Success.code, "")
+      )
 
   def run(
       repo: Path,
@@ -549,17 +536,6 @@ object Calls:
       val path = Path.of(raw)
       Some(if path.isAbsolute then path else repo.resolve(path))
     catch case _: java.nio.file.InvalidPathException => None
-
-  private def published(
-      destination: Path,
-      line: histos.publish.PublishedModule
-  ): String =
-    val base = destination.toAbsolutePath.normalize
-    val full = line.jar.toAbsolutePath.normalize
-    val shown =
-      (if full.startsWith(base) then base.relativize(full) else full).toString
-        .replace('\\', '/')
-    s"${line.group.value} ${line.artifact} ${line.revision} $shown"
 
   private def relative(repo: Path, path: Path): String =
     val base = repo.toAbsolutePath.normalize

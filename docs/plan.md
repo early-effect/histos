@@ -67,7 +67,7 @@ What remains waits on names that are not chosen yet:
 - Test jail, and remote execution. Tests stay local subprocesses.
 - An sbt importer.
 - MiMa on `histos.api`. That is the 1.0 cut.
-- Publishing Histos. No snapshot and no Central release until you say the feature is complete. A downstream pin uses the snapshot channel.
+- A Central release. The snapshot `0.0.1-SNAPSHOT` is uploaded by a local `histos publish snapshots`. CI downloads that launcher and does not publish.
 - Loading `central` through the plugin classloader.
 - A presentation compiler, a Bloop export, and a VS Code extension that is the language client.
 - Editing `~/projects/early-effect/ascent-histos` or Specular from a docs change. Commit 10 edits the ascent copy. Commit 11 edits the Specular repo. groks-beard stays unedited. Commit 12 adds the host module in this repo when its names exist.

@@ -2,6 +2,10 @@ package histos.cli
 
 import histos.jdk.{ArchiveSource, JdkLock, JdkMajor, JdkVersion, Sha256}
 
+import com.sun.net.httpserver.{HttpExchange, HttpServer}
+
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
 
@@ -56,6 +60,7 @@ object BootstrapSpec extends ZIOSpecDefault:
       "/usr/bin/find",
       "/bin/chmod",
       "/bin/rm",
+      "/bin/mv",
     ).foreach: source =>
       val path = Path.of(source)
       if Files.isRegularFile(path) then
@@ -89,6 +94,57 @@ object BootstrapSpec extends ZIOSpecDefault:
     val code = started.waitFor()
     (code, output + (if Files.isRegularFile(log) then Files.readString(log) else ""))
 
+  private def download(root: Path, snapshots: String, args: List[String]): (Int, String) =
+    val log = root.resolve("java.log")
+    val bin = root.resolve("bin")
+    val command = List("/bin/sh", root.resolve("histos").toString) ++ args
+    val process = new ProcessBuilder(command.asJava)
+    val env = process.environment()
+    env.remove("HISTOS_ASSEMBLY")
+    env.put("HISTOS_SNAPSHOTS", snapshots)
+    env.put("HISTOS_JAVA_LOG", log.toString)
+    env.put("XDG_CACHE_HOME", root.resolve("xdg").toString)
+    env.put("HOME", root.toString)
+    env.put("PATH", bin.toString)
+    process.redirectErrorStream(true)
+    val started = process.start()
+    val output = new String(started.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+    val code = started.waitFor()
+    (code, output + (if Files.isRegularFile(log) then Files.readString(log) else ""))
+
+  private def snapshot(jar: Array[Byte], checksum: String): HttpServer =
+    val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
+    server.createContext("/", (exchange: HttpExchange) => serve(exchange, jar, checksum))
+    server.start()
+    server
+
+  private def serve(exchange: HttpExchange, jar: Array[Byte], checksum: String): Unit =
+    val path = exchange.getRequestURI.getPath
+    val body =
+      if path.endsWith("maven-metadata.xml") then Some(metadata.getBytes(StandardCharsets.UTF_8))
+      else if path.endsWith(".jar.sha256") then Some(s"$checksum\n".getBytes(StandardCharsets.UTF_8))
+      else if path.endsWith(".jar") then Some(jar)
+      else None
+    body match
+      case None =>
+        exchange.sendResponseHeaders(404, -1)
+        exchange.close()
+      case Some(bytes) =>
+        exchange.sendResponseHeaders(200, bytes.length)
+        val out = exchange.getResponseBody
+        out.write(bytes)
+        out.close()
+        exchange.close()
+
+  private val metadata =
+    """<metadata>
+      |  <snapshot>
+      |    <timestamp>20261021.140102</timestamp>
+      |    <buildNumber>1</buildNumber>
+      |  </snapshot>
+      |</metadata>
+      |""".stripMargin
+
   private val checks = suite("bootstrap script")(
     test("verifies the fixture and execs java -jar"):
       val root = layout("fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8), "pending")
@@ -111,6 +167,26 @@ object BootstrapSpec extends ZIOSpecDefault:
       assertTrue(
         packed == 0 && code == 0 && output.contains("--enable-native-access=ALL-UNNAMED") && output.contains("-jar") && output.contains("app.jar") && output.contains("graph"),
       ),
+    test("a snapshot launcher is downloaded and exec'd"):
+      val bytes = "fixture".getBytes(StandardCharsets.UTF_8)
+      val root = layout(bytes, "pending")
+      val server = snapshot(bytes, sha256(root.resolve("app.jar")))
+      try
+        val (code, output) = download(root, s"http://127.0.0.1:${server.getAddress.getPort}", List("graph"))
+        assertTrue(
+          code == 0 && output.contains("0.0.1-20261021.140102-1/histos.jar") && output.contains("graph") && output.contains("-jar"),
+        )
+      finally server.stop(0)
+    ,
+    test("a snapshot checksum mismatch does not exec"):
+      val bytes = "fixture".getBytes(StandardCharsets.UTF_8)
+      val root = layout(bytes, "pending")
+      val server = snapshot(bytes, "0" * 64)
+      try
+        val (code, output) = download(root, s"http://127.0.0.1:${server.getAddress.getPort}", List("graph"))
+        assertTrue(code == 1 && output.contains("checksum mismatch") && !output.contains("-jar"))
+      finally server.stop(0)
+    ,
   )
 
   private def lockedJdk(root: Path): Int =

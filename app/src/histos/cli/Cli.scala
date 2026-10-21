@@ -26,8 +26,7 @@ import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.central.Publisher
-import histos.publish.LocalPublish
+import histos.publish.PublishRun
 import histos.testrun.{
   ModuleTest,
   ModuleTestError,
@@ -608,61 +607,18 @@ object Cli:
         case Left(error) =>
           ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
         case Right(loaded) =>
-          ZIO
-            .attempt(Path.of(directory))
-            .either
-            .flatMap:
-              case Left(_) =>
-                ZIO.succeed(
-                  Completed(
-                    CliExit.PublishFailed,
-                    "",
-                    s"'$directory' is not a path"
+          GraphCompile.jdkHere.either.flatMap:
+            case Left(error) =>
+              ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message))
+            case Right(jdk) =>
+              ZIO.serviceWithZIO[Machine]: machine =>
+                PublishRun
+                  .run(repo, loaded.graph, projects, jdk, machine.env, directory)
+                  .mapBoth(
+                    failure => Completed(CliExit.PublishFailed, "", failure.message),
+                    report => Completed(CliExit.Success, report.lines.mkString("\n"), ""),
                   )
-                )
-              case Right(raw) =>
-                val destination =
-                  if raw.isAbsolute then raw else repo.resolve(raw)
-                GraphCompile.jdkHere.either.flatMap:
-                  case Left(error) =>
-                    ZIO.succeed(
-                      Completed(CliExit.PublishFailed, "", error.message)
-                    )
-                  case Right(jdk) =>
-                    ZIO.serviceWithZIO[Machine]: machine =>
-                      LocalPublish
-                        .run(repo, loaded.graph, projects, jdk, machine.env)
-                        .provideSome[histos.resolve.Resolve](
-                          Publisher.local(destination)
-                        )
-                        .mapBoth(
-                          failure =>
-                            Completed(
-                              CliExit.PublishFailed,
-                              "",
-                              failure.message
-                            ),
-                          output =>
-                            val skipped = output.skipped
-                            val written = output.modules
-                              .map(line => publishedLine(destination, line))
-                            Completed(
-                              CliExit.Success,
-                              (skipped ++ written).mkString("\n"),
-                              ""
-                            )
-                        )
-                        .merge
-
-  private def publishedLine(
-      destination: Path,
-      line: histos.publish.PublishedModule
-  ): String =
-    val base = destination.toAbsolutePath.normalize
-    val full = line.jar.toAbsolutePath.normalize
-    val shown = (if full.startsWith(base) then base.relativize(full)
-                 else full).toString.replace('\\', '/')
-    s"${line.group.value} ${line.artifact} ${line.revision} $shown"
+                  .merge
 
   /** Compile, then one subprocess per Scala version. `no tests` is success and
     * is not a passing suite.

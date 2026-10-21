@@ -80,6 +80,16 @@ private object RepositoryUrlMacro:
           case Left(err) => report.errorAndAbort(err.message, raw)
           case Right(_)  => '{ RepositoryUrl.trusted(${ Expr(text) }) }
 
+private object ArtifactBaseMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ArtifactBase] =
+    import quotes.reflect.report
+    raw.value match
+      case None => report.errorAndAbort("ArtifactBase(...) takes a literal. Use ArtifactBase.from at runtime.", raw)
+      case Some(text) =>
+        ArtifactBase.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ ArtifactBase.trusted(${ Expr(text) }) }
+
 private object OrganizationMacro:
   def literal(raw: Expr[String])(using Quotes): Expr[Organization] =
     import quotes.reflect.report
@@ -120,6 +130,13 @@ private object LiteralMacro:
       case Right(raw) =>
         val url = RepositoryUrlMacro.literal(Expr(raw))
         '{ Resolver.Maven($url) }
+
+  def artifact(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[ArtifactBase] =
+    onePart(sc, args, "artifact") match
+      case Left(err)  =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => ArtifactBaseMacro.literal(Expr(raw))
 
   def organization(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Organization] =
     onePart(sc, args, "organization") match

@@ -10,6 +10,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: "./histos test"
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: "./histos run versions"
   workflow:
     runs-on: ubuntu-latest
     steps:

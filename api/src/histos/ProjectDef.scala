@@ -38,6 +38,7 @@ final case class ModuleDef private (
     application: Option[MainClass] = None,
     notes: List[ModuleNote] = Nil,
     flags: ScalacFlags = ScalacFlags.empty,
+    published: Option[ArtifactBase] = None,
 ) extends ProjectDef:
   /** Compile classpath. These are the dependencies the published pom lists. */
   def libraryDependencies(deps: Dep*): ModuleDef =
@@ -93,6 +94,10 @@ final case class ModuleDef private (
   /** Apply a function this module already has. A plugin publishes `ModuleDef => ModuleDef`. */
   def pipe(f: ModuleDef => ModuleDef): ModuleDef =
     f(this)
+
+  /** The published artifact id, without a Scala or platform suffix. A second call replaces it. */
+  def artifact(name: ArtifactBase): ModuleDef =
+    copy(published = Some(name))
 
   /** Replace this module's scalac flags. A second call replaces the list. It does not append. */
   def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef =
