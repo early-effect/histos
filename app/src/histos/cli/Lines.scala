@@ -8,6 +8,12 @@ import java.nio.file.Path
 
 /** The lines a compile or a test prints. The daemon and the local command use the same text. */
 object Lines:
+  def compiling(module: ProjectName, version: ScalaVersion, platform: Platform): String =
+    s"compiling ${module.value} ${version.value} ${token(platform)}"
+
+  def compilingTests(module: ProjectName, version: ScalaVersion, platform: Platform): String =
+    s"compiling ${module.value} ${version.value} ${token(platform)} test"
+
   def compiled(repo: Path, cell: CompiledCell): String =
     s"${cell.module.value} ${cell.version.value} ${token(cell.platform)} ${cell.classFiles} ${relative(repo, cell.classes)}"
 

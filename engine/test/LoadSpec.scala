@@ -19,10 +19,7 @@ import zio.test.*
 
 object LoadSpec extends ZIOSpecDefault:
   private val apiJar: IO[LoadError, Path] =
-    val candidates = rooted("dist/histos-api.jar", "../dist/histos-api.jar")
-    ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
-      case Some(jar) => ZIO.succeed(jar)
-      case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+    ApiJar.locate
 
   private def rooted(names: String*): List[Path] =
     val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))

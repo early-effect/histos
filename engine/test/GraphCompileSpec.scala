@@ -198,12 +198,16 @@ object GraphCompileSpec extends ZIOSpecDefault:
             )
           names <- GraphCompile
             .console(root, built, List("app"), jdk)
-            .collect { case CompileFeed.Done(cell) =>
-              cell.module.value
+            .collect {
+              case CompileFeed.Began(module, _, _) =>
+                s"compiling ${module.value}"
+              case CompileFeed.Done(cell) => cell.module.value
             }
             .runCollect
             .provide(Resolve.live(root.resolve("coursier")))
-        yield assertTrue(names.toList == List("core", "app"))
+        yield assertTrue(
+          names.toList == List("compiling core", "core", "compiling app", "app")
+        )
     ,
     test("a compile diagnostic is on the console before the cell fails"):
       ZIO.scoped:
@@ -228,6 +232,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           result <- GraphCompile
             .console(root, built, Nil, jdk)
             .tap {
+              case CompileFeed.Began(_, _, _)               => ZIO.unit
               case CompileFeed.Diagnostic(_, _, _, problem) =>
                 seen.update(_ :+ problem.text)
               case CompileFeed.Done(_)       => ZIO.unit

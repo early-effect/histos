@@ -86,11 +86,23 @@ object Calls:
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     PublishRun
-      .run(repo, graph, projects, jdk, machine.env, repository)
+      .run(
+        repo,
+        graph,
+        projects,
+        jdk,
+        machine.env,
+        repository,
+        feed => showCompile(repo, say, feed).ignore
+      )
       .foldZIO(
         failure => done(say, CliExit.PublishFailed.code, failure.message),
         report =>
-          told(say, report.lines.mkString("\n")) *> done(say, CliExit.Success.code, "")
+          told(say, report.lines.mkString("\n")) *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
       )
 
   def run(
@@ -318,6 +330,8 @@ object Calls:
     GraphCompile
       .console(repo, graph, projects, jdk)
       .mapZIO {
+        case CompileFeed.Began(module, version, platform) =>
+          say(Message.Out(Lines.compiling(module, version, platform)))
         case CompileFeed.Diagnostic(_, _, _, problem) =>
           say(Message.Err(problem.text))
         case CompileFeed.Done(cell) =>
@@ -353,6 +367,8 @@ object Calls:
               .mapError(ModuleTestError.Compile(_))
               .mapZIO { feed =>
                 val sent = feed match
+                  case CompileFeed.Began(module, version, platform) =>
+                    say(Message.Out(Lines.compiling(module, version, platform)))
                   case CompileFeed.Diagnostic(_, _, _, problem) =>
                     say(Message.Err(problem.text))
                   case CompileFeed.Done(cell) =>
@@ -382,7 +398,19 @@ object Calls:
                 )
               )
             _ <- ModuleTest
-              .suites(repo, graph, projects, jdk, cells.toList, parsed, quick)
+              .suites(
+                repo,
+                graph,
+                projects,
+                jdk,
+                cells.toList,
+                parsed,
+                quick,
+                (module, version, platform) =>
+                  say(
+                    Message.Out(Lines.compilingTests(module, version, platform))
+                  ).ignore
+              )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>
                   say(Message.Out(Lines.begin(module, version, platform)))
@@ -561,9 +589,25 @@ object Calls:
           s"could not write ${repo.resolve(".histos").resolve("assembly.sha256")}"
         )
 
+  private def showCompile(
+      repo: Path,
+      say: Say,
+      feed: CompileFeed
+  ): IO[ServerError, Unit] =
+    feed match
+      case CompileFeed.Began(module, version, platform) =>
+        say(Message.Out(Lines.compiling(module, version, platform)))
+      case CompileFeed.Diagnostic(_, _, _, problem) =>
+        say(Message.Err(problem.text))
+      case CompileFeed.Done(cell) =>
+        say(Message.Out(Lines.compiled(repo, cell)))
+      case CompileFeed.Failed(error) =>
+        say(Message.Err(error.message))
+
   private def compiled(feed: CompileFeed): Option[histos.zinc.CompiledCell] =
     feed match
       case CompileFeed.Done(cell)             => Some(cell)
+      case CompileFeed.Began(_, _, _)         => None
       case CompileFeed.Diagnostic(_, _, _, _) => None
       case CompileFeed.Failed(_)              => None
 

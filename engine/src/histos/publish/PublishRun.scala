@@ -1,11 +1,11 @@
 package histos.publish
 
-import histos.zinc.ResolvedJdk
+import histos.zinc.{CompileFeed, ResolvedJdk}
 import histos.ProjectGraph
 
 import java.nio.file.Path
 
-import zio.ZIO
+import zio.{UIO, ZIO}
 
 /** One publish, either into a directory or up to Central snapshots. */
 object PublishRun:
@@ -23,12 +23,15 @@ object PublishRun:
       jdk: ResolvedJdk,
       env: Map[String, String],
       repository: String,
+      report: CompileFeed => UIO[Unit] = _ => ZIO.unit
   ): ZIO[histos.resolve.Resolve, LocalPublishError, Report] =
-    ZIO.fromEither(PublishWhere.resolve(repo, repository, env)).flatMap: where =>
-      val body =
-        for
-          _ <- ZIO.fromEither(LauncherPublish.ready(repo, graph))
-          written <- LocalPublish.run(repo, graph, names, jdk, env)
-          done <- LauncherPublish.upload(repo, graph, written)
-        yield Report(where, done)
-      body.provideSome[histos.resolve.Resolve](where.layer)
+    ZIO
+      .fromEither(PublishWhere.resolve(repo, repository, env))
+      .flatMap: where =>
+        val body =
+          for
+            _ <- ZIO.fromEither(LauncherPublish.ready(repo, graph))
+            written <- LocalPublish.run(repo, graph, names, jdk, env, report)
+            done <- LauncherPublish.upload(repo, graph, written)
+          yield Report(where, done)
+        body.provideSome[histos.resolve.Resolve](where.layer)

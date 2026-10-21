@@ -369,7 +369,8 @@ object Bsp:
                       s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
                       problem
                     )
-                  case histos.zinc.CompileFeed.Done(_)   => ZIO.unit
+                  case histos.zinc.CompileFeed.Began(_, _, _) => ZIO.unit
+                  case histos.zinc.CompileFeed.Done(_)        => ZIO.unit
                   case histos.zinc.CompileFeed.Failed(_) => failed.set(true)
                 } *> failed.get
           ran.either.flatMap {

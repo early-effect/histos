@@ -575,6 +575,8 @@ object Cli:
 
   private def showCompile(repo: Path, feed: CompileFeed): UIO[Unit] =
     feed match
+      case CompileFeed.Began(module, version, platform) =>
+        say(Lines.compiling(module, version, platform))
       case CompileFeed.Diagnostic(_, _, _, problem) => sayError(problem.text)
       case CompileFeed.Done(cell)    => say(compiledLine(repo, cell))
       case CompileFeed.Failed(error) => sayError(error.message)
@@ -613,7 +615,15 @@ object Cli:
             case Right(jdk) =>
               ZIO.serviceWithZIO[Machine]: machine =>
                 PublishRun
-                  .run(repo, loaded.graph, projects, jdk, machine.env, directory)
+                  .run(
+                    repo,
+                    loaded.graph,
+                    projects,
+                    jdk,
+                    machine.env,
+                    directory,
+                    showCompile(repo, _),
+                  )
                   .mapBoth(
                     failure => Completed(CliExit.PublishFailed, "", failure.message),
                     report => Completed(CliExit.Success, report.lines.mkString("\n"), ""),
@@ -661,7 +671,7 @@ object Cli:
                     case CompileFeed.Done(cell)    => ZIO.succeed(Some(cell))
                     case CompileFeed.Failed(error) =>
                       failedCompile.update(_ :+ error).as(None)
-                    case CompileFeed.Diagnostic(_, _, _, _) =>
+                    case CompileFeed.Began(_, _, _) | CompileFeed.Diagnostic(_, _, _, _) =>
                       ZIO.succeed(None))
               }
               .collectSome
@@ -674,7 +684,8 @@ object Cli:
                 jdk,
                 cells.toList,
                 patterns,
-                quick
+                quick,
+                (module, version, platform) => say(Lines.compilingTests(module, version, platform)),
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>

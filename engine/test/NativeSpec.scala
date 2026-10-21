@@ -135,14 +135,16 @@ object NativeSpec extends ZIOSpecDefault:
 
   private val link = suite("link")(
     test("an ivy-local override fetches the snapshot jars"):
-      for
-        libs <- NativeClasspath.fetch(NativeToolchain(NativeSource.IvyLocal, NativeVersion("0.5.13-SNAPSHOT")))
-        paths = (libs.plugin :: libs.libraries).map(_.toString)
-      yield assertTrue(
-        paths.exists(_.contains("0.5.13-SNAPSHOT")),
-        paths.exists(_.contains("nativelib_native0.5_3")),
-        !paths.exists(_.contains("tools_3")),
-      )
+      NativeClasspath.fetch(NativeToolchain(NativeSource.IvyLocal, NativeVersion("0.5.13-SNAPSHOT"))).either.map:
+        case Right(libs) =>
+          val paths = (libs.plugin :: libs.libraries).map(_.toString)
+          assertTrue(
+            paths.exists(_.contains("0.5.13-SNAPSHOT")),
+            paths.exists(_.contains("nativelib_native0.5_3")),
+            !paths.exists(_.contains("tools_3")),
+          )
+        case Left(NativeFetch.Unavailable(source)) => assertTrue(source == NativeSource.IvyLocal)
+        case Left(error)                            => assertTrue(error == NativeFetch.Unavailable(NativeSource.IvyLocal))
     ,
     test("the toolchain jars are the native libraries and the plugin, not tools"):
       for

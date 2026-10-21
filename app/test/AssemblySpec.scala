@@ -18,7 +18,7 @@ object AssemblySpec extends ZIOSpecDefault:
   private val checks = suite("runtime assembly")(
     test("the runtime jar prints the version"):
       ZIO.scoped:
-        val found = rooted("dist/histos.jar").find(path => Files.isRegularFile(path))
+        val found = (rooted("dist/histos.jar") ++ cachedLaunchers).find(path => Files.isRegularFile(path))
         found match
           case None => ZIO.succeed(assertTrue(found.nonEmpty))
           case Some(jar) =>
@@ -43,6 +43,22 @@ object AssemblySpec extends ZIOSpecDefault:
   private def rooted(name: String): List[Path] =
     val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
     root.toList.map(_.resolve(name)) ++ List(Path.of(name), Path.of("..").resolve(name))
+
+  /** The launcher `./histos` downloaded when `dist/histos.jar` is not in the checkout. */
+  private def cachedLaunchers: List[Path] =
+    val home = Option(java.lang.System.getProperty("user.home")).filter(_.nonEmpty).map(Path.of(_))
+    val cache = sys.env.get("XDG_CACHE_HOME").filter(_.nonEmpty).map(Path.of(_)).orElse(home.map(_.resolve(".cache")))
+    cache.toList.flatMap: root =>
+      val launchers = root.resolve("histos").resolve("launchers")
+      if !Files.isDirectory(launchers) then Nil
+      else
+        val walk = Files.walk(launchers)
+        try
+          walk.iterator.asScala
+            .filter(path => Files.isRegularFile(path) && Option(path.getFileName).exists(_.toString == "histos.jar"))
+            .toList
+            .sortBy(path => -Files.getLastModifiedTime(path).toMillis)
+        finally walk.close()
 
   private def javaBin: Path =
     Path.of(java.lang.System.getProperty("java.home")).resolve("bin").resolve("java")

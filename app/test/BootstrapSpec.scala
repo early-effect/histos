@@ -61,6 +61,8 @@ object BootstrapSpec extends ZIOSpecDefault:
       "/bin/chmod",
       "/bin/rm",
       "/bin/mv",
+      "/usr/bin/gzip",
+      "/bin/gzip",
     ).foreach: source =>
       val path = Path.of(source)
       if Files.isRegularFile(path) then

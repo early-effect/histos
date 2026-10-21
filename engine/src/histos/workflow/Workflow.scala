@@ -105,12 +105,12 @@ object Workflow:
         case first :: rest => Right(TestTarget.Named(first, rest))
         case Nil           => Right(TestTarget.Entire)
 
-  def render(graph: ProjectGraph): Either[CiError, String] =
-    plan(graph, CiEvent.Other).map(jobs => document(graph, jobs))
+  def render(graph: ProjectGraph, setup: Boolean = false): Either[CiError, String] =
+    plan(graph, CiEvent.Other).map(jobs => document(graph, jobs, setup))
 
   /** `ci.yml` plus one `histos-<job>.yml` for each scheduled plugin job. */
-  def renderAll(graph: ProjectGraph): Either[CiError, List[RenderedWorkflow]] =
-    render(graph).map: body =>
+  def renderAll(graph: ProjectGraph, setup: Boolean = false): Either[CiError, List[RenderedWorkflow]] =
+    render(graph, setup).map: body =>
       RenderedWorkflow(fileName, body) :: scheduled(graph)
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
@@ -118,7 +118,8 @@ object Workflow:
 
   def check(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
     for
-      rendered <- ZIO.fromEither(renderAll(graph))
+      setup <- present(repo)
+      rendered <- ZIO.fromEither(renderAll(graph, setup))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.when(extra.nonEmpty)(ZIO.fail(CiError.Drift))
@@ -126,7 +127,8 @@ object Workflow:
 
   def update(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
     for
-      rendered <- ZIO.fromEither(renderAll(graph))
+      setup <- present(repo)
+      rendered <- ZIO.fromEither(renderAll(graph, setup))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.foreachDiscard(extra): orphan =>
@@ -214,10 +216,16 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
+  private def setupScript(repo: Path): Path =
+    repo.resolve(".github").resolve("setup.sh")
+
+  private def present(repo: Path): IO[CiError, Boolean] =
+    ZIO.attemptBlocking(Files.isRegularFile(setupScript(repo))).mapError(_ => CiError.Io(CiIo.Read))
+
+  private def document(graph: ProjectGraph, jobs: List[TestJob], setup: Boolean): String =
     val test = jobs match
       case Nil => Nil
-      case _   => testJob(jobs)
+      case _   => testJob(jobs, setup)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob)
@@ -276,7 +284,8 @@ object Workflow:
       "jobs:",
     )
 
-  private def testJob(jobs: List[TestJob]): List[String] =
+  private def testJob(jobs: List[TestJob], setup: Boolean): List[String] =
+    val prepare = if setup then List("      - run: \"./.github/setup.sh\"") else Nil
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
@@ -284,6 +293,7 @@ object Workflow:
           "    runs-on: ubuntu-latest",
           "    steps:",
           "      - uses: actions/checkout@v4",
+        ) ++ prepare ++ List(
           s"      - run: ${quote(argv(aggregate).mkString(" "))}",
         )
       case _ =>
@@ -297,6 +307,7 @@ object Workflow:
         ) ++ jobs.flatMap(include) ++ List(
           "    steps:",
           "      - uses: actions/checkout@v4",
+        ) ++ prepare ++ List(
           "      - run: \"${{ matrix.command }}\"",
         )
 

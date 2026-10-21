@@ -4,7 +4,7 @@ import histos.jdk.{Machine, Os, Settled}
 import histos.load.PluginLink
 import histos.plugin.*
 import histos.workflow.WorkflowAction
-import histos.load.{LoadError, LoadIo}
+import histos.load.{ApiJar, LoadError, LoadIo}
 import histos.*
 
 import java.nio.file.{Files, Path}
@@ -24,11 +24,7 @@ object CliSpec extends ZIOSpecDefault:
       |""".stripMargin
 
   private val apiJar: IO[LoadError, Path] =
-    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
-    val candidates = root.toList.map(_.resolve("dist/histos-api.jar")) ++ List(Path.of("dist/histos-api.jar"), Path.of("../dist/histos-api.jar"))
-    ZIO.attempt(candidates.find(Files.isRegularFile(_))).mapError(t => LoadError.Io(LoadIo.Temp)).flatMap:
-      case Some(jar) => ZIO.succeed(jar)
-      case None      => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+    ApiJar.locate
 
   private final class Listed extends HistosPlugin:
     val id: PluginId = PluginId("dev.example")
