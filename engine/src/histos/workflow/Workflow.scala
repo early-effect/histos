@@ -216,11 +216,11 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def setupScript(repo: Path): Path =
-    repo.resolve(".github").resolve("setup.sh")
+  private def toolsMarker(repo: Path): Path =
+    repo.resolve(".github").resolve("ci-tools")
 
   private def present(repo: Path): IO[CiError, Boolean] =
-    ZIO.attemptBlocking(Files.isRegularFile(setupScript(repo))).mapError(_ => CiError.Io(CiIo.Read))
+    ZIO.attemptBlocking(Files.isRegularFile(toolsMarker(repo))).mapError(_ => CiError.Io(CiIo.Read))
 
   private def document(graph: ProjectGraph, jobs: List[TestJob], setup: Boolean): String =
     val test = jobs match
@@ -284,8 +284,19 @@ object Workflow:
       "jobs:",
     )
 
+  /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action. */
+  private val tools: List[String] =
+    List(
+      "      - uses: actions/setup-node@v4",
+      "        with:",
+      "          node-version: \"22\"",
+      "      - uses: KyleMayes/install-llvm-action@v2.0.9",
+      "        with:",
+      "          version: \"21.1.8\"",
+    )
+
   private def testJob(jobs: List[TestJob], setup: Boolean): List[String] =
-    val prepare = if setup then List("      - run: \"./.github/setup.sh\"") else Nil
+    val prepare = if setup then tools else Nil
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(

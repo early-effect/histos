@@ -9,7 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: "./.github/setup.sh"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: KyleMayes/install-llvm-action@v2.0.9
+        with:
+          version: "21.1.8"
       - run: "./histos test"
   versions:
     runs-on: ubuntu-latest
