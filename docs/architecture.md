@@ -1,0 +1,222 @@
+# Histos architecture
+
+This is the tree as it is built today. [roadmap.md](roadmap.md) says where it is going, and [audit.md](audit.md) lists every known gap with the step that closes it. Gaps appear here as ledger ids, such as (S8). [plugins.md](plugins.md) is the plugin contract.
+
+A PR that changes behavior described here updates this file in the same PR.
+
+## What Histos is
+
+Histos is a Scala 3 build tool written in ZIO. A repository describes its build in `histos.scala`. Evaluating that file produces one immutable, validated `ProjectGraph`. Compile, test, run, publish, and the CI render are ZIO programs over that graph. The same graph serves a terminal, Metals over BSP, and an agent over MCP.
+
+Histos builds itself. `./histos test` compiles and tests the four modules of this repository, and `.github/workflows/ci.yml` is a render of `histos.scala`.
+
+## Modules
+
+| Module | Role | Depends on |
+| --- | --- | --- |
+| `api` | The graph, the builder, the literals, the version scheme, and the plugin contract (`histos.plugin`). The jar plugins compile against. | ZIO (because `HistosPlugin.run` returns a ZIO) |
+| `central` | Publishers: a local Maven directory, and Sonatype snapshot upload. | `api`, ZIO |
+| `engine` | Load, selection, resolution, compile, test, Scala.js, Scala Native, toolchains, publish, assembly, versions, CI render, cache, scheduler, plugin runtime. | `central`, `api`, ZIO, zio-streams, scala3-compiler, Zinc, Coursier, ASM. The Scala.js and Scala Native linkers are fetched for a child JVM and are not dependencies. |
+| `app` | The CLI, the server, BSP, and MCP. One `ZIOAppDefault`, `histos.cli.Main`. | `engine`, ZIO, zio-cli, heddle-mcp |
+
+The pinned coordinates are in `histos.scala`. Histos itself is built with Scala 3.10.0. That compiler loads `histos.scala`. A module compile fetches the compiler the module names.
+
+## The build file and the graph
+
+```scala
+import histos.*
+
+object build extends HistosBuild:
+  def graph =
+    val core = module("core", Jvm, Js)(scala"3.10.0", scala"2.13.16")
+      .libraryDependencies(dep"dev.zio::zio:2.1.27")
+      .testDependencies(dep"dev.zio::zio-test:2.1.27", dep"dev.zio::zio-test-sbt:2.1.27")
+    val app = module("app", Jvm)(scala"3.10.0").dependsOn(core).main(MainClass("demo.Main"))
+    Projects(core, app, aggregate("all", core, app))
+```
+
+- `module(name, platform, platforms*)(version, versions*)` requires at least one platform and one full Scala version. A series such as `3` is not a pin.
+- `aggregate(name, module, modules*)` takes `ModuleDef`s only, so a nested aggregate does not compile. An aggregate selects modules and has no classpath and no cell.
+- `scala"..."`, `dep"..."`, `ship"..."`, `manual"..."`, and the other literals are macros. A malformed literal fails the build-file compile.
+- Settings are methods that return a new `ModuleDef`: `libraryDependencies`, `testDependencies`, `dependsOn`, `in`, `main`, `test`, `testProvider`, `scalac`, `jsEnv`, `jsModule`, `nativeVersion`, `clang`, `artifact`, `note`, and `pipe`.
+- `Projects(...)` returns `Either[BuildError, ProjectGraph]`. Validation reports the first error (G12).
+- A cell is one module, one Scala version, and one platform. Compile and test work per cell.
+
+Module flags are typed: `.scalac(ScalacFlag.EncodingUtf8)` adds `-encoding UTF-8`. `ScalacFlag` has one case today (G13).
+
+### Source layout
+
+A module's directory is its name, or the path given to `.in(...)`. Sources are `<directory>/src`. A single-module graph may use `src` at the repository root. Tests are `src/test` under the source root plus a sibling `<directory>/test`. Platform and version directories (`jvm/`, `js/`, `native/`, `scala-2.13/`, `scala-3/`) select files for a cell. Main and test are separate compilation units, and test outputs never become main classes.
+
+## Load
+
+`Loader.load(repo, apiJar)` is a `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build class loader.
+
+1. `Loader.scan` reads the plugin header (`plugin(dep"...")`, `plugin(path"...")`) at the top of `histos.scala`.
+2. The loader resolves header plugins through the lock, compiles source and path plugins first, and writes the build file to a temporary copy with the header lines blanked, so line numbers match.
+3. The Scala 3 compiler compiles that copy in process against the api classpath and the plugin classpaths.
+4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+
+Loading is the same in the batch command and the server. A load error is a `LoadError` and exits 3.
+
+## Selection
+
+`compile`, `test`, `testOnly`, `testQuick`, and `publish` share `Selection.select`. No names is every module. A module name is that module, and an aggregate name is its direct members. A repeated module is refused. Selection errors reuse `CiError` today (A24).
+
+## Resolution and the lock
+
+`.histos/dependencies.lock` is the authority for module dependencies. `histos resolve --update` resolves with Coursier and writes exact versions, repositories, and SHA-256 checksums. Plain `histos resolve` verifies, and `--check` fails on drift. Compile and test read the lock and do not re-resolve. A range is refused before fetch. A checksum that disagrees with the bytes is an error. Test dependencies are a separate cell and never reach the compile classpath or the published pom. Plugin cells live in the same file.
+
+The lock does not yet cover the toolchain: Scala compiler jars, semanticdb-scalac, the Scala.js linker and environments, Chekhov, Scala Native tools, and the bridge jars are fetched from Maven Central with no lock entry or checksum (L1). Several tool versions are literals in engine code (L2).
+
+## Compile
+
+The engine compiles JVM, Scala.js, and Scala Native cells with Zinc 2.0.4 and the compiler the module names. Scala 3 and Scala 2.13 are accepted. Scala 2.12 and older are `CompileError.UnsupportedScala`.
+
+- Outputs go to `.histos/classes/<module>/<scala>/<platform>`. Test outputs go to `.histos/test-classes`.
+- Upstream cells compile first. Cells in one topological layer compile in parallel, and a layer waits for the whole previous layer (K5).
+- A failed cell does not cancel an independent sibling. The command fails after the last cell.
+- SemanticDB is on for every cell: `-Xsemanticdb` for Scala 3, and the `semanticdb-scalac` plugin for 2.13.
+- The compile classpath is the locked compile cell plus upstream classes. Jars that contain the Scala compiler or a Histos build marker are refused, so the engine never reaches user code.
+- Each compile starts a fresh Zinc compiler with an empty previous result, so every compile is full and a deleted source leaves its class files behind (S8).
+
+## Test
+
+A test cell runs in its own subprocess: one per module, Scala version, and platform. Tests never load inside the engine or the server.
+
+- The default framework is ZIO Test (`TestProvider.Zio`) when a module names neither a provider nor a main. `.testProvider(...)` names another sbt test-interface framework, and `.test(TestMain(...))` runs one main instead.
+- The child classpath is the module's main and test classes, upstream main classes, and the locked compile and test jars. The engine is never on it.
+- The child environment is `HISTOS_REPO`, plus `PATH`, `HOME`, and `XDG_CACHE_HOME` from the parent. The child calls `setpgid` before user code, and cancel kills the JVM child's process group. Node and native children are not put in their own group (B17).
+- Output streams to the console as it arrives, one suite tree per cell in module order.
+- `testOnly <pattern>` filters suites by fully qualified name (`*` crosses dots, `?` is one character). A pattern that matches nothing fails.
+- `testQuick` skips a suite whose stamp and last success match. The stamp covers the suite's referenced classes and misses upstream jars, the JDK, and flags (P6).
+- `~ <command>` reruns a command when a watched file changes.
+- A failure in one cell's preparation stops later cells (P4).
+
+## Scala.js and Scala Native
+
+Scala.js and Scala Native cells compile through Zinc with the platform's compiler support (`-scalajs` for Scala 3, the Scala Native compiler plugin). Linking runs in a child JVM, so the engine never loads a linker.
+
+- Scala.js test and run go through bridge programs that the engine writes as Scala source, compiles, and links per run (P1, P2). The JS environment is `JsEnv.Node` (default), `Jsdom`, or `Firefox` through Chekhov. Js children run `node` from `PATH` (B22).
+- A Native module names its tools with `.nativeVersion(...)`, default 0.5.12 from Maven Central. `HISTOS_NATIVE` overrides the fetch origin for a local build. Native links need clang on `PATH`, and `.clang(...)` names the expected major.
+- Library suffixes follow the platform: `_sjs1_3`, `_native0.5_3`.
+
+## Run
+
+`histos run <module> [jvm|js|native]` starts the module's `.main(...)` class on its platform. A module that builds more than one platform needs the platform argument. `histos run inspect` and `histos run versions` are built-in tasks, and `histos run <plugin>/<task>` runs a plugin task.
+
+## Toolchains
+
+`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK and waits for it (B20). Engine staging handles zip archives only (B24).
+
+`.histos/node.lock` pins Node, and `histos toolchain` reports which Node it would use. Execution does not use that choice yet (B22).
+
+`histos toolchain` prints the JDK decision, then Node when the graph has Js, then clang when it has Native.
+
+## Publish and versions
+
+The version scheme is the zipx scheme, implemented in `histos.version`: everyday builds are `<version>-ci`, a snapshot is `<version>-<sha>-SNAPSHOT`, the default branch also updates a `<version>-SNAPSHOT` pointer, and a ship number is the next release. A catalog can state a manual version, which is what this repository does. `histos run versions` checks the catalog and the registry.
+
+`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31). A module that builds Jvm and Js writes both cells to one coordinate (B1).
+
+## Assembly and the launcher
+
+`histos assembly [path]` writes one runnable jar of `app` and its dependencies, rewrites lazy-val bytecode that would call `sun.misc.Unsafe`, and records its SHA-256 in `.histos/assembly.sha256`. The assembly spec is hardcoded for this repository (P8).
+
+`./histos` and `histos.bat` are frozen scripts. With `dist/histos.jar` present, the script verifies it against `.histos/assembly.sha256` and execs it. Otherwise it downloads the launcher for `.histos-version`. A release launcher is checked against its pin. The snapshot path does not check one (L7). The script fetches the locked Temurin only when no `java` is on `PATH`.
+
+## CI render
+
+`.github/workflows/ci.yml` is a render of the graph. `histos workflow` and `--check` compare it, `--update` rewrites it, and drift exits 6.
+
+- Jobs are `test` (`./histos test`), `versions` (`./histos run versions`, when the catalog is non-empty), each plugin job with `JobWhen.Always`, and `workflow` (`./histos workflow --check`). A plugin job with a schedule renders as its own `histos-<job>.yml`.
+- When `.github/ci-tools` exists, the test job also installs Node 22, LLVM 21.1.8, and the Playwright Firefox build Chekhov reads (C1).
+- The renderer can scope a pull request to the changed modules and their dependents. The committed `ci.yml` is the full render, so pull requests run every module.
+
+## Cache
+
+The content store lives in `$XDG_CACHE_HOME/histos` or `~/.cache/histos`. Entries are content-addressed under `cas/`. `histos cache path`, `cache list`, and `cache clean [--dry-run]` manage it. `clean` removes entries under `cas/` and `plugins/` that the current projects have not used for 30 days, and it does not touch JDKs or launchers (B37).
+
+The remote cache is off. The only implementation is in memory, used by tests, and there is no configuration path (D10).
+
+## Tasks and the scheduler
+
+`Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Built-in tasks are `inspect` and `versions`.
+
+`Scheduler` in `histos.schedule` runs an action graph with digests, a local action cache, and the remote verdict from `Sendable.decide`. Only plugin tasks use it today. Compile, test, publish, and run are separate pipelines (K1).
+
+## Plugins
+
+A build opts into plugins in `histos.scala`: the header names each jar or path, and `use(...)` names each plugin object as the first argument to `Projects`. Nothing is discovered by scanning a classpath. A plugin contributes data (tasks, commands, CI jobs, module notes), and the graph stores that data. `HistosPlugin.run` returns the effect the engine runs later inside the plugin's `Scope`. [plugins.md](plugins.md) is the contract.
+
+## Process model
+
+The CLI is one-shot by default: each command loads the build, runs, and exits.
+
+`./histos server` is the opt-in warm process. It writes `.histos/server.json` with its version, a fingerprint of `histos.scala`, `.histos/dependencies.lock`, and path-plugin files, and a socket path. A command that loads the graph reads that record:
+
+| Record | Decision |
+| --- | --- |
+| Missing, corrupt, or unreadable | Run in process (`Decision.Absent`) |
+| Different `Cli.VersionText` | Refuse and ask for `histos reboot` (`Decision.DifferentVersion`) |
+| Matching version | Send a `Call` over the socket (`Decision.Open`). The server compares the fingerprint and refuses a call whose lock changed. |
+
+The server covers compile, test, publish, graph, run, a task, cancel, toolchain, resolve, workflow, assembly, reload, reboot, and a BSP splice. `cache` and `version` never load a graph. `histos reload` reloads the build in the same JVM and keeps the last good graph on failure. `histos reboot` replaces the JVM.
+
+Known gaps: `compile` and `test` load the build in the client before attaching (B2), a failure after bind can leave `histos server` waiting (B3), and reboot leaves the old JVM running (B4).
+
+## BSP
+
+`.bsp/histos.json` names `./histos bsp`. Metals spawns it and speaks BSP 2.2 over stdio. When a server is running, the BSP process splices its stdio onto the server socket.
+
+| Method | Behavior |
+| --- | --- |
+| `build/initialize`, `build/initialized`, `build/shutdown`, `build/exit` | Lifecycle. Requests before `initialize` are refused. |
+| `workspace/buildTargets` | One JVM main target per module and Scala version, a test target when the module has tests, and a target for `histos.scala`. Js and Native targets appear only when `.histos/bsp-platforms` names them. |
+| `buildTarget/sources`, `buildTarget/dependencySources` | Source roots and locked source jars. |
+| `buildTarget/scalacOptions` | The module flags, then SemanticDB options, and the classpath. |
+| `buildTarget/compile` | Compiles the cell without linking. Diagnostics go out as `build/publishDiagnostics`. |
+| `buildTarget/scalaMainClasses`, `buildTarget/scalaTestClasses` | Discovered from class files. |
+| `buildTarget/jvmRunEnvironment`, `buildTarget/jvmTestEnvironment` | The classpath and environment Metals launches with. |
+| `buildTarget/didChange` | Sent after a reload changes the target list. |
+| `build/logMessage` | Progress and errors. |
+
+The session handles one request at a time and ignores `$/cancelRequest` (A10). A Metals-only session does not reload on its own (B7).
+
+## MCP
+
+`histos mcp` serves the Model Context Protocol over stdio through heddle-mcp. The tools are `graph`, `compile`, `test`, `publish`, `run`, `cancel`, and `toolchain`. Each call re-reads `.histos/server.json` and sends a `Call` when the server matches. Otherwise the session keeps one loaded graph.
+
+Tool results are the CLI text as a string, success and failure alike. The roadmap replaces this with typed reports and typed faults (A2).
+
+## Errors and exit codes
+
+Every module reports failures as error enums with a `message` rendering, for example `BuildError`, `LoadError`, `ResolveError`, `GraphCompileError`, `ModuleTestError`, `CiError`, `PluginRunError`, and `ServerError`. Many IO cases drop the path and the reason (S2), and the server turns errors into strings at the wire (A1).
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Success |
+| 1 | A task failed |
+| 2 | Usage |
+| 3 | Load failed |
+| 4 | Toolchain failed |
+| 5 | Resolve failed, including a missing lock for test and run |
+| 6 | Workflow drift or a missing workflow file |
+| 7 | A test failed, or an unknown project for test |
+| 8 | Compile failed, including a missing lock for compile |
+| 9 | Publish failed |
+| 130 | Interrupted |
+| other | The exit status of the program `histos run` started |
+
+A missing lock exits 8 from `compile` and 5 from `test` and `run` (A17).
+
+## Security
+
+The trust boundary is the local user. `histos.scala`, header plugins, and test code run with the user's permissions.
+
+- The launcher verifies `dist/histos.jar` and release launchers by SHA-256. The snapshot path does not (L7).
+- The lock checksums module and plugin dependencies. Toolchain jars are not checksummed (L1).
+- `ApiBoundary` keeps engine classes away from build and plugin code. It is a class-loading boundary, and plugins still run with the user's permissions.
+- The server socket lives under `.histos` and serves the local user.
+- A test child gets a reduced environment and its own process. It is not a filesystem or network sandbox.
+- `histos publish snapshots` sends Basic auth to the configured repository, and an `http://` URL is accepted (B30).

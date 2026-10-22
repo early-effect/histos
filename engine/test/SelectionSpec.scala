@@ -20,11 +20,12 @@ object SelectionSpec extends ZIOSpecDefault:
         whole <- ZIO.fromEither(Selection.select(built, Nil))
         named <- ZIO.fromEither(Selection.select(built, List("root")))
         twice <- ZIO.succeed(Selection.select(built, List("root", "core")))
+        repeated <- ZIO.fromEither(ProjectName.from("core"))
       yield assertTrue(
         whole.modules.map(_.name.value) == List("core", "app"),
         named.modules.map(_.name.value) == List("core", "app"),
         named.expanded == named.modules.map(_.name).toSet,
-        twice == Left(CiError.Duplicate(named.modules.head.name)),
+        twice == Left(CiError.Duplicate(repeated)),
       )
     ,
     test("a missing aggregate child is an unknown project"):

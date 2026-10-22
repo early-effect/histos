@@ -2,10 +2,10 @@ package histos.publish
 
 import histos.central.Publisher
 import histos.jdk.{JdkMajor, JdkVersion}
-import histos.resolve.{BuildResolvers, Resolve}
+import histos.resolve.{BuildResolvers, Resolve, ResolveError}
 import histos.version.{ManualVersion, ShipNumber}
-import histos.zinc.{GraphCompile, ResolvedJdk}
-import histos.{Dep, Jvm, Organization, Projects, RepositoryUrl, Resolver, ScalaVersion, module}
+import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
+import histos.{BuildError, Dep, Jvm, Organization, Projects, RepositoryUrl, RepositoryUrlError, Resolver, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -34,7 +34,7 @@ object PublishSpec extends ZIOSpecDefault:
                  write(root, "app/src/main/scala/App.scala", "object App {\n  def text: String = demo.Hello.greet\n}\n")
                  write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
                }
-          built <- ZIO.fromEither(library).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(library)
           published <- LocalPublish.run(root, built, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo))
           appPom <- ZIO.attempt(Files.readString(repo.resolve("com/example/app_3/1.0.0/app_3-1.0.0.pom")))
           names <- ZIO.attempt(zipNames(repo.resolve("com/example/core_3/1.0.0/core_3-1.0.0.jar")))
@@ -57,8 +57,8 @@ object PublishSpec extends ZIOSpecDefault:
         for
           root <- temp
           repo <- temp
-          develop <- ZIO.fromEither(development).mapError(error => new IllegalStateException(error.message))
-          plain <- ZIO.fromEither(unorganized).mapError(error => new IllegalStateException(error.message))
+          develop <- ZIO.fromEither(development)
+          plain <- ZIO.fromEither(unorganized)
           held <- LocalPublish.run(root, develop, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo)).either
           missing <- LocalPublish.run(root, plain, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo)).either
           wrote <- ZIO.attempt(Option(repo.toFile.list()).map(_.toList).getOrElse(Nil))
@@ -74,17 +74,17 @@ object PublishSpec extends ZIOSpecDefault:
   )
 
   /** The second build names the published directory. Resolve and compile use that list, not Central. */
-  private def consume(repo: Path, work: Path, jdk: ResolvedJdk): ZIO[Scope, Throwable, Boolean] =
+  private def consume(repo: Path, work: Path, jdk: ResolvedJdk): ZIO[Scope, Throwable | RepositoryUrlError | BuildError | ResolveError | GraphCompileError, Boolean] =
     val version = ScalaVersion("3.10.0")
     val dependency = Dep("com.example::core:1.0.0")
-    ZIO.fromEither(RepositoryUrl.from(repo.toUri.toASCIIString)).mapError(error => new IllegalStateException(error.message)).flatMap: url =>
+    ZIO.fromEither(RepositoryUrl.from(repo.toUri.toASCIIString)).flatMap: url =>
       val use = module("use", Jvm)(version).libraryDependencies(dependency)
-      ZIO.fromEither(Projects.resolvers(Resolver.Maven(url))(use)).mapError(error => new IllegalStateException(error.message)).flatMap: graph =>
+      ZIO.fromEither(Projects.resolvers(Resolver.Maven(url))(use)).flatMap: graph =>
         val repositories = BuildResolvers(graph.resolvers)
         for
           _ <- ZIO.attempt(write(work, "src/main/scala/Use.scala", "object Use {\n  def text: String = demo.Hello.greet\n}\n"))
-          _ <- Resolve.update(work, graph, repositories).provide(Resolve.live(work.resolve("coursier"))).mapError(error => new IllegalStateException(error.message))
-          cells <- GraphCompile.run(work, graph, Nil, jdk).provide(Resolve.live(work.resolve("coursier"))).mapError(error => new IllegalStateException(error.message))
+          _ <- Resolve.update(work, graph, repositories).provide(Resolve.live(work.resolve("coursier")))
+          cells <- GraphCompile.run(work, graph, Nil, jdk).provide(Resolve.live(work.resolve("coursier")))
         yield cells.exists(cell => Files.isRegularFile(cell.classes.resolve("Use.class")))
 
   private val library =

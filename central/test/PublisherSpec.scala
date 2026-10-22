@@ -1,7 +1,7 @@
 package histos.central
 
-import histos.version.{CommitSha, CommitShaError, ManualVersion, ManualVersionError, ReleaseVersion, ShipNumber, ShipNumberError, SnapshotCoordinate, SnapshotPointer}
-import histos.{Organization, OrganizationError}
+import histos.version.{CommitSha, ManualVersion, ReleaseVersion, ShipNumber, SnapshotCoordinate, SnapshotPointer}
+import histos.Organization
 
 import java.nio.file.{Files, Path}
 
@@ -12,21 +12,6 @@ import zio.test.*
 
 object PublisherSpec extends ZIOSpecDefault:
   private val bytes = Chunk[Byte](0x50, 0x4b, 0x03, 0x04) ++ Chunk.fromArray("histos".getBytes)
-  private val full = "1234567890abcdef1234567890abcdef12345678"
-
-  private enum FixtureError:
-    case Ship(error: ShipNumberError)
-    case Group(error: OrganizationError)
-    case Name(error: PublishError)
-    case Commit(error: CommitShaError)
-    case Version(error: ManualVersionError)
-
-    def message: String = this match
-      case Ship(error)    => error.message
-      case Group(error)   => error.message
-      case Name(error)    => error.message
-      case Commit(error)  => error.message
-      case Version(error) => error.message
 
   private final case class Fixture(
       number: ShipNumber,
@@ -37,20 +22,23 @@ object PublisherSpec extends ZIOSpecDefault:
       manual: ManualVersion,
   )
 
-  private val opened: Either[FixtureError, Fixture] =
+  private val opened: Either[PublishError, Fixture] =
     for
-      number  <- ShipNumber.from("1.4.2").left.map(FixtureError.Ship(_))
-      group   <- Organization.from("com.example").left.map(FixtureError.Group(_))
-      widget  <- ArtifactId.from("widget").left.map(FixtureError.Name(_))
-      app     <- ArtifactId.from("app").left.map(FixtureError.Name(_))
-      commit  <- CommitSha.from(full).left.map(FixtureError.Commit(_))
-      manual  <- ManualVersion.from("1.2.3-SNAPSHOT").left.map(FixtureError.Version(_))
-    yield Fixture(number, group, widget, app, commit, manual)
+      widget <- ArtifactId.from("widget")
+      app    <- ArtifactId.from("app")
+    yield Fixture(
+      ShipNumber("1.4.2"),
+      Organization("com.example"),
+      widget,
+      app,
+      CommitSha("1234567890abcdef1234567890abcdef12345678"),
+      ManualVersion("1.2.3-SNAPSHOT"),
+    )
 
-  private def use(f: Fixture => ZIO[Any, Throwable, TestResult]): ZIO[Any, Throwable, TestResult] =
+  private def use[E](f: Fixture => ZIO[Any, E, TestResult]): ZIO[Any, E | PublishError, TestResult] =
     opened match
       case Right(fixture) => f(fixture)
-      case Left(error)    => ZIO.succeed(assertTrue(error.message == "fixture"))
+      case Left(error)    => ZIO.fail(error)
 
   private val publish = suite("local repository")(
     test("a release jar and its pom land under the group"):
@@ -58,7 +46,7 @@ object PublisherSpec extends ZIOSpecDefault:
         ZIO.scoped:
           for
             root <- directory
-            published <- required(send(root, fixture, Revision.Release(ReleaseVersion(fixture.number)), fixture.widget))
+            published <- send(root, fixture, Revision.Release(ReleaseVersion(fixture.number)), fixture.widget)
             pom <- ZIO.attempt(Files.readString(published.pom))
             stored <- ZIO.attempt(Files.readAllBytes(published.jar))
             sidecar <- ZIO.attempt(Files.readString(published.jar.resolveSibling("widget-1.4.2.jar.sha256")))
@@ -76,8 +64,8 @@ object PublisherSpec extends ZIOSpecDefault:
         ZIO.scoped:
           for
             root <- directory
-            snapshot <- required(send(root, fixture, Revision.Snapshot(SnapshotCoordinate(fixture.number, fixture.commit.abbreviate)), fixture.widget))
-            stated <- required(send(root, fixture, Revision.Manual(fixture.manual), fixture.app))
+            snapshot <- send(root, fixture, Revision.Snapshot(SnapshotCoordinate(fixture.number, fixture.commit.abbreviate)), fixture.widget)
+            stated <- send(root, fixture, Revision.Manual(fixture.manual), fixture.app)
           yield assertTrue(
             snapshot.jar.toString.contains("widget-1.4.2-1234567890ab-SNAPSHOT.jar"),
             stated.jar.toString.contains("app-1.2.3-SNAPSHOT.jar"),
@@ -88,7 +76,7 @@ object PublisherSpec extends ZIOSpecDefault:
         ZIO.scoped:
           for
             root <- directory
-            published <- required(send(root, fixture, Revision.Pointer(SnapshotPointer(fixture.number)), fixture.widget))
+            published <- send(root, fixture, Revision.Pointer(SnapshotPointer(fixture.number)), fixture.widget)
           yield assertTrue(
             published.jar.toString.contains("widget-1.4.2-SNAPSHOT.jar"),
             !published.jar.toString.contains("1234567890ab"),
@@ -99,18 +87,12 @@ object PublisherSpec extends ZIOSpecDefault:
         ZIO.scoped:
           for
             root <- directory
-            dependency <- ZIO.fromEither {
-                            for
-                              group   <- Organization.from("dev.zio").left.map(_.message)
-                              name    <- ArtifactId.from("zio_3").left.map(_.message)
-                              version <- DependencyVersion.from("2.1.27").left.map(_.message)
-                            yield MavenDependency(group, name, version)
-                          }.mapError(new IllegalStateException(_))
-            published <- required(
-                           ZIO.serviceWithZIO[Publisher](
-                             _.publish(Artifact(fixture.group, fixture.widget, Revision.Release(ReleaseVersion(fixture.number)), bytes, List(dependency)))
-                           ).provide(Publisher.local(root))
-                         )
+            name <- ZIO.fromEither(ArtifactId.from("zio_3"))
+            version <- ZIO.fromEither(DependencyVersion.from("2.1.27"))
+            dependency = MavenDependency(Organization("dev.zio"), name, version)
+            published <- ZIO.serviceWithZIO[Publisher](
+                           _.publish(Artifact(fixture.group, fixture.widget, Revision.Release(ReleaseVersion(fixture.number)), bytes, List(dependency)))
+                         ).provide(Publisher.local(root))
             pom <- ZIO.attempt(Files.readString(published.pom))
           yield assertTrue(
             pom.contains("<artifactId>zio_3</artifactId>"),
@@ -146,9 +128,6 @@ object PublisherSpec extends ZIOSpecDefault:
             finally walk.close()
           paths.sortBy(_.getNameCount).reverse.foreach(item => Files.deleteIfExists(item))
       }.ignore
-
-  private def required(effect: ZIO[Any, PublishError, Published]): ZIO[Any, Throwable, Published] =
-    effect.mapError(error => new IllegalStateException(error.message))
 
   private def send(root: Path, fixture: Fixture, revision: Revision, name: ArtifactId) =
     ZIO.serviceWithZIO[Publisher](_.publish(Artifact(fixture.group, name, revision, bytes)))

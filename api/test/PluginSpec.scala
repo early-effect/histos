@@ -6,7 +6,7 @@ import java.nio.file.Path
 
 import histos.*
 
-import zio.{Scope, ZIO}
+import zio.{IO, Scope, ZIO}
 import zio.test.*
 
 /** In-tree plugin. `Projects` copies [[contribute]] and does not call [[run]]. */
@@ -74,9 +74,7 @@ object PluginSpec extends ZIOSpecDefault:
         PluginId.from(".echo") == Left(PluginIdError.Bad(".echo")),
         PluginId.from("echo.") == Left(PluginIdError.Bad("echo.")),
         PluginId.from("has space") == Left(PluginIdError.Bad("has space")),
-        errors match
-          case e :: _ => e.message.contains("a/b")
-          case Nil    => false,
+        errors.headOption.is(_.some).message.contains("a/b"),
       )
     ,
     test("a task name is a token, and inspect still is not a plugin task id"):
@@ -89,7 +87,7 @@ object PluginSpec extends ZIOSpecDefault:
         PluginTaskId.parse("versions") == Left(PluginTaskError.Shape("versions")),
         PluginTaskId.parse("a/b/c") == Left(PluginTaskError.Shape("a/b/c")),
         parsed == Right(PluginTaskId(PluginId("dev.earlyeffect.specular"), TaskName("versions"))),
-        parsed.exists(_.render == "dev.earlyeffect.specular/versions"),
+        parsed.map(_.render) == Right("dev.earlyeffect.specular/versions"),
       )
     ,
     test("reserved command and job names are the built-in words"):
@@ -126,9 +124,7 @@ object PluginSpec extends ZIOSpecDefault:
         RepoPath.from("..") == Left(RepoPathError.Escapes("..")),
         RepoPath.from("") == Left(RepoPathError.Empty),
         RepoPath.from("/etc/passwd") == Left(RepoPathError.Escapes("/etc/passwd")),
-        errors match
-          case e :: _ => e.message.contains("docs/../secret")
-          case Nil    => false,
+        errors.headOption.is(_.some).message.contains("docs/../secret"),
       )
     ,
     test("an api digest is 64 hex digits, stored lowercase"):
@@ -137,11 +133,11 @@ object PluginSpec extends ZIOSpecDefault:
       val hash = ContentHash.from(digest)
       assertTrue(
         parsed == upper,
-        parsed.exists(_.value == digest),
+        parsed.map(_.value) == Right(digest),
         ApiDigest.resource == "META-INF/histos/version",
         ApiDigest.from("ab") == Left(ApiDigestError.Bad("ab")),
         ApiDigest.from(digest + " ") == Left(ApiDigestError.Bad(digest + " ")),
-        hash.exists(_.value == digest),
+        hash.map(_.value) == Right(digest),
       )
     ,
     test("a cron expression is five GitHub fields"):
@@ -149,7 +145,7 @@ object PluginSpec extends ZIOSpecDefault:
       assertTrue(
         daily == Right(Cron("0 0 * * *")),
         Cron.from("0  0  *  *  *") == daily,
-        Cron.from("*/15 * * * MON-FRI").exists(_.value == "*/15 * * * MON-FRI"),
+        Cron.from("*/15 * * * MON-FRI").map(_.value) == Right("*/15 * * * MON-FRI"),
         Cron.from("0 0 * JAN SUN") == Right(Cron("0 0 * JAN SUN")),
         Cron.from("") == Left(CronError.Empty),
         Cron.from("0 0 * *") == Left(CronError.Fields(4)),
@@ -164,31 +160,30 @@ object PluginSpec extends ZIOSpecDefault:
     test("a load error names the header until the plugin object exists"):
       val dependency = Dep("dev.earlyeffect::specular:0.2.0")
       val path = ProjectPath("tools/docs-preview")
-      val built = ApiDigest.from(digest)
-      val loaded = ApiDigest.from(other)
-      (built, loaded) match
-        case (Right(pluginApi), Right(launcher)) =>
-          val mismatch = PluginLoadError.VersionMismatch(dependency, pluginApi, launcher).message
-          val missing = PluginLoadError.NoSource(PluginCoordinate.Published(dependency)).message
-          val pathMissing = PluginLoadError.NoSource(PluginCoordinate.Path(path)).message
-          assertTrue(
-            linkName(LinkStrategy.Api) == "refused",
-            mismatch.contains("dev.earlyeffect::specular:0.2.0"),
-            mismatch.contains(pluginApi.value),
-            mismatch.contains(launcher.value),
-            !mismatch.contains("test.echo"),
-            PluginLoadError.ApiLink(dependency).message.contains("dev.earlyeffect::specular:0.2.0"),
-            missing.contains("dev.earlyeffect::specular:0.2.0"),
-            !missing.contains(pluginApi.value),
-            pathMissing.contains("tools/docs-preview"),
-            !pathMissing.contains(pluginApi.value),
-            PluginLoadError.EngineLeak(PluginCoordinate.Published(dependency), "histos.schedule.Sendable").message
-              .contains("histos.schedule.Sendable"),
-            PluginLoadError.Defect(PluginCoordinate.Path(path), "java.lang.ExceptionInInitializerError").message
-              .contains("tools/docs-preview"),
-            PluginRunError.Defect("java.lang.RuntimeException").message.contains("java.lang.RuntimeException"),
-          )
-        case _ => assertTrue(false)
+      for
+        pluginApi <- ZIO.fromEither(ApiDigest.from(digest))
+        launcher  <- ZIO.fromEither(ApiDigest.from(other))
+      yield
+        val mismatch = PluginLoadError.VersionMismatch(dependency, pluginApi, launcher).message
+        val missing = PluginLoadError.NoSource(PluginCoordinate.Published(dependency)).message
+        val pathMissing = PluginLoadError.NoSource(PluginCoordinate.Path(path)).message
+        assertTrue(
+          linkName(LinkStrategy.Api) == "refused",
+          mismatch.contains("dev.earlyeffect::specular:0.2.0"),
+          mismatch.contains(pluginApi.value),
+          mismatch.contains(launcher.value),
+          !mismatch.contains("test.echo"),
+          PluginLoadError.ApiLink(dependency).message.contains("dev.earlyeffect::specular:0.2.0"),
+          missing.contains("dev.earlyeffect::specular:0.2.0"),
+          !missing.contains(pluginApi.value),
+          pathMissing.contains("tools/docs-preview"),
+          !pathMissing.contains(pluginApi.value),
+          PluginLoadError.EngineLeak(PluginCoordinate.Published(dependency), "histos.schedule.Sendable").message
+            .contains("histos.schedule.Sendable"),
+          PluginLoadError.Defect(PluginCoordinate.Path(path), "java.lang.ExceptionInInitializerError").message
+            .contains("tools/docs-preview"),
+          PluginRunError.Defect("java.lang.RuntimeException").message.contains("java.lang.RuntimeException"),
+        )
     ,
     test("a fixture request is the task id and nothing else"):
       val repo = Path.of("repo")
@@ -205,6 +200,9 @@ object PluginSpec extends ZIOSpecDefault:
   )
 
   private val detail = PluginDetail("runs the task")
+
+  private def projectName(raw: String): IO[ProjectNameError, ProjectName] =
+    ZIO.fromEither(ProjectName.from(raw))
 
   private def jvm(name: String): ModuleDef =
     module(name, Jvm)(scala"3.9.0")
@@ -233,30 +231,28 @@ object PluginSpec extends ZIOSpecDefault:
   private val registration = suite("registration")(
     test("use copies the contribution and does not call run"):
       val built = Projects(use(Echo, Quiet), jvm("core"))
+      val echo = Contribution(List(DeclaredTask(TaskName("echo"), Seal.Open, Set.empty, Nil, Nil, Nil)), Nil, Nil)
+      val quiet = Contribution(List(DeclaredTask(TaskName("quiet"), Seal.Open, Set.empty, Nil, Nil, Nil)), Nil, Nil)
       assertTrue:
-        built match
-          case Right(ProjectGraph(_, _, _, _, _, List(echo, quiet), _)) =>
-            echo.id == Echo.id &&
-            echo.entry == EntryName("histos.plugin.Echo$") &&
-            echo.contribution.tasks == List(DeclaredTask(TaskName("echo"), Seal.Open, Set.empty, Nil, Nil, Nil)) &&
-            echo.contribution.commands.isEmpty &&
-            echo.contribution.jobs.isEmpty &&
-            quiet.id == Quiet.id
-          case _ => false
+        built.map(_.plugins) == Right(
+          List(
+            RegisteredPlugin(Echo.id, EntryName("histos.plugin.Echo$"), echo),
+            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet),
+          )
+        )
     ,
     test("a build that does not call use stores no plugins"):
-      assertTrue(Projects(jvm("core")).exists(_.plugins.isEmpty))
+      assertTrue(Projects(jvm("core")).map(_.plugins) == Right(Nil))
     ,
     test("pipe applies a module function and keeps the note"):
       val docs = jvm("docs").pipe: item =>
         item.note(Echo.id, NoteKey("role"), NoteText("site"))
       val built = Projects(use(Echo), docs)
-      assertTrue:
-        built match
-          case Right(ProjectGraph(List(found: Module), _, _, _, _, List(plugin), _)) =>
-            found.notes == List(ModuleNote(Echo.id, NoteKey("role"), NoteText("site"))) &&
-            plugin.id == Echo.id
-          case _ => false
+      assertTrue(
+        built.map(_.projects.collect { case found: Module => found.notes }) ==
+          Right(List(List(ModuleNote(Echo.id, NoteKey("role"), NoteText("site"))))),
+        built.map(_.plugins.map(_.id)) == Right(List(Echo.id)),
+      )
     ,
     test("use is the first argument"):
       val bad = typeCheckErrors("""Projects(module("docs", Jvm)(scala"3.9.0"), use(Echo))""")
@@ -265,17 +261,14 @@ object PluginSpec extends ZIOSpecDefault:
     ,
     test("an organized build keeps the registered plugin"):
       val built = Projects.resolvers(central)(use(Echo), jvm("core"))
-      assertTrue:
-        built match
-          case Right(graph) => graph.plugins.map(_.id) == List(Echo.id) && graph.resolvers == List(central)
-          case Left(_)      => false
+      assertTrue(
+        built.map(_.plugins.map(_.id)) == Right(List(Echo.id)),
+        built.map(_.resolvers) == Right(List(central)),
+      )
     ,
     test("the same plugin id cannot be registered twice"):
       val built = Projects(use(Echo, Echo), jvm("core"))
-      assertTrue:
-        built match
-          case Left(BuildError.DuplicatePlugin(id)) => id == Echo.id
-          case _                                    => false
+      assertTrue(built == Left(BuildError.DuplicatePlugin(Echo.id)))
     ,
     test("one plugin cannot declare a task twice, and two plugins can share the local name"):
       val twice = fixed(PluginId("test.echo"), List(task(TaskName("echo")), task(TaskName("echo"))))
@@ -284,12 +277,8 @@ object PluginSpec extends ZIOSpecDefault:
       val repeated = Projects(use(twice), jvm("core"))
       val shared = Projects(use(left, right), jvm("core"))
       assertTrue(
-        repeated match
-          case Left(BuildError.DuplicatePluginTask(plugin, name)) =>
-            plugin == PluginId("test.echo") && name == TaskName("echo")
-          case _ => false
-        ,
-        shared.exists(_.plugins.map(_.id) == List(PluginId("test.one"), PluginId("test.two"))),
+        repeated == Left(BuildError.DuplicatePluginTask(PluginId("test.echo"), TaskName("echo"))),
+        shared.map(_.plugins.map(_.id)) == Right(List(PluginId("test.one"), PluginId("test.two"))),
       )
     ,
     test("a command name is one flat namespace"):
@@ -304,11 +293,7 @@ object PluginSpec extends ZIOSpecDefault:
         List(command(CommandName("site"), TaskName("echo"))),
       )
       val built = Projects(use(left, right), jvm("core"))
-      assertTrue:
-        built match
-          case Left(err @ BuildError.DuplicateCommand(name)) =>
-            name == CommandName("site") && err.message.contains("twice")
-          case _ => false
+      assertTrue(built == Left(BuildError.DuplicateCommand(CommandName("site"))))
     ,
     test("a command cannot shadow a built-in, and it must name a declared task"):
       val shadow = fixed(
@@ -324,15 +309,8 @@ object PluginSpec extends ZIOSpecDefault:
       val shadowed = Projects(use(shadow), jvm("core"))
       val unknown = Projects(use(missing), jvm("core"))
       assertTrue(
-        shadowed match
-          case Left(err @ BuildError.CommandShadow(name)) =>
-            name == CommandName("test") && err.message.contains("built-in")
-          case _ => false
-        ,
-        unknown match
-          case Left(BuildError.UnknownPluginTask(plugin, name)) =>
-            plugin == PluginId("test.echo") && name == TaskName("absent")
-          case _ => false
+        shadowed == Left(BuildError.CommandShadow(CommandName("test"))),
+        unknown == Left(BuildError.UnknownPluginTask(PluginId("test.echo"), TaskName("absent"))),
       )
     ,
     test("a job name is one flat namespace, and the built-in names stay reserved"):
@@ -344,21 +322,13 @@ object PluginSpec extends ZIOSpecDefault:
       val refused = Projects(use(reserved), jvm("core"))
       val unknown = Projects(use(missing), jvm("core"))
       assertTrue(
-        duplicated match
-          case Left(BuildError.DuplicateJob(name)) => name == JobName("nightly")
-          case _                                   => false
-        ,
-        refused match
-          case Left(BuildError.ReservedJob(name)) => name == JobName("test")
-          case _                                  => false
-        ,
-        unknown match
-          case Left(BuildError.UnknownPluginTask(_, name)) => name == TaskName("absent")
-          case _                                           => false
+        duplicated == Left(BuildError.DuplicateJob(JobName("nightly"))),
+        refused == Left(BuildError.ReservedJob(JobName("test"))),
+        unknown == Left(BuildError.UnknownPluginTask(PluginId("test.echo"), TaskName("absent"))),
       )
     ,
     test("a sibling task and an open cell are accepted"):
-      val result = ProjectName.from("docs").map: docs =>
+      projectName("docs").map: docs =>
         val plugin = fixed(
           PluginId("test.echo"),
           List(
@@ -371,11 +341,9 @@ object PluginSpec extends ZIOSpecDefault:
           ),
         )
         val docsModule = jvm("docs").note(PluginId("test.echo"), NoteKey("role"), NoteText("site"))
-        Projects(use(plugin), docsModule)
-      assertTrue:
-        result match
-          case Right(Right(graph)) => graph.plugins.flatMap(_.contribution.tasks.map(_.name)) == List(TaskName("echo"), TaskName("later"))
-          case _                   => false
+        val built = Projects(use(plugin), docsModule)
+        assertTrue:
+          built.map(_.plugins.flatMap(_.contribution.tasks.map(_.name))) == Right(List(TaskName("echo"), TaskName("later")))
     ,
     test("a missing sibling task is refused"):
       val plugin = fixed(
@@ -383,86 +351,58 @@ object PluginSpec extends ZIOSpecDefault:
         List(task(TaskName("echo"), dependsOn = List(TaskDep.Same(TaskName("absent"))))),
       )
       val built = Projects(use(plugin), jvm("core"))
-      assertTrue:
-        built match
-          case Left(BuildError.UnknownPluginTask(pluginId, name)) =>
-            pluginId == PluginId("test.echo") && name == TaskName("absent")
-          case _ => false
+      assertTrue(built == Left(BuildError.UnknownPluginTask(PluginId("test.echo"), TaskName("absent"))))
     ,
     test("a repeated note is refused, and another plugin's note does not count"):
       val id = PluginId("test.echo")
       val repeated = jvm("docs").note(id, NoteKey("role"), NoteText("site")).note(id, NoteKey("role"), NoteText("other"))
-      val foreign = ProjectName.from("docs").map: docs =>
+      projectName("docs").map: docs =>
         val plugin = fixed(id, List(task(TaskName("echo"), inputs = List(DeclaredInput.Note(docs, NoteKey("role"))))))
         val docsModule = jvm("docs").note(PluginId("test.other"), NoteKey("role"), NoteText("site"))
-        Projects(use(plugin), docsModule)
-      assertTrue(
-        Projects(repeated) match
-          case Left(err @ BuildError.DuplicateNote(module, plugin, key)) =>
-            module.value == "docs" && plugin == id && key == NoteKey("role") && err.message.contains("test.echo/role")
-          case _ => false
-        ,
-        foreign match
-          case Right(Left(BuildError.MissingNote(module, plugin, key))) =>
-            module.value == "docs" && plugin == id && key == NoteKey("role")
-          case _ => false
-      )
+        assertTrue(
+          Projects(repeated) == Left(BuildError.DuplicateNote(docs, id, NoteKey("role"))),
+          Projects(use(plugin), docsModule) == Left(BuildError.MissingNote(docs, id, NoteKey("role"))),
+        )
     ,
     test("a note input that names a missing module is refused"):
-      val result = ProjectName.from("missing").map: missing =>
+      projectName("missing").map: missing =>
         val plugin = fixed(
           PluginId("test.echo"),
           List(task(TaskName("echo"), inputs = List(DeclaredInput.Note(missing, NoteKey("role"))))),
         )
-        Projects(use(plugin), jvm("core"))
-      assertTrue:
-        result match
-          case Right(Left(BuildError.PluginMissingModule(plugin, name))) =>
-            plugin == PluginId("test.echo") && name.value == "missing"
-          case _ => false
+        assertTrue(Projects(use(plugin), jvm("core")) == Left(BuildError.PluginMissingModule(PluginId("test.echo"), missing)))
     ,
     test("an aggregate is not a module a plugin can compile"):
-      val result = ProjectName.from("root").map: root =>
+      projectName("root").map: root =>
         val core = jvm("core")
         val plugin = fixed(
           PluginId("test.echo"),
           List(task(TaskName("echo"), inputs = List(DeclaredInput.Module(root, None, None)))),
         )
-        Projects(use(plugin), aggregate("root", core), core)
-      assertTrue:
-        result match
-          case Right(Left(err @ BuildError.PluginMissingModule(_, name))) =>
-            name.value == "root" && err.message.contains("not a module")
-          case _ => false
+        assertTrue:
+          Projects(use(plugin), aggregate("root", core), core) == Left(BuildError.PluginMissingModule(PluginId("test.echo"), root))
     ,
     test("a named cell has to be one the module builds"):
-      val result = ProjectName.from("core").map: core =>
+      val scala2 = ScalaVersion("2.13.16")
+      projectName("core").map: core =>
         def plugin(dep: TaskDep) = fixed(PluginId("test.echo"), List(task(TaskName("echo"), dependsOn = List(dep))))
-        val version = Projects(use(plugin(TaskDep.Compile(core, Some(ScalaVersion("2.13.16")), None))), jvm("core"))
+        val version = Projects(use(plugin(TaskDep.Compile(core, Some(scala2), None))), jvm("core"))
         val platform = Projects(
           use(plugin(TaskDep.Compile(core, None, Some(Js)))),
           jvm("core"),
         )
-        (version, platform)
-      assertTrue:
-        result match
-          case Right((Left(version), Left(platform))) =>
-            version match
-              case BuildError.PluginMissingCell(_, module, Some(found), None) =>
-                module.value == "core" && found == ScalaVersion("2.13.16") && platform.message.contains("js")
-              case _ => false
-          case _ => false
+        assertTrue(
+          version == Left(BuildError.PluginMissingCell(PluginId("test.echo"), core, Some(scala2), None)),
+          platform == Left(BuildError.PluginMissingCell(PluginId("test.echo"), core, None, Some(Js))),
+        )
     ,
     test("a throw from contribute becomes the exception class, not the message"):
       val built = Projects(use(Boom), jvm("core"))
-      assertTrue:
-        built match
-          case Left(err @ BuildError.PluginDefect(id, binary)) =>
-            id == Boom.id &&
-            binary == "java.lang.IllegalStateException" &&
-            err.message.contains("java.lang.IllegalStateException") &&
-            !err.message.contains("nope")
-          case _ => false
+      assertTrue(
+        built == Left(BuildError.PluginDefect(Boom.id, "java.lang.IllegalStateException")),
+        built.is(_.left).message.contains("java.lang.IllegalStateException"),
+        !built.is(_.left).message.contains("nope"),
+      )
     ,
   )
 

@@ -322,10 +322,6 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
   private val apiJar: IO[LoadError, Path] =
     ApiJar.locate
 
-  private def rooted(names: String*): List[Path] =
-    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
-    root.toList.flatMap(base => names.map(base.resolve)) ++ names.map(Path.of(_))
-
   private def apiHex(jar: Path): IO[LoadError, String] =
     ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(LoadIo.Stat))
 

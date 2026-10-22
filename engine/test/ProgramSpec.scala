@@ -3,13 +3,13 @@ package histos.program
 import histos.jdk.{JdkMajor, JdkVersion}
 import histos.resolve.Resolve
 import histos.zinc.ResolvedJdk
-import histos.{ClangMajor, Js, Jvm, MainClass, Native, Projects, ScalaVersion, module}
+import histos.{ClangMajor, Js, Jvm, MainClass, Native, Projects, Requires, ScalaVersion, Tool, module}
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO, durationInt}
+import zio.{Scope, System, UIO, ZIO, durationInt}
 import zio.test.*
 
 object ProgramSpec extends ZIOSpecDefault:
@@ -27,7 +27,7 @@ object ProgramSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           out <- Program.console(root, built, "core", jdk, Map.empty).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
@@ -39,12 +39,13 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
                }
-          feeds <- Program.console(root, built, "app", jdk, pathEnv).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          env <- pathEnv
+          feeds <- Program.console(root, built, "app", jdk, env).runCollect.provide(Resolve.live(root.resolve("coursier")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/app/3.10.0/jvm")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
@@ -57,23 +58,25 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Js)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 js\n")
                }
-          feeds <- Program.console(root, built, "app", jdk, pathEnv).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          env <- pathEnv
+          feeds <- Program.console(root, built, "app", jdk, env).runCollect.provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) => (platform, code) } == List((Js, 0)),
         )
+    @@ Requires(Tool.Node)
     ,
     test("a multi-platform module does not start until a platform is named"):
       ZIO.scoped:
         for
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           out <- Program.console(root, built, "app", jdk, Map.empty).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
           classes <- ZIO.attempt(Files.exists(root.resolve(".histos").resolve("classes")))
         yield assertTrue:
@@ -90,7 +93,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           out <- Program.console(root, built, "app", jdk, Map.empty, Some(Native)).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
           classes <- ZIO.attempt(Files.exists(root.resolve(".histos").resolve("classes")))
         yield assertTrue:
@@ -104,12 +107,13 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
                }
-          feeds <- Program.console(root, built, "app", jdk, pathEnv, Some(Jvm)).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          env <- pathEnv
+          feeds <- Program.console(root, built, "app", jdk, env, Some(Jvm)).runCollect.provide(Resolve.live(root.resolve("coursier")))
           jsClasses <- ZIO.attempt(Files.exists(root.resolve(".histos/classes/app/3.10.0/js")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
@@ -122,16 +126,18 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Native)(ScalaVersion("3.9.0")).clang(ClangMajor(21)).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.9.0 native\n")
                }
-          feeds <- Program.console(root, built, "app", jdk, pathEnv).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          env <- pathEnv
+          feeds <- Program.console(root, built, "app", jdk, env).runCollect.provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) => (platform, code) } == List((Native, 0)),
         )
+    @@ Requires(Tool.Clang(ClangMajor(21)))
     ,
   )
 
@@ -143,8 +149,8 @@ object ProgramSpec extends ZIOSpecDefault:
       |    println("hi")
       |""".stripMargin
 
-  private def pathEnv: Map[String, String] =
-    sys.env.get("PATH").filter(_.nonEmpty).map(path => Map("PATH" -> path)).getOrElse(Map.empty)
+  private val pathEnv: UIO[Map[String, String]] =
+    System.env("PATH").orElseSucceed(None).map(_.filter(_.nonEmpty).map(path => Map("PATH" -> path)).getOrElse(Map.empty))
 
   private def entries(classes: Path): List[String] =
     if !Files.isDirectory(classes) then Nil
@@ -170,4 +176,4 @@ object ProgramSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = ran @@ TestAspect.sequential @@ TestAspect.timeout(12.minutes)
+  def spec = ran @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)
