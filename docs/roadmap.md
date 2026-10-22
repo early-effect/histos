@@ -407,7 +407,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/drop-acp`: delete `app/src/histos/acp`, the `acp` root command, its tests, and its mentions in the README and docs. `acp` stays in `CommandName.reserved`, so a plugin cannot claim the word before ACP returns. Closes A11.
 - `histos/docs-truth`: `design.md` becomes `architecture.md` (modules, process model, BSP table, error enums, without line references). `plan.md` is deleted. `plugins.md` is corrected and its examples compile. README points at the roadmap. Closes D1 to D21.
 - `histos/typed-asserts`: tests match error values, cover the four untested `BuildError` cases, and stop flattening errors to `IllegalStateException`. Closes T1 to T5.
-- `histos/test-aspects`: a `HistosAspect.requires(Tool.*)` `TestAspect` for clang, Node, Firefox, and the network. `zio.System` with `withLiveSystem` in tests. Remove stray SemanticDB files and stop their writer. Closes T6 to T9.
+- `histos/test-aspects`: a `Requires(Tool.*)` `TestAspect` for clang, Node, npm, Firefox, and the ivy-local Scala Native jars. Network use is not gated, because Coursier's cache serves those specs offline. `zio.System` with `withLiveSystem` in tests. Remove stray SemanticDB files and find their writer. Closes T6 to T9.
 
 **Exit:** no test identifies which error happened by its message, and no test flattens a typed error into an exception (`rg 'IllegalStateException\(.*message|left\.map\(_\.message\)' */test` is empty). `.message` appears only where the rendering is the subject. `./histos test` passes on a machine without clang or Firefox and reports the gated specs as ignored.
 
@@ -440,7 +440,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 **Goal:** Resource ownership lives in scoped layers, and compile is incremental.
 
-- `histos/machine-config`: `Machine.layer` from `zio.System`, with `HISTOS_*` as ZIO Config. Closes S1.
+- `histos/machine-config`: `Machine.layer` from `zio.System`, with `HISTOS_*` as ZIO Config, and the test JDK fixtures read the same source. Closes S1, T12.
 - `histos/workspace`: a `Workspace` service with one lock reader, one tree delete, and scoped work directories. IO errors carry the path and an `IoFault`. Blocking moves to `attemptBlocking`. Closes S2 to S4, S11, S13.
 - `histos/process-runner`: `TestProcess` becomes `histos.process.ChildProcess`, used by test, link, run, and the JDK hand-off. Closes S10.
 - `histos/incremental-zinc`: a persisted analysis store, a previous result, and a `CompilerPool` (`ZKeyedPool` keyed by the locked toolchain), scoped to the server or to one batch run. A precompiled provider runner removes the second compile. Closes S8, S9.
@@ -455,7 +455,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/tool-lock`: a `ToolLock[T]` parser shared by the JDK and Node locks, one `ArchiveStage`, and one resolution walk. Closes L4 to L6.
 - `histos/tool-cells`: compiler, semanticdb, Scala.js linker and environment, Chekhov, Scala Native tools, and bridge jars resolve through `Resolve` into tool cells in the lock. Every raw `coursier.Fetch(FileCache())` goes away, and one suffix function is used everywhere. Closes L1, L3.
 - `histos/tool-versions`: `jsVersion` on the module beside `nativeVersion`, a typed tool catalog for the remaining defaults, and the build-file compiler version read from the running compiler. Closes L2, B15.
-- `histos/launcher-verify`: the snapshot path verifies the pin, downloads and unpacks atomically, and `histos.bat` matches the POSIX script. Closes L7, L8.
+- `histos/launcher-verify`: the snapshot path verifies the pin, downloads and unpacks atomically, `histos.bat` matches the POSIX script, and `BootstrapSpec` runs as effects. Closes L7, L8, T13.
 
 **Exit:** with the network off and the cache warm, every command in this repository runs. `rg 'FileCache\(\)' engine/src` is empty.
 

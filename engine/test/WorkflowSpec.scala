@@ -8,7 +8,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO}
+import zio.{Scope, System, ZIO}
 import zio.test.*
 
 object WorkflowSpec extends ZIOSpecDefault:
@@ -146,12 +146,12 @@ object WorkflowSpec extends ZIOSpecDefault:
       case Left(_)     => project("core")
 
   private def text(name: String): ZIO[Any, Throwable, String] =
-    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
     val relative = List(Path.of("engine/test/fixtures/ci").resolve(name), Path.of("test/fixtures/ci").resolve(name))
-    val candidates = root.toList.map(_.resolve("engine/test/fixtures/ci").resolve(name)) ++ relative
-    ZIO.attempt(candidates.find(Files.isRegularFile(_))).flatMap:
-      case Some(file) => ZIO.attempt(Files.readString(file))
-      case None       => ZIO.fail(new java.io.FileNotFoundException(name))
+    System.env("HISTOS_REPO").flatMap: root =>
+      val candidates = root.filter(_.nonEmpty).toList.map(Path.of(_).resolve("engine/test/fixtures/ci").resolve(name)) ++ relative
+      ZIO.attempt(candidates.find(Files.isRegularFile(_))).flatMap:
+        case Some(file) => ZIO.attempt(Files.readString(file))
+        case None       => ZIO.fail(new java.io.FileNotFoundException(name))
 
   private def temp: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-workflow"))): dir =>
@@ -295,4 +295,4 @@ object WorkflowSpec extends ZIOSpecDefault:
       Contribution(Nil, Nil, jobs),
     )
 
-  def spec = suite("workflow")(render, affected, plugins)
+  def spec = suite("workflow")(render, affected, plugins) @@ TestAspect.withLiveSystem

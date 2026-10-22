@@ -11,7 +11,7 @@ import java.util.jar.{JarEntry, JarOutputStream}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import zio.{Scope, ZIO, durationInt}
+import zio.{Scope, System, ZIO, durationInt}
 import zio.test.*
 
 object TestProcessSpec extends ZIOSpecDefault:
@@ -31,10 +31,13 @@ object TestProcessSpec extends ZIOSpecDefault:
     ,
     test("a suite keeps the repo, PATH, and HOME"):
       val env = ModuleTest.suiteEnv(Path.of("/repo"))
-      assertTrue(
+      for
+        path <- System.env("PATH")
+        home <- System.env("HOME")
+      yield assertTrue(
         env.get("HISTOS_REPO").contains(Path.of("/repo").toAbsolutePath.normalize.toString),
-        env.get("PATH") == sys.env.get("PATH").filter(_.nonEmpty),
-        env.get("HOME") == sys.env.get("HOME").filter(_.nonEmpty),
+        env.get("PATH") == path.filter(_.nonEmpty),
+        env.get("HOME") == home.filter(_.nonEmpty),
         !env.contains("USER"),
       )
     ,
@@ -209,4 +212,4 @@ object TestProcessSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("test subprocess")(types, process) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.seconds)
+  def spec = suite("test subprocess")(types, process) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(15.seconds)

@@ -3,7 +3,7 @@ package histos.testrun
 import histos.jdk.{JdkMajor, JdkVersion}
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.zinc.ResolvedJdk
-import histos.{ClangMajor, Dep, FrameworkClass, Js, JsEnv, Jvm, Native, Projects, ScalaVersion, TestMain, TestProvider, module}
+import histos.{ClangMajor, Dep, FrameworkClass, Js, JsEnv, Jvm, Native, Projects, Requires, ScalaVersion, TestMain, TestProvider, Tool, module}
 
 import java.nio.file.{Files, Path}
 
@@ -93,6 +93,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           compiled.exists(_.endsWith(".sjsir")),
           mainEntries.isEmpty,
         )
+    @@ Requires(Tool.Node)
     ,
     test("a named native main links and runs the binary"):
       ZIO.scoped:
@@ -114,6 +115,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           ,
           compiled.exists(_.endsWith(".nir")),
         )
+    @@ Requires(Tool.Clang(ClangMajor(21)))
     ,
     test("a single module uses test at the repository root"):
       ZIO.scoped:
@@ -208,12 +210,15 @@ object ModuleTestSpec extends ZIOSpecDefault:
             case TestedCell(module, version, platform, TestStatus.Passed(out, _)) :: Nil =>
               module.value == "probe" && version == scala3 && platform == Js && out.contains("hi")
             case _ => false
+    @@ Requires(Tool.Node)
     ,
     test("a js provider runs under jsdom"):
       ZIO.scoped(jsProvider(JsEnv.Jsdom, installJsdom = true))
+    @@ Requires(Tool.Node, Tool.Npm)
     ,
     test("a js provider runs under firefox"):
       ZIO.scoped(jsProvider(JsEnv.Firefox, installJsdom = false))
+    @@ Requires(Tool.Node, Tool.Firefox)
     ,
     test("a native provider links TestMain and runs the binary"):
       ZIO.scoped:
@@ -238,6 +243,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                   case TestStatus.Unmatched              => "unmatched"
               }.mkString("\n")
         yield assertTrue(got == "passed")
+    @@ Requires(Tool.Clang(ClangMajor(21)))
   )
 
   private val refused = suite("refused before the subprocess")(

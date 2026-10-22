@@ -21,10 +21,6 @@ object LoadSpec extends ZIOSpecDefault:
   private val apiJar: IO[LoadError, Path] =
     ApiJar.locate
 
-  private def rooted(names: String*): List[Path] =
-    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
-    root.toList.flatMap(base => names.map(base.resolve)) ++ names.map(Path.of(_))
-
   private def withRepo(source: String): ZIO[Scope, LoadError, Path] =
     for
       dir <- ZIO.attempt(Files.createTempDirectory("histos-repo")).mapError(t => LoadError.Io(LoadIo.Temp))

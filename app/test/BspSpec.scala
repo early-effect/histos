@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 
 import zio.json.*
 import zio.json.ast.Json
-import zio.{Ref, Scope, ZIO, durationInt}
+import zio.{Ref, Scope, System, ZIO, durationInt}
 import zio.test.*
 
 object BspSpec extends ZIOSpecDefault:
@@ -444,12 +444,12 @@ object BspSpec extends ZIOSpecDefault:
       case _          => ZIO.fail(FixtureFault.Shape)
 
   private def discovery: ZIO[Any, FixtureFault, Json] =
-    val found = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(value => Path.of(value).resolve(".bsp").resolve("histos.json"))
-    found match
-      case Some(path) =>
-        ZIO.attempt(Files.readString(path)).mapError(_ => FixtureFault.Discovery).flatMap: text =>
-          ZIO.fromEither(text.fromJson[Json].left.map(_ => FixtureFault.Discovery))
-      case None => ZIO.fail(FixtureFault.Discovery)
+    System.env("HISTOS_REPO").mapError(_ => FixtureFault.Discovery).flatMap: root =>
+      root.filter(_.nonEmpty).map(value => Path.of(value).resolve(".bsp").resolve("histos.json")) match
+        case Some(path) =>
+          ZIO.attempt(Files.readString(path)).mapError(_ => FixtureFault.Discovery).flatMap: text =>
+            ZIO.fromEither(text.fromJson[Json].left.map(_ => FixtureFault.Discovery))
+        case None => ZIO.fail(FixtureFault.Discovery)
 
   private def framed(payloads: String*): ZIO[Any, Frame.FrameError, Array[Byte]] =
     val out = new ByteArrayOutputStream
@@ -616,4 +616,4 @@ object BspSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("bsp")(protocol, client) @@ TestAspect.sequential @@ TestAspect.timeout(4.minutes)
+  def spec = suite("bsp")(protocol, client) @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)

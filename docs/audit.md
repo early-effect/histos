@@ -46,10 +46,10 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M0.3 Test environment as aspects
 
-- [ ] **T6** (tests) Tests that need the network, clang, Firefox, or npm run ungated: `NativeSpec.scala:143-188`, `ModuleTestSpec.scala:213-218`, `ProgramSpec.scala:120-124`.
-- [ ] **T7** (tests) Tests read `sys.env`: `LoadSpec.scala:25`, `SpecularFixtureSpec.scala:326`, `ProgramSpec.scala:147`.
-- [ ] **T8** (tests) `NativeSpec.scala:55` fallback is a tautology, `:144-154` passes on failure, and `:134-140` proves only the classpath.
-- [ ] **T9** (hygiene) About 13 untracked `*.scala.semanticdb` files sit in `engine/src`, including `jdk/`. Find the writer.
+- [x] **T6** (tests) Tests that need the network, clang, Firefox, or npm run ungated: `NativeSpec.scala:143-188`, `ModuleTestSpec.scala:213-218`, `ProgramSpec.scala:120-124`.
+- [x] **T7** (tests) Tests read `sys.env`: `LoadSpec.scala:25`, `SpecularFixtureSpec.scala:326`, `ProgramSpec.scala:147`. The same reads in `NativeSpec`, `WorkflowSpec`, `TestProcessSpec`, `BspSpec`, and `AssemblySpec` now go through `zio.System` with `withLiveSystem`, and the two dead `rooted` helpers are deleted. `BootstrapSpec` moves to T13.
+- [x] **T8** (tests) `NativeSpec.scala:55` fallback is a tautology, `:144-154` passes on failure, and `:134-140` proves only the classpath.
+- [x] **T9** (hygiene) About 13 untracked `*.scala.semanticdb` files sit in `engine/src`, including `jdk/`. Find the writer. All 13 date from 2026-10-17, before scala-cli left the repo, and a full `./histos test` writes none, so the writer was that setup. They are deleted.
 
 ## M0.4 Drop ACP
 
@@ -151,6 +151,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **S11** (resources) `load/ApiJar.scala:47-52` is main code used only by tests and never deletes its temp directory. `Loader.scala:59-62` creates temp files outside `acquireRelease`.
 - [ ] **S12** (api-shape) More than five parameters: `PluginInputs.hash` (7), `Loader.link` (8), `Scheduler.publish` (7), `Program.one` (8), `JsSuite.run` (9), `NativeSuite.run` (8), `NativeLink` (7), `JsRun.start` (6), `JsLink.link` (6).
 - [ ] **S13** (typed-errors) `program/EntryPoints.scala:16` uses `.orDie` on IO. `watch/SourceWatch.scala:30` names the first root, not the one that failed.
+- [ ] **T12** (duplication) Ten specs build their own JDK fixture from `java.lang.System.getProperty("java.home")`, several with an invented `21.0.2` fallback, beside the production `GraphCompile.jdkHere`, which reads the property the same way. They move to the `Machine` source with S1. Found in M0.3.
 
 ## M4 The lock covers every jar
 
@@ -163,6 +164,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **L6** (duplication) `Jdk` and `Node` repeat the resolution fold, the location scans, and the override and lock reads.
 - [ ] **L7** (security) `histos:80-84` skips the pin on the snapshot path, `:128-140` downloads and unpacks non-atomically, and `histos.bat` has no snapshot path, uses fixed `%TEMP%` names, and re-untars every time.
 - [ ] **L8** (correctness) `Toolchain.scala:187-188`: the engine refuses https locks that the script itself fetches.
+- [ ] **T13** (tests) `BootstrapSpec` builds and runs the launcher with plain-Scala file and process side effects outside ZIO, and reads `sys.env`. The launcher rewrite converts it. Found in M0.3.
 
 ## M5 Platforms as backends
 
@@ -170,7 +172,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **P2** (performance) `fresh(linkDir)` wipes the bridge classes, their analysis, and the Scala Native link cache on every run (`Program.scala:104,116`, `ModuleTest.scala:450,493,648`, `NativeLink.scala:183`).
 - [ ] **P3** (duplication) `ModuleTest.scala:413-992` has six near-copies (`runJs`, `runJsProvider`, `runNative`, `runNativeProvider`, `execute`, `provide`) with 10 or 11 parameters. The platform dispatch is repeated in `GraphCompile.scala:635-647` and `ModuleTest.scala:1348-1365`.
 - [ ] **P4** (correctness) `ModuleTest.scala:235,250`: `foreachPar(prepare)` fails fast and `concatAll` drops later cells. The test half of design commit 4 is missing.
-- [ ] **P5** (correctness) `ModuleTest.scala:1319`: none of the seven callers passes `hear`, so test-compile warnings are dropped.
+- [ ] **P5** (correctness) `ModuleTest.scala:1319`: none of the seven callers passes `hear`, so test-compile warnings are dropped, and a failed test compile prints its messages with no file or line.
 - [ ] **P6** (correctness) `testrun/SuiteStamp.scala:19-28` and `ModuleTest.scala:790,1293`: the `testQuick` stamp omits upstream locked jars, the JDK, and flags. It does blocking IO outside an effect, swallows `NonFatal`, and uses `Map.apply` (`SuiteStamp.scala:26`).
 - [ ] **P7** (typed-errors) Errors become strings: `LinkFailed(detail: String)` (`ModuleTest.scala:116-121,453,506,604,660,672,733`), `Program` `Link`, `Process`, and `Library` (`Program.scala:106-220`), `NativeCompile.scala:21-22`, `NativeLink.scala:184,192`, `JsLink.scala:62`. `JvmCompile.scala:94,384-388` turns a `Throwable` message plus 8 frames into a diagnostic. `jdk/Toolchain` `Startup.Refuse(report: String)` and `CompileError.NativeLibrary(text: String)` carry text.
 - [ ] **P8** (api-shape) `assembly/Assemble.scala:35,40-44,53` hardcodes `app`, `api`, `histos.cli.Main`, and `versions.first`, ignores `graph.assembly`, flattens `NoModule(error.message)`, and has no test.

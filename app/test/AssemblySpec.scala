@@ -18,36 +18,39 @@ object AssemblySpec extends ZIOSpecDefault:
   private val checks = suite("runtime assembly")(
     test("the runtime jar prints the version"):
       ZIO.scoped:
-        val found = (rooted("dist/histos.jar") ++ cachedLaunchers).find(path => Files.isRegularFile(path))
-        found match
-          case None => ZIO.succeed(assertTrue(found.nonEmpty))
-          case Some(jar) =>
-            for
-              root <- temp
-              ran <- ZIO.attempt(exec(jar, root.resolve("work"), javaBin))
-              names <- ZIO.attempt(namesOf(jar))
-              manifest <- ZIO.attempt(manifestOf(jar))
-            yield
-              val lines = ran.output.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-              assertTrue(
-                ran.finished,
-                ran.code == 0,
-                lines == List(Cli.VersionText),
-                names.contains("histos/cli/Main.class"),
-                !names.exists(_.startsWith("scala/scalanative/")),
-                manifest.contains("Main-Class: histos.cli.Main"),
-              )
+        for
+          repo  <- System.env("HISTOS_REPO")
+          xdg   <- System.env("XDG_CACHE_HOME")
+          home  <- System.property("user.home")
+          found <- ZIO.attemptBlocking((rooted(repo, "dist/histos.jar") ++ cachedLaunchers(xdg, home)).find(path => Files.isRegularFile(path)))
+          checked <- found match
+            case None => ZIO.succeed(assertTrue(found.nonEmpty))
+            case Some(jar) =>
+              for
+                root <- temp
+                ran <- ZIO.attempt(exec(jar, root.resolve("work"), javaBin))
+                names <- ZIO.attempt(namesOf(jar))
+                manifest <- ZIO.attempt(manifestOf(jar))
+              yield
+                val lines = ran.output.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+                assertTrue(
+                  ran.finished,
+                  ran.code == 0,
+                  lines == List(Cli.VersionText),
+                  names.contains("histos/cli/Main.class"),
+                  !names.exists(_.startsWith("scala/scalanative/")),
+                  manifest.contains("Main-Class: histos.cli.Main"),
+                )
+        yield checked
     ,
   )
 
-  private def rooted(name: String): List[Path] =
-    val root = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
-    root.toList.map(_.resolve(name)) ++ List(Path.of(name), Path.of("..").resolve(name))
+  private def rooted(repo: Option[String], name: String): List[Path] =
+    repo.filter(_.nonEmpty).map(Path.of(_)).toList.map(_.resolve(name)) ++ List(Path.of(name), Path.of("..").resolve(name))
 
   /** The launcher `./histos` downloaded when `dist/histos.jar` is not in the checkout. */
-  private def cachedLaunchers: List[Path] =
-    val home = Option(java.lang.System.getProperty("user.home")).filter(_.nonEmpty).map(Path.of(_))
-    val cache = sys.env.get("XDG_CACHE_HOME").filter(_.nonEmpty).map(Path.of(_)).orElse(home.map(_.resolve(".cache")))
+  private def cachedLaunchers(xdg: Option[String], home: Option[String]): List[Path] =
+    val cache = xdg.filter(_.nonEmpty).map(Path.of(_)).orElse(home.filter(_.nonEmpty).map(Path.of(_).resolve(".cache")))
     cache.toList.flatMap: root =>
       val launchers = root.resolve("histos").resolve("launchers")
       if !Files.isDirectory(launchers) then Nil
