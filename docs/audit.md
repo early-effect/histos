@@ -8,33 +8,33 @@ Every row was found by reading the code. No build or test ran during the audit. 
 
 The PR that fixes a row checks its box in the same PR. A row is never dropped. If a row turns out to be wrong, the PR strikes it through and says why.
 
-Paths are `<module>:<path under src/histos>`. Test paths are `<module>-test:<file>`.
+Paths are `<module>:<path under src/histos>`. Test paths are `<module>-test:<file>`. Line numbers are at `7eeacb3`, including those in `design.md` and `plan.md`, which M0 retired.
 
 Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `stringly`, `booleanly`, `totality`, `cast`, `services`, `duplication`, `reproducibility`, `security`, `performance`, `api-shape`, `tests`, `docs`.
 
 ## M0.1 Docs tell the truth
 
-- [ ] **D1** (docs) `docs/design.md` "Proposed Design" and "Commits" describe commits 1 to 9 as unbuilt. The code has them: `api:Builder.scala:20`, `engine:select/Selection.scala`, `app:bsp/Bsp.scala:978`, `api:ProjectDef.scala:103`, `app:server/Daemon.scala:94`, commit `6dd46d3`. `docs/plan.md:57` is the accurate one.
-- [ ] **D2** (docs) `design.md:27` says the repo has no GitHub Actions workflow. `.github/workflows/ci.yml` exists.
-- [ ] **D3** (docs) `design.md:22-23,87` say an aggregate still fails as `NotModule` and that MCP loads its own graph. Both are stale.
-- [ ] **D4** (docs) `design.md:191,215` say the server shares Zinc analysis and that the analysis file is the incrementality. Compile is never incremental (S8).
-- [ ] **D5** (docs) `design.md:207,484` say the test child sees `HISTOS_REPO` and `PATH` only. It also gets `HOME` and `XDG_CACHE_HOME` (`engine:testrun/ModuleTest.scala:1155-1157`).
-- [ ] **D6** (docs) `design.md:207` says `compiledTests` passes `ScalacFlags.empty` and that four helpers are private. It passes `module.flags` (`ModuleTest.scala:1333`), and the helpers are `private[histos]`.
-- [ ] **D7** (docs) `design.md:202` shows `.scalac(EncodingUtf8)`, which does not compile. The call is `ScalacFlag.EncodingUtf8`. The flag text is produced in `api:ScalacFlag.scala:21-23`, not in `JvmCompile`, which `plan.md:45` also gets wrong.
-- [ ] **D8** (docs) `design.md:228` says production `ScalacFlags` stay empty in BSP. `app:bsp/Bsp.scala:476` passes `flags.argv`.
-- [ ] **D9** (docs) `design.md:211` says `cache clean` drops JDKs and launchers. It walks `cas` and `plugins` only (`engine:cache/ContentStore.scala:64,136-151`). M0.1 states the current behavior, and B37 decides the target.
-- [ ] **D10** (docs) `design.md:213` and `plan.md:9` describe a configurable, read-only-until-opened remote cache. No configuration path exists.
-- [ ] **D11** (docs) `design.md:329,374` say `BspSpec` covers the mixed compile status and `ServerSpec` covers reload and reboot. Neither test exists (A22).
-- [ ] **D12** (docs) `design.md:420,621` say `ci.yml` is `test` plus `workflow` with an empty catalog. It has a `versions` job and tool steps, and `design.md:256` already says the catalog is non-empty.
-- [ ] **D13** (docs) `design.md:69,482` say the launcher refuses a mismatched sha256. The snapshot path skips the check (`histos:80-84`). M0.1 states the current behavior, and L7 fixes the script.
-- [ ] **D14** (docs) `design.md:69` says the engine re-execs. It starts a child and waits (`engine:jdk/Toolchain.scala:206-210`).
-- [ ] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection is display only (B22).
-- [ ] **D16** (docs) `design.md:484` says publish takes no password. `engine:publish/PublishWhere.scala:37-41` reads `SONATYPE_PASSWORD`. `design.md:118` calls `central` a local Maven publisher, but it also uploads snapshots.
-- [ ] **D17** (docs) `plugins.md` cites retired design section numbers (5.3, 5.7, 5.9, 5.10, 5.11) throughout.
-- [ ] **D18** (docs) `plugins.md` uses stale names: `PluginIdMacro`, `ScannedBuild.source: Path` (it is a `String`), `closeLoader`, `Loader.classpath`, `PluginRuntime.run` and `bind` signatures, `Policy.Plugin` arity, `CommandSpec.summary: String` (it is `PluginDetail`), and "`LoaderLive.compile` passes the on-disk path".
-- [ ] **D19** (docs) `plugins.md` examples do not compile: `register` with `try`/`catch` and an `Either`-returning `fromClass` (`:327`), and `ProjectName("docs")`, which has no literal (`:811`).
-- [ ] **D20** (docs) `plugins.md:448-453` lists the compile classpath without `zio-stacktracer` and `izumi-reflect` (`engine:load/Boundary.scala:39-47`).
-- [ ] **D21** (docs) `design.md` narrates code line by line, with file names and "do not" warnings. That style rots: this audit found more than 20 stale claims. It is replaced by an as-built `architecture.md` and this roadmap.
+- [x] **D1** (docs) `docs/design.md` "Proposed Design" and "Commits" describe commits 1 to 9 as unbuilt. The code has them: `api:Builder.scala:20`, `engine:select/Selection.scala`, `app:bsp/Bsp.scala:978`, `api:ProjectDef.scala:103`, `app:server/Daemon.scala:94`, commit `6dd46d3`. `docs/plan.md:57` is the accurate one.
+- [x] **D2** (docs) `design.md:27` says the repo has no GitHub Actions workflow. `.github/workflows/ci.yml` exists.
+- [x] **D3** (docs) `design.md:22-23,87` say an aggregate still fails as `NotModule` and that MCP loads its own graph. Both are stale.
+- [x] **D4** (docs) `design.md:191,215` say the server shares Zinc analysis and that the analysis file is the incrementality. Compile is never incremental (S8).
+- [x] **D5** (docs) `design.md:207,484` say the test child sees `HISTOS_REPO` and `PATH` only. It also gets `HOME` and `XDG_CACHE_HOME` (`engine:testrun/ModuleTest.scala:1155-1157`).
+- [x] **D6** (docs) `design.md:207` says `compiledTests` passes `ScalacFlags.empty` and that four helpers are private. It passes `module.flags` (`ModuleTest.scala:1333`), and the helpers are `private[histos]`.
+- [x] **D7** (docs) `design.md:202` shows `.scalac(EncodingUtf8)`, which does not compile. The call is `ScalacFlag.EncodingUtf8`. The flag text is produced in `api:ScalacFlag.scala:21-23`, not in `JvmCompile`, which `plan.md:45` also gets wrong.
+- [x] **D8** (docs) `design.md:228` says production `ScalacFlags` stay empty in BSP. `app:bsp/Bsp.scala:476` passes `flags.argv`.
+- [x] **D9** (docs) `design.md:211` says `cache clean` drops JDKs and launchers. It walks `cas` and `plugins` only (`engine:cache/ContentStore.scala:64,136-151`). M0.1 states the current behavior, and B37 decides the target.
+- [x] **D10** (docs) `design.md:213` and `plan.md:9` describe a configurable, read-only-until-opened remote cache. No configuration path exists.
+- [x] **D11** (docs) `design.md:329,374` say `BspSpec` covers the mixed compile status and `ServerSpec` covers reload and reboot. Neither test exists (A22).
+- [x] **D12** (docs) `design.md:420,621` say `ci.yml` is `test` plus `workflow` with an empty catalog. It has a `versions` job and tool steps, and `design.md:256` already says the catalog is non-empty.
+- [x] **D13** (docs) `design.md:69,482` say the launcher refuses a mismatched sha256. The snapshot path skips the check (`histos:80-84`). M0.1 states the current behavior, and L7 fixes the script.
+- [x] **D14** (docs) `design.md:69` says the engine re-execs. It starts a child and waits (`engine:jdk/Toolchain.scala:206-210`).
+- [x] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection is display only (B22).
+- [x] **D16** (docs) `design.md:484` says publish takes no password. `engine:publish/PublishWhere.scala:37-41` reads `SONATYPE_PASSWORD`. `design.md:118` calls `central` a local Maven publisher, but it also uploads snapshots.
+- [x] **D17** (docs) `plugins.md` cites retired design section numbers (5.3, 5.7, 5.9, 5.10, 5.11) throughout.
+- [x] **D18** (docs) `plugins.md` uses stale names: `PluginIdMacro`, `ScannedBuild.source: Path` (it is a `String`), `closeLoader`, `Loader.classpath`, `PluginRuntime.run` and `bind` signatures, `Policy.Plugin` arity, `CommandSpec.summary: String` (it is `PluginDetail`), and "`LoaderLive.compile` passes the on-disk path".
+- [x] **D19** (docs) `plugins.md` examples do not compile: `register` with `try`/`catch` and an `Either`-returning `fromClass` (`:327`), and `ProjectName("docs")`, which has no literal (`:811`).
+- [x] **D20** (docs) `plugins.md:448-453` lists the compile classpath without `zio-stacktracer` and `izumi-reflect` (`engine:load/Boundary.scala:39-47`).
+- [x] **D21** (docs) `design.md` narrates code line by line, with file names and "do not" warnings. That style rots: this audit found more than 20 stale claims. It is replaced by an as-built `architecture.md` and this roadmap.
 
 ## M0.2 Tests assert typed values
 
@@ -77,6 +77,8 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **B12** (typed-errors) `Loader.scala:220,263,283-293` reads `MODULE$`, which runs the plugin's static initializer outside `attempt`. A throw is a defect, not `PluginLoadError.Defect`.
 - [ ] **B13** (typed-errors) `Loader.scala:236-241,269-281` blames `matched.head` for leaks and defects, not the plugin whose class failed.
 - [ ] **B14** (reproducibility) `engine:load/PluginInputs.scala:173,176` puts the absolute Coursier path of each plugin jar in the digest, so no remote hit can happen on another machine.
+- [ ] **B38** (correctness) `LoaderLive.reportBuild`, which BSP uses for build-file diagnostics, compiles the raw `histos.scala` with the header lines still in and no plugin jars, so diagnostics fail for any build with a plugin header. Found while correcting `plugins.md`.
+- [ ] **B39** (correctness, *miniature first*) `izumi.reflect.*` is not a boundary name, and the izumi jar is dropped from plugin classpaths, so plugin code that materializes a `Tag` may fail with `PluginRunError.Linkage`. Found while correcting `plugins.md`, not yet proved.
 
 ## M1.4 Child processes
 
@@ -201,6 +203,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **A22** (tests) `ServerSpec` has no reload, `NoServer`, reboot, `didChange`, concurrent-splice, permit-on-interrupt, or `testOnly`-through-server case. The test name at `:26` contradicts its assertion at `:55-57`. `ProtocolSpec` tests only the local path. `CliSpec.scala:61-67` reports fixture IO as `LoadError.Io`.
 - [ ] **A23** (api-shape) `Session.perform` collects all output with `runCollect`, so an agent sees no progress.
 - [ ] **A24** (api-shape) `GraphCompile.scala:16` and `ModuleTest.scala:15` reuse `CiError` from `workflow` as the selection error. `Selection` parses each name twice and reports a nested aggregate as `Unknown`.
+- [ ] **A25** (correctness) A plugin command run through the server or MCP loses its arguments, because `Call.Task` carries only the task id. Found while correcting `plugins.md`.
 
 ## M7 The api grows up
 

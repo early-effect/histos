@@ -5,7 +5,7 @@
 **Baseline:** `main` at `7eeacb3`
 **Companion:** [audit.md](audit.md), the ledger every milestone below closes
 
-This file states what Histos is for, what exists today, the architecture we are building toward, and the order of work. It replaces the "Remaining work" section of [plan.md](plan.md). Milestone M0 retires `plan.md` and turns [design.md](design.md) into an as-built `architecture.md`. [plugins.md](plugins.md) stays as the plugin contract after M0 corrects it.
+This file states what Histos is for, what exists today, the architecture we are building toward, and the order of work. [architecture.md](architecture.md) describes the tree as built, and [plugins.md](plugins.md) is the plugin contract. M0 retired `plan.md` and turned `design.md` into `architecture.md`. "Design decision 12" below is the rule from that retired file that MCP results are the CLI text.
 
 ## Why Histos
 
@@ -81,7 +81,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 - `ZLayer.succeed(object)` becomes services with constructor injection that own their resources in scoped layers, including a pooled compiler.
 - Per-platform copies become `PlatformBackend` layers.
 - Toolchain fetches outside the lock become locked tool cells.
-- String results on MCP become typed reports and typed faults. This retires design decision 12.
+- String results on MCP become typed reports and typed faults. This retires design decision 12 (MCP results as CLI text).
 - CI tool steps from a marker file become steps derived from the graph's needs.
 - Anonymous `ModuleDef => ModuleDef` settings become recorded module aspects, and string notes become typed keys.
 - Errors flattened to `message` become nested enums.
@@ -417,7 +417,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 - `histos/publish-platform`: one coordinate per platform cell. Closes B1.
 - `histos/server-lifecycle`: attach before load, the listening promise completes from the accept fiber's exit, `serve` ends when accepting ends, interruptible reads (miniature first), finalizer order, fingerprint checks on BSP requests, a set of splices, and the dead `Stale` cases removed. Closes B2 to B9.
-- `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, and digests use coordinate plus checksum. Closes B10 to B14.
+- `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, digests use coordinate plus checksum, BSP build-file diagnostics compile the header-stripped unit with the plugin jars, and `izumi.reflect` crosses the boundary if a test proves it must. Closes B10 to B14, B38, B39.
 - `histos/child-process`: `acquireRelease` around start, a process group for every child, a streamed line reader, and closed class loaders. Closes B16 to B21.
 - `histos/toolchain-execution`: the resolved Node runs Js, `HISTOS_NATIVE` travels as a value, tar.gz staging that keeps file modes, atomic staging into a scoped temp directory, and a read-only probe. Closes B22 to B27.
 - `histos/snapshot-publisher`: an https-only `SnapshotRepository`, `Config.Secret` credentials, a scoped `HttpClient`, an interruptible send, `zio.Clock`, and a `Published` ADT. Closes B28 to B34.
@@ -475,10 +475,10 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 **Goal:** Every surface is a thin codec over `Build`, and agents get structured results.
 
-- `histos/wire-types`: `Request`, `BuildEvent`, `Report`, `BuildFault`, and `RunId` with derived codecs on the opaque types. `Call` and `Message(Int, String)` are deleted. Suite patterns are parsed at the edge. Closes A1, A3, A4, A12, A19, A21.
+- `histos/wire-types`: `Request`, `BuildEvent`, `Report`, `BuildFault`, and `RunId` with derived codecs on the opaque types. `Call` and `Message(Int, String)` are deleted. Suite patterns are parsed at the edge, and a plugin command's arguments travel with the call. Closes A1, A3, A4, A12, A19, A21, A25.
 - `histos/build-service`: `Build.local`, `Build.remote`, and `Build.attached`. The CLI becomes a renderer, the `*Local` copies and the package cycle go away, and one function maps a report to an exit code. Closes A5, A16 to A18, A20, A24.
 - `histos/surface-aspects`: per-request fibers behind one writer, cancellation by `RunId`, write locks keyed by cell output directory in place of the global permit, and run-scoped log annotations. Closes A8 to A10, A13, A14.
-- `histos/mcp-reports`: each MCP tool returns its tagged report-or-fault enum, progress notifications come from events, and `isError` marks the fault case. No tool result is a `String`. `ToolchainView` returns as the toolchain report or is deleted. Design decision 12 is retired in `architecture.md`. Closes A2, A15, A23.
+- `histos/mcp-reports`: each MCP tool returns its tagged report-or-fault enum, progress notifications come from events, and `isError` marks the fault case. No tool result is a `String`. `ToolchainView` returns as the toolchain report or is deleted. The MCP section of `architecture.md` changes with it. Closes A2, A15, A23.
 - `histos/bsp-thin`: a `Classpaths` service in the engine, a `BspMethod` enum, and an opaque `TargetUri`. Closes A6, A7.
 - `histos/server-specs`: concurrent splices, a permit released on interrupt, and `testOnly` through the server. Closes A22.
 
