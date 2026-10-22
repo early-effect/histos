@@ -38,7 +38,7 @@ object QuickSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          module <- ZIO.fromEither(ProjectName.from("app")).mapError(error => new IllegalStateException(error.message))
+          module <- ZIO.fromEither(ProjectName.from("app"))
           _ <- QuickRecord.save(root, module, ScalaVersion("3.10.0"), Jvm, "demo.Foo", "aaa")
           hit <- QuickRecord.hit(root, module, ScalaVersion("3.10.0"), Jvm, "demo.Foo", "aaa")
           miss <- QuickRecord.hit(root, module, ScalaVersion("3.10.0"), Jvm, "demo.Foo", "bbb")

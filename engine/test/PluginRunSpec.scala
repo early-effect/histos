@@ -75,10 +75,11 @@ object PluginRunSpec extends ZIOSpecDefault:
   ): Script =
     Script(id, Contribution(tasks, Nil, Nil), calls, seen, argsSeen, body)
 
-  private def graph(plugin: HistosPlugin, docs: ModuleDef): UIO[ProjectGraph] =
-    Projects(use(plugin), docs) match
-      case Left(err)    => ZIO.dieMessage(err.message)
-      case Right(built) => ZIO.succeed(built)
+  private def graph(
+      plugin: HistosPlugin,
+      docs: ModuleDef
+  ): ZIO[Any, BuildError, ProjectGraph] =
+    ZIO.fromEither(Projects(use(plugin), docs))
 
   private def runtime(
       repo: Path,
@@ -375,10 +376,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           calls <- Ref.make(0)
           seen <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          name <- ZIO
-            .fromEither(ProjectName.from("docs"))
-            .mapError(error => new IllegalStateException(error.message))
-            .orDie
+          name <- ZIO.fromEither(ProjectName.from("docs"))
           out = DeclaredOutput(
             OutputName.trusted("out"),
             RepoPath.trusted("out.txt")
@@ -460,10 +458,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           calls <- Ref.make(0)
           seen <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          name <- ZIO
-            .fromEither(ProjectName.from("docs"))
-            .mapError(error => new IllegalStateException(error.message))
-            .orDie
+          name <- ZIO.fromEither(ProjectName.from("docs"))
           page = task(
             TaskName("echo"),
             Seal.Open,
@@ -502,7 +497,13 @@ object PluginRunSpec extends ZIOSpecDefault:
             Resolve.live(dir.resolve("coursier"))
           ).either
           count <- calls.get
-        yield assertTrue(ran.isLeft, count == 0)
+        yield
+          val failure = ran.left.toOption.collect:
+            case PluginRunError.Failed(detail) => detail.value
+          assertTrue(
+            failure.is(_.some).startsWith("'docs' 3.9.0 jvm failed to compile"),
+            count == 0
+          )
     ,
     test("interrupting a parked plugin releases its scope and stores nothing"):
       ZIO.scoped:
@@ -570,7 +571,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           id = PluginTaskId(echoId, TaskName("wait"))
           result <-
             TaskId.from(id.render) match
-              case Left(err)  => ZIO.dieMessage(err.message)
+              case Left(err)  => ZIO.fail(err)
               case Right(key) =>
                 ZIO
                   .serviceWithZIO[Tasks]: tasks =>

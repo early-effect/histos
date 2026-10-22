@@ -37,7 +37,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                      write(root, "extra/test/place.txt", "not scala")
                      write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\ncell extra 3.10.0 jvm\n")
                      Projects(core, module("extra", Jvm)(scala3), app)
-                   }.flatMap(graph => ZIO.fromEither(graph).mapError(error => new IllegalStateException(error.message)))
+                   }.flatMap(graph => ZIO.fromEither(graph))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
           named <- ModuleTest.run(root, built, List("app"), jdk).provide(Resolve.live(root.resolve("coursier")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/app/3.10.0/jvm")))
@@ -61,7 +61,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                  write(root, "e2e/src/test/scala/demo/Check.scala", onlyPasses)
                  write(root, ".histos/dependencies.lock", "cell e2e 3.10.0 jvm\n")
                }
-          built <- ZIO.fromEither(Projects(module("e2e", Jvm)(scala3).test(TestMain("demo.Check")))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("e2e", Jvm)(scala3).test(TestMain("demo.Check"))))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/e2e/3.10.0/jvm")))
           testEntries <- ZIO.attempt(entries(root.resolve(".histos/test-classes/e2e/3.10.0/jvm")))
@@ -76,7 +76,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
         for
           root <- temp
           probe = module("probe", Js)(scala3).test(TestMain("demo.Check"))
-          built <- ZIO.fromEither(Projects(probe)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(probe))
           _ <- ZIO.attempt {
                  write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
                  write(root, ".histos/dependencies.lock", "cell probe 3.10.0 js\n")
@@ -99,7 +99,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
         for
           root <- temp
           probe = module("probe", Native)(ScalaVersion("3.9.0")).clang(ClangMajor(21)).test(TestMain("demo.Check"))
-          built <- ZIO.fromEither(Projects(probe)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(probe))
           _ <- ZIO.attempt {
                  write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
                  write(root, ".histos/dependencies.lock", "cell probe 3.9.0 native\n")
@@ -124,7 +124,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                  write(root, "test/scala/demo/Check.scala", helloPasses)
                  write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
                }
-          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
           cells.map(cell => (cell.module.value, cell.version.value, cell.status.label)) == List(("core", "3.10.0", "passed"))
@@ -138,7 +138,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                  write(root, "test/scala/demo/Check.scala", helloFails)
                  write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
                }
-          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
           cells match
@@ -156,7 +156,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
           core = module("core", Jvm)(scala3).testDependencies(zioDep)
           bad = module("bad", Jvm)(scala3).testProvider(TestProvider.Zio).testDependencies(zioDep)
-          built <- ZIO.fromEither(Projects(core, bad)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(core, bad))
           _ <- ZIO.attempt {
                  write(root, "core/src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
                  write(root, "core/test/scala/demo/Check.scala", passSpec)
@@ -177,14 +177,14 @@ object ModuleTestSpec extends ZIOSpecDefault:
           root <- temp
           zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
           core = module("core", Jvm)(scala3).testDependencies(zioDep)
-          built <- ZIO.fromEither(Projects(core)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(core))
           _ <- ZIO.attempt {
                  write(root, "core/src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
                  write(root, "core/test/scala/demo/FooA.scala", zioNamed("FooA", "alpha"))
                  write(root, "core/test/scala/demo/FooB.scala", zioNamed("FooB", "beta"))
                }
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
-          pattern <- ZIO.fromEither(SuitePattern.from("demo.FooA")).mapError(error => new IllegalStateException(error.message))
+          pattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           cells <- ModuleTest.run(root, built, Nil, jdk, List(pattern)).provide(Resolve.live(root.resolve("coursier")))
           report = cells.map {
             case TestedCell(_, _, _, TestStatus.Passed(out, err)) => out + err
@@ -198,9 +198,8 @@ object ModuleTestSpec extends ZIOSpecDefault:
           root <- temp
           iface = Dep("org.scala-js:scalajs-test-interface_2.13:1.22.0")
           provider <- ZIO.fromEither(TestProvider(FrameworkClass("demo.ProbeFramework"), "org.scala-js", "scalajs-test-interface_2.13"))
-            .mapError(error => new IllegalStateException(error.message))
           probe = module("probe", Js)(scala3).testProvider(provider).testDependencies(iface)
-          built <- ZIO.fromEither(Projects(probe)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(probe))
           _ <- ZIO.attempt(write(root, "probe/src/test/scala/demo/ProbeFramework.scala", probeFramework))
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
@@ -222,9 +221,8 @@ object ModuleTestSpec extends ZIOSpecDefault:
           root <- temp
           iface = Dep("org.scala-native::test-interface:0.5.12")
           provider <- ZIO.fromEither(TestProvider(FrameworkClass("demo.ProbeFramework"), "org.scala-native", "test-interface"))
-            .mapError(error => new IllegalStateException(error.message))
           probe = module("probe", Native)(ScalaVersion("3.9.0")).clang(ClangMajor(21)).testProvider(provider).testDependencies(iface)
-          built <- ZIO.fromEither(Projects(probe)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(probe))
           _ <- ZIO.attempt(write(root, "probe/src/test/scala/demo/ProbeFramework.scala", nativeProbe))
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
@@ -252,7 +250,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                  write(root, "test/scala/demo/Check.scala", helloPasses)
                  write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
                }
-          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           out <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
@@ -266,14 +264,14 @@ object ModuleTestSpec extends ZIOSpecDefault:
           root <- temp
           fooA = module("a", Jvm)(scala3).test(TestMain("demo.FooA"))
           fooB = module("b", Jvm)(scala3).test(TestMain("demo.FooB"))
-          built <- ZIO.fromEither(Projects(fooA, fooB)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(fooA, fooB))
           _ <- ZIO.attempt {
                  write(root, "a/src/test/scala/demo/FooA.scala", mainNamed("FooA", "alpha"))
                  write(root, "b/src/test/scala/demo/FooB.scala", mainNamed("FooB", "beta"))
                  write(root, ".histos/dependencies.lock", "cell a 3.10.0 jvm\ncell b 3.10.0 jvm\n")
                }
-          bothPattern <- ZIO.fromEither(SuitePattern.from("demo.Foo*")).mapError(error => new IllegalStateException(error.message))
-          onePattern <- ZIO.fromEither(SuitePattern.from("demo.FooA")).mapError(error => new IllegalStateException(error.message))
+          bothPattern <- ZIO.fromEither(SuitePattern.from("demo.Foo*"))
+          onePattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           both <- ModuleTest.run(root, built, Nil, jdk, List(bothPattern)).provide(Resolve.live(root.resolve("coursier")))
           one <- ModuleTest.run(root, built, Nil, jdk, List(onePattern)).provide(Resolve.live(root.resolve("coursier")))
           text = (cells: List[TestedCell]) =>
@@ -291,12 +289,12 @@ object ModuleTestSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("a", Jvm)(scala3).test(TestMain("demo.FooA"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "a/src/test/scala/demo/FooA.scala", mainNamed("FooA", "alpha"))
                  write(root, ".histos/dependencies.lock", "cell a 3.10.0 jvm\n")
                }
-          pattern <- ZIO.fromEither(SuitePattern.from("demo.Missing")).mapError(error => new IllegalStateException(error.message))
+          pattern <- ZIO.fromEither(SuitePattern.from("demo.Missing"))
           out <- ModuleTest.run(root, built, Nil, jdk, List(pattern)).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
@@ -311,7 +309,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
                  write(root, "src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
                  write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
                }
-          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           out <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
@@ -326,9 +324,8 @@ object ModuleTestSpec extends ZIOSpecDefault:
       root <- temp
       iface = Dep("org.scala-js:scalajs-test-interface_2.13:1.22.0")
       provider <- ZIO.fromEither(TestProvider(FrameworkClass("demo.ProbeFramework"), "org.scala-js", "scalajs-test-interface_2.13"))
-        .mapError(error => new IllegalStateException(error.message))
       probe = module("probe", Js)(scala3).jsEnv(env).testProvider(provider).testDependencies(iface)
-      built <- ZIO.fromEither(Projects(probe)).mapError(error => new IllegalStateException(error.message))
+      built <- ZIO.fromEither(Projects(probe))
       _ <- ZIO.attempt(write(root, "probe/src/test/scala/demo/ProbeFramework.scala", probeFramework))
       _ <- ZIO.when(installJsdom)(npm(root, "jsdom@27"))
       _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
@@ -587,7 +584,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
                  write(root, "app/src/main/scala/demo/Other.scala", libNamed("Other", "other"))
@@ -612,7 +609,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/test/scala/demo/Foo.scala", fails)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")

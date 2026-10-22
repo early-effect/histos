@@ -409,7 +409,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/typed-asserts`: tests match error values, cover the four untested `BuildError` cases, and stop flattening errors to `IllegalStateException`. Closes T1 to T5.
 - `histos/test-aspects`: a `HistosAspect.requires(Tool.*)` `TestAspect` for clang, Node, Firefox, and the network. `zio.System` with `withLiveSystem` in tests. Remove stray SemanticDB files and stop their writer. Closes T6 to T9.
 
-**Exit:** `rg '\.message\.contains|IllegalStateException\(.*message' */test` is empty. `./histos test` passes on a machine without clang or Firefox and reports the gated specs as ignored.
+**Exit:** no test identifies which error happened by its message, and no test flattens a typed error into an exception (`rg 'IllegalStateException\(.*message|left\.map\(_\.message\)' */test` is empty). `.message` appears only where the rendering is the subject. `./histos test` passes on a machine without clang or Firefox and reports the gated specs as ignored.
 
 ### M1. Fix what is broken today
 
@@ -420,7 +420,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, digests use coordinate plus checksum, BSP build-file diagnostics compile the header-stripped unit with the plugin jars, and `izumi.reflect` crosses the boundary if a test proves it must. Closes B10 to B14, B38, B39.
 - `histos/child-process`: `acquireRelease` around start, a process group for every child, a streamed line reader, and closed class loaders. Closes B16 to B21.
 - `histos/toolchain-execution`: the resolved Node runs Js, `HISTOS_NATIVE` travels as a value, tar.gz staging that keeps file modes, atomic staging into a scoped temp directory, and a read-only probe. Closes B22 to B27.
-- `histos/snapshot-publisher`: an https-only `SnapshotRepository`, `Config.Secret` credentials, a scoped `HttpClient`, an interruptible send, `zio.Clock`, and a `Published` ADT. Closes B28 to B34.
+- `histos/snapshot-publisher`: an https-only `SnapshotRepository`, `Config.Secret` credentials, a scoped `HttpClient`, an interruptible send, `zio.Clock`, a `Published` ADT, and parse errors with their own enums. Closes B28 to B34, B40.
 - `histos/cache-hygiene`: temp files scoped and swept, a per-project keep set, and `cache clean` matching its contract. Closes B35 to B37.
 
 **Exit:** each closed row has a test that failed before its fix. `ServerSpec` covers reload, `NoServer`, and reboot.
@@ -434,7 +434,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/compile-steps`: compile cells become steps keyed by `CompileKey`. This deletes the layer barrier, the blocking-queue side channel, `runCells`, the discarded source hash, and the 9 to 12 parameter methods.
 - `histos/plugin-steps`: plugin tasks run on `Histos`. `TaskDep.Compile` depends on real compile steps, the stub nodes go away, `pluginLoader` and `declaredOutputs` become aspects, and planning covers only reachable steps. Typed errors are nested.
 
-**Exit:** a gated spec shows an unrelated cell compiling while a slow upstream in an earlier layer is still running. An identical second compile is a `LocalHit` through `cached`. `rg 'LinkedBlockingQueue|AtomicBoolean' engine/src` is empty. Closes K1 to K16.
+**Exit:** a gated spec shows an unrelated cell compiling while a slow upstream in an earlier layer is still running. An identical second compile is a `LocalHit` through `cached`. `rg 'LinkedBlockingQueue|AtomicBoolean' engine/src` is empty. Closes K1 to K18.
 
 ### M3. Services that own resources
 
@@ -466,7 +466,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/toolchains`: a `Tool[T]` type class (lock, origins, home probe, archive format) with givens for `Jdk`, `Node`, and `Clang`, plus a `Toolchains` service. A scoped `ResolvedTools` layer resolves once per session, and every backend consumes it.
 - `histos/bridges`: the Js and Native bridges become real modules in this repository, compiled by this build, shipped with the launcher snapshot, pinned as tool cells, and cached by tool and revision. Each bridge sits behind a `Bridge` seam keyed by tool and revision, so more than one implementation can coexist: two Scala.js linker revisions, or a Node and a browser JS environment. Closes P1, P2.
 - `histos/backends`: `PlatformBackend` with `compile`, `link`, and `launch`, one layer per platform. The six launch copies in `ModuleTest` and the dispatch in `Program` collapse. Closes P3, P9 to P14.
-- `histos/test-steps`: test cells become steps, and suite failures are data (the test half of design commit 4). Test-compile diagnostics become events. A test cell is a `TestStep`, a `CachedStep`, so `testQuick` is `@@ StepAspect.cached` over a digest that covers the linked classpath, the toolchain, and the flags, and `SuiteStamp` is deleted. Closes P4 to P7.
+- `histos/test-steps`: test cells become steps, and suite failures are data (the test half of design commit 4). Test-compile diagnostics become events. A test cell is a `TestStep`, a `CachedStep`, so `testQuick` is `@@ StepAspect.cached` over a digest that covers the linked classpath, the toolchain, and the flags, and `SuiteStamp` and `QuickRecord` are deleted, and the specs this step rewrites drop their `case _ => false` fallbacks and share one fixture. Closes P4 to P7, P15, T10, T11.
 - `histos/assembly-steps`: assembly reads its modules and main class from the graph's assembly spec, and publish runs as `Step.local`. Closes P8.
 
 **Exit:** `ModuleTest.scala` is gone or under 400 lines. A Js test uses the locked Node. A test failure in one cell leaves other cells' results in the report.
@@ -488,7 +488,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 **Goal:** The build file is shorter, illegal states do not typecheck, and plugins extend the build with typed steps.
 
-- `histos/module-shape`: a `TestRunner` enum, platform settings on platform values (`Js(env, kind)`, `Native(revision, clang)`), one builder value in place of 16 `apply` and 5 `trusted` overloads, and `BuildError` accumulated into a `NonEmptyChunk`. Closes G1 to G3, G12.
+- `histos/module-shape`: a `TestRunner` enum, platform settings on platform values (`Js(env, kind)`, `Native(revision, clang)`), one builder value in place of 16 `apply` and 5 `trusted` overloads, `BuildError` accumulated into a `NonEmptyChunk`, aggregates and edges that hold their children by reference, and positions that point at the referencing call. Closes G1 to G3, G12, G19 to G21.
 - `histos/literals`: one `Literal[A, E]` type class behind every literal macro, a `ProjectName` literal and a constant-name check in `module`, interpolators that reject arguments by type, and typed `Dep` fields. Closes G4, G5, G7 to G9.
 - `histos/scalac-literal`: a `scalac"..."` literal checked at compile time against a table of known flags, with the BSP rule for fatal warnings. This unblocks the ascent flags. Closes G13.
 - `histos/module-aspects`: recorded `ModuleAspect(owner, name)` settings visible in `histos graph`, typed `NoteKey[A]` with a codec, and `Decoration`. Closes G14, G15.

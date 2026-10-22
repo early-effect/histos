@@ -26,41 +26,39 @@ object JdkSpec extends ZIOSpecDefault:
         javaHome = Located.Found(home("/jdks/21", v21)),
         onPath = Located.Found(home("/jdks/path", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Selected(chosen, _) =>
-            chosen.origin == Origin.JavaHome && chosen.home == Path.of("/jdks/21")
-          case _ => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.Selected]).chosen ==
+          Candidate.Match(Origin.JavaHome, Path.of("/jdks/21"), v21)
+      )
     ,
     test("a wrong JAVA_HOME falls through to PATH"):
       val view = bare.copy(
         javaHome = Located.Found(home("/jdks/17", v17)),
         onPath = Located.Found(home("/jdks/21", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Selected(chosen, _) => chosen.origin == Origin.Path
-          case _                              => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.Selected]).chosen ==
+          Candidate.Match(Origin.Path, Path.of("/jdks/21"), v21)
+      )
     ,
     test("an unreadable JAVA_HOME falls through to PATH"):
       val view = bare.copy(
         javaHome = Located.Found(JdkHome(Path.of("/bad"), hasJavac = true, version = Left(ReleaseError.NoFile))),
         onPath = Located.Found(home("/jdks/21", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Selected(chosen, _) => chosen.origin == Origin.Path
-          case _                              => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.Selected]).chosen ==
+          Candidate.Match(Origin.Path, Path.of("/jdks/21"), v21)
+      )
     ,
     test("a present manager without the pin does not use the cache"):
       val view = bare.copy(
         coursier = ManagerSlot.Present(List(home("/cs/17", v17))),
         cached = List(home("/cache/21", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Install(InstallHint.Coursier(major), _) => major == major21
-          case _                                                  => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.Install]).hint == InstallHint.Coursier(major21)
+      )
     ,
     test("sdkman is used when coursier has no match"):
       val view = bare.copy(
@@ -68,10 +66,10 @@ object JdkSpec extends ZIOSpecDefault:
         sdkman = ManagerSlot.Present(List(home("/sdk/21", v21))),
         cached = List(home("/cache/17", v17)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Selected(chosen, _) => chosen.origin == Origin.Sdkman
-          case _                              => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.Selected]).chosen ==
+          Candidate.Match(Origin.Sdkman, Path.of("/sdk/21"), v21)
+      )
     ,
     test("both managers without the pin ask for coursier, not the cache"):
       val view = bare.copy(
@@ -79,71 +77,57 @@ object JdkSpec extends ZIOSpecDefault:
         sdkman = ManagerSlot.Present(Nil),
         cached = List(home("/cache/21", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Install(InstallHint.Coursier(major), trace) =>
-            major == major21 &&
-              trace.contains(Candidate.Empty(Origin.Coursier)) &&
-              trace.contains(Candidate.Empty(Origin.Sdkman)) &&
-              !trace.exists:
-                case Candidate.Match(Origin.Cache, _, _) => true
-                case _                                   => false
-          case _ => false
+      assertTrue(
+        Jdk.resolve(major21, view) == Resolution.Install(
+          InstallHint.Coursier(major21),
+          List(
+            Candidate.NotPresent(Origin.Override),
+            Candidate.NotPresent(Origin.JavaHome),
+            Candidate.NotPresent(Origin.Path),
+            Candidate.Empty(Origin.Coursier),
+            Candidate.Empty(Origin.Sdkman),
+          ),
+        )
+      )
     ,
     test("sdkman alone is told to list java"):
       val view = bare.copy(sdkman = ManagerSlot.Present(Nil))
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Install(hint, _) => hint.command == "sdk list java"
-          case _                           => false
+      assertTrue(Jdk.resolve(major21, view).is(_.subtype[Resolution.Install]).hint.command == "sdk list java")
     ,
     test("the cache is used only when no manager is installed"):
       val view = bare.copy(cached = List(home("/cache/21", v21)))
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.Selected(chosen, _) => chosen.origin == Origin.Cache
-          case _                              => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.Selected]).chosen ==
+          Candidate.Match(Origin.Cache, Path.of("/cache/21"), v21)
+      )
     ,
     test("a bare machine provisions"):
-      assertTrue:
-        Jdk.resolve(major21, bare) match
-          case Resolution.Provision(major, _) => major == major21
-          case _                              => false
+      assertTrue(Jdk.resolve(major21, bare).is(_.subtype[Resolution.Provision]).major == major21)
     ,
     test("a wrong explicit override stops"):
       val view = bare.copy(
         explicit = Located.Found(home("/jdks/17", v17)),
         javaHome = Located.Found(home("/jdks/21", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.OverrideRejected(Reject.WrongMajor(found), _) => found == major17
-          case _                                                        => false
+      assertTrue(
+        Jdk.resolve(major21, view).is(_.subtype[Resolution.OverrideRejected]).reason == Reject.WrongMajor(major17)
+      )
     ,
     test("a missing explicit override stops"):
       val view = bare.copy(
         explicit = Located.Missing(Path.of("/missing")),
         javaHome = Located.Found(home("/jdks/21", v21)),
       )
-      assertTrue:
-        Jdk.resolve(major21, view) match
-          case Resolution.OverrideRejected(Reject.Absent, _) => true
-          case _                                             => false
+      assertTrue(Jdk.resolve(major21, view).is(_.subtype[Resolution.OverrideRejected]).reason == Reject.Absent)
     ,
   )
 
   private val versions = suite("versions")(
     test("a modern release file yields its major"):
-      assertTrue:
-        JdkVersion.fromRelease("JAVA_VERSION=\"21.0.2\"\n") match
-          case Right(version) => version.value == "21.0.2" && version.major == major21
-          case Left(_)        => false
+      assertTrue(JdkVersion.fromRelease("JAVA_VERSION=\"21.0.2\"\n") == Right(v21))
     ,
     test("a 1.8 release file yields major 8"):
-      assertTrue:
-        JdkVersion.from("1.8.0_402") match
-          case Right(version) => version.major == major8
-          case Left(_)        => false
+      assertTrue(JdkVersion.from("1.8.0_402").is(_.right).major == major8)
     ,
     test("a release file without the key is a typed miss"):
       assertTrue(JdkVersion.fromRelease("IMPLEMENTOR=\"Eclipse\"") == Left(ReleaseError.MissingKey))
@@ -161,37 +145,25 @@ object JdkSpec extends ZIOSpecDefault:
       val path = Path.of("/opt/jdk.zip")
       val sha  = Sha256.of(zio.Chunk.fromArray(Array[Byte](1, 2, 3)))
       val lock = JdkLock(major21, v21, ArchiveSource.Local(path), sha)
-      assertTrue:
-        JdkLock.parse(JdkLock.render(lock)) match
-          case Right(found) =>
-            found.major == major21 && found.version == v21 && found.source == ArchiveSource.Local(path) && found.sha256 == sha
-          case Left(_) => false
+      assertTrue(JdkLock.parse(JdkLock.render(lock)) == Right(lock))
     ,
     test("the major has to agree with the version"):
       val text = s"major 21\nversion 17.0.9\nurl file:///opt/a.zip\nsha256 ${"ab" * 32}\n"
-      assertTrue:
-        JdkLock.parse(text) match
-          case Left(LockError.MajorDisagrees(declared, found)) => declared == major21 && found == major17
-          case _                                               => false
+      assertTrue(JdkLock.parse(text) == Left(LockError.MajorDisagrees(major21, major17)))
     ,
     test("https is remote and http is rejected"):
       val sha  = "ab" * 32
       val http = s"major 21\nversion 21.0.2\nurl http://example.test/jdk.zip\nsha256 $sha\n"
       val https = s"major 21\nversion 21.0.2\nurl https://example.test/jdk.zip\nsha256 $sha\n"
-      assertTrue:
-        (JdkLock.parse(http), JdkLock.parse(https)) match
-          case (Left(LockError.BadUrl(_)), Right(lock)) =>
-            lock.source match
-              case ArchiveSource.Remote(url) => url.value == "https://example.test/jdk.zip"
-              case _                         => false
-          case _ => false
+      ZIO.fromEither(HttpsUrl.from("https://example.test/jdk.zip")).map: url =>
+        assertTrue(
+          JdkLock.parse(http) == Left(LockError.BadUrl("http://example.test/jdk.zip")),
+          JdkLock.parse(https).is(_.right).source == ArchiveSource.Remote(url),
+        )
     ,
     test("an unknown field is not dropped"):
       val text = s"major 21\nversion 21.0.2\nurl file:///opt/a.zip\nsha256 ${"ab" * 32}\nextra 1\n"
-      assertTrue:
-        JdkLock.parse(text) match
-          case Left(LockError.UnknownField("extra")) => true
-          case _                                     => false
+      assertTrue(JdkLock.parse(text) == Left(LockError.UnknownField("extra")))
     ,
   )
 
@@ -219,11 +191,10 @@ object JdkSpec extends ZIOSpecDefault:
           other = Sha256.of(zio.Chunk.fromArray(Array[Byte](9)))
           lock  = JdkLock(major21, v21, ArchiveSource.Local(file), other)
           out  <- JdkStage.stage(lock, root.resolve("jdks")).either
-        yield assertTrue:
-          out match
-            case Left(StageError.Checksum(expected, _)) =>
-              expected == other && !Files.exists(root.resolve("jdks").resolve(other.value).resolve("archive"))
-            case _ => false
+        yield assertTrue(
+          out == Left(StageError.Checksum(other, Sha256.of(zio.Chunk.fromArray(zip)))),
+          !Files.exists(root.resolve("jdks").resolve(other.value).resolve("archive")),
+        )
     ,
     test("a zip entry that escapes the cache is rejected"):
       ZIO.scoped:
@@ -235,10 +206,10 @@ object JdkSpec extends ZIOSpecDefault:
           sha  = Sha256.of(zio.Chunk.fromArray(zip))
           lock = JdkLock(major21, v21, ArchiveSource.Local(file), sha)
           out  <- JdkStage.stage(lock, root.resolve("jdks")).either
-        yield assertTrue:
-          out match
-            case Left(StageError.UnsafePath(_)) => !Files.exists(root.resolve("jdks").resolve(sha.value).resolve("evil"))
-            case _                              => false
+        yield assertTrue(
+          out == Left(StageError.UnsafePath("../evil")),
+          !Files.exists(root.resolve("jdks").resolve(sha.value).resolve("evil")),
+        )
     ,
     test("a remote url is not fetched"):
       ZIO.scoped:
@@ -248,10 +219,7 @@ object JdkSpec extends ZIOSpecDefault:
           sha  = Sha256.of(zio.Chunk.fromArray(Array[Byte](1)))
           lock = JdkLock(major21, v21, ArchiveSource.Remote(url), sha)
           out  <- JdkStage.stage(lock, root.resolve("jdks")).either
-        yield assertTrue:
-          out match
-            case Left(StageError.Remote(found)) => found == url && !Files.exists(root.resolve("jdks"))
-            case _                              => false
+        yield assertTrue(out == Left(StageError.Remote(url)), !Files.exists(root.resolve("jdks")))
     ,
   )
 
@@ -269,10 +237,7 @@ object JdkSpec extends ZIOSpecDefault:
         for
           root <- temp
           view <- JdkLocations.probe(machine(root), None).flatMap(Jdk.scan)
-        yield assertTrue:
-          Jdk.resolve(major21, view) match
-            case Resolution.Provision(major, _) => major == major21
-            case _                              => false
+        yield assertTrue(Jdk.resolve(major21, view).is(_.subtype[Resolution.Provision]).major == major21)
     ,
     test("scan reads javac and the release file"):
       ZIO.scoped:
@@ -285,11 +250,10 @@ object JdkSpec extends ZIOSpecDefault:
                     Files.writeString(jdk.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
                   }
           view <- Jdk.scan(ScanInput(None, Some(jdk), None, ManagerProbe.Absent, ManagerProbe.Absent, root.resolve("jdks")))
-        yield assertTrue:
-          Jdk.resolve(major21, view) match
-            case Resolution.Selected(chosen, _) =>
-              chosen.origin == Origin.JavaHome && chosen.version.value == "21.0.2"
-            case _ => false
+        yield assertTrue(
+          Jdk.resolve(major21, view).is(_.subtype[Resolution.Selected]).chosen ==
+            Candidate.Match(Origin.JavaHome, jdk, v21)
+        )
     ,
     test("no lock continues on the current JVM"):
       ZIO.scoped:
@@ -331,13 +295,11 @@ object JdkSpec extends ZIOSpecDefault:
                     )
                   }
           out <- Toolchain.prepare(machine(root))
-        yield assertTrue:
-          out match
-            case Startup.Refuse(report) =>
-              report.contains("provision temurin 21") &&
-                report.contains("https://example.test/jdk.zip") &&
-                !Files.exists(root.resolve("cache").resolve("jdks"))
-            case _ => false
+        yield assertTrue(
+          out.is(_.subtype[Startup.Refuse]).report.contains("provision temurin 21"),
+          out.is(_.subtype[Startup.Refuse]).report.contains("https://example.test/jdk.zip"),
+          !Files.exists(root.resolve("cache").resolve("jdks")),
+        )
     ,
     test("a settled process does not re-exec"):
       ZIO.scoped:

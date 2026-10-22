@@ -30,7 +30,6 @@ object LauncherSpec extends ZIOSpecDefault:
     test("the api name keeps the binary suffix and the assembly name does not"):
       ZIO
         .fromEither(opened)
-        .mapError(error => new IllegalStateException(error.message))
         .map: graph =>
           val names = graph.projects.collect:
             case item: Module =>
@@ -67,9 +66,7 @@ object LauncherSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          graph <- ZIO
-            .fromEither(opened)
-            .mapError(error => new IllegalStateException(error.message))
+          graph <- ZIO.fromEither(opened)
           _ <- ZIO.attempt(
             Files.writeString(root.resolve(".histos-version"), s"$version\n")
           )
@@ -84,9 +81,7 @@ object LauncherSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          graph <- ZIO
-            .fromEither(opened)
-            .mapError(error => new IllegalStateException(error.message))
+          graph <- ZIO.fromEither(opened)
           _ <- ZIO.attempt {
             Files.writeString(root.resolve(".histos-version"), "9.9.9\n")
             Files.createDirectories(root.resolve("dist"))
@@ -102,17 +97,13 @@ object LauncherSpec extends ZIOSpecDefault:
         for
           root <- temp
           repo <- temp
-          graph <- ZIO
-            .fromEither(opened)
-            .mapError(error => new IllegalStateException(error.message))
+          graph <- ZIO.fromEither(opened)
           _ <- ZIO.attempt {
             Files.writeString(root.resolve(".histos-version"), s"$version\n")
             Files.createDirectories(root.resolve("dist"))
             Files.write(root.resolve("dist").resolve("histos.jar"), jarBytes)
           }
-          group <- ZIO
-            .fromEither(Organization.from("rocks.earlyeffect"))
-            .mapError(error => new IllegalStateException(error.message))
+          group <- ZIO.fromEither(Organization.from("rocks.earlyeffect"))
           written = PublishOutput(
             Nil,
             List(

@@ -38,11 +38,11 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M0.2 Tests assert typed values
 
-- [ ] **T1** (tests) `api-test:GraphSpec.scala:12-13,205-484` and `VersionSpec.scala:189-279` match errors with `.message.contains`. 29 of the 30 graph `BuildError` cases are never matched as values. `AggregateChild`, `JsEnvWithoutJs`, `EmptyShipName`, and `BadShipName` have no test.
-- [ ] **T2** (tests) Fixtures fail by comparing made-up strings: `GraphSpec.scala:349`, `Outside.scala:21`, `VersionSpec.scala:48`, `central-test:PublisherSpec.scala:53`.
-- [ ] **T3** (typed-errors) Tests flatten typed errors with `IllegalStateException(e.message)` or `.left.map(_.message)`: `PublisherSpec`, `SnapshotSpec`, `ModuleTestSpec` (25 sites), `GraphCompileSpec` (18), `PublishSpec` (7), `LauncherSpec` (5), `QuickSpec`, `PluginRunSpec:380,465`, `ProgramSpec` (7), `ModuleTestSpec:200-203`.
-- [ ] **T4** (tests) Shape-only assertions: `GraphSpec.scala:332` (`isRight`), `GraphCompileSpec.scala:248`, `PluginRunSpec.scala:505` (`isLeft`), `case _ => false` in `JdkSpec`, and 18-field positional `Module` patterns (`api-test:Outside.scala:15`).
-- [ ] **T5** (totality) `engine-test:SelectionSpec.scala:27` uses `.head`.
+- [x] **T1** (tests) `api-test:GraphSpec.scala:12-13,205-484` and `VersionSpec.scala:189-279` match errors with `.message.contains`. 29 of the 30 graph `BuildError` cases are never matched as values. `AggregateChild`, `JsEnvWithoutJs`, `EmptyShipName`, and `BadShipName` have no test.
+- [x] **T2** (tests) Fixtures fail by comparing made-up strings: `GraphSpec.scala:349`, `Outside.scala:21`, `VersionSpec.scala:48`, `central-test:PublisherSpec.scala:53`.
+- [x] **T3** (typed-errors) Tests flatten typed errors with `IllegalStateException(e.message)` or `.left.map(_.message)`: `PublisherSpec`, `SnapshotSpec`, `ModuleTestSpec` (25 sites), `GraphCompileSpec` (18), `PublishSpec` (7), `LauncherSpec` (5), `QuickSpec`, `PluginRunSpec:380,465`, `ProgramSpec` (7), `ModuleTestSpec:200-203`.
+- [x] **T4** (tests) Shape-only assertions: `GraphSpec.scala:332` (`isRight`), `GraphCompileSpec.scala:248`, `PluginRunSpec.scala:505` (`isLeft`), `case _ => false` in `JdkSpec`, and 18-field positional `Module` patterns (`api-test:Outside.scala:15`).
+- [x] **T5** (totality) `engine-test:SelectionSpec.scala:27` uses `.head`.
 
 ## M0.3 Test environment as aspects
 
@@ -107,6 +107,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **B32** (tests) `Snapshots.scala:111,151` reads a `java.time.Clock` inside a pure binding, so `TestClock` cannot drive it.
 - [ ] **B33** (api-shape) `Snapshots.scala:126-131` and `Publisher.scala:68`: `Published.jar` is a fake relative `Path` for a remote publish, and `jarSha256` is a `String`.
 - [ ] **B34** (typed-errors) `Snapshots.scala:210` and `Publisher.scala:48-50`: `Transport(getMessage)`, `Status(detail)`, and `Metadata(detail: String)` carry raw text.
+- [ ] **B40** (typed-errors) `ArtifactId.from`, `DependencyVersion.from`, and `SnapshotMetadata.base` fail with the whole `PublishError`, so parse errors share an enum with HTTP failures, and a malformed base URL is `PublishError.Transport`. `SnapshotMetadata.render` takes 7 positional parameters. Found in M0.2.
 
 ## M1.7 Cache hygiene
 
@@ -132,6 +133,8 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **K14** (minor) `Scheduler.scala:180,185` computes the verdict twice, `:25` `Failed.message` drops the inner error, `Action.scala:91` has `getOrElse(id, "")`, `:112` has a no-op `put` default, and `RemoteCache.scala:48-75` keeps test helpers in main code.
 - [ ] **K15** (tests) `SchedulerSpec` lacks: a failure stops only its dependents, `DuplicateAction`, `MissingDependency`, `DuplicateInput`, the context loader under parallel plugins, the sticky refusal, and temp cleanup on interrupt.
 - [ ] **K16** (typed-errors) `load/PluginCells.scala:84,114,121,156,250,265,272,296-303,322-327` turns `GraphCompileError`, `ResolveError`, `LockError`, and `ModuleTestError` into `PluginRunError.Failed(PluginDetail(text))`. `PluginRuntime.scala:273-279` does the same with `ScheduleError`.
+- [ ] **K17** (api-shape) `GraphCompileError.Cells(first, rest)` is a hand-rolled non-empty list where `NonEmptyChunk` fits. Found in M0.2.
+- [ ] **K18** (correctness) `PluginRuntime.bind` drops a task whose `TaskId.from` fails (`.toOption.toList`) without reporting it. Found in M0.2.
 
 ## M3 Services that own resources
 
@@ -156,7 +159,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **L2** (reproducibility) Tool versions are literals in engine code: Scala.js 1.22.0, JS envs 1.6.0 and 1.1.1, chekhov 0.1.3 (twice), bridge Scala 2.13.18, semanticdb 4.17.3 (`JvmCompile.scala:186,234`), Native pinned to `JvmCompile.Scala390` (`NativeCompile.scala:17`), and `testrun/SuiteNames.scala:104`.
 - [ ] **L3** (duplication) A second artifact-suffix scheme is hand-written in `JsSuite.scala:82-96`, `JsLink.scala:125`, `ScalaJs.scala:37-42`, and `NativeSuite.scala:184`. `resolve/ArtifactName.scala:13-20` duplicates its own binary branch.
 - [ ] **L4** (duplication) `jdk/JdkLock.scala` and `node/NodeLock.scala` are the same parser, and the launcher's awk at `histos:118` is a third.
-- [ ] **L5** (duplication) `JdkStage` and `NodeStage` are about 180 identical lines each.
+- [ ] **L5** (duplication) `JdkStage` and `NodeStage` are about 180 identical lines each, and `JdkStage.unpackEntries` and `hash` use `var`, `null` checks, `while` loops, and `try`/`catch`.
 - [ ] **L6** (duplication) `Jdk` and `Node` repeat the resolution fold, the location scans, and the override and lock reads.
 - [ ] **L7** (security) `histos:80-84` skips the pin on the snapshot path, `:128-140` downloads and unpacks non-atomically, and `histos.bat` has no snapshot path, uses fixed `%TEMP%` names, and re-untars every time.
 - [ ] **L8** (correctness) `Toolchain.scala:187-188`: the engine refuses https locks that the script itself fetches.
@@ -169,7 +172,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **P4** (correctness) `ModuleTest.scala:235,250`: `foreachPar(prepare)` fails fast and `concatAll` drops later cells. The test half of design commit 4 is missing.
 - [ ] **P5** (correctness) `ModuleTest.scala:1319`: none of the seven callers passes `hear`, so test-compile warnings are dropped.
 - [ ] **P6** (correctness) `testrun/SuiteStamp.scala:19-28` and `ModuleTest.scala:790,1293`: the `testQuick` stamp omits upstream locked jars, the JDK, and flags. It does blocking IO outside an effect, swallows `NonFatal`, and uses `Map.apply` (`SuiteStamp.scala:26`).
-- [ ] **P7** (typed-errors) Errors become strings: `LinkFailed(detail: String)` (`ModuleTest.scala:116-121,453,506,604,660,672,733`), `Program` `Link`, `Process`, and `Library` (`Program.scala:106-220`), `NativeCompile.scala:21-22`, `NativeLink.scala:184,192`, `JsLink.scala:62`. `JvmCompile.scala:94,384-388` turns a `Throwable` message plus 8 frames into a diagnostic.
+- [ ] **P7** (typed-errors) Errors become strings: `LinkFailed(detail: String)` (`ModuleTest.scala:116-121,453,506,604,660,672,733`), `Program` `Link`, `Process`, and `Library` (`Program.scala:106-220`), `NativeCompile.scala:21-22`, `NativeLink.scala:184,192`, `JsLink.scala:62`. `JvmCompile.scala:94,384-388` turns a `Throwable` message plus 8 frames into a diagnostic. `jdk/Toolchain` `Startup.Refuse(report: String)` and `CompileError.NativeLibrary(text: String)` carry text.
 - [ ] **P8** (api-shape) `assembly/Assemble.scala:35,40-44,53` hardcodes `app`, `api`, `histos.cli.Main`, and `versions.first`, ignores `graph.assembly`, flattens `NoModule(error.message)`, and has no test.
 - [ ] **P9** (dead code) `NodeStage`, `NativeLink.link`, and `NativeKey` have test callers only. `LinkError.Interrupted` and `Unexpected` and `NativeClasspath.entries` are unused.
 - [ ] **P10** (stringly, booleanly) `framework: String` (`JsSuite.scala:30`, `NativeSuite.scala:24`), `Map[String, String]` child env, `Machine.userHome: String`, `hasJavac` and `hasBinary`, `slot(stop: Boolean)` (`Jdk.scala:199`, `Node.scala:114`), `Node.required: Boolean`, the module name `"hello"` (`NativeLink.scala:174`), and `HISTOS_JDK_SETTLED` written twice (`Toolchain.scala:26,209`).
@@ -177,6 +180,9 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **P12** (correctness) Windows gaps: `native/Clang.scala:157-160` never looks for `clang.exe`, `TestProcess.scala:241-244` hardcodes `bin/java`, and the entry point exits 3 when setpgid is missing (`ModuleTest.scala:1004`).
 - [ ] **P13** (correctness) `ScalaJs.scala:63-65` matches file names with `startsWith`. `native/ClassShapes.scala:22-30` appends with `:+` (quadratic) and holds every class's bytes.
 - [ ] **P14** (concurrency) Effects run eagerly outside ZIO: `native/Clang.scala:121,127`, `NodeProbe.scala:163-169`.
+- [ ] **P15** (typed-errors) `testrun/QuickRecord`: `save` and `clear` `.ignore` IO failures, `read` uses `try`/`catch NonFatal`, `write` checks `parent != null`, and `suite` and `digest` are `String`s. Found in M0.2.
+- [ ] **T10** (tests) Value assertions written as `x match { case ... => ...; case _ => false }` inside `assertTrue` hide the failing value: about 9 in `ModuleTestSpec`, 3 in `ProgramSpec`, 8 in `GraphCompileSpec`, 2 in `PluginRunSpec`, 1 in `PublishSpec`, and 3 in `LauncherSpec`. Each spec converts to `is(...)` lenses when its step rewrites it. Found in M0.2.
+- [ ] **T11** (duplication) `temp`, `write`, `entries`, and the `jdk` fixture are copied across `ModuleTestSpec`, `ProgramSpec`, and `QuickSpec`, and `jsProvider` takes `installJsdom: Boolean`. Found in M0.2.
 
 ## M6 One application service, four codecs
 
@@ -225,6 +231,9 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **G16** (api-shape) `TaskDep` is closed to `Compile` and `Same`, so a plugin task cannot depend on link, test, or package.
 - [ ] **G17** (tests) `PluginFixture` cannot set `RunRequest.compiled`.
 - [ ] **G18** (duplication) `central`: `ArtifactId` duplicates `ArtifactBase` with no literal, `Digest` duplicates `ContentHash`, `central.Revision` shadows `version.Revision`, `SnapshotLayer` duplicates `Publisher.snapshots`, `render` takes 7 parameters, and `Planned` has 9 string fields.
+- [ ] **G19** (correctness) `BuildError.MissingProject.referencedFrom` holds the position of the missing module's own `module(...)` call, where it should point at the `dependsOn` or `ship` call that references it, and its `name` is a `String`. Found in M0.2.
+- [ ] **G20** (correctness) `ShipLink.asBuild` maps `CatalogError.DuplicateName` to `BadShipName` with a made-up `SourcePos("<catalog>", 1, 1)`, and `Catalog.from` repeats checks `ShipLink` already made, so those branches look unreachable. Found in M0.2.
+- [ ] **G21** (api-shape) Aggregates and edges find their children by name, not by the definition passed in, which is the only reason `BuildError.AggregateChild` can happen. Found in M0.2.
 
 ## M8 CI from what the graph needs
 

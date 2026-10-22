@@ -39,7 +39,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           cells <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -82,7 +81,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("2.13.16"))))
-            .mapError(error => new IllegalStateException(error.message))
           cells <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -130,11 +128,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               Projects(core, app, extra)
             }
-            .flatMap(graph =>
-              ZIO
-                .fromEither(graph)
-                .mapError(error => new IllegalStateException(error.message))
-            )
+            .flatMap(ZIO.fromEither(_))
           cells <- GraphCompile
             .run(root, built, List("app"), jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -191,11 +185,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               Projects(core, app)
             }
-            .flatMap(graph =>
-              ZIO
-                .fromEither(graph)
-                .mapError(error => new IllegalStateException(error.message))
-            )
+            .flatMap(ZIO.fromEither(_))
           names <- GraphCompile
             .console(root, built, List("app"), jdk)
             .collect {
@@ -223,29 +213,28 @@ object GraphCompileSpec extends ZIOSpecDefault:
               write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
               Projects(module("core", Jvm)(ScalaVersion("3.9.0")))
             }
-            .flatMap(graph =>
-              ZIO
-                .fromEither(graph)
-                .mapError(error => new IllegalStateException(error.message))
-            )
-          seen <- Ref.make(Chunk.empty[String])
+            .flatMap(ZIO.fromEither(_))
+          seen <- Ref.make(Chunk.empty[CompileFeed])
           result <- GraphCompile
             .console(root, built, Nil, jdk)
-            .tap {
-              case CompileFeed.Began(_, _, _)               => ZIO.unit
-              case CompileFeed.Diagnostic(_, _, _, problem) =>
-                seen.update(_ :+ problem.text)
-              case CompileFeed.Done(_)       => ZIO.unit
-              case CompileFeed.Failed(error) => seen.update(_ :+ error.message)
-            }
+            .tap(feed => seen.update(_ :+ feed))
             .runDrain
             .either
             .provide(Resolve.live(root.resolve("coursier")))
-          lines <- seen.get
+          feeds <- seen.get
         yield
-          val missingAt = lines.indexWhere(_.contains("missing"))
-          val failedAt = lines.indexWhere(_.contains("failed to compile"))
-          assertTrue(result.isRight, missingAt >= 0, failedAt > missingAt)
+          val missingAt = feeds.indexWhere:
+            case CompileFeed.Diagnostic(_, _, _, problem) =>
+              problem.text.contains("missing")
+            case _ => false
+          val failedAt = feeds.indexWhere:
+            case CompileFeed.Failed(
+                  GraphCompileError
+                    .Failed(module, version, platform, CompileError.Failed(_))
+                ) =>
+              module.value == "core" && version.value == "3.9.0" && platform == Jvm
+            case _ => false
+          assertTrue(result == Right(()), missingAt >= 0, failedAt > missingAt)
     ,
     test("an upstream built for another Scala version is not a classpath"):
       ZIO.scoped:
@@ -273,11 +262,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               Projects(core, app)
             }
-            .flatMap(graph =>
-              ZIO
-                .fromEither(graph)
-                .mapError(error => new IllegalStateException(error.message))
-            )
+            .flatMap(ZIO.fromEither(_))
           out <- GraphCompile
             .run(root, built, List("app"), jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -333,11 +318,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               Projects(types, facade, core)
             }
-            .flatMap(graph =>
-              ZIO
-                .fromEither(graph)
-                .mapError(error => new IllegalStateException(error.message))
-            )
+            .flatMap(ZIO.fromEither(_))
           cells <- GraphCompile
             .run(root, built, List("core"), jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -373,7 +354,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
                   .in(ProjectPath("example/todo"))
               )
             )
-            .mapError(error => new IllegalStateException(error.message))
           cells <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -409,7 +389,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("ui", Js)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           out <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -448,17 +427,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 module("app", Jvm)(ScalaVersion("3.9.0"))
               )
             )
-            .mapError(error => new IllegalStateException(error.message))
           one <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           coreBoth <- base(root, both, "core")
           appBoth <- base(root, both, "app")
           shared <- base(sharedRoot, one, "core")
         yield assertTrue(
-          coreBoth == Some(root.resolve("core").resolve("src")),
-          appBoth.isEmpty,
-          shared == Some(sharedRoot.resolve("src"))
+          coreBoth == Some(Some(root.resolve("core").resolve("src"))),
+          appBoth == Some(None),
+          shared == Some(Some(sharedRoot.resolve("src")))
         )
   )
 
@@ -469,7 +446,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           root <- temp
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           out <- GraphCompile
             .run(root, built, List("missing"), jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -486,7 +462,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           root <- temp
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           out <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -506,7 +481,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           )
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           out <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -551,7 +525,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 module("probe", Jvm)(ScalaVersion("3.9.0"))
               )
             )
-            .mapError(error => new IllegalStateException(error.message))
           compiled <- GraphCompile
             .run(root, built, List("e2e"), jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -588,7 +561,6 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-            .mapError(error => new IllegalStateException(error.message))
           out <- GraphCompile
             .run(root, built, Nil, jdk)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -607,14 +579,11 @@ object GraphCompileSpec extends ZIOSpecDefault:
       root: Path,
       graph: histos.ProjectGraph,
       name: String
-  ): ZIO[Any, Throwable, Option[Path]] =
+  ): ZIO[Any, GraphCompileError, Option[Option[Path]]] =
     val modules = graph.projects.collect { case module: Module => module }
-    modules.find(_.name.value == name) match
-      case None => ZIO.fail(new IllegalStateException(s"no module $name"))
-      case Some(module) =>
-        GraphCompile
-          .sourceBase(root, module, modules)
-          .mapError(error => new IllegalStateException(error.message))
+    ZIO.foreach(modules.find(_.name.value == name))(module =>
+      GraphCompile.sourceBase(root, module, modules)
+    )
 
   /** Classpath-root entries. A later jar reads these paths, so a nested source
     * tree is a failed compile.

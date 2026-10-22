@@ -2,6 +2,7 @@ package histos.version
 
 import histos.{ProjectName, ProjectNameError}
 
+import zio.{IO, ZIO}
 import zio.test.*
 
 object VersionSpec extends ZIOSpecDefault:
@@ -15,12 +16,6 @@ object VersionSpec extends ZIOSpecDefault:
     case Project(error: ProjectNameError)
     case Pull(error: PullRequestError)
     case Rows(error: CatalogError)
-
-    def message: String = this match
-      case Ship(error)    => error.message
-      case Project(error) => error.message
-      case Pull(error)    => error.message
-      case Rows(error)    => error.message
 
   private final case class Fixture(
       libs: ShipName,
@@ -42,10 +37,8 @@ object VersionSpec extends ZIOSpecDefault:
       both   <- Catalog.from(List(Ship.Line(libs, number, ::(core, Nil)), Ship.Line(client, clientNumber, ::(tests, Nil)))).left.map(FixtureError.Rows(_))
     yield Fixture(libs, client, core, one, both, pull)
 
-  private def use(f: Fixture => TestResult): TestResult =
-    opened match
-      case Right(fixture) => f(fixture)
-      case Left(error)    => assertTrue(error.message == "fixture")
+  private def use(f: Fixture => TestResult): IO[FixtureError, TestResult] =
+    ZIO.fromEither(opened).map(f)
 
   private val clear = Evidence.Checked(Registry.empty)
 
@@ -106,10 +99,7 @@ object VersionSpec extends ZIOSpecDefault:
       use: fixture =>
         val parsed = Registry.parse(List("libs matches", "# note", ""))
         assertTrue(
-          parsed match
-            case Right(found) => found.relation(fixture.libs) == Some(TagRelation.Matches)
-            case Left(error)  => error.message == "matches"
-          ,
+          parsed.map(_.relation(fixture.libs)) == Right(Some(TagRelation.Matches)),
           Registry.parse(List("libs matches", "# note", "", "libs moved")) == Left(RegistryError.Duplicate(fixture.libs)),
           Registry.parse(List("libs sideways")) == Left(RegistryError.BadRelation("sideways")),
           Registry.parse(List("1.4.2 matches")) == Left(RegistryError.BadName("1.4.2")),
@@ -122,15 +112,12 @@ object VersionSpec extends ZIOSpecDefault:
       use: fixture =>
         val checked = Versions.decide(fixture.one, Session.Development, clear)
         val missed = Versions.decide(fixture.one, Session.Development, Evidence.Unchecked)
+        val compile = CiVersion(number)
+        val lines = ::(DevelopLine(fixture.libs, compile), Nil)
         assertTrue(
-          checked match
-            case Decision.Develop(Drift.Clear, line :: Nil) => line.compile.render == "1.4.2-ci"
-            case other                                      => Decision.text(other) == "development"
-          ,
-          missed match
-            case Decision.Develop(Drift.Unchecked, line :: Nil) => line.compile.render == "1.4.2-ci"
-            case other                                          => Decision.text(other) == "unchecked"
-          ,
+          compile.render == "1.4.2-ci",
+          checked == Decision.Develop(Drift.Clear, lines),
+          missed == Decision.Develop(Drift.Unchecked, lines),
           Decision.text(missed).contains("drift unchecked"),
         )
     ,
@@ -138,39 +125,30 @@ object VersionSpec extends ZIOSpecDefault:
       use: fixture =>
         val onDefault = Versions.decide(fixture.one, Session.Snapshot(sha, Branch.Default), clear)
         val elsewhere = Versions.decide(fixture.one, Session.Snapshot(sha, Branch.Other), clear)
+        val stored = SnapshotCoordinate(number, abbrev)
         assertTrue(
-          onDefault match
-            case Decision.Publish(_, line :: Nil) =>
-              line.action match
-                case PublishAction.Snapshot(compile, stored, pointer) =>
-                  compile.render == "1.4.2-ci" &&
-                  stored.render == "1.4.2-1234567890ab-SNAPSHOT" &&
-                  pointer == Some(SnapshotPointer(number))
-                case _ => false
-            case other => Decision.text(other) == "snapshot default"
-          ,
-          elsewhere match
-            case Decision.Publish(_, line :: Nil) =>
-              line.action match
-                case PublishAction.Snapshot(_, stored, pointer) =>
-                  stored.render == "1.4.2-1234567890ab-SNAPSHOT" && pointer.isEmpty
-                case _ => false
-            case other => Decision.text(other) == "snapshot other"
-          ,
+          stored.render == "1.4.2-1234567890ab-SNAPSHOT",
+          onDefault == Decision.Publish(
+            PublishKind.Snapshot(sha, Branch.Default),
+            ::(PublishLine(fixture.libs, PublishAction.Snapshot(CiVersion(number), stored, Some(SnapshotPointer(number)))), Nil),
+          ),
+          elsewhere == Decision.Publish(
+            PublishKind.Snapshot(sha, Branch.Other),
+            ::(PublishLine(fixture.libs, PublishAction.Snapshot(CiVersion(number), stored, None)), Nil),
+          ),
         )
     ,
     test("a pull request stores the same commit and cannot name the pointer"):
       use: fixture =>
         val decision = Versions.decide(fixture.one, Session.PullRequest(fixture.pull, sha), clear)
-        assertTrue:
-          decision match
-            case Decision.Publish(PublishKind.PullRequest(pull, _), line :: Nil) =>
-              pull.value == 42 &&
-              (line.action match
-                case PublishAction.Snapshot(_, stored, pointer) =>
-                  stored.render == "1.4.2-1234567890ab-SNAPSHOT" && pointer.isEmpty
-                case _ => false)
-            case other => Decision.text(other) == "pr"
+        val stored = SnapshotCoordinate(number, abbrev)
+        assertTrue(
+          fixture.pull.value == 42,
+          decision == Decision.Publish(
+            PublishKind.PullRequest(fixture.pull, sha),
+            ::(PublishLine(fixture.libs, PublishAction.Snapshot(CiVersion(number), stored, None)), Nil),
+          ),
+        )
     ,
     test("a released ship that still matches publishes nothing, and a moved or unproven ship publishes nothing at all"):
       use: fixture =>
@@ -181,46 +159,27 @@ object VersionSpec extends ZIOSpecDefault:
         val shadowed = changed.map(evidence => Versions.decide(fixture.both, Session.Snapshot(sha, Branch.Default), evidence))
         val unproven = unknown.map(evidence => Versions.decide(fixture.one, Session.Development, evidence))
         assertTrue(
-          held match
-            case Right(Decision.Publish(_, line :: Nil)) =>
-              line.action match
-                case PublishAction.Hold(compile, HoldReason.AlreadyReleased) => compile.render == "1.4.2-ci"
-                case _                                                        => false
-            case other => other.fold(_.message, Decision.text) == "hold"
-          ,
-          shadowed match
-            case Right(Decision.Refused(refusal :: Nil)) =>
-              refusal == Refusal.Shadowed(fixture.libs, number)
-            case other => other.fold(_.message, Decision.text) == "shadowed"
-          ,
-          unproven match
-            case Right(Decision.Refused(Refusal.Unproven(ship, released) :: Nil)) =>
-              ship == fixture.libs && released == number
-            case other => other.fold(_.message, Decision.text) == "unproven"
-          ,
+          held == Right(
+            Decision.Publish(
+              PublishKind.Snapshot(sha, Branch.Default),
+              ::(PublishLine(fixture.libs, PublishAction.Hold(HoldCompile.Everyday(CiVersion(number)), HoldReason.AlreadyReleased)), Nil),
+            )
+          ),
+          shadowed == Right(Decision.Refused(::(Refusal.Shadowed(fixture.libs, number), Nil))),
+          unproven == Right(Decision.Refused(::(Refusal.Unproven(fixture.libs, number), Nil))),
         )
     ,
     test("a manual catalog publishes the stated version and does not read git"):
       use: fixture =>
         val stated = ManualVersion("1.2.3-SNAPSHOT")
-        Catalog.from(List(Ship.Manual(fixture.libs, stated, ::(fixture.core, Nil)))) match
-          case Left(error) => assertTrue(error.message == "manual")
-          case Right(catalog) =>
-            val decided = Versions.decide(catalog, Session.Snapshot(sha, Branch.Default), Evidence.Unchecked)
-            val assessed = Versions.assess(catalog, Map(Session.Key -> "snapshot"), Evidence.Unchecked)
-            assertTrue(
-              decided match
-                case Decision.Manual(line :: Nil) => line.ship == fixture.libs && line.version == stated
-                case other                        => Decision.text(other) == "manual"
-              ,
-              assessed match
-                case Right(decision @ Decision.Manual(line :: Nil)) =>
-                  line.version.value == "1.2.3-SNAPSHOT" &&
-                  Decision.text(decision).contains("session manual") &&
-                  !Decision.text(decision).contains("-ci")
-                case other => other.fold(_.message, Decision.text) == "assessed"
-              ,
-            )
+        val catalog = Catalog.from(List(Ship.Manual(fixture.libs, stated, ::(fixture.core, Nil))))
+        val decided = catalog.map(Versions.decide(_, Session.Snapshot(sha, Branch.Default), Evidence.Unchecked))
+        val assessed = catalog.map(Versions.assess(_, Map(Session.Key -> "snapshot"), Evidence.Unchecked))
+        val manual = Decision.Manual(::(ManualLine(fixture.libs, stated), Nil))
+        assertTrue(
+          decided == Right(manual),
+          assessed == Right(Right(manual)),
+        )
     ,
     test("a publish does not run until the registry has been read"):
       use: fixture =>
@@ -240,43 +199,25 @@ object VersionSpec extends ZIOSpecDefault:
           Versions.decide(fixture.one, Session.Release, evidence)
         val mixed = registry(s"${fixture.libs.value} matches").map: evidence =>
           Versions.decide(fixture.both, Session.Release, evidence)
+        val held = PublishLine(fixture.libs, PublishAction.Hold(HoldCompile.Release(ReleaseVersion(number)), HoldReason.AlreadyReleased))
+        val published = PublishLine(
+          fixture.client,
+          PublishAction.Release(ReleaseVersion(clientNumber), CatalogBump(fixture.client, clientNumber)),
+        )
         assertTrue(
-          first match
-            case Decision.Publish(PublishKind.Release, line :: Nil) =>
-              line.action match
-                case PublishAction.Release(compile, bump) =>
-                  compile.render == "1.4.2" && bump == CatalogBump(fixture.libs, number)
-                case _ => false
-            case other => Decision.text(other) == "release"
-          ,
-          again match
-            case Right(Decision.Refused(Refusal.NothingToRelease :: Nil)) => true
-            case other => other.fold(_.message, Decision.text) == "nothing"
-          ,
-          mixed match
-            case Right(Decision.Publish(PublishKind.Release, held :: published :: Nil)) =>
-              (held.action, published.action) match
-                case (PublishAction.Hold(heldAt, HoldReason.AlreadyReleased), PublishAction.Release(compile, bump)) =>
-                  held.ship == fixture.libs &&
-                  heldAt.render == "1.4.2" &&
-                  published.ship == fixture.client &&
-                  compile.render == "0.3.0" &&
-                  bump == CatalogBump(fixture.client, clientNumber)
-                case _ => false
-            case other => other.fold(_.message, Decision.text) == "mixed"
-          ,
+          ReleaseVersion(number).render == "1.4.2",
+          first == Decision.Publish(
+            PublishKind.Release,
+            ::(PublishLine(fixture.libs, PublishAction.Release(ReleaseVersion(number), CatalogBump(fixture.libs, number))), Nil),
+          ),
+          again == Right(Decision.Refused(::(Refusal.NothingToRelease, Nil))),
+          mixed == Right(Decision.Publish(PublishKind.Release, ::(held, published :: Nil))),
         )
     ,
     test("a ship named by the registry and missing from the catalog is not a scheme refusal"):
       use: fixture =>
-        registry("client matches") match
-          case Left(error) => assertTrue(error.message == "client")
-          case Right(found) =>
-            val assessed = Versions.assess(fixture.one, Map.empty, found)
-            assertTrue:
-              assessed match
-                case Left(VersionError.UnknownShip(name)) => name == fixture.client
-                case other                                 => other.fold(_.message, Decision.text) == "unknown"
+        val assessed = registry("client matches").map(Versions.assess(fixture.one, Map.empty, _))
+        assertTrue(assessed == Right(Left(VersionError.UnknownShip(fixture.client))))
     ,
   )
 

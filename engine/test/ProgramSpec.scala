@@ -27,7 +27,7 @@ object ProgramSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3))).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           out <- Program.console(root, built, "core", jdk, Map.empty).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
@@ -39,7 +39,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
@@ -57,7 +57,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Js)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 js\n")
@@ -73,7 +73,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           out <- Program.console(root, built, "app", jdk, Map.empty).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
           classes <- ZIO.attempt(Files.exists(root.resolve(".histos").resolve("classes")))
         yield assertTrue:
@@ -90,7 +90,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           out <- Program.console(root, built, "app", jdk, Map.empty, Some(Native)).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
           classes <- ZIO.attempt(Files.exists(root.resolve(".histos").resolve("classes")))
         yield assertTrue:
@@ -104,7 +104,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
@@ -122,7 +122,7 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           app = module("app", Native)(ScalaVersion("3.9.0")).clang(ClangMajor(21)).main(MainClass("demo.Check"))
-          built <- ZIO.fromEither(Projects(app)).mapError(error => new IllegalStateException(error.message))
+          built <- ZIO.fromEither(Projects(app))
           _ <- ZIO.attempt {
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.9.0 native\n")

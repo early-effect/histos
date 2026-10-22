@@ -43,9 +43,9 @@ object SnapshotSpec extends ZIOSpecDefault:
         for
           open <- depot("maven", "secret")
           (http, store) = open
-          number <- ZIO.fromEither(ShipNumber.from("1.4.2")).mapError(error => new IllegalStateException(error.message))
-          group <- ZIO.fromEither(Organization.from("rocks.earlyeffect")).mapError(error => new IllegalStateException(error.message))
-          name <- ZIO.fromEither(ArtifactId.from("histos")).mapError(error => new IllegalStateException(error.message))
+          number = ShipNumber("1.4.2")
+          group = Organization("rocks.earlyeffect")
+          name <- ZIO.fromEither(ArtifactId.from("histos"))
           refused <- ZIO.serviceWithZIO[Publisher](
                        _.publish(Artifact(group, name, Revision.Release(ReleaseVersion(number)), bytes))
                      ).provide(publisher(http)).either
@@ -56,10 +56,10 @@ object SnapshotSpec extends ZIOSpecDefault:
         for
           open <- depot("maven", "secret")
           (http, store) = open
-          group <- ZIO.fromEither(Organization.from("rocks.earlyeffect")).mapError(error => new IllegalStateException(error.message))
-          name <- ZIO.fromEither(ArtifactId.from("histos")).mapError(error => new IllegalStateException(error.message))
-          first <- required(ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher(http)))
-          second <- required(ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher(http)))
+          group = Organization("rocks.earlyeffect")
+          name <- ZIO.fromEither(ArtifactId.from("histos"))
+          first <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher(http))
+          second <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher(http))
           jar = store.get("/repo/rocks/earlyeffect/histos/0.0.1-SNAPSHOT/histos-0.0.1-20261021.140102-1.jar").map(Chunk.fromArray)
           sha = store.text("/repo/rocks/earlyeffect/histos/0.0.1-SNAPSHOT/histos-0.0.1-20261021.140102-1.jar.sha256")
           pom = store.text("/repo/rocks/earlyeffect/histos/0.0.1-SNAPSHOT/histos-0.0.1-20261021.140102-1.pom")
@@ -82,13 +82,13 @@ object SnapshotSpec extends ZIOSpecDefault:
         for
           open <- depot("maven", "secret")
           (http, _) = open
-          group <- ZIO.fromEither(Organization.from("rocks.earlyeffect")).mapError(error => new IllegalStateException(error.message))
-          name <- ZIO.fromEither(ArtifactId.from("histos")).mapError(error => new IllegalStateException(error.message))
+          group = Organization("rocks.earlyeffect")
+          name <- ZIO.fromEither(ArtifactId.from("histos"))
           refused <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(Publisher.snapshots(base(http), "maven", "nope", clock)).either
         yield assertTrue(
-          refused match
-            case Left(error) => error == PublishError.Unauthorized && !error.message.contains("nope") && !error.message.contains("secret")
-            case Right(_)    => false
+          refused == Left(PublishError.Unauthorized),
+          !refused.is(_.left).message.contains("nope"),
+          !refused.is(_.left).message.contains("secret"),
         )
     ,
   )
@@ -101,9 +101,6 @@ object SnapshotSpec extends ZIOSpecDefault:
 
   private def base(http: HttpServer): String =
     s"http://127.0.0.1:${http.getAddress.getPort}/repo"
-
-  private def required(effect: ZIO[Any, PublishError, Published]): ZIO[Any, Throwable, Published] =
-    effect.mapError(error => new IllegalStateException(error.message))
 
   private final class Depot:
     private val files = new ConcurrentHashMap[String, Array[Byte]]
