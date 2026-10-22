@@ -23,17 +23,7 @@ The pinned coordinates are in `histos.scala`. Histos itself is built with Scala 
 
 ## The build file and the graph
 
-```scala
-import histos.*
-
-object build extends HistosBuild:
-  def graph =
-    val core = module("core", Jvm, Js)(scala"3.10.0", scala"2.13.16")
-      .libraryDependencies(dep"dev.zio::zio:2.1.27")
-      .testDependencies(dep"dev.zio::zio-test:2.1.27", dep"dev.zio::zio-test-sbt:2.1.27")
-    val app = module("app", Jvm)(scala"3.10.0").dependsOn(core).main(MainClass("demo.Main"))
-    Projects(core, app, aggregate("all", core, app))
-```
+This repository's own [`histos.scala`](../histos.scala) is a real build: four JVM modules, an assembly, and a version catalog. [`GraphSpec`](../api/test/GraphSpec.scala) builds graphs with Js and Native platforms, several Scala versions, and aggregates, and [`SelectionSpec`](../engine/test/SelectionSpec.scala) selects through an aggregate.
 
 - `module(name, platform, platforms*)(version, versions*)` requires at least one platform and one full Scala version. A series such as `3` is not a pin.
 - `aggregate(name, module, modules*)` takes `ModuleDef`s only, so a nested aggregate does not compile. An aggregate selects modules and has no classpath and no cell.

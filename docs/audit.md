@@ -236,8 +236,9 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **G19** (correctness) `BuildError.MissingProject.referencedFrom` holds the position of the missing module's own `module(...)` call, where it should point at the `dependsOn` or `ship` call that references it, and its `name` is a `String`. Found in M0.2.
 - [ ] **G20** (correctness) `ShipLink.asBuild` maps `CatalogError.DuplicateName` to `BadShipName` with a made-up `SourcePos("<catalog>", 1, 1)`, and `Catalog.from` repeats checks `ShipLink` already made, so those branches look unreachable. Found in M0.2.
 - [ ] **G21** (api-shape) Aggregates and edges find their children by name, not by the definition passed in, which is the only reason `BuildError.AggregateChild` can happen. Found in M0.2.
+- [ ] **T14** (tests) `plugins.md` describes three things no test shows: a plugin `run` through `PluginFixture` (only a request is built today), one complete plugin lock cell with its `plugin`, `direct`, `artifact`, and `source` lines, and one header that combines a dependency, a path, and a link strategy. The doc links the nearest specs until these exist. Found when the doc moved to links.
 
 ## M8 CI from what the graph needs
 
-- [ ] **C1** (booleanly) `engine:workflow/Workflow.scala:107,112,219-223,290-304`: `setup: Boolean` comes from the presence of `.github/ci-tools` and emits hardcoded Node 22, LLVM 21.1.8, Playwright 1.62.1, and Firefox steps, including Chekhov's private cache path. No test passes `true`, and no doc mentions it.
+- [ ] **C1** (booleanly) `engine:workflow/Workflow.scala:107,112,219-223,290-304`: `setup: Boolean` comes from the presence of `.github/ci-tools` and emits hardcoded Node 22, LLVM 21.1.8, Playwright 1.62.1, and Firefox steps, including Chekhov's private cache path. No test passes `true`, and no doc mentions it. The steps run uncached on every job, so on 2026-10-22 the `test` job took 12 to 31 minutes, depending on the Ubuntu mirror serving the Firefox packages.
 - [ ] **C2** (api-shape) Split axes render `--platform` and `--scala`, which the CLI rejects.

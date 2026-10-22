@@ -95,7 +95,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 
 ## Target architecture
 
-The signatures below are sketches unless a section says a miniature proved them. M2.1 settles the rest in a `scala-cli` miniature before product code changes shape.
+The signatures below are sketches of unbuilt code, kept until each one lands and becomes a link. Sections that say a miniature proved them record what Scala accepted.
 
 ### Steps
 
@@ -308,7 +308,7 @@ enum Decoration:
 module("core", Jvm)(scala"3.10.0").decorate(Decoration.Timeout(10.minutes))
 ```
 
-Histos's own test suite uses the same idea through ZIO Test: one `TestAspect` gates the specs that need clang, Firefox, Node, or the network (M0.3).
+Histos's own tests already use the idea: [`Requires`](../engine/test/Requires.scala) is a ZIO Test aspect that ignores a spec when a machine tool is missing.
 
 ### Services and layers
 
@@ -429,7 +429,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 **Goal:** The kernel from the target architecture runs compile, which is the hottest path, and plugin tasks.
 
-- `histos/steps-api`: `histos.step` on the api: kinds, aliases, constructors, `zip`, `map`, `andThenHermetic`, `sandboxed`, `Fits`, `Stored`, and `StepAspect` with `lift`. The two 2026-10-22 miniatures become an api spec that asserts each accepted composition and each rejection message with `typeCheckErrors`. `docs/steps.md` records the semantics.
+- `histos/steps-api`: `histos.step` on the api: kinds, aliases, constructors, `zip`, `map`, `andThenHermetic`, `sandboxed`, `Fits`, `Stored`, and `StepAspect` with `lift`. The two 2026-10-22 miniatures become an api spec that asserts each accepted composition and each rejection message with `typeCheckErrors`, and the sketches in this roadmap become links to that code.
 - `histos/executor`: the `Histos` executor service replaces `Scheduler`, with bounded parallelism, failure as data, and the event stream. The cache, manifest, remote lookup, and upload logic move out of `Scheduler` into `cached`, `declaredOutputs`, and `remote`. `timed` and `traced` are added.
 - `histos/compile-steps`: compile cells become steps keyed by `CompileKey`. This deletes the layer barrier, the blocking-queue side channel, `runCells`, the discarded source hash, and the 9 to 12 parameter methods.
 - `histos/plugin-steps`: plugin tasks run on `Histos`. `TaskDep.Compile` depends on real compile steps, the stub nodes go away, `pluginLoader` and `declaredOutputs` become aspects, and planning covers only reachable steps. Typed errors are nested.
@@ -492,7 +492,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/literals`: one `Literal[A, E]` type class behind every literal macro, a `ProjectName` literal and a constant-name check in `module`, interpolators that reject arguments by type, and typed `Dep` fields. Closes G4, G5, G7 to G9.
 - `histos/scalac-literal`: a `scalac"..."` literal checked at compile time against a table of known flags, with the BSP rule for fatal warnings. This unblocks the ascent flags. Closes G13.
 - `histos/module-aspects`: recorded `ModuleAspect(owner, name)` settings visible in `histos graph`, typed `NoteKey[A]` with a codec, and `Decoration`. Closes G14, G15.
-- `histos/plugin-tasks`: a plugin task is a typed spec plus a `Step` of its declared kind. A hermetic plugin task is a `HermeticStep`, and the seal on the graph is read from that kind. `TaskDep` opens to this plugin's steps and to core cell phases, errors are nested, and `PluginFixture` sets compiled inputs. Closes G6, G10, G11, G16, G17.
+- `histos/plugin-tasks`: a plugin task is a typed spec plus a `Step` of its declared kind. A hermetic plugin task is a `HermeticStep`, and the seal on the graph is read from that kind. `TaskDep` opens to this plugin's steps and to core cell phases, errors are nested, and `PluginFixture` sets compiled inputs, and specs cover what `plugins.md` describes: a run through the fixture, a full plugin lock cell, and a combined header. Closes G6, G10, G11, G16, G17, T14.
 - `histos/central-shape`: one artifact type, one digest type, and the duplicates removed. Closes G18.
 
 **Exit:** this repository's `histos.scala` and the ascent copy compile on the new builder. Moving a `jsEnv` onto a JVM-only module fails to compile.
@@ -516,6 +516,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - A Central release plugin with credentials and signing as layers, following the 2026-10-16 publisher design.
 - zipx surface plugins: docs, docker, deploy, coverage, and the dependency-update bot.
 - A benchmark of cold, warm, no-op, and one-file-edit builds against sbt 2 and Mill on the ascent copy.
+- These docs move to a Specular site built by Histos, where examples are compiled tests.
 
 **Exit:** one early-effect library builds, tests, and publishes snapshots with Histos alone.
 
@@ -572,4 +573,6 @@ Each has a direction and waits for the milestone that makes it cheap:
 - A suspected bug gets a failing test first. A question about a ZIO mechanism gets a miniature spec first. A question about type inference gets a `scala-cli` miniature first.
 - Tests assert values: graphs, events, reports, and error cases.
 - No new dependency without asking first, with the reason.
+- Docs link to real code and do not copy it. Sketches of unbuilt code are fine until the code lands.
+- Code comments explain only what the code cannot say: a constraint, a reason, or an outside rule.
 - `./histos test` and `./histos workflow --check` stay green on this repository after every PR.
