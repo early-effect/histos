@@ -16,7 +16,7 @@ Histos builds itself. `./histos test` compiles and tests the four modules of thi
 | --- | --- | --- |
 | `api` | The graph, the builder, the literals, the version scheme, and the plugin contract (`histos.plugin`). The jar plugins compile against. | ZIO (because `HistosPlugin.run` returns a ZIO) |
 | `central` | Publishers: a local Maven directory, and Sonatype snapshot upload. | `api`, ZIO |
-| `engine` | Load, selection, resolution, compile, test, Scala.js, Scala Native, toolchains, publish, assembly, versions, CI render, cache, scheduler, plugin runtime. | `central`, `api`, ZIO, zio-streams, scala3-compiler, Zinc, Coursier, Scala.js and Scala Native tools |
+| `engine` | Load, selection, resolution, compile, test, Scala.js, Scala Native, toolchains, publish, assembly, versions, CI render, cache, scheduler, plugin runtime. | `central`, `api`, ZIO, zio-streams, scala3-compiler, Zinc, Coursier, ASM. The Scala.js and Scala Native linkers are fetched for a child JVM and are not dependencies. |
 | `app` | The CLI, the server, BSP, and MCP. One `ZIOAppDefault`, `histos.cli.Main`. | `engine`, ZIO, zio-cli, heddle-mcp |
 
 The pinned coordinates are in `histos.scala`. Histos itself is built with Scala 3.10.0. That compiler loads `histos.scala`. A module compile fetches the compiler the module names.
