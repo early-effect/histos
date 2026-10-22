@@ -2,8 +2,7 @@ package histos.mcp
 
 import heddle.LinePipe
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
-import histos.acp.Acp
-import histos.cli.Command
+import histos.cli.{CliParseError, Command}
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled}
 import histos.load.{ApiJar, LoadError, LoadIo, Loader}
@@ -139,12 +138,12 @@ object ProtocolSpec extends ZIOSpecDefault:
         case None       => ZIO.succeed(Nil)
         case Some(line) => readLines(pipe, n - 1).map(line :: _)
 
-  private val protocol = suite("mcp and acp")(
-    test("mcp and acp are commands"):
+  private val protocol = suite("mcp")(
+    test("mcp is a command, and acp is a reserved word with no command"):
       for
         mcp <- histos.cli.Cli.parse(List("mcp"))
-        acp <- histos.cli.Cli.parse(List("acp"))
-      yield assertTrue(mcp == Command.Mcp && acp == Command.Acp)
+        acp <- histos.cli.Cli.parse(List("acp")).flip
+      yield assertTrue(mcp == Command.Mcp, acp == CliParseError.UnknownCommand)
     ,
     test("graph and run answer over an in-memory pipe"):
       ZIO.scoped:
@@ -333,77 +332,6 @@ object ProtocolSpec extends ZIOSpecDefault:
             .mkString("\n")
             .contains("plugin task dev.example/echo is not in the graph")
         )
-    ,
-    test("acp lists the commands and returns toolchain text"):
-      ZIO.scoped:
-        for
-          jar <- apiJar
-          dir <- repo
-          checked <- acpTexts(dir, jar).provideSome[Scope](loading(dir))
-        yield checked
   ) @@ TestAspect.timeout(15.seconds)
-
-  private def acpTexts(dir: Path, jar: Path) =
-    for
-      desk <- histos.client.Session.desk
-      here = machine(dir)
-      init <- Acp.answer(
-        dir,
-        jar,
-        here,
-        desk,
-        """{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}"""
-      )
-      missing <- Acp.answer(
-        dir,
-        jar,
-        here,
-        desk,
-        """{"jsonrpc":"2.0","id":8,"method":"toolchain","params":{}}"""
-      )
-      unknown <- Acp.answer(
-        dir,
-        jar,
-        here,
-        desk,
-        """{"jsonrpc":"2.0","id":9,"method":"nope","params":{}}"""
-      )
-      bad <- Acp.answer(dir, jar, here, desk, "not json")
-      _ <- ZIO.attempt(writeJdk(dir)).mapError(t => LoadError.Io(LoadIo.Temp))
-      chosen <- Acp.answer(
-        dir,
-        jar,
-        machine(dir, Map("JAVA_HOME" -> dir.resolve("jdk").toString)),
-        desk,
-        """{"jsonrpc":"2.0","id":10,"method":"toolchain","params":{}}"""
-      )
-    yield assertTrue(
-      init.contains(""""protocolVersion":1"""),
-      init.contains(""""id":7"""),
-      init.contains("compile"),
-      init.contains("toolchain"),
-      resultValue(missing).exists(_.contains("jdk.lock")),
-      !missing.contains(""""jdk""""),
-      unknown.contains("acp does not handle nope"),
-      bad.contains("parse error"),
-      resultValue(chosen).exists(_.contains("JavaHome")),
-      resultValue(chosen).exists(_.contains("21.0.2"))
-    )
-
-  private def resultValue(line: String): Option[String] =
-    for
-      json <- line.fromJson[Json].toOption
-      result <- jsonField(json, "result")
-      value <- jsonField(result, "value")
-      text <- value match
-        case Json.Str(found) => Some(found)
-        case _               => None
-    yield text
-
-  private def jsonField(json: Json, name: String): Option[Json] =
-    json match
-      case Json.Obj(fields) =>
-        fields.collectFirst { case (`name`, value) => value }
-      case _ => None
 
   def spec = protocol

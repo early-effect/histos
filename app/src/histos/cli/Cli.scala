@@ -1,8 +1,6 @@
 package histos.cli
 
 import heddle.LinePipe
-import histos.acp.Acp
-import histos.client.Session
 import histos.bsp.{Bsp, Frame}
 import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
@@ -59,7 +57,6 @@ enum Command:
   case Assembly(destination: Option[String])
   case Publish(repository: String, projects: List[String])
   case Mcp
-  case Acp
   case Bsp
   case Server
   case Toolchain
@@ -143,7 +140,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | acp | bsp | server | reload | reboot | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -185,7 +182,6 @@ object Cli:
       case Command.Publish(repository, projects) =>
         publish(repo, apiJar, repository, projects)
       case Command.Mcp              => mcp(repo, apiJar)
-      case Command.Acp              => acp(repo, apiJar)
       case Command.Bsp              => bsp(repo, apiJar)
       case Command.Server           => serve(repo, apiJar)
       case Command.Toolchain        => toolchain(repo, apiJar)
@@ -1248,48 +1244,6 @@ object Cli:
                 case Bsp.Answer.Quiet       => loop
                 case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
     loop
-
-  private def acp(
-      repo: Path,
-      apiJar: Path
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
-    ZIO.serviceWithZIO[Machine] { machine =>
-      Session.desk.flatMap { desk =>
-        ZIO.addFinalizer(
-          desk.held.get.flatMap {
-            case Some(held) => held.scope.close(Exit.unit)
-            case None       => ZIO.unit
-          }
-        ) *> {
-          def loop: URIO[Loader & ContentStore & Resolve, Completed] =
-            LinePipe.standard.readLine.foldZIO(
-              _ =>
-                ZIO.succeed(
-                  Completed(CliExit.LoadFailed, "", "the acp pipe failed")
-                ),
-              {
-                case None => ZIO.succeed(Completed(CliExit.Success, "", ""))
-                case Some(line) =>
-                  Acp
-                    .answer(repo, apiJar, machine, desk, line)
-                    .flatMap(text => LinePipe.standard.writeLine(text))
-                    .foldZIO(
-                      _ =>
-                        ZIO.succeed(
-                          Completed(
-                            CliExit.LoadFailed,
-                            "",
-                            "the acp pipe failed"
-                          )
-                        ),
-                      _ => loop
-                    )
-              }
-            )
-          loop
-        }
-      }
-    }
 
   private def taskExit(err: TaskError): CliExit =
     err match

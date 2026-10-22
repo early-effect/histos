@@ -31,7 +31,7 @@ opaque type CommandName = String
 object CommandName:
   given CanEqual[CommandName, CommandName] = CanEqual.derived
 
-  /** Root words the built-in grammar already owns. A plugin command cannot use one. */
+  /** Root words the built-in grammar owns, plus `acp`, held until ACP returns. A plugin command cannot use one. */
   val reserved: Set[CommandName] = Set(
     trusted("version"),
     trusted("graph"),

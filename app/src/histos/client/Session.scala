@@ -22,13 +22,10 @@ import java.nio.file.Path
 
 import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO, ZLayer}
 
-/** One MCP or ACP process. It sends [[Call]] while the server matches, and
-  * keeps a single graph otherwise.
+/** One MCP process. It sends [[Call]] while the server matches, and keeps a
+  * single graph otherwise.
   */
 object Session:
-  val commands: List[String] =
-    List("graph", "compile", "test", "publish", "run", "cancel", "toolchain")
-
   final case class Held(
       fingerprint: Fingerprint,
       loaded: LoadedBuild,

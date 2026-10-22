@@ -1,6 +1,6 @@
 package histos.cli
 
-import histos.plugin.{PluginArgs, PluginTaskId}
+import histos.plugin.{CommandName, PluginArgs, PluginTaskId}
 import histos.task.TaskId
 import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction
@@ -12,7 +12,7 @@ import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Option
 /** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that name into a [[TaskId]] and, for a module, a platform. */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Acp, Bsp, Server, CachePath, CacheList, Toolchain, Reload, Reboot
+    case Version, Graph, Mcp, Bsp, Server, CachePath, CacheList, Toolchain, Reload, Reboot
     case Run(name: String, platform: Option[String])
     case Test(projects: List[String])
     case TestOnly(args: List[String])
@@ -41,7 +41,6 @@ object Grammar:
       Wire.Publish(repository, projects.toList)
     }
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
-  private val acp       = CliCommand("acp").map(_ => Wire.Acp)
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
   private val server    = CliCommand("server").map(_ => Wire.Server)
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
@@ -61,14 +60,11 @@ object Grammar:
     }
   private val root      =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | acp | bsp | server | toolchain | cache | resolve | workflow | reload | reboot,
+      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | reload | reboot,
     )
 
-  /** Words the built-in grammar owns. `path`, `list`, and `clean` stay free so a plugin can take them. */
-  private val roots: Set[String] = Set(
-    "version", "graph", "run", "test", "testOnly", "testQuick", "compile", "assembly", "publish",
-    "mcp", "acp", "bsp", "server", "toolchain", "cache", "resolve", "workflow", "reload", "reboot",
-  )
+  /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface. */
+  private val roots: Set[String] = CommandName.reserved.map(_.value)
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     args match
@@ -88,7 +84,6 @@ object Grammar:
       case Wire.Version            => ZIO.succeed(Command.Version)
       case Wire.Graph              => ZIO.succeed(Command.Graph)
       case Wire.Mcp                => ZIO.succeed(Command.Mcp)
-      case Wire.Acp                => ZIO.succeed(Command.Acp)
       case Wire.Bsp                => ZIO.succeed(Command.Bsp)
       case Wire.Server            => ZIO.succeed(Command.Server)
       case Wire.CachePath          => ZIO.succeed(Command.CachePath)
