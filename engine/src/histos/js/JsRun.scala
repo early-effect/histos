@@ -13,21 +13,25 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
+/** One start of a linked script. The engine does not load a `JSEnv`. */
+final case class JsRunRequest(
+    env: JsEnv,
+    kind: JsModuleKind,
+    script: Path,
+    work: Path,
+    jdk: ResolvedJdk,
+    processEnv: Map[String, String],
+    node: NodeBinary,
+)
+
 /** Start a linked script in the module's JavaScript environment. The engine does not load a `JSEnv`. */
 object JsRun:
   private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
   private val FirefoxScala: ScalaVersion = ScalaVersion.trusted("3.9.0")
   private val SuiteMain: String = "subprocess.JsRun"
 
-  def start(
-      env: JsEnv,
-      kind: JsModuleKind,
-      script: Path,
-      work: Path,
-      jdk: ResolvedJdk,
-      processEnv: Map[String, String],
-      node: NodeBinary,
-  ): IO[JsRunError, ChildRequest] =
+  def start(request: JsRunRequest): IO[JsRunError, ChildRequest] =
+    val JsRunRequest(env, kind, script, work, jdk, processEnv, node) = request
     val bridgeRoot = work.resolve("js-run")
     val classes = bridgeRoot.resolve("classes")
     val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")

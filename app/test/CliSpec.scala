@@ -581,10 +581,12 @@ object CliSpec extends ZIOSpecDefault:
   )
 
   private def layers(dir: Path, env: Map[String, String] = Map.empty) =
-    histos.load.Loader.live ++
-      ZLayer.succeed(histos.cache.ContentStore.in(dir.resolve("cache"))) ++
-      ZLayer.succeed(machine(dir, env)) ++
-      histos.resolve.Resolve.live(dir.resolve("cache").resolve("resolve"))
+    ZLayer.make[histos.load.Loader & histos.cache.ContentStore & histos.jdk.Machine & histos.resolve.Resolve](
+      histos.load.Loader.live,
+      ZLayer.succeed(histos.cache.ContentStore.in(dir.resolve("cache"))),
+      ZLayer.succeed(machine(dir, env)),
+      histos.resolve.Resolve.live(dir.resolve("cache").resolve("resolve")),
+    )
 
   private def machine(dir: Path, env: Map[String, String]): Machine =
     Machine(env, dir.toString, Os.Linux, dir.resolve("cache"), dir, None, Settled.No, NativeOrigin.read(env))

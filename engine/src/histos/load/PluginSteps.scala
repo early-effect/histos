@@ -10,7 +10,7 @@ import Histos.given
 
 /** The reachable plugin tasks, with each `TaskDep.Compile` as a compile step. */
 private[load] object PluginSteps:
-  private type R = histos.schedule.ActionCache & histos.schedule.RemoteCache & histos.resolve.Resolve & histos.schedule.Scheduler
+  private type R = histos.resolve.Resolve
   private type CellStep = histos.step.HermeticStep[R, PluginFault, String]
 
   def goal(

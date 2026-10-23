@@ -240,13 +240,8 @@ object Session:
   ] =
     for
       scope <- Scope.make
-      loaded <- ZIO
-        .serviceWithZIO[Loader](_.load(repo, apiJar))
-        .provideSomeLayer[
-          Loader & histos.resolve.Resolve & histos.cache.ContentStore
-        ](
-          ZLayer.succeed(scope)
-        )
+      loaded <- scope
+        .extend(ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)))
         .mapError(_.message)
         .tapError(_ => scope.close(Exit.unit))
       _ <- desk.held.set(Some(Held(now, loaded, scope)))

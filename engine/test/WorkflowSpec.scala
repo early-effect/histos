@@ -191,11 +191,11 @@ object WorkflowSpec extends ZIOSpecDefault:
                   |  contents: read
                   |jobs:
                   |  nightly:
-                  |    runs-on: ubuntu-latest
+                  |    runs-on: ubuntu-26.04
                   |    permissions:
                   |      contents: read
                   |    steps:
-                  |      - uses: actions/checkout@v4
+                  |      - uses: actions/checkout@v7
                   |      - run: "./histos run dev.example/site"
                   |""".stripMargin &&
               !body.contains("schedule:") && !body.contains("cron:")

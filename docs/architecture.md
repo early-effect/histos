@@ -40,7 +40,7 @@ A module's directory is its name, or the path given to `.in(...)`. Sources are `
 
 ## Load
 
-`Loader.load(repo, apiJar)` is a `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build class loader and its plugin threads.
+`Loader.load(repo, apiJar)` is a `ZIO[Scope, LoadError, LoadedBuild]`. The live loader is built with the `Resolve` and `ContentStore` it closes over. The caller's `Scope` closes the build class loader and its plugin threads. A caller that already owns that scope uses `scope.extend`, not a scope layer.
 
 1. `Loader.scan` reads the plugin header (`plugin(dep"...")`, `plugin(path"...")`) at the top of `histos.scala`.
 2. The loader resolves header plugins through the lock, compiles source and path plugins first, and writes the build file to a temporary copy with the header lines blanked, so line numbers match.
@@ -128,7 +128,7 @@ The version scheme is the zipx scheme, implemented in `histos.version`: everyday
 
 `.github/workflows/ci.yml` is a render of the graph. `histos workflow` and `--check` compare it, `--update` rewrites it, and drift exits 6. A pull request starts that workflow once. A push starts it only on `main`, so updating a pull request branch does not run it again.
 
-- Jobs are `test` (`./histos test`), `versions` (`./histos run versions`, when the catalog is non-empty), each plugin job with `JobWhen.Always`, and `workflow` (`./histos workflow --check`). A plugin job with a schedule renders as its own `histos-<job>.yml`.
+- Jobs are `test` (`./histos test`), `versions` (`./histos run versions`, when the catalog is non-empty), each plugin job with `JobWhen.Always`, and `workflow` (`./histos workflow --check`). A plugin job with a schedule renders as its own `histos-<job>.yml`. Every job runs on `ubuntu-26.04` and checks out with `actions/checkout@v7`.
 - When `.github/ci-tools` exists, the test job also installs Node 22, LLVM 21.1.8, and the Playwright Firefox build Chekhov reads. Those installs are not cached, so every `test` job repeats `npm install`, `install-deps firefox`, and the browser download (C1). M8 restores an install the graph still needs from a keyed cache.
 - The renderer can scope a pull request to the changed modules and their dependents. The committed `ci.yml` is the full render, so pull requests run every module.
 
@@ -142,7 +142,7 @@ The remote cache is off. The only implementation is in memory, used by tests, an
 
 `Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Built-in tasks are `inspect` and `versions`.
 
-`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. A plugin task is a step. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. That compile step uses the native origin from the command's `Machine`, not a hardcoded Central. `pluginLoader` and `declaredOutputs` are step aspects. Test, publish, and run are still separate pipelines (K1).
+`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. `Scheduler` is that executor plus the action cache and the remote cache for one run. A plugin task is a step, and the loaded runtime keeps one `Histos` for every task it runs. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. That compile step uses the native origin from the command's `Machine`, not a hardcoded Central. `pluginLoader` and `declaredOutputs` are step aspects. Test, publish, and run are still separate pipelines (K1).
 
 ## Plugins
 

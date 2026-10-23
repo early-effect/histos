@@ -13,7 +13,7 @@ import histos.resolve.{
 }
 import histos.program.{EntryPoints, Program, ProgramError}
 import histos.workspace.IoFailure
-import histos.testrun.{ModuleTest, SuiteNames}
+import histos.testrun.{ModuleTest, SuiteNames, TestCompile}
 import histos.toolchain.Runtimes
 import histos.TestProvider
 import histos.zinc.{
@@ -408,10 +408,10 @@ object Bsp:
           clear(uri) *>
             (for
               lock <- readLock
-              sources <- ModuleTest
+              sources <- TestCompile
                 .testSources(repo, id.module, modules, id.version, id.platform)
                 .mapError(BspError.Tests(_))
-              _ <- ModuleTest
+              _ <- TestCompile
                 .compiledTests(
                   repo,
                   modules,
@@ -501,7 +501,7 @@ object Bsp:
               id.module.flags.argv ++ SemanticDb.argv(repo, id.version),
               paths.map(fileUri),
               fileUri(
-                ModuleTest.testClasses(
+                TestCompile.testClasses(
                   repo,
                   id.module.name,
                   id.version,
@@ -794,7 +794,7 @@ object Bsp:
             paths.map(fileUri),
             Nil,
             work.toAbsolutePath.normalize.toString,
-            ModuleTest.suiteEnv(repo, runtimes.env)
+            TestCompile.suiteEnv(repo, runtimes.env)
           )
         case Some(_) => ZIO.fail(BspError.NotMain)
         case None    => ZIO.fail(BspError.UnknownTarget)
@@ -806,8 +806,8 @@ object Bsp:
       parsed(uri) {
         case Some(id: Id.Test) =>
           val work =
-            ModuleTest.testWork(repo, id.module.name, id.version, id.platform)
-          val classes = ModuleTest.testClasses(
+            TestCompile.testWork(repo, id.module.name, id.version, id.platform)
+          val classes = TestCompile.testClasses(
             repo,
             id.module.name,
             id.version,
@@ -823,12 +823,12 @@ object Bsp:
           )
           for
             _ <- ZIO
-              .fromEither(ModuleTest.launchProvider(id.module))
+              .fromEither(TestCompile.launchProvider(id.module))
               .mapError(BspError.Tests(_))
             lock <- readLock
             modules <- graphModules
             seen <- request.get
-            linked <- ModuleTest
+            linked <- TestCompile
               .runtimeClasspath(
                 repo,
                 modules,
@@ -844,7 +844,7 @@ object Bsp:
             (classes :: linked.paths).map(fileUri),
             Nil,
             work.toAbsolutePath.normalize.toString,
-            ModuleTest.suiteEnv(repo, runtimes.env)
+            TestCompile.suiteEnv(repo, runtimes.env)
           )
         case Some(_) => ZIO.fail(BspError.NotTest)
         case None    => ZIO.fail(BspError.UnknownTarget)
@@ -860,11 +860,11 @@ object Bsp:
       */
     private def suites(id: Id.Test): ZIO[Resolve, BspError, Suites] =
       val classes =
-        ModuleTest.testClasses(repo, id.module.name, id.version, id.platform)
+        TestCompile.testClasses(repo, id.module.name, id.version, id.platform)
       id.module.test match
         case Some(main) => ZIO.succeed(Suites(List(main.value), None))
         case None       =>
-          ModuleTest.launchProvider(id.module) match
+          TestCompile.launchProvider(id.module) match
             case Left(_)               => ZIO.succeed(Suites(Nil, None))
             case Right(None)           => ZIO.succeed(Suites(Nil, None))
             case Right(Some(provider)) =>
@@ -879,7 +879,7 @@ object Bsp:
               readLock.flatMap { lock =>
                 graphModules.flatMap { modules =>
                   request.get.flatMap { seen =>
-                    ModuleTest
+                    TestCompile
                       .runtimeClasspath(
                         repo,
                         modules,
@@ -949,7 +949,7 @@ object Bsp:
           }
         case Id.Test(module, version, platform) =>
           graphModules.flatMap: modules =>
-            ModuleTest
+            TestCompile
               .testSources(repo, module, modules, version, platform)
               .mapError(BspError.Tests(_))
 
@@ -1015,7 +1015,7 @@ object Bsp:
             _.toMap
           )
         tests <- ZIO.foreach(cells)(cell =>
-          ModuleTest
+          TestCompile
             .testSources(
               repo,
               cell.module,

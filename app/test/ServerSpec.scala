@@ -186,11 +186,7 @@ object ServerSpec extends ZIOSpecDefault:
               }
             )
           program.provideSome[Scope](
-            Resolve.live(
-              root.resolve("coursier")
-            ) ++ histos.load.Loader.live ++ zio.ZLayer.succeed(
-              histos.cache.ContentStore.in(root.resolve("cache"))
-            )
+            liveLayers(root)
           )
     ,
     test("a path plugin edit stays stale on a second call"):
@@ -242,11 +238,7 @@ object ServerSpec extends ZIOSpecDefault:
               }
             )
           program.provideSome[Scope](
-            Resolve.live(
-              root.resolve("coursier")
-            ) ++ histos.load.Loader.live ++ zio.ZLayer.succeed(
-              histos.cache.ContentStore.in(root.resolve("cache"))
-            )
+            liveLayers(root)
           )
     ,
     test(
@@ -276,11 +268,7 @@ object ServerSpec extends ZIOSpecDefault:
               heard.marker == Message.Marker(1)
             )
           program.provideSome[Scope](
-            Resolve.live(
-              root.resolve("coursier")
-            ) ++ histos.load.Loader.live ++ zio.ZLayer.succeed(
-              histos.cache.ContentStore.in(root.resolve("cache"))
-            )
+            liveLayers(root)
           )
     ,
     test("graph is served, and cancel of an unknown run fails"):
@@ -322,10 +310,7 @@ object ServerSpec extends ZIOSpecDefault:
               }
             )
           program.provideSome[Scope](
-            Resolve.live(root.resolve("coursier")) ++ histos.load.Loader.live ++
-              zio.ZLayer.succeed(
-                histos.cache.ContentStore.in(root.resolve("cache"))
-              )
+            liveLayers(root)
           )
   )
 
@@ -347,7 +332,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Files.isRegularFile(root.resolve(".histos/classes/demo/3.10.0/jvm/Hello.class"))
               )
             yield assertTrue(done.exit == CliExit.Success, classFile)
-          program.provideSome[Scope](layers(root, Loader.live) ++ ZLayer.succeed(machine(root)))
+          program.provideSome[Scope](liveLayers(root) ++ ZLayer.succeed(machine(root)))
     ,
     test("a cell that fails to compile fails a compile sent to the server"):
       ZIO.scoped:
@@ -366,7 +351,7 @@ object ServerSpec extends ZIOSpecDefault:
               case Feed.Exit(code, _) => code == CliExit.CompileFailed.code
               case _                  => false
             })
-          program.provideSome[Scope](layers(root, Loader.live))
+          program.provideSome[Scope](liveLayers(root))
     ,
     test("a server that cannot write its record fails to open, and leaves no socket"):
       ZIO.scoped:
@@ -381,7 +366,7 @@ object ServerSpec extends ZIOSpecDefault:
               opened <- ZIO.scoped(daemon(root, built).either).timeout(30.seconds)
               socket <- ZIO.attempt(Files.exists(Record.socket(root)))
             yield assertTrue(opened == Some(Left(ServerError.Io(ServerIo.Save))), !socket)
-          program.provideSome[Scope](layers(root, Loader.live))
+          program.provideSome[Scope](liveLayers(root))
     ,
     test("reboot starts a successor, and the old server stops with an idle connection open"):
       ZIO.scoped:
@@ -403,7 +388,7 @@ object ServerSpec extends ZIOSpecDefault:
               relaunched,
               !record,
             )
-          program.provideSome[Scope](layers(root, Loader.live))
+          program.provideSome[Scope](liveLayers(root))
     ,
     test("a bsp session reloads a changed build and announces the new targets"):
       ZIO.scoped:
@@ -474,9 +459,15 @@ object ServerSpec extends ZIOSpecDefault:
       def buildClasspath(apiJar: Path) = ZIO.succeed(Nil)
       def reportBuild(repo: Path, apiJar: Path) = ZIO.succeed(BuildNotes(false, Nil))
 
-  private def layers(root: Path, loader: zio.ULayer[Loader]) =
-    Resolve.live(root.resolve("coursier")) ++ loader ++
+  private def deps(root: Path) =
+    Resolve.live(root.resolve("coursier")) ++
       ZLayer.succeed(histos.cache.ContentStore.in(root.resolve("cache")))
+
+  private def liveLayers(root: Path) =
+    deps(root) >+> histos.load.Loader.live
+
+  private def layers(root: Path, loader: zio.ULayer[Loader]) =
+    deps(root) ++ loader
 
   private def machine(root: Path): Machine =
     Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No, NativeOrigin.Central)

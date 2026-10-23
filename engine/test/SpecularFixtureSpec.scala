@@ -118,9 +118,10 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                    List(PluginRequest.Dep(coordinate, LinkStrategy.BinaryOrSource)),
                    Repositories(Repository.Maven(RepoUrl.file(maven)), Nil),
                  ).provide(Resolve.live(work.resolve("cache"))).mapError(LoadError.Resolve(_))
-            loaded <- ZIO.serviceWithZIO[Loader](_.load(project, api)).provideSome[Loader & Scope](
+            loaded <- ZIO.serviceWithZIO[Loader](_.load(project, api)).provideSome[Scope](
                         Resolve.live(work.resolve("cache")),
                         ZLayer.succeed(ContentStore.in(work.resolve("store"))),
+                        Loader.live,
                       )
             id = PluginTaskId(PluginId("dev.earlyeffect.specular"), TaskName("site"))
             ran <- loaded.plugins.run(id, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, IdleResolve.layer)
@@ -181,7 +182,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
               contributed,
               noted,
             )
-    ).provideShared(Loader.live) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+    ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
 
   private def publish(work: Path, api: Path, hex: String): IO[LoadError, Path] =
     val textClasses = work.resolve("text-classes")

@@ -1,7 +1,7 @@
 package histos.program
 
-import histos.js.{JsLink, JsRun}
-import histos.native.{NativeLink, NativeToolchain}
+import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest}
+import histos.native.{NativeLink, NativeLinkRequest, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
@@ -46,7 +46,7 @@ object Program:
         ZStream.unwrap:
           continue.get.map: keep =>
             if keep then
-              one(repo, graph, module, binary, cell, lock, jdk, runtimes).tap:
+              one(CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes)).tap:
                 case ProgramFeed.Exited(_, _, _, code) if code != 0 => continue.set(false)
                 case _                                              => ZIO.unit
             else ZStream.empty
@@ -71,7 +71,7 @@ object Program:
           case only :: Nil => Right(only)
           case many        => Left(ProgramError.Choose(module.name, many))
 
-  private def one(
+  private final case class CellRun(
       repo: Path,
       graph: ProjectGraph,
       module: Module,
@@ -80,7 +80,10 @@ object Program:
       lock: DependencyLock,
       jdk: ResolvedJdk,
       runtimes: Runtimes,
-  ): ZStream[Resolve, ProgramError, ProgramFeed] =
+  )
+
+  private def one(run: CellRun): ZStream[Resolve, ProgramError, ProgramFeed] =
+    val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes) = run
     val env = runtimes.env
     val modules = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
@@ -107,9 +110,9 @@ object Program:
               node <- runtimes.node.mapError(miss => ProgramError.NoNode(cell.module, cell.version, miss))
               paths <- classpath(repo, modules, module, cell, lock, repositories)
               _ <- fresh(linkDir)
-              script <- JsLink.link(cell.version, binary, paths, linkDir, jdk, module.jsModule)
+              script <- JsLink.link(JsLinkRequest(cell.version, binary, paths, linkDir, jdk, module.jsModule))
                 .mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
-              asked <- JsRun.start(module.jsEnv, module.jsModule, script, linkDir, jdk, env, node)
+              asked <- JsRun.start(JsRunRequest(module.jsEnv, module.jsModule, script, linkDir, jdk, env, node))
                 .mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
             yield events(cell, asked)
         case Platform.Native =>
@@ -122,13 +125,8 @@ object Program:
               toolchain <- ZIO.fromEither(NativeToolchain.of(module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision), runtimes.native))
                              .mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
               program <- NativeLink.linkClasspath(
-                           major,
-                           toolchain,
-                           env,
+                           NativeLinkRequest(major, toolchain, env, linkDir, jdk, binary),
                            paths,
-                           linkDir,
-                           jdk,
-                           binary,
                          ).mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
               work <- fresh(linkDir.resolve("exec"))
             yield command(cell, List(program.toString), work, env)

@@ -762,12 +762,8 @@ object Daemon:
   ] =
     for
       scope <- Scope.make
-      loaded <- ZIO
-        .serviceWithZIO[histos.load.Loader](_.load(repo, apiJar))
-        .provideSomeLayer[
-          histos.load.Loader & histos.cache.ContentStore &
-            histos.resolve.Resolve
-        ](ZLayer.succeed(scope))
+      loaded <- scope
+        .extend(ZIO.serviceWithZIO[histos.load.Loader](_.load(repo, apiJar)))
         .either
       result <- loaded match
         case Left(error)  => scope.close(Exit.unit).as(Left(error.message))

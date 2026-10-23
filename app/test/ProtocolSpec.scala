@@ -52,8 +52,10 @@ object ProtocolSpec extends ZIOSpecDefault:
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
   private def loading(dir: Path) =
-    Loader.live ++ ZLayer.succeed(IdleResolve) ++ ZLayer.succeed(
-      ContentStore.in(dir.resolve("cache"))
+    ZLayer.make[Loader & histos.resolve.Resolve & histos.cache.ContentStore](
+      Loader.live,
+      ZLayer.succeed(IdleResolve),
+      ZLayer.succeed(ContentStore.in(dir.resolve("cache"))),
     )
   private val source =
     """import histos.*
