@@ -1,16 +1,17 @@
 package histos.load
 
 import histos.pack.ClassJar
+import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, System, ZIO}
+import zio.{Scope, System, ZIO}
 
 /** The api jar tests compile a build file against. `dist/histos-api.jar` wins. Otherwise the classes just compiled. */
 object ApiJar:
-  def locate: IO[LoadError, Path] =
+  def locate: ZIO[Scope, LoadError, Path] =
     System.env("HISTOS_REPO").mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: named =>
       val roots = repoRoots(named.filter(_.nonEmpty).map(Path.of(_)))
       val packed = roots.map(_.resolve("dist").resolve("histos-api.jar"))
@@ -44,9 +45,7 @@ object ApiJar:
         case only :: Nil => Some(only)
         case _           => None
 
-  private def jarOf(classes: Path): IO[LoadError, Path] =
-    ZIO.attemptBlocking {
-      val dir = Files.createTempDirectory("histos-api-jar")
-      dir.resolve("histos-api.jar")
-    }.mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: dest =>
+  private def jarOf(classes: Path): ZIO[Scope, LoadError, Path] =
+    Workspace.work("histos-api-jar").mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: dir =>
+      val dest = dir.resolve("histos-api.jar")
       ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(LoadIo.Temp), _.path)

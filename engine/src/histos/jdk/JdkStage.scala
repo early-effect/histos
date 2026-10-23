@@ -1,6 +1,7 @@
 package histos.jdk
 
 import histos.cache.{Placed, Scratch}
+import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -120,14 +121,7 @@ object JdkStage:
     }.mapError(_ => StageError.Io(StageOp.Read))
 
   private def deleteTree(root: Path): IO[StageError, Unit] =
-    ZIO.attempt {
-      if Files.exists(root) then
-        val walk = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.mapError(_ => StageError.Io(StageOp.Delete))
+    Workspace.delete(root).mapError(_ => StageError.Io(StageOp.Delete))
 
   private def unpackZip(archive: Path, dest: Path): IO[StageError, Unit] =
     ZIO.attempt(unpackEntries(archive, dest.normalize)).mapError(_ => StageError.Io(StageOp.Unpack)).flatMap:

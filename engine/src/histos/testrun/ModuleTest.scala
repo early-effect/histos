@@ -15,6 +15,7 @@ import histos.resolve.{
   ResolveError
 }
 import histos.workflow.CiError
+import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
   CompileProblem,
@@ -1472,38 +1473,13 @@ object ModuleTest:
       )
 
   private def readLock(repo: Path): IO[ModuleTestError, DependencyLock] =
-    val path = repo.resolve(".histos").resolve("dependencies.lock")
-    ZIO
-      .attemptBlocking {
-        if Files.isRegularFile(path) then Right(Files.readString(path))
-        else Left(ModuleTestError.Lock(ResolveError.NoLock(path)))
-      }
-      .mapError(_ => ModuleTestError.LockRead(path))
-      .flatMap(ZIO.fromEither)
-      .flatMap: text =>
-        ZIO.fromEither(
-          DependencyLock
-            .parse(text)
-            .left
-            .map(error => ModuleTestError.Lock(ResolveError.Lock(error)))
-        )
+    Resolve.readLock(repo).mapError:
+      case ResolveError.Io(failure) => ModuleTestError.LockRead(failure.path)
+      case other                    => ModuleTestError.Lock(other)
 
   private def fresh(work: Path): IO[ModuleTestError, Path] =
-    ZIO
-      .attemptBlocking {
-        if Files.exists(work) then
-          val walk = Files.walk(work)
-          val paths =
-            try walk.iterator.asScala.toList
-            finally walk.close()
-          paths
-            .sortBy(_.getNameCount)
-            .reverse
-            .foreach(path => Files.deleteIfExists(path))
-        Files.createDirectories(work)
-        work
-      }
-      .mapError(_ => ModuleTestError.Work(work))
+    Workspace.delete(work).mapError(_ => ModuleTestError.Work(work)) *>
+      Workspace.createDirectories(work).mapError(_ => ModuleTestError.Work(work))
 
   private[histos] def testClasses(
       repo: Path,

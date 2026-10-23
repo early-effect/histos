@@ -24,7 +24,7 @@ object CliSpec extends ZIOSpecDefault:
       |    Projects(core)
       |""".stripMargin
 
-  private val apiJar: IO[LoadError, Path] =
+  private val apiJar: ZIO[Scope, LoadError, Path] =
     ApiJar.locate
 
   private final class Listed extends HistosPlugin:

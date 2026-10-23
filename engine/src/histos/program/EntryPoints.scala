@@ -7,13 +7,14 @@ import scala.util.control.NonFatal
 
 import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes}
 
-import zio.UIO
+import histos.workspace.{IoFailure, IoFault}
+
 import zio.ZIO
 
 /** Classes in a directory that declare `public static void main(String[])`. */
 object EntryPoints:
-  def mains(root: Path): UIO[List[String]] =
-    ZIO.attemptBlocking(read(root)).orDie
+  def mains(root: Path): zio.IO[IoFailure, List[String]] =
+    ZIO.attemptBlocking(read(root)).mapError(_ => IoFailure(root, IoFault.Walk))
 
   private def read(root: Path): List[String] =
     if !Files.isDirectory(root) then Nil

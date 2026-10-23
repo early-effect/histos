@@ -76,7 +76,7 @@ object ProtocolSpec extends ZIOSpecDefault:
       "params" -> withMeta
     )
 
-  private val apiJar: IO[LoadError, Path] =
+  private val apiJar: ZIO[Scope, LoadError, Path] =
     ApiJar.locate
 
   private def repo: ZIO[Scope, LoadError, Path] =

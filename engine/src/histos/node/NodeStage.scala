@@ -1,6 +1,7 @@
 package histos.node
 
 import histos.cache.{Placed, Scratch}
+import histos.workspace.Workspace
 import histos.jdk.{ArchiveKind, ArchiveSource, ExtractFailure, HttpsUrl, Machine, Sha256, Tar}
 
 import java.nio.file.{Files, Path, StandardCopyOption}
@@ -140,14 +141,7 @@ object NodeStage:
     else if read == 0 then pump(input, digest)
 
   private def deleteTree(root: Path): IO[NodeStageError, Unit] =
-    ZIO.attempt {
-      if Files.exists(root) then
-        val walk = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.mapError(_ => NodeStageError.Io(NodeStageOp.Delete))
+    Workspace.delete(root).mapError(_ => NodeStageError.Io(NodeStageOp.Delete))
 
   private def unpackZip(archive: Path, dest: Path): IO[NodeStageError, Unit] =
     ZIO.attempt(unpackEntries(archive, dest.normalize)).mapError(_ => NodeStageError.Io(NodeStageOp.Unpack)).flatMap:

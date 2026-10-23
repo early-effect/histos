@@ -3,6 +3,7 @@ package histos.load
 import dotty.tools.dotc.Driver
 import dotty.tools.dotc.reporting.StoreReporter
 import histos.cache.ContentStore
+import histos.workspace.Workspace
 import histos.jdk.Sha256
 import histos.plugin.{ApiDigest, PluginIo, PluginLoadError}
 import histos.schedule.Digest
@@ -140,7 +141,7 @@ private[load] object PluginCompile:
     sources match
       case Nil => ZIO.fail(LoadError.CompileFailed(List(CompilerMessage.fromCompiler("plugin sources are empty"))))
       case _ =>
-        ZIO.attempt {
+        ZIO.attemptBlocking {
           val reporter = new StoreReporter(null)
           val args = List(
             "-classpath",
@@ -195,9 +196,9 @@ private[load] object PluginCompile:
 
   private def publish(tmp: Path, dest: Path): IO[LoadError, Unit] =
     ZIO.attempt {
-      if ready(dest) then deleteTreeSync(tmp)
+      if ready(dest) then Workspace.deleteSync(tmp)
       else
-        if Files.exists(dest) then deleteTreeSync(dest)
+        if Files.exists(dest) then Workspace.deleteSync(dest)
         try Files.move(tmp, dest, StandardCopyOption.ATOMIC_MOVE)
         catch
           case _: java.nio.file.AtomicMoveNotSupportedException =>
@@ -218,15 +219,7 @@ private[load] object PluginCompile:
     Files.isRegularFile(dir.resolve(".complete"))
 
   private def deleteTree(root: Path): UIO[Unit] =
-    ZIO.attempt(deleteTreeSync(root)).ignore
-
-  private def deleteTreeSync(root: Path): Unit =
-    if Files.exists(root) then
-      val walk = Files.walk(root)
-      val paths =
-        try walk.iterator.asScala.toList
-        finally walk.close()
-      paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
+    Workspace.delete(root).ignore
 
   private def rel(root: Path, path: Path): String =
     root.relativize(path).toString.replace('\\', '/')
