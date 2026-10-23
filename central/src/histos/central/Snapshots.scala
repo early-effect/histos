@@ -1,56 +1,231 @@
 package histos.central
 
-import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse}
+import histos.Organization
+
 import java.nio.charset.StandardCharsets
-import java.time.{Clock, Duration, ZoneOffset}
+import java.time.{Instant, ZoneOffset}
 import java.time.format.DateTimeFormatter
-import java.util.Base64
 
-import zio.{Chunk, IO, ULayer, ZIO, ZLayer}
+import heddle.client.{Authority, Client, ClientError}
+import heddle.http.{Body, Method, Request, Response, Scheme, Url}
+import heddle.http.header.{BasicCredentials, Headers}
 
-/** The Central snapshot repository. A release does not go here. */
-object Snapshots:
-  val central: String = "https://central.sonatype.com/repository/maven-snapshots/"
+import zio.{Chunk, Config, IO, ZIO}
 
-/** The `maven-metadata.xml` a snapshot deploy writes and the next build reads. */
+/** Where a snapshot deploy goes. `https` anywhere, `http` only on loopback. */
+opaque type SnapshotRepository = Url
+
+object SnapshotRepository:
+  given CanEqual[SnapshotRepository, SnapshotRepository] = CanEqual.derived
+
+  enum Error:
+    case Malformed(raw: String)
+    case Insecure(host: String)
+
+    def message: String = this match
+      case Malformed(raw)  => s"'$raw' is not a snapshot repository"
+      case Insecure(host)  => s"http snapshot repository '$host' is not loopback"
+
+  val central: SnapshotRepository =
+    trusted(
+      Url(
+        heddle.http.Path(Chunk("repository", "maven-snapshots")),
+        scheme = Some(Scheme.Https),
+        host = Some("central.sonatype.com"),
+      )
+    )
+
+  def from(raw: String): Either[Error, SnapshotRepository] =
+    val trimmed =
+      raw.trim match
+        case text if text.endsWith("/") => text.dropRight(1)
+        case text                        => text
+    Url.decode(trimmed) match
+      case Left(_)   => Left(Error.Malformed(raw))
+      case Right(url) =>
+        (url.scheme, url.host) match
+          case (Some(Scheme.Https), Some(_))              => Right(url)
+          case (Some(Scheme.Http), Some(host)) if loopback(host) => Right(url)
+          case (Some(Scheme.Http), Some(host))            => Left(Error.Insecure(host))
+          case _                                          => Left(Error.Malformed(raw))
+
+  extension (repo: SnapshotRepository) def root: Url = repo
+
+  private[central] def trusted(url: Url): SnapshotRepository = url
+
+  private def loopback(host: String): Boolean =
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
+
+/** A repository username. A colon would split the Basic credential. */
+opaque type RepositoryUser = String
+
+object RepositoryUser:
+  given CanEqual[RepositoryUser, RepositoryUser] = CanEqual.derived
+
+  enum Error:
+    case Empty
+    case Colon
+
+    def message: String = this match
+      case Empty => "a repository user is empty"
+      case Colon => "a repository user contains ':'"
+
+  def from(raw: String): Either[Error, RepositoryUser] =
+    val name = raw.trim
+    if name.isEmpty then Left(Error.Empty)
+    else if name.contains(':') then Left(Error.Colon)
+    else Right(name)
+
+  extension (user: RepositoryUser) def value: String = user
+
+/** Basic credentials. `password` renders as `Secret(<redacted>)`. */
+final case class RepositorySecret(user: RepositoryUser, password: Config.Secret)
+
+/** Why no HTTP response arrived. The case carries the target, never a throwable or its message. */
+enum TransportFault:
+  case Target(raw: String)
+  case Connect(host: String, port: Int)
+  case ConnectTimeout(host: String, port: Int)
+  case Tls(host: String, port: Int)
+  case ReadTimeout(host: String, port: Int)
+  case Io(host: String, port: Int)
+  case Protocol(host: String, port: Int)
+  case Pool(host: String, port: Int)
+  case Trust
+  case Body
+
+  def message: String = this match
+    case Target(raw)                 => s"could not reach the snapshot repository: '$raw' is not a target"
+    case Connect(host, port)         => s"could not connect to the snapshot repository at $host:$port"
+    case ConnectTimeout(host, port)  => s"the snapshot repository at $host:$port did not accept a connection"
+    case Tls(host, port)             => s"tls failed with the snapshot repository at $host:$port"
+    case ReadTimeout(host, port)     => s"the snapshot repository at $host:$port stopped answering"
+    case Io(host, port)              => s"the snapshot repository at $host:$port closed the exchange"
+    case Protocol(host, port)        => s"the snapshot repository at $host:$port sent an invalid response"
+    case Pool(host, port)            => s"no free connection to the snapshot repository at $host:$port"
+    case Trust                       => "the snapshot repository trust material is unusable"
+    case Body                        => "the snapshot repository response body failed"
+
+object TransportFault:
+  def from(error: ClientError): TransportFault = error match
+    case ClientError.InvalidTarget(target, _) => Target(target)
+    case ClientError.Connect(authority, _)    => at(authority, Connect.apply)
+    case ClientError.ConnectTimeout(authority) => at(authority, ConnectTimeout.apply)
+    case ClientError.Tls(authority, _)        => at(authority, Tls.apply)
+    case ClientError.ReadTimeout(authority)   => at(authority, ReadTimeout.apply)
+    case ClientError.Io(authority, _)         => at(authority, Io.apply)
+    case ClientError.Protocol(authority, _)   => at(authority, Protocol.apply)
+    case ClientError.PoolExhausted(authority) => at(authority, Pool.apply)
+    case ClientError.NotAnEventStream(authority, _) => at(authority, Protocol.apply)
+    case ClientError.InvalidTrust(_)          => Trust
+    case ClientError.BodyFailed(_)            => Body
+
+  private def at(authority: Authority, make: (String, Int) => TransportFault): TransportFault =
+    make(authority.host, authority.port)
+
+/** Why snapshot metadata could not name the next build. */
+enum MetadataFault:
+  case MissingBuild
+  case BadBuild
+  case Saturated
+  case Unread
+
+  def message: String = this match
+    case MissingBuild => "snapshot metadata has no build number"
+    case BadBuild     => "snapshot metadata build number is not a positive int"
+    case Saturated    => "snapshot metadata build number cannot increase"
+    case Unread       => "snapshot metadata was not a complete body"
+
+/** A revision that is not a `-SNAPSHOT`. */
+enum SnapshotRevisionError:
+  case NotSnapshot(revision: String)
+
+  def message: String = this match
+    case NotSnapshot(revision) => s"'$revision' is not a snapshot"
+
+/** The text before `-SNAPSHOT`. */
+opaque type SnapshotBase = String
+
+object SnapshotBase:
+  private[central] def trusted(raw: String): SnapshotBase = raw
+
+  extension (base: SnapshotBase) def value: String = base
+
+/** The `<version>` a snapshot directory is named with, including `-SNAPSHOT`. */
+opaque type SnapshotRevision = String
+
+object SnapshotRevision:
+  private[central] def trusted(raw: String): SnapshotRevision = raw
+
+  extension (revision: SnapshotRevision) def value: String = revision
+
+final case class SnapshotName(base: SnapshotBase, revision: SnapshotRevision)
+
+/** `yyyyMMdd.HHmmss` in UTC. */
+opaque type SnapshotStamp = String
+
+object SnapshotStamp:
+  def from(instant: Instant): SnapshotStamp = stamp.format(instant)
+
+  extension (value: SnapshotStamp) def value: String = value
+
+  private val stamp = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").withZone(ZoneOffset.UTC)
+
+/** `yyyyMMddHHmmss` in UTC. */
+opaque type SnapshotUpdated = String
+
+object SnapshotUpdated:
+  def from(instant: Instant): SnapshotUpdated = compact.format(instant)
+
+  extension (value: SnapshotUpdated) def value: String = value
+
+  private val compact = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC)
+
+/** `<base>-<stamp>-<build>`, the file name Maven resolves a snapshot to. */
+opaque type SnapshotVersion = String
+
+object SnapshotVersion:
+  def apply(base: SnapshotBase, stamp: SnapshotStamp, build: Int): SnapshotVersion =
+    s"${base.value}-${stamp.value}-$build"
+
+  extension (version: SnapshotVersion) def value: String = version
+
+/** One `maven-metadata.xml`. */
+final case class SnapshotDocument(
+    group: Organization,
+    name: ArtifactId,
+    revision: SnapshotRevision,
+    stamp: SnapshotStamp,
+    build: Int,
+    unique: SnapshotVersion,
+    updated: SnapshotUpdated,
+)
+
 object SnapshotMetadata:
-  def timestamp(instant: java.time.Instant): String =
-    stamp.format(instant)
-
-  def updated(instant: java.time.Instant): String =
-    compact.format(instant)
-
-  def base(revision: String): Either[PublishError, String] =
+  def parse(revision: String): Either[SnapshotRevisionError, SnapshotName] =
     val stripped = revision.stripSuffix("-SNAPSHOT")
-    if stripped.nonEmpty && stripped != revision && !stripped.contains("..") then Right(stripped)
-    else Left(PublishError.NotSnapshot(revision))
+    if stripped.nonEmpty && stripped != revision && !stripped.contains("..") then
+      Right(SnapshotName(SnapshotBase.trusted(stripped), SnapshotRevision.trusted(revision)))
+    else Left(SnapshotRevisionError.NotSnapshot(revision))
 
-  def buildNumber(xml: String): Either[PublishError, Int] =
+  def buildNumber(xml: String): Either[MetadataFault, Int] =
     val open = "<buildNumber>"
     val close = "</buildNumber>"
     val start = xml.indexOf(open)
     val end = if start < 0 then -1 else xml.indexOf(close, start + open.length)
-    if start < 0 || end < 0 then Left(PublishError.Metadata("snapshot metadata has no build number"))
+    if start < 0 || end < 0 then Left(MetadataFault.MissingBuild)
     else
-      val raw = xml.substring(start + open.length, end).trim
-      raw.toIntOption match
+      xml.substring(start + open.length, end).trim.toIntOption match
         case Some(number) if number > 0 => Right(number)
-        case _                           => Left(PublishError.Metadata("snapshot metadata has no build number"))
+        case _                           => Left(MetadataFault.BadBuild)
 
-  def render(
-      group: String,
-      artifact: String,
-      revision: String,
-      timestamp: String,
-      build: Int,
-      unique: String,
-      updatedAt: String,
-  ): String =
-    val groupText = xml(group)
-    val artifactText = xml(artifact)
-    val revisionText = xml(revision)
-    val uniqueText = xml(unique)
+  def render(document: SnapshotDocument): String =
+    val groupText = xml(document.group.value)
+    val artifactText = xml(document.name.value)
+    val revisionText = xml(document.revision.value)
+    val uniqueText = xml(document.unique.value)
+    val stamp = document.stamp.value
+    val updated = document.updated.value
     s"""<?xml version="1.0" encoding="UTF-8"?>
        |<metadata modelVersion="1.1.0">
        |  <groupId>$groupText</groupId>
@@ -58,117 +233,93 @@ object SnapshotMetadata:
        |  <version>$revisionText</version>
        |  <versioning>
        |    <snapshot>
-       |      <timestamp>$timestamp</timestamp>
-       |      <buildNumber>$build</buildNumber>
+       |      <timestamp>$stamp</timestamp>
+       |      <buildNumber>${document.build}</buildNumber>
        |    </snapshot>
-       |    <lastUpdated>$updatedAt</lastUpdated>
+       |    <lastUpdated>$updated</lastUpdated>
        |    <snapshotVersions>
        |      <snapshotVersion>
        |        <extension>jar</extension>
        |        <value>$uniqueText</value>
-       |        <updated>$updatedAt</updated>
+       |        <updated>$updated</updated>
        |      </snapshotVersion>
        |      <snapshotVersion>
        |        <extension>pom</extension>
        |        <value>$uniqueText</value>
-       |        <updated>$updatedAt</updated>
+       |        <updated>$updated</updated>
        |      </snapshotVersion>
        |    </snapshotVersions>
        |  </versioning>
        |</metadata>
        |""".stripMargin
 
-  private val stamp = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").withZone(ZoneOffset.UTC)
-  private val compact = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC)
-
   private def xml(text: String): String =
     text.flatMap:
-      case '&' => "&amp;"
-      case '<' => "&lt;"
-      case '>' => "&gt;"
+      case '&'  => "&amp;"
+      case '<'  => "&lt;"
+      case '>'  => "&gt;"
       case char => String.valueOf(char)
 
 private[central] final class SnapshotPublisher(
-    base: String,
-    user: String,
-    password: String,
-    clock: Clock,
+    repository: SnapshotRepository,
+    credentials: RepositorySecret,
+    client: Client,
 ) extends Publisher:
-  private val client = HttpClient.newBuilder()
-    .followRedirects(HttpClient.Redirect.NEVER)
-    .connectTimeout(Duration.ofSeconds(20))
-    .build()
-
-  private val authorization =
-    val token = Base64.getEncoder.encodeToString(s"$user:$password".getBytes(StandardCharsets.UTF_8))
-    s"Basic $token"
+  private val token =
+    "Basic " + BasicCredentials.render(credentials.user.value, new String(credentials.password.value.toArray))
 
   def publish(artifact: Artifact): IO[PublishError, Published] =
     ZIO.fromEither(plan(artifact)).flatMap: planned =>
       for
-        previous <- metadata(planned.metadataUrl)
-        build <- ZIO.fromEither(nextBuild(previous))
-        instant = clock.instant()
-        stamped = SnapshotMetadata.timestamp(instant)
-        unique = s"${planned.base}-$stamped-$build"
-        _ <- ZIO.foreachDiscard(files(planned, unique))(item => put(planned.fileUrl(item.name), item.bytes))
-        body = SnapshotMetadata.render(
-          planned.group,
-          planned.artifact,
-          planned.revision,
-          stamped,
-          build,
-          unique,
-          SnapshotMetadata.updated(instant),
-        )
-        _ <- ZIO.foreachDiscard(sidecars("maven-metadata.xml", Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8)))): item =>
-          put(planned.fileUrl(item.name), item.bytes)
-      yield Published(
-        java.nio.file.Path.of(s"${planned.artifact}-$unique.jar"),
-        java.nio.file.Path.of(s"${planned.artifact}-$unique.pom"),
-        planned.jarSha,
-        Some(unique),
-      )
+        previous <- metadata(planned.metadata)
+        build    <- ZIO.fromEither(nextBuild(previous)).mapError(PublishError.Metadata(_))
+        instant  <- ZIO.clockWith(_.instant)
+        stamp     = SnapshotStamp.from(instant)
+        unique    = SnapshotVersion(planned.base, stamp, build)
+        _        <- ZIO.foreachDiscard(files(planned, unique))(item => put(planned.directory / item.name, item.bytes))
+        body      = SnapshotMetadata.render(
+                      SnapshotDocument(
+                        planned.group,
+                        planned.name,
+                        planned.revision,
+                        stamp,
+                        build,
+                        unique,
+                        SnapshotUpdated.from(instant),
+                      )
+                    )
+        xml       = Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8))
+        _        <- ZIO.foreachDiscard(sidecars("maven-metadata.xml", xml))(item => put(planned.directory / item.name, item.bytes))
+      yield Published.Snapshot(unique, planned.sha256)
 
-  override def toString: String = "SnapshotPublisher"
-
-  private def nextBuild(previous: Option[String]): Either[PublishError, Int] =
+  private def nextBuild(previous: Option[String]): Either[MetadataFault, Int] =
     previous match
-      case None => Right(1)
+      case None      => Right(1)
       case Some(xml) =>
         SnapshotMetadata.buildNumber(xml).flatMap: current =>
-          if current == Int.MaxValue then Left(PublishError.Metadata("snapshot metadata build number cannot increase"))
-          else Right(current + 1)
+          if current == Int.MaxValue then Left(MetadataFault.Saturated) else Right(current + 1)
 
   private def plan(artifact: Artifact): Either[PublishError, Planned] =
     for
-      jar <- JarCheck.accept(artifact.jar)
-      base <- SnapshotMetadata.base(artifact.revision.render)
-      root <- repository
+      jar   <- JarCheck.accept(artifact.jar)
+      named <- SnapshotMetadata.parse(artifact.revision.render).left.map(PublishError.NotSnapshot(_))
     yield
-      val revision = artifact.revision.render
-      val tail = artifact.group.segments :+ artifact.name.value :+ revision
-      val directory = (root :: tail).mkString("/")
-      val pom = Layout.pom(artifact)
+      val tail = artifact.group.segments :+ artifact.name.value :+ named.revision.value
+      val directory = tail.foldLeft(repository.root)(_ / _)
       Planned(
-        artifact.group.value,
-        artifact.name.value,
-        revision,
-        base,
-        directory + "/maven-metadata.xml",
+        artifact.group,
+        artifact.name,
+        named.revision,
+        named.base,
+        directory / "maven-metadata.xml",
         directory,
-        pom,
+        Layout.pom(artifact),
         jar,
-        Digest.sha256(jar),
+        Checksum.sha256(jar),
       )
 
-  private def repository: Either[PublishError, String] =
-    val trimmed = if base.endsWith("/") then base.dropRight(1) else base
-    if trimmed.startsWith("https://") || trimmed.startsWith("http://") then Right(trimmed)
-    else Left(PublishError.Transport(trimmed))
-
-  private def files(planned: Planned, unique: String): List[Upload] =
-    val stem = s"${planned.artifact}-$unique"
+  private def files(planned: Planned, unique: SnapshotVersion): List[Upload] =
+    val stem = s"${planned.name.value}-${unique.value}"
     val pom = Chunk.fromArray(planned.pom.getBytes(StandardCharsets.UTF_8))
     sidecars(s"$stem.jar", planned.jar) ++ sidecars(s"$stem.pom", pom)
 
@@ -183,50 +334,46 @@ private[central] final class SnapshotPublisher(
   private def text(hex: String): Chunk[Byte] =
     Chunk.fromArray(s"$hex\n".getBytes(StandardCharsets.UTF_8))
 
-  private def metadata(url: String): IO[PublishError, Option[String]] =
-    send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(2)).header("Authorization", authorization).header("User-Agent", "histos").GET().build()).flatMap: response =>
-      response.statusCode match
-        case 404 => ZIO.succeed(None)
-        case 200 => ZIO.succeed(Some(new String(response.body, StandardCharsets.UTF_8)))
+  private def metadata(url: Url): IO[PublishError, Option[String]] =
+    exchange(Method.GET, url, None).flatMap: response =>
+      response.status.code match
+        case 404       => ZIO.succeed(None)
+        case 200       =>
+          response.body.strict match
+            case Some(bytes) => ZIO.succeed(Some(new String(bytes.toArray, StandardCharsets.UTF_8)))
+            case None        => ZIO.fail(PublishError.Metadata(MetadataFault.Unread))
         case 401 | 403 => ZIO.fail(PublishError.Unauthorized)
-        case code => ZIO.fail(PublishError.Status(code, detail(response.body)))
+        case code      => ZIO.fail(PublishError.Status(code))
 
-  private def put(url: String, bytes: Chunk[Byte]): IO[PublishError, Unit] =
-    val request = HttpRequest.newBuilder(URI.create(url))
-      .timeout(Duration.ofMinutes(5))
-      .header("Authorization", authorization)
-      .header("User-Agent", "histos")
-      .header("Content-Type", "application/octet-stream")
-      .PUT(HttpRequest.BodyPublishers.ofByteArray(bytes.toArray))
-      .build()
-    send(request).flatMap: response =>
-      response.statusCode match
+  private def put(url: Url, bytes: Chunk[Byte]): IO[PublishError, Unit] =
+    exchange(Method.PUT, url, Some(bytes)).flatMap: response =>
+      response.status.code match
         case 200 | 201 | 204 => ZIO.unit
         case 401 | 403       => ZIO.fail(PublishError.Unauthorized)
-        case code            => ZIO.fail(PublishError.Status(code, detail(response.body)))
+        case code            => ZIO.fail(PublishError.Status(code))
 
-  private def send(request: HttpRequest): IO[PublishError, HttpResponse[Array[Byte]]] =
-    ZIO.attemptBlocking(client.send(request, HttpResponse.BodyHandlers.ofByteArray())).mapError: error =>
-      PublishError.Transport(Option(error.getMessage).getOrElse("").take(180).replace('\n', ' ').trim)
-
-  private def detail(body: Array[Byte]): String =
-    new String(body, StandardCharsets.UTF_8).take(180).replace('\n', ' ').trim
+  private def exchange(method: Method, url: Url, body: Option[Chunk[Byte]]): IO[PublishError, Response] =
+    val headers =
+      body match
+        case None    => Headers.empty.add("Authorization", token).add("User-Agent", "histos")
+        case Some(_) =>
+          Headers.empty
+            .add("Authorization", token)
+            .add("User-Agent", "histos")
+            .add("Content-Type", "application/octet-stream")
+    val request = Request(method, url, headers, body.fold(Body.empty)(Body.fromBytes(_)))
+    client.batched(request).mapError(error => PublishError.Transport(TransportFault.from(error)))
 
   private final case class Planned(
-      group: String,
-      artifact: String,
-      revision: String,
-      base: String,
-      metadataUrl: String,
-      directory: String,
+      group: Organization,
+      name: ArtifactId,
+      revision: SnapshotRevision,
+      base: SnapshotBase,
+      metadata: Url,
+      directory: Url,
       pom: String,
       jar: Chunk[Byte],
-      jarSha: String,
-  ):
-    def fileUrl(name: String): String = s"$directory/$name"
+      sha256: Checksum,
+  )
 
   private final case class Upload(name: String, bytes: Chunk[Byte])
-
-object SnapshotLayer:
-  def apply(base: String, user: String, password: String, clock: Clock = Clock.systemUTC()): ULayer[Publisher] =
-    ZLayer.succeed(SnapshotPublisher(base, user, password, clock))

@@ -15,7 +15,7 @@ Histos builds itself. `./histos test` compiles and tests the four modules of thi
 | Module | Role | Depends on |
 | --- | --- | --- |
 | `api` | The graph, the builder, the literals, the version scheme, and the plugin contract (`histos.plugin`). The jar plugins compile against. | ZIO (because `HistosPlugin.run` returns a ZIO) |
-| `central` | Publishers: a local Maven directory, and Sonatype snapshot upload. | `api`, ZIO |
+| `central` | Publishers: a local Maven directory, and Sonatype snapshot upload through heddle's `Client`. | `api`, ZIO, heddle |
 | `engine` | Load, selection, resolution, compile, test, Scala.js, Scala Native, toolchains, publish, assembly, versions, CI render, cache, scheduler, plugin runtime. | `central`, `api`, ZIO, zio-streams, scala3-compiler, Zinc, Coursier, ASM. The Scala.js and Scala Native linkers are fetched for a child JVM and are not dependencies. |
 | `app` | The CLI, the server, BSP, and MCP. One `ZIOAppDefault`, `histos.cli.Main`. | `engine`, ZIO, zio-cli, heddle-mcp |
 
@@ -108,7 +108,7 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 The version scheme is the zipx scheme, implemented in `histos.version`: everyday builds are `<version>-ci`, a snapshot is `<version>-<sha>-SNAPSHOT`, the default branch also updates a `<version>-SNAPSHOT` pointer, and a ship number is the next release. A catalog can state a manual version, which is what this repository does. `histos run versions` checks the catalog and the registry.
 
-`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. Each platform cell is its own coordinate (`core_3`, `core_sjs1_3`, `core_native0.5_3`), with a pom that names that platform's dependencies. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31).
+`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. Each platform cell is its own coordinate (`core_3`, `core_sjs1_3`, `core_native0.5_3`), with a pom that names that platform's dependencies. `histos publish snapshots` uploads to Sonatype's snapshot repository. The repository is `https`, or `http` on loopback. `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` are read from the environment the command was given, and the password is a `Config.Secret`. The upload uses heddle's `Client` and the fiber's clock.
 
 ## Assembly and the launcher
 
@@ -210,4 +210,4 @@ The trust boundary is the local user. `histos.scala`, header plugins, and test c
 - `ApiBoundary` keeps engine classes away from build and plugin code. It is a class-loading boundary, and plugins still run with the user's permissions.
 - The server socket lives under `.histos` and serves the local user.
 - A test child gets a reduced environment and its own process. It is not a filesystem or network sandbox.
-- `histos publish snapshots` sends Basic auth to the configured repository, and an `http://` URL is accepted (B30).
+- `histos publish snapshots` sends Basic auth to Sonatype's snapshot repository. An `http` repository is accepted only on loopback.

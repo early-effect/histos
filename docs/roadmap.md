@@ -48,7 +48,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | JDK selection and provisioning | Selection and `file:` staging work | Staging unpacks zip and tar.gz into a scratch directory and moves it into place. An https lock is refused (L8). |
 | Node selection | Works | Js test and run launch the chosen Node. Staging takes a locked `file:` zip, tar.gz, or tar.xz. |
 | Local Maven publish | Works for JVM-only modules | Jvm+Js collide on one jar (B1). |
-| Snapshot upload | Works | Accepts http with Basic auth, never closes its client, ignores interrupt (B28 to B34). |
+| Snapshot upload | Works | `https`, or `http` on loopback. Credentials are a `Config.Secret`. Uploads go through heddle's scoped `Client`, and the unique version comes from the fiber's clock. |
 | Assembly | Works for this repository only | Hardcoded modules and main class (P8). |
 | Version catalog (zipx scheme) | Works | |
 | CI render and drift check | Works | Tool steps come from a marker file and a Boolean (C1). |

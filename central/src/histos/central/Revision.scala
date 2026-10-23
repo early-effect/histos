@@ -23,8 +23,14 @@ object ArtifactId:
 
   private val Name = """[A-Za-z][A-Za-z0-9_.-]*""".r
 
-  def from(raw: String): Either[PublishError, ArtifactId] =
+  def from(raw: String): Either[ArtifactIdError, ArtifactId] =
     if raw.nonEmpty && !raw.contains("..") && Name.matches(raw) then Right(raw)
-    else Left(PublishError.BadArtifact(raw))
+    else Left(ArtifactIdError.Bad(raw))
 
   extension (name: ArtifactId) def value: String = name
+
+enum ArtifactIdError:
+  case Bad(raw: String)
+
+  def message: String = this match
+    case Bad(raw) => s"'$raw' is not an artifact id"
