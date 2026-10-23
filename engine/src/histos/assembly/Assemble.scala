@@ -4,6 +4,7 @@ import histos.load.BuildClasspath
 import histos.native.NativeOrigin
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, Assembled, ClassJar, JarError, MainClass}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, RepositoryIo, Resolve, ResolveCell, ResolveError}
+import histos.workspace.Workspace
 import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError, ResolvedJdk}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -131,12 +132,9 @@ object Assemble:
     Option(path.getFileName).exists(_.toString.startsWith("scala-library-"))
 
   private def readLock(repo: Path): IO[AssembleError, DependencyLock] =
-    val path = Resolve.lockPath(repo)
-    ZIO.attemptBlocking {
-      if Files.isRegularFile(path) then Right(Files.readString(path))
-      else Left(AssembleError.Resolve(ResolveError.NoLock(path)))
-    }.mapError(_ => AssembleError.Io(path)).flatMap(ZIO.fromEither).flatMap: text =>
-      ZIO.fromEither(DependencyLock.parse(text).left.map(error => AssembleError.Resolve(ResolveError.Lock(error))))
+    Resolve.readLock(repo).mapError:
+      case ResolveError.Io(failure) => AssembleError.Io(failure.path)
+      case other                    => AssembleError.Resolve(other)
 
   private def pack(
       classes: List[Path],
@@ -155,12 +153,4 @@ object Assemble:
         yield assembled
 
   private def temp: ZIO[Scope, AssembleError, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-api")).mapError(_ => AssembleError.Io(Path.of("histos-api")))): dir =>
-      ZIO.attempt {
-        if Files.exists(dir) then
-          val walk = Files.walk(dir)
-          val paths =
-            try walk.iterator.asScala.toList
-            finally walk.close()
-          paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-      }.ignore
+    Workspace.work("histos-api").mapError(failure => AssembleError.Io(failure.path))

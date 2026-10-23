@@ -15,6 +15,7 @@ import histos.plugin.{
   RegisteredPlugin,
 }
 import histos.resolve.{ArtifactName, DependencyLock, LockedPlugin, PluginCells, Resolve, ResolveError, ResolvedArtifact}
+import histos.workspace.Workspace
 import histos.zinc.{CompileProblem, CompileSeverity, PositionBase}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
 
@@ -92,8 +93,8 @@ private object LoaderLive extends Loader:
       launcher <- digestOf(apiJar)
       boundary <- Boundary.jars(apiJar)
       matched  <- materialize(repo, scanned.requests, launcher, boundary)
-      out      <- ZIO.acquireRelease(tempDir("histos-classes"))(deleteTree)
-      source   <- ZIO.acquireRelease(writeTemp(scanned.source))(deleteFile)
+      out      <- tempDir("histos-classes")
+      source   <- writeTemp(scanned.source)
     yield Prepared(launcher, boundary, matched, source, out)
 
   private def materialize(
@@ -323,18 +324,17 @@ private object LoaderLive extends Loader:
   private def exists(path: Path): IO[LoadError, Boolean] =
     ZIO.attempt(Files.isRegularFile(path)).mapError(failed(LoadIo.Stat))
 
-  private def tempDir(prefix: String): IO[LoadError, Path] =
-    ZIO.attempt(Files.createTempDirectory(prefix)).mapError(failed(LoadIo.Temp))
+  private def tempDir(prefix: String): ZIO[Scope, LoadError, Path] =
+    Workspace.work(prefix).mapError(_ => LoadError.Io(LoadIo.Temp))
 
-  private def writeTemp(text: String): IO[LoadError, Path] =
-    ZIO.attempt {
-      val path = Files.createTempFile("histos-build", ".scala")
-      Files.writeString(path, text)
-      path
-    }.mapError(failed(LoadIo.Temp))
-
-  private def deleteFile(path: Path): UIO[Unit] =
-    ZIO.attempt(Files.deleteIfExists(path)).ignore
+  private def writeTemp(text: String): ZIO[Scope, LoadError, Path] =
+    ZIO.acquireRelease(
+      ZIO.attemptBlocking {
+        val path = Files.createTempFile("histos-build", ".scala")
+        Files.writeString(path, text)
+        path
+      }.mapError(_ => LoadError.Io(LoadIo.Temp))
+    )(path => ZIO.attemptBlocking(Files.deleteIfExists(path)).ignore)
 
   private def compile(source: Path, classpath: List[Path], out: Path): IO[LoadError, Unit] =
     drive(source, classpath, out).flatMap: reporter =>
@@ -343,7 +343,7 @@ private object LoaderLive extends Loader:
       else ZIO.unit
 
   private def drive(source: Path, classpath: List[Path], out: Path): IO[LoadError, StoreReporter] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       val reporter = new StoreReporter(null)
       new Driver().process(
         Array(
@@ -434,16 +434,6 @@ private object LoaderLive extends Loader:
       case build :: Nil => ZIO.succeed(build)
       case Nil          => ZIO.fail(LoadError.NoEntry)
       case many         => ZIO.fail(LoadError.AmbiguousEntry(many.map(build => BinaryName.fromClass(build.getClass))))
-
-  private def deleteTree(root: Path): UIO[Unit] =
-    ZIO.attempt {
-      if Files.exists(root) then
-        val walk = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.ignore
 
   private def failed(op: LoadIo): Throwable => LoadError =
     _ => LoadError.Io(op)

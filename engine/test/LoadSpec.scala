@@ -7,6 +7,7 @@ import histos.jdk.Sha256
 import histos.plugin.*
 import histos.resolve.*
 import histos.schedule.{ActionCache, RemoteCache}
+import histos.workspace.Workspace
 import histos.{BuildError, Dep, ProjectPath}
 
 import java.nio.file.{Files, Path}
@@ -18,7 +19,7 @@ import zio.*
 import zio.test.*
 
 object LoadSpec extends ZIOSpecDefault:
-  private val apiJar: IO[LoadError, Path] =
+  private val apiJar: ZIO[Scope, LoadError, Path] =
     ApiJar.locate
 
   private def withRepo(source: String): ZIO[Scope, LoadError, Path] =
@@ -29,14 +30,7 @@ object LoadSpec extends ZIOSpecDefault:
     yield dir
 
   private def deleteTree(root: Path): UIO[Unit] =
-    ZIO.attempt {
-      if Files.exists(root) then
-        val walk = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.ignore
+    Workspace.delete(root).ignore
 
   private def load(source: String): ZIO[Loader & Scope & ContentStore & Resolve, LoadError, LoadedBuild] =
     for

@@ -541,21 +541,9 @@ object GraphCompile:
     Fetched(classpath.artifacts.map(_.path), classpath.artifacts.map(_.sha256))
 
   private def readLock(repo: Path): IO[GraphCompileError, DependencyLock] =
-    val path = repo.resolve(".histos").resolve("dependencies.lock")
-    ZIO
-      .attemptBlocking {
-        if Files.isRegularFile(path) then Right(Files.readString(path))
-        else Left(GraphCompileError.Lock(ResolveError.NoLock(path)))
-      }
-      .mapError(_ => GraphCompileError.LockRead(path))
-      .flatMap(ZIO.fromEither)
-      .flatMap: text =>
-        ZIO.fromEither(
-          DependencyLock
-            .parse(text)
-            .left
-            .map(error => GraphCompileError.Lock(ResolveError.Lock(error)))
-        )
+    Resolve.readLock(repo).mapError:
+      case ResolveError.Io(failure) => GraphCompileError.LockRead(failure.path)
+      case other                    => GraphCompileError.Lock(other)
 
   /** Classpath root written for one JVM cell. Test compile and the test
     * subprocess read this directory.

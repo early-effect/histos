@@ -271,20 +271,7 @@ private[load] object PluginCells:
       .sortBy(cell => (cell.version.value, cell.platform.token))
 
   private def readLock(repo: Path): IO[PluginRunError, DependencyLock] =
-    val path = Resolve.lockPath(repo)
-    ZIO
-      .attempt:
-        if Files.isRegularFile(path) then Right(Files.readString(path))
-        else Left(failed(s"no dependency lock at $path"))
-      .mapError(_ => failed(s"could not read $path"))
-      .flatMap(ZIO.fromEither)
-      .flatMap: text =>
-        ZIO.fromEither(
-          DependencyLock
-            .parse(text)
-            .left
-            .map(error => failed(line(error.message)))
-        )
+    Resolve.readLock(repo).mapError(error => failed(line(error.message)))
 
   private def classes(repo: Path, cell: Cell): Path =
     classes(repo, cell.module.name, cell)

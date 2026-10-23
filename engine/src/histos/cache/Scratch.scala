@@ -1,8 +1,8 @@
 package histos.cache
 
-import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
+import histos.workspace.Workspace
 
-import scala.jdk.CollectionConverters.*
+import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
 
 import zio.{IO, Scope, UIO, ZIO}
 
@@ -59,11 +59,4 @@ object Scratch:
       case _ => ZIO.fail(failed)
 
   private def remove(path: Path): UIO[Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(path, LinkOption.NOFOLLOW_LINKS) then
-        val walk = Files.walk(path)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(Files.deleteIfExists)
-    }.ignore
+    Workspace.delete(path).ignore

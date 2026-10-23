@@ -7,6 +7,7 @@ import histos.jdk.Sha256
 import histos.plugin.*
 import histos.resolve.*
 import histos.schedule.{ActionCache, Hold, RemoteCache, Runner, Sendable, Verdict}
+import histos.workspace.Workspace
 import histos.workflow.Workflow
 import histos.{Dep, Module}
 
@@ -319,18 +320,11 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
   private def fileName(path: String): String =
     Option(Path.of(path).getFileName).map(_.toString).getOrElse(path)
 
-  private val apiJar: IO[LoadError, Path] =
+  private val apiJar: ZIO[Scope, LoadError, Path] =
     ApiJar.locate
 
   private def apiHex(jar: Path): IO[LoadError, String] =
     ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(LoadIo.Stat))
 
   private def deleteTree(root: Path): UIO[Unit] =
-    ZIO.attempt {
-      if Files.exists(root) then
-        val walk = Files.walk(root)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    }.ignore
+    Workspace.delete(root).ignore

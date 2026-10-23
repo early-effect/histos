@@ -7,6 +7,7 @@ import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.testrun.{TestClasspath, TestEvent, TestProcess, TestRequest}
 import histos.toolchain.Runtimes
+import histos.workspace.Workspace
 import histos.zinc.{GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk}
 import histos.{Aggregate, ClangPin, Dep, MainClass, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -179,24 +180,13 @@ object Program:
         ZIO.fail(ProgramError.NoClang(module.name, version))
 
   private def readLock(repo: Path): IO[ProgramError, DependencyLock] =
-    val path = repo.resolve(".histos").resolve("dependencies.lock")
-    ZIO.attemptBlocking {
-      if Files.isRegularFile(path) then Right(Files.readString(path))
-      else Left(ProgramError.Lock(ResolveError.NoLock(path)))
-    }.mapError(_ => ProgramError.LockRead(path)).flatMap(ZIO.fromEither).flatMap: text =>
-      ZIO.fromEither(DependencyLock.parse(text).left.map(error => ProgramError.Lock(ResolveError.Lock(error))))
+    Resolve.readLock(repo).mapError:
+      case ResolveError.Io(failure) => ProgramError.LockRead(failure.path)
+      case other                    => ProgramError.Lock(other)
 
   private def fresh(work: Path): IO[ProgramError, Path] =
-    ZIO.attemptBlocking {
-      if Files.exists(work) then
-        val walk = Files.walk(work)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-      Files.createDirectories(work)
-      work
-    }.mapError(_ => ProgramError.Work(work))
+    Workspace.delete(work).mapError(_ => ProgramError.Work(work)) *>
+      Workspace.createDirectories(work).mapError(_ => ProgramError.Work(work))
 
   private def workDir(repo: Path, cell: histos.zinc.CompiledCell): Path =
     workDir(repo, cell.module, cell.version, cell.platform)

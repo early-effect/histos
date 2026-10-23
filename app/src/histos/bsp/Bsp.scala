@@ -12,6 +12,7 @@ import histos.resolve.{
   ResolveError
 }
 import histos.program.{EntryPoints, Program, ProgramError}
+import histos.workspace.IoFailure
 import histos.testrun.{ModuleTest, SuiteNames}
 import histos.toolchain.Runtimes
 import histos.TestProvider
@@ -81,6 +82,7 @@ object Bsp:
     case NotTest
     case NotMain
     case Platforms(text: String)
+    case Mains(failure: IoFailure)
 
     def code: Int = this match
       case Parse                                         => -32700
@@ -89,7 +91,7 @@ object Bsp:
       case Params(_) | UnknownTarget | NotTest | NotMain => -32602
       case NotInitialized                                => -32002
       case Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) |
-          Tests(_) | Run(_) | Build(_) | Platforms(_) =>
+          Tests(_) | Run(_) | Build(_) | Platforms(_) | Mains(_) =>
         -32603
 
     def message: String = this match
@@ -112,6 +114,7 @@ object Bsp:
       case NotTest               => "jvmTestEnvironment needs a test target"
       case NotMain               => "jvmRunEnvironment needs a main target"
       case Platforms(text)       => text
+      case Mains(failure)        => failure.message
 
   def open(
       repo: Path,
@@ -666,21 +669,9 @@ object Bsp:
           case Left(_)         => None
 
     private def readLock: IO[BspError, DependencyLock] =
-      val path = repo.resolve(".histos").resolve("dependencies.lock")
-      ZIO
-        .attemptBlocking {
-          if Files.isRegularFile(path) then Right(Files.readString(path))
-          else Left(BspError.Lock(ResolveError.NoLock(path)))
-        }
-        .mapError(_ => BspError.LockRead(path))
-        .flatMap(ZIO.fromEither)
-        .flatMap: text =>
-          ZIO.fromEither(
-            DependencyLock
-              .parse(text)
-              .left
-              .map(error => BspError.Lock(ResolveError.Lock(error)))
-          )
+      Resolve.readLock(repo).mapError:
+        case ResolveError.Io(failure) => BspError.LockRead(failure.path)
+        case other                    => BspError.Lock(other)
 
     private def mainClasses(
         id: Rpc.RpcId,
@@ -740,6 +731,7 @@ object Bsp:
           )
           EntryPoints
             .mains(classes)
+            .mapError(failure => BspError.Mains(failure))
             .map: found =>
               val names = (named ++ found).distinct.sorted
               Rpc.ScalaMainClassesItem(

@@ -27,7 +27,10 @@ object SourceWatch:
     (repo.resolve("histos.scala") :: owned ::: shared).distinct
 
   def take(roots: List[Path]): IO[WatchError, Snapshot] =
-    ZIO.attemptBlocking(Snapshot(roots.flatMap(entries).sortBy(_.path))).mapError(_ => WatchError.Read(roots.headOption.getOrElse(Path.of("."))))
+    ZIO.foreach(roots)(one).map(found => Snapshot(found.flatten.sortBy(_.path)))
+
+  private def one(root: Path): IO[WatchError, List[Entry]] =
+    ZIO.attemptBlocking(entries(root)).mapError(_ => WatchError.Read(root))
 
   /** Wait until a snapshot differs, and until a burst of writes has settled. */
   def changed(roots: List[Path]): IO[WatchError, Unit] =

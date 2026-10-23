@@ -2,6 +2,7 @@ package histos.resolve
 
 import histos.jdk.Sha256
 import histos.load.{LoadError, PluginRequest}
+import histos.workspace.{IoFailure, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
 import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -189,6 +190,7 @@ enum ResolveError:
   case NoLock(path: Path)
   case UnsupportedPlatform(platform: Platform)
   case Lock(error: LockError)
+  case Io(failure: IoFailure)
   case Repository(op: RepositoryIo)
 
   def message: String = this match
@@ -201,6 +203,7 @@ enum ResolveError:
     case ResolveError.NoLock(path)                  => s"no dependency lock at $path"
     case ResolveError.UnsupportedPlatform(platform) => s"resolve does not fetch ${PlatformToken.render(platform)}"
     case ResolveError.Lock(error)                   => error.message
+    case ResolveError.Io(failure)                   => failure.message
     case ResolveError.Repository(op)                => s"resolve failed while ${op.toString.toLowerCase}"
 
   private def shown(dependency: Dep): String =
@@ -421,8 +424,14 @@ object Resolve:
       case ClasspathScope.Compile => base
       case ClasspathScope.Test    => s"$base test"
 
+  /** The one reader of `.histos/dependencies.lock`. */
   private[histos] def readLock(repo: Path): IO[ResolveError, DependencyLock] =
     read(lockPath(repo))
+
+  private def read(path: Path): IO[ResolveError, DependencyLock] =
+    Workspace.readIfPresent(path).mapError(failure => ResolveError.Io(failure)).flatMap:
+      case None       => ZIO.fail(ResolveError.NoLock(path))
+      case Some(text) => ZIO.fromEither(DependencyLock.parse(text).left.map(ResolveError.Lock(_)))
 
   private def absent(dependencies: List[Dep])(error: ResolveError): LoadError =
     error match
@@ -499,13 +508,6 @@ object Resolve:
 
   private def marked(character: Char): Boolean =
     character == '[' || character == ']' || character == '(' || character == ')' || character == '+' || character == ','
-
-  private def read(path: Path): IO[ResolveError, DependencyLock] =
-    ZIO.attemptBlocking {
-      if Files.exists(path) then Right(Files.readString(path)) else Left(ResolveError.NoLock(path))
-    }.mapError(_ => ResolveError.Repository(RepositoryIo.Read)).flatMap:
-      case Left(error) => ZIO.fail(error)
-      case Right(text) => ZIO.fromEither(DependencyLock.parse(text).left.map(ResolveError.Lock(_)))
 
   private def write(path: Path, lock: DependencyLock): IO[ResolveError, Unit] =
     Option(path.getParent) match
