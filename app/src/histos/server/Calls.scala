@@ -331,7 +331,7 @@ object Calls:
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     GraphCompile
-      .console(repo, graph, projects, jdk, NativeOrigin.read(machine.env))
+      .strict(GraphCompile.console(repo, graph, projects, jdk, NativeOrigin.read(machine.env)))
       .mapZIO {
         case CompileFeed.Began(module, version, platform) =>
           say(Message.Out(Lines.compiling(module, version, platform)))

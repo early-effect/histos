@@ -122,7 +122,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.8 Exit codes
 
-- [ ] **B46** (correctness) `histos compile` exits 0 when a cell fails to compile: `Cli.compileLocal` fails only on a stream error, and a failed cell is a `CompileFeed.Failed` event.
+- [x] **B46** (correctness) `histos compile` exits 0 when a cell fails to compile: `Cli.compileLocal` fails only on a stream error, and a failed cell is a `CompileFeed.Failed` event. `GraphCompile.strict` fails the compile command's stream after its last event, locally and through the server. Test runs keep the lenient stream so passing cells still test.
 
 ## M2 Steps, executor, and aspects
 

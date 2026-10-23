@@ -452,7 +452,7 @@ object Cli:
       jdk =>
         ZIO.serviceWithZIO[Machine]: machine =>
           GraphCompile
-            .console(repo, loaded.graph, projects, jdk, NativeOrigin.read(machine.env))
+            .strict(GraphCompile.console(repo, loaded.graph, projects, jdk, NativeOrigin.read(machine.env)))
             .foreach(showCompile(repo, _))
             .foldZIO(
               error =>
@@ -576,6 +576,9 @@ object Cli:
     error match
       case GraphCompileError.Failed(module, version, _, _) =>
         s"'${module.value}' ${version.value} failed to compile"
+      case GraphCompileError.Cells(_, rest) =>
+        val count = rest.size + 1
+        if count == 1 then "1 cell failed to compile" else s"$count cells failed to compile"
       case other => other.message
 
   private def showCompile(repo: Path, feed: CompileFeed): UIO[Unit] =

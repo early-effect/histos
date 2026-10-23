@@ -208,6 +208,20 @@ object CliSpec extends ZIOSpecDefault:
           unknown.exit == CliExit.CompileFailed && unknown.err.contains("missing") && !unknown.err.contains("dependencies.lock"),
         )
     ,
+    test("a cell that fails to compile fails compile with the compile exit code"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          _ <- ZIO.attempt {
+                 Files.createDirectories(dir.resolve("core/src"))
+                 Files.writeString(dir.resolve("core/src/Bad.scala"), "object Bad:\n  val n: Int = \"text\"\n")
+                 Files.createDirectories(dir.resolve(".histos"))
+                 Files.writeString(dir.resolve(".histos/dependencies.lock"), "cell core 3.9.0 jvm\n")
+               }.mapError(_ => LoadError.Io(LoadIo.Temp))
+          done <- Cli.execute(List("compile"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(done.exit == CliExit.CompileFailed)
+    ,
     test("test without a lock fails, and an unknown project is not a lock error"):
       ZIO.scoped:
         for

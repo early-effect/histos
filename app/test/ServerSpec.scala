@@ -348,6 +348,25 @@ object ServerSpec extends ZIOSpecDefault:
             yield assertTrue(done.exit == CliExit.Success, classFile)
           program.provideSome[Scope](layers(root, Loader.live) ++ ZLayer.succeed(machine(root)))
     ,
+    test("a cell that fails to compile fails a compile sent to the server"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt {
+                write(root, "histos.scala", "object build\n")
+                write(root, "demo/src/Bad.scala", "object Bad {\n  val n: Int = \"text\"\n}\n")
+                write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+              }
+              running <- daemon(root, built)
+              feeds <- Client.talk(running.record.socket, Call.Compile(Nil)).runCollect
+            yield assertTrue(feeds.exists {
+              case Feed.Exit(code, _) => code == CliExit.CompileFailed.code
+              case _                  => false
+            })
+          program.provideSome[Scope](layers(root, Loader.live))
+    ,
     test("a server that cannot write its record fails to open, and leaves no socket"):
       ZIO.scoped:
         temp.flatMap: root =>

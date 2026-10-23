@@ -126,6 +126,22 @@ object GraphCompile:
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     watch(repo, graph, choose(graph, names), None, platform, jdk, native)
 
+  /** Fails after the last event when a cell failed. Test runs keep the lenient stream so passing cells still test. */
+  def strict(
+      feeds: ZStream[Resolve, GraphCompileError, CompileFeed]
+  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+    ZStream.unwrap:
+      zio.Ref.make(List.empty[GraphCompileError]).map: failed =>
+        feeds.tap {
+          case CompileFeed.Failed(error) => failed.update(_ :+ error)
+          case _                         => ZIO.unit
+        } ++ ZStream
+          .fromZIO(failed.get.flatMap {
+            case Nil          => ZIO.unit
+            case head :: rest => ZIO.fail(GraphCompileError.Cells(head, rest))
+          })
+          .drain
+
   /** Compile these JVM cells, plus `dependsOn` at the same Scala version. A
     * module's other Scala versions stay untouched.
     */
