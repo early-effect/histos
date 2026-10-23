@@ -1,5 +1,7 @@
 package histos.testrun
 
+import histos.process.ProcessOutput
+
 import zio.Chunk
 
 /** The lines a process wrote, per stream, in the order they arrived. */

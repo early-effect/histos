@@ -1,11 +1,9 @@
 package histos.jdk
 
 import histos.native.{NativeOrigin, NativeToolchain}
-import histos.process.ProcessTree
+import histos.process.ChildProcess
 
 import java.nio.file.{Files, Path}
-
-import scala.jdk.CollectionConverters.*
 
 import zio.{Config, ConfigProvider, Duration, IO, ZIO, ZLayer, durationInt}
 
@@ -279,20 +277,12 @@ object Toolchain:
 
   /** The child shares this terminal, and its status is the result. Interrupt stops it and everything it started. */
   def replace(javaBin: Path, jar: Path, args: List[String]): IO[ToolchainError, Int] =
-    ZIO.scoped:
-      ZIO.acquireRelease(handOff(javaBin, jar, args))(process => ProcessTree.of(process).flatMap(_.terminate(HandOffGrace)))
-        .flatMap: process =>
-          ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => ToolchainError.Reexec)
+    ChildProcess
+      .attached(command(javaBin, jar, args), Map("HISTOS_JDK_SETTLED" -> "1"), HandOffGrace)
+      .mapError(_ => ToolchainError.Reexec)
 
   /** Time for the child's own SIGTERM handling, which stops its test children, before it is force-killed. */
   private val HandOffGrace: Duration = 2.seconds
-
-  private def handOff(javaBin: Path, jar: Path, args: List[String]): IO[ToolchainError, Process] =
-    ZIO.attemptBlocking {
-      val builder = new ProcessBuilder(command(javaBin, jar, args).asJava).inheritIO()
-      builder.environment().put("HISTOS_JDK_SETTLED", "1")
-      builder.start()
-    }.mapError(_ => ToolchainError.Reexec)
 
   private def startup(lock: JdkLock, running: Option[Path], home: Path, resolution: Resolution): Startup =
     Launch.decide(running, home, resolution) match

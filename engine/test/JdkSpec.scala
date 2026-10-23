@@ -2,7 +2,7 @@ package histos.jdk
 
 import histos.cache.ContentStore
 import histos.native.{NativeOrigin, NativeSource, NativeToolchainError}
-import histos.testrun.{ProcessExit, TestEvent, TestProcess}
+import histos.process.{ChildEvent, ChildProcess, ProcessExit}
 
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.{PosixFilePermission, PosixFilePermissions}
@@ -244,18 +244,18 @@ object JdkSpec extends ZIOSpecDefault:
                      Files.createDirectories(root.resolve("run"))
                    }
           file  = root.resolve("jdk.tar.gz")
-          packed <- TestProcess.command(List("tar", "-czf", file.toString, "-C", tree.toString, "jdk-21.0.2+13"), root.resolve("pack"), env).runCollect
+          packed <- ChildProcess.command(List("tar", "-czf", file.toString, "-C", tree.toString, "jdk-21.0.2+13"), root.resolve("pack"), env).runCollect
           bytes <- ZIO.attempt(Files.readAllBytes(file))
           lock  = JdkLock(major21, v21, ArchiveSource.Local(file), Sha256.of(zio.Chunk.fromArray(bytes)))
           home  <- JdkStage.stage(lock, machine(root).copy(env = env))
           java  = home.path.resolve("bin").resolve("java")
           mode  <- ZIO.attempt(Files.getPosixFilePermissions(java).asScala.toSet)
-          ran   <- TestProcess.command(List(java.toString), root.resolve("run"), Map.empty).runCollect
+          ran   <- ChildProcess.command(List(java.toString), root.resolve("run"), Map.empty).runCollect
         yield assertTrue(
-          packed.lastOption.contains(TestEvent.Exited(ProcessExit(0))),
+          packed.lastOption.contains(ChildEvent.Exited(ProcessExit(0))),
           home.version.map(_.value) == Right("21.0.2"),
           mode.contains(PosixFilePermission.OWNER_EXECUTE),
-          ran.toList == List(TestEvent.Out("staged java"), TestEvent.Exited(ProcessExit(0))),
+          ran.toList == List(ChildEvent.Out("staged java"), ChildEvent.Exited(ProcessExit(0))),
         )
     @@ TestAspect.withLiveSystem
     ,

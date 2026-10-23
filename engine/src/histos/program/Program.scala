@@ -5,7 +5,7 @@ import histos.native.{NativeLink, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
-import histos.testrun.{TestClasspath, TestEvent, TestProcess, TestRequest}
+import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
 import histos.zinc.{GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk}
@@ -92,10 +92,10 @@ object Program:
             for
               paths <- classpath(repo, modules, module, cell, lock, repositories)
               work <- fresh(workDir(repo, cell))
-            yield events(cell, TestRequest(
+            yield events(cell, ChildRequest(
               Platform.Jvm,
               jdk.home.resolve("bin").resolve("java"),
-              TestClasspath(cell.classes, paths.drop(1)),
+              ChildClasspath(cell.classes, paths.drop(1)),
               binary,
               work,
               env,
@@ -134,17 +134,17 @@ object Program:
             yield command(cell, List(program.toString), work, env)
     began ++ ran
 
-  private def events(cell: histos.zinc.CompiledCell, request: TestRequest): ZStream[Any, ProgramError, ProgramFeed] =
-    TestProcess.events(request).mapError(error => ProgramError.Process(cell.module, cell.version, error.message)).map:
-      case TestEvent.Out(text)    => ProgramFeed.Out(text)
-      case TestEvent.Err(text)    => ProgramFeed.Err(text)
-      case TestEvent.Exited(code) => ProgramFeed.Exited(cell.module, cell.version, cell.platform, code.value)
+  private def events(cell: histos.zinc.CompiledCell, request: ChildRequest): ZStream[Any, ProgramError, ProgramFeed] =
+    ChildProcess.events(request).mapError(error => ProgramError.Process(cell.module, cell.version, error.message)).map:
+      case ChildEvent.Out(text)    => ProgramFeed.Out(text)
+      case ChildEvent.Err(text)    => ProgramFeed.Err(text)
+      case ChildEvent.Exited(code) => ProgramFeed.Exited(cell.module, cell.version, cell.platform, code.value)
 
   private def command(cell: histos.zinc.CompiledCell, argv: List[String], work: Path, env: Map[String, String]): ZStream[Any, ProgramError, ProgramFeed] =
-    TestProcess.command(argv, work, env).mapError(error => ProgramError.Process(cell.module, cell.version, error.message)).map:
-      case TestEvent.Out(text)    => ProgramFeed.Out(text)
-      case TestEvent.Err(text)    => ProgramFeed.Err(text)
-      case TestEvent.Exited(code) => ProgramFeed.Exited(cell.module, cell.version, cell.platform, code.value)
+    ChildProcess.command(argv, work, env).mapError(error => ProgramError.Process(cell.module, cell.version, error.message)).map:
+      case ChildEvent.Out(text)    => ProgramFeed.Out(text)
+      case ChildEvent.Err(text)    => ProgramFeed.Err(text)
+      case ChildEvent.Exited(code) => ProgramFeed.Exited(cell.module, cell.version, cell.platform, code.value)
 
   /** Main classes, upstream main classes, the JVM library on JVM, then compile jars. */
   private[histos] def classpath(

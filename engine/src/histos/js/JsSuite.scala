@@ -2,7 +2,8 @@ package histos.js
 
 import histos.node.NodeBinary
 import histos.pack.MainClass
-import histos.testrun.{SuitePattern, TestClasspath, TestRequest}
+import histos.process.{ChildClasspath, ChildRequest}
+import histos.testrun.SuitePattern
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
 
@@ -35,7 +36,7 @@ object JsSuite:
       processEnv: Map[String, String],
       node: NodeBinary,
       patterns: List[SuitePattern] = Nil,
-  ): IO[JsSuiteError, TestRequest] =
+  ): IO[JsSuiteError, ChildRequest] =
     val output = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
     val classes = bridgeRoot.resolve("classes")
@@ -60,10 +61,10 @@ object JsSuite:
            )).mapError(JsSuiteError.Library(_))
       _ <- empty(output)
       _ <- empty(child)
-    yield TestRequest(
+    yield ChildRequest(
       histos.Platform.Jvm,
       jdk.home.resolve("bin").resolve("java"),
-      TestClasspath(classes, tools),
+      ChildClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
       processEnv ++ JsRun.nodeEnv(env, node) ++ Map(

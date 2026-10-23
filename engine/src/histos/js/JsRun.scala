@@ -2,7 +2,7 @@ package histos.js
 
 import histos.node.NodeBinary
 import histos.pack.MainClass
-import histos.testrun.{TestClasspath, TestRequest}
+import histos.process.{ChildClasspath, ChildRequest}
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
 
@@ -27,7 +27,7 @@ object JsRun:
       jdk: ResolvedJdk,
       processEnv: Map[String, String],
       node: NodeBinary,
-  ): IO[JsRunError, TestRequest] =
+  ): IO[JsRunError, ChildRequest] =
     val bridgeRoot = work.resolve("js-run")
     val classes = bridgeRoot.resolve("classes")
     val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")
@@ -44,10 +44,10 @@ object JsRun:
              Nil,
            )).mapError(JsRunError.Compile(_))
       _ <- empty(child)
-    yield TestRequest(
+    yield ChildRequest(
       histos.Platform.Jvm,
       jdk.home.resolve("bin").resolve("java"),
-      TestClasspath(classes, tools),
+      ChildClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
       processEnv ++ nodeEnv(env, node) ++ Map(

@@ -2,7 +2,7 @@ package histos.native
 
 import histos.jdk.Sha256
 import histos.pack.MainClass
-import histos.testrun.{TestClasspath, TestProcess, TestRequest}
+import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
 import histos.zinc.{CompileError, CompileOutput, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -179,10 +179,10 @@ object NativeLink:
            )).mapError(NativeError.Compile(_))
       _ <- emptyDir(child)
       bridge <- ZIO.fromEither(MainClass.from(NativeBridge.MainName)).mapError(error => NativeError.Link(LinkError.Linker(error.message)))
-      binary <- TestProcess.run(TestRequest(
+      binary <- ChildProcess.run(ChildRequest(
                   Platform.Jvm,
                   jdk.home.resolve("bin").resolve("java"),
-                  TestClasspath(classes, jars),
+                  ChildClasspath(classes, jars),
                   bridge,
                   child,
                   linkerEnv(env),

@@ -1,7 +1,8 @@
 package histos.native
 
 import histos.pack.MainClass
-import histos.testrun.{SuitePattern, TestClasspath, TestRequest}
+import histos.process.{ChildClasspath, ChildRequest}
+import histos.testrun.SuitePattern
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.Platform
 
@@ -28,7 +29,7 @@ object NativeSuite:
       jdk: ResolvedJdk,
       processEnv: Map[String, String],
       patterns: List[SuitePattern] = Nil,
-  ): IO[NativeSuiteError, TestRequest] =
+  ): IO[NativeSuiteError, ChildRequest] =
     val bridgeRoot = work.resolve("runner")
     val classes = bridgeRoot.resolve("classes")
     val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("NativeSuite.scala")
@@ -48,10 +49,10 @@ object NativeSuite:
              Nil,
            )).mapError(NativeSuiteError.Compile(_))
       _ <- empty(child)
-    yield TestRequest(
+    yield ChildRequest(
       Platform.Jvm,
       jdk.home.resolve("bin").resolve("java"),
-      TestClasspath(classes, tools),
+      ChildClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
       processEnv ++ Map(
