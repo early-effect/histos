@@ -88,8 +88,8 @@ A test cell runs in its own subprocess: one per module, Scala version, and platf
 
 Scala.js and Scala Native cells compile through Zinc with the platform's compiler support (`-scalajs` for Scala 3, the Scala Native compiler plugin). Linking runs in a child JVM, so the engine never loads a linker.
 
-- Scala.js test and run go through bridge programs that the engine writes as Scala source, compiles, and links per run (P1, P2). The JS environment is `JsEnv.Node` (default), `Jsdom`, or `Firefox` through Chekhov. Js children run `node` from `PATH` (B22).
-- A Native module names its tools with `.nativeVersion(...)`, default 0.5.12 from Maven Central. `HISTOS_NATIVE` overrides the fetch origin for a local build. Native links need clang on `PATH`, and `.clang(...)` names the expected major.
+- Scala.js test and run go through bridge programs that the engine writes as Scala source, compiles, and links per run (P1, P2). The JS environment is `JsEnv.Node` (default), `Jsdom`, or `Firefox` through Chekhov. Js test and run launch the Node that `histos toolchain` reports. It is chosen at a command's first Js launch and kept for the rest of the command, and Chekhov's Playwright driver gets it as `PLAYWRIGHT_NODEJS_PATH`. When no Node can be chosen, the Js cell fails with `NoNode` before it links.
+- A Native module names its tools with `.nativeVersion(...)`, default 0.5.12 from Maven Central. `HISTOS_NATIVE` overrides the fetch origin for a local build. A command reads it once from the machine and hands it to compile, the test compile, link, and runner, and the run link. A malformed value fails only Native cells. Native links need clang on `PATH`, and `.clang(...)` names the expected major.
 - Library suffixes follow the platform: `_sjs1_3`, `_native0.5_3`.
 
 ## Run
@@ -98,9 +98,9 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 ## Toolchains
 
-`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK that shares the terminal, and exits with the child's status. Interrupting the engine sends SIGTERM to that child and every process below it, then force-kills whatever is still running 2 seconds later. Engine staging handles zip archives only (B24).
+`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK that shares the terminal, and exits with the child's status. Interrupting the engine sends SIGTERM to that child and every process below it, then force-kills whatever is still running 2 seconds later. Coursier counts as installed when `cs` is on `PATH` or its JVM cache holds a JDK. Engine staging unpacks a zip (the Windows archive) itself, and a tar.gz or tar.xz with the system `tar`, which keeps file modes and symlinks. The archive is copied to a scratch file and unpacked into a scratch directory beside its destination, then moved into place atomically. A failure or an interrupt removes the scratch, and a complete unpack that another stager placed first is kept.
 
-`.histos/node.lock` pins Node, and `histos toolchain` reports which Node it would use. Execution does not use that choice yet (B22).
+`.histos/node.lock` pins Node, and `.histos/node.local` overrides it. `histos toolchain` reports which Node it would use, and Js test and run launch that one. When no installed Node matches and the lock names a `file:` zip, tar.gz, or tar.xz, that archive is staged into the cache the same way. The probe only reads: a `node` without its execute bit is not a match, and its `node --version` child is killed with everything it started if the probe is interrupted.
 
 `histos toolchain` prints the JDK decision, then Node when the graph has Js, then clang when it has Native.
 

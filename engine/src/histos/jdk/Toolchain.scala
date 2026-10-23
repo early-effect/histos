@@ -111,14 +111,14 @@ object JdkLocations:
     val coursier = JdkLocations.coursierCache(machine.userHome, machine.os, machine.env)
     val sdkRoot  = JdkLocations.sdkmanRoot(machine.userHome, machine.env)
     for
-      cacheDir <- isDir(coursier)
       csOnPath <- toolOnPath(machine.env.get("PATH"), "cs")
       sdkDir   <- isDir(sdkRoot)
       java     <- firstJdk(machine.env.get("PATH"), machine.os)
     yield
+      // Histos's own Coursier fetches create the cache directory, so the directory alone is not an install.
       val cs =
-        if cacheDir || csOnPath then ManagerProbe.Installed(Some(coursier.resolve("arc")))
-        else ManagerProbe.Absent
+        if csOnPath then ManagerProbe.Installed(Some(coursier.resolve("arc")))
+        else ManagerProbe.Cached(coursier.resolve("arc"))
       val sdk =
         if sdkDir then ManagerProbe.Installed(Some(sdkRoot.resolve("candidates").resolve("java")))
         else ManagerProbe.Absent
@@ -189,7 +189,7 @@ object Toolchain:
               lock.source match
                 case ArchiveSource.Remote(_) => ZIO.succeed(Startup.Refuse(render(lock, found)))
                 case ArchiveSource.Local(_) =>
-                  JdkStage.stage(lock, machine.cache.resolve("jdks")).mapError(ToolchainError.Stage(_)).flatMap: home =>
+                  JdkStage.stage(lock, machine).mapError(ToolchainError.Stage(_)).flatMap: home =>
                     home.version match
                       case Left(_) => ZIO.succeed(Startup.Refuse(render(lock, found)))
                       case Right(version) =>

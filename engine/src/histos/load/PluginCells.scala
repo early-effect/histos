@@ -15,6 +15,7 @@ import histos.resolve.{
   Resolve,
   ResolveCell
 }
+import histos.native.NativeOrigin
 import histos.testrun.ModuleTest
 import histos.zinc.{
   CompileFeed,
@@ -108,7 +109,8 @@ private[load] object PluginCells:
           graph,
           List(cell.module.name -> cell.version),
           cell.platform,
-          jdk
+          jdk,
+          NativeOrigin.Central
         )
         .runCollect
         .mapError(error => failed(line(error.message)))
@@ -150,6 +152,7 @@ private[load] object PluginCells:
           compiled,
           sources,
           jdk,
+          NativeOrigin.Central,
           lock,
           BuildResolvers(graph.resolvers)
         )

@@ -3,7 +3,7 @@ package histos.native
 import histos.pack.MainClass
 import histos.testrun.{SuitePattern, TestClasspath, TestRequest}
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
-import histos.{NativeVersion, Platform}
+import histos.Platform
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -20,7 +20,7 @@ object NativeSuite:
   private val SuiteMain: String = "subprocess.NativeSuite"
 
   def run(
-      revision: NativeVersion,
+      toolchain: NativeToolchain,
       framework: String,
       binary: Path,
       classpath: List[Path],
@@ -36,7 +36,7 @@ object NativeSuite:
     val child = work.resolve("runner-child")
     for
       found <- ClassShapes.read(classpath).mapError(NativeSuiteError.Shapes(_))
-      tools <- ZIO.attemptBlockingInterrupt(fetch(revision)).mapError(_ => NativeSuiteError.Unavailable).flatMap(ZIO.fromEither)
+      tools <- ZIO.attemptBlockingInterrupt(fetch(toolchain)).mapError(_ => NativeSuiteError.Unavailable).flatMap(ZIO.fromEither)
       _ <- write(shapes, encode(found))
       _ <- write(source, suite(patterns))
       _ <- JvmCompile.compile(CompileRequest(
@@ -179,15 +179,16 @@ object NativeSuite:
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
       |""".stripMargin.replace("__SUITES__", SuitePattern.embed(patterns))
 
-  private def fetch(revision: NativeVersion): Either[NativeSuiteError, List[Path]] =
+  /** The runner comes from the toolchain's origin. Its Scala and sbt dependencies come from Central. */
+  private def fetch(toolchain: NativeToolchain): Either[NativeSuiteError, List[Path]] =
     val dependency = coursier.Dependency(
       coursier.Module(coursier.Organization("org.scala-native"), coursier.ModuleName(s"test-runner_3")),
-      coursier.version.VersionConstraint(revision.value),
+      coursier.version.VersionConstraint(toolchain.revision.value),
     )
     val got = coursier.Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
       .noMirrors
       .withGradleModuleSupport(false)
-      .withRepositories(Seq(coursier.Repositories.central))
+      .withRepositories(List(NativeClasspath.repository(toolchain.source), coursier.Repositories.central).distinct)
       .addDependencies(dependency)
       .eitherResult()
     got match

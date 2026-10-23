@@ -1,14 +1,17 @@
 package histos.node
 
 import histos.jdk.{ArchiveSource, HttpsUrl, Machine, Os, Settled, Sha256}
+import histos.testrun.{ProcessExit, TestEvent, TestProcess}
 import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.PosixFilePermissions
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
-import zio.{Chunk, Scope, ZIO, durationInt}
+import zio.{Chunk, Scope, UIO, ZIO, durationInt}
 import zio.test.*
 
 object NodeSpec extends ZIOSpecDefault:
@@ -177,6 +180,85 @@ object NodeSpec extends ZIOSpecDefault:
           text = NodeToolchain.text(found)
         yield assertTrue(text.contains("chosen nvm 22.14.0"), text.contains(nvm.toString), !text.contains("java"))
     ,
+    test("a probe leaves a node's mode alone, and a node that cannot run is not chosen"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          nvm    = root.resolve(".nvm").resolve("versions").resolve("node").resolve("v22.14.0")
+          node   = nvm.resolve("bin").resolve("node")
+          _      <- ZIO.attempt(script(nvm, "v22.14.0"))
+          _      <- ZIO.attempt(Files.setPosixFilePermissions(node, PosixFilePermissions.fromString("rw-r--r--")))
+          before <- ZIO.attempt(Files.getPosixFilePermissions(node).asScala.toSet)
+          machine = Machine(Map("NVM_DIR" -> root.resolve(".nvm").toString), root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+          url    <- ZIO.fromEither(HttpsUrl.from("https://example.test/node.zip"))
+          _      <- ZIO.attempt(writeLock(root, ArchiveSource.Remote(url), Sha256.of(Chunk.fromArray("x".getBytes))))
+          found  <- NodeToolchain.explain(machine)
+          after  <- ZIO.attempt(Files.getPosixFilePermissions(node).asScala.toSet)
+        yield assertTrue(
+          after == before,
+          found.resolution == NodeResolution.Install(
+            NodeInstall.Nvm(major22),
+            List(
+              NodeCandidate.NotPresent(NodeOrigin.Override),
+              NodeCandidate.NotPresent(NodeOrigin.Path),
+              NodeCandidate.Rejected(NodeOrigin.Nvm, NodeReject.UnreadableVersion(NodeVersionError.NotExecutable(node))),
+              NodeCandidate.NotPresent(NodeOrigin.Fnm),
+              NodeCandidate.NotPresent(NodeOrigin.Volta),
+            ),
+          ),
+        )
+    ,
+    test("a failed node unpack leaves no partial directory and no temp file"):
+      ZIO.scoped:
+        for
+          root <- temp
+          bad  = zipOf("node/bin/node" -> scriptBytes("v22.14.0"), "../outside" -> scriptBytes("v22.14.0"))
+          file = root.resolve("bad.zip")
+          _    <- ZIO.attempt(Files.write(file, bad))
+          sha  = Sha256.of(Chunk.fromArray(bad))
+          out  <- NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Local(file), sha), at(root)).either
+          left <- ZIO.attempt(names(root.resolve("cache").resolve("nodes").resolve(sha.value)))
+        yield assertTrue(out == Left(NodeStageError.UnsafePath("../outside")), left == List("archive"))
+    ,
+    test("a local tar.gz or tar.xz node stages with a bin/node that runs"):
+      ZIO.scoped:
+        for
+          root  <- temp
+          env   <- zio.System.envs
+          tree  = root.resolve("tree")
+          _     <- ZIO.attempt {
+                     script(tree.resolve("node-v22.14.0-darwin-arm64"), "v22.14.0")
+                     Files.createDirectories(root.resolve("pack"))
+                   }
+          gz    = root.resolve("node.tar.gz")
+          xz    = root.resolve("node.tar.xz")
+          gzPacked <- pack(List("tar", "-czf", gz.toString, "-C", tree.toString, "node-v22.14.0-darwin-arm64"), root, env)
+          xzPacked <- pack(List("tar", "-cJf", xz.toString, "-C", tree.toString, "node-v22.14.0-darwin-arm64"), root, env)
+          machine = at(root).copy(env = env)
+          gzHome <- stageFile(gz, machine)
+          xzHome <- ZIO.when(xzPacked)(stageFile(xz, machine))
+          runs   <- ZIO.attempt(Files.isExecutable(gzHome.path.resolve("bin").resolve("node")))
+        yield assertTrue(
+          gzPacked,
+          gzHome.version == Right(v22),
+          runs,
+          xzHome.forall(_.version == Right(v22)),
+        )
+    @@ TestAspect.withLiveSystem
+    ,
+    test("interrupting a version probe stops the node and what it started"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          _      <- ZIO.attempt(slowNode(root.resolve("homes").resolve("v22.14.0"), root))
+          fiber  <- NodeProbe.homes(root.resolve("homes")).fork
+          leader <- awaitPid(root.resolve("leader.pid"))
+          child  <- awaitPid(root.resolve("child.pid"))
+          done   <- fiber.interrupt.timeout(5.seconds)
+          dead   <- ZIO.foreach(leader.toList ++ child.toList)(awaitDead)
+        yield assertTrue(done.exists(_.isInterrupted), leader.nonEmpty, child.nonEmpty, dead == List(true, true))
+    @@ TestAspect.withLiveClock
+    ,
     test("a file zip is staged and an https lock is not fetched"):
       ZIO.scoped:
         for
@@ -189,21 +271,66 @@ object NodeSpec extends ZIOSpecDefault:
           sha  = Sha256.of(Chunk.fromArray(zip))
           bad  = zipOf("../outside" -> body)
           _    <- ZIO.attempt(Files.write(root.resolve("bad.zip"), bad))
-          staged <- NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Local(file), sha), root.resolve("cache")).either
-          remote <- NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Remote(url), sha), root.resolve("remote")).either
+          staged <- NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Local(file), sha), at(root)).either
+          remote <- NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Remote(url), sha), at(root.resolve("remote"))).either
           escaped <- NodeStage.stage(
                        NodeLock(major22, v22, ArchiveSource.Local(root.resolve("bad.zip")), Sha256.of(Chunk.fromArray(bad))),
-                       root.resolve("escape"),
+                       at(root.resolve("escape")),
                      ).either
           leaked = escapedFile(root.resolve("escape"))
         yield assertTrue(
           staged.map(_.version) == Right(Right(v22)),
           remote == Left(NodeStageError.Remote(url)),
-          !Files.exists(root.resolve("remote")),
+          !Files.exists(root.resolve("remote").resolve("cache")),
           escaped == Left(NodeStageError.UnsafePath("../outside")),
           !leaked,
         )
   )
+
+  private def at(root: Path): Machine =
+    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+
+  private def pack(argv: List[String], root: Path, env: Map[String, String]) =
+    TestProcess.command(argv, root.resolve("pack"), env).runCollect.map(_.lastOption.contains(TestEvent.Exited(ProcessExit(0))))
+
+  private def stageFile(file: Path, machine: Machine) =
+    ZIO.attempt(Files.readAllBytes(file)).flatMap: bytes =>
+      NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Local(file), Sha256.of(Chunk.fromArray(bytes))), machine)
+
+  /** Answers `--version` only after the `sleep` it starts, which holds its stdout, exits. */
+  private def slowNode(home: Path, root: Path): Unit =
+    val bin = home.resolve("bin")
+    Files.createDirectories(bin)
+    val node = bin.resolve("node")
+    Files.writeString(
+      node,
+      s"""#!/bin/sh
+         |echo $$$$ > '$root/leader.pid'
+         |sleep 30 &
+         |echo $$! > '$root/child.pid'
+         |wait
+         |printf '%s\n' 'v22.14.0'
+         |""".stripMargin,
+    )
+    Files.setPosixFilePermissions(node, PosixFilePermissions.fromString("rwxr-xr-x"))
+
+  private def awaitPid(path: Path): UIO[Option[Long]] =
+    ZIO.suspendSucceed {
+      readPid(path) match
+        case Some(pid) => ZIO.succeed(Some(pid))
+        case None      => ZIO.sleep(20.millis) *> awaitPid(path)
+    }.timeout(5.seconds).map(_.flatten)
+
+  private def readPid(path: Path): Option[Long] =
+    if !Files.isRegularFile(path) then None
+    else
+      try Files.readString(path).trim.toLongOption.filter(_ > 0)
+      catch case _: java.io.IOException => None
+
+  private def awaitDead(pid: Long): UIO[Boolean] =
+    ZIO.suspendSucceed {
+      if ProcessHandle.of(pid).toScala.exists(_.isAlive) then ZIO.sleep(20.millis) *> awaitDead(pid) else ZIO.succeed(true)
+    }.timeout(1.second).map(_.getOrElse(false))
 
   private def writeLock(root: Path, source: ArchiveSource, sha: Sha256): Unit =
     Files.createDirectories(root.resolve(".histos"))
@@ -219,6 +346,13 @@ object NodeSpec extends ZIOSpecDefault:
 
   private def scriptBytes(version: String): Array[Byte] =
     s"#!/bin/sh\nprintf '%s\\n' '$version'\n".getBytes(StandardCharsets.UTF_8)
+
+  private def names(dir: Path): List[String] =
+    if !Files.isDirectory(dir) then Nil
+    else
+      val listed = Files.list(dir)
+      try listed.iterator.asScala.flatMap(path => Option(path.getFileName).map(_.toString)).toList.sorted
+      finally listed.close()
 
   private def escapedFile(root: Path): Boolean =
     if !Files.exists(root) then false

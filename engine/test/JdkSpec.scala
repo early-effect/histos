@@ -1,6 +1,9 @@
 package histos.jdk
 
+import histos.testrun.{ProcessExit, TestEvent, TestProcess}
+
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.{PosixFilePermission, PosixFilePermissions}
 
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
@@ -177,7 +180,7 @@ object JdkSpec extends ZIOSpecDefault:
           file = root.resolve("jdk.zip")
           _    <- ZIO.attempt(Files.write(file, zip))
           lock = JdkLock(major21, v21, ArchiveSource.Local(file), Sha256.of(zio.Chunk.fromArray(zip)))
-          home <- JdkStage.stage(lock, root.resolve("jdks"))
+          home <- JdkStage.stage(lock, machine(root))
           java <- ZIO.attempt(Files.isRegularFile(home.path.resolve("bin").resolve("java")))
           versionOk = home.version.exists(version => version.value == v21.value && version.major == v21.major)
         yield assertTrue(home.hasJavac, versionOk, java)
@@ -191,10 +194,10 @@ object JdkSpec extends ZIOSpecDefault:
           _    <- ZIO.attempt(Files.write(file, zip))
           other = Sha256.of(zio.Chunk.fromArray(Array[Byte](9)))
           lock  = JdkLock(major21, v21, ArchiveSource.Local(file), other)
-          out  <- JdkStage.stage(lock, root.resolve("jdks")).either
+          out  <- JdkStage.stage(lock, machine(root)).either
         yield assertTrue(
           out == Left(StageError.Checksum(other, Sha256.of(zio.Chunk.fromArray(zip)))),
-          !Files.exists(root.resolve("jdks").resolve(other.value).resolve("archive")),
+          !Files.exists(root.resolve("cache").resolve("jdks").resolve(other.value).resolve("archive")),
         )
     ,
     test("a zip entry that escapes the cache is rejected"):
@@ -206,10 +209,10 @@ object JdkSpec extends ZIOSpecDefault:
           _    <- ZIO.attempt(Files.write(file, zip))
           sha  = Sha256.of(zio.Chunk.fromArray(zip))
           lock = JdkLock(major21, v21, ArchiveSource.Local(file), sha)
-          out  <- JdkStage.stage(lock, root.resolve("jdks")).either
+          out  <- JdkStage.stage(lock, machine(root)).either
         yield assertTrue(
           out == Left(StageError.UnsafePath("../evil")),
-          !Files.exists(root.resolve("jdks").resolve(sha.value).resolve("evil")),
+          !Files.exists(root.resolve("cache").resolve("jdks").resolve(sha.value).resolve("evil")),
         )
     ,
     test("a remote url is not fetched"):
@@ -219,8 +222,72 @@ object JdkSpec extends ZIOSpecDefault:
           url  <- ZIO.fromEither(HttpsUrl.from("https://example.test/jdk.zip"))
           sha  = Sha256.of(zio.Chunk.fromArray(Array[Byte](1)))
           lock = JdkLock(major21, v21, ArchiveSource.Remote(url), sha)
-          out  <- JdkStage.stage(lock, root.resolve("jdks")).either
-        yield assertTrue(out == Left(StageError.Remote(url)), !Files.exists(root.resolve("jdks")))
+          out  <- JdkStage.stage(lock, machine(root)).either
+        yield assertTrue(out == Left(StageError.Remote(url)), !Files.exists(root.resolve("cache").resolve("jdks")))
+    ,
+    test("a local tar.gz keeps the exec bit, and its java runs"):
+      ZIO.scoped:
+        for
+          root  <- temp
+          env   <- System.envs
+          tree  = root.resolve("tree")
+          _     <- ZIO.attempt {
+                     val home = tree.resolve("jdk-21.0.2+13")
+                     Files.createDirectories(home.resolve("bin"))
+                     Files.writeString(home.resolve("bin").resolve("java"), "#!/bin/sh\necho staged java\n")
+                     Files.setPosixFilePermissions(home.resolve("bin").resolve("java"), PosixFilePermissions.fromString("rwxr-xr-x"))
+                     Files.writeString(home.resolve("bin").resolve("javac"), "")
+                     Files.writeString(home.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
+                     Files.createDirectories(root.resolve("pack"))
+                     Files.createDirectories(root.resolve("run"))
+                   }
+          file  = root.resolve("jdk.tar.gz")
+          packed <- TestProcess.command(List("tar", "-czf", file.toString, "-C", tree.toString, "jdk-21.0.2+13"), root.resolve("pack"), env).runCollect
+          bytes <- ZIO.attempt(Files.readAllBytes(file))
+          lock  = JdkLock(major21, v21, ArchiveSource.Local(file), Sha256.of(zio.Chunk.fromArray(bytes)))
+          home  <- JdkStage.stage(lock, machine(root).copy(env = env))
+          java  = home.path.resolve("bin").resolve("java")
+          mode  <- ZIO.attempt(Files.getPosixFilePermissions(java).asScala.toSet)
+          ran   <- TestProcess.command(List(java.toString), root.resolve("run"), Map.empty).runCollect
+        yield assertTrue(
+          packed.lastOption.contains(TestEvent.Exited(ProcessExit(0))),
+          home.version.map(_.value) == Right("21.0.2"),
+          mode.contains(PosixFilePermission.OWNER_EXECUTE),
+          ran.toList == List(TestEvent.Out("staged java"), TestEvent.Exited(ProcessExit(0))),
+        )
+    @@ TestAspect.withLiveSystem
+    ,
+    test("a failed unpack leaves no partial directory and no temp file"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zip  = zipOf("jdk/bin/javac" -> Array.emptyByteArray, "../evil" -> Array[Byte](1))
+          file = root.resolve("slip.zip")
+          _    <- ZIO.attempt(Files.write(file, zip))
+          sha  = Sha256.of(zio.Chunk.fromArray(zip))
+          out  <- JdkStage.stage(JdkLock(major21, v21, ArchiveSource.Local(file), sha), machine(root)).either
+          left <- ZIO.attempt(names(root.resolve("cache").resolve("jdks").resolve(sha.value)))
+        yield assertTrue(out == Left(StageError.UnsafePath("../evil")), left == List("archive"))
+    ,
+    test("a complete unpack already in place is kept"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zip  = jdkZip("21.0.2")
+          file = root.resolve("jdk.zip")
+          _    <- ZIO.attempt(Files.write(file, zip))
+          sha  = Sha256.of(zio.Chunk.fromArray(zip))
+          kept = root.resolve("cache").resolve("jdks").resolve(sha.value).resolve("unpack").resolve("jdk")
+          _    <- ZIO.attempt {
+                    Files.createDirectories(kept.resolve("bin"))
+                    Files.writeString(kept.resolve("bin").resolve("javac"), "")
+                    Files.writeString(kept.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
+                    Files.writeString(kept.resolve("theirs"), "")
+                  }
+          home <- JdkStage.stage(JdkLock(major21, v21, ArchiveSource.Local(file), sha), machine(root))
+          left <- ZIO.attempt(names(root.resolve("cache").resolve("jdks").resolve(sha.value)))
+          mark <- ZIO.attempt(Files.isRegularFile(kept.resolve("theirs")))
+        yield assertTrue(home.path == kept, mark, left == List("archive", "unpack"))
     ,
   )
 
@@ -239,6 +306,37 @@ object JdkSpec extends ZIOSpecDefault:
           root <- temp
           view <- JdkLocations.probe(machine(root), None).flatMap(Jdk.scan)
         yield assertTrue(Jdk.resolve(major21, view).is(_.subtype[Resolution.Provision]).major == major21)
+    ,
+    test("a coursier cache without a JDK, and no cs on PATH, is not an installed manager"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(Files.createDirectories(root.resolve(".cache").resolve("coursier").resolve("arc").resolve("https")))
+          view <- JdkLocations.probe(machine(root), None).flatMap(Jdk.scan)
+        yield assertTrue(
+          view.coursier == ManagerSlot.Absent,
+          Jdk.resolve(major21, view).is(_.subtype[Resolution.Provision]).major == major21,
+        )
+    ,
+    test("cs on PATH, or a JDK in coursier's cache, is an installed manager"):
+      ZIO.scoped:
+        for
+          root <- temp
+          bin  = root.resolve("bin")
+          jdk  = root.resolve(".cache").resolve("coursier").resolve("arc").resolve("https").resolve("jdk-17")
+          _    <- ZIO.attempt {
+                    Files.createDirectories(bin)
+                    Files.writeString(bin.resolve("cs"), "")
+                    Files.createDirectories(jdk.resolve("bin"))
+                    Files.writeString(jdk.resolve("bin").resolve("javac"), "")
+                    Files.writeString(jdk.resolve("release"), "JAVA_VERSION=\"17.0.9\"\n")
+                  }
+          onPath <- JdkLocations.probe(machine(root.resolve("elsewhere")).copy(env = Map("PATH" -> bin.toString)), None).flatMap(Jdk.scan)
+          cached <- JdkLocations.probe(machine(root), None).flatMap(Jdk.scan)
+        yield assertTrue(
+          onPath.coursier == ManagerSlot.Present(Nil),
+          cached.coursier == ManagerSlot.Present(List(JdkHome(jdk, hasJavac = true, version = Right(v17)))),
+        )
     ,
     test("scan reads javac and the release file"):
       ZIO.scoped:
@@ -424,6 +522,13 @@ object JdkSpec extends ZIOSpecDefault:
       output.closeEntry()
     output.close()
     buffer.toByteArray
+
+  private def names(dir: Path): List[String] =
+    if !Files.isDirectory(dir) then Nil
+    else
+      val listed = Files.list(dir)
+      try listed.iterator.asScala.flatMap(path => Option(path.getFileName).map(_.toString)).toList.sorted
+      finally listed.close()
 
   private def temp: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-jdk"))): dir =>

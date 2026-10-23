@@ -3,6 +3,7 @@ package histos.server
 import histos.bsp.{Bsp, Frame}
 import histos.jdk.Sha256
 import histos.load.HeaderScan
+import histos.toolchain.Runtimes
 import histos.zinc.ResolvedJdk
 import histos.ProjectGraph
 
@@ -609,7 +610,7 @@ object Daemon:
                   val ran =
                     asked match
                       case Call.Compile(projects) =>
-                        Calls.compile(repo, held.graph, projects, jdk, say)
+                        Calls.compile(repo, held.graph, projects, jdk, machine, say)
                       case Call.Test(projects, patterns, quick) =>
                         Calls.test(
                           repo,
@@ -618,6 +619,7 @@ object Daemon:
                           patterns,
                           quick,
                           jdk,
+                          machine,
                           say
                         )
                       case Call.Publish(repository, projects) =>
@@ -668,6 +670,7 @@ object Daemon:
                           repo,
                           held.graph,
                           jdk,
+                          machine,
                           destination,
                           say
                         )
@@ -687,6 +690,7 @@ object Daemon:
                           version,
                           bound,
                           jdk,
+                          machine,
                           warm,
                           permit,
                           buildClasspath,
@@ -846,6 +850,7 @@ object Daemon:
       version: String,
       bound: Path,
       jdk: ResolvedJdk,
+      machine: histos.jdk.Machine,
       warm: Warm,
       permit: Semaphore,
       buildClasspath: List[Path],
@@ -865,12 +870,13 @@ object Daemon:
             .mapError(_ => ServerError.Io(ServerIo.Write))
         )
       val notify = (line: String) => send(line).ignore
-      warm.live.get.flatMap { generation =>
+      warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
         Bsp
           .open(
             repo,
             generation.graph,
             jdk,
+            runtimes,
             buildClasspath,
             notify,
             build,

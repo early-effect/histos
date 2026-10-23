@@ -1,5 +1,7 @@
 package histos.jdk
 
+import histos.cache.{Placed, Scratch}
+
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
 
@@ -12,33 +14,39 @@ enum StageOp:
 
 enum StageError:
   case Remote(url: HttpsUrl)
-  case NotZip
+  case UnknownArchive
   case Checksum(expected: Sha256, actual: Sha256)
   case UnsafePath(entry: String)
   case NoHome
+  case Extract(archive: Path, failure: ExtractFailure)
   case Io(op: StageOp)
 
   def message: String = this match
     case Remote(url)                 => s"will not fetch ${url.value}"
-    case NotZip                      => "jdk archive is not a zip"
+    case UnknownArchive              => "jdk archive is not a zip, a tar.gz, or a tar.xz"
     case Checksum(expected, actual)  => s"jdk checksum was ${actual.value}, lock has ${expected.value}"
     case UnsafePath(entry)           => s"jdk archive entry escapes the cache: $entry"
     case NoHome                      => "jdk archive has no bin/javac of the locked major"
+    case Extract(archive, failure)   => failure.message(archive)
     case Io(op)                      => s"jdk stage failed while ${op.toString.toLowerCase}"
 
-/** Stage a locked zip into `cache/jdks/<sha256>`. `https` urls are refused. There is no network here. */
+/**
+ * Stage a locked archive into `cache/jdks/<sha256>`. `https` urls are refused. There is no network here.
+ * A zip is the Windows archive. A tar.gz or tar.xz is unpacked by the system `tar`.
+ * The archive and the unpack are built under scratch names and moved into place, so a reader never sees half of one.
+ */
 object JdkStage:
-  def stage(lock: JdkLock, cache: Path): IO[StageError, JdkHome] =
+  def stage(lock: JdkLock, machine: Machine): IO[StageError, JdkHome] =
     lock.source match
       case ArchiveSource.Remote(url) => ZIO.fail(StageError.Remote(url))
       case ArchiveSource.Local(source) =>
-        val root    = cache.resolve(lock.sha256.value)
+        val root    = machine.cache.resolve("jdks").resolve(lock.sha256.value)
         val archive = root.resolve("archive")
         val unpack  = root.resolve("unpack")
         for
           _    <- place(source, archive, lock.sha256)
-          _    <- requireZip(archive)
-          _    <- unpackIfNeeded(unpack, archive, lock)
+          kind <- ArchiveKind.of(archive, StageError.Io(StageOp.Read)).someOrFail(StageError.UnknownArchive)
+          _    <- unpackIfNeeded(kind, archive, unpack, lock, machine)
           home <- homeOf(unpack, lock)
         yield home
 
@@ -47,19 +55,37 @@ object JdkStage:
       case Some(found) if found == expected => ZIO.unit
       case Some(found)                      => ZIO.fail(StageError.Checksum(expected, found))
       case None =>
-        for
-          tmp    <- tempBeside(archive)
-          _      <- copy(source, tmp)
-          actual <- hash(tmp)
-          _      <-
-            if actual == expected then move(tmp, archive)
-            else delete(tmp) *> ZIO.fail(StageError.Checksum(expected, actual))
-        yield ()
+        ZIO.scoped:
+          for
+            tmp    <- Scratch.file(archive, StageError.Io(StageOp.Write))
+            _      <- copy(source, tmp)
+            actual <- hash(tmp)
+            _      <- ZIO.unless(actual == expected)(ZIO.fail(StageError.Checksum(expected, actual)))
+            _      <- Scratch.place(tmp, archive, StageError.Io(StageOp.Move))
+          yield ()
 
-  private def unpackIfNeeded(unpack: Path, archive: Path, lock: JdkLock): IO[StageError, Unit] =
+  private def unpackIfNeeded(kind: ArchiveKind, archive: Path, unpack: Path, lock: JdkLock, machine: Machine): IO[StageError, Unit] =
     homeOf(unpack, lock).either.flatMap:
       case Right(_) => ZIO.unit
-      case Left(_)  => deleteTree(unpack) *> unpackZip(archive, unpack)
+      case Left(_) =>
+        ZIO.scoped:
+          for
+            fresh <- Scratch.directory(unpack, StageError.Io(StageOp.Write))
+            _     <- kind match
+                       case ArchiveKind.Zip                     => unpackZip(archive, fresh)
+                       case ArchiveKind.TarGz | ArchiveKind.TarXz =>
+                         Tar.extract(archive, fresh, machine).mapError(StageError.Extract(archive, _))
+            _     <- homeOf(fresh, lock)
+            _     <- install(fresh, unpack, lock)
+          yield ()
+
+  /** A complete unpack already in place came from a stager that won the race, and it stays. An incomplete one predates atomic staging. */
+  private def install(fresh: Path, unpack: Path, lock: JdkLock): IO[StageError, Unit] =
+    Scratch.place(fresh, unpack, StageError.Io(StageOp.Move)).flatMap:
+      case Placed.Moved => ZIO.unit
+      case Placed.Occupied =>
+        homeOf(unpack, lock).unit.orElse:
+          deleteTree(unpack) *> Scratch.place(fresh, unpack, StageError.Io(StageOp.Move)) *> homeOf(unpack, lock).unit
 
   private def homeOf(unpack: Path, lock: JdkLock): IO[StageError, JdkHome] =
     Jdk.homes(unpack).mapError(stageProbe).flatMap: homes =>
@@ -75,15 +101,6 @@ object JdkStage:
     ZIO.attempt(Files.isRegularFile(archive)).mapError(_ => StageError.Io(StageOp.Read)).flatMap:
       case false => ZIO.none
       case true  => hash(archive).map(Some(_))
-
-  private def tempBeside(archive: Path): IO[StageError, Path] =
-    Option(archive.getParent) match
-      case None => ZIO.fail(StageError.Io(StageOp.Write))
-      case Some(parent) =>
-        ZIO.attempt {
-          Files.createDirectories(parent)
-          parent.resolve("archive.partial")
-        }.mapError(_ => StageError.Io(StageOp.Write))
 
   private def copy(from: Path, to: Path): IO[StageError, Unit] =
     ZIO.attempt(Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING)).mapError(_ => StageError.Io(StageOp.Write)).unit
@@ -102,17 +119,6 @@ object JdkStage:
       Sha256.fromDigest(digest.digest)
     }.mapError(_ => StageError.Io(StageOp.Read))
 
-  private def move(from: Path, to: Path): IO[StageError, Unit] =
-    ZIO.attempt {
-      Option(to.getParent).foreach(Files.createDirectories(_))
-      try Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-      catch case _: java.nio.file.AtomicMoveNotSupportedException =>
-        Files.move(from, to, StandardCopyOption.REPLACE_EXISTING)
-    }.mapError(_ => StageError.Io(StageOp.Move)).unit
-
-  private def delete(path: Path): IO[StageError, Unit] =
-    ZIO.attempt(Files.deleteIfExists(path)).mapError(_ => StageError.Io(StageOp.Delete)).unit
-
   private def deleteTree(root: Path): IO[StageError, Unit] =
     ZIO.attempt {
       if Files.exists(root) then
@@ -122,18 +128,6 @@ object JdkStage:
           finally walk.close()
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.mapError(_ => StageError.Io(StageOp.Delete))
-
-  private def requireZip(archive: Path): IO[StageError, Unit] =
-    ZIO.attempt {
-      val input = Files.newInputStream(archive)
-      try
-        val first  = input.read()
-        val second = input.read()
-        first == 0x50 && second == 0x4b
-      finally input.close()
-    }.mapError(_ => StageError.Io(StageOp.Read)).flatMap:
-      case true  => ZIO.unit
-      case false => ZIO.fail(StageError.NotZip)
 
   private def unpackZip(archive: Path, dest: Path): IO[StageError, Unit] =
     ZIO.attempt(unpackEntries(archive, dest.normalize)).mapError(_ => StageError.Io(StageOp.Unpack)).flatMap:

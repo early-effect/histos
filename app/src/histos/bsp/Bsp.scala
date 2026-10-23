@@ -13,6 +13,7 @@ import histos.resolve.{
 }
 import histos.program.{EntryPoints, Program, ProgramError}
 import histos.testrun.{ModuleTest, SuiteNames}
+import histos.toolchain.Runtimes
 import histos.TestProvider
 import histos.zinc.{
   CompileError,
@@ -116,6 +117,7 @@ object Bsp:
       repo: Path,
       graph: ProjectGraph,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       buildClasspath: List[Path] = Nil,
       notify: String => UIO[Unit] = _ => ZIO.unit,
       build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
@@ -132,6 +134,7 @@ object Bsp:
     yield Session.start(
       repo,
       jdk,
+      runtimes,
       buildClasspath,
       notify,
       build,
@@ -145,6 +148,7 @@ object Bsp:
     private[Bsp] def start(
         repo: Path,
         jdk: ResolvedJdk,
+        runtimes: Runtimes,
         buildClasspath: List[Path],
         notify: String => UIO[Unit],
         build: IO[LoadError, BuildNotes],
@@ -156,6 +160,7 @@ object Bsp:
       new Session(
         repo,
         jdk,
+        runtimes,
         buildClasspath,
         notify,
         build,
@@ -168,6 +173,7 @@ object Bsp:
   final class Session private (
       repo: Path,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       buildClasspath: List[Path],
       notify: String => UIO[Unit],
       build: IO[LoadError, BuildNotes],
@@ -356,7 +362,7 @@ object Bsp:
           val ran =
             ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
               GraphCompile
-                .cellFeed(repo, graph, cells, platform, jdk)
+                .cellFeed(repo, graph, cells, platform, jdk, runtimes.native)
                 .mapError(BspError.Sources(_))
                 .foreach {
                   case histos.zinc.CompileFeed.Diagnostic(
@@ -410,6 +416,7 @@ object Bsp:
                   cell,
                   sources,
                   jdk,
+                  runtimes.native,
                   lock,
                   BuildResolvers(graph.resolvers),
                   problem => heard.add(problem)
@@ -795,7 +802,7 @@ object Bsp:
             paths.map(fileUri),
             Nil,
             work.toAbsolutePath.normalize.toString,
-            ModuleTest.suiteEnv(repo)
+            ModuleTest.suiteEnv(repo, runtimes.env)
           )
         case Some(_) => ZIO.fail(BspError.NotMain)
         case None    => ZIO.fail(BspError.UnknownTarget)
@@ -845,7 +852,7 @@ object Bsp:
             (classes :: linked.paths).map(fileUri),
             Nil,
             work.toAbsolutePath.normalize.toString,
-            ModuleTest.suiteEnv(repo)
+            ModuleTest.suiteEnv(repo, runtimes.env)
           )
         case Some(_) => ZIO.fail(BspError.NotTest)
         case None    => ZIO.fail(BspError.UnknownTarget)

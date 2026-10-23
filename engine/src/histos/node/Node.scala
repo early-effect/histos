@@ -21,6 +21,12 @@ enum NodeReject:
   case WrongMajor(found: NodeMajor)
   case UnreadableVersion(error: NodeVersionError)
 
+  def message: String = this match
+    case Absent                   => "absent"
+    case NoBinary                 => "no node"
+    case WrongMajor(found)        => s"major ${found.value}"
+    case UnreadableVersion(error) => error.message
+
 enum NodeCandidate:
   case Match(origin: NodeOrigin, home: Path, version: NodeVersion)
   case Rejected(origin: NodeOrigin, reason: NodeReject)
@@ -183,9 +189,4 @@ object Node:
       case NodeCandidate.NotPresent(origin)           => s"absent ${origin.label}"
       case NodeCandidate.Empty(origin)                => s"empty ${origin.label}"
 
-  private def showReason(reason: NodeReject): String =
-    reason match
-      case NodeReject.Absent                   => "absent"
-      case NodeReject.NoBinary                 => "no node"
-      case NodeReject.WrongMajor(found)        => s"major ${found.value}"
-      case NodeReject.UnreadableVersion(error) => error.message
+  private def showReason(reason: NodeReject): String = reason.message

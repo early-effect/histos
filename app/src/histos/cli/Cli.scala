@@ -18,7 +18,8 @@ import histos.jdk.{
 import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.schedule.RemoteCache
-import histos.toolchain.Survey
+import histos.native.NativeOrigin
+import histos.toolchain.{Runtimes, Survey}
 import histos.mcp.HistosMcp
 import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
 import histos.task.{TaskError, TaskId, Tasks}
@@ -382,8 +383,9 @@ object Cli:
               jdk <- GraphCompile.jdkHere.mapError(
                 histos.program.ProgramError.Compile(_)
               )
+              runtimes <- Runtimes.read(machine)
               _ <- histos.program.Program
-                .console(repo, loaded.graph, name, jdk, machine.env, platform)
+                .console(repo, loaded.graph, name, jdk, runtimes, platform)
                 .foreach:
                   case histos.program.ProgramFeed
                         .Begin(module, version, target) =>
@@ -422,7 +424,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       projects: List[String]
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
       Call.Compile(projects),
@@ -444,27 +446,28 @@ object Cli:
       repo: Path,
       loaded: histos.load.LoadedBuild,
       projects: List[String]
-  ): URIO[Resolve, Completed] =
+  ): URIO[Machine & Resolve, Completed] =
     GraphCompile.jdkHere.foldZIO(
       error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
       jdk =>
-        GraphCompile
-          .console(repo, loaded.graph, projects, jdk)
-          .foreach(showCompile(repo, _))
-          .foldZIO(
-            error =>
-              ZIO.succeed(
-                Completed(CliExit.CompileFailed, "", compileReport(error))
-              ),
-            _ => ZIO.succeed(Completed(CliExit.Success, "", ""))
-          )
+        ZIO.serviceWithZIO[Machine]: machine =>
+          GraphCompile
+            .console(repo, loaded.graph, projects, jdk, NativeOrigin.read(machine.env))
+            .foreach(showCompile(repo, _))
+            .foldZIO(
+              error =>
+                ZIO.succeed(
+                  Completed(CliExit.CompileFailed, "", compileReport(error))
+                ),
+              _ => ZIO.succeed(Completed(CliExit.Success, "", ""))
+            )
     )
 
   private def assembly(
       repo: Path,
       apiJar: Path,
       destination: Option[String]
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
       Call.Assembly(destination),
@@ -475,7 +478,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       destination: Option[String]
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
       .either
@@ -499,8 +502,10 @@ object Cli:
                     Completed(CliExit.CompileFailed, "", error.message)
                   )
                 case Right(jdk) =>
-                  Assemble
-                    .run(repo, loaded.graph, jdk, path)
+                  ZIO
+                    .serviceWithZIO[Machine](machine =>
+                      Assemble.run(repo, loaded.graph, jdk, NativeOrigin.read(machine.env), path)
+                    )
                     .either
                     .flatMap:
                       case Left(error) =>
@@ -645,7 +650,7 @@ object Cli:
       projects: List[String],
       patterns: List[SuitePattern],
       quick: Boolean
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
       Call.Test(projects, patterns.map(_.value), quick),
@@ -658,14 +663,15 @@ object Cli:
       projects: List[String],
       patterns: List[SuitePattern],
       quick: Boolean
-  ): URIO[Resolve, Completed] =
+  ): URIO[Machine & Resolve, Completed] =
     Ref.make(false).flatMap { failed =>
       Ref.make(List.empty[GraphCompileError]).flatMap { failedCompile =>
         val ran =
           for
             jdk <- GraphCompile.jdkHere.mapError(ModuleTestError.Compile(_))
+            runtimes <- ZIO.serviceWithZIO[Machine](Runtimes.read)
             cells <- GraphCompile
-              .console(repo, loaded.graph, projects, jdk)
+              .console(repo, loaded.graph, projects, jdk, runtimes.native)
               .mapError(ModuleTestError.Compile(_))
               .mapZIO { feed =>
                 showCompile(repo, feed) *>
@@ -685,6 +691,7 @@ object Cli:
                 loaded.graph,
                 projects,
                 jdk,
+                runtimes,
                 cells.toList,
                 patterns,
                 quick,
@@ -978,7 +985,7 @@ object Cli:
   private def bsp(
       repo: Path,
       apiJar: Path
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     Attach
       .decide(repo, VersionText)
       .flatMap:
@@ -1177,8 +1184,8 @@ object Cli:
   private def bspLocal(
       repo: Path,
       apiJar: Path
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    ZIO.environmentWithZIO[Loader & Resolve & ContentStore]: env =>
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    ZIO.environmentWithZIO[Loader & Resolve & ContentStore & Machine]: env =>
       val loader = env.get[Loader]
       loader
         .load(repo, apiJar)
@@ -1202,33 +1209,35 @@ object Cli:
                       val output = java.lang.System.out
                       val notify = (line: String) =>
                         histos.bsp.Frame.write(output, line).ignore
-                      Bsp
-                        .open(
-                          repo,
-                          loaded.graph,
-                          jdk,
-                          classpath,
-                          notify,
-                          loader
-                            .reportBuild(repo, apiJar)
-                            .provideEnvironment(env)
-                        )
-                        .flatMap: session =>
-                          speak(session).foldZIO(
-                            error =>
-                              ZIO.succeed(
-                                Completed(CliExit.LoadFailed, "", error.message)
-                              ),
-                            code =>
-                              ZIO.succeed(
-                                Completed(
-                                  if code == 0 then CliExit.Success
-                                  else CliExit.TaskFailed,
-                                  "",
-                                  ""
-                                )
-                              )
+                      Runtimes.read(env.get[Machine]).flatMap: runtimes =>
+                        Bsp
+                          .open(
+                            repo,
+                            loaded.graph,
+                            jdk,
+                            runtimes,
+                            classpath,
+                            notify,
+                            loader
+                              .reportBuild(repo, apiJar)
+                              .provideEnvironment(env)
                           )
+                          .flatMap: session =>
+                            speak(session).foldZIO(
+                              error =>
+                                ZIO.succeed(
+                                  Completed(CliExit.LoadFailed, "", error.message)
+                                ),
+                              code =>
+                                ZIO.succeed(
+                                  Completed(
+                                    if code == 0 then CliExit.Success
+                                    else CliExit.TaskFailed,
+                                    "",
+                                    ""
+                                  )
+                                )
+                            )
                   )
             )
         )

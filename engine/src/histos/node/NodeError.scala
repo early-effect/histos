@@ -14,6 +14,20 @@ enum NodeOverrideError:
     case Relative(raw) => s"node.local path is not absolute: $raw"
     case Invalid(raw)  => s"node.local path is invalid: $raw"
 
+/** The `node` a Js run or test launches. */
+final case class NodeBinary(path: Path)
+
+/** Why no Node can be chosen for a Js launch. */
+enum NodeMiss:
+  case Unresolved(error: NodeError)
+  case Rejected(reason: NodeReject)
+  case Install(hint: NodeInstall)
+
+  def message: String = this match
+    case Unresolved(error) => error.message
+    case Rejected(reason)  => s"node.local was rejected: ${reason.message}"
+    case Install(hint)     => s"no installed Node matches the lock. Install it: ${hint.command}"
+
 enum NodeError:
   case BadMajor(raw: Int)
   case Unreadable(path: Path)

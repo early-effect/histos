@@ -4,7 +4,7 @@ import histos.jdk.Sha256
 import histos.pack.MainClass
 import histos.testrun.{TestClasspath, TestProcess, TestRequest}
 import histos.zinc.{CompileError, CompileOutput, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
-import histos.{NativeVersion, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -47,14 +47,12 @@ final case class Linked(binary: Path, key: Sha256)
 
 enum NativeError:
   case Clang(miss: ClangMiss)
-  case Toolchain(error: NativeToolchainError)
   case Fetch(error: NativeFetch)
   case Compile(error: CompileError)
   case Link(error: LinkError)
 
   def message: String = this match
     case Clang(miss)        => miss.message
-    case Toolchain(error)   => error.message
     case Fetch(error)       => error.message
     case Compile(error) => error.message
     case Link(error)   => error.message
@@ -91,9 +89,10 @@ object NativeProject:
           case (done, _) => done
 
 object NativeLink:
+  /** `env` is the machine's: clang is found on its `PATH`, and the linker child gets that `PATH`. */
   def link(
       major: histos.ClangMajor,
-      revision: NativeVersion,
+      toolchain: NativeToolchain,
       env: Map[String, String],
       sourcesRoot: Path,
       work: Path,
@@ -101,20 +100,19 @@ object NativeLink:
       main: MainClass,
   ): IO[NativeError, Linked] =
     for
-      clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
-      toolchain <- ZIO.fromEither(NativeToolchain.resolve(revision, env)).mapError(NativeError.Toolchain(_))
       libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
+      clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       sources <- histos.zinc.Sources.select(sourcesRoot, JvmCompile.Scala390, Platform.Native).mapError(NativeError.Compile(_))
       digest <- JvmCompile.sourceDigest(sources).mapError(NativeError.Compile(_))
       compiled <- compile(sources, libs, work, jdk).mapError(NativeError.Compile(_))
       hashes <- NativeClasspath.hashes(libs, toolchain.source).mapError(NativeError.Fetch(_))
-      binary <- invoke(clang, main, revision, compiled.classes :: libs.libraries, work, jdk, toolchain)
+      binary <- invoke(clang, main, compiled.classes :: libs.libraries, work, jdk, toolchain, env)
     yield Linked(binary, NativeKey.of(JvmCompile.Scala390, clang.version, clang.target, digest, hashes))
 
   /** Link `.nir` that is already compiled. The native libraries are added after `classpath`. */
   def linkClasspath(
       major: histos.ClangMajor,
-      revision: NativeVersion,
+      toolchain: NativeToolchain,
       env: Map[String, String],
       classpath: List[Path],
       work: Path,
@@ -122,10 +120,9 @@ object NativeLink:
       main: MainClass,
   ): IO[NativeError, Path] =
     for
-      clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
-      toolchain <- ZIO.fromEither(NativeToolchain.resolve(revision, env)).mapError(NativeError.Toolchain(_))
       libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
-      binary <- invoke(clang, main, revision, withoutLibraries(classpath, libs.libraries) ++ libs.libraries, work, jdk, toolchain)
+      clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
+      binary <- invoke(clang, main, withoutLibraries(classpath, libs.libraries) ++ libs.libraries, work, jdk, toolchain, env)
     yield binary
 
   private def compile(
@@ -159,13 +156,13 @@ object NativeLink:
   private def invoke(
       clang: Clang,
       main: MainClass,
-      revision: NativeVersion,
       classpath: List[Path],
       work: Path,
       jdk: ResolvedJdk,
       toolchain: NativeToolchain,
+      env: Map[String, String],
   ): IO[NativeError, Path] =
-    val bridgeRoot = work.resolve("bridge").resolve(revision.value)
+    val bridgeRoot = work.resolve("bridge").resolve(toolchain.revision.value)
     val classes = bridgeRoot.resolve("classes")
     val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("NativeBridge.scala")
     val child = work.resolve("child")
@@ -188,7 +185,7 @@ object NativeLink:
                   TestClasspath(classes, jars),
                   bridge,
                   child,
-                  linkerEnv(sys.env),
+                  linkerEnv(env),
                 )).mapError(error => NativeError.Link(LinkError.Linker(error.message)))
       linked <- binary.exit.value match
         case 0 => readBinary(child.resolve("binary.path"))

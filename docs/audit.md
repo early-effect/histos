@@ -94,12 +94,14 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.5 Toolchain decisions reach execution
 
-- [ ] **B22** (correctness, *verified*) `ModuleTest.scala:461`, `js/JsSuite.scala:106`, and `js/JsRun.scala:128` run `node` from `PATH`. The Node lock only feeds `histos toolchain` (`toolchain/Survey.scala:34`).
-- [ ] **B23** (correctness) `native/NativeCompile.scala:21` ignores `HISTOS_NATIVE` at compile, `ModuleTest.scala:1154-1158` drops it for test links, and `native/NativeLink.scala:191` builds the linker env from `sys.env`.
-- [ ] **B24** (correctness, *verified*) `jdk/JdkStage.scala:126-136,143-166` stages zip only. Temurin ships tar.gz on Linux and macOS, and unzip loses exec bits. `JdkSpec:301-316` checks only `isRegularFile`.
-- [ ] **B25** (correctness) `jdk/Jdk.scala:163` and `Toolchain.scala:112,118` count Coursier as installed when its cache directory exists. Histos's own `FileCache()` creates that directory.
-- [ ] **B26** (resources) `JdkStage.scala:79-85,138-166` and `node/NodeStage.scala:91-98,154-181` use one fixed `archive.partial` name and unpack in place, so concurrent or interrupted stages corrupt the cache.
-- [ ] **B27** (correctness) `node/NodeProbe.scala:194-196`: the read-only probe runs `setExecutable(true)` on user binaries.
+- [x] **B22** (correctness, *verified*) `ModuleTest.scala:461`, `js/JsSuite.scala:106`, and `js/JsRun.scala:128` run `node` from `PATH`. The Node lock only feeds `histos toolchain` (`toolchain/Survey.scala:34`). A named Js main ran the parent's `node` and never launched the `node.local` choice, and Js test and run now launch the Node the selection chooses, once per command, or fail with `NoNode`.
+- [x] **B23** (correctness) `native/NativeCompile.scala:21` ignores `HISTOS_NATIVE` at compile, `ModuleTest.scala:1154-1158` drops it for test links, and `native/NativeLink.scala:191` builds the linker env from `sys.env`. With `HISTOS_NATIVE` naming an empty local repository, compile, the test compile, and the link all fetched from Central, and the origin is now read once from `Machine` and passed to compile, the test compile, link, and runner, and the run link, with the linker env built from the machine's.
+- [x] **B24** (correctness, *verified*) `jdk/JdkStage.scala:126-136,143-166` stages zip only. Temurin ships tar.gz on Linux and macOS, and unzip loses exec bits. `JdkSpec:301-316` checks only `isRegularFile`. A tar.gz JDK was refused as `NotZip`, and the system `tar` now unpacks it as a scoped child, so `bin/java` keeps its exec bit and runs.
+- [x] **B25** (correctness) `jdk/Jdk.scala:163` and `Toolchain.scala:112,118` count Coursier as installed when its cache directory exists. Histos's own `FileCache()` creates that directory. A cache without a JDK and no `cs` on `PATH` turned provisioning into a `cs java-home` hint, and that cache now counts only when it holds a JDK.
+- [x] **B26** (resources) `JdkStage.scala:79-85,138-166` and `node/NodeStage.scala:91-98,154-181` use one fixed `archive.partial` name and unpack in place, so concurrent or interrupted stages corrupt the cache. A failed unpack left a partial `unpack` beside `archive`, and both stagers now copy to a per-attempt scratch file and unpack into a scratch directory under a scope, then move into place atomically and keep a complete unpack another stager placed first.
+- [x] **B27** (correctness) `node/NodeProbe.scala:194-196`: the read-only probe runs `setExecutable(true)` on user binaries. Probing made an `rw-r--r--` node executable and chose it, and the probe now leaves modes alone and rejects that node as `NotExecutable`.
+- [x] **B47** (correctness) `node/NodeStage.scala` stages zip only, but nodejs.org ships tar.gz and tar.xz for Linux and macOS. Found in M1.5. A tar.gz node was refused as `NotZip`, and tar.gz and tar.xz now unpack through the same scoped system `tar` as B24, with `bin/node` executable.
+- [x] **B48** (resources) `node/NodeProbe.scala` `versionOf` starts `node --version` with a raw `ProcessBuilder` and a `destroy` in `finally`. Found in M1.5. Interrupting a probe of a node whose `sleep` held stdout did not finish within 5 seconds, and the probe is now a scoped child whose release, and any interrupt, kills its tree.
 
 ## M1.6 Snapshot publisher
 
@@ -117,6 +119,10 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **B35** (resources) `engine:cache/ContentStore.scala:46-51` leaks the temp file on failure or interrupt, and `clean` never sweeps `tmp/`.
 - [ ] **B36** (correctness) `ContentStore.scala:67-81`: the keep file only grows, is global across projects, and is read-modify-write with no lock.
 - [ ] **B37** (correctness) `cache clean` does not cover JDKs or launchers. Either clean them or change the documented contract (D9).
+
+## M1.8 Exit codes
+
+- [ ] **B46** (correctness) `histos compile` exits 0 when a cell fails to compile: `Cli.compileLocal` fails only on a stream error, and a failed cell is a `CompileFeed.Failed` event.
 
 ## M2 Steps, executor, and aspects
 
@@ -154,6 +160,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **S11** (resources) `load/ApiJar.scala:47-52` is main code used only by tests and never deletes its temp directory. `Loader.scala:59-62` creates temp files outside `acquireRelease`.
 - [ ] **S12** (api-shape) More than five parameters: `PluginInputs.hash` (7), `Loader.link` (8), `Scheduler.publish` (7), `Program.one` (8), `JsSuite.run` (9), `NativeSuite.run` (8), `NativeLink` (7), `JsRun.start` (6), `JsLink.link` (6).
 - [ ] **S13** (typed-errors) `program/EntryPoints.scala:16` uses `.orDie` on IO. `watch/SourceWatch.scala:30` names the first root, not the one that failed.
+- [ ] **S14** (services) Plugin compile dependencies (`load/PluginCells.scala`) use `NativeOrigin.Central`, because the machine's environment does not reach the plugin runtime.
 - [ ] **T12** (duplication) Ten specs build their own JDK fixture from `java.lang.System.getProperty("java.home")`, several with an invented `21.0.2` fallback, beside the production `GraphCompile.jdkHere`, which reads the property the same way. They move to the `Machine` source with S1. Found in M0.3.
 - [ ] **B42** (resources) `engine:testrun/TestProcess.scala` `command`: a node or native child has no process group of its own, so a descendant that outlives it is reparented and nothing can find it. The fix is a small exec launcher that calls `setpgid` before `execvp`. Found in M1.4.
 - [ ] **B43** (resources) `TestProcess.scala` `stop`: on Linux, closing a pipe does not wake a read that is already blocked, so `stop` can wait on a writer outside the process tree that still holds the pipe. On macOS the close freed the read in 7 ms. Found in M1.4.
@@ -181,7 +188,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **P6** (correctness) `testrun/SuiteStamp.scala:19-28` and `ModuleTest.scala:790,1293`: the `testQuick` stamp omits upstream locked jars, the JDK, and flags. It does blocking IO outside an effect, swallows `NonFatal`, and uses `Map.apply` (`SuiteStamp.scala:26`).
 - [ ] **P7** (typed-errors) Errors become strings: `LinkFailed(detail: String)` (`ModuleTest.scala:116-121,453,506,604,660,672,733`), `Program` `Link`, `Process`, and `Library` (`Program.scala:106-220`), `NativeCompile.scala:21-22`, `NativeLink.scala:184,192`, `JsLink.scala:62`. `JvmCompile.scala:94,384-388` turns a `Throwable` message plus 8 frames into a diagnostic. `jdk/Toolchain` `Startup.Refuse(report: String)` and `CompileError.NativeLibrary(text: String)` carry text.
 - [ ] **P8** (api-shape) `assembly/Assemble.scala:35,40-44,53` hardcodes `app`, `api`, `histos.cli.Main`, and `versions.first`, ignores `graph.assembly`, flattens `NoModule(error.message)`, and has no test.
-- [ ] **P9** (dead code) `NodeStage`, `NativeLink.link`, and `NativeKey` have test callers only. `LinkError.Interrupted` and `Unexpected` and `NativeClasspath.entries` are unused.
+- [ ] **P9** (dead code) `NativeLink.link` and `NativeKey` have test callers only. `NodeStage` has had a production caller, `NodeToolchain.choose`, since M1.5. `LinkError.Interrupted` and `Unexpected` and `NativeClasspath.entries` are unused.
 - [ ] **P10** (stringly, booleanly) `framework: String` (`JsSuite.scala:30`, `NativeSuite.scala:24`), `Map[String, String]` child env, `Machine.userHome: String`, `hasJavac` and `hasBinary`, `slot(stop: Boolean)` (`Jdk.scala:199`, `Node.scala:114`), `Node.required: Boolean`, the module name `"hello"` (`NativeLink.scala:174`), and `HISTOS_JDK_SETTLED` written twice (`Toolchain.scala:26,209`).
 - [ ] **P11** (cast, totality) `pack/LazyVals.scala:197-198` uses `asInstanceOf` after a guard, and `:109,114,160` index lists with `window(n)` and `window.head`.
 - [ ] **P12** (correctness) Windows gaps: `native/Clang.scala:157-160` never looks for `clang.exe`, `TestProcess.scala:241-244` hardcodes `bin/java`, and the entry point exits 3 when setpgid is missing (`ModuleTest.scala:1004`).

@@ -1,6 +1,7 @@
 package histos.assembly
 
 import histos.load.BuildClasspath
+import histos.native.NativeOrigin
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, Assembled, ClassJar, JarError, MainClass}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, RepositoryIo, Resolve, ResolveCell, ResolveError}
 import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError, ResolvedJdk}
@@ -35,12 +36,12 @@ object Assemble:
   private val Program = MainClass.trusted("histos.cli.Main")
 
   /** Compile `app` and the modules it depends on, and write the one jar the launcher execs. */
-  def run(repo: Path, graph: ProjectGraph, jdk: ResolvedJdk, destination: Path): ZIO[Resolve, AssembleError, Assembled] =
+  def run(repo: Path, graph: ProjectGraph, jdk: ResolvedJdk, native: NativeOrigin, destination: Path): ZIO[Resolve, AssembleError, Assembled] =
     for
       app <- module(graph, "app")
       api <- module(graph, "api")
       ordered <- ZIO.fromEither(closure(app, index(graph)))
-      compiled <- GraphCompile.run(repo, graph, List(app.name.value), jdk).mapError(AssembleError.Compile(_))
+      compiled <- GraphCompile.run(repo, graph, List(app.name.value), jdk, native).mapError(AssembleError.Compile(_))
       classes <- ZIO.fromEither(directories(ordered, compiled, app.versions.first))
       lock <- readLock(repo)
       jars <- artifacts(ordered, app.versions.first, BuildResolvers(graph.resolvers), lock)

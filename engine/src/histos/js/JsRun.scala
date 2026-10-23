@@ -1,5 +1,6 @@
 package histos.js
 
+import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.testrun.{TestClasspath, TestRequest}
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
@@ -25,6 +26,7 @@ object JsRun:
       work: Path,
       jdk: ResolvedJdk,
       processEnv: Map[String, String],
+      node: NodeBinary,
   ): IO[JsRunError, TestRequest] =
     val bridgeRoot = work.resolve("js-run")
     val classes = bridgeRoot.resolve("classes")
@@ -48,11 +50,25 @@ object JsRun:
       TestClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
-      processEnv ++ Map(
+      processEnv ++ nodeEnv(env, node) ++ Map(
         "JS_SCRIPT" -> script.toAbsolutePath.toString,
         "JS_MODULE" -> kind.token,
       ),
     )
+
+  /** The child hands the chosen `node` to its `JSEnv`. Chekhov's Playwright driver reads `PLAYWRIGHT_NODEJS_PATH`. */
+  private[js] def nodeEnv(env: JsEnv, node: NodeBinary): Map[String, String] = env match
+    case JsEnv.Node | JsEnv.Jsdom => Map("JS_NODE" -> node.path.toString)
+    case JsEnv.Firefox            => Map("PLAYWRIGHT_NODEJS_PATH" -> node.path.toString)
+
+  /** The expression that builds the `JSEnv` on the `node` in `JS_NODE`. */
+  private[js] def envExpr(env: JsEnv): String = env match
+    case JsEnv.Node =>
+      """new org.scalajs.jsenv.nodejs.NodeJSEnv(org.scalajs.jsenv.nodejs.NodeJSEnv.Config().withExecutable(sys.env("JS_NODE")))"""
+    case JsEnv.Jsdom =>
+      """new org.scalajs.jsenv.jsdomnodejs.JSDOMNodeJSEnv(org.scalajs.jsenv.jsdomnodejs.JSDOMNodeJSEnv.Config().withExecutable(sys.env("JS_NODE")))"""
+    case JsEnv.Firefox =>
+      "new chekhov.jsenv.ChekhovJSEnv(chekhov.ChekhovBrowser.Firefox, true, false, scala.collection.immutable.Map.empty[String, String])"
 
   private def compiler(env: JsEnv): ScalaVersion = env match
     case JsEnv.Firefox        => FirefoxScala
@@ -123,12 +139,6 @@ object JsRun:
       |  }
       |}
       |""".stripMargin.replace("__ENV__", envExpr(env))
-
-  private def envExpr(env: JsEnv): String = env match
-    case JsEnv.Node => "new org.scalajs.jsenv.nodejs.NodeJSEnv()"
-    case JsEnv.Jsdom => "new org.scalajs.jsenv.jsdomnodejs.JSDOMNodeJSEnv()"
-    case JsEnv.Firefox =>
-      "new chekhov.jsenv.ChekhovJSEnv(chekhov.ChekhovBrowser.Firefox, true, false, scala.collection.immutable.Map.empty[String, String])"
 
   private final case class Artifact(organization: String, name: String, revision: String)
 

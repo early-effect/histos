@@ -148,7 +148,7 @@ object NativeClasspath:
           if file.getName.endsWith(".jar") && !classified(publication) then List(file.toPath) else Nil
         if found.isEmpty then Left(NativeFetch.Missing(name, revision)) else Right(found)
 
-  private def repository(source: NativeSource): coursier.core.Repository =
+  private[native] def repository(source: NativeSource): coursier.core.Repository =
     source match
       case NativeSource.Central     => coursier.Repositories.central
       case NativeSource.IvyLocal    => coursier.LocalRepositories.ivy2Local

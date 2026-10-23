@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.central.Publisher
 import histos.jdk.{JdkMajor, JdkVersion}
+import histos.native.NativeOrigin
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
 import histos.version.{ManualVersion, ShipNumber}
 import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
@@ -110,7 +111,7 @@ object PublishSpec extends ZIOSpecDefault:
         for
           _ <- ZIO.attempt(write(work, "src/main/scala/Use.scala", "object Use {\n  def text: String = demo.Hello.greet\n}\n"))
           _ <- Resolve.update(work, graph, repositories).provide(Resolve.live(work.resolve("coursier")))
-          cells <- GraphCompile.run(work, graph, Nil, jdk).provide(Resolve.live(work.resolve("coursier")))
+          cells <- GraphCompile.run(work, graph, Nil, jdk, NativeOrigin.Central).provide(Resolve.live(work.resolve("coursier")))
         yield cells.exists(cell => Files.isRegularFile(cell.classes.resolve("Use.class")))
 
   private val library =

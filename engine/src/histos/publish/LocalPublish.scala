@@ -9,6 +9,7 @@ import histos.central.{
   Publisher,
   Revision
 }
+import histos.native.NativeOrigin
 import histos.pack.{ClassJar, JarError}
 import histos.resolve.ArtifactName
 import histos.version.{
@@ -140,6 +141,7 @@ object LocalPublish:
           graph,
           picked.modules.toList.map(_.value),
           jdk,
+          NativeOrigin.read(env),
           report = report
         )
         .mapError(LocalPublishError.Compile(_))

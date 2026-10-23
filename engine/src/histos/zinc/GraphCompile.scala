@@ -2,7 +2,7 @@ package histos.zinc
 
 import histos.jdk.Sha256
 import histos.js.ScalaJs
-import histos.native.{NativeCompile, NativeToolchain}
+import histos.native.{NativeCompile, NativeOrigin, NativeToolchain}
 import histos.resolve.{
   BuildResolvers,
   Classpath,
@@ -105,10 +105,11 @@ object GraphCompile:
       graph: ProjectGraph,
       names: List[String],
       jdk: ResolvedJdk,
+      native: NativeOrigin,
       platform: Option[Platform] = None,
       report: CompileFeed => UIO[Unit] = _ => ZIO.unit
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
-    collected(console(repo, graph, names, jdk, platform).tap(report))
+    collected(console(repo, graph, names, jdk, native, platform).tap(report))
 
   /** One cell at a time, in dependency order, then module name, then Scala
     * version. A layer still compiles in parallel. Its lines are not
@@ -120,9 +121,10 @@ object GraphCompile:
       graph: ProjectGraph,
       names: List[String],
       jdk: ResolvedJdk,
+      native: NativeOrigin,
       platform: Option[Platform] = None
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
-    watch(repo, graph, choose(graph, names), None, platform, jdk)
+    watch(repo, graph, choose(graph, names), None, platform, jdk, native)
 
   /** Compile these JVM cells, plus `dependsOn` at the same Scala version. A
     * module's other Scala versions stay untouched.
@@ -131,7 +133,8 @@ object GraphCompile:
       repo: Path,
       graph: ProjectGraph,
       cells: List[(ProjectName, ScalaVersion)],
-      jdk: ResolvedJdk
+      jdk: ResolvedJdk,
+      native: NativeOrigin
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
     collected(
       watch(
@@ -140,7 +143,8 @@ object GraphCompile:
         chooseCells(graph, cells),
         Some(cells.map(_._2.value).toSet),
         None,
-        jdk
+        jdk,
+        native
       )
     )
 
@@ -153,7 +157,8 @@ object GraphCompile:
       graph: ProjectGraph,
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
-      jdk: ResolvedJdk
+      jdk: ResolvedJdk,
+      native: NativeOrigin
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     watch(
       repo,
@@ -161,7 +166,8 @@ object GraphCompile:
       pickCells(graph, cells, platform),
       Some(cells.map(_._2.value).toSet),
       Some(platform),
-      jdk
+      jdk,
+      native
     )
 
   private def collected(
@@ -307,7 +313,8 @@ object GraphCompile:
       picked: Either[GraphCompileError, List[Module]],
       only: Option[Set[String]],
       platform: Option[Platform],
-      jdk: ResolvedJdk
+      jdk: ResolvedJdk,
+      native: NativeOrigin
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     ZStream.unwrapScoped {
       for
@@ -322,6 +329,7 @@ object GraphCompile:
           layers,
           lock,
           jdk,
+          native,
           BuildResolvers(graph.resolvers),
           only,
           platform,
@@ -451,6 +459,7 @@ object GraphCompile:
       layers: List[List[Module]],
       lock: DependencyLock,
       jdk: ResolvedJdk,
+      native: NativeOrigin,
       repositories: Repositories,
       only: Option[Set[String]],
       platform: Option[Platform],
@@ -469,6 +478,7 @@ object GraphCompile:
                 done,
                 lock,
                 jdk,
+                native,
                 repositories,
                 only,
                 platform,
@@ -492,6 +502,7 @@ object GraphCompile:
       done: Map[CellKey, Path],
       lock: DependencyLock,
       jdk: ResolvedJdk,
+      native: NativeOrigin,
       repositories: Repositories,
       only: Option[Set[String]],
       platform: Option[Platform],
@@ -525,6 +536,7 @@ object GraphCompile:
                     done,
                     lock,
                     jdk,
+                    native,
                     repositories,
                     slot.hear
                   ).foldZIO(
@@ -559,6 +571,7 @@ object GraphCompile:
       done: Map[CellKey, Path],
       lock: DependencyLock,
       jdk: ResolvedJdk,
+      native: NativeOrigin,
       repositories: Repositories,
       hear: CompileProblem => Unit
   ): ZIO[Resolve, GraphCompileError, CompiledCell] =
@@ -598,6 +611,7 @@ object GraphCompile:
             compiled <- compile(
               module,
               request,
+              native,
               SemanticDb.argv(repo, version),
               hear
             ).mapError(failed)
@@ -635,6 +649,7 @@ object GraphCompile:
   private def compile(
       module: Module,
       request: CompileRequest,
+      native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit
   ): IO[CompileError, CompileOutput] =
@@ -644,7 +659,7 @@ object GraphCompile:
       case Platform.Native =>
         val revision =
           module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
-        NativeCompile.compile(request, revision, extra, hear)
+        NativeCompile.compile(request, revision, native, extra, hear)
 
   private def upstreamClasses(
       module: Module,

@@ -2,6 +2,8 @@ package histos.bsp
 
 import histos.cli.{Cli, Command}
 import histos.resolve.Resolve
+import histos.server.Calls
+import histos.toolchain.Runtimes
 import histos.zinc.GraphCompile
 import histos.{BuildError, Dep, Js, Jvm, MainClass, Module, ProjectGraph, ProjectName, Projects, ScalaVersion, ScalacFlag, module}
 
@@ -13,7 +15,7 @@ import scala.jdk.CollectionConverters.*
 
 import zio.json.*
 import zio.json.ast.Json
-import zio.{Ref, Scope, System, ZIO, durationInt}
+import zio.{Ref, Scope, System, UIO, ZIO, durationInt}
 import zio.test.*
 
 object BspSpec extends ZIOSpecDefault:
@@ -123,7 +125,7 @@ object BspSpec extends ZIOSpecDefault:
                    }
               demo <- moduleName(built, "demo")
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -175,7 +177,7 @@ object BspSpec extends ZIOSpecDefault:
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -200,7 +202,7 @@ object BspSpec extends ZIOSpecDefault:
                    }
               notes <- Ref.make(List.empty[String])
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk, Nil, line => notes.update(_ :+ line))
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found, Nil, line => notes.update(_ :+ line)))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -235,7 +237,7 @@ object BspSpec extends ZIOSpecDefault:
                      )
                    }
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -268,7 +270,7 @@ object BspSpec extends ZIOSpecDefault:
                      )
                    }
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               mainUri <- uriOf(listed, "scope=main")
@@ -303,7 +305,7 @@ object BspSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
               _ <- ZIO.attempt(write(root, "demo/test/DemoSpec.scala", "object DemoSpec\n"))
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               testUri <- uriOf(listed, "scope=test")
@@ -324,7 +326,7 @@ object BspSpec extends ZIOSpecDefault:
                      write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
                    }
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -343,7 +345,7 @@ object BspSpec extends ZIOSpecDefault:
                      write(root, ".histos/dependencies.lock", "cell ui 3.10.0 js\n")
                    }
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               jvm <- uriOf(listed, "platform=jvm&scope=main")
@@ -367,7 +369,7 @@ object BspSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(Projects(module("ui", Js)(scala3)))
               _ <- ZIO.attempt(write(root, ".histos/bsp-platforms", "jvm\n"))
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
             yield assertTrue(
@@ -383,7 +385,7 @@ object BspSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3).scalac(ScalacFlag.EncodingUtf8)))
               _ <- ZIO.attempt(write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n"))
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -401,7 +403,7 @@ object BspSpec extends ZIOSpecDefault:
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
               jdk <- GraphCompile.jdkHere
-              open <- Bsp.open(root, built, jdk)
+              open <- runtimes.flatMap(found => Bsp.open(root, built, jdk, found))
               _ <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
               uri <- one(listed, "3.10.0")
@@ -414,8 +416,11 @@ object BspSpec extends ZIOSpecDefault:
     for
       built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
       jdk   <- GraphCompile.jdkHere
-      open  <- Bsp.open(Path.of("."), built, jdk)
+      open  <- runtimes.flatMap(found => Bsp.open(Path.of("."), built, jdk, found))
     yield open
+
+  private val runtimes: UIO[Runtimes] =
+    System.envs.orElseSucceed(Map.empty[String, String]).flatMap(env => Runtimes.read(Calls.idleMachine.copy(env = env)))
 
   private def moduleName(graph: ProjectGraph, name: String): ZIO[Any, FixtureFault, ProjectName] =
     graph.projects.collect { case item: Module if item.name.value == name => item.name } match
