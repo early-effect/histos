@@ -1,7 +1,6 @@
 package histos.resolve
 
 import histos.jdk.Sha256
-import histos.load.{LoadError, PluginRequest}
 import histos.workspace.{IoFailure, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
 import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
@@ -191,6 +190,7 @@ enum ResolveError:
   case UnsupportedPlatform(platform: Platform)
   case Lock(error: LockError)
   case Io(failure: IoFailure)
+  case Plugin(error: PluginLoadError)
   case Repository(op: RepositoryIo)
 
   def message: String = this match
@@ -204,6 +204,7 @@ enum ResolveError:
     case ResolveError.UnsupportedPlatform(platform) => s"resolve does not fetch ${PlatformToken.render(platform)}"
     case ResolveError.Lock(error)                   => error.message
     case ResolveError.Io(failure)                   => failure.message
+    case ResolveError.Plugin(error)                 => error.message
     case ResolveError.Repository(op)                => s"resolve failed while ${op.toString.toLowerCase}"
 
   private def shown(dependency: Dep): String =
@@ -321,13 +322,24 @@ object Resolve:
       yield path.toString
 
   /** A missing plugin cell is `Unlocked` and does not compile. A path plugin has no cell. */
-  def requirePlugins(repo: Path, requests: List[PluginRequest]): ZIO[Resolve, LoadError, Unit] =
+  def requirePlugins(repo: Path, requests: List[PluginRequest]): ZIO[Resolve, ResolveError, Unit] =
     val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
     if dependencies.isEmpty then ZIO.unit
     else
-      read(lockPath(repo)).mapError(absent(dependencies)).flatMap: lock =>
-        ZIO.foreachDiscard(dependencies): dependency =>
-          ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(LoadError.Plugin(_))
+      val path = lockPath(repo)
+      read(path).foldZIO(
+        {
+          case ResolveError.NoLock(_) =>
+            dependencies match
+              case head :: _ =>
+                ZIO.fail(ResolveError.Plugin(PluginLoadError.Unlocked(PluginCoordinate.Published(head).render)))
+              case Nil => ZIO.fail(ResolveError.NoLock(path))
+          case other => ZIO.fail(other)
+        },
+        lock =>
+          ZIO.foreachDiscard(dependencies): dependency =>
+            ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(error => ResolveError.Plugin(error)),
+      )
 
   /** Re-resolve plugin cells and fail when the fresh classpath disagrees with the lock. */
   def checkPlugins(repo: Path, requests: List[PluginRequest], repositories: Repositories): ZIO[Resolve, ResolveError, Unit] =
@@ -432,14 +444,6 @@ object Resolve:
     Workspace.readIfPresent(path).mapError(failure => ResolveError.Io(failure)).flatMap:
       case None       => ZIO.fail(ResolveError.NoLock(path))
       case Some(text) => ZIO.fromEither(DependencyLock.parse(text).left.map(ResolveError.Lock(_)))
-
-  private def absent(dependencies: List[Dep])(error: ResolveError): LoadError =
-    error match
-      case ResolveError.NoLock(_) =>
-        dependencies match
-          case head :: _ => LoadError.Plugin(PluginLoadError.Unlocked(PluginCoordinate.Published(head).render))
-          case Nil       => LoadError.Io(histos.load.LoadIo.Stat)
-      case other => LoadError.Resolve(other)
 
   private def lockPlugin(
       dependency: Dep,

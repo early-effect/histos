@@ -104,6 +104,10 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 `Machine.load` is the one read of the process. It asks the fiber's `zio.System` for the environment and for `user.home`, `os.name`, and `java.home`. `HISTOS_NATIVE` and `HISTOS_JDK_SETTLED` are `zio.Config` over that map: unset native is Central, anything else is `NativeToolchain.parse`, and settled is yes only for `1`. `XDG_CACHE_HOME` is not a `HISTOS_*` key. It is taken from the same map. `Machine.layer` is that load as a layer. Compile asks `GraphCompile.jdkHere` for the JDK release file through the same `zio.System`. A plugin run reads the native origin before it builds steps, and passes that origin into compile.
 
+A JVM compile keeps Zinc's analysis in `.histos/analysis/<module>/<version>/<platform>/inc.zip` and passes it back as the previous result. An unchanged class file is not rewritten. A removed source deletes its class file. One compile holds a compiler for each toolchain and reuses it for the next cell. The pool does not sleep: `ZKeyedPool`'s shrink timer waits on the test clock.
+
+The provider runner is compiled once per Scala version. The framework, class directory, and suite patterns are a file the child reads, not source that changes every run.
+
 `Workspace` is the filesystem the build owns. `Resolve.readLock` is the one reader of `.histos/dependencies.lock`. A missing file is `ResolveError.NoLock`. A failed read is `ResolveError.Io`, which carries the path and an `IoFault`. `Workspace.delete` is the one tree delete. `Workspace.work` is a temporary directory removed when its scope closes, including on interrupt. The api jar tests pack, the loader's build classes, and assembly's scratch directory use it.
 
 `histos toolchain` prints the JDK decision, then Node when the graph has Js, then clang when it has Native.

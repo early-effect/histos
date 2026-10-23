@@ -18,6 +18,7 @@ final case class CompilePlan(
     jdk: ResolvedJdk,
     native: histos.native.NativeOrigin,
     repositories: histos.resolve.Repositories,
+    pool: CompilerPool,
 )
 
 /** One cell, the class directories it may use, and where its feeds go. */

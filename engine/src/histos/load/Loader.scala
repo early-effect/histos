@@ -14,7 +14,16 @@ import histos.plugin.{
   PluginLoadError,
   RegisteredPlugin,
 }
-import histos.resolve.{ArtifactName, DependencyLock, LockedPlugin, PluginCells, Resolve, ResolveError, ResolvedArtifact}
+import histos.resolve.{
+  ArtifactName,
+  DependencyLock,
+  LockedPlugin,
+  PluginCells,
+  PluginRequest,
+  Resolve,
+  ResolveError,
+  ResolvedArtifact,
+}
 import histos.workspace.Workspace
 import histos.zinc.{CompileProblem, CompileSeverity, PositionBase}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}

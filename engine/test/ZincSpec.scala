@@ -136,6 +136,45 @@ object ZincSpec extends ZIOSpecDefault:
           thrice  <- calls.get
         yield assertTrue(once == 1 && exists && second == first && still == 1 && thrice == 2 && changed != key)
     ,
+    test("an unchanged class is left alone, a neighbor is rebuilt, and a removed source deletes its class"):
+      ZIO.scoped:
+        for
+          root <- temp
+          jdk <- running
+          foo <- ZIO.attempt(write(root, "Foo.scala", "object Foo:\n  def n: Int = 1\n"))
+          bar <- ZIO.attempt(write(root, "Bar.scala", "object Bar:\n  def n: Int = 2\n"))
+          both = liveRequest(root, foo, jdk).copy(sources = List(foo, bar))
+          _ <- JvmCompile.compile(both)
+          stored = Files.isRegularFile(root.resolve("analysis").resolve("inc.zip"))
+          fooClass = root.resolve("classes").resolve("Foo.class")
+          barClass = root.resolve("classes").resolve("Bar.class")
+          stamped <- ZIO.attempt:
+            val old = java.nio.file.attribute.FileTime.from(java.time.Instant.now.minusSeconds(30))
+            Files.setLastModifiedTime(fooClass, old)
+            Files.getLastModifiedTime(fooClass)
+          _ <- ZIO.attempt(Files.writeString(bar, "object Bar:\n  def n: Int = 3\n"))
+          _ <- JvmCompile.compile(both)
+          fooSame <- ZIO.attempt(Files.getLastModifiedTime(fooClass) == stamped)
+          _ <- ZIO.attempt(Files.delete(bar))
+          _ <- JvmCompile.compile(both.copy(sources = List(foo)))
+          barGone <- ZIO.attempt(!Files.exists(barClass))
+          fooKept <- ZIO.attempt(Files.isRegularFile(fooClass))
+        yield assertTrue(stored && fooSame && barGone && fooKept)
+    ,
+    test("two compiles on one pool open the compiler once"):
+      ZIO.scoped:
+        for
+          root <- temp
+          jdk <- running
+          source <- ZIO.attempt(write(root, "Hello.scala", hello))
+          req = liveRequest(root, source, jdk)
+          pool <- CompilerPool.make
+          _ <- JvmCompile.compilePooled(pool, req, Nil, _ => ())
+          opened <- pool.openings
+          _ <- JvmCompile.compilePooled(pool, req, Nil, _ => ())
+          again <- pool.openings
+        yield assertTrue(opened == 1 && again == 1)
+    ,
     test("user code cannot see the compiler"):
       ZIO.scoped:
         for

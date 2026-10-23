@@ -1,7 +1,7 @@
 package histos.resolve
 
 import histos.jdk.Sha256
-import histos.load.PluginRequest
+import histos.resolve.PluginRequest
 import histos.plugin.LinkStrategy
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, GraphCompile, GraphCompileError, JvmCompile, ScalacFlags}
 import histos.{Dep, DepKind, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}

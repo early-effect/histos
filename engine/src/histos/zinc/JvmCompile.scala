@@ -15,9 +15,9 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
-import sbt.internal.inc.{IncrementalCompilerImpl, Locate, MappedFileConverter, ScalaInstance, Stamps, ZincUtil}
+import sbt.internal.inc.{FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
 import sbt.util.Logger
-import xsbti.compile.{CompileOrder, IncOptions, PerClasspathEntryLookup}
+import xsbti.compile.{CompileOrder, IncOptions, PerClasspathEntryLookup, PreviousResult}
 
 import zio.{Chunk, IO, ZIO}
 
@@ -245,6 +245,22 @@ object JvmCompile:
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
     else compilePrepared(request, Nil, extra, hear)
 
+  /** Uses the batch's compiler pool when a compile is already inside one. */
+  private[zinc] def compilePooled(
+      pool: CompilerPool,
+      request: CompileRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): IO[CompileError, CompileOutput] =
+    val tool = request.toolchain
+    if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
+    else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
+    else if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
+    else
+      ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
+        hashSources(request.sources).flatMap: digest =>
+          invoke(request, extra, hear, None, CompileKey.of(request, digest), Some(pool))
+
   /** Compile with the Scala compiler the request names. Plugins are not user dependencies. `hear` is called on the compiler thread for each diagnostic. */
   private[histos] def compilePrepared(
       request: CompileRequest,
@@ -350,151 +366,91 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]] = None,
       key: Sha256,
+      pool: Option[CompilerPool] = None,
+  ): IO[CompileError, CompileOutput] =
+    pool match
+      case Some(found) => drive(found, request, extra, hear, stdlib, key)
+      case None        => ZIO.scoped(CompilerPool.make.flatMap(drive(_, request, extra, hear, stdlib, key)))
+
+  private def drive(
+      pool: CompilerPool,
+      request: CompileRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+      stdlib: Option[List[Path]],
+      key: Sha256,
   ): IO[CompileError, CompileOutput] =
     val version = request.toolchain.version
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3) =>
         Scala3.jars(version).flatMap: toolchain =>
-          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear, stdlib, key)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+          pool.compile(request, stdlib.getOrElse(toolchain.runtime), toolchain.compilerClasspath, toolchain.bridgeJar, extra, hear, key)
       case Some(ScalaSeries.Scala2(13)) =>
-        invoke213(request, extra, hear, key)
+        for
+          jars <- Scala213.jars(version)
+          plugin <- SemanticDb.plugin(version)
+          argv = s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra
+          compiled <- pool.compile(request, jars.runtime, jars.compilerClasspath, jars.bridgeJar, argv, hear, key)
+        yield compiled
       case _ =>
         ZIO.fail(CompileError.UnsupportedScala(version))
 
-  private def invoke213(
+  /** One compile against a pooled compiler. The analysis file is the previous result and the next one. */
+  private[zinc] def once(
       request: CompileRequest,
-      extra: List[String],
-      hear: CompileProblem => Unit,
-      key: Sha256,
-  ): IO[CompileError, CompileOutput] =
-    for
-      jars <- Scala213.jars(request.toolchain.version)
-      plugin <- SemanticDb.plugin(request.toolchain.version)
-      argv = s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra
-      compiled <- ZIO.attemptBlockingInterrupt(runZinc213(request, jars, argv, hear, key)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
-    yield compiled
-
-  private def runZinc3(
-      request: CompileRequest,
-      extra: List[String],
-      toolchain: Scala3.Toolchain,
-      hear: CompileProblem => Unit,
-      stdlib: Option[List[Path]],
-      key: Sha256,
-  ): Either[CompileError, CompileOutput] =
-    val loader = toolchain.openLoader(getClass.getClassLoader)
-    try
-      compileOne(
-        request,
-        request.toolchain.version,
-        toolchain.bridgeJar,
-        stdlib.getOrElse(toolchain.runtime),
-        toolchain.compilerClasspath,
-        loader,
-        extra,
-        hear,
-        key,
-      )
-    catch
-      case NonFatal(thrown) =>
-        val text = Option(thrown.getMessage).filter(_.nonEmpty).getOrElse(thrown.getClass.getName)
-        val trace = thrown.getStackTrace.take(8).mkString("\n")
-        Left(CompileError.Failed(List(CompileDiagnostic.fromCompiler(s"$text\n$trace"))))
-    finally loader.close()
-
-  private def runZinc213(
-      request: CompileRequest,
-      toolchain: Scala213.Toolchain,
+      prepared: Prepared,
       extra: List[String],
       hear: CompileProblem => Unit,
       key: Sha256,
   ): Either[CompileError, CompileOutput] =
-    val loader = toolchain.openLoader()
+    val zinc = new IncrementalCompilerImpl
+    val converter = MappedFileConverter.empty
+    val reporter = CollectingReporter(hear)
+    val lookup = new PerClasspathEntryLookup:
+      def analysis(entry: xsbti.VirtualFile) = Optional.empty
+      def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
+    Files.createDirectories(request.classes)
+    Files.createDirectories(request.analysis)
+    val setup = zinc.setup(
+      lookup,
+      false,
+      request.analysis,
+      prepared.cache,
+      IncOptions.of(),
+      reporter,
+      None,
+      None,
+      Array.empty[xsbti.T2[String, String]],
+    )
+    val classpath = (request.classes :: prepared.runtime ++ request.classpath).map(converter.toVirtualFile).toArray
+    val sources = request.sources.map(converter.toVirtualFile).toArray
+    val inputs = zinc.inputs(
+      classpath,
+      sources,
+      request.classes,
+      None,
+      (request.toolchain.flags.argv ++ extra).toArray,
+      Array.empty[String],
+      100,
+      Array.empty,
+      CompileOrder.Mixed,
+      prepared.compilers,
+      setup,
+      remembered(zinc, request.analysis),
+      Optional.empty,
+      converter,
+      Stamps.timeWrapBinaryStamps(converter),
+    )
     try
-      compileOne(
-        request,
-        request.toolchain.version,
-        toolchain.bridgeJar,
-        toolchain.runtime,
-        toolchain.compilerClasspath,
-        loader,
-        extra,
-        hear,
-        key,
-      )
-    finally loader.close()
+      val result = zinc.compile(inputs, Logger.Null)
+      FileAnalysisStore.binary(request.analysis.resolve("inc.zip").toFile).set(result)
+      if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
+      else Right(CompileOutput(request.classes, countClasses(request.classes), key))
+    catch case _: xsbti.CompileFailed => Left(CompileError.Failed(reporter.diagnostics))
 
-  private def compileOne(
-      request: CompileRequest,
-      version: ScalaVersion,
-      bridge: Path,
-      libraries: List[Path],
-      compiler: List[Path],
-      compilerLoader: ClassLoader,
-      extra: List[String],
-      hear: CompileProblem => Unit,
-      key: Sha256,
-  ): Either[CompileError, CompileOutput] =
-    val versionText = version.value
-    val libraryLoader = new URLClassLoader(libraries.map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader)
-    try
-      val instance = new ScalaInstance(
-        versionText,
-        compilerLoader,
-        compilerLoader,
-        libraryLoader,
-        libraries.map(_.toFile).toArray,
-        compiler.map(_.toFile).toArray,
-        (libraries ++ compiler).map(_.toFile).toArray,
-        Some(versionText),
-      )
-      val zinc       = new IncrementalCompilerImpl
-      val options    = xsbti.compile.ClasspathOptionsUtil.noboot(versionText)
-      val scalac     = ZincUtil.scalaCompiler(instance, bridge, options)
-      val compilers  = zinc.compilers(instance, options, Some(request.toolchain.jdk.home), scalac)
-      val converter  = MappedFileConverter.empty
-      val reporter   = CollectingReporter(hear)
-      val lookup     = new PerClasspathEntryLookup:
-        def analysis(entry: xsbti.VirtualFile)     = Optional.empty
-        def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
-      val setup = zinc.setup(
-        lookup,
-        false,
-        request.analysis,
-        xsbti.compile.CompilerCache.fresh,
-        IncOptions.of(),
-        reporter,
-        None,
-        None,
-        Array.empty[xsbti.T2[String, String]],
-      )
-      Files.createDirectories(request.classes)
-      Files.createDirectories(request.analysis)
-      val classpath = (request.classes :: libraries ++ request.classpath).map(converter.toVirtualFile).toArray
-      val sources   = request.sources.map(converter.toVirtualFile).toArray
-      val inputs = zinc.inputs(
-        classpath,
-        sources,
-        request.classes,
-        None,
-        (request.toolchain.flags.argv ++ extra).toArray,
-        Array.empty[String],
-        100,
-        Array.empty,
-        CompileOrder.Mixed,
-        compilers,
-        setup,
-        zinc.emptyPreviousResult,
-        Optional.empty,
-        converter,
-        Stamps.timeWrapBinaryStamps(converter),
-      )
-      try
-        zinc.compile(inputs, Logger.Null)
-        if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
-        else Right(CompileOutput(request.classes, countClasses(request.classes), key))
-      catch case _: xsbti.CompileFailed => Left(CompileError.Failed(reporter.diagnostics))
-    finally libraryLoader.close()
+  private def remembered(zinc: IncrementalCompilerImpl, dir: Path): PreviousResult =
+    val got = FileAnalysisStore.binary(dir.resolve("inc.zip").toFile).get()
+    if got.isPresent then zinc.previousResult(got.get) else zinc.emptyPreviousResult
 
   private def countClasses(root: Path): Int =
     if !Files.isDirectory(root) then 0
