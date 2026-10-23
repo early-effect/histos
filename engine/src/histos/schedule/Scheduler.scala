@@ -39,11 +39,27 @@ trait Scheduler:
       verdict: Action => Verdict = Sendable.ofAction,
   ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String]
 
+  /** Cache policy for one action. The caller already ordered its upstream steps. */
+  def cached[E](
+      action: Action,
+      digest: Digest,
+      local: IO[E, String],
+      verdict: Action => Verdict = Sendable.ofAction,
+  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String]
+
 object Scheduler:
   val live: ULayer[Scheduler] =
     Parallelism.live >>> Histos.live >>> ZLayer.fromFunction(SchedulerLive.apply)
 
 private final class SchedulerLive(runner: Histos) extends Scheduler:
+  def cached[E](
+      action: Action,
+      digest: Digest,
+      local: IO[E, String],
+      verdict: Action => Verdict,
+  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
+    perform(action, digest, _ => local, verdict)
+
   def execute[E](
       root: ActionId,
       actions: List[Action],

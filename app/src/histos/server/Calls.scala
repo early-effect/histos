@@ -14,6 +14,7 @@ import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, ResolvedJdk}
 import histos.jdk.{Machine, Os, Settled}
 import histos.jdk.Sha256
 import histos.load.{LoadError, PluginLink, PluginRuntime}
+import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
 import histos.publish.PublishRun
 import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
@@ -645,10 +646,10 @@ object Calls:
         args: PluginArgs
     ): ZIO[
       histos.schedule.ActionCache & RemoteCache & Resolve,
-      PluginRunError,
+      PluginFault,
       histos.plugin.PluginOutput
     ] =
-      ZIO.fail(PluginRunError.Unknown(id))
+      ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
 
     def bind: ZIO[
       histos.schedule.ActionCache & RemoteCache & Resolve,
