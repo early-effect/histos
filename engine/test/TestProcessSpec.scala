@@ -11,7 +11,7 @@ import java.util.jar.{JarEntry, JarOutputStream}
 import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 
-import zio.{Scope, System, ZIO, durationInt}
+import zio.{Chunk, Scope, System, ZIO, durationInt}
 import zio.test.*
 
 object TestProcessSpec extends ZIOSpecDefault:
@@ -29,11 +29,12 @@ object TestProcessSpec extends ZIOSpecDefault:
         MainClass.from("1bad") == Left(MainClassError.Bad("1bad")),
       )
     ,
-    test("a suite keeps the repo, PATH, and HOME"):
-      val env = ModuleTest.suiteEnv(Path.of("/repo"))
+    test("a suite keeps the repo, PATH, and HOME from the machine"):
       for
-        path <- System.env("PATH")
-        home <- System.env("HOME")
+        path    <- System.env("PATH")
+        home    <- System.env("HOME")
+        machine <- System.envs
+        env = ModuleTest.suiteEnv(Path.of("/repo"), machine + ("USER" -> "someone"))
       yield assertTrue(
         env.get("HISTOS_REPO").contains(Path.of("/repo").toAbsolutePath.normalize.toString),
         env.get("PATH") == path.filter(_.nonEmpty),
@@ -104,7 +105,79 @@ object TestProcessSpec extends ZIOSpecDefault:
           exit.isInterrupted,
           childDead == List(true) && selfDead == List(true),
         )
+    ,
+    test("the group kill reaches a child the test left running after its main returned"):
+      ZIO.scoped:
+        for
+          root     <- temp
+          classes  <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
+          compiled <- ZIO.attempt(compile(root, classes, "Leaver.java", leaverSource, Nil))
+          work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
+          outcome  <- TestProcess.run(request(work, Platform.Jvm, leaverMain, TestClasspath(classes, Nil)))
+          child    <- awaitPid(work.resolve("child.pid"))
+          dead     <- ZIO.foreach(child.toList)(awaitDead)
+        yield assertTrue(
+          compiled == Tool(0, ""),
+          outcome.exit == ProcessExit(0),
+          child.nonEmpty,
+          dead == List(true),
+        )
+    ,
+    test("closing a command kills the grandchild it started"):
+      ZIO.scoped:
+        for
+          work  <- temp
+          shown <- TestProcess.command(List("/bin/sh", "-c", "sleep 300 & echo $!; wait"), work, shellPath).take(1).runCollect
+          pids   = shown.collect { case TestEvent.Out(text) => text.trim.toLongOption }.flatten
+          dead  <- ZIO.foreach(pids)(awaitDead)
+        yield assertTrue(pids.size == 1, dead == Chunk(true))
+    ,
+    test("a large output arrives whole and in bounded time"):
+      ZIO.scoped:
+        for
+          root     <- temp
+          classes  <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
+          compiled <- ZIO.attempt(compile(root, classes, "Chatty.java", chattySource, Nil))
+          work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
+          timed    <- TestProcess.run(request(work, Platform.Jvm, chattyMain, TestClasspath(classes, Nil))).timed
+          (took, outcome) = timed
+          lines    = outcome.out.text.linesIterator.size
+          whole    = outcome.out.text == chattyText
+        yield assertTrue(
+          compiled == Tool(0, ""),
+          outcome.exit == ProcessExit(0),
+          lines == ChattyLines,
+          whole,
+          outcome.err.text.isEmpty,
+          took.toSeconds < 5,
+        )
+    ,
+    test("interrupting the bootstrap compile kills javac"):
+      ZIO.scoped:
+        for
+          root    <- temp
+          bin     <- ZIO.attempt(Files.createDirectories(root.resolve("jdk").resolve("bin")))
+          stub    <- executable(bin.resolve("java"), "exit 0\n")
+          _       <- executable(bin.resolve("javac"), s"echo $$$$ > '$root/javac.pid'\nexec sleep 30\n")
+          classes <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
+          work    <- ZIO.attempt(Files.createDirectories(root.resolve("work")))
+          fiber   <- TestProcess.run(request(work, Platform.Jvm, exitMain, TestClasspath(classes, Nil)).copy(java = stub)).fork
+          javac   <- awaitPid(root.resolve("javac.pid"))
+          exit    <- fiber.interrupt.timeout(3.seconds)
+          dead    <- ZIO.foreach(javac.toList)(awaitDead)
+        yield assertTrue(javac.nonEmpty, exit.exists(_.isInterrupted), dead == List(true))
   )
+
+  private def executable(path: Path, body: String): ZIO[Any, Throwable, Path] =
+    ZIO.attempt:
+      Files.writeString(path, s"#!/bin/sh\n$body")
+      Files.setPosixFilePermissions(path, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
+
+  private val shellPath = Map("PATH" -> "/bin:/usr/bin")
+  private val leaverMain = MainClass.trusted("demo.Leaver")
+  private val chattyMain = MainClass.trusted("demo.Chatty")
+  private val ChattyLines = 200000
+  private val chattyText  = (0 until ChattyLines).map(index => s"line $index\n").mkString
 
   private def request(work: Path, platform: Platform, main: MainClass, classpath: TestClasspath): TestRequest =
     TestRequest(platform, javaBin, classpath, main, work)
@@ -161,6 +234,26 @@ object TestProcessSpec extends ZIOSpecDefault:
       |    Process child = new ProcessBuilder("/bin/sleep", "2").start();
       |    Files.writeString(Path.of("child.pid"), Long.toString(child.pid()));
       |    Thread.sleep(2_000L);
+      |  }
+      |}
+      |""".stripMargin
+
+  private val leaverSource =
+    """package demo;
+      |import java.nio.file.*;
+      |public final class Leaver {
+      |  public static void main(String[] args) throws Exception {
+      |    Process child = new ProcessBuilder("/bin/sleep", "300").start();
+      |    Files.writeString(Path.of("child.pid"), Long.toString(child.pid()));
+      |  }
+      |}
+      |""".stripMargin
+
+  private val chattySource =
+    s"""package demo;
+      |public final class Chatty {
+      |  public static void main(String[] args) {
+      |    for (int index = 0; index < $ChattyLines; index++) System.out.println("line " + index);
       |  }
       |}
       |""".stripMargin

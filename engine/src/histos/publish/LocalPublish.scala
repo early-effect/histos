@@ -9,6 +9,7 @@ import histos.central.{
   Publisher,
   Revision
 }
+import histos.native.NativeOrigin
 import histos.pack.{ClassJar, JarError}
 import histos.resolve.ArtifactName
 import histos.version.{
@@ -70,7 +71,7 @@ enum LocalPublishError:
   case Version(error: VersionError)
   case Target(error: CiError)
   case Compile(error: GraphCompileError)
-  case Jar(module: ProjectName, version: ScalaVersion, error: JarError)
+  case Jar(module: ProjectName, version: ScalaVersion, platform: Platform, error: JarError)
   case Publish(error: PublishError)
   case Read(path: Path)
   case NoOrganization
@@ -91,8 +92,8 @@ enum LocalPublishError:
     case Version(error)              => error.message
     case Target(error)               => error.message
     case Compile(error)              => error.message
-    case Jar(module, version, error) =>
-      s"'${module.value}' ${version.value} failed to jar\n${error.message}"
+    case Jar(module, version, platform, error) =>
+      s"'${module.value}' ${version.value} ${platform.token} failed to jar\n${error.message}"
     case Publish(error) => error.message
     case Read(path)     => s"could not read $path"
     case NoOrganization =>
@@ -140,6 +141,7 @@ object LocalPublish:
           graph,
           picked.modules.toList.map(_.value),
           jdk,
+          NativeOrigin.read(env),
           report = report
         )
         .mapError(LocalPublishError.Compile(_))
@@ -260,9 +262,8 @@ object LocalPublish:
       else
         val next = more.flatMap: name =>
           graph.get(name) match
-            case Some(module: Module) =>
-              module.upstream(Platform.Jvm).filter(members.contains).toSet
-            case _ => Set.empty
+            case Some(module: Module) => upstream(module).filter(members.contains).toSet
+            case _                    => Set.empty
         step(seen ++ more, next -- seen)
     step(Set.empty, asked)
 
@@ -280,9 +281,7 @@ object LocalPublish:
     modules.foldLeft[Either[LocalPublishError, Unit]](Right(())):
       (acc, module) =>
         acc.flatMap: _ =>
-          module
-            .upstream(Platform.Jvm)
-            .find(dependency => !chosen.contains(dependency)) match
+          upstream(module).find(dependency => !chosen.contains(dependency)) match
             case Some(dependency) =>
               Left(
                 LocalPublishError.UnpublishedDependency(module.name, dependency)
@@ -314,7 +313,7 @@ object LocalPublish:
       job: Job
   ): ZIO[Publisher, LocalPublishError, PublishedModule] =
     val cell = job.cell
-    val artifact = artifactName(graph, cell.module, cell.version)
+    val artifact = artifactName(graph, cell.module, cell.version, cell.platform)
     for
       name <- ZIO
         .fromEither(ArtifactId.from(artifact))
@@ -323,12 +322,12 @@ object LocalPublish:
             .BadDependency(group.value, artifact, job.revision.render)
         )
       deps <- ZIO.fromEither(
-        dependencies(graph, group, cell.module, cell.version, job.revision)
+        dependencies(graph, group, cell, job.revision)
       )
       jar <- ClassJar
         .write(cell.classes, jarFile(repo, cell, job.revision))
         .mapError(error =>
-          LocalPublishError.Jar(cell.module, cell.version, error)
+          LocalPublishError.Jar(cell.module, cell.version, cell.platform, error)
         )
       bytes <- ZIO
         .attemptBlocking(Chunk.fromArray(Files.readAllBytes(jar.path)))
@@ -349,32 +348,31 @@ object LocalPublish:
   private def dependencies(
       graph: ProjectGraph,
       group: Organization,
-      module: ProjectName,
-      version: ScalaVersion,
+      cell: histos.zinc.CompiledCell,
       revision: Revision
   ): Either[LocalPublishError, List[MavenDependency]] =
-    graph.get(module) match
+    graph.get(cell.module) match
       case Some(found: Module) =>
         val internal = found
-          .upstream(Platform.Jvm)
+          .upstream(cell.platform)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>
             acc.flatMap: seen =>
               coordinate(
                 group,
-                artifactName(graph, dependency, version),
+                artifactName(graph, dependency, cell.version, cell.platform),
                 revision.render
               ).map(seen :+ _)
         val external = Dep
-          .select(found.dependencies, Platform.Jvm)
+          .select(found.dependencies, cell.platform)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>
             acc.flatMap: seen =>
               externalCoordinate(
                 dependency.organization,
-                ArtifactName.of(dependency, version, Platform.Jvm),
+                ArtifactName.of(dependency, cell.version, cell.platform),
                 dependency.revision
               ).map(seen :+ _)
         for
@@ -416,13 +414,18 @@ object LocalPublish:
   private def artifactName(
       graph: ProjectGraph,
       name: ProjectName,
-      version: ScalaVersion
+      version: ScalaVersion,
+      platform: Platform
   ): String =
     val base = graph.get(name) match
       case Some(module: Module) =>
         module.published.fold(module.name.value)(_.value)
       case _ => name.value
-    ArtifactName.published(base, version, Platform.Jvm)
+    ArtifactName.published(base, version, platform)
+
+  /** Upstream modules on every platform the module builds. */
+  private def upstream(module: Module): List[ProjectName] =
+    module.platforms.all.flatMap(module.upstream).distinct
 
   private def jarFile(
       repo: Path,
@@ -430,8 +433,8 @@ object LocalPublish:
       revision: Revision
   ): Path =
     val kind = revision match
-      case Revision.Pointer(_) => "pointer.jar"
-      case _                   => "jvm.jar"
+      case Revision.Pointer(_) => s"${cell.platform.token}-pointer.jar"
+      case _                   => s"${cell.platform.token}.jar"
     repo
       .resolve(".histos")
       .resolve("jars")

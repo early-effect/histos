@@ -14,6 +14,7 @@ import histos.plugin.{
   ParamName,
   PluginArgs,
   PluginId,
+  PluginLinked,
   PluginOutput,
   PluginRunError,
   PluginTaskId,
@@ -33,7 +34,7 @@ import java.nio.file.{Files, Path}
 
 import _root_.scala.jdk.CollectionConverters.*
 
-import zio.{Promise, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
+import zio.{Promise, Ref, Scope, UIO, URIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object PluginRunSpec extends ZIOSpecDefault:
@@ -84,12 +85,18 @@ object PluginRunSpec extends ZIOSpecDefault:
   private def runtime(
       repo: Path,
       built: ProjectGraph,
-      plugin: HistosPlugin
-  ): PluginRuntime =
+      plugin: HistosPlugin,
+      links: List[PluginLink] = Nil
+  ): URIO[Scope, PluginRuntime] =
     val parent = Option(getClass.getClassLoader).getOrElse(
       ClassLoader.getSystemClassLoader
     )
-    PluginRuntime.loaded(repo, built, parent, List(plugin), Nil, launcher)
+    PluginThreads
+      .make(parent)
+      .map(PluginRuntime.loaded(repo, built, parent, _, List(plugin), links, launcher))
+
+  private def jarsAt(jars: List[Path]): List[PluginLink] =
+    List(PluginLink(echoId, PluginLinked.FromBinary(launcher), jars.map(_.toString)))
 
   private def recording: UIO[(Ref[Map[String, String]], ActionCache)] =
     Ref
@@ -121,15 +128,15 @@ object PluginRunSpec extends ZIOSpecDefault:
     }.ignore
 
   private def run(
-      plugins: PluginRuntime,
+      plugins: URIO[Scope, PluginRuntime],
       id: PluginTaskId,
       args: PluginArgs,
       cache: ActionCache,
       resolve: zio.ULayer[Resolve] = IdleResolve.layer
   ) =
-    plugins
-      .run(id, args)
-      .provide(ZLayer.succeed(cache), RemoteCache.off, resolve)
+    plugins.flatMap:
+      _.run(id, args)
+        .provide(ZLayer.succeed(cache), RemoteCache.off, resolve)
 
   private val core = module("core", Jvm)(scala"3.9.0")
 
@@ -229,6 +236,77 @@ object PluginRunSpec extends ZIOSpecDefault:
                   "out.txt"
                 )
               case _ => false
+          )
+    ,
+    test("the same plugin jar at another path keeps the digest"):
+      ZIO.scoped:
+        for
+          calls <- Ref.make(0)
+          seen <- Ref.make(List.empty[ModuleView])
+          argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
+          page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
+          live = script(
+            echoId,
+            List(page),
+            calls,
+            seen,
+            argsSeen,
+            _ => ZIO.succeed(PluginOutput("ok", Nil))
+          )
+          built <- graph(live, core)
+          dir <- directory
+          here <- directory
+          there <- directory
+          (first, second) <- ZIO.attempt {
+            (
+              Files.writeString(here.resolve("echo.jar"), "jar"),
+              Files.writeString(there.resolve("echo.jar"), "jar")
+            )
+          }.orDie
+          (values, cache) <- recording
+          id = PluginTaskId(echoId, TaskName("echo"))
+          _ <- run(runtime(dir, built, live, jarsAt(List(first))), id, PluginArgs.empty, cache)
+          _ <- run(runtime(dir, built, live, jarsAt(List(second))), id, PluginArgs.empty, cache)
+          entered <- calls.get
+          stored <- values.get
+        yield assertTrue(entered == 1, stored.size == 1)
+    ,
+    test("two jars with one file name stay two inputs, and a jar listed twice is one"):
+      ZIO.scoped:
+        for
+          calls <- Ref.make(0)
+          seen <- Ref.make(List.empty[ModuleView])
+          argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
+          page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
+          live = script(
+            echoId,
+            List(page),
+            calls,
+            seen,
+            argsSeen,
+            _ => ZIO.succeed(PluginOutput("ok", Nil))
+          )
+          built <- graph(live, core)
+          dir <- directory
+          here <- directory
+          there <- directory
+          (first, second) <- ZIO.attempt {
+            (
+              Files.writeString(here.resolve("echo.jar"), "one"),
+              Files.writeString(there.resolve("echo.jar"), "two")
+            )
+          }.orDie
+          listed = List(first, second, first)
+          id = PluginTaskId(echoId, TaskName("echo"))
+          hashed <- PluginInputs.hash(dir, built, echoId, page, id, listed.map(_.toString), launcher)
+          (_, cache) <- recording
+          out <- run(runtime(dir, built, live, jarsAt(listed)), id, PluginArgs.empty, cache).either
+        yield
+          val jars = hashed.inputs.filter(_.name.value.startsWith("plugin.jar:"))
+          assertTrue(
+            jars.size == 2,
+            jars.map(_.name).distinct.size == 2,
+            out == Right(PluginOutput("ok", Nil))
           )
     ,
     test("a missing declared file is not stored"):
@@ -565,7 +643,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           built <- graph(live, core)
           dir <- directory
           (values, cache) <- recording
-          running = runtime(dir, built, live)
+          running <- runtime(dir, built, live)
           bound <- running.bind
             .provide(ZLayer.succeed(cache), RemoteCache.off, IdleResolve.layer)
           id = PluginTaskId(echoId, TaskName("wait"))

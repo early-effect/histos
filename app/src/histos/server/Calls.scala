@@ -19,7 +19,8 @@ import histos.publish.PublishRun
 import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
 import histos.schedule.RemoteCache
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
-import histos.toolchain.Survey
+import histos.native.NativeOrigin
+import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.{Platform, ProjectGraph}
@@ -117,9 +118,9 @@ object Calls:
     chosen(platform) match
       case Left(message) => done(say, CliExit.TaskFailed.code, message)
       case Right(choice) =>
-        Ref.make(0).flatMap { status =>
+        Ref.make(0).zip(Runtimes.read(machine)).flatMap { (status, runtimes) =>
           histos.program.Program
-            .console(repo, graph, id, jdk, machine.env, choice)
+            .console(repo, graph, id, jdk, runtimes, choice)
             .foreach {
               case histos.program.ProgramFeed.Begin(module, version, target) =>
                 told(
@@ -297,6 +298,7 @@ object Calls:
       repo: Path,
       graph: ProjectGraph,
       jdk: ResolvedJdk,
+      machine: Machine,
       destination: Option[String],
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
@@ -305,7 +307,7 @@ object Calls:
         done(say, CliExit.CompileFailed.code, "assembly path is not a path")
       case Some(path) =>
         Assemble
-          .run(repo, graph, jdk, path)
+          .run(repo, graph, jdk, NativeOrigin.read(machine.env), path)
           .foldZIO(
             error => done(say, CliExit.CompileFailed.code, error.message),
             assembled =>
@@ -325,10 +327,11 @@ object Calls:
       graph: ProjectGraph,
       projects: List[String],
       jdk: ResolvedJdk,
+      machine: Machine,
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     GraphCompile
-      .console(repo, graph, projects, jdk)
+      .strict(GraphCompile.console(repo, graph, projects, jdk, NativeOrigin.read(machine.env)))
       .mapZIO {
         case CompileFeed.Began(module, version, platform) =>
           say(Message.Out(Lines.compiling(module, version, platform)))
@@ -356,14 +359,16 @@ object Calls:
       patterns: List[String],
       quick: Boolean,
       jdk: ResolvedJdk,
+      machine: Machine,
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     Ref.make(false).flatMap { failed =>
       Ref.make(List.empty[String]).flatMap { missed =>
         val ran =
           for
+            runtimes <- Runtimes.read(machine)
             cells <- GraphCompile
-              .console(repo, graph, projects, jdk)
+              .console(repo, graph, projects, jdk, runtimes.native)
               .mapError(ModuleTestError.Compile(_))
               .mapZIO { feed =>
                 val sent = feed match
@@ -403,6 +408,7 @@ object Calls:
                 graph,
                 projects,
                 jdk,
+                runtimes,
                 cells.toList,
                 parsed,
                 quick,
@@ -613,9 +619,8 @@ object Calls:
 
   private def failedSuite(status: TestStatus): Boolean =
     status match
-      case TestStatus.Failed(_, _, _) => true
-      case TestStatus.NoTests | TestStatus.Unmatched |
-          TestStatus.Passed(_, _) =>
+      case TestStatus.Failed(_) => true
+      case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed =>
         false
 
   private def told(say: Say, text: String): IO[ServerError, Unit] =

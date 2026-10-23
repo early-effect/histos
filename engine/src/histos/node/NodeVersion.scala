@@ -38,8 +38,10 @@ enum NodeVersionError:
   case Bad(raw: String)
   case Status(code: Int)
   case Missing
+  case NotExecutable(binary: java.nio.file.Path)
 
   def message: String = this match
-    case Bad(raw)     => s"not a Node version: $raw"
-    case Status(code) => s"node --version exited $code"
-    case Missing      => "node binary is missing"
+    case Bad(raw)              => s"not a Node version: $raw"
+    case Status(code)          => s"node --version exited $code"
+    case Missing               => "node binary is missing"
+    case NotExecutable(binary) => s"$binary is not executable"

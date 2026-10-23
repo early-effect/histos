@@ -63,13 +63,13 @@ object Session:
           .runCollect
           .foldZIO(
             {
-              case ServerError.Unreachable(_) | ServerError.Stale =>
+              case ServerError.Unreachable(_) =>
                 locally(repo, apiJar, machine, desk, call)
               case other => ZIO.fail(other.message)
             },
             feeds => ZIO.fromEither(spoken(feeds.toList))
           )
-      case Decision.Absent | Decision.Stale(_) =>
+      case Decision.Absent =>
         locally(repo, apiJar, machine, desk, call)
     }
 
@@ -150,7 +150,7 @@ object Session:
         histos.server.Calls.cancel(desk.runs, id, say)
       case Call.Compile(projects) =>
         withJdk(say, CliExit.CompileFailed)(jdk =>
-          histos.server.Calls.compile(repo, graph, projects, jdk, say)
+          histos.server.Calls.compile(repo, graph, projects, jdk, machine, say)
         )
       case Call.Test(projects, patterns, quick) =>
         GraphCompile.jdkHere.foldZIO(
@@ -161,7 +161,7 @@ object Session:
           ,
           jdk =>
             histos.server.Calls
-              .test(repo, graph, projects, patterns, quick, jdk, say)
+              .test(repo, graph, projects, patterns, quick, jdk, machine, say)
         )
       case Call.Publish(repository, projects) =>
         withJdk(say, CliExit.PublishFailed)(jdk =>
@@ -170,7 +170,8 @@ object Session:
         )
       case Call.Assembly(destination) =>
         withJdk(say, CliExit.CompileFailed)(jdk =>
-          histos.server.Calls.assembly(repo, graph, jdk, destination, say)
+          histos.server.Calls
+            .assembly(repo, graph, jdk, machine, destination, say)
         )
       case Call.Run(id, platform) =>
         GraphCompile.jdkHere.foldZIO(

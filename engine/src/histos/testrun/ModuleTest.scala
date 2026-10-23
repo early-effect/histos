@@ -2,7 +2,9 @@ package histos.testrun
 
 import histos.jdk.Sha256
 import histos.js.{JsLink, JsLinkError, JsSuite, ScalaJs}
-import histos.native.{NativeCompile, NativeLink, NativeSuite, NativeToolchain}
+import histos.native.{NativeCompile, NativeLink, NativeOrigin, NativeSuite, NativeToolchain}
+import histos.node.{NodeBinary, NodeMiss}
+import histos.toolchain.Runtimes
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -61,19 +63,22 @@ final case class TestedCell(
 )
 
 /** What one cell did. `NoTests` means there was nothing to run. It is not a
-  * passing suite.
+  * passing suite. The output is not here: the console streams it once.
   */
 enum TestStatus:
   case NoTests
   case Unmatched
-  case Passed(out: String, err: String)
-  case Failed(exit: Int, out: String, err: String)
+  case Passed
+  case Failed(exit: Int)
 
   def label: String = this match
-    case NoTests            => "no tests"
-    case Unmatched          => "unmatched"
-    case Passed(_, _)       => "passed"
-    case Failed(exit, _, _) => s"failed $exit"
+    case NoTests      => "no tests"
+    case Unmatched    => "unmatched"
+    case Passed       => "passed"
+    case Failed(exit) => s"failed $exit"
+
+/** A finished cell and the lines its process wrote. */
+final case class TestReport(cell: TestedCell, transcript: Transcript)
 
 /** What the test console is doing. Suites are not merged: one tree finishes,
   * then the next starts.
@@ -119,6 +124,7 @@ enum ModuleTestError:
       platform: Platform,
       detail: String
   )
+  case NoNode(module: ProjectName, version: ScalaVersion, miss: NodeMiss)
 
   def message: String = this match
     case Target(error)                   => error.message
@@ -152,6 +158,8 @@ enum ModuleTestError:
     case Runner(path) => s"could not write the test provider runner at $path"
     case LinkFailed(module, version, platform, detail) =>
       s"'${module.value}' ${version.value} ${platformToken(platform)} failed to link\n$detail"
+    case NoNode(module, version, miss) =>
+      s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
 
 object ModuleTest:
   /** Compile each requested module, then run its test provider once per Scala
@@ -164,15 +172,26 @@ object ModuleTest:
       graph: ProjectGraph,
       names: List[String],
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       patterns: List[SuitePattern] = Nil,
       quick: Boolean = false,
       onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit] =
         (_, _, _) => ZIO.unit
-  ): ZIO[Resolve, ModuleTestError, List[TestedCell]] =
-    console(repo, graph, names, jdk, patterns, quick, onTestCompile)
-      .collect { case TestFeed.Done(cell) => cell }
-      .runCollect
-      .map(_.toList)
+  ): ZIO[Resolve, ModuleTestError, List[TestReport]] =
+    console(repo, graph, names, jdk, runtimes, patterns, quick, onTestCompile)
+      .runFold(Reports(Transcript.empty, Chunk.empty))(report)
+      .map(_.done.toList)
+
+  private final case class Reports(heard: Transcript, done: Chunk[TestReport])
+
+  /** Cells do not interleave, so the lines since the last cell belong to the next `Done`. */
+  private def report(have: Reports, feed: TestFeed): Reports =
+    feed match
+      case TestFeed.Begin(_, _, _)     => have.copy(heard = Transcript.empty)
+      case TestFeed.Out(text)          => have.copy(heard = have.heard.withOut(text))
+      case TestFeed.Err(text)          => have.copy(heard = have.heard.withErr(text))
+      case TestFeed.Done(cell)         => Reports(Transcript.empty, have.done :+ TestReport(cell, have.heard))
+      case TestFeed.Cached(_, _, _, _) => have
 
   /** Test compiles stay parallel. The console is `concatAll`: one suite's
     * lines, then the next, in module name order. Merging the trees would make
@@ -183,6 +202,7 @@ object ModuleTest:
       graph: ProjectGraph,
       names: List[String],
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       patterns: List[SuitePattern] = Nil,
       quick: Boolean = false,
       onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit] =
@@ -191,7 +211,7 @@ object ModuleTest:
     ZStream
       .fromZIO(
         GraphCompile
-          .run(repo, graph, names, jdk)
+          .run(repo, graph, names, jdk, runtimes.native)
           .mapError(ModuleTestError.Compile(_))
       )
       .flatMap: compiled =>
@@ -200,6 +220,7 @@ object ModuleTest:
           graph,
           names,
           jdk,
+          runtimes,
           compiled,
           patterns,
           quick,
@@ -214,6 +235,7 @@ object ModuleTest:
       graph: ProjectGraph,
       names: List[String],
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       compiled: List[CompiledCell],
       patterns: List[SuitePattern] = Nil,
       quick: Boolean = false,
@@ -238,6 +260,7 @@ object ModuleTest:
             graph,
             cell,
             jdk,
+            runtimes,
             lock,
             repositories,
             patterns,
@@ -271,6 +294,7 @@ object ModuleTest:
       graph: ProjectGraph,
       cell: CompiledCell,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
@@ -309,6 +333,7 @@ object ModuleTest:
                           sources,
                           main,
                           jdk,
+                          runtimes,
                           lock,
                           repositories,
                           quick
@@ -322,6 +347,7 @@ object ModuleTest:
                           sources,
                           main,
                           jdk,
+                          runtimes,
                           lock,
                           repositories,
                           quick
@@ -335,6 +361,7 @@ object ModuleTest:
                           sources,
                           main,
                           jdk,
+                          runtimes,
                           lock,
                           repositories,
                           quick
@@ -352,6 +379,7 @@ object ModuleTest:
                         sources,
                         framework,
                         jdk,
+                        runtimes,
                         lock,
                         repositories,
                         patterns,
@@ -366,6 +394,7 @@ object ModuleTest:
                         sources,
                         framework,
                         jdk,
+                        runtimes,
                         lock,
                         repositories,
                         patterns,
@@ -380,6 +409,7 @@ object ModuleTest:
                         sources,
                         framework,
                         jdk,
+                        runtimes,
                         lock,
                         repositories,
                         patterns,
@@ -403,7 +433,7 @@ object ModuleTest:
               _,
               _,
               _,
-              TestStatus.Passed(_, _) | TestStatus.Failed(_, _, _)
+              TestStatus.Passed | TestStatus.Failed(_)
             )
           ) =>
         matched.set(true)
@@ -418,6 +448,7 @@ object ModuleTest:
       sources: List[Path],
       main: TestMain,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
@@ -434,6 +465,7 @@ object ModuleTest:
         cell,
         sources,
         jdk,
+        runtimes.native,
         lock,
         repositories
       )
@@ -447,6 +479,7 @@ object ModuleTest:
         quick,
         _ =>
           for
+            chosen <- node(cell, runtimes)
             _ <- fresh(linkDir)
             script <- JsLink
               .link(cell.version, binary, classes :: linked.paths, linkDir, jdk)
@@ -458,9 +491,9 @@ object ModuleTest:
             module.name,
             cell.version,
             cell.platform,
-            List("node", script.toString),
+            List(chosen.path.toString, script.toString),
             work,
-            suiteEnv(repo)
+            suiteEnv(repo, runtimes.env)
           )
       )
     yield stream
@@ -473,6 +506,7 @@ object ModuleTest:
       sources: List[Path],
       provider: TestProvider,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
@@ -490,6 +524,7 @@ object ModuleTest:
           if !keep then ZIO.succeed(ZStream.empty)
           else
             for
+              chosen <- node(cell, runtimes)
               _ <- fresh(linkDir)
               asked <- JsSuite
                 .run(
@@ -500,7 +535,8 @@ object ModuleTest:
                   classes :: linked.paths,
                   linkDir,
                   jdk,
-                  suiteEnv(repo),
+                  suiteEnv(repo, runtimes.env),
+                  chosen,
                   selected
                 )
                 .mapError(error => linkFailed(cell, error.message))
@@ -523,6 +559,7 @@ object ModuleTest:
         cell,
         sources,
         jdk,
+        runtimes.native,
         lock,
         repositories
       )
@@ -560,6 +597,7 @@ object ModuleTest:
       sources: List[Path],
       main: TestMain,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
@@ -577,6 +615,7 @@ object ModuleTest:
         cell,
         sources,
         jdk,
+        runtimes.native,
         lock,
         repositories
       )
@@ -591,11 +630,12 @@ object ModuleTest:
         _ =>
           for
             _ <- fresh(linkDir)
+            toolchain <- nativeToolchain(module, cell, runtimes.native)
             program <- NativeLink
               .linkClasspath(
                 major,
-                module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision),
-                suiteEnv(repo),
+                toolchain,
+                suiteEnv(repo, runtimes.env),
                 classes :: linked.paths,
                 linkDir,
                 jdk,
@@ -611,7 +651,7 @@ object ModuleTest:
             cell.platform,
             List(program.toString),
             work,
-            suiteEnv(repo)
+            suiteEnv(repo, runtimes.env)
           )
       )
     yield stream
@@ -624,6 +664,7 @@ object ModuleTest:
       sources: List[Path],
       provider: TestProvider,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
@@ -631,8 +672,6 @@ object ModuleTest:
   ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     val linkDir = linkWork(repo, module.name, cell.version, cell.platform)
     val classes = testClasses(repo, module.name, cell.version, cell.platform)
-    val revision =
-      module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
     val entry = MainClass.trusted("scala.scalanative.testinterface.TestMain")
     def launch(
         selected: List[SuitePattern],
@@ -647,11 +686,12 @@ object ModuleTest:
             for
               _ <- fresh(linkDir)
               classpath = classes :: linked.paths
+              toolchain <- nativeToolchain(module, cell, runtimes.native)
               binary <- NativeLink
                 .linkClasspath(
                   major,
-                  revision,
-                  suiteEnv(repo),
+                  toolchain,
+                  suiteEnv(repo, runtimes.env),
                   classpath,
                   linkDir,
                   jdk,
@@ -660,13 +700,13 @@ object ModuleTest:
                 .mapError(error => linkFailed(cell, error.message))
               asked <- NativeSuite
                 .run(
-                  revision,
+                  toolchain,
                   provider.framework.value,
                   binary,
                   classpath,
                   linkDir,
                   jdk,
-                  suiteEnv(repo),
+                  suiteEnv(repo, runtimes.env),
                   selected
                 )
                 .mapError(error => linkFailed(cell, error.message))
@@ -690,6 +730,7 @@ object ModuleTest:
         cell,
         sources,
         jdk,
+        runtimes.native,
         lock,
         repositories
       )
@@ -737,6 +778,19 @@ object ModuleTest:
   private def linkFailed(cell: CompiledCell, detail: String): ModuleTestError =
     ModuleTestError.LinkFailed(cell.module, cell.version, cell.platform, detail)
 
+  private def nativeToolchain(
+      module: Module,
+      cell: CompiledCell,
+      native: NativeOrigin
+  ): IO[ModuleTestError, NativeToolchain] =
+    val revision = module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
+    ZIO
+      .fromEither(NativeToolchain.of(revision, native))
+      .mapError(error => linkFailed(cell, error.message))
+
+  private def node(cell: CompiledCell, runtimes: Runtimes): IO[ModuleTestError, NodeBinary] =
+    runtimes.node.mapError(miss => ModuleTestError.NoNode(cell.module, cell.version, miss))
+
   private def runCommand(
       module: ProjectName,
       version: ScalaVersion,
@@ -749,9 +803,7 @@ object ModuleTest:
       TestProcess
         .command(argv, work, env)
         .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapAccumZIO(Transcript("", "")) { (acc, event) =>
-          hear(module, version, platform, None, acc, event)
-        }
+        .mapZIO(hear(module, version, platform, None, _))
 
   private def finished(
       cell: CompiledCell,
@@ -816,7 +868,7 @@ object ModuleTest:
               shown ++ stream.tap {
                 case TestFeed.Done(done) =>
                   done.status match
-                    case TestStatus.Passed(_, _) =>
+                    case TestStatus.Passed =>
                       ZIO.foreachDiscard(dirty):
                         case (name, Some(digest)) =>
                           QuickRecord.save(
@@ -828,7 +880,7 @@ object ModuleTest:
                             digest
                           )
                         case _ => ZIO.unit
-                    case TestStatus.Failed(_, _, _) =>
+                    case TestStatus.Failed(_) =>
                       ZIO.foreachDiscard(dirty)((name, _) =>
                         QuickRecord.clear(
                           repo,
@@ -855,6 +907,7 @@ object ModuleTest:
       sources: List[Path],
       main: TestMain,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
@@ -870,6 +923,7 @@ object ModuleTest:
         cell,
         sources,
         jdk,
+        runtimes.native,
         lock,
         repositories
       )
@@ -888,7 +942,7 @@ object ModuleTest:
                 module.name,
                 cell.version,
                 None,
-                request(repo, jdk, classes, linked.paths, binary, work),
+                request(repo, jdk, runtimes, classes, linked.paths, binary, work),
                 cell.platform
               )
           }
@@ -903,6 +957,7 @@ object ModuleTest:
       sources: List[Path],
       provider: TestProvider,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
@@ -925,6 +980,7 @@ object ModuleTest:
           cell,
           sources :+ runner,
           jdk,
+          runtimes.native,
           lock,
           repositories
         )
@@ -941,6 +997,7 @@ object ModuleTest:
                   request(
                     repo,
                     jdk,
+                    runtimes,
                     classes,
                     linked.paths,
                     ProviderRunner.Main,
@@ -964,6 +1021,7 @@ object ModuleTest:
               cell,
               sources,
               jdk,
+              runtimes.native,
               lock,
               repositories
             )
@@ -994,6 +1052,7 @@ object ModuleTest:
   private def request(
       repo: Path,
       jdk: ResolvedJdk,
+      runtimes: Runtimes,
       classes: Path,
       classpath: List[Path],
       main: MainClass,
@@ -1005,10 +1064,8 @@ object ModuleTest:
       TestClasspath(classes, classpath),
       main,
       work,
-      suiteEnv(repo)
+      suiteEnv(repo, runtimes.env)
     )
-
-  private final case class Transcript(out: String, err: String)
 
   /** Header, then lines as the process writes them, then the cell. `NoneFound`
     * fails the stream.
@@ -1024,51 +1081,35 @@ object ModuleTest:
       TestProcess
         .events(asked)
         .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapAccumZIO(Transcript("", "")) { (acc, event) =>
-          hear(module, version, shown, provider, acc, event)
-        }
+        .mapZIO(hear(module, version, shown, provider, _))
 
   private def hear(
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
       provider: Option[TestProvider],
-      acc: Transcript,
       event: TestEvent
-  ): ZIO[Any, ModuleTestError, (Transcript, TestFeed)] =
+  ): ZIO[Any, ModuleTestError, TestFeed] =
     event match
-      case TestEvent.Out(text) =>
-        val next = acc.copy(out = join(acc.out, text))
-        ZIO.succeed((next, TestFeed.Out(text)))
-      case TestEvent.Err(text) =>
-        val next = acc.copy(err = join(acc.err, text))
-        ZIO.succeed((next, TestFeed.Err(text)))
+      case TestEvent.Out(text) => ZIO.succeed(TestFeed.Out(text))
+      case TestEvent.Err(text) => ZIO.succeed(TestFeed.Err(text))
       case TestEvent.Exited(code) =>
         provider match
           case Some(_) if code.value == ProviderRunner.NoneMatched =>
             ZIO.succeed(
-              (
-                acc,
-                TestFeed.Done(
-                  TestedCell(module, version, platform, TestStatus.Unmatched)
-                )
+              TestFeed.Done(
+                TestedCell(module, version, platform, TestStatus.Unmatched)
               )
             )
           case Some(found) if code.value == ProviderRunner.NoneFound =>
             ZIO.fail(ModuleTestError.NoneDiscovered(module, found))
           case _ =>
             val status =
-              if code.value == 0 then TestStatus.Passed(acc.out, acc.err)
-              else TestStatus.Failed(code.value, acc.out, acc.err)
+              if code.value == 0 then TestStatus.Passed
+              else TestStatus.Failed(code.value)
             ZIO.succeed(
-              (
-                acc,
-                TestFeed.Done(TestedCell(module, version, platform, status))
-              )
+              TestFeed.Done(TestedCell(module, version, platform, status))
             )
-
-  private def join(have: String, line: String): String =
-    s"$have$line\n"
 
   private def satisfied(module: Module, provider: TestProvider): Boolean =
     val library = provider.library
@@ -1150,11 +1191,11 @@ object ModuleTest:
         if satisfied(module, provider) then Right(Some(provider))
         else Left(ModuleTestError.ProviderDependency(module.name, provider))
 
-  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds node and clang. `HOME` finds the Playwright cache. */
-  private[histos] def suiteEnv(repo: Path): Map[String, String] =
+  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds clang. `HOME` finds the Playwright cache. `env` is the machine's. */
+  private[histos] def suiteEnv(repo: Path, env: Map[String, String]): Map[String, String] =
     val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
     val kept = List("PATH", "HOME", "XDG_CACHE_HOME").flatMap: key =>
-      sys.env.get(key).filter(_.nonEmpty).map(key -> _)
+      env.get(key).filter(_.nonEmpty).map(key -> _)
     root ++ kept
 
   /** `src/test` inside the source root, plus `<module>/test`. The repository
@@ -1314,6 +1355,7 @@ object ModuleTest:
       cell: CompiledCell,
       sources: List[Path],
       jdk: ResolvedJdk,
+      native: NativeOrigin,
       lock: DependencyLock,
       repositories: Repositories,
       hear: CompileProblem => Unit = _ => ()
@@ -1340,6 +1382,7 @@ object ModuleTest:
       _ <- compileSuite(
         module,
         request,
+        native,
         SemanticDb.argv(repo, cell.version),
         hear
       )
@@ -1348,6 +1391,7 @@ object ModuleTest:
   private def compileSuite(
       module: Module,
       request: CompileRequest,
+      native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit
   ): IO[ModuleTestError, Unit] =
@@ -1357,7 +1401,7 @@ object ModuleTest:
       case Platform.Native =>
         val revision =
           module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
-        NativeCompile.compile(request, revision, extra, hear)
+        NativeCompile.compile(request, revision, native, extra, hear)
     compiled
       .mapError(error =>
         ModuleTestError.Sources(module.name, request.toolchain.version, error)

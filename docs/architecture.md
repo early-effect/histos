@@ -40,12 +40,13 @@ A module's directory is its name, or the path given to `.in(...)`. Sources are `
 
 ## Load
 
-`Loader.load(repo, apiJar)` is a `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build class loader.
+`Loader.load(repo, apiJar)` is a `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build class loader and its plugin threads.
 
 1. `Loader.scan` reads the plugin header (`plugin(dep"...")`, `plugin(path"...")`) at the top of `histos.scala`.
 2. The loader resolves header plugins through the lock, compiles source and path plugins first, and writes the build file to a temporary copy with the header lines blanked, so line numbers match.
 3. The Scala 3 compiler compiles that copy in process against the api classpath and the plugin classpaths.
-4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `izumi.reflect.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+5. `graph` and every plugin `run` execute on [`PluginThreads`](../engine/src/histos/load/PluginThreads.scala): a fixed pool and a blocking pool whose daemon threads have `BuildLoader` as their context class loader. A fiber that moves to another thread, including a blocking step, still sees it.
 
 Loading is the same in the batch command and the server. A load error is a `LoadError` and exits 3.
 
@@ -76,8 +77,8 @@ A test cell runs in its own subprocess: one per module, Scala version, and platf
 
 - The default framework is ZIO Test (`TestProvider.Zio`) when a module names neither a provider nor a main. `.testProvider(...)` names another sbt test-interface framework, and `.test(TestMain(...))` runs one main instead.
 - The child classpath is the module's main and test classes, upstream main classes, and the locked compile and test jars. The engine is never on it.
-- The child environment is `HISTOS_REPO`, plus `PATH`, `HOME`, and `XDG_CACHE_HOME` from the parent. The child calls `setpgid` before user code, and cancel kills the JVM child's process group. Node and native children are not put in their own group (B17).
-- Output streams to the console as it arrives, one suite tree per cell in module order.
+- The child environment is `HISTOS_REPO`, plus `PATH`, `HOME`, and `XDG_CACHE_HOME` from the parent. A JVM child calls `setpgid` before user code. Stopping or cancelling a child kills every process below it, and for a JVM child its whole process group, which also reaches what a test left running after its main returned. Node and native children have no group of their own, so a descendant that outlives the node or native process is not reached.
+- Output streams to the console as it arrives, one suite tree per cell in module order. One fiber reads each pipe, and the cell's status does not keep a copy of the output.
 - `testOnly <pattern>` filters suites by fully qualified name (`*` crosses dots, `?` is one character). A pattern that matches nothing fails.
 - `testQuick` skips a suite whose stamp and last success match. The stamp covers the suite's referenced classes and misses upstream jars, the JDK, and flags (P6).
 - `~ <command>` reruns a command when a watched file changes.
@@ -87,8 +88,8 @@ A test cell runs in its own subprocess: one per module, Scala version, and platf
 
 Scala.js and Scala Native cells compile through Zinc with the platform's compiler support (`-scalajs` for Scala 3, the Scala Native compiler plugin). Linking runs in a child JVM, so the engine never loads a linker.
 
-- Scala.js test and run go through bridge programs that the engine writes as Scala source, compiles, and links per run (P1, P2). The JS environment is `JsEnv.Node` (default), `Jsdom`, or `Firefox` through Chekhov. Js children run `node` from `PATH` (B22).
-- A Native module names its tools with `.nativeVersion(...)`, default 0.5.12 from Maven Central. `HISTOS_NATIVE` overrides the fetch origin for a local build. Native links need clang on `PATH`, and `.clang(...)` names the expected major.
+- Scala.js test and run go through bridge programs that the engine writes as Scala source, compiles, and links per run (P1, P2). The JS environment is `JsEnv.Node` (default), `Jsdom`, or `Firefox` through Chekhov. Js test and run launch the Node that `histos toolchain` reports. It is chosen at a command's first Js launch and kept for the rest of the command, and Chekhov's Playwright driver gets it as `PLAYWRIGHT_NODEJS_PATH`. When no Node can be chosen, the Js cell fails with `NoNode` before it links.
+- A Native module names its tools with `.nativeVersion(...)`, default 0.5.12 from Maven Central. `HISTOS_NATIVE` overrides the fetch origin for a local build. A command reads it once from the machine and hands it to compile, the test compile, link, and runner, and the run link. A malformed value fails only Native cells. Native links need clang on `PATH`, and `.clang(...)` names the expected major.
 - Library suffixes follow the platform: `_sjs1_3`, `_native0.5_3`.
 
 ## Run
@@ -97,9 +98,9 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 ## Toolchains
 
-`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK and waits for it (B20). Engine staging handles zip archives only (B24).
+`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK that shares the terminal, and exits with the child's status. Interrupting the engine sends SIGTERM to that child and every process below it, then force-kills whatever is still running 2 seconds later. Coursier counts as installed when `cs` is on `PATH` or its JVM cache holds a JDK. Engine staging unpacks a zip (the Windows archive) itself, and a tar.gz or tar.xz with the system `tar`, which keeps file modes and symlinks. The archive is copied to a scratch file and unpacked into a scratch directory beside its destination, then moved into place atomically. A failure or an interrupt removes the scratch, and a complete unpack that another stager placed first is kept.
 
-`.histos/node.lock` pins Node, and `histos toolchain` reports which Node it would use. Execution does not use that choice yet (B22).
+`.histos/node.lock` pins Node, and `.histos/node.local` overrides it. `histos toolchain` reports which Node it would use, and Js test and run launch that one. When no installed Node matches and the lock names a `file:` zip, tar.gz, or tar.xz, that archive is staged into the cache the same way. The probe only reads: a `node` without its execute bit is not a match, and its `node --version` child is killed with everything it started if the probe is interrupted.
 
 `histos toolchain` prints the JDK decision, then Node when the graph has Js, then clang when it has Native.
 
@@ -107,7 +108,7 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 The version scheme is the zipx scheme, implemented in `histos.version`: everyday builds are `<version>-ci`, a snapshot is `<version>-<sha>-SNAPSHOT`, the default branch also updates a `<version>-SNAPSHOT` pointer, and a ship number is the next release. A catalog can state a manual version, which is what this repository does. `histos run versions` checks the catalog and the registry.
 
-`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31). A module that builds Jvm and Js writes both cells to one coordinate (B1).
+`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. Each platform cell is its own coordinate (`core_3`, `core_sjs1_3`, `core_native0.5_3`), with a pom that names that platform's dependencies. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31).
 
 ## Assembly and the launcher
 
@@ -149,11 +150,11 @@ The CLI is one-shot by default: each command loads the build, runs, and exits.
 | --- | --- |
 | Missing, corrupt, or unreadable | Run in process (`Decision.Absent`) |
 | Different `Cli.VersionText` | Refuse and ask for `histos reboot` (`Decision.DifferentVersion`) |
-| Matching version | Send a `Call` over the socket (`Decision.Open`). The server compares the fingerprint and refuses a call whose lock changed. |
+| Matching version | Send a `Call` over the socket (`Decision.Open`). The server compares the fingerprint on each call and reloads a changed build. A failed reload keeps the last good graph and fails the call. |
 
 The server covers compile, test, publish, graph, run, a task, cancel, toolchain, resolve, workflow, assembly, reload, reboot, and a BSP splice. `cache` and `version` never load a graph. `histos reload` reloads the build in the same JVM and keeps the last good graph on failure. `histos reboot` replaces the JVM.
 
-Known gaps: `compile` and `test` load the build in the client before attaching (B2), a failure after bind can leave `histos server` waiting (B3), and reboot leaves the old JVM running (B4).
+A command that attaches never loads the build in the client. `histos server` exits when its server stops: after a reboot has started the replacement, or when binding or writing the record fails, which also removes the socket. Stopping closes every open connection, including an idle one.
 
 ## BSP
 
@@ -165,13 +166,13 @@ Known gaps: `compile` and `test` load the build in the client before attaching (
 | `workspace/buildTargets` | One JVM main target per module and Scala version, a test target when the module has tests, and a target for `histos.scala`. Js and Native targets appear only when `.histos/bsp-platforms` names them. |
 | `buildTarget/sources`, `buildTarget/dependencySources` | Source roots and locked source jars. |
 | `buildTarget/scalacOptions` | The module flags, then SemanticDB options, and the classpath. |
-| `buildTarget/compile` | Compiles the cell without linking. Diagnostics go out as `build/publishDiagnostics`. |
+| `buildTarget/compile` | Compiles the cell without linking. Diagnostics go out as `build/publishDiagnostics`. The `histos.scala` target goes through `Loader.reportBuild`, which prepares the file as a load does (header blanked, plugins resolved and compiled) and compiles it against the api and plugin classpaths. |
 | `buildTarget/scalaMainClasses`, `buildTarget/scalaTestClasses` | Discovered from class files. |
 | `buildTarget/jvmRunEnvironment`, `buildTarget/jvmTestEnvironment` | The classpath and environment Metals launches with. |
 | `buildTarget/didChange` | Sent after a reload changes the target list. |
 | `build/logMessage` | Progress and errors. |
 
-The session handles one request at a time and ignores `$/cancelRequest` (A10). A Metals-only session does not reload on its own (B7).
+Each request checks the build fingerprint and reloads a changed build, and every spliced session receives `buildTarget/didChange`. The session handles one request at a time and ignores `$/cancelRequest` (A10).
 
 ## MCP
 

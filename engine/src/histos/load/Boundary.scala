@@ -14,9 +14,10 @@ private[load] object ClassHome:
     else if name.startsWith("histos.") then ClassHome.Refused
     else ClassHome.Open
 
-  /** Api surface, ZIO, and Scala. Never a plugin jar. */
+  /** Api surface, ZIO, izumi-reflect (`zio.Tag`), and Scala. Never a plugin jar. */
   def boundary(name: String): Boolean =
     name.startsWith("zio.") ||
+      name.startsWith("izumi.reflect.") ||
       name.startsWith("scala.") ||
       name.startsWith("histos.version.") ||
       name.startsWith("histos.plugin.") ||

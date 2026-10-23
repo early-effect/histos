@@ -31,7 +31,7 @@ trait Loader:
   def scan(repo: Path): IO[LoadError, ScannedBuild]
   def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]]
-  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes]
+  def reportBuild(repo: Path, apiJar: Path): ZIO[Resolve & ContentStore, LoadError, BuildNotes]
 
 object Loader:
   val live: zio.ULayer[Loader] = zio.ZLayer.succeed(LoaderLive)
@@ -46,21 +46,19 @@ private final case class Matched(
 
 private final case class Opened(build: BuildLoader)
 
+/** The blanked build file and its class directory live as long as the `Scope`. */
+private final case class Prepared(launcher: ApiDigest, boundary: List[Path], matched: List[Matched], source: Path, out: Path)
+
 private object LoaderLive extends Loader:
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
     Boundary.jars(apiJar)
 
-  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes] =
-    val display = repo.resolve("histos.scala")
-    for
-      _        <- ZIO.unlessZIO(exists(display))(ZIO.fail(LoadError.MissingFile(display)))
-      text     <- ZIO.attempt(Files.readString(display)).mapError(failed(LoadIo.Stat))
-      boundary <- Boundary.jars(apiJar)
-      out      <- tempDir("histos-bsp-build")
-      file     <- writeTemp(text)
-      notes    <- drive(file, boundary, out).map(reporter => notesOf(reporter, display, file))
-                    .ensuring(deleteFile(file) *> deleteTree(out))
-    yield notes
+  def reportBuild(repo: Path, apiJar: Path): ZIO[Resolve & ContentStore, LoadError, BuildNotes] =
+    ZIO.scoped:
+      for
+        prepared <- prepare(repo, apiJar)
+        reporter <- drive(prepared.source, prepared.boundary ++ pluginJars(prepared.matched), prepared.out)
+      yield notesOf(reporter, repo.resolve("histos.scala"), prepared.source)
 
   def scan(repo: Path): IO[LoadError, ScannedBuild] =
     val source = repo.resolve("histos.scala")
@@ -72,21 +70,31 @@ private object LoaderLive extends Loader:
 
   def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild] =
     for
+      prepared <- prepare(repo, apiJar)
+      matched   = prepared.matched
+      jars      = pluginJars(matched)
+      _        <- compile(prepared.source, prepared.boundary ++ jars, prepared.out)
+      opened   <- ZIO.acquireRelease(open(prepared.out, jars))(close)
+      threads  <- PluginThreads.make(opened.build)
+      live     <- ZIO.foreach(matched)(row => define(opened.build, matched, row))
+      builds   <- entries(prepared.out, opened.build)
+      build    <- select(builds)
+      graph    <- graphOf(opened.build, threads, build, matched)
+      _        <- checkUses(opened.build, matched, graph.plugins)
+    yield LoadedBuild(
+      graph,
+      PluginRuntime.loaded(repo, graph, opened.build, threads, live, links(matched, live), prepared.launcher),
+    )
+
+  private def prepare(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, Prepared] =
+    for
       scanned  <- scan(repo)
       launcher <- digestOf(apiJar)
       boundary <- Boundary.jars(apiJar)
       matched  <- materialize(repo, scanned.requests, launcher, boundary)
       out      <- ZIO.acquireRelease(tempDir("histos-classes"))(deleteTree)
       source   <- ZIO.acquireRelease(writeTemp(scanned.source))(deleteFile)
-      jars      = pluginJars(matched)
-      _        <- compile(source, boundary ++ jars, out)
-      opened   <- ZIO.acquireRelease(open(out, jars))(close)
-      live     <- ZIO.foreach(matched)(row => define(opened.build, row))
-      builds   <- entries(out, opened.build)
-      build    <- select(builds)
-      graph    <- graphOf(opened.build, build, matched)
-      _        <- checkUses(opened.build, matched, graph.plugins)
-    yield LoadedBuild(graph, PluginRuntime.loaded(repo, graph, opened.build, live, links(matched, live), launcher))
+    yield Prepared(launcher, boundary, matched, source, out)
 
   private def materialize(
       repo: Path,
@@ -215,39 +223,44 @@ private object LoaderLive extends Loader:
           case Nil       => LoadError.Io(LoadIo.Stat)
       case other => LoadError.Resolve(other)
 
-  private def define(loader: BuildLoader, row: Matched): IO[LoadError, HistosPlugin] =
-    ZIO.attempt(loader.loadClass(row.entry.value)).mapError(blown(loader, row, _)).flatMap: cls =>
-      pluginOf(cls) match
+  private def define(loader: BuildLoader, matched: List[Matched], row: Matched): IO[LoadError, HistosPlugin] =
+    ZIO.attempt(loader.loadClass(row.entry.value)).mapError(blown(loader, matched, row, _)).flatMap: cls =>
+      pluginOf(cls, blown(loader, matched, row, _)).flatMap:
         case Some(plugin) => ZIO.succeed(plugin)
         case None         => ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(row.coordinate.render)))
 
-  private def blown(loader: BuildLoader, row: Matched, err: Throwable): LoadError =
+  /** `row` is the entry being defined. A refusal asked for by another plugin's class blames that plugin. */
+  private def blown(loader: BuildLoader, matched: List[Matched], row: Matched, err: Throwable): LoadError =
     loader.takeRefused match
-      case Some(binary) => LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, binary))
-      case None         =>
+      case Some(refusal) =>
+        LoadError.Plugin(PluginLoadError.EngineLeak(ownerOf(matched, refusal).getOrElse(row).coordinate, refusal.binary))
+      case None =>
         err match
           case _: IllegalAccessException | _: java.lang.reflect.InaccessibleObjectException =>
             LoadError.Plugin(PluginLoadError.NoEntry(row.coordinate.render))
           case _ =>
             LoadError.Plugin(PluginLoadError.Defect(row.coordinate, err.getClass.getName))
 
-  private def graphOf(loader: BuildLoader, build: HistosBuild, matched: List[Matched]): IO[LoadError, histos.ProjectGraph] =
-    withContext(loader, ZIO.fromEither(build.graph).mapError(LoadError.BrokenGraph(_))).either.flatMap: outcome =>
+  private def graphOf(
+      loader: BuildLoader,
+      threads: PluginThreads,
+      build: HistosBuild,
+      matched: List[Matched],
+  ): IO[LoadError, histos.ProjectGraph] =
+    threads.run(ZIO.fromEither(build.graph).mapError(LoadError.BrokenGraph(_))).either.flatMap: outcome =>
       loader.takeRefused match
-        case Some(binary) =>
-          matched match
-            case row :: _ => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, binary)))
-            case Nil      => outcome.fold(error => ZIO.fail(error), value => ZIO.succeed(value))
-        case None => outcome.fold(error => ZIO.fail(error), value => ZIO.succeed(value))
+        case Some(refusal) => ZIO.fail(leaked(matched, refusal))
+        case None          => ZIO.fromEither(outcome)
 
-  private def withContext[A](loader: ClassLoader, effect: IO[LoadError, A]): IO[LoadError, A] =
-    ZIO.acquireReleaseWith(
-      ZIO.attempt {
-        val previous = Thread.currentThread.getContextClassLoader
-        Thread.currentThread.setContextClassLoader(loader)
-        previous
-      }.mapError(failed(LoadIo.OpenLoader))
-    )(previous => ZIO.attempt(Thread.currentThread.setContextClassLoader(previous)).ignore)(_ => effect)
+  private def leaked(matched: List[Matched], refusal: Refusal): LoadError =
+    ownerOf(matched, refusal) match
+      case Some(row) => LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, refusal.binary))
+      case None      => LoadError.Plugin(PluginLoadError.BuildLeak(refusal.binary))
+
+  /** The plugin row whose classpath defined the class that asked for the refused name. */
+  private def ownerOf(matched: List[Matched], refusal: Refusal): Option[Matched] =
+    refusal.requester.flatMap(Boundary.codeSource).flatMap: source =>
+      matched.find(row => (row.origin :: row.classpath).exists(same(source, _)))
 
   private def checkUses(loader: BuildLoader, matched: List[Matched], plugins: List[RegisteredPlugin]): IO[LoadError, Unit] =
     ZIO.foreachDiscard(plugins)(plugin => checkOne(loader, matched, plugin))
@@ -260,37 +273,32 @@ private object LoaderLive extends Loader:
         case Some(row) if plugin.entry != row.entry =>
           ZIO.fail(LoadError.Plugin(PluginLoadError.NotEntry(plugin.id, plugin.entry, row.entry)))
         case Some(row) =>
-          pluginOf(cls) match
+          pluginOf(cls, blown(loader, matched, row, _)).flatMap:
             case None => ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(row.coordinate.render)))
             case Some(found) if found.id != plugin.id =>
               ZIO.fail(LoadError.Plugin(PluginLoadError.IdMismatch(plugin.id, found.id)))
             case Some(_) => ZIO.unit
 
   private def missed(loader: BuildLoader, matched: List[Matched], plugin: RegisteredPlugin, err: Throwable): LoadError =
+    val entered = matched.find(_.entry == plugin.entry)
     loader.takeRefused match
-      case Some(binary) =>
-        matched match
-          case row :: _ => LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, binary))
-          case Nil      => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
+      case Some(refusal) =>
+        ownerOf(matched, refusal).orElse(entered) match
+          case Some(row) => LoadError.Plugin(PluginLoadError.EngineLeak(row.coordinate, refusal.binary))
+          case None      => LoadError.Plugin(PluginLoadError.BuildLeak(refusal.binary))
       case None =>
-        err match
-          case _: ClassNotFoundException => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
-          case _                         =>
-            matched match
-              case row :: _ => LoadError.Plugin(PluginLoadError.Defect(row.coordinate, err.getClass.getName))
-              case Nil      => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
+        (err, entered) match
+          case (_: ClassNotFoundException, _) => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
+          case (_, Some(row))                 => LoadError.Plugin(PluginLoadError.Defect(row.coordinate, err.getClass.getName))
+          case (_, None)                      => LoadError.Plugin(PluginLoadError.Undeclared(plugin.id))
 
-  private def pluginOf(cls: Class[?]): Option[HistosPlugin] =
-    val field =
-      try Some(cls.getField("MODULE$"))
-      catch case _: NoSuchFieldException => None
-    field.flatMap: found =>
-      try
-        found.setAccessible(true)
-        found.get(null) match
-          case plugin: HistosPlugin => Some(plugin)
-          case _                    => None
-      catch case _: IllegalAccessException | _: java.lang.reflect.InaccessibleObjectException => None
+  /** Reading `MODULE$` runs the object's static initializer, so a throw there goes to `fault`. */
+  private def pluginOf(cls: Class[?], fault: Throwable => LoadError): IO[LoadError, Option[HistosPlugin]] =
+    ZIO.attempt {
+      cls.getFields.find(_.getName == "MODULE$").map: field =>
+        field.setAccessible(true)
+        field.get(null)
+    }.mapBoth(fault, _.collect { case plugin: HistosPlugin => plugin })
 
   private def links(matched: List[Matched], instances: List[HistosPlugin]): List[PluginLink] =
     matched.zip(instances).map: (row, plugin) =>

@@ -1,6 +1,9 @@
 package histos.load
 
 import java.net.{URL, URLClassLoader}
+import java.util.concurrent.atomic.AtomicReference
+
+import scala.jdk.OptionConverters.*
 
 /**
  * The classloader API reports a missing class by throwing. The refused binary name is stored
@@ -23,19 +26,21 @@ private[load] final class ApiBoundary(host: ClassLoader) extends ClassLoader(Cla
           loaded
         case ClassHome.Open => super.loadClass(name, resolve)
 
+/** A refused name, and the innermost class on the stack that the build loader defined, if any. */
+private[load] final case class Refusal(binary: String, requester: Option[Class[?]])
+
 /** Build classes plus plugin jars. Refused names are thrown before this loader searches its own URLs. */
 private[load] final class BuildLoader(urls: Array[URL], parent: ClassLoader) extends URLClassLoader(urls, parent):
-  private val refused = new java.util.concurrent.atomic.AtomicReference[String]
+  private val refused = new AtomicReference[Option[Refusal]](None)
 
-  def takeRefused: Option[String] =
-    Option(refused.get)
+  /** The latest refusal, which this clears. */
+  def takeRefused: Option[Refusal] =
+    refused.getAndSet(None)
 
   override protected def loadClass(name: String, resolve: Boolean): Class[?] =
     getClassLoadingLock(name).synchronized:
       ClassHome.of(name) match
-        case ClassHome.Refused =>
-          refused.set(name)
-          throw new ClassNotFoundException(name)
+        case ClassHome.Refused => refuse(name)
         case ClassHome.Boundary =>
           val loaded = getParent.loadClass(name)
           if resolve then resolveClass(loaded)
@@ -45,10 +50,16 @@ private[load] final class BuildLoader(urls: Array[URL], parent: ClassLoader) ext
 
   override protected def findClass(name: String): Class[?] =
     ClassHome.of(name) match
-      case ClassHome.Refused =>
-        refused.set(name)
-        throw new ClassNotFoundException(name)
-      case ClassHome.Boundary =>
-        throw new ClassNotFoundException(name)
-      case ClassHome.Open =>
-        super.findClass(name)
+      case ClassHome.Refused  => refuse(name)
+      case ClassHome.Boundary => throw new ClassNotFoundException(name)
+      case ClassHome.Open     => super.findClass(name)
+
+  private def refuse(name: String): Nothing =
+    refused.set(Some(Refusal(name, requester)))
+    throw new ClassNotFoundException(name)
+
+  private def requester: Option[Class[?]] =
+    StackWalker
+      .getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
+      .walk(frames => frames.map(_.getDeclaringClass).filter(_.getClassLoader eq this).findFirst)
+      .toScala

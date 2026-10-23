@@ -1,10 +1,12 @@
 package histos.jdk
 
+import histos.process.ProcessTree
+
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{Duration, IO, ZIO, durationInt}
 
 enum Os:
   case Mac, Linux, Windows, Other
@@ -109,14 +111,14 @@ object JdkLocations:
     val coursier = JdkLocations.coursierCache(machine.userHome, machine.os, machine.env)
     val sdkRoot  = JdkLocations.sdkmanRoot(machine.userHome, machine.env)
     for
-      cacheDir <- isDir(coursier)
       csOnPath <- toolOnPath(machine.env.get("PATH"), "cs")
       sdkDir   <- isDir(sdkRoot)
       java     <- firstJdk(machine.env.get("PATH"), machine.os)
     yield
+      // Histos's own Coursier fetches create the cache directory, so the directory alone is not an install.
       val cs =
-        if cacheDir || csOnPath then ManagerProbe.Installed(Some(coursier.resolve("arc")))
-        else ManagerProbe.Absent
+        if csOnPath then ManagerProbe.Installed(Some(coursier.resolve("arc")))
+        else ManagerProbe.Cached(coursier.resolve("arc"))
       val sdk =
         if sdkDir then ManagerProbe.Installed(Some(sdkRoot.resolve("candidates").resolve("java")))
         else ManagerProbe.Absent
@@ -187,7 +189,7 @@ object Toolchain:
               lock.source match
                 case ArchiveSource.Remote(_) => ZIO.succeed(Startup.Refuse(render(lock, found)))
                 case ArchiveSource.Local(_) =>
-                  JdkStage.stage(lock, machine.cache.resolve("jdks")).mapError(ToolchainError.Stage(_)).flatMap: home =>
+                  JdkStage.stage(lock, machine).mapError(ToolchainError.Stage(_)).flatMap: home =>
                     home.version match
                       case Left(_) => ZIO.succeed(Startup.Refuse(render(lock, found)))
                       case Right(version) =>
@@ -203,11 +205,21 @@ object Toolchain:
   def command(javaBin: Path, jar: Path, args: List[String]): List[String] =
     javaBin.toString :: NativeAccess :: "-jar" :: jar.toString :: args
 
+  /** The child shares this terminal, and its status is the result. Interrupt stops it and everything it started. */
   def replace(javaBin: Path, jar: Path, args: List[String]): IO[ToolchainError, Int] =
-    ZIO.attemptBlockingInterrupt {
-      val process = new ProcessBuilder(command(javaBin, jar, args).asJava).inheritIO()
-      process.environment().put("HISTOS_JDK_SETTLED", "1")
-      process.start().waitFor()
+    ZIO.scoped:
+      ZIO.acquireRelease(handOff(javaBin, jar, args))(process => ProcessTree.of(process).flatMap(_.terminate(HandOffGrace)))
+        .flatMap: process =>
+          ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => ToolchainError.Reexec)
+
+  /** Time for the child's own SIGTERM handling, which stops its test children, before it is force-killed. */
+  private val HandOffGrace: Duration = 2.seconds
+
+  private def handOff(javaBin: Path, jar: Path, args: List[String]): IO[ToolchainError, Process] =
+    ZIO.attemptBlocking {
+      val builder = new ProcessBuilder(command(javaBin, jar, args).asJava).inheritIO()
+      builder.environment().put("HISTOS_JDK_SETTLED", "1")
+      builder.start()
     }.mapError(_ => ToolchainError.Reexec)
 
   private def startup(lock: JdkLock, running: Option[Path], home: Path, resolution: Resolution): Startup =

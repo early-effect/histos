@@ -111,9 +111,11 @@ enum ManagerSlot:
   case Absent
   case Present(homes: List[JdkHome])
 
+/** `Cached` is a manager whose binary is not on `PATH`. It counts only when its cache holds a JDK. */
 enum ManagerProbe:
   case Absent
   case Installed(homesRoot: Option[Path])
+  case Cached(homesRoot: Path)
 
 final case class ProbeView(
     explicit: Located,
@@ -282,6 +284,10 @@ object Jdk:
       case ManagerProbe.Absent              => ZIO.succeed(ManagerSlot.Absent)
       case ManagerProbe.Installed(None)     => ZIO.succeed(ManagerSlot.Present(Nil))
       case ManagerProbe.Installed(Some(dir)) => listHomes(dir).map(ManagerSlot.Present(_))
+      case ManagerProbe.Cached(dir) =>
+        listHomes(dir).map:
+          case Nil   => ManagerSlot.Absent
+          case found => ManagerSlot.Present(found)
 
   private def listHomes(root: Path): IO[JdkError, List[JdkHome]] =
     ZIO.attempt {

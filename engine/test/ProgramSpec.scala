@@ -3,13 +3,13 @@ package histos.program
 import histos.jdk.{JdkMajor, JdkVersion}
 import histos.resolve.Resolve
 import histos.zinc.ResolvedJdk
-import histos.{ClangMajor, Js, Jvm, MainClass, Native, Projects, Requires, ScalaVersion, Tool, module}
+import histos.{ClangMajor, Js, Jvm, MainClass, Native, Projects, Requires, ScalaVersion, TestMachine, Tool, module}
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, System, UIO, ZIO, durationInt}
+import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
 object ProgramSpec extends ZIOSpecDefault:
@@ -28,7 +28,8 @@ object ProgramSpec extends ZIOSpecDefault:
         for
           root <- temp
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
-          out <- Program.console(root, built, "core", jdk, Map.empty).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
+          here <- TestMachine.runtimes(root)
+          out <- Program.console(root, built, "core", jdk, here).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
             case Left(ProgramError.NoMain(name)) => name.value == "core"
@@ -44,8 +45,8 @@ object ProgramSpec extends ZIOSpecDefault:
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
                }
-          env <- pathEnv
-          feeds <- Program.console(root, built, "app", jdk, env).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          here <- TestMachine.runtimes(root)
+          feeds <- Program.console(root, built, "app", jdk, here).runCollect.provide(Resolve.live(root.resolve("coursier")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/app/3.10.0/jvm")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
@@ -63,11 +64,14 @@ object ProgramSpec extends ZIOSpecDefault:
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 js\n")
                }
-          env <- pathEnv
-          feeds <- Program.console(root, built, "app", jdk, env).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          chosen <- TestMachine.chosenNode(root)
+          here <- TestMachine.runtimes(root)
+          feeds <- Program.console(root, built, "app", jdk, here).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          ran <- TestMachine.launches(chosen)
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) => (platform, code) } == List((Js, 0)),
+          ran.nonEmpty,
         )
     @@ Requires(Tool.Node)
     ,
@@ -77,7 +81,8 @@ object ProgramSpec extends ZIOSpecDefault:
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          out <- Program.console(root, built, "app", jdk, Map.empty).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
+          here <- TestMachine.runtimes(root)
+          out <- Program.console(root, built, "app", jdk, here).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
           classes <- ZIO.attempt(Files.exists(root.resolve(".histos").resolve("classes")))
         yield assertTrue:
           out match
@@ -94,7 +99,8 @@ object ProgramSpec extends ZIOSpecDefault:
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          out <- Program.console(root, built, "app", jdk, Map.empty, Some(Native)).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
+          here <- TestMachine.runtimes(root)
+          out <- Program.console(root, built, "app", jdk, here, Some(Native)).runCollect.provide(Resolve.live(root.resolve("coursier"))).either
           classes <- ZIO.attempt(Files.exists(root.resolve(".histos").resolve("classes")))
         yield assertTrue:
           out match
@@ -112,8 +118,8 @@ object ProgramSpec extends ZIOSpecDefault:
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
                }
-          env <- pathEnv
-          feeds <- Program.console(root, built, "app", jdk, env, Some(Jvm)).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          here <- TestMachine.runtimes(root)
+          feeds <- Program.console(root, built, "app", jdk, here, Some(Jvm)).runCollect.provide(Resolve.live(root.resolve("coursier")))
           jsClasses <- ZIO.attempt(Files.exists(root.resolve(".histos/classes/app/3.10.0/js")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
@@ -131,8 +137,8 @@ object ProgramSpec extends ZIOSpecDefault:
                  write(root, "app/src/main/scala/demo/Check.scala", hi)
                  write(root, ".histos/dependencies.lock", "cell app 3.9.0 native\n")
                }
-          env <- pathEnv
-          feeds <- Program.console(root, built, "app", jdk, env).runCollect.provide(Resolve.live(root.resolve("coursier")))
+          here <- TestMachine.runtimes(root)
+          feeds <- Program.console(root, built, "app", jdk, here).runCollect.provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           feeds.collect { case ProgramFeed.Out(text) => text }.mkString("\n").contains("hi"),
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) => (platform, code) } == List((Native, 0)),
@@ -148,9 +154,6 @@ object ProgramSpec extends ZIOSpecDefault:
       |  def main(args: Array[String]): Unit =
       |    println("hi")
       |""".stripMargin
-
-  private val pathEnv: UIO[Map[String, String]] =
-    System.env("PATH").orElseSucceed(None).map(_.filter(_.nonEmpty).map(path => Map("PATH" -> path)).getOrElse(Map.empty))
 
   private def entries(classes: Path): List[String] =
     if !Files.isDirectory(classes) then Nil

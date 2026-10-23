@@ -1,5 +1,6 @@
 package histos.js
 
+import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.testrun.{SuitePattern, TestClasspath, TestRequest}
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
@@ -32,6 +33,7 @@ object JsSuite:
       work: Path,
       jdk: ResolvedJdk,
       processEnv: Map[String, String],
+      node: NodeBinary,
       patterns: List[SuitePattern] = Nil,
   ): IO[JsSuiteError, TestRequest] =
     val output = work.resolve("out")
@@ -64,7 +66,7 @@ object JsSuite:
       TestClasspath(classes, tools),
       MainClass.trusted(SuiteMain),
       child,
-      processEnv ++ Map(
+      processEnv ++ JsRun.nodeEnv(env, node) ++ Map(
         "JS_OUT" -> output.toAbsolutePath.toString,
         "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
         "JS_FRAMEWORK" -> framework,
@@ -100,13 +102,6 @@ object JsSuite:
   private def useRunEnv(env: JsEnv): Boolean = env match
     case JsEnv.Firefox        => false
     case JsEnv.Node | JsEnv.Jsdom => true
-
-  /** The expression that builds the `JSEnv`. It is the only line that names the implementation. */
-  private def envExpr(env: JsEnv): String = env match
-    case JsEnv.Node => "new org.scalajs.jsenv.nodejs.NodeJSEnv()"
-    case JsEnv.Jsdom => "new org.scalajs.jsenv.jsdomnodejs.JSDOMNodeJSEnv()"
-    case JsEnv.Firefox =>
-      "new chekhov.jsenv.ChekhovJSEnv(chekhov.ChekhovBrowser.Firefox, true, false, scala.collection.immutable.Map.empty[String, String])"
 
   private def suite(env: JsEnv, patterns: List[SuitePattern]): String =
     """package subprocess
@@ -276,7 +271,7 @@ object JsSuite:
       |}
       |
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
-      |""".stripMargin.replace("__ENV__", envExpr(env)).replace("__USE_ENV__", if useRunEnv(env) then "true" else "false").replace("__SUITES__", SuitePattern.embed(patterns))
+      |""".stripMargin.replace("__ENV__", JsRun.envExpr(env)).replace("__USE_ENV__", if useRunEnv(env) then "true" else "false").replace("__SUITES__", SuitePattern.embed(patterns))
 
   private final case class Artifact(organization: String, name: String, revision: String)
 

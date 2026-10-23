@@ -10,6 +10,7 @@ object NativeCompile:
   def compile(
       request: CompileRequest,
       revision: NativeVersion,
+      origin: NativeOrigin,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
   ): IO[CompileError, CompileOutput] =
@@ -18,7 +19,7 @@ object NativeCompile:
       ZIO.fail(CompileError.NativeLibrary(s"native compile uses the Scala ${JvmCompile.Scala390.value} compiler plugin, not ${request.toolchain.version.value}"))
     else
       for
-        toolchain <- ZIO.fromEither(NativeToolchain.resolve(revision, Map.empty)).mapError(error => CompileError.NativeLibrary(error.message))
+        toolchain <- ZIO.fromEither(NativeToolchain.of(revision, origin)).mapError(error => CompileError.NativeLibrary(error.message))
         libs <- NativeClasspath.fetch(toolchain).mapError(error => CompileError.NativeLibrary(error.message))
         compiled <- JvmCompile.compilePrepared(
                       request.copy(classpath = libs.libraries ++ request.classpath),

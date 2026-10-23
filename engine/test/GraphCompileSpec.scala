@@ -1,6 +1,7 @@
 package histos.zinc
 
 import histos.jdk.{JdkMajor, JdkVersion}
+import histos.native.NativeOrigin
 import histos.resolve.{Resolve, ResolveError}
 import histos.workflow.CiError
 import histos.{Js, Jvm, Module, ProjectPath, Projects, ScalaVersion, module}
@@ -40,7 +41,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           cells <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
           found <- ZIO.attempt(
             cells.map(cell =>
@@ -82,7 +83,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("2.13.16"))))
           cells <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
           found <- ZIO.attempt(cells.flatMap(cell => entries(cell.classes)))
         yield assertTrue(
@@ -130,7 +131,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             }
             .flatMap(ZIO.fromEither(_))
           cells <- GraphCompile
-            .run(root, built, List("app"), jdk)
+            .run(root, built, List("app"), jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
           found <- ZIO.attempt(
             cells.map(cell => (cell.module.value, entries(cell.classes)))
@@ -187,7 +188,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             }
             .flatMap(ZIO.fromEither(_))
           names <- GraphCompile
-            .console(root, built, List("app"), jdk)
+            .console(root, built, List("app"), jdk, NativeOrigin.Central)
             .collect {
               case CompileFeed.Began(module, _, _) =>
                 s"compiling ${module.value}"
@@ -216,7 +217,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .flatMap(ZIO.fromEither(_))
           seen <- Ref.make(Chunk.empty[CompileFeed])
           result <- GraphCompile
-            .console(root, built, Nil, jdk)
+            .console(root, built, Nil, jdk, NativeOrigin.Central)
             .tap(feed => seen.update(_ :+ feed))
             .runDrain
             .either
@@ -264,7 +265,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             }
             .flatMap(ZIO.fromEither(_))
           out <- GraphCompile
-            .run(root, built, List("app"), jdk)
+            .run(root, built, List("app"), jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
             .either
         yield assertTrue:
@@ -320,7 +321,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             }
             .flatMap(ZIO.fromEither(_))
           cells <- GraphCompile
-            .run(root, built, List("core"), jdk)
+            .run(root, built, List("core"), jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
         yield
           val names = cells.map(cell => (cell.module.value, cell.platform))
@@ -355,7 +356,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
             )
           cells <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
           cells match
@@ -390,7 +391,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("ui", Js)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
         yield
           val files = out match
@@ -447,7 +448,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
-            .run(root, built, List("missing"), jdk)
+            .run(root, built, List("missing"), jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
             .either
         yield assertTrue:
@@ -463,7 +464,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
             .either
         yield assertTrue:
@@ -482,7 +483,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
             .either
         yield assertTrue:
@@ -526,10 +527,10 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
             )
           compiled <- GraphCompile
-            .run(root, built, List("e2e"), jdk)
+            .run(root, built, List("e2e"), jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
           refused <- GraphCompile
-            .run(root, built, List("probe"), jdk)
+            .run(root, built, List("probe"), jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
             .either
           files <- ZIO.attempt(
@@ -562,7 +563,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
-            .run(root, built, Nil, jdk)
+            .run(root, built, Nil, jdk, NativeOrigin.Central)
             .provide(Resolve.live(root.resolve("coursier")))
             .either
         yield assertTrue:

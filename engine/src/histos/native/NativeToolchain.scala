@@ -24,8 +24,10 @@ object NativeToolchain:
 
   val Key: String = "HISTOS_NATIVE"
 
-  def resolve(revision: NativeVersion, env: Map[String, String]): Either[NativeToolchainError, NativeToolchain] =
-    source(env).map(origin => NativeToolchain(origin, revision))
+  def of(revision: NativeVersion, origin: NativeOrigin): Either[NativeToolchainError, NativeToolchain] =
+    origin match
+      case NativeOrigin.Chosen(source)  => Right(NativeToolchain(source, revision))
+      case NativeOrigin.Refused(error) => Left(error)
 
   /** Unset is Central. `ivy-local` or `file:/path` replaces the origin. The revision stays on the module. */
   def source(env: Map[String, String]): Either[NativeToolchainError, NativeSource] =
@@ -42,6 +44,20 @@ object NativeToolchain:
         case Left(error) => Left(NativeToolchainError.Repository(error))
         case Right(url)  => Right(NativeSource.Maven(url))
     else Left(NativeToolchainError.Origin(raw))
+
+/**
+ * `HISTOS_NATIVE` as one command read it from the machine. A refusal fails only the Native cells that fetch,
+ * so a graph without Native does not care what it says.
+ */
+enum NativeOrigin:
+  case Chosen(source: NativeSource)
+  case Refused(error: NativeToolchainError)
+
+object NativeOrigin:
+  val Central: NativeOrigin = Chosen(NativeSource.Central)
+
+  def read(env: Map[String, String]): NativeOrigin =
+    NativeToolchain.source(env).fold(Refused(_), Chosen(_))
 
 enum NativeToolchainError:
   case Empty

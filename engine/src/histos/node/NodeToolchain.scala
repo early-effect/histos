@@ -16,6 +16,19 @@ object NodeToolchain:
       case None       => ZIO.fail(NodeError.NoLock(lockPath(machine.repo)))
       case Some(lock) => resolution(machine, lock).map(found => NodeSurvey(lock, found))
 
+  /** The `node` a Js launch runs: the one selected, or the locked archive staged into the cache. */
+  def choose(machine: Machine): IO[NodeMiss, NodeBinary] =
+    for
+      survey <- explain(machine).mapError(NodeMiss.Unresolved(_))
+      home <- survey.resolution match
+        case NodeResolution.Selected(chosen, _)         => ZIO.succeed(chosen.home)
+        case NodeResolution.OverrideRejected(reason, _) => ZIO.fail(NodeMiss.Rejected(reason))
+        case NodeResolution.Install(hint, _)            => ZIO.fail(NodeMiss.Install(hint))
+        case NodeResolution.Provision(_, _) =>
+          NodeStage.stage(survey.lock, machine).mapBoth(error => NodeMiss.Unresolved(NodeError.Stage(error)), _.path)
+      binary <- NodeProbe.binary(home).mapError(NodeMiss.Unresolved(_))
+    yield binary
+
   def text(survey: NodeSurvey): String =
     render(survey.lock, survey.resolution)
 

@@ -3,6 +3,7 @@ package histos.server
 import histos.bsp.{Bsp, Frame}
 import histos.jdk.Sha256
 import histos.load.HeaderScan
+import histos.toolchain.Runtimes
 import histos.zinc.ResolvedJdk
 import histos.ProjectGraph
 
@@ -30,22 +31,14 @@ import zio.{
   ZLayer
 }
 
-/** What a batch command found in `.histos/server.json`. A stale record does not
-  * attach.
-  */
+/** What a batch command found in `.histos/server.json`. */
 enum Decision:
   case Absent
   case DifferentVersion
-  case Stale(drift: Drift)
   case Open(socket: Path)
-
-enum Drift:
-  case Version
-  case Fingerprint
 
 enum ServerError:
   case Unreachable(path: Path)
-  case Stale
   case DifferentVersion
   case NoServer
   case Protocol
@@ -54,7 +47,6 @@ enum ServerError:
 
   def message: String = this match
     case Unreachable(path) => s"histos server at $path is not listening"
-    case Stale             => "histos server does not match this build"
     case DifferentVersion  =>
       "histos server is a different version. Run histos reboot"
     case NoServer => "no histos server is running"
@@ -102,7 +94,6 @@ object Call:
 
 enum Message derives JsonCodec:
   case Ready
-  case Stale
   case Out(text: String)
   case Err(text: String)
   case Exit(code: Int, err: String)
@@ -291,7 +282,6 @@ object Client:
   private def ready(frame: Option[String]): Either[ServerError, Unit] =
     frame.flatMap(_.fromJson[Message].toOption) match
       case Some(Message.Ready) => Right(())
-      case Some(Message.Stale) => Left(ServerError.Stale)
       case _                   => Left(ServerError.Protocol)
 
   private def frames(input: InputStream): ZStream[Any, ServerError, Feed] =
@@ -358,16 +348,17 @@ object Daemon:
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       plugins: histos.load.PluginRuntime = Calls.quiet,
-      machine: histos.jdk.Machine = Calls.idleMachine
+      machine: histos.jdk.Machine = Calls.idleMachine,
+      relaunch: Path => IO[ServerError, Unit] = successor
   ): ZIO[
     Scope & histos.resolve.Resolve & histos.load.Loader &
       histos.cache.ContentStore,
     ServerError,
-    Record.Written
+    Running
   ] =
     for
       listening <- Promise.make[ServerError, Record.Written]
-      _ <- run(
+      serving <- run(
         repo,
         graph,
         jdk,
@@ -377,10 +368,33 @@ object Daemon:
         build,
         plugins,
         machine,
+        relaunch(repo),
         listening
-      ).forkScoped
+      ).tapErrorCause(listening.failCause).forkScoped
       record <- listening.await
-    yield record
+    yield Running(record, serving.join)
+
+  /** A listening server. `done` completes when it stops. */
+  final case class Running(record: Record.Written, done: IO[ServerError, Unit])
+
+  /** `stopping` lets the accept loop end cleanly when a reboot closes the channel. */
+  private final case class Lifecycle(
+      armed: Ref[Boolean],
+      stopping: Promise[Nothing, Unit],
+      relaunch: IO[ServerError, Unit]
+  )
+
+  private def successor(repo: Path): IO[ServerError, Unit] =
+    ZIO
+      .attemptBlocking {
+        new ProcessBuilder("./histos", "server")
+          .directory(repo.toFile)
+          .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start()
+        ()
+      }
+      .mapError(_ => ServerError.Io(ServerIo.Bind))
 
   private def run(
       repo: Path,
@@ -392,6 +406,7 @@ object Daemon:
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       plugins: histos.load.PluginRuntime,
       machine: histos.jdk.Machine,
+      relaunch: IO[ServerError, Unit],
       listening: Promise[ServerError, Record.Written]
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
@@ -399,18 +414,18 @@ object Daemon:
     Unit
   ] =
     val socket = Record.socket(repo)
-    bind(socket).foldZIO(
-      error => listening.fail(error).unit,
-      channel =>
-        ZIO.scoped {
+    bind(socket).flatMap: channel =>
+      ZIO.scoped {
           for
             _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
-            fingerprint <- Fingerprint.read(repo)
-            _ <- Record.write(repo, version, fingerprint, socket)
             armed <- Ref.make(true)
             _ <- ZIO.addFinalizer(
               ZIO.whenZIO(armed.get)(remove(repo, socket)).unit
             )
+            stopping <- Promise.make[Nothing, Unit]
+            life = Lifecycle(armed, stopping, relaunch)
+            fingerprint <- Fingerprint.read(repo)
+            _ <- Record.write(repo, version, fingerprint, socket)
             held <- Scope.make
             uses <- Ref.make[Uses](Uses.Live(0))
             graphs <- Ref.make(graph)
@@ -418,7 +433,7 @@ object Daemon:
               Generation(graph, plugins, fingerprint, held, uses)
             )
             reloading <- Semaphore.make(1)
-            spliced <- Ref.make(Option.empty[Bsp.Session])
+            spliced <- Ref.make(Set.empty[Bsp.Session])
             warm = Warm(live, graphs, reloading, spliced)
             permit <- Semaphore.make(1)
             runs <- Ref.make(Map.empty[String, Fiber[ServerError, Unit]])
@@ -438,7 +453,7 @@ object Daemon:
               version,
               apiJar,
               socket,
-              armed,
+              life,
               warm,
               permit,
               runs,
@@ -448,7 +463,6 @@ object Daemon:
             )
           yield ()
         }
-    )
 
   private def bind(socket: Path): IO[ServerError, ServerSocketChannel] =
     for
@@ -489,7 +503,7 @@ object Daemon:
       live: Ref[Generation],
       graphs: Ref[ProjectGraph],
       reloading: Semaphore,
-      spliced: Ref[Option[Bsp.Session]]
+      spliced: Ref[Set[Bsp.Session]]
   )
 
   private def accept(
@@ -499,7 +513,7 @@ object Daemon:
       version: String,
       apiJar: Path,
       bound: Path,
-      armed: Ref[Boolean],
+      life: Lifecycle,
       warm: Warm,
       permit: Semaphore,
       runs: Ref[Map[String, Fiber[ServerError, Unit]]],
@@ -520,27 +534,32 @@ object Daemon:
     ] =
       ZIO
         .attemptBlockingInterrupt(server.accept())
-        .mapError(_ => ServerError.Io(ServerIo.Accept))
-        .flatMap { socket =>
-          handle(
-            socket,
-            repo,
-            jdk,
-            version,
-            apiJar,
-            bound,
-            server,
-            armed,
-            warm,
-            permit,
-            runs,
-            machine,
-            buildClasspath,
-            build
-          ).ignore
-            .ensuring(ZIO.attempt(socket.close()).ignore)
-            .forkScoped *> loop
-        }
+        .foldZIO(
+          _ =>
+            ZIO.ifZIO(life.stopping.isDone)(
+              ZIO.unit,
+              ZIO.fail(ServerError.Io(ServerIo.Accept))
+            ),
+          socket =>
+            handle(
+              socket,
+              repo,
+              jdk,
+              version,
+              apiJar,
+              bound,
+              server,
+              life,
+              warm,
+              permit,
+              runs,
+              machine,
+              buildClasspath,
+              build
+            ).ignore
+              .ensuring(ZIO.attempt(socket.close()).ignore)
+              .forkScoped *> loop
+        )
     loop
 
   private def handle(
@@ -551,7 +570,7 @@ object Daemon:
       apiJar: Path,
       bound: Path,
       server: ServerSocketChannel,
-      armed: Ref[Boolean],
+      life: Lifecycle,
       warm: Warm,
       permit: Semaphore,
       runs: Ref[Map[String, Fiber[ServerError, Unit]]],
@@ -591,7 +610,7 @@ object Daemon:
                   val ran =
                     asked match
                       case Call.Compile(projects) =>
-                        Calls.compile(repo, held.graph, projects, jdk, say)
+                        Calls.compile(repo, held.graph, projects, jdk, machine, say)
                       case Call.Test(projects, patterns, quick) =>
                         Calls.test(
                           repo,
@@ -600,6 +619,7 @@ object Daemon:
                           patterns,
                           quick,
                           jdk,
+                          machine,
                           say
                         )
                       case Call.Publish(repository, projects) =>
@@ -650,6 +670,7 @@ object Daemon:
                           repo,
                           held.graph,
                           jdk,
+                          machine,
                           destination,
                           say
                         )
@@ -661,11 +682,15 @@ object Daemon:
                           )
                         )
                       case Call.Reboot =>
-                        reboot(repo, bound, server, armed, output)
+                        reboot(repo, bound, server, life, output)
                       case Call.Bsp =>
                         bsp(
                           repo,
+                          apiJar,
+                          version,
+                          bound,
                           jdk,
+                          machine,
                           warm,
                           permit,
                           buildClasspath,
@@ -754,11 +779,9 @@ object Daemon:
             previous <- warm.live.getAndSet(next)
             _ <- warm.graphs.set(found.graph)
             _ <- retire(previous)
-            _ <- warm.spliced.get.flatMap {
-              case Some(session) =>
-                session.changed(previous.graph, found.graph)
-              case None => ZIO.unit
-            }
+            _ <- warm.spliced.get.flatMap(
+              ZIO.foreachDiscard(_)(_.changed(previous.graph, found.graph))
+            )
           yield Right(next)
     yield result
 
@@ -806,39 +829,39 @@ object Daemon:
       repo: Path,
       bound: Path,
       server: ServerSocketChannel,
-      armed: Ref[Boolean],
+      life: Lifecycle,
       output: OutputStream
   ): ZIO[Any, ServerError, Unit] =
     for
-      _ <- armed.set(false)
+      _ <- life.armed.set(false)
       _ <- remove(repo, bound)
-      _ <- ZIO
-        .attemptBlocking {
-          new ProcessBuilder("./histos", "server")
-            .directory(repo.toFile)
-            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
-            .start()
-          ()
-        }
-        .mapError(_ => ServerError.Io(ServerIo.Bind))
+      _ <- life.relaunch
       _ <- write(
         output,
         wire(Message.Exit(histos.cli.CliExit.Success.code, ""))
       )
+      _ <- life.stopping.succeed(())
       _ <- ZIO.attemptBlocking(server.close()).ignore
     yield ()
 
   private def bsp(
       repo: Path,
+      apiJar: Path,
+      version: String,
+      bound: Path,
       jdk: ResolvedJdk,
+      machine: histos.jdk.Machine,
       warm: Warm,
       permit: Semaphore,
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       input: InputStream,
       output: OutputStream
-  ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
+  ): ZIO[
+    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    ServerError,
+    Unit
+  ] =
     Semaphore.make(1).flatMap { writer =>
       def send(payload: String): IO[ServerError, Unit] =
         writer.withPermit(
@@ -847,12 +870,13 @@ object Daemon:
             .mapError(_ => ServerError.Io(ServerIo.Write))
         )
       val notify = (line: String) => send(line).ignore
-      warm.live.get.flatMap { generation =>
+      warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
         Bsp
           .open(
             repo,
             generation.graph,
             jdk,
+            runtimes,
             buildClasspath,
             notify,
             build,
@@ -860,17 +884,26 @@ object Daemon:
             Some(warm.graphs)
           )
           .flatMap { session =>
-            def loop: ZIO[histos.resolve.Resolve, ServerError, Int] =
+            def loop: ZIO[
+              histos.resolve.Resolve & histos.load.Loader &
+                histos.cache.ContentStore,
+              ServerError,
+              Int
+            ] =
               Frame
                 .read(input)
                 .mapError(_ => ServerError.Io(ServerIo.Read))
                 .flatMap:
                   case None          => ZIO.succeed(1)
                   case Some(payload) =>
-                    warm.reloading
-                      .withPermit(
-                        warm.live.get.flatMap(gen => acquire(gen).as(gen))
-                      )
+                    adopt(repo, apiJar, version, bound, warm)
+                      .flatMap {
+                        case Right(gen) => ZIO.succeed(gen)
+                        case Left(_)    =>
+                          warm.reloading.withPermit(
+                            warm.live.get.flatMap(gen => acquire(gen).as(gen))
+                          )
+                      }
                       .flatMap { gen =>
                         session
                           .answer(gen.graph, payload)
@@ -880,9 +913,9 @@ object Daemon:
                         case Bsp.Answer.Reply(text) => send(text) *> loop
                         case Bsp.Answer.Quiet       => loop
                         case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
-            warm.spliced.set(Some(session)) *>
+            warm.spliced.update(_ + session) *>
               loop
-                .ensuring(warm.spliced.set(None))
+                .ensuring(warm.spliced.update(_ - session))
                 .flatMap(code => send(wire(Message.Marker(code))))
           }
       }
@@ -898,7 +931,5 @@ object Daemon:
     Frame.write(output, payload).mapError(_ => ServerError.Io(ServerIo.Write))
 
   private def remove(repo: Path, socket: Path): UIO[Unit] =
-    ZIO.attemptBlocking {
-      Files.deleteIfExists(Record.file(repo))
-      Files.deleteIfExists(socket)
-    }.ignore
+    ZIO.attemptBlocking(Files.deleteIfExists(Record.file(repo))).ignore *>
+      ZIO.attemptBlocking(Files.deleteIfExists(socket)).ignore

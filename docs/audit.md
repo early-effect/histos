@@ -57,46 +57,51 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.1 Publish one coordinate per platform
 
-- [ ] **B1** (correctness, *verified*) `engine:publish/LocalPublish.scala:137-145,300-308,432-440` compiles every platform, and `jobs` filters cells by module only. A Jvm+Js module gets two parallel writers on one `jvm.jar` under one `_3` coordinate.
+- [x] **B1** (correctness, *verified*) `engine:publish/LocalPublish.scala:137-145,300-308,432-440` compiles every platform, and `jobs` filters cells by module only. A Jvm+Js module gets two parallel writers on one `jvm.jar` under one `_3` coordinate.
 
 ## M1.2 Server lifecycle
 
-- [ ] **B2** (correctness, *verified*) `app:cli/Cli.scala:425-441,642-657`: `compile` and `test` call `Loader.load` before `attach`. A live server still gets a client-side load, a broken `histos.scala` fails in the client, and `~ compile` loads every iteration.
-- [ ] **B3** (concurrency) `app:server/Daemon.scala:368-383,400-451`: `run` is `forkScoped` and unobserved. A failure after bind leaves `listening` incomplete, so `histos server` hangs.
-- [ ] **B4** (resources) `Daemon.scala:805-830`: reboot closes the channel, but `serve` waits on `ZIO.never`, so the old JVM never exits. The order differs from the design, and no test covers it.
-- [ ] **B5** (concurrency, *miniature first*) `app:bsp/Frame.scala:27-28` and `Daemon.scala:316-328,566-570,863-867` read sockets and stdin with `attemptBlocking`, which interrupt does not reach.
-- [ ] **B6** (resources) `Daemon.scala:402-413` registers the socket `remove` finalizer after `Record.write`.
-- [ ] **B7** (correctness) `Daemon.scala:863-882`: BSP requests never check the fingerprint, so a Metals-only session never reloads or sends `buildTarget/didChange`.
-- [ ] **B8** (concurrency) `Daemon.scala:421,883-885`: `Ref[Option[Bsp.Session]]` lets a second splice overwrite the first, and the first exit clears both.
-- [ ] **B9** (dead code) `Decision.Stale`, `Drift`, `ServerError.Stale`, and `Message.Stale` are never produced and are still matched (`Cli.scala:995,1150,1164`).
+- [x] **B2** (correctness, *verified*) `app:cli/Cli.scala:425-441,642-657`: `compile` and `test` call `Loader.load` before `attach`. A live server still gets a client-side load, a broken `histos.scala` fails in the client, and `~ compile` loads every iteration.
+- [x] **B3** (concurrency) `app:server/Daemon.scala:368-383,400-451`: `run` is `forkScoped` and unobserved. A failure after bind leaves `listening` incomplete, so `histos server` hangs.
+- [x] **B4** (resources) `Daemon.scala:805-830`: reboot closes the channel, but `serve` waits on `ZIO.never`, so the old JVM never exits. The order differs from the design, and no test covers it.
+- [x] **B5** (concurrency, *miniature first*) `app:bsp/Frame.scala:27-28` and `Daemon.scala:316-328,566-570,863-867` read sockets and stdin with `attemptBlocking`, which interrupt does not reach. A miniature showed that interrupting `attemptBlocking` on a socket stream waits for the read, `attemptBlockingInterrupt` frees a socket read but not a pipe, and `attemptBlockingCancelable` with a close frees both. `Frame.read` closes its stream on interrupt.
+- [x] **B6** (resources) `Daemon.scala:402-413` registers the socket `remove` finalizer after `Record.write`.
+- [x] **B7** (correctness) `Daemon.scala:863-882`: BSP requests never check the fingerprint, so a Metals-only session never reloads or sends `buildTarget/didChange`.
+- [x] **B8** (concurrency) `Daemon.scala:421,883-885`: `Ref[Option[Bsp.Session]]` lets a second splice overwrite the first, and the first exit clears both.
+- [x] **B9** (dead code) `Decision.Stale`, `Drift`, `ServerError.Stale`, and `Message.Stale` are never produced and are still matched (`Cli.scala:995,1150,1164`).
 
 ## M1.3 Plugin isolation
 
-- [ ] **B10** (concurrency, *miniature first*) `engine:load/PluginRuntime.scala:130-134,253-261` and `Loader.scala:243-250` set the thread context class loader on the current thread and then run plugin code that may move the fiber to another thread. Parallel plugin nodes overwrite each other.
-- [ ] **B11** (correctness) `engine:load/BuildLoader.scala:28-31`: `takeRefused` never clears, so one refused `histos.*` lookup fails every later run on that loader with `EngineLeak`.
-- [ ] **B12** (typed-errors) `Loader.scala:220,263,283-293` reads `MODULE$`, which runs the plugin's static initializer outside `attempt`. A throw is a defect, not `PluginLoadError.Defect`.
-- [ ] **B13** (typed-errors) `Loader.scala:236-241,269-281` blames `matched.head` for leaks and defects, not the plugin whose class failed.
-- [ ] **B14** (reproducibility) `engine:load/PluginInputs.scala:173,176` puts the absolute Coursier path of each plugin jar in the digest, so no remote hit can happen on another machine.
-- [ ] **B38** (correctness) `LoaderLive.reportBuild`, which BSP uses for build-file diagnostics, compiles the raw `histos.scala` with the header lines still in and no plugin jars, so diagnostics fail for any build with a plugin header. Found while correcting `plugins.md`.
-- [ ] **B39** (correctness, *miniature first*) `izumi.reflect.*` is not a boundary name, and the izumi jar is dropped from plugin classpaths, so plugin code that materializes a `Tag` may fail with `PluginRunError.Linkage`. Found while correcting `plugins.md`, not yet proved.
+- [x] **B10** (concurrency, *miniature first*) `engine:load/PluginRuntime.scala:130-134,253-261` and `Loader.scala:243-250` set the thread context class loader on the current thread and then run plugin code that may move the fiber to another thread. Parallel plugin nodes overwrite each other. A blocking step in `run` landed on a default blocking thread whose context loader was the app loader, so `loadClass("dev.example.Echo$")` failed with `ClassNotFoundException`, and `graph` and `run` now execute on `PluginThreads`, whose threads carry `BuildLoader`.
+- [x] **B11** (correctness) `engine:load/BuildLoader.scala:28-31`: `takeRefused` never clears, so one refused `histos.*` lookup fails every later run on that loader with `EngineLeak`. An unrelated task run after a refused lookup failed with `EngineLeak("histos.schedule.Sendable")`, and `takeRefused` now clears.
+- [x] **B12** (typed-errors) `Loader.scala:220,263,283-293` reads `MODULE$`, which runs the plugin's static initializer outside `attempt`. A throw is a defect, not `PluginLoadError.Defect`. The load died with `ExceptionInInitializerError`, and it is now `Defect(coordinate, "java.lang.ExceptionInInitializerError")`.
+- [x] **B13** (typed-errors) `Loader.scala:236-241,269-281` blames `matched.head` for leaks and defects, not the plugin whose class failed. A leak from `tools/b`'s `contribute` named `tools/a`, and `BuildLoader` now records the requesting class, with the new `PluginLoadError.BuildLeak` when no plugin class asked.
+- [x] **B14** (reproducibility) `engine:load/PluginInputs.scala:173,176` puts the absolute Coursier path of each plugin jar in the digest, so no remote hit can happen on another machine. The same jar bytes at two paths stored two digests, and each jar input is now named by its content hash, with exact duplicates dropped.
+- [x] **B38** (correctness) `LoaderLive.reportBuild`, which BSP uses for build-file diagnostics, compiles the raw `histos.scala` with the header lines still in and no plugin jars, so diagnostics fail for any build with a plugin header. Found while correcting `plugins.md`. A build with `plugin(path"tools/docs")` reported `Illegal start of toplevel definition` and `Not found: dev`, and it now reports no problems.
+- [x] **B39** (correctness, *miniature first*) `izumi.reflect.*` is not a boundary name, and the izumi jar is dropped from plugin classpaths, so plugin code that materializes a `Tag` may fail with `PluginRunError.Linkage`. Found while correcting `plugins.md`. A `LoadSpec` plugin that summons `Tag[Greeting]` died with `NoClassDefFoundError: izumi/reflect/Tag$` (`izumi.reflect.Tag$`), a die rather than `Linkage` because `run` threw while building its effect, before `catchSomeDefect` applies, and `izumi.reflect.` is now a boundary name.
+- [x] **B41** (typed-errors) `engine:load/PluginRuntime.scala` `invoke`: a plugin whose `run` throws before it returns an effect escaped `catchSomeDefect` and the run died with the raw throwable (`java.lang.IllegalStateException`), and `ZIO.suspendSucceed(plugin.run(request))` now turns that throw into `PluginRunError.Defect`. Found while proving B39.
 
 ## M1.4 Child processes
 
-- [ ] **B16** (resources) `engine:testrun/TestProcess.scala:126-127,144-145`: `start` then `addFinalizer` is not atomic, so an interrupt between them leaks the child.
-- [ ] **B17** (resources) `TestProcess.scala:266-279,316-320`: non-JVM children (node, native binaries) never get their own process group, and `stop` skips the group kill once the leader exited.
-- [ ] **B18** (concurrency) `TestProcess.scala:180-199` starts a new `Thread` per line read, outside ZIO supervision.
-- [ ] **B19** (performance) `ModuleTest.scala:69-70,1070` and `TestProcess.scala:164` build output with `s"$have$line\n"` (quadratic), and `TestStatus` keeps a second copy of streamed output.
-- [ ] **B20** (resources) `engine:jdk/Toolchain.scala:206-210`: the JDK hand-off is a raw `ProcessBuilder` plus `waitFor`, and the child survives an interrupt.
-- [ ] **B21** (resources) `engine:pack/Assembly.scala:268-270` opens a `URLClassLoader` over every jar and never closes it.
+- [x] **B16** (resources) `engine:testrun/TestProcess.scala:126-127,144-145`: `start` then `addFinalizer` is not atomic, so an interrupt between them leaks the child. The gap is a race no deterministic test can hit, and `start` is now the acquire of `ZIO.acquireRelease`, which is uninterruptible.
+- [x] **B17** (resources) `TestProcess.scala:266-279,316-320`: non-JVM children (node, native binaries) never get their own process group, and `stop` skips the group kill once the leader exited. The `sleep` started by `sh -c` and the `sleep` a JVM test left behind after its main returned both survived. This branch kills every descendant of a live child, taken with `ProcessHandle.descendants()` before anything dies, and a JVM child's whole group even after its leader exited (`process/ProcessTree.scala`). B42 holds the rest: a descendant that outlives a node or native child.
+- [x] **B18** (concurrency) `TestProcess.scala:180-199` starts a new `Thread` per line read, outside ZIO supervision. Each pipe is now `ZStream.fromInputStream` read by one fiber, in a scope that closes after the tree is killed, because a blocked pipe read ignores interrupt.
+- [x] **B19** (performance) `ModuleTest.scala:69-70,1070` and `TestProcess.scala:164` build output with `s"$have$line\n"` (quadratic), and `TestStatus` keeps a second copy of streamed output. 200,000 lines took 13.1 s through `TestProcess.run` and now take about 0.4 s. `TestStatus` carries no output, and `Transcript` (one `Chunk` per stream) is the one accumulator, for `TestProcess.run` and `ModuleTest.run`.
+- [x] **B20** (resources) `engine:jdk/Toolchain.scala:206-210`: the JDK hand-off is a raw `ProcessBuilder` plus `waitFor`, and the child survives an interrupt. An interrupted hand-off left the child and the `sleep` it started running, and the child is now an `acquireRelease` resource whose release kills its tree.
+- [x] **B21** (resources) `engine:pack/Assembly.scala:268-270` opens a `URLClassLoader` over every jar and never closes it. The loader still served `demo/Lib.class` after its scope closed, and it is now closed by `acquireRelease`.
+- [x] **B44** (resources) `engine:jdk/Toolchain.scala` `replace`: an interrupted hand-off force-killed the child before its TERM handler could run (a child that traps TERM never exited 130), and the release now sends SIGTERM to the tree, waits up to 2 seconds, then force-kills what is left.
+- [x] **B45** (resources) `engine:testrun/TestProcess.scala` `bootstrap`: an interrupt waited out the `javac` compile and left `javac` running (it did not finish within 3 seconds against a `javac` that sleeps), and `javac` is now an `acquireRelease` child whose release kills its tree.
 
 ## M1.5 Toolchain decisions reach execution
 
-- [ ] **B22** (correctness, *verified*) `ModuleTest.scala:461`, `js/JsSuite.scala:106`, and `js/JsRun.scala:128` run `node` from `PATH`. The Node lock only feeds `histos toolchain` (`toolchain/Survey.scala:34`).
-- [ ] **B23** (correctness) `native/NativeCompile.scala:21` ignores `HISTOS_NATIVE` at compile, `ModuleTest.scala:1154-1158` drops it for test links, and `native/NativeLink.scala:191` builds the linker env from `sys.env`.
-- [ ] **B24** (correctness, *verified*) `jdk/JdkStage.scala:126-136,143-166` stages zip only. Temurin ships tar.gz on Linux and macOS, and unzip loses exec bits. `JdkSpec:301-316` checks only `isRegularFile`.
-- [ ] **B25** (correctness) `jdk/Jdk.scala:163` and `Toolchain.scala:112,118` count Coursier as installed when its cache directory exists. Histos's own `FileCache()` creates that directory.
-- [ ] **B26** (resources) `JdkStage.scala:79-85,138-166` and `node/NodeStage.scala:91-98,154-181` use one fixed `archive.partial` name and unpack in place, so concurrent or interrupted stages corrupt the cache.
-- [ ] **B27** (correctness) `node/NodeProbe.scala:194-196`: the read-only probe runs `setExecutable(true)` on user binaries.
+- [x] **B22** (correctness, *verified*) `ModuleTest.scala:461`, `js/JsSuite.scala:106`, and `js/JsRun.scala:128` run `node` from `PATH`. The Node lock only feeds `histos toolchain` (`toolchain/Survey.scala:34`). A named Js main ran the parent's `node` and never launched the `node.local` choice, and Js test and run now launch the Node the selection chooses, once per command, or fail with `NoNode`.
+- [x] **B23** (correctness) `native/NativeCompile.scala:21` ignores `HISTOS_NATIVE` at compile, `ModuleTest.scala:1154-1158` drops it for test links, and `native/NativeLink.scala:191` builds the linker env from `sys.env`. With `HISTOS_NATIVE` naming an empty local repository, compile, the test compile, and the link all fetched from Central, and the origin is now read once from `Machine` and passed to compile, the test compile, link, and runner, and the run link, with the linker env built from the machine's.
+- [x] **B24** (correctness, *verified*) `jdk/JdkStage.scala:126-136,143-166` stages zip only. Temurin ships tar.gz on Linux and macOS, and unzip loses exec bits. `JdkSpec:301-316` checks only `isRegularFile`. A tar.gz JDK was refused as `NotZip`, and the system `tar` now unpacks it as a scoped child, so `bin/java` keeps its exec bit and runs.
+- [x] **B25** (correctness) `jdk/Jdk.scala:163` and `Toolchain.scala:112,118` count Coursier as installed when its cache directory exists. Histos's own `FileCache()` creates that directory. A cache without a JDK and no `cs` on `PATH` turned provisioning into a `cs java-home` hint, and that cache now counts only when it holds a JDK.
+- [x] **B26** (resources) `JdkStage.scala:79-85,138-166` and `node/NodeStage.scala:91-98,154-181` use one fixed `archive.partial` name and unpack in place, so concurrent or interrupted stages corrupt the cache. A failed unpack left a partial `unpack` beside `archive`, and both stagers now copy to a per-attempt scratch file and unpack into a scratch directory under a scope, then move into place atomically and keep a complete unpack another stager placed first.
+- [x] **B27** (correctness) `node/NodeProbe.scala:194-196`: the read-only probe runs `setExecutable(true)` on user binaries. Probing made an `rw-r--r--` node executable and chose it, and the probe now leaves modes alone and rejects that node as `NotExecutable`.
+- [x] **B47** (correctness) `node/NodeStage.scala` stages zip only, but nodejs.org ships tar.gz and tar.xz for Linux and macOS. Found in M1.5. A tar.gz node was refused as `NotZip`, and tar.gz and tar.xz now unpack through the same scoped system `tar` as B24, with `bin/node` executable.
+- [x] **B48** (resources) `node/NodeProbe.scala` `versionOf` starts `node --version` with a raw `ProcessBuilder` and a `destroy` in `finally`. Found in M1.5. Interrupting a probe of a node whose `sleep` held stdout did not finish within 5 seconds, and the probe is now a scoped child whose release, and any interrupt, kills its tree.
 
 ## M1.6 Snapshot publisher
 
@@ -114,6 +119,10 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **B35** (resources) `engine:cache/ContentStore.scala:46-51` leaks the temp file on failure or interrupt, and `clean` never sweeps `tmp/`.
 - [ ] **B36** (correctness) `ContentStore.scala:67-81`: the keep file only grows, is global across projects, and is read-modify-write with no lock.
 - [ ] **B37** (correctness) `cache clean` does not cover JDKs or launchers. Either clean them or change the documented contract (D9).
+
+## M1.8 Exit codes
+
+- [x] **B46** (correctness) `histos compile` exits 0 when a cell fails to compile: `Cli.compileLocal` fails only on a stream error, and a failed cell is a `CompileFeed.Failed` event. `GraphCompile.strict` fails the compile command's stream after its last event, locally and through the server. Test runs keep the lenient stream so passing cells still test.
 
 ## M2 Steps, executor, and aspects
 
@@ -151,7 +160,10 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **S11** (resources) `load/ApiJar.scala:47-52` is main code used only by tests and never deletes its temp directory. `Loader.scala:59-62` creates temp files outside `acquireRelease`.
 - [ ] **S12** (api-shape) More than five parameters: `PluginInputs.hash` (7), `Loader.link` (8), `Scheduler.publish` (7), `Program.one` (8), `JsSuite.run` (9), `NativeSuite.run` (8), `NativeLink` (7), `JsRun.start` (6), `JsLink.link` (6).
 - [ ] **S13** (typed-errors) `program/EntryPoints.scala:16` uses `.orDie` on IO. `watch/SourceWatch.scala:30` names the first root, not the one that failed.
+- [ ] **S14** (services) Plugin compile dependencies (`load/PluginCells.scala`) use `NativeOrigin.Central`, because the machine's environment does not reach the plugin runtime.
 - [ ] **T12** (duplication) Ten specs build their own JDK fixture from `java.lang.System.getProperty("java.home")`, several with an invented `21.0.2` fallback, beside the production `GraphCompile.jdkHere`, which reads the property the same way. They move to the `Machine` source with S1. Found in M0.3.
+- [ ] **B42** (resources) `engine:testrun/TestProcess.scala` `command`: a node or native child has no process group of its own, so a descendant that outlives it is reparented and nothing can find it. The fix is a small exec launcher that calls `setpgid` before `execvp`. Found in M1.4.
+- [ ] **B43** (resources) `TestProcess.scala` `stop`: on Linux, closing a pipe does not wake a read that is already blocked, so `stop` can wait on a writer outside the process tree that still holds the pipe. On macOS the close freed the read in 7 ms. Found in M1.4.
 
 ## M4 The lock covers every jar
 
@@ -176,7 +188,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **P6** (correctness) `testrun/SuiteStamp.scala:19-28` and `ModuleTest.scala:790,1293`: the `testQuick` stamp omits upstream locked jars, the JDK, and flags. It does blocking IO outside an effect, swallows `NonFatal`, and uses `Map.apply` (`SuiteStamp.scala:26`).
 - [ ] **P7** (typed-errors) Errors become strings: `LinkFailed(detail: String)` (`ModuleTest.scala:116-121,453,506,604,660,672,733`), `Program` `Link`, `Process`, and `Library` (`Program.scala:106-220`), `NativeCompile.scala:21-22`, `NativeLink.scala:184,192`, `JsLink.scala:62`. `JvmCompile.scala:94,384-388` turns a `Throwable` message plus 8 frames into a diagnostic. `jdk/Toolchain` `Startup.Refuse(report: String)` and `CompileError.NativeLibrary(text: String)` carry text.
 - [ ] **P8** (api-shape) `assembly/Assemble.scala:35,40-44,53` hardcodes `app`, `api`, `histos.cli.Main`, and `versions.first`, ignores `graph.assembly`, flattens `NoModule(error.message)`, and has no test.
-- [ ] **P9** (dead code) `NodeStage`, `NativeLink.link`, and `NativeKey` have test callers only. `LinkError.Interrupted` and `Unexpected` and `NativeClasspath.entries` are unused.
+- [ ] **P9** (dead code) `NativeLink.link` and `NativeKey` have test callers only. `NodeStage` has had a production caller, `NodeToolchain.choose`, since M1.5. `LinkError.Interrupted` and `Unexpected` and `NativeClasspath.entries` are unused.
 - [ ] **P10** (stringly, booleanly) `framework: String` (`JsSuite.scala:30`, `NativeSuite.scala:24`), `Map[String, String]` child env, `Machine.userHome: String`, `hasJavac` and `hasBinary`, `slot(stop: Boolean)` (`Jdk.scala:199`, `Node.scala:114`), `Node.required: Boolean`, the module name `"hello"` (`NativeLink.scala:174`), and `HISTOS_JDK_SETTLED` written twice (`Toolchain.scala:26,209`).
 - [ ] **P11** (cast, totality) `pack/LazyVals.scala:197-198` uses `asInstanceOf` after a guard, and `:109,114,160` index lists with `window(n)` and `window.head`.
 - [ ] **P12** (correctness) Windows gaps: `native/Clang.scala:157-160` never looks for `clang.exe`, `TestProcess.scala:241-244` hardcodes `bin/java`, and the entry point exits 3 when setpgid is missing (`ModuleTest.scala:1004`).
@@ -202,7 +214,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **A13** (typed-errors) `Bsp.scala:792,842,936` use `.orDie` on file IO, so a defect kills the splice.
 - [ ] **A14** (concurrency) `Bsp.scala:388-416` feeds a `ConcurrentLinkedQueue` from a `CompileProblem => Unit` callback.
 - [ ] **A15** (dead code) `mcp/ToolchainView.scala` (174 lines) is unused.
-- [ ] **A16** (duplication) `pin`, `placed` (twice in `Calls`), `relative` (also in `Lines`), the program exit mapping, and the compile renderer (four copies) are repeated between `Cli.scala` and `Calls.scala`.
+- [ ] **A16** (duplication) `pin`, `placed` (twice in `Calls`), `relative` (also in `Lines`), the program exit mapping, the compile renderer (four copies), and `Cli.failedCell` and `Calls.failedSuite` are repeated between `Cli.scala` and `Calls.scala`.
 - [ ] **A17** (correctness) A missing lock exits 8 from `compile` and 5 from `test` and `run` (`Cli.scala:448-459,749-758`), and `CliSpec.scala:201-219` asserts the split.
 - [ ] **A18** (services) `server` and `client` import `CliExit`, `Lines`, and `Cli.testFailure`, and `cli` imports `server`. That is a package cycle.
 - [ ] **A19** (booleanly) `dryRun`, `update`/`check`, and `test: Boolean` (`Cli.scala:68`, `Grammar.scala:24-25`, `Bsp.scala:599`), `ContentStore.clean(dryRun: Boolean)`, and `HeaderScan.scala:56` (`dependency: Boolean`).

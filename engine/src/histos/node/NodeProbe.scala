@@ -1,8 +1,8 @@
 package histos.node
 
 import histos.jdk.{Machine, Os}
+import histos.process.{Child, Ended}
 
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
@@ -160,37 +160,39 @@ object NodeProbe:
       val normal = dir.normalize
       if kept.exists(parent => normal.startsWith(parent.normalize)) then kept else kept :+ dir
 
-  private def readHome(dir: Path): IO[NodeError, NodeHome] =
+  /** The executable a home launches. A probed home that matched has one. */
+  def binary(home: Path): IO[NodeError, NodeBinary] =
+    ZIO.attemptBlocking(launcher(home)).mapError(_ => NodeError.Unreadable(home)).flatMap:
+      case Some(file) => ZIO.succeed(NodeBinary(file))
+      case None       => ZIO.fail(NodeError.Version(home.resolve("bin").resolve("node"), NodeVersionError.Missing))
+
+  private def launcher(dir: Path): Option[Path] =
     val binary = dir.resolve("bin").resolve("node")
     val windows = dir.resolve("bin").resolve("node.exe")
-    val chosen =
-      if Files.isRegularFile(binary) then Some(binary)
-      else if Files.isRegularFile(windows) then Some(windows)
-      else None
-    chosen match
+    if Files.isRegularFile(binary) then Some(binary)
+    else if Files.isRegularFile(windows) then Some(windows)
+    else None
+
+  private def readHome(dir: Path): IO[NodeError, NodeHome] =
+    launcher(dir) match
       case None => ZIO.succeed(NodeHome(dir, hasBinary = false, version = Left(NodeVersionError.Missing)))
       case Some(file) =>
-        runnable(file) *> versionOf(file).foldZIO(
-          {
-            case NodeError.Version(_, error) => ZIO.succeed(NodeHome(dir, hasBinary = true, version = Left(error)))
-            case other                       => ZIO.fail(other)
-          },
-          version => ZIO.succeed(NodeHome(dir, hasBinary = true, version = Right(version))),
-        )
+        ZIO.attemptBlocking(Files.isExecutable(file)).mapError(_ => NodeError.Unreadable(file)).flatMap:
+          case false => ZIO.succeed(NodeHome(dir, hasBinary = true, version = Left(NodeVersionError.NotExecutable(file))))
+          case true =>
+            versionOf(file).foldZIO(
+              {
+                case NodeError.Version(_, error) => ZIO.succeed(NodeHome(dir, hasBinary = true, version = Left(error)))
+                case other                       => ZIO.fail(other)
+              },
+              version => ZIO.succeed(NodeHome(dir, hasBinary = true, version = Right(version))),
+            )
 
   private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
-    ZIO.attemptBlockingInterrupt {
-      val process = new ProcessBuilder(binary.toString, "--version").redirectErrorStream(true).start()
-      try
-        val text = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8).trim
-        val code = process.waitFor()
-        (code, text)
-      finally process.destroy()
-    }.mapError(_ => NodeError.Unreadable(binary)).flatMap:
-      case (0, text) =>
-        ZIO.fromEither(NodeVersion.from(text)).mapError(error => NodeError.Version(binary, error))
-      case (code, _) => ZIO.fail(NodeError.Version(binary, NodeVersionError.Status(code)))
-
-  /** A script unpacked from a zip has no execute bit. `node --version` is the check that it runs. */
-  private def runnable(binary: Path): IO[NodeError, Unit] =
-    ZIO.attempt(binary.toFile.setExecutable(true)).mapError(_ => NodeError.Unreadable(binary)).unit
+    val start = ZIO
+      .attemptBlocking(new ProcessBuilder(binary.toString, "--version").redirectErrorStream(true).start())
+      .orElseFail(NodeError.Unreadable(binary))
+    Child.run(start, NodeError.Unreadable(binary)).flatMap:
+      case Ended(0, text) =>
+        ZIO.fromEither(NodeVersion.from(text.trim)).mapError(error => NodeError.Version(binary, error))
+      case Ended(code, _) => ZIO.fail(NodeError.Version(binary, NodeVersionError.Status(code)))

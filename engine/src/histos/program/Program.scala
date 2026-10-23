@@ -2,9 +2,11 @@ package histos.program
 
 import histos.js.{JsLink, JsRun}
 import histos.native.{NativeLink, NativeToolchain}
+import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.testrun.{TestClasspath, TestEvent, TestProcess, TestRequest}
+import histos.toolchain.Runtimes
 import histos.zinc.{GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk}
 import histos.{Aggregate, ClangPin, Dep, MainClass, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -26,7 +28,7 @@ object Program:
       graph: ProjectGraph,
       name: String,
       jdk: ResolvedJdk,
-      env: Map[String, String],
+      runtimes: Runtimes,
       choice: Option[Platform] = None,
   ): ZStream[Resolve, ProgramError, ProgramFeed] =
     ZStream.unwrap:
@@ -36,14 +38,14 @@ object Program:
         binary <- ZIO.fromEither(Binary.from(main.value).left.map(ProgramError.Main(_)))
         platform <- ZIO.fromEither(pick(module, choice))
         lock <- readLock(repo)
-        compiled <- GraphCompile.run(repo, graph, List(module.name.value), jdk, Some(platform)).mapError(ProgramError.Compile(_))
+        compiled <- GraphCompile.run(repo, graph, List(module.name.value), jdk, runtimes.native, Some(platform)).mapError(ProgramError.Compile(_))
         cells = compiled.filter(cell => cell.module == module.name && cell.platform == platform).sortBy(_.version.value)
         continue <- Ref.make(true)
       yield ZStream.fromIterable(cells).flatMap: cell =>
         ZStream.unwrap:
           continue.get.map: keep =>
             if keep then
-              one(repo, graph, module, binary, cell, lock, jdk, env).tap:
+              one(repo, graph, module, binary, cell, lock, jdk, runtimes).tap:
                 case ProgramFeed.Exited(_, _, _, code) if code != 0 => continue.set(false)
                 case _                                              => ZIO.unit
             else ZStream.empty
@@ -76,8 +78,9 @@ object Program:
       cell: histos.zinc.CompiledCell,
       lock: DependencyLock,
       jdk: ResolvedJdk,
-      env: Map[String, String],
+      runtimes: Runtimes,
   ): ZStream[Resolve, ProgramError, ProgramFeed] =
+    val env = runtimes.env
     val modules = graph.projects.collect { case item: Module => item }
     val repositories = BuildResolvers(graph.resolvers)
     val began = ZStream.succeed(ProgramFeed.Begin(cell.module, cell.version, cell.platform))
@@ -100,11 +103,12 @@ object Program:
           ZStream.unwrap:
             val linkDir = workDir(repo, cell)
             for
+              node <- runtimes.node.mapError(miss => ProgramError.NoNode(cell.module, cell.version, miss))
               paths <- classpath(repo, modules, module, cell, lock, repositories)
               _ <- fresh(linkDir)
               script <- JsLink.link(cell.version, binary, paths, linkDir, jdk, module.jsModule)
                 .mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
-              asked <- JsRun.start(module.jsEnv, module.jsModule, script, linkDir, jdk, env)
+              asked <- JsRun.start(module.jsEnv, module.jsModule, script, linkDir, jdk, env, node)
                 .mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
             yield events(cell, asked)
         case Platform.Native =>
@@ -114,9 +118,11 @@ object Program:
               major <- nativeMajor(module, cell.version)
               paths <- classpath(repo, modules, module, cell, lock, repositories)
               _ <- fresh(linkDir)
+              toolchain <- ZIO.fromEither(NativeToolchain.of(module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision), runtimes.native))
+                             .mapError(error => ProgramError.Link(cell.module, cell.version, cell.platform, error.message))
               program <- NativeLink.linkClasspath(
                            major,
-                           module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision),
+                           toolchain,
                            env,
                            paths,
                            linkDir,
@@ -218,6 +224,7 @@ enum ProgramError:
   case LockRead(path: Path)
   case Link(module: ProjectName, version: ScalaVersion, platform: Platform, detail: String)
   case Process(module: ProjectName, version: ScalaVersion, detail: String)
+  case NoNode(module: ProjectName, version: ScalaVersion, miss: NodeMiss)
   case MissingUpstream(module: ProjectName, dependency: ProjectName, version: ScalaVersion)
   case Work(path: Path)
   case Root(path: Path)
@@ -241,6 +248,8 @@ enum ProgramError:
       s"'${module.value}' ${version.value} ${platform.token} failed to link\n$detail"
     case Process(module, version, detail) =>
       s"'${module.value}' ${version.value} did not start\n$detail"
+    case NoNode(module, version, miss) =>
+      s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
     case MissingUpstream(module, dependency, version) =>
       s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} classes"
     case Work(path) => s"could not prepare the run directory $path"

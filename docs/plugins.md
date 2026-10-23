@@ -148,7 +148,7 @@ Load and run fail with separate enums, `PluginLoadError` and `PluginRunError` in
 
 Every case has `message`, the same way `BuildError` and `LoadError` do. Neither enum carries a `Throwable`. `Defect` carries the exception class name. `Linkage` carries the missing class name the JDK reports. `PluginDetail` is the plugin's own message, used when the plugin fails a run on purpose. `PluginLoadError.Io(op)` names the step that failed (`PluginIo.Read`, `Resolve`, `Compile`, or `Open`) and carries no exception. `PluginRunError.MissingNote` is the run-time form of `BuildError.MissingNote`, raised when the engine reads a declared `Note` input and finds no note.
 
-`ApiLink`, `VersionMismatch`, `NoSource`, `EngineLeak`, and `Defect` fire before the plugin object exists, so they name the header coordinate and never a `PluginId`. `VersionMismatch` also names both digests. `ForeignEntry`, `NotEntry`, `IdMismatch`, and `Undeclared` fire after `graph` returns and name the `PluginId`. `Loader.load` wraps every `PluginLoadError` as `LoadError.Plugin(error)`, and the CLI exits 3 with `error.message`. The `contract` suite in [`PluginSpec.scala`](../api/test/PluginSpec.scala) asserts that the `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, and `Defect` messages name the coordinate.
+`ApiLink`, `VersionMismatch`, `NoSource`, `EngineLeak`, and `Defect` name the header coordinate and never a `PluginId`. `VersionMismatch` also names both digests. `EngineLeak` names the plugin whose class asked for the refused name: `BuildLoader` records the innermost class on the stack that it defined, and the loader matches that class's code source to a header row. A refused name that no plugin class asked for, such as one the build file looks up itself, is `BuildLeak`, which names only the binary. `ForeignEntry`, `NotEntry`, `IdMismatch`, and `Undeclared` fire after `graph` returns and name the `PluginId`. `Loader.load` wraps every `PluginLoadError` as `LoadError.Plugin(error)`, and the CLI exits 3 with `error.message`. The `contract` suite in [`PluginSpec.scala`](../api/test/PluginSpec.scala) asserts that the `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, and `Defect` messages name the coordinate.
 
 A slash id that is not in the graph is `PluginRunError.Unknown`, a task failure with exit 1.
 
@@ -239,11 +239,12 @@ Boundary names (`ClassHome.boundary` in [`Boundary.scala`](../engine/src/histos/
 - `histos.version.*`
 - `histos.plugin.*`
 - `zio.*`
+- `izumi.reflect.*`, because `zio.Tag` extends `izumi.reflect.Tag` and a summoned `Tag` compiles to izumi calls in the plugin's own classes
 - `scala.*`
 
 Every other name under `histos.` is refused before any plugin URL is searched. That covers `histos.schedule`, `histos.zinc`, `histos.load`, `histos.task`, `histos.workflow`, `histos.cli`, `histos.central`, and any engine package added later, including a copy vendored in a plugin jar.
 
-`BuildLoader` is a `URLClassLoader` over the build file's class directory plus the plugin classpaths. It applies the same split before its own search: boundary names go to the parent, refused names throw and are recorded on the loader, and other names use normal parent-first lookup. A stock parent-first `URLClassLoader` would fall back to its own URLs after the parent misses, so a plugin could vendor `histos/schedule/Sendable.class`. The recorded refusal becomes `PluginLoadError.EngineLeak` during load and `PluginRunError.EngineLeak` during a run.
+`BuildLoader` is a `URLClassLoader` over the build file's class directory plus the plugin classpaths. It applies the same split before its own search: boundary names go to the parent, refused names throw and are recorded on the loader, and other names use normal parent-first lookup. A stock parent-first `URLClassLoader` would fall back to its own URLs after the parent misses, so a plugin could vendor `histos/schedule/Sendable.class`. The recorded refusal becomes `PluginLoadError.EngineLeak` during load and `PluginRunError.EngineLeak` during a run. Reading a refusal clears it, so a refused lookup fails the load or run that made it and no later run.
 
 The loader rejects plugin classes in reserved packages:
 
@@ -259,7 +260,7 @@ When plugin code reaches for an engine class:
 - At compile time the engine is off the classpath, so scalac fails before a jar exists.
 - At load or `run`, `ApiBoundary` does not define it, and `BuildLoader` does not search plugin URLs for it. Linkage failures are caught around entry load and around `run`. A refused `histos.*` name is `EngineLeak`, and any other missing class during a run is `PluginRunError.Linkage`. The task fails and nothing is cached.
 
-That guarantee covers parent delegation and classes defined from plugin URLs. Engine types remain reachable by other means. `./histos` runs with `java -jar`, so the system class loader is the assembly, which contains `histos.schedule` and the rest. `ClassLoader.getSystemClassLoader.loadClass("histos.schedule.Sendable")` still links the engine. The engine sets the thread context class loader to `BuildLoader` while it evaluates `graph` (which calls `contribute`) and on the thread that starts `run`, and restores the previous loader afterwards, including on failure and interruption. The engine-leak test in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) vendors `histos/schedule/Sendable.class` and covers the plugin-URL path. Nothing covers `getSystemClassLoader`.
+That guarantee covers parent delegation and classes defined from plugin URLs. Engine types remain reachable by other means. `./histos` runs with `java -jar`, so the system class loader is the assembly, which contains `histos.schedule` and the rest. `ClassLoader.getSystemClassLoader.loadClass("histos.schedule.Sendable")` still links the engine. The engine evaluates `graph` (which calls `contribute`) and every `run` on `PluginThreads`, a fixed pool and a blocking pool owned by the load `Scope`, whose threads have `BuildLoader` as their context class loader. A fiber that moves to another thread, including a blocking step, still sees `BuildLoader`, and the engine never sets the context loader on a thread it shares. The engine-leak test in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) vendors `histos/schedule/Sendable.class` and covers the plugin-URL path. Nothing covers `getSystemClassLoader`.
 
 ### Compile classpath
 
@@ -338,7 +339,7 @@ Compiled plugin classes live under `<cache>/plugins/<digest>`. The digest covers
 
 ### Entry checks
 
-After the build file compiles and before `graph` runs, the loader defines each header entry class on `BuildLoader` and reads its public `MODULE$` field, so the entry must be a public object. A `MODULE$` the loader cannot read, or one that is not a `HistosPlugin`, is `NoEntry`. A failure while defining the entry class is `PluginLoadError.Defect`.
+After the build file compiles and before `graph` runs, the loader defines each header entry class on `BuildLoader` and reads its public `MODULE$` field, so the entry must be a public object. A `MODULE$` the loader cannot read, or one that is not a `HistosPlugin`, is `NoEntry`. A failure while defining the entry class, or a throw from its initializer when `MODULE$` is read (`java.lang.ExceptionInInitializerError`), is `PluginLoadError.Defect`.
 
 After `graph` returns, the loader loads each registered entry class from `BuildLoader` and checks it:
 
@@ -418,7 +419,7 @@ Declared inputs contribute:
 1. Every cell that a reachable task names in `TaskDep.Compile` compiles first, test sources included when the module has them. A compile failure fails the run with `PluginRunError.Failed`.
 2. Dependencies run before dependents. A `TaskDep.Same` sibling runs with `PluginArgs.empty`, and only the requested task receives the caller's arguments. A dependency cycle fails the run with `PluginRunError.Failed` carrying the scheduler's cycle message.
 3. For each plugin action the scheduler looks in the remote cache when one is on, then in the local action cache. A hit for a task with declared outputs must find every declared file under the repo with the sha256 the manifest recorded. A missing or changed file is a miss. A text-only hit (no declared outputs) is always accepted.
-4. On a miss, the engine hashes the inputs, builds the `RunRequest`, sets the context class loader, and calls `plugin.run(request)` inside `ZIO.scoped`, on the task fiber.
+4. On a miss, the engine hashes the inputs, builds the `RunRequest`, and runs `plugin.run(request)` inside `ZIO.scoped` on `PluginThreads`. Each plugin jar or class directory enters the key once, named by the sha256 of its bytes (or of its directory hash) and never by its path, so the same cell keys the same in another cache and two jars that share a file name stay two inputs.
 5. After success, every `WrittenFile` must name a declared output (otherwise `ExtraOutput`), and every declared output must exist as a regular file (otherwise `MissingOutput`). A failed check stores nothing.
 6. The stored value is the manifest (`PluginManifest` in [`PluginManifest.scala`](../engine/src/histos/schedule/PluginManifest.scala)): `PluginOutput.text` when the task declares no outputs, or a `histos-manifest v1` header, the file count, one `<sha256> <path>` line per declared output, then the text. Both caches store only that UTF-8 text, and output bytes stay in the work tree.
 7. `Policy.Plugin` stores a result only when the verdict is `Send`. A `Stay` result is returned and never written. `Policy.Core` stores every local success and uploads only a `Send`.
@@ -427,15 +428,15 @@ On a hit, `run` returns the stored text, plus a `WrittenFile` for each declared 
 
 The CLI and the server run plugin tasks against the local action cache in the content store, with the remote cache off. Output file bytes never travel through `RemoteCache`. Another machine that receives a manifest without the files misses and runs locally.
 
-[`PluginRunSpec.scala`](../engine/test/PluginRunSpec.scala) runs scripted plugins through `PluginRuntime.run` and covers note isolation, the missing and undeclared output checks, an unknown id, argument routing to the requested task only, a compile failure before the run, and interruption.
+[`PluginRunSpec.scala`](../engine/test/PluginRunSpec.scala) runs scripted plugins through `PluginRuntime.run` and covers note isolation, the missing and undeclared output checks, an unknown id, argument routing to the requested task only, a compile failure before the run, a plugin jar that keeps its key at another path, two jars that share a file name, and interruption.
 
 ### Failure and cancellation
 
 Interruption closes the inner `Scope`, so `acquireRelease` in the plugin runs its release. A plugin that starts a process ties it to that `Scope`, and the engine installs no shutdown hook for it. Failure, a defect, interruption, a missing output, and linkage store nothing. Interruption stays interruption: CLI exit `CliExit.Interrupted` (130), with no `PluginRunError`. Partial files may remain in the work tree. They never count as a hit, and the next run overwrites them. There is no transactional output directory.
 
 - A defect in `contribute` is `BuildError.PluginDefect`, then `LoadError.BrokenGraph`, exit 3.
-- A failure while defining the entry class is `PluginLoadError.Defect`, then `LoadError.Plugin`, exit 3.
-- A `Die` inside `run` is `PluginRunError.Defect(binary)`, exit 1. A `ClassNotFoundException` or `NoClassDefFoundError` is `Linkage` instead.
+- A failure while defining the entry class or running its initializer is `PluginLoadError.Defect`, then `LoadError.Plugin`, exit 3.
+- A `Die` inside `run`, including a throw before `run` returns its effect, is `PluginRunError.Defect(binary)`, exit 1. A `ClassNotFoundException` or `NoClassDefFoundError` is `Linkage` instead.
 
 Each carries a class name in `message`. The CLI prints `message` and never branches on exception text.
 
@@ -535,7 +536,7 @@ Histos has no metrics stack, and plugins add none. The signals are CLI output, `
 
 - An exact digest match is quiet.
 - A `FromSource` link prints nothing during load. `histos graph` shows `source <published> <running>` on the plugin line.
-- `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, and `Unlocked` print the error `message`, which names the header coordinate. `VersionMismatch` also names both digests. The exit is `CliExit.LoadFailed` (3), through `LoadError.Plugin` or `LoadError.BrokenGraph`.
+- `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, and `Unlocked` print the error `message`, which names the header coordinate. `VersionMismatch` also names both digests. `BuildLeak` names only the refused binary. The exit is `CliExit.LoadFailed` (3), through `LoadError.Plugin` or `LoadError.BrokenGraph`.
 - A plugin task failure, including `PluginRunError.Unknown` and `PluginRunError.Defect`, prints `message` and exits `CliExit.TaskFailed` (1). Interruption exits 130.
 - A cache hit is quiet, the same as a compile cache hit. A `Stay` task logs no cache decision.
 - Workflow drift is `CiError.Drift` when a rendered plugin job changes a committed file, or when an orphan `histos-<job>.yml` remains.
@@ -546,7 +547,7 @@ Histos has no metrics stack, and plugins add none. The signals are CLI output, `
 
 | Limit | Severity | Mitigation |
 | --- | --- | --- |
-| `java -jar` leaves the assembly as the system loader, so `getSystemClassLoader` still links `histos.schedule`. | Medium | Outside the `ApiBoundary` guarantee. The context loader is `BuildLoader` while `graph` runs and when `run` starts. |
+| `java -jar` leaves the assembly as the system loader, so `getSystemClassLoader` still links `histos.schedule`. | Medium | Outside the `ApiBoundary` guarantee. The context loader is `BuildLoader` on every thread that runs `graph` or `run`. |
 | A hermetic plugin reads an undeclared file or opens a socket, and the digest stays the same. | Medium | The declaration is the key. `Stay` results are never stored. `histos graph` shows the claim. There is no sandbox. |
 | `UnknownRoot` loads the build, so a root typo pays for a load and a broken build reports exit 3. | Low | Only `UnknownRoot` loads. `histos cache nope` and `histos test --nope` do not. |
 | ZIO on `api` widens the jar that projects might touch. | Medium | Projects are banned from the api jar through `HistosBuild`, and from plugins through `META-INF/histos/plugin` in both `jarBan` and `directoryBan`. The launcher's ZIO wins at runtime. |
@@ -597,7 +598,7 @@ Shade every dependency into the direct jar and keep one checksum. Rejected. Shad
 3. **Enablement is `plugin(...)` in a header plus `use(...)` on `Projects`.** The header is text. The loader blanks those lines into a temp file, and `Driver.process` compiles the temp file. `use` names the instances. `Projects` calls `contribute`, so a jar on the classpath cannot mutate the build.
 4. **The classpath is a lock cell, and the entry resource is read from the direct jar only.** `META-INF/histos/plugin` is one line in the direct jar, opened as a zip. Transitive jars are libraries, each checksummed, and never scanned for an entry. `FromBinary` puts the cell jars on `BuildLoader`. `FromSource` replaces the direct jar with the class directory compiled from the locked sources and keeps the third-party jars. A classpath scan is the AutoPlugin bug.
 5. **Task ids are `pluginId/localName`.** `TaskId.from` stays loose for engine use. The rendered plugin id always has a slash, so `inspect` and `versions` cannot be occupied, and `specular/versions` does not shadow `versions`. A slash id never reaches `program`.
-6. **`ApiBoundary` is parented on the platform loader, and boundary names load from the engine host.** The compile classpath is the api jar, `scala-library`, `scala3-library`, ZIO, `zio-stacktracer`, and `izumi-reflect`. Allowed packages are the api root, `histos.version`, `histos.plugin`, `zio`, and `scala`. A second api `URLClassLoader` would make `ProjectGraph` a different class. Other `histos.*` names are refused before plugin URLs are searched. The system loader under `java -jar` is outside this boundary.
+6. **`ApiBoundary` is parented on the platform loader, and boundary names load from the engine host.** The compile classpath is the api jar, `scala-library`, `scala3-library`, ZIO, `zio-stacktracer`, and `izumi-reflect`. Allowed packages are the api root, `histos.version`, `histos.plugin`, `zio`, `izumi.reflect`, and `scala`. A second api `URLClassLoader` would make `ProjectGraph` a different class. Other `histos.*` names are refused before plugin URLs are searched. The system loader under `java -jar` is outside this boundary.
 7. **Commands dispatch after the built-in grammar, on `UnknownRoot` only.** A mismatch under a reserved root word stays `UnknownCommand`. `~` applies the same rule to its inner tokens. `path`, `list`, and `clean` stay free at the root. Built-ins win twice: the grammar matches first, and `CommandShadow` rejects the shadow in `Projects`. The plugin never parses argv.
 8. **CI jobs are data on the contribution, and `Workflow` renders them.** Scheduled jobs are separate `histos-<job>.yml` files, so `cron` never wraps `test`. An orphan of that shape is drift, and `--update` deletes it. The step is `./histos run <plugin>/<task>`.
 9. **Cache eligibility is `Sendable.decide`.** The plugin-specific parts are `Policy.Plugin` on `Action`, the declared-file check on both hit paths, and the refusal to store a `Stay` result. Declared inputs plus the plugin classpath, the api digest, and the task id are the key. `outputs = Nil` stores `PluginOutput.text`. Undeclared reads go undetected.

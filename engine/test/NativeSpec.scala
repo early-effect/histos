@@ -2,8 +2,11 @@ package histos.native
 
 import histos.jdk.{JdkVersion, ReleaseError}
 import histos.pack.MainClass
-import histos.zinc.{JvmCompile, ResolvedJdk}
-import histos.{ClangMajor, ClangPin, Module, NativeVersion, Platform, Platforms, ProjectGraph, ProjectName, Requires, ScalaVersion, ScalaVersions, SourcePos, Tool}
+import histos.resolve.Resolve
+import histos.testrun.{ModuleTest, ModuleTestError}
+import histos.toolchain.Runtimes
+import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk}
+import histos.{ClangMajor, ClangPin, Module, Native, NativeVersion, Platform, Platforms, ProjectGraph, ProjectName, Projects, Requires, ScalaVersion, ScalaVersions, SourcePos, TestMachine, TestMain, Tool, module}
 
 import java.io.File
 import java.nio.charset.StandardCharsets
@@ -117,7 +120,7 @@ object NativeSpec extends ZIOSpecDefault:
       val ivy = NativeToolchain.source(Map(NativeToolchain.Key -> "ivy-local"))
       val file = NativeToolchain.source(Map(NativeToolchain.Key -> "file:///tmp/native"))
       val revision = NativeToolchain.source(Map(NativeToolchain.Key -> "ivy-local@0.5.13-SNAPSHOT"))
-      val release = NativeToolchain.resolve(NativeToolchain.ReleaseRevision, Map.empty)
+      val release = NativeToolchain.of(NativeToolchain.ReleaseRevision, NativeOrigin.read(Map.empty))
       assertTrue(
         ivy == Right(NativeSource.IvyLocal),
         file match
@@ -159,7 +162,7 @@ object NativeSpec extends ZIOSpecDefault:
     test("the toolchain jars are the native libraries and the plugin, not tools"):
       for
         env       <- liveEnv
-        toolchain <- ZIO.fromEither(NativeToolchain.resolve(NativeToolchain.ReleaseRevision, env))
+        toolchain <- ZIO.fromEither(NativeToolchain.of(NativeToolchain.ReleaseRevision, NativeOrigin.read(env)))
         libs <- NativeClasspath.fetch(toolchain)
         names = (libs.plugin :: libs.libraries).flatMap(path => Option(path.getFileName).map(_.toString))
       yield assertTrue(
@@ -180,7 +183,7 @@ object NativeSpec extends ZIOSpecDefault:
           found <- ClangProbe.found(env)
           jdk <- ZIO.fromEither(running)
           main <- ZIO.fromEither(MainClass.from("Hello"))
-          linked <- NativeLink.link(found.version.major, NativeToolchain.ReleaseRevision, env, root, root.resolve("work"), jdk, main)
+          linked <- NativeLink.link(found.version.major, NativeToolchain.Release, env, root, root.resolve("work"), jdk, main)
           ran <- ZIO.attemptBlocking {
                    val process = new ProcessBuilder(linked.binary.toString).redirectErrorStream(true).start()
                    try
@@ -193,6 +196,40 @@ object NativeSpec extends ZIOSpecDefault:
         yield assertTrue(ran == (0, "hi\n"), shown == "file")
     @@ Requires(Tool.AnyClang)
   ) @@ TestAspect.withLiveSystem
+
+  private val origin = suite("HISTOS_NATIVE")(
+    test("the origin a command read from the machine reaches compile, the test compile, and the link"):
+      ZIO.scoped:
+        for
+          root     <- temp
+          empty    = root.resolve("empty-repo")
+          _        <- ZIO.attempt {
+                        Files.createDirectories(empty)
+                        write(root, "app/src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def main(args: Array[String]): Unit = ()\n")
+                        write(root, "check/src/test/scala/demo/Check.scala", "package demo\n\nobject Check:\n  def main(args: Array[String]): Unit = ()\n")
+                        write(root, ".histos/dependencies.lock", "cell app 3.9.0 native\ncell check 3.9.0 native\n")
+                      }
+          chosen   <- ZIO.fromEither(NativeToolchain.parse(empty.toUri.toString))
+          missing  = CompileError.NativeLibrary(NativeFetch.Unavailable(chosen).message)
+          here     <- Runtimes.read(TestMachine.at(root, Map(NativeToolchain.Key -> empty.toUri.toString)))
+          app      <- ZIO.fromEither(ProjectName.from("app"))
+          check    <- ZIO.fromEither(ProjectName.from("check"))
+          built    <- ZIO.fromEither(Projects(
+                        module("app", Native)(JvmCompile.Scala390).clang(major21),
+                        module("check", Native)(JvmCompile.Scala390).clang(major21).test(TestMain("demo.Check")),
+                      ))
+          jdk      <- ZIO.fromEither(running)
+          compiled <- GraphCompile.run(root, built, List("app"), jdk, here.native).provide(Resolve.live(root.resolve("coursier"))).either
+          tested   <- ModuleTest.run(root, built, List("check"), jdk, here).provide(Resolve.live(root.resolve("coursier"))).either
+          main     <- ZIO.fromEither(MainClass.from("demo.Hello"))
+          toolchain <- ZIO.fromEither(NativeToolchain.of(NativeToolchain.ReleaseRevision, here.native))
+          linked   <- NativeLink.linkClasspath(major21, toolchain, Map.empty, Nil, root.resolve("link"), jdk, main).either
+        yield assertTrue(
+          compiled == Left(GraphCompileError.Cells(GraphCompileError.Failed(app, JvmCompile.Scala390, Platform.Native, missing), Nil)),
+          tested == Left(ModuleTestError.Sources(check, JvmCompile.Scala390, missing)),
+          linked == Left(NativeError.Fetch(NativeFetch.Unavailable(chosen))),
+        )
+  )
 
   private val hello =
     """object Hello:
@@ -241,4 +278,4 @@ object NativeSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("scala native")(versions, probe, declare, toolchain, link) @@ TestAspect.sequential @@ TestAspect.timeout(5.minutes)
+  def spec = suite("scala native")(versions, probe, declare, toolchain, origin, link) @@ TestAspect.sequential @@ TestAspect.timeout(5.minutes)

@@ -2,9 +2,11 @@ package histos.server
 
 import histos.bsp.{Frame, Rpc}
 import histos.cli.{Cli, CliExit, Command}
+import histos.jdk.{Machine, Os, Settled}
+import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
 import histos.resolve.Resolve
 import histos.zinc.GraphCompile
-import histos.{Jvm, Projects, ScalaVersion, module}
+import histos.{Jvm, ProjectGraph, Projects, ScalaVersion, module}
 
 import java.net.UnixDomainSocketAddress
 import java.nio.channels.{Channels, SocketChannel}
@@ -13,7 +15,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
-import zio.{Scope, ZIO, durationInt}
+import zio.{Promise, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object ServerSpec extends ZIOSpecDefault:
@@ -138,7 +140,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
               }
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(
+              running <- Daemon.open(
                 root,
                 built,
                 jdk,
@@ -147,7 +149,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Nil,
                 ZIO.succeed(histos.load.BuildNotes(false, Nil))
               )
-              feeds <- Client.talk(record.socket, Call.Compile(Nil)).runCollect
+              feeds <- Client.talk(running.record.socket, Call.Compile(Nil)).runCollect
               classFile <- ZIO.attempt(
                 Files.isRegularFile(
                   GraphCompile
@@ -163,7 +165,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
               )
               refused <- Client
-                .talk(record.socket, Call.Compile(Nil))
+                .talk(running.record.socket, Call.Compile(Nil))
                 .runCollect
             yield assertTrue(
               feeds.exists {
@@ -212,7 +214,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
               }
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(
+              running <- Daemon.open(
                 root,
                 built,
                 jdk,
@@ -224,8 +226,8 @@ object ServerSpec extends ZIOSpecDefault:
               _ <- ZIO.attempt(
                 write(root, "tools/docs/Echo.scala", "object Echo\n// edited\n")
               )
-              first <- Client.talk(record.socket, Call.Compile(Nil)).runCollect
-              second <- Client.talk(record.socket, Call.Compile(Nil)).runCollect
+              first <- Client.talk(running.record.socket, Call.Compile(Nil)).runCollect
+              second <- Client.talk(running.record.socket, Call.Compile(Nil)).runCollect
             yield assertTrue(
               first.exists {
                 case Feed.Exit(code, _) =>
@@ -258,7 +260,7 @@ object ServerSpec extends ZIOSpecDefault:
               )
               _ <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(
+              running <- Daemon.open(
                 root,
                 built,
                 jdk,
@@ -267,7 +269,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Nil,
                 ZIO.succeed(histos.load.BuildNotes(false, Nil))
               )
-              heard <- bsp(record.socket)
+              heard <- bsp(running.record.socket)
             yield assertTrue(
               heard.result.displayName == "histos",
               heard.marker == Message.Marker(1)
@@ -290,7 +292,7 @@ object ServerSpec extends ZIOSpecDefault:
               )
               _ <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
               jdk <- GraphCompile.jdkHere
-              record <- Daemon.open(
+              running <- Daemon.open(
                 root,
                 built,
                 jdk,
@@ -299,9 +301,9 @@ object ServerSpec extends ZIOSpecDefault:
                 Nil,
                 ZIO.succeed(histos.load.BuildNotes(false, Nil))
               )
-              shown <- Client.talk(record.socket, Call.Graph).runCollect
+              shown <- Client.talk(running.record.socket, Call.Graph).runCollect
               missing <- Client
-                .talk(record.socket, Call.Cancel("missing"))
+                .talk(running.record.socket, Call.Cancel("missing"))
                 .runCollect
             yield assertTrue(
               shown.exists {
@@ -325,6 +327,192 @@ object ServerSpec extends ZIOSpecDefault:
               )
           )
   )
+
+  private val lifecycle = suite("lifecycle")(
+    test("compile attaches to a running server without loading the build"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt {
+                write(root, "histos.scala", "object build\n")
+                write(root, "demo/src/Hello.scala", "object Hello {\n  def n: Int = 1\n}\n")
+                write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+              }
+              _ <- daemon(root, built)
+              done <- Cli.execute(List("compile"), root, root.resolve("missing-api.jar"))
+              classFile <- ZIO.attempt(
+                Files.isRegularFile(root.resolve(".histos/classes/demo/3.10.0/jvm/Hello.class"))
+              )
+            yield assertTrue(done.exit == CliExit.Success, classFile)
+          program.provideSome[Scope](layers(root, Loader.live) ++ ZLayer.succeed(machine(root)))
+    ,
+    test("a cell that fails to compile fails a compile sent to the server"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt {
+                write(root, "histos.scala", "object build\n")
+                write(root, "demo/src/Bad.scala", "object Bad {\n  val n: Int = \"text\"\n}\n")
+                write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+              }
+              running <- daemon(root, built)
+              feeds <- Client.talk(running.record.socket, Call.Compile(Nil)).runCollect
+            yield assertTrue(feeds.exists {
+              case Feed.Exit(code, _) => code == CliExit.CompileFailed.code
+              case _                  => false
+            })
+          program.provideSome[Scope](layers(root, Loader.live))
+    ,
+    test("a server that cannot write its record fails to open, and leaves no socket"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt {
+                write(root, "histos.scala", "object build\n")
+                write(root, ".histos/server.json/keep", "a directory where the record goes\n")
+              }
+              opened <- ZIO.scoped(daemon(root, built).either).timeout(30.seconds)
+              socket <- ZIO.attempt(Files.exists(Record.socket(root)))
+            yield assertTrue(opened == Some(Left(ServerError.Io(ServerIo.Save))), !socket)
+          program.provideSome[Scope](layers(root, Loader.live))
+    ,
+    test("reboot starts a successor, and the old server stops with an idle connection open"):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
+              launched <- Promise.make[Nothing, Unit]
+              running <- daemon(root, built, _ => launched.succeed(()).unit)
+              _ <- connected(running.record.socket)
+              feeds <- Client.talk(running.record.socket, Call.Reboot).runCollect
+              stopped <- running.done.timeout(30.seconds)
+              relaunched <- launched.isDone
+              record <- ZIO.attempt(Files.exists(Record.file(root)))
+            yield assertTrue(
+              feeds.contains(Feed.Exit(CliExit.Success.code, "")),
+              stopped == Some(()),
+              relaunched,
+              !record,
+            )
+          program.provideSome[Scope](layers(root, Loader.live))
+    ,
+    test("a bsp session reloads a changed build and announces the new targets"):
+      ZIO.scoped:
+        temp.zip(demoAndExtra).flatMap: (root, grown) =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
+              running <- daemon(root, built)
+              session <- bspSession(running.record.socket)
+              _ <- ZIO.attempt(write(root, "histos.scala", "object build\n// edited\n"))
+              heard <- session.ask(2, "workspace/buildTargets")
+              targets <- decoded[Rpc.RpcOk[Rpc.BuildTargetsResult]](Some(heard.reply))
+            yield assertTrue(
+              heard.notes.contains("buildTarget/didChange"),
+              targets.result.targets.exists(_.id.uri.contains("extra")),
+            )
+          program.provideSome[Scope](layers(root, ZLayer.succeed(reloading(grown))))
+    ,
+    test("a reload announces the change to every spliced bsp session"):
+      ZIO.scoped:
+        temp.zip(demoAndExtra).flatMap: (root, grown) =>
+          val program =
+            for
+              built <- demo
+              _ <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
+              running <- daemon(root, built)
+              first <- bspSession(running.record.socket)
+              second <- bspSession(running.record.socket)
+              reloaded <- Client.talk(running.record.socket, Call.Reload).runCollect
+              firstNote <- first.next.timeout(30.seconds)
+              secondNote <- second.next.timeout(30.seconds)
+            yield assertTrue(
+              reloaded.contains(Feed.Exit(CliExit.Success.code, "")),
+              firstNote == Some("buildTarget/didChange"),
+              secondNote == Some("buildTarget/didChange"),
+            )
+          program.provideSome[Scope](layers(root, ZLayer.succeed(reloading(grown))))
+  ) @@ TestAspect.withLiveClock
+
+  private val demo = ZIO.fromEither(Projects(module("demo", Jvm)(ScalaVersion("3.10.0"))))
+
+  private val demoAndExtra =
+    ZIO.fromEither(Projects(module("demo", Jvm)(ScalaVersion("3.10.0")), module("extra", Jvm)(ScalaVersion("3.10.0"))))
+
+  private def daemon(
+      root: Path,
+      graph: ProjectGraph,
+      relaunch: Path => zio.IO[ServerError, Unit] = _ => ZIO.unit
+  ) =
+    GraphCompile.jdkHere.flatMap: jdk =>
+      Daemon.open(
+        root,
+        graph,
+        jdk,
+        Cli.VersionText,
+        root.resolve("missing-api.jar"),
+        Nil,
+        ZIO.succeed(BuildNotes(false, Nil)),
+        relaunch = relaunch
+      )
+
+  /** A loader whose every load is the next graph, as if `histos.scala` changed. */
+  private def reloading(next: ProjectGraph): Loader =
+    new Loader:
+      def scan(repo: Path) = ZIO.fail(LoadError.NoEntry)
+      def load(repo: Path, apiJar: Path) = ZIO.succeed(LoadedBuild(next, Calls.quiet))
+      def buildClasspath(apiJar: Path) = ZIO.succeed(Nil)
+      def reportBuild(repo: Path, apiJar: Path) = ZIO.succeed(BuildNotes(false, Nil))
+
+  private def layers(root: Path, loader: zio.ULayer[Loader]) =
+    Resolve.live(root.resolve("coursier")) ++ loader ++
+      ZLayer.succeed(histos.cache.ContentStore.in(root.resolve("cache")))
+
+  private def machine(root: Path): Machine =
+    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+
+  private final case class Answered(reply: String, notes: List[String])
+
+  /** An initialized BSP splice. `ask` collects notification methods until the reply with `id`. */
+  private final case class BspSession(input: java.io.InputStream, output: java.io.OutputStream):
+    def ask(id: Int, method: String): ZIO[Any, Throwable | Frame.FrameError | Fixture, Answered] =
+      Frame.write(output, Rpc.Incoming(method = Some(method), id = Some(Rpc.RpcId.Num(id))).toJson) *>
+        collect(id, Nil)
+
+    def next: ZIO[Any, Frame.FrameError | Fixture, String] =
+      Frame.read(input).flatMap(decoded[Rpc.Incoming]).flatMap(note => ZIO.fromOption(note.method).orElseFail(Fixture.Reply))
+
+    private def collect(id: Int, notes: List[String]): ZIO[Any, Frame.FrameError | Fixture, Answered] =
+      Frame.read(input).flatMap:
+        case None => ZIO.fail(Fixture.Reply)
+        case Some(text) =>
+          decoded[Rpc.Incoming](Some(text)).flatMap: frame =>
+            frame.method match
+              case Some(note) => collect(id, notes :+ note)
+              case None if frame.id.contains(Rpc.RpcId.Num(id)) => ZIO.succeed(Answered(text, notes))
+              case None => collect(id, notes)
+
+  private def connected(socket: Path) =
+    ZIO.acquireRelease(ZIO.attempt(SocketChannel.open(UnixDomainSocketAddress.of(socket))))(channel => ZIO.attempt(channel.close()).ignore)
+
+  private def bspSession(socket: Path) =
+    for
+      channel <- connected(socket)
+      session = BspSession(Channels.newInputStream(channel), Channels.newOutputStream(channel))
+      _ <- Frame.write(session.output, Call.encode(Call.Bsp))
+      _ <- Frame.read(session.input)
+      _ <- session.ask(1, "build/initialize")
+      _ <- Frame.write(session.output, Rpc.Incoming(method = Some("build/initialized")).toJson)
+    yield session
 
   private enum Fixture:
     case Shape
@@ -392,5 +580,5 @@ object ServerSpec extends ZIOSpecDefault:
         }.ignore
 
   def spec =
-    suite("server")(protocol, attached) @@ TestAspect.sequential @@ TestAspect
+    suite("server")(protocol, attached, lifecycle) @@ TestAspect.sequential @@ TestAspect
       .timeout(4.minutes)

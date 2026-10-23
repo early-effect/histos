@@ -42,11 +42,11 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | Dependency resolution and lock | Works for module dependencies | Compilers, linkers, semanticdb, and bridges bypass the lock (L1). |
 | JVM compile, Scala 3 and 2.13, via Zinc | Works, never incremental | Fresh compiler and empty previous result on every compile (S8). Layer barrier between topological layers (K5). |
 | Failed cell does not cancel siblings | Compile yes, test no | P4. |
-| Test subprocess, providers, `testOnly`, `testQuick`, watch | Works | Process groups, line threads, and the quick stamp need work (B16 to B19, P6). |
-| Scala.js link, run, test | Works on a prepared machine | Bridges are Scala source in strings, recompiled per run. Node comes from `PATH` (P1, P2, B22). |
-| Scala Native link, run, test | Works on a prepared machine | `HISTOS_NATIVE` is dropped at compile and test (B23). Relinks from scratch (P2). |
-| JDK selection and provisioning | Selection works | Engine staging is zip-only (B24). |
-| Node selection | Display only | B22. |
+| Test subprocess, providers, `testOnly`, `testQuick`, watch | Works | A stop kills every descendant of a live child and a JVM child's whole group, and one fiber reads each pipe. A descendant that outlives a node or native child (B42), a blocked Linux pipe read (B43), and the quick stamp (P6) need work. |
+| Scala.js link, run, test | Works on a prepared machine | Bridges are Scala source in strings, recompiled per run (P1, P2). Js runs on the Node that the lock and the selection choose. |
+| Scala Native link, run, test | Works on a prepared machine | `HISTOS_NATIVE` is read once per command and reaches compile, test, and link. Relinks from scratch (P2). |
+| JDK selection and provisioning | Selection and `file:` staging work | Staging unpacks zip and tar.gz into a scratch directory and moves it into place. An https lock is refused (L8). |
+| Node selection | Works | Js test and run launch the chosen Node. Staging takes a locked `file:` zip, tar.gz, or tar.xz. |
 | Local Maven publish | Works for JVM-only modules | Jvm+Js collide on one jar (B1). |
 | Snapshot upload | Works | Accepts http with Basic auth, never closes its client, ignores interrupt (B28 to B34). |
 | Assembly | Works for this repository only | Hardcoded modules and main class (P8). |
@@ -417,11 +417,12 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 - `histos/publish-platform`: one coordinate per platform cell. Closes B1.
 - `histos/server-lifecycle`: attach before load, the listening promise completes from the accept fiber's exit, `serve` ends when accepting ends, interruptible reads (miniature first), finalizer order, fingerprint checks on BSP requests, a set of splices, and the dead `Stale` cases removed. Closes B2 to B9.
-- `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, digests use coordinate plus checksum, BSP build-file diagnostics compile the header-stripped unit with the plugin jars, and `izumi.reflect` crosses the boundary if a test proves it must. Closes B10 to B14, B38, B39.
-- `histos/child-process`: `acquireRelease` around start, a process group for every child, a streamed line reader, and closed class loaders. Closes B16 to B21.
-- `histos/toolchain-execution`: the resolved Node runs Js, `HISTOS_NATIVE` travels as a value, tar.gz staging that keeps file modes, atomic staging into a scoped temp directory, and a read-only probe. Closes B22 to B27.
+- `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, digests use coordinate plus checksum, BSP build-file diagnostics compile the header-stripped unit with the plugin jars, and `izumi.reflect` crosses the boundary if a test proves it must. Closes B10 to B14, B38, B39, B41.
+- `histos/child-process`: `acquireRelease` around every child, including `javac` and the JDK hand-off. A stop kills every descendant of a live child, and a JVM child's whole group even after its leader exited. One fiber reads each pipe, output is kept once, the hand-off gets SIGTERM and a 2 second grace before a force kill, and the assembly class loader is closed. Closes B16 to B21, B44, B45.
+- `histos/toolchain-execution`: the resolved Node runs Js, `HISTOS_NATIVE` travels as a value, tar.gz staging that keeps file modes, atomic staging into a scoped temp directory, and a read-only probe. Closes B22 to B27, B47, B48.
 - `histos/snapshot-publisher`: an https-only `SnapshotRepository`, `Config.Secret` credentials, a scoped `HttpClient`, an interruptible send, `zio.Clock`, a `Published` ADT, and parse errors with their own enums. Closes B28 to B34, B40.
 - `histos/cache-hygiene`: temp files scoped and swept, a per-project keep set, and `cache clean` matching its contract. Closes B35 to B37.
+- `histos/compile-exit`: a failed cell fails `compile` with the compile exit code, locally and through the server. Closes B46.
 
 **Exit:** each closed row has a test that failed before its fix. `ServerSpec` covers reload, `NoServer`, and reboot.
 
@@ -440,9 +441,9 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 **Goal:** Resource ownership lives in scoped layers, and compile is incremental.
 
-- `histos/machine-config`: `Machine.layer` from `zio.System`, with `HISTOS_*` as ZIO Config, and the test JDK fixtures read the same source. Closes S1, T12.
+- `histos/machine-config`: `Machine.layer` from `zio.System`, with `HISTOS_*` as ZIO Config, and the test JDK fixtures read the same source. Closes S1, T12, S14.
 - `histos/workspace`: a `Workspace` service with one lock reader, one tree delete, and scoped work directories. IO errors carry the path and an `IoFault`. Blocking moves to `attemptBlocking`. Closes S2 to S4, S11, S13.
-- `histos/process-runner`: `TestProcess` becomes `histos.process.ChildProcess`, used by test, link, run, and the JDK hand-off. Closes S10.
+- `histos/process-runner`: `TestProcess` becomes `histos.process.ChildProcess`, used by test, link, run, and the JDK hand-off. Closes S10, B42, B43.
 - `histos/incremental-zinc`: a persisted analysis store, a previous result, and a `CompilerPool` (`ZKeyedPool` keyed by the locked toolchain), scoped to the server or to one batch run. A precompiled provider runner removes the second compile. Closes S8, S9.
 - `histos/service-shape`: case-class implementations with constructor injection, no 1:1 traits without a seam, `Resolve.scala` and `Loader.scala` split by concern, the `resolve` to `load` cycle removed, and context types where methods take more than five parameters. Closes S5 to S7, S12.
 
