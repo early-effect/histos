@@ -1,20 +1,20 @@
 package histos.publish
 
-import histos.central.Publisher
+import histos.central.{Publisher, RepositorySecret, RepositoryUser, SnapshotRepository}
 
 import java.nio.file.{InvalidPathException, Path}
 
-/** Where `histos publish` writes. `snapshots` is Central. Any other token is a
-  * directory.
-  */
+import zio.{Chunk, Config}
+
+/** Where `histos publish` writes. `snapshots` is Central. Any other token is a directory. */
 enum PublishWhere:
   case Directory(path: Path)
-  case Snapshots(user: String, password: String)
+  case Snapshots(user: RepositoryUser, password: Config.Secret)
 
-  def layer: zio.ULayer[Publisher] = this match
+  def layer: zio.ZLayer[Any, histos.central.PublishError, Publisher] = this match
     case Directory(path)           => Publisher.local(path)
     case Snapshots(user, password) =>
-      Publisher.snapshots(histos.central.Snapshots.central, user, password)
+      Publisher.snapshots(SnapshotRepository.central, RepositorySecret(user, password))
 
   override def toString: String = this match
     case Directory(path) => s"Directory($path)"
@@ -38,7 +38,10 @@ object PublishWhere:
     val password = env.get("SONATYPE_PASSWORD").filter(_.nonEmpty)
     (user, password) match
       case (Some(name), Some(secret)) =>
-        Right(PublishWhere.Snapshots(name, secret))
+        RepositoryUser.from(name) match
+          case Right(parsed) =>
+            Right(PublishWhere.Snapshots(parsed, Config.Secret(Chunk.fromArray(secret.toCharArray))))
+          case Left(_) => Left(LocalPublishError.Credentials)
       case _ => Left(LocalPublishError.Credentials)
 
   private def directory(

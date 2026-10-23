@@ -12,7 +12,7 @@ object build extends HistosBuild:
       .testDependencies(zioTest, zioTestSbt)
     val central = module("central", Jvm)(scala3)
       .dependsOn(api)
-      .libraryDependencies(zio)
+      .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.12.0")
       .testDependencies(zioTest, zioTestSbt)
     val engine = module("engine", Jvm)(scala3)
       .dependsOn(central, api)

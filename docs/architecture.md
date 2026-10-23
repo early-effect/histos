@@ -15,7 +15,7 @@ Histos builds itself. `./histos test` compiles and tests the four modules of thi
 | Module | Role | Depends on |
 | --- | --- | --- |
 | `api` | The graph, the builder, the literals, the version scheme, and the plugin contract (`histos.plugin`). The jar plugins compile against. | ZIO (because `HistosPlugin.run` returns a ZIO) |
-| `central` | Publishers: a local Maven directory, and Sonatype snapshot upload. | `api`, ZIO |
+| `central` | Publishers: a local Maven directory, and Sonatype snapshot upload through heddle's `Client`. | `api`, ZIO, heddle |
 | `engine` | Load, selection, resolution, compile, test, Scala.js, Scala Native, toolchains, publish, assembly, versions, CI render, cache, scheduler, plugin runtime. | `central`, `api`, ZIO, zio-streams, scala3-compiler, Zinc, Coursier, ASM. The Scala.js and Scala Native linkers are fetched for a child JVM and are not dependencies. |
 | `app` | The CLI, the server, BSP, and MCP. One `ZIOAppDefault`, `histos.cli.Main`. | `engine`, ZIO, zio-cli, heddle-mcp |
 
@@ -45,7 +45,7 @@ A module's directory is its name, or the path given to `.in(...)`. Sources are `
 1. `Loader.scan` reads the plugin header (`plugin(dep"...")`, `plugin(path"...")`) at the top of `histos.scala`.
 2. The loader resolves header plugins through the lock, compiles source and path plugins first, and writes the build file to a temporary copy with the header lines blanked, so line numbers match.
 3. The Scala 3 compiler compiles that copy in process against the api classpath and the plugin classpaths.
-4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `izumi.reflect.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `izumi.reflect.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused. Reading a refusal clears it, so the failure belongs to the load or run that made it.
 5. `graph` and every plugin `run` execute on [`PluginThreads`](../engine/src/histos/load/PluginThreads.scala): a fixed pool and a blocking pool whose daemon threads have `BuildLoader` as their context class loader. A fiber that moves to another thread, including a blocking step, still sees it.
 
 Loading is the same in the batch command and the server. A load error is a `LoadError` and exits 3.
@@ -108,7 +108,7 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 The version scheme is the zipx scheme, implemented in `histos.version`: everyday builds are `<version>-ci`, a snapshot is `<version>-<sha>-SNAPSHOT`, the default branch also updates a `<version>-SNAPSHOT` pointer, and a ship number is the next release. A catalog can state a manual version, which is what this repository does. `histos run versions` checks the catalog and the registry.
 
-`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. Each platform cell is its own coordinate (`core_3`, `core_sjs1_3`, `core_native0.5_3`), with a pom that names that platform's dependencies. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31).
+`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. Each platform cell is its own coordinate (`core_3`, `core_sjs1_3`, `core_native0.5_3`), with a pom that names that platform's dependencies. `histos publish snapshots` uploads to Sonatype's snapshot repository. The repository is `https`, or `http` on loopback. `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` are read from the environment the command was given, and the password is a `Config.Secret`. The upload uses heddle's `Client` and the fiber's clock.
 
 ## Assembly and the launcher
 
@@ -210,4 +210,4 @@ The trust boundary is the local user. `histos.scala`, header plugins, and test c
 - `ApiBoundary` keeps engine classes away from build and plugin code. It is a class-loading boundary, and plugins still run with the user's permissions.
 - The server socket lives under `.histos` and serves the local user.
 - A test child gets a reduced environment and its own process. It is not a filesystem or network sandbox.
-- `histos publish snapshots` sends Basic auth to the configured repository, and an `http://` URL is accepted (B30).
+- `histos publish snapshots` sends Basic auth to Sonatype's snapshot repository. An `http` repository is accepted only on loopback.

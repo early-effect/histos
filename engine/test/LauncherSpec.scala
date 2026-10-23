@@ -53,8 +53,11 @@ object LauncherSpec extends ZIOSpecDefault:
       )
       val directory = PublishWhere.resolve(repo, "target/repo", Map.empty)
       val authed = present match
-        case Right(PublishWhere.Snapshots(user, password)) =>
-          user == "maven" && password == "secret"
+        case Right(where: PublishWhere.Snapshots) =>
+          where.user.value == "maven" &&
+            where.password == zio.Config.Secret(zio.Chunk.fromArray("secret".toCharArray)) &&
+            !where.password.toString.contains("secret") &&
+            !where.toString.contains("secret")
         case _ => false
       val folder = directory match
         case Right(PublishWhere.Directory(path)) =>
@@ -111,7 +114,7 @@ object LauncherSpec extends ZIOSpecDefault:
                 group,
                 "histos-api_3",
                 version,
-                root.resolve("api.jar")
+                Some(root.resolve("api.jar"))
               )
             )
           )

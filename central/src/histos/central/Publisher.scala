@@ -15,10 +15,16 @@ object DependencyVersion:
 
   private val Text = """[A-Za-z0-9][A-Za-z0-9._+-]*""".r
 
-  def from(raw: String): Either[PublishError, DependencyVersion] =
-    if Text.matches(raw) && !raw.contains("..") then Right(raw) else Left(PublishError.BadVersion(raw))
+  def from(raw: String): Either[DependencyVersionError, DependencyVersion] =
+    if Text.matches(raw) && !raw.contains("..") then Right(raw) else Left(DependencyVersionError.Bad(raw))
 
   extension (version: DependencyVersion) def value: String = version
+
+enum DependencyVersionError:
+  case Bad(raw: String)
+
+  def message: String = this match
+    case Bad(raw) => s"'$raw' is not a dependency version"
 
 /** One pom dependency. The artifact id already includes its Scala suffix. */
 final case class MavenDependency(group: Organization, name: ArtifactId, version: DependencyVersion)
@@ -36,36 +42,43 @@ enum PublishIo:
   case Directory, Write, Move
 
 enum PublishError:
-  case BadArtifact(raw: String)
-  case BadVersion(raw: String)
   case EmptyJar
   case NotAJar
   case NotADirectory(path: Path)
   case Escaped(path: Path)
   case Io(op: PublishIo)
   case Unauthorized
-  case NotSnapshot(revision: String)
-  case Status(code: Int, detail: String)
-  case Transport(detail: String)
-  case Metadata(detail: String)
+  case NotSnapshot(error: SnapshotRevisionError)
+  case Status(code: Int)
+  case Transport(reason: TransportFault)
+  case Metadata(reason: MetadataFault)
 
   def message: String = this match
-    case BadArtifact(raw)  => s"'$raw' is not an artifact id"
-    case BadVersion(raw)   => s"'$raw' is not a dependency version"
-    case EmptyJar          => "a published jar is not empty"
-    case NotAJar           => "a published jar is a zip"
+    case EmptyJar            => "a published jar is not empty"
+    case NotAJar             => "a published jar is a zip"
     case NotADirectory(path) => s"$path is not a directory"
-    case Escaped(path)     => s"$path leaves the repository"
-    case Io(op)            => s"publish failed while ${op.toString.toLowerCase}"
-    case Unauthorized      => "sonatype rejected the credentials"
-    case NotSnapshot(revision) => s"'$revision' is not a snapshot"
-    case Status(code, detail) =>
-      if detail.isEmpty then s"publish failed with HTTP $code" else s"publish failed with HTTP $code: $detail"
-    case Transport(detail) =>
-      if detail.isEmpty then "could not reach the snapshot repository" else s"could not reach the snapshot repository: $detail"
-    case Metadata(detail)  => detail
+    case Escaped(path)       => s"$path leaves the repository"
+    case Io(op)              => s"publish failed while ${op.toString.toLowerCase}"
+    case Unauthorized        => "sonatype rejected the credentials"
+    case NotSnapshot(error)  => error.message
+    case Status(code)        => s"publish failed with HTTP $code"
+    case Transport(reason)   => reason.message
+    case Metadata(reason)    => reason.message
 
-final case class Published(jar: Path, pom: Path, jarSha256: String, unique: Option[String] = None)
+/** A directory publish names the files it wrote. A snapshot publish names the unique version it uploaded. */
+enum Published:
+  case Local(jar: Path, pom: Path, sha256: Checksum)
+  case Snapshot(unique: SnapshotVersion, sha256: Checksum)
+
+/** SHA-256 of a published jar, lowercase hex. */
+opaque type Checksum = String
+
+object Checksum:
+  given CanEqual[Checksum, Checksum] = CanEqual.derived
+
+  def sha256(bytes: Chunk[Byte]): Checksum = Digest.sha256(bytes)
+
+  extension (sum: Checksum) def value: String = sum
 
 /** Where one artifact lands. Every path is under the repository root. */
 final case class MavenPaths(directory: Path, jar: Path, pom: Path, jarSha256: Path, pomSha256: Path)
@@ -147,9 +160,15 @@ object Publisher:
   def local(root: Path): ULayer[Publisher] =
     ZLayer.succeed(LocalPublisher(root))
 
-  /** PUT a snapshot to a Maven repository. `clock` stamps the unique version. */
-  def snapshots(base: String, user: String, password: String, clock: java.time.Clock = java.time.Clock.systemUTC()): ULayer[Publisher] =
-    SnapshotLayer(base, user, password, clock)
+  /** PUT a snapshot through a heddle `Client`. The layer closes that client. The clock is the fiber's. */
+  def snapshots(
+      repository: SnapshotRepository,
+      credentials: RepositorySecret,
+  ): ZLayer[Any, PublishError, Publisher] =
+    val http =
+      ZLayer.succeed(heddle.client.Client.Config.default) >>>
+        heddle.client.Client.layer.mapError(error => PublishError.Transport(TransportFault.from(error)))
+    http >>> ZLayer.fromFunction((client: heddle.client.Client) => SnapshotPublisher(repository, credentials, client))
 
 private final class LocalPublisher(root: Path) extends Publisher:
   def publish(artifact: Artifact): IO[PublishError, Published] =
@@ -158,12 +177,12 @@ private final class LocalPublisher(root: Path) extends Publisher:
       jar    <- ZIO.fromEither(JarCheck.accept(artifact.jar))
       paths  <- ZIO.fromEither(Layout.paths(root, artifact))
       pom     = Chunk.fromArray(Layout.pom(artifact).getBytes(java.nio.charset.StandardCharsets.UTF_8))
-      digest  = Digest.sha256(jar)
+      digest  = Checksum.sha256(jar)
       _      <- place(paths.jar, jar)
       _      <- place(paths.pom, pom)
-      _      <- place(paths.jarSha256, text(digest))
+      _      <- place(paths.jarSha256, text(digest.value))
       _      <- place(paths.pomSha256, text(Digest.sha256(pom)))
-    yield Published(paths.jar, paths.pom, digest)
+    yield Published.Local(paths.jar, paths.pom, digest)
 
   private def directory: IO[PublishError, Unit] =
     ZIO.attemptBlocking {
