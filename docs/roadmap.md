@@ -28,7 +28,7 @@ The same build serves a person at a terminal, Metals over BSP, and an agent over
 7. **The lock is the authority for every byte.** User dependencies, compilers, linkers, bridges, plugins, JDKs, and Node all resolve through the lock with a checksum. A cache key is portable across machines.
 8. **One application service, many surfaces.** The CLI, BSP, MCP, and the server wire are codecs over one `Build` service. A surface decodes, calls the service, and encodes.
 9. **Agent-native means typed.** The type rule holds on MCP too: every tool returns a typed report or a typed fault, and none returns a bare `String`. Agents receive streamed progress, and they cancel by run id.
-10. **The build describes CI.** The workflow is a render of the graph's needs, with a drift check. Tool setup comes from what the graph builds.
+10. **The build describes CI, and CI does not repeat work.** The workflow is a render of the graph's needs, with a drift check. A job installs a tool only when the graph needs it. That install is keyed and restored. Seeding a cache is expected. Downloading the same browser, toolchain, or apt set on every run is waste.
 11. **Histos builds Histos at every step.** Each PR keeps `./histos test` and `./histos workflow --check` green on this repository and keeps the snapshot launcher loop working.
 
 ## Where we are
@@ -421,11 +421,11 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 
 **Goal:** The workflow is a pure function of the graph.
 
-- `histos/ci-needs`: a `ToolSetup` ADT in `histos.workflow`, derived from the graph (Native needs clang of the declared major, a browser environment needs its pinned browser, and test-only tool needs come from the module). The `.github/ci-tools` marker and `setup: Boolean` are deleted. Closes C1.
+- `histos/ci-needs`: a `ToolSetup` ADT in `histos.workflow`, derived from the graph (Native needs clang of the declared major, a browser environment needs its pinned browser, and test-only tool needs come from the module). The `.github/ci-tools` marker and `setup: Boolean` are deleted. Each install is restored from a cache keyed by the tool revision and the package set. The first run seeds that cache. A later run does not repeat `npm install`, `install-deps`, or the browser download. Closes C1.
 - `histos/ci-matrix`: the CLI accepts `--platform` and `--scala`, and split axes render. Pull requests run the affected set. Closes C2.
 - `histos/ci-publish`: a snapshot publish job on the default branch, contributed by the publish plugin.
 
-**Exit:** `./histos workflow --check` passes with no marker file, and the rendered tool steps change when a Native module is added to a fixture graph.
+**Exit:** `./histos workflow --check` passes with no marker file, and the rendered tool steps change when a Native module is added to a fixture graph. A second run with a warm cache does not execute `install-deps` or download the browser again.
 
 ### M9. Dogfood and the ecosystem
 

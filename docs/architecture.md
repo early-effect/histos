@@ -121,7 +121,7 @@ The version scheme is the zipx scheme, implemented in `histos.version`: everyday
 `.github/workflows/ci.yml` is a render of the graph. `histos workflow` and `--check` compare it, `--update` rewrites it, and drift exits 6. A pull request starts that workflow once. A push starts it only on `main`, so updating a pull request branch does not run it again.
 
 - Jobs are `test` (`./histos test`), `versions` (`./histos run versions`, when the catalog is non-empty), each plugin job with `JobWhen.Always`, and `workflow` (`./histos workflow --check`). A plugin job with a schedule renders as its own `histos-<job>.yml`.
-- When `.github/ci-tools` exists, the test job also installs Node 22, LLVM 21.1.8, and the Playwright Firefox build Chekhov reads (C1).
+- When `.github/ci-tools` exists, the test job also installs Node 22, LLVM 21.1.8, and the Playwright Firefox build Chekhov reads. Those installs are not cached, so every `test` job repeats `npm install`, `install-deps firefox`, and the browser download (C1). M8 restores an install the graph still needs from a keyed cache.
 - The renderer can scope a pull request to the changed modules and their dependents. The committed `ci.yml` is the full render, so pull requests run every module.
 
 ## Cache
