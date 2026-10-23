@@ -61,14 +61,14 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.2 Server lifecycle
 
-- [ ] **B2** (correctness, *verified*) `app:cli/Cli.scala:425-441,642-657`: `compile` and `test` call `Loader.load` before `attach`. A live server still gets a client-side load, a broken `histos.scala` fails in the client, and `~ compile` loads every iteration.
-- [ ] **B3** (concurrency) `app:server/Daemon.scala:368-383,400-451`: `run` is `forkScoped` and unobserved. A failure after bind leaves `listening` incomplete, so `histos server` hangs.
-- [ ] **B4** (resources) `Daemon.scala:805-830`: reboot closes the channel, but `serve` waits on `ZIO.never`, so the old JVM never exits. The order differs from the design, and no test covers it.
-- [ ] **B5** (concurrency, *miniature first*) `app:bsp/Frame.scala:27-28` and `Daemon.scala:316-328,566-570,863-867` read sockets and stdin with `attemptBlocking`, which interrupt does not reach.
-- [ ] **B6** (resources) `Daemon.scala:402-413` registers the socket `remove` finalizer after `Record.write`.
-- [ ] **B7** (correctness) `Daemon.scala:863-882`: BSP requests never check the fingerprint, so a Metals-only session never reloads or sends `buildTarget/didChange`.
-- [ ] **B8** (concurrency) `Daemon.scala:421,883-885`: `Ref[Option[Bsp.Session]]` lets a second splice overwrite the first, and the first exit clears both.
-- [ ] **B9** (dead code) `Decision.Stale`, `Drift`, `ServerError.Stale`, and `Message.Stale` are never produced and are still matched (`Cli.scala:995,1150,1164`).
+- [x] **B2** (correctness, *verified*) `app:cli/Cli.scala:425-441,642-657`: `compile` and `test` call `Loader.load` before `attach`. A live server still gets a client-side load, a broken `histos.scala` fails in the client, and `~ compile` loads every iteration.
+- [x] **B3** (concurrency) `app:server/Daemon.scala:368-383,400-451`: `run` is `forkScoped` and unobserved. A failure after bind leaves `listening` incomplete, so `histos server` hangs.
+- [x] **B4** (resources) `Daemon.scala:805-830`: reboot closes the channel, but `serve` waits on `ZIO.never`, so the old JVM never exits. The order differs from the design, and no test covers it.
+- [x] **B5** (concurrency, *miniature first*) `app:bsp/Frame.scala:27-28` and `Daemon.scala:316-328,566-570,863-867` read sockets and stdin with `attemptBlocking`, which interrupt does not reach. A miniature showed that interrupting `attemptBlocking` on a socket stream waits for the read, `attemptBlockingInterrupt` frees a socket read but not a pipe, and `attemptBlockingCancelable` with a close frees both. `Frame.read` closes its stream on interrupt.
+- [x] **B6** (resources) `Daemon.scala:402-413` registers the socket `remove` finalizer after `Record.write`.
+- [x] **B7** (correctness) `Daemon.scala:863-882`: BSP requests never check the fingerprint, so a Metals-only session never reloads or sends `buildTarget/didChange`.
+- [x] **B8** (concurrency) `Daemon.scala:421,883-885`: `Ref[Option[Bsp.Session]]` lets a second splice overwrite the first, and the first exit clears both.
+- [x] **B9** (dead code) `Decision.Stale`, `Drift`, `ServerError.Stale`, and `Message.Stale` are never produced and are still matched (`Cli.scala:995,1150,1164`).
 
 ## M1.3 Plugin isolation
 

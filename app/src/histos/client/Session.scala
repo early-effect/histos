@@ -63,13 +63,13 @@ object Session:
           .runCollect
           .foldZIO(
             {
-              case ServerError.Unreachable(_) | ServerError.Stale =>
+              case ServerError.Unreachable(_) =>
                 locally(repo, apiJar, machine, desk, call)
               case other => ZIO.fail(other.message)
             },
             feeds => ZIO.fromEither(spoken(feeds.toList))
           )
-      case Decision.Absent | Decision.Stale(_) =>
+      case Decision.Absent =>
         locally(repo, apiJar, machine, desk, call)
     }
 

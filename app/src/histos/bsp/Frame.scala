@@ -24,8 +24,12 @@ object Frame:
       case Encoding       => "bsp frame is not utf-8"
       case Io             => "bsp frame could not be read"
 
+  /** Interrupt closes the stream so a blocked read returns. Stdin ignores thread interrupts. */
   def read(in: InputStream): IO[FrameError, Option[String]] =
-    ZIO.attemptBlocking(readMessage(in)).mapError(_ => FrameError.Io).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlockingCancelable(readMessage(in))(ZIO.attempt(in.close()).ignore)
+      .mapError(_ => FrameError.Io)
+      .flatMap(ZIO.fromEither)
 
   def write(out: OutputStream, payload: String): IO[FrameError, Unit] =
     val bytes = payload.getBytes(StandardCharsets.UTF_8)

@@ -149,11 +149,11 @@ The CLI is one-shot by default: each command loads the build, runs, and exits.
 | --- | --- |
 | Missing, corrupt, or unreadable | Run in process (`Decision.Absent`) |
 | Different `Cli.VersionText` | Refuse and ask for `histos reboot` (`Decision.DifferentVersion`) |
-| Matching version | Send a `Call` over the socket (`Decision.Open`). The server compares the fingerprint and refuses a call whose lock changed. |
+| Matching version | Send a `Call` over the socket (`Decision.Open`). The server compares the fingerprint on each call and reloads a changed build. A failed reload keeps the last good graph and fails the call. |
 
 The server covers compile, test, publish, graph, run, a task, cancel, toolchain, resolve, workflow, assembly, reload, reboot, and a BSP splice. `cache` and `version` never load a graph. `histos reload` reloads the build in the same JVM and keeps the last good graph on failure. `histos reboot` replaces the JVM.
 
-Known gaps: `compile` and `test` load the build in the client before attaching (B2), a failure after bind can leave `histos server` waiting (B3), and reboot leaves the old JVM running (B4).
+A command that attaches never loads the build in the client. `histos server` exits when its server stops: after a reboot has started the replacement, or when binding or writing the record fails, which also removes the socket. Stopping closes every open connection, including an idle one.
 
 ## BSP
 
@@ -171,7 +171,7 @@ Known gaps: `compile` and `test` load the build in the client before attaching (
 | `buildTarget/didChange` | Sent after a reload changes the target list. |
 | `build/logMessage` | Progress and errors. |
 
-The session handles one request at a time and ignores `$/cancelRequest` (A10). A Metals-only session does not reload on its own (B7).
+Each request checks the build fingerprint and reloads a changed build, and every spliced session receives `buildTarget/didChange`. The session handles one request at a time and ignores `$/cancelRequest` (A10).
 
 ## MCP
 

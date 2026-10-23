@@ -423,18 +423,22 @@ object Cli:
       apiJar: Path,
       projects: List[String]
   ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+    attach(
+      repo,
+      Call.Compile(projects),
+      loaded(repo, apiJar)(compileLocal(repo, _, projects))
+    )
+
+  /** Only the local path loads. A matching server already holds the graph. */
+  private def loaded[R](repo: Path, apiJar: Path)(
+      use: histos.load.LoadedBuild => URIO[R, Completed]
+  ): URIO[R & Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
-      .either
-      .flatMap:
-        case Left(error) =>
-          ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
-        case Right(loaded) =>
-          attach(
-            repo,
-            Call.Compile(projects),
-            compileLocal(repo, loaded, projects)
-          )
+      .foldZIO(
+        error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+        use
+      )
 
   private def compileLocal(
       repo: Path,
@@ -642,15 +646,11 @@ object Cli:
       patterns: List[SuitePattern],
       quick: Boolean
   ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    ZIO
-      .serviceWithZIO[Loader](_.load(repo, apiJar))
-      .either
-      .flatMap:
-        case Left(error) =>
-          ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
-        case Right(loaded) =>
-          val local = testLocal(repo, loaded, projects, patterns, quick)
-          attach(repo, Call.Test(projects, patterns.map(_.value), quick), local)
+    attach(
+      repo,
+      Call.Test(projects, patterns.map(_.value), quick),
+      loaded(repo, apiJar)(testLocal(repo, _, projects, patterns, quick))
+    )
 
   private def testLocal(
       repo: Path,
@@ -988,7 +988,7 @@ object Cli:
             .splice(socket)
             .foldZIO(
               {
-                case ServerError.Unreachable(_) | ServerError.Stale =>
+                case ServerError.Unreachable(_) =>
                   bspLocal(repo, apiJar)
                 case error =>
                   ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
@@ -1010,7 +1010,7 @@ object Cli:
               ServerError.DifferentVersion.message
             )
           )
-        case Decision.Absent | Decision.Stale(_) => bspLocal(repo, apiJar)
+        case Decision.Absent => bspLocal(repo, apiJar)
 
   private def reload(repo: Path): UIO[Completed] =
     Attach
@@ -1024,7 +1024,7 @@ object Cli:
               ServerError.DifferentVersion.message
             )
           )
-        case Decision.Absent | Decision.Stale(_) =>
+        case Decision.Absent =>
           ZIO.succeed(
             Completed(CliExit.LoadFailed, "", ServerError.NoServer.message)
           )
@@ -1063,7 +1063,7 @@ object Cli:
             },
             done => ZIO.succeed(done)
           )
-        case Decision.Absent | Decision.Stale(_) | Decision.DifferentVersion =>
+        case Decision.Absent | Decision.DifferentVersion =>
           serve(repo, apiJar)
 
   private def serve(
@@ -1105,8 +1105,8 @@ object Cli:
                             loaded.plugins,
                             machine
                           )
-                          .flatMap { record =>
-                            say(record.socket.toString) *> ZIO.never
+                          .flatMap { running =>
+                            say(running.record.socket.toString) *> running.done
                           }
                           .foldCauseZIO(
                             cause =>
@@ -1143,7 +1143,7 @@ object Cli:
         case Decision.Open(socket) =>
           remote(socket, call).foldZIO(
             {
-              case ServerError.Unreachable(_) | ServerError.Stale => local
+              case ServerError.Unreachable(_) => local
               case error                                          =>
                 ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
             },
@@ -1157,7 +1157,7 @@ object Cli:
               ServerError.DifferentVersion.message
             )
           )
-        case Decision.Absent | Decision.Stale(_) => local
+        case Decision.Absent => local
 
   private def remote(
       socket: java.nio.file.Path,
