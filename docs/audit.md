@@ -126,15 +126,15 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M2 Steps, executor, and aspects
 
-- [ ] **K1** (services) The scheduler runs plugin tasks only (`PluginRuntime.scala:69`). Compile (`zinc/GraphCompile`), test (`testrun/ModuleTest`), publish (`publish/LocalPublish`), and run (`program/Program`) are hand-wired pipelines.
+- [ ] **K1** (services) Plugin tasks still go through `Scheduler` (`PluginRuntime.scala:69`). Compile cells run on `Histos`. Test (`testrun/ModuleTest`), publish (`publish/LocalPublish`), and run (`program/Program`) are still hand-wired pipelines.
 - [ ] **K2** (api-shape) Scheduler outputs are `String`, dependents never receive upstream values, and dispatch is `if action.kind == ...` (`PluginRuntime.scala:104`).
 - [x] **K3** (concurrency) `schedule/Scheduler.scala:128,144`: parallelism is unbounded, and `foreachParDiscard` fails fast, which contradicts design Key Decision 9. `Histos` takes one permit per resource class, and a failed side of a zip does not cancel the other side. `HistosSpec` holds a cpu limit of one and a dependent that does not run.
 - [ ] **K4** (services) `Scheduler.scala:146-214` hardcodes four aspects inline: local cache, manifest check, remote lookup, and upload by verdict.
-- [ ] **K5** (concurrency, *verified*) `GraphCompile.scala:459-486`: compile folds over topological layers, so a cell waits for its whole previous layer, not only its upstreams.
-- [ ] **K6** (concurrency, *verified*) `GraphCompile.scala:330-334,404-446`: a `LinkedBlockingQueue` and `AtomicBoolean` side channel, side effects inside `ZIO.succeed`, `attemptBlockingInterrupt(take).orDie`, and `closeAll` twice.
-- [ ] **K7** (api-shape) `GraphCompile.scala:448,488,552` take 9, 10, and 12 parameters. A `CompilePlan` type is missing.
-- [ ] **K8** (dead code) `CompileKey` in `zinc/JvmCompile.scala:216-231` has only `ZincSpec` as a caller, and nothing calls `GraphCompile.runCells` (`:130`).
-- [ ] **K9** (performance) `JvmCompile.scala:256,288-294,338`: `hashSources(..) *> invoke` reads every source into one `Chunk` and discards the digest.
+- [x] **K5** (concurrency, *verified*) `GraphCompile.scala:459-486`: compile folded over topological layers, so a cell waited for its whole previous layer. A cell is now a step whose upstreams are the cells it depends on. `GraphCompileSpec` holds one cell and sees an unrelated cell start.
+- [x] **K6** (concurrency, *verified*) `GraphCompile.scala:330-334,404-446`: a `LinkedBlockingQueue` and `AtomicBoolean` side channel, side effects inside `ZIO.succeed`, `attemptBlockingInterrupt(take).orDie`, and `closeAll` twice. Feeds go through the stream the compile is already producing.
+- [x] **K7** (api-shape) `GraphCompile.scala:448,488,552` took 9, 10, and 12 parameters. `CompilePlan` and `CellRun` carry them.
+- [x] **K8** (dead code) `CompileKey` had only `ZincSpec` as a caller, and nothing called `GraphCompile.runCells`. The compile path keeps the key, and `runCells` is gone.
+- [x] **K9** (performance) `JvmCompile.scala:256,288-294,338`: `hashSources(..) *> invoke` read every source into one `Chunk` and discarded the digest. The digest is `CompileOutput.key`, and a compiled cell keeps it.
 - [ ] **K10** (correctness) `PluginRuntime.scala:104,196-205`: compile dependencies are stub actions that return `"compiled"` with no inputs. Their verdict is `Send`, so a write-mode remote would upload them.
 - [ ] **K11** (performance) `PluginRuntime.scala:123,169-177` plans and hashes every task of every plugin on each run.
 - [ ] **K12** (api-shape) `task/Task.scala:53,56,70`: `TaskResult.text` is a `String`, the doc says a cancelled run dies (it is interrupted), and the registry finalizer does nothing.

@@ -33,14 +33,14 @@ The same build serves a person at a terminal, Metals over BSP, and an agent over
 
 ## Where we are
 
-About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge. The step algebra is in `histos.step`. Compile does not run on it yet.
+About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. Plugin tasks still go through the scheduler, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge. The step algebra is in `histos.step`. Compile cells run on `Histos`.
 
 | Capability | State | Notes |
 | --- | --- | --- |
 | Typed graph, literals, `BuildError` | Works | Reports the first error only. `Module` has 18 fields and many overloads (G1 to G3). |
 | Build file load, plugin header, `ApiBoundary` | Works | `graph` and `run` execute on threads that carry the build loader. A refusal lasts one run. |
 | Dependency resolution and lock | Works for module dependencies | Compilers, linkers, semanticdb, and bridges bypass the lock (L1). |
-| JVM compile, Scala 3 and 2.13, via Zinc | Works, never incremental | Fresh compiler and empty previous result on every compile (S8). Layer barrier between topological layers (K5). |
+| JVM compile, Scala 3 and 2.13, via Zinc | Works, never incremental | Fresh compiler and empty previous result on every compile (S8). A cell starts when its own upstreams finish. |
 | Failed cell does not cancel siblings | Compile yes, test no | P4. |
 | Test subprocess, providers, `testOnly`, `testQuick`, watch | Works | A stop kills every descendant of a live child and a JVM child's whole group, and one fiber reads each pipe. A descendant that outlives a node or native child (B42), a blocked Linux pipe read (B43), and the quick stamp (P6) need work. |
 | Scala.js link, run, test | Works on a prepared machine | Bridges are Scala source in strings, recompiled per run (P1, P2). Js runs on the Node that the lock and the selection choose. |
@@ -89,7 +89,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 **Drop.**
 
 - ACP, until an agent client needs the real protocol.
-- Dead code still in the tree: `ToolchainView`, `runCells`, stub compile nodes, and test-only code in main sources.
+- Dead code still in the tree: `ToolchainView`, stub compile nodes, and test-only code in main sources.
 - Scala source generated as strings.
 - Design prose that narrates code line by line.
 

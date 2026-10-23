@@ -10,7 +10,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Ref, Scope, ZIO, durationInt}
+import zio.{Chunk, Promise, Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
 object GraphCompileSpec extends ZIOSpecDefault:
@@ -199,6 +199,48 @@ object GraphCompileSpec extends ZIOSpecDefault:
         yield assertTrue(
           names.toList == List("compiling core", "core", "compiling app", "app")
         )
+    ,
+    test("a cell starts while an unrelated upstream is still compiling"):
+      ZIO.scoped:
+        for
+          root <- temp
+          release <- Promise.make[Nothing, Unit]
+          begun <- Promise.make[Nothing, Unit]
+          built <- ZIO
+            .attempt {
+              val slow = module("slow", Jvm)(ScalaVersion("3.9.0"))
+              val fast = module("fast", Jvm)(ScalaVersion("3.9.0"))
+              val after = module("after", Jvm)(ScalaVersion("3.9.0")).dependsOn(fast)
+              write(root, "slow/src/main/scala/Slow.scala", "object Slow:\n  def n: Int = 1\n")
+              write(root, "fast/src/main/scala/Fast.scala", "object Fast:\n  def n: Int = 1\n")
+              write(root, "after/src/main/scala/After.scala", "object After:\n  def n: Int = Fast.n\n")
+              write(
+                root,
+                ".histos/dependencies.lock",
+                "cell slow 3.9.0 jvm\ncell fast 3.9.0 jvm\ncell after 3.9.0 jvm\n",
+              )
+              Projects(slow, fast, after)
+            }
+            .flatMap(ZIO.fromEither(_))
+          fiber <- GraphCompile
+            .gated(
+              root,
+              built,
+              Nil,
+              jdk,
+              NativeOrigin.Central,
+              name => if name.value == "slow" then release.await else ZIO.unit,
+            )
+            .tap:
+              case CompileFeed.Began(module, _, _) if module.value == "after" => begun.succeed(()).unit
+              case _                                                          => ZIO.unit
+            .runDrain
+            .provide(Resolve.live(root.resolve("coursier")))
+            .forkScoped
+          started <- Live.live(begun.await.timeout(90.seconds))
+          _ <- release.succeed(())
+          _ <- fiber.join
+        yield assertTrue(started.isDefined)
     ,
     test("a compile diagnostic is on the console before the cell fails"):
       ZIO.scoped:
@@ -632,4 +674,4 @@ object GraphCompileSpec extends ZIOSpecDefault:
     compile,
     roots,
     refused
-  ) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+  ) @@ TestAspect.timeout(3.minutes)
