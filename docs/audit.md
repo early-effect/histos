@@ -22,7 +22,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **D6** (docs) `design.md:207` says `compiledTests` passes `ScalacFlags.empty` and that four helpers are private. It passes `module.flags` (`ModuleTest.scala:1333`), and the helpers are `private[histos]`.
 - [x] **D7** (docs) `design.md:202` shows `.scalac(EncodingUtf8)`, which does not compile. The call is `ScalacFlag.EncodingUtf8`. The flag text is produced in `api:ScalacFlag.scala:21-23`, not in `JvmCompile`, which `plan.md:45` also gets wrong.
 - [x] **D8** (docs) `design.md:228` says production `ScalacFlags` stay empty in BSP. `app:bsp/Bsp.scala:476` passes `flags.argv`.
-- [x] **D9** (docs) `design.md:211` says `cache clean` drops JDKs and launchers. It walks `cas` and `plugins` only (`engine:cache/ContentStore.scala:64,136-151`). M0.1 states the current behavior, and B37 decides the target.
+- [x] **D9** (docs) `design.md:211` says `cache clean` drops JDKs and launchers. It walks `cas`, `plugins`, and old `tmp` files. B37 keeps JDKs and launchers out of `clean`: they are shared toolchains, and nothing records which project last used one.
 - [x] **D10** (docs) `design.md:213` and `plan.md:9` describe a configurable, read-only-until-opened remote cache. No configuration path exists.
 - [x] **D11** (docs) `design.md:329,374` say `BspSpec` covers the mixed compile status and `ServerSpec` covers reload and reboot. Neither test exists (A22).
 - [x] **D12** (docs) `design.md:420,621` say `ci.yml` is `test` plus `workflow` with an empty catalog. It has a `versions` job and tool steps, and `design.md:256` already says the catalog is non-empty.
@@ -116,9 +116,9 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.7 Cache hygiene
 
-- [ ] **B35** (resources) `engine:cache/ContentStore.scala:46-51` leaks the temp file on failure or interrupt, and `clean` never sweeps `tmp/`.
-- [ ] **B36** (correctness) `ContentStore.scala:67-81`: the keep file only grows, is global across projects, and is read-modify-write with no lock.
-- [ ] **B37** (correctness) `cache clean` does not cover JDKs or launchers. Either clean them or change the documented contract (D9).
+- [x] **B35** (resources) `engine:cache/ContentStore.scala:46-51` leaks the temp file on failure or interrupt, and `clean` never sweeps `tmp/`. `put` releases the temp on failure and interrupt. `clean` deletes temp files older than the retention and leaves a fresh one.
+- [x] **B36** (correctness) `ContentStore.scala:67-81`: the keep file only grows, is global across projects, and is read-modify-write with no lock. Each project has its own file, a load replaces that file, and the write holds a lock. A legacy `keep` file is still honored.
+- [x] **B37** (correctness) `cache clean` does not cover JDKs or launchers. Either clean them or change the documented contract (D9). The contract is that `clean` does not remove them.
 
 ## M1.8 Exit codes
 
