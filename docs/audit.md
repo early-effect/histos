@@ -28,7 +28,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **D12** (docs) `design.md:420,621` say `ci.yml` is `test` plus `workflow` with an empty catalog. It has a `versions` job and tool steps, and `design.md:256` already says the catalog is non-empty.
 - [x] **D13** (docs) `design.md:69,482` say the launcher refuses a mismatched sha256. The snapshot path skips the check (`histos:80-84`). M0.1 states the current behavior, and L7 fixes the script.
 - [x] **D14** (docs) `design.md:69` says the engine re-execs. It starts a child and waits (`engine:jdk/Toolchain.scala:206-210`).
-- [x] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection is display only (B22).
+- [x] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection was display only. B22 now launches that Node for Js test and run.
 - [x] **D16** (docs) `design.md:484` says publish takes no password. `engine:publish/PublishWhere.scala:37-41` reads `SONATYPE_PASSWORD`. `design.md:118` calls `central` a local Maven publisher, but it also uploads snapshots.
 - [x] **D17** (docs) `plugins.md` cites retired design section numbers (5.3, 5.7, 5.9, 5.10, 5.11) throughout.
 - [x] **D18** (docs) `plugins.md` uses stale names: `PluginIdMacro`, `ScannedBuild.source: Path` (it is a `String`), `closeLoader`, `Loader.classpath`, `PluginRuntime.run` and `bind` signatures, `Policy.Plugin` arity, `CommandSpec.summary: String` (it is `PluginDetail`), and "`LoaderLive.compile` passes the on-disk path".

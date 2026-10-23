@@ -45,7 +45,7 @@ A module's directory is its name, or the path given to `.in(...)`. Sources are `
 1. `Loader.scan` reads the plugin header (`plugin(dep"...")`, `plugin(path"...")`) at the top of `histos.scala`.
 2. The loader resolves header plugins through the lock, compiles source and path plugins first, and writes the build file to a temporary copy with the header lines blanked, so line numbers match.
 3. The Scala 3 compiler compiles that copy in process against the api classpath and the plugin classpaths.
-4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `izumi.reflect.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `izumi.reflect.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused. Reading a refusal clears it, so the failure belongs to the load or run that made it.
 5. `graph` and every plugin `run` execute on [`PluginThreads`](../engine/src/histos/load/PluginThreads.scala): a fixed pool and a blocking pool whose daemon threads have `BuildLoader` as their context class loader. A fiber that moves to another thread, including a blocking step, still sees it.
 
 Loading is the same in the batch command and the server. A load error is a `LoadError` and exits 3.
