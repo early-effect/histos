@@ -132,7 +132,7 @@ final case class CompileRequest(
     artifactHashes: List[Sha256],
 )
 
-final case class CompileOutput(classes: Path, classFiles: Int)
+final case class CompileOutput(classes: Path, classFiles: Int, key: Sha256)
 
 /** Zinc positions are 1-based. Dotty positions are already 0-based. */
 enum PositionBase:
@@ -254,7 +254,10 @@ object JvmCompile:
   ): IO[CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-       else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg) ++ extra, hear))
+       else
+         hashSources(request.sources).flatMap: digest =>
+           val key = CompileKey.of(request, digest)
+           invoke(request, plugins.map(pluginArg) ++ extra, hear, key = key))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -336,30 +339,39 @@ object JvmCompile:
     else
       ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned) *>
         (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
-         else hashSources(request.sources) *> invoke(request, plugins.map(pluginArg) ++ extra, hear, Some(stdlib)))
+         else
+           hashSources(request.sources).flatMap: digest =>
+             val key = CompileKey.of(request, digest)
+             invoke(request, plugins.map(pluginArg) ++ extra, hear, Some(stdlib), key))
 
   private def invoke(
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]] = None,
+      key: Sha256,
   ): IO[CompileError, CompileOutput] =
     val version = request.toolchain.version
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3) =>
         Scala3.jars(version).flatMap: toolchain =>
-          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear, stdlib)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+          ZIO.attemptBlockingInterrupt(runZinc3(request, extra, toolchain, hear, stdlib, key)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
       case Some(ScalaSeries.Scala2(13)) =>
-        invoke213(request, extra, hear)
+        invoke213(request, extra, hear, key)
       case _ =>
         ZIO.fail(CompileError.UnsupportedScala(version))
 
-  private def invoke213(request: CompileRequest, extra: List[String], hear: CompileProblem => Unit): IO[CompileError, CompileOutput] =
+  private def invoke213(
+      request: CompileRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+      key: Sha256,
+  ): IO[CompileError, CompileOutput] =
     for
       jars <- Scala213.jars(request.toolchain.version)
       plugin <- SemanticDb.plugin(request.toolchain.version)
       argv = s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra
-      compiled <- ZIO.attemptBlockingInterrupt(runZinc213(request, jars, argv, hear)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
+      compiled <- ZIO.attemptBlockingInterrupt(runZinc213(request, jars, argv, hear, key)).mapError(_ => CompileError.Io(CompileIo.Compile)).flatMap(ZIO.fromEither)
     yield compiled
 
   private def runZinc3(
@@ -368,6 +380,7 @@ object JvmCompile:
       toolchain: Scala3.Toolchain,
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
+      key: Sha256,
   ): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader(getClass.getClassLoader)
     try
@@ -380,6 +393,7 @@ object JvmCompile:
         loader,
         extra,
         hear,
+        key,
       )
     catch
       case NonFatal(thrown) =>
@@ -393,6 +407,7 @@ object JvmCompile:
       toolchain: Scala213.Toolchain,
       extra: List[String],
       hear: CompileProblem => Unit,
+      key: Sha256,
   ): Either[CompileError, CompileOutput] =
     val loader = toolchain.openLoader()
     try
@@ -405,6 +420,7 @@ object JvmCompile:
         loader,
         extra,
         hear,
+        key,
       )
     finally loader.close()
 
@@ -417,6 +433,7 @@ object JvmCompile:
       compilerLoader: ClassLoader,
       extra: List[String],
       hear: CompileProblem => Unit,
+      key: Sha256,
   ): Either[CompileError, CompileOutput] =
     val versionText = version.value
     val libraryLoader = new URLClassLoader(libraries.map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader)
@@ -475,7 +492,7 @@ object JvmCompile:
       try
         zinc.compile(inputs, Logger.Null)
         if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
-        else Right(CompileOutput(request.classes, countClasses(request.classes)))
+        else Right(CompileOutput(request.classes, countClasses(request.classes), key))
       catch case _: xsbti.CompileFailed => Left(CompileError.Failed(reporter.diagnostics))
     finally libraryLoader.close()
 
