@@ -1,11 +1,10 @@
 package histos.native
 
-import histos.jdk.{JdkVersion, ReleaseError}
 import histos.pack.MainClass
 import histos.resolve.Resolve
 import histos.testrun.{ModuleTest, ModuleTestError}
 import histos.toolchain.Runtimes
-import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk}
+import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile}
 import histos.{ClangMajor, ClangPin, Module, Native, NativeVersion, Platform, Platforms, ProjectGraph, ProjectName, Projects, Requires, ScalaVersion, ScalaVersions, SourcePos, TestMachine, TestMain, Tool, module}
 
 import java.io.File
@@ -181,7 +180,7 @@ object NativeSpec extends ZIOSpecDefault:
           _    <- ZIO.attempt(write(root, "jvm/Skip.scala", "object Skip { def n = 1 }\n"))
           env   <- liveEnv
           found <- ClangProbe.found(env)
-          jdk <- ZIO.fromEither(running)
+          jdk <- GraphCompile.jdkHere
           main <- ZIO.fromEither(MainClass.from("Hello"))
           linked <- NativeLink.link(found.version.major, NativeToolchain.Release, env, root, root.resolve("work"), jdk, main)
           ran <- ZIO.attemptBlocking {
@@ -218,7 +217,7 @@ object NativeSpec extends ZIOSpecDefault:
                         module("app", Native)(JvmCompile.Scala390).clang(major21),
                         module("check", Native)(JvmCompile.Scala390).clang(major21).test(TestMain("demo.Check")),
                       ))
-          jdk      <- ZIO.fromEither(running)
+          jdk      <- GraphCompile.jdkHere
           compiled <- GraphCompile.run(root, built, List("app"), jdk, here.native).provide(Resolve.live(root.resolve("coursier"))).either
           tested   <- ModuleTest.run(root, built, List("check"), jdk, here).provide(Resolve.live(root.resolve("coursier"))).either
           main     <- ZIO.fromEither(MainClass.from("demo.Hello"))
@@ -238,11 +237,6 @@ object NativeSpec extends ZIOSpecDefault:
       |""".stripMargin
 
   private val liveEnv: UIO[Map[String, String]] = System.envs.orElseSucceed(Map.empty)
-
-  private def running: Either[ReleaseError, ResolvedJdk] =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    JdkVersion.fromRelease(text).map(version => ResolvedJdk(home, version))
 
   private def pair(dir: Path, version: String): Unit =
     script(dir, "clang", version)
@@ -278,4 +272,7 @@ object NativeSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("scala native")(versions, probe, declare, toolchain, origin, link) @@ TestAspect.timeout(5.minutes)
+  def spec =
+    suite("scala native")(versions, probe, declare, toolchain, origin, link) @@
+      TestAspect.withLiveSystem @@
+      TestAspect.timeout(5.minutes)

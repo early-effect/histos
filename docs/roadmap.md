@@ -44,7 +44,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | Failed cell does not cancel siblings | Compile yes, test no | P4. |
 | Test subprocess, providers, `testOnly`, `testQuick`, watch | Works | A stop kills every descendant of a live child and a JVM child's whole group, and one fiber reads each pipe. A descendant that outlives a node or native child (B42), a blocked Linux pipe read (B43), and the quick stamp (P6) need work. |
 | Scala.js link, run, test | Works on a prepared machine | Bridges are Scala source in strings, recompiled per run (P1, P2). Js runs on the Node that the lock and the selection choose. |
-| Scala Native link, run, test | Works on a prepared machine | `HISTOS_NATIVE` is read once per command and reaches compile, test, and link. Relinks from scratch (P2). |
+| Scala Native link, run, test | Works on a prepared machine | `HISTOS_NATIVE` is read once per command, including plugin compile, and reaches compile, test, and link. Relinks from scratch (P2). |
 | JDK selection and provisioning | Selection and `file:` staging work | Staging unpacks zip and tar.gz into a scratch directory and moves it into place. An https lock is refused (L8). |
 | Node selection | Works | Js test and run launch the chosen Node. Staging takes a locked `file:` zip, tar.gz, or tar.xz. |
 | Local Maven publish | Works | One coordinate per platform cell (`core_3`, `core_sjs1_3`, `core_native0.5_3`). |

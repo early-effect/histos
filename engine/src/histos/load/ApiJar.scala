@@ -6,22 +6,22 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{IO, System, ZIO}
 
 /** The api jar tests compile a build file against. `dist/histos-api.jar` wins. Otherwise the classes just compiled. */
 object ApiJar:
   def locate: IO[LoadError, Path] =
-    val roots = repoRoots
-    val packed = roots.map(_.resolve("dist").resolve("histos-api.jar"))
-    ZIO.attemptBlocking(packed.find(path => Files.isRegularFile(path))).mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap:
-      case Some(jar) => ZIO.succeed(jar)
-      case None =>
-        compiled(roots) match
-          case Some(classes) => jarOf(classes)
-          case None          => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+    System.env("HISTOS_REPO").mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: named =>
+      val roots = repoRoots(named.filter(_.nonEmpty).map(Path.of(_)))
+      val packed = roots.map(_.resolve("dist").resolve("histos-api.jar"))
+      ZIO.attemptBlocking(packed.find(path => Files.isRegularFile(path))).mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap:
+        case Some(jar) => ZIO.succeed(jar)
+        case None =>
+          compiled(roots) match
+            case Some(classes) => jarOf(classes)
+            case None          => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
 
-  private def repoRoots: List[Path] =
-    val named = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+  private def repoRoots(named: Option[Path]): List[Path] =
     val cwd = Path.of("").toAbsolutePath.normalize
     (named.toList :+ cwd).distinct
 

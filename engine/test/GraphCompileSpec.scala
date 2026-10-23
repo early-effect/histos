@@ -1,6 +1,5 @@
 package histos.zinc
 
-import histos.jdk.{JdkMajor, JdkVersion}
 import histos.native.NativeOrigin
 import histos.resolve.{Resolve, ResolveError}
 import histos.workflow.CiError
@@ -14,20 +13,11 @@ import zio.{Chunk, Promise, Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
 object GraphCompileSpec extends ZIOSpecDefault:
-  private val jdk: ResolvedJdk =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then
-      Files.readString(home.resolve("release"))
-    else ""
-    JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        =>
-        ResolvedJdk(home, JdkVersion.trusted("21.0.2", JdkMajor.trusted(21)))
-
   private val compile = suite("cells")(
     test("one module compiles src at the repository root"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(root, "histos.scala", oneModule)
@@ -71,6 +61,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a scala 2.13 cell writes semanticdb"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(
@@ -94,6 +85,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a named module compiles its upstream, from each module directory"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .attempt {
@@ -163,6 +155,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .attempt {
@@ -203,6 +196,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a cell starts while an unrelated upstream is still compiling"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           release <- Promise.make[Nothing, Unit]
           begun <- Promise.make[Nothing, Unit]
@@ -245,6 +239,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a compile diagnostic is on the console before the cell fails"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .attempt {
@@ -282,6 +277,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("an upstream built for another Scala version is not a classpath"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .attempt {
@@ -325,6 +321,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a js-only upstream is on the js classpath and not the jvm one"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .attempt {
@@ -381,6 +378,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("sources can live under a directory that is not the module name"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(
@@ -411,6 +409,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(
@@ -456,6 +455,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(root, "core/src/place.txt", "x")
@@ -486,6 +486,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("an unknown project is not a lock error"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
@@ -502,6 +503,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a missing lock is refused"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
@@ -518,6 +520,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("a module with no source root is refused"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt(
             write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
@@ -543,6 +546,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(
@@ -597,6 +601,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
     test("an empty source root is refused"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
             write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
@@ -674,4 +679,4 @@ object GraphCompileSpec extends ZIOSpecDefault:
     compile,
     roots,
     refused
-  ) @@ TestAspect.timeout(3.minutes)
+  ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

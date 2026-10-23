@@ -102,6 +102,8 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 `.histos/node.lock` pins Node, and `.histos/node.local` overrides it. `histos toolchain` reports which Node it would use, and Js test and run launch that one. When no installed Node matches and the lock names a `file:` zip, tar.gz, or tar.xz, that archive is staged into the cache the same way. The probe only reads: a `node` without its execute bit is not a match, and its `node --version` child is killed with everything it started if the probe is interrupted.
 
+`Machine.load` is the one read of the process. It asks the fiber's `zio.System` for the environment and for `user.home`, `os.name`, and `java.home`. `HISTOS_NATIVE` and `HISTOS_JDK_SETTLED` are `zio.Config` over that map: unset native is Central, anything else is `NativeToolchain.parse`, and settled is yes only for `1`. `XDG_CACHE_HOME` is not a `HISTOS_*` key. It is taken from the same map. `Machine.layer` is that load as a layer. Compile asks `GraphCompile.jdkHere` for the JDK release file through the same `zio.System`. A plugin run reads the native origin before it builds steps, and passes that origin into compile.
+
 `histos toolchain` prints the JDK decision, then Node when the graph has Js, then clang when it has Native.
 
 ## Publish and versions
@@ -126,7 +128,7 @@ The version scheme is the zipx scheme, implemented in `histos.version`: everyday
 
 ## Cache
 
-The content store lives in `$XDG_CACHE_HOME/histos` or `~/.cache/histos`. Entries are content-addressed under `cas/`. `histos cache path`, `cache list`, and `cache clean [--dry-run]` manage it. `clean` removes entries under `cas/` and `plugins/` that no current project has used for 30 days, and temp files in `tmp/` older than that. It does not touch JDKs or launchers. Each project has its own keep file, replaced by the plugins that load used.
+The content store lives in `$XDG_CACHE_HOME/histos` or `~/.cache/histos`. Entries are content-addressed under `cas/`. `histos cache path`, `cache list`, and `cache clean [--dry-run]` manage it. `clean` removes entries under `cas/` and `plugins/` that no current project has used for 30 days, and temp files in `tmp/` older than that. The cutoff and the stamp on a stored action are the fiber's clock. It does not touch JDKs or launchers. Each project has its own keep file, replaced by the plugins that load used.
 
 The remote cache is off. The only implementation is in memory, used by tests, and there is no configuration path (D10).
 
@@ -134,7 +136,7 @@ The remote cache is off. The only implementation is in memory, used by tests, an
 
 `Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Built-in tasks are `inspect` and `versions`.
 
-`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. A plugin task is a step. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. `pluginLoader` and `declaredOutputs` are step aspects. Test, publish, and run are still separate pipelines (K1).
+`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. A plugin task is a step. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. That compile step uses the native origin from the command's `Machine`, not a hardcoded Central. `pluginLoader` and `declaredOutputs` are step aspects. Test, publish, and run are still separate pipelines (K1).
 
 ## Plugins
 

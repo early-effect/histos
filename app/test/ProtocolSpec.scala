@@ -5,6 +5,7 @@ import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
 import histos.cli.{CliParseError, Command}
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled}
+import histos.native.NativeOrigin
 import histos.load.{ApiJar, LoadError, LoadIo, Loader}
 import histos.resolve.{
   Classpath,
@@ -113,7 +114,8 @@ object ProtocolSpec extends ZIOSpecDefault:
       dir.resolve("cache"),
       dir,
       None,
-      Settled.No
+      Settled.No,
+      NativeOrigin.read(env),
     )
 
   private def writeJdk(dir: Path): Unit =
@@ -334,4 +336,4 @@ object ProtocolSpec extends ZIOSpecDefault:
         )
   ) @@ TestAspect.timeout(15.seconds)
 
-  def spec = protocol
+  def spec = protocol @@ TestAspect.withLiveSystem

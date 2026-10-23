@@ -116,7 +116,7 @@ object ZincSpec extends ZIOSpecDefault:
         for
           root   <- temp
           source <- ZIO.attempt(write(root, "Hello.scala", hello))
-          live    = running
+          live   <- running
           req     = liveRequest(root, source, live)
           key    <- JvmCompile.sourceDigest(req.sources).map(CompileKey.of(req, _))
           id     <- ZIO.fromEither(ActionId.from("compile")).orElseFail(CompileError.NoSources)
@@ -141,7 +141,8 @@ object ZincSpec extends ZIOSpecDefault:
         for
           root   <- temp
           source <- ZIO.attempt(write(root, "Bad.scala", "object Bad:\n  def x = classOf[dotty.tools.dotc.Driver]\n"))
-          out    <- JvmCompile.compile(liveRequest(root, source, running)).either
+          live   <- running
+          out    <- JvmCompile.compile(liveRequest(root, source, live)).either
         yield assertTrue:
           out match
             case Left(CompileError.Failed(diagnostics)) =>
@@ -170,7 +171,7 @@ object ZincSpec extends ZIOSpecDefault:
         for
           root <- temp
           source <- ZIO.attempt(write(root, "Hello.scala", namedTuple))
-          jdk = running
+          jdk <- running
           old <- JvmCompile.compile(request(root.resolve("old"), source, jdk, ScalaVersion.trusted("3.3.7"))).either
           fresh <- JvmCompile.compile(request(root.resolve("fresh"), source, jdk, ScalaVersion.trusted("3.10.0")))
           names <- ZIO.attempt {
@@ -203,12 +204,8 @@ object ZincSpec extends ZIOSpecDefault:
       Nil,
     )
 
-  private def running: ResolvedJdk =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        => ResolvedJdk(home, v21)
+  private def running: zio.IO[GraphCompileError, ResolvedJdk] =
+    GraphCompile.jdkHere
 
   private val namedTuple =
     """object Hello {
@@ -265,4 +262,4 @@ object ZincSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("jvm compile")(keys, banned, builds) @@ TestAspect.timeout(3.minutes)
+  def spec = suite("jvm compile")(keys, banned, builds) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

@@ -1,6 +1,5 @@
 package histos.zinc
 
-import histos.jdk.{JdkVersion, ReleaseError}
 import histos.pack.MainClass
 import histos.testrun.{TestClasspath, TestProcess, TestRequest}
 import histos.{Platform, ScalaVersion}
@@ -123,7 +122,7 @@ object Scala213Spec extends ZIOSpecDefault:
           _ <- ZIO.attempt(write(root, "scala-3/Later.scala", "enum Later { case A }\n"))
           sources <- Sources.select(root, v213, Platform.Jvm)
           found <- Scala213.jars(v213)
-          jdk <- ZIO.fromEither(running)
+          jdk <- GraphCompile.jdkHere
           classes = root.resolve("classes")
           compiled <- JvmCompile.compile(CompileRequest(
                         CompileToolchain(v213, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -141,7 +140,7 @@ object Scala213Spec extends ZIOSpecDefault:
             case (Right(_), Right(name)) =>
               TestProcess.run(TestRequest(
                 Platform.Jvm,
-                javaBin,
+                jdk.home.resolve("bin").resolve("java"),
                 TestClasspath(classes, found.runtime),
                 name,
                 work,
@@ -165,7 +164,7 @@ object Scala213Spec extends ZIOSpecDefault:
         for
           root <- temp
           found <- Scala213.jars(v213)
-          jdk <- ZIO.fromEither(running)
+          jdk <- GraphCompile.jdkHere
           compiler = found.compiler
           out <- JvmCompile.compile(CompileRequest(
                    CompileToolchain(v213, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -190,7 +189,7 @@ object Scala213Spec extends ZIOSpecDefault:
         for
           root <- temp
           _ <- ZIO.attempt(write(root, "Leak.scala", leak))
-          jdk <- ZIO.fromEither(running)
+          jdk <- GraphCompile.jdkHere
           out <- JvmCompile.compile(CompileRequest(
                    CompileToolchain(v213, Platform.Jvm, jdk, ScalacFlags.empty),
                    List(root.resolve("Leak.scala")),
@@ -215,7 +214,7 @@ object Scala213Spec extends ZIOSpecDefault:
           root <- temp
           _ <- ZIO.attempt(write(root, "Hello.scala", "object Hello { def greet: String = \"hi\" }\n"))
           found <- Scala213.jars(ScalaVersion.trusted("2.13.18"))
-          jdk <- ZIO.fromEither(running)
+          jdk <- GraphCompile.jdkHere
           compiled <- JvmCompile.compile(CompileRequest(
                         CompileToolchain(ScalaVersion.trusted("2.13.18"), Platform.Jvm, jdk, ScalacFlags.empty),
                         List(root.resolve("Hello.scala")),
@@ -258,13 +257,6 @@ object Scala213Spec extends ZIOSpecDefault:
 
   private def only(name: String): String = s"object $name { def n: Int = 1 }\n"
 
-  private val javaBin = Path.of(java.lang.System.getProperty("java.home")).resolve("bin").resolve("java")
-
-  private def running: Either[ReleaseError, ResolvedJdk] =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    JdkVersion.fromRelease(text).map(version => ResolvedJdk(home, version))
-
   private def write(root: Path, name: String, text: String): Path =
     val path = root.resolve(name)
     Files.createDirectories(path.getParent)
@@ -282,4 +274,4 @@ object Scala213Spec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("scala 2.13")(layout, compile) @@ TestAspect.timeout(3.minutes)
+  def spec = suite("scala 2.13")(layout, compile) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

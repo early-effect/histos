@@ -1,6 +1,7 @@
 package histos
 
 import histos.jdk.{ArchiveSource, Machine, Os, Settled, Sha256}
+import histos.native.NativeOrigin
 import histos.node.{NodeLock, NodeVersion}
 import histos.testrun.{TestEvent, TestProcess}
 import histos.toolchain.Runtimes
@@ -26,7 +27,8 @@ object TestMachine:
       root.resolve("cache"),
       root,
       None,
-      Settled.No
+      Settled.No,
+      NativeOrigin.read(env),
     )
 
   /** Needs `TestAspect.withLiveSystem`. */

@@ -1,8 +1,7 @@
 package histos.program
 
-import histos.jdk.{JdkMajor, JdkVersion}
 import histos.resolve.Resolve
-import histos.zinc.ResolvedJdk
+import histos.zinc.GraphCompile
 import histos.{ClangMajor, Js, Jvm, MainClass, Native, Projects, Requires, ScalaVersion, TestMachine, Tool, module}
 
 import java.nio.file.{Files, Path}
@@ -15,17 +14,11 @@ import zio.test.*
 object ProgramSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
 
-  private val jdk: ResolvedJdk =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        => ResolvedJdk(home, JdkVersion.trusted("21.0.2", JdkMajor.trusted(21)))
-
   private val ran = suite("entry")(
     test("a module without a main is not linked"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           here <- TestMachine.runtimes(root)
@@ -38,6 +31,7 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a jvm main runs on the main classpath"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
@@ -57,6 +51,7 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a js main links and starts in node"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
@@ -78,6 +73,7 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a multi-platform module does not start until a platform is named"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
@@ -96,6 +92,7 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a platform the module does not build is refused"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
@@ -111,6 +108,7 @@ object ProgramSpec extends ZIOSpecDefault:
     test("an explicit platform runs only that platform"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
@@ -130,6 +128,7 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a native main links and runs the binary"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Native)(ScalaVersion("3.9.0")).clang(ClangMajor(21)).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))

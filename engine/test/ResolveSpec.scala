@@ -1,9 +1,9 @@
 package histos.resolve
 
-import histos.jdk.{JdkMajor, JdkVersion, Sha256}
+import histos.jdk.Sha256
 import histos.load.PluginRequest
 import histos.plugin.LinkStrategy
-import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
+import histos.zinc.{CompileError, CompileRequest, CompileToolchain, GraphCompile, GraphCompileError, JvmCompile, ScalacFlags}
 import histos.{Dep, DepKind, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
 import java.io.ByteArrayOutputStream
@@ -359,7 +359,7 @@ object ResolveSpec extends ZIOSpecDefault:
             case Right(lock) => Resolve.materialize(open.cell, lock).provide(Resolve.live(open.cache)).either
             case Left(error) => ZIO.succeed(Left(ResolveError.Lock(error)))
           source <- ZIO.attempt(write(open.root, "App.scala", app))
-          jdk     = running
+          jdk    <- GraphCompile.jdkHere
           request = materialized match
             case Right(classpath) =>
               CompileRequest(
@@ -517,11 +517,12 @@ object ResolveSpec extends ZIOSpecDefault:
   private def resolve(open: Opened, cell: ResolveCell): ZIO[Any, Nothing, Either[ResolveError, Classpath]] =
     ZIO.serviceWithZIO[Resolve](_.resolve(cell)).provide(Resolve.live(open.cache)).either
 
-  private def opened: ZIO[Scope, Throwable, Opened] =
+  private def opened: ZIO[Scope, Throwable | GraphCompileError, Opened] =
     for
       root <- temp
       repo <- ZIO.attempt(Files.createDirectories(root.resolve("repo")).toRealPath())
-      compiled <- ZIO.attempt(compileGreeting(root))
+      jdk <- GraphCompile.jdkHere
+      compiled <- ZIO.attempt(compileGreeting(root, jdk.home.resolve("bin").resolve("javac")))
       _ <- ZIO.when(compiled.code == 0)(ZIO.attempt(publish(repo, compiled.bytes)))
     yield
       val repositories = Repositories(Repository.Maven(RepoUrl.file(repo)), Nil)
@@ -529,12 +530,11 @@ object ResolveSpec extends ZIOSpecDefault:
 
   private final case class Compiled(code: Int, text: String, bytes: Array[Byte])
 
-  private def compileGreeting(root: Path): Compiled =
+  private def compileGreeting(root: Path, javac: Path): Compiled =
     val sources = Files.createDirectories(root.resolve("java"))
     val classes = Files.createDirectories(root.resolve("jclasses"))
     val file    = sources.resolve("Greeting.java")
     Files.writeString(file, greetingSource)
-    val javac   = Path.of(java.lang.System.getProperty("java.home")).resolve("bin").resolve("javac")
     val process = new ProcessBuilder(javac.toString, "-d", classes.toString, file.toString).redirectErrorStream(true).start()
     val text    = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
     val code    = process.waitFor()
@@ -643,14 +643,6 @@ object ResolveSpec extends ZIOSpecDefault:
       case Right(name) => name
       case Left(_)     => project("core")
 
-  private def running: ResolvedJdk =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    val fallback = JdkVersion.trusted("21.0.2", JdkMajor.trusted(21))
-    JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        => ResolvedJdk(home, fallback)
-
   private def write(root: Path, name: String, text: String): Path =
     val path = root.resolve(name)
     Files.writeString(path, text)
@@ -670,4 +662,4 @@ object ResolveSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("resolve")(names, lockFile, fetch) @@ TestAspect.timeout(3.minutes)
+  def spec = suite("resolve")(names, lockFile, fetch) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

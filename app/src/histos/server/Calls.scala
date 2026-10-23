@@ -64,7 +64,8 @@ object Calls:
       Path.of(".histos"),
       Path.of("."),
       None,
-      Settled.No
+      Settled.No,
+      NativeOrigin.Central,
     )
 
   def graph(

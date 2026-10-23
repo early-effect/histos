@@ -1,10 +1,9 @@
 package histos.testrun
 
-import histos.jdk.{JdkMajor, JdkVersion}
 import histos.node.{NodeError, NodeMiss}
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.toolchain.Runtimes
-import histos.zinc.ResolvedJdk
+import histos.zinc.GraphCompile
 import histos.{ClangMajor, Dep, FrameworkClass, Js, JsEnv, Jvm, Native, ProjectName, Projects, Requires, ScalaVersion, TestMachine, TestMain, TestProvider, Tool, module}
 
 import java.nio.file.{Files, Path}
@@ -17,17 +16,11 @@ import zio.test.*
 private[testrun] object ModuleTestSupport:
   private val scala3 = ScalaVersion("3.10.0")
 
-  private val jdk: ResolvedJdk =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        => ResolvedJdk(home, JdkVersion.trusted("21.0.2", JdkMajor.trusted(21)))
-
   private[testrun] val subprocess = suite("subprocess")(
     test("a named main runs against main classes, and a module with nothing to run is not a pass"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           built <- ZIO.attempt {
                      val core = module("core", Jvm)(scala3)
@@ -59,6 +52,7 @@ private[testrun] object ModuleTestSupport:
     test("src/test is the suite when the module has no main"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
                  write(root, "e2e/src/test/scala/demo/Check.scala", onlyPasses)
@@ -78,6 +72,7 @@ private[testrun] object ModuleTestSupport:
     test("a named js main links and runs on the chosen node, not the node on PATH"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           probe = module("probe", Js)(scala3).test(TestMain("demo.Check"))
           built <- ZIO.fromEither(Projects(probe))
@@ -109,6 +104,7 @@ private[testrun] object ModuleTestSupport:
     test("a js main with no Node to choose is a typed failure before the link"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           probe = module("probe", Js)(scala3).test(TestMain("demo.Check"))
           built <- ZIO.fromEither(Projects(probe))
@@ -128,6 +124,7 @@ private[testrun] object ModuleTestSupport:
     test("a named native main links and runs the binary"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           probe = module("probe", Native)(ScalaVersion("3.9.0")).clang(ClangMajor(21)).test(TestMain("demo.Check"))
           built <- ZIO.fromEither(Projects(probe))
@@ -148,6 +145,7 @@ private[testrun] object ModuleTestSupport:
     test("a single module uses test at the repository root"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
                  write(root, "src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
@@ -163,6 +161,7 @@ private[testrun] object ModuleTestSupport:
     test("a non-zero main is a failed cell and its output is kept"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
                  write(root, "src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
@@ -183,6 +182,7 @@ private[testrun] object ModuleTestSupport:
     test("ZIO Test is the default provider, and a failing spec is not a pass"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
           core = module("core", Jvm)(scala3).testDependencies(zioDep)
@@ -206,6 +206,7 @@ private[testrun] object ModuleTestSupport:
     test("a suite pattern runs one provider suite"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
           core = module("core", Jvm)(scala3).testDependencies(zioDep)
@@ -228,6 +229,7 @@ private[testrun] object ModuleTestSupport:
     test("a js provider links the Scala.js bridge and runs on node"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           iface = Dep("org.scala-js:scalajs-test-interface_2.13:1.22.0")
           provider <- ZIO.fromEither(TestProvider(FrameworkClass("demo.ProbeFramework"), "org.scala-js", "scalajs-test-interface_2.13"))
@@ -257,6 +259,7 @@ private[testrun] object ModuleTestSupport:
     test("a native provider links TestMain and runs the binary"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           iface = Dep("org.scala-native::test-interface:0.5.12")
           provider <- ZIO.fromEither(TestProvider(FrameworkClass("demo.ProbeFramework"), "org.scala-native", "test-interface"))
@@ -277,6 +280,7 @@ private[testrun] object ModuleTestSupport:
     test("test sources without a provider library are refused"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
                  write(root, "src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
@@ -295,6 +299,7 @@ private[testrun] object ModuleTestSupport:
     test("a suite pattern runs the matching mains"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           fooA = module("a", Jvm)(scala3).test(TestMain("demo.FooA"))
           fooB = module("b", Jvm)(scala3).test(TestMain("demo.FooB"))
@@ -319,6 +324,7 @@ private[testrun] object ModuleTestSupport:
     test("a suite pattern that matches nothing fails"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("a", Jvm)(scala3).test(TestMain("demo.FooA"))
           built <- ZIO.fromEither(Projects(app))
@@ -337,6 +343,7 @@ private[testrun] object ModuleTestSupport:
     test("a named main without test sources is refused"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           _ <- ZIO.attempt {
                  write(root, "src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n")
@@ -355,6 +362,7 @@ private[testrun] object ModuleTestSupport:
 
   private def jsProvider(env: JsEnv, installJsdom: Boolean) =
     for
+      jdk <- GraphCompile.jdkHere
       root <- temp
       iface = Dep("org.scala-js:scalajs-test-interface_2.13:1.22.0")
       provider <- ZIO.fromEither(TestProvider(FrameworkClass("demo.ProbeFramework"), "org.scala-js", "scalajs-test-interface_2.13"))
@@ -612,6 +620,7 @@ private[testrun] object ModuleTestSupport:
     test("testQuick reruns a suite when a referenced class changes and skips it otherwise"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
           built <- ZIO.fromEither(Projects(app))
@@ -637,6 +646,7 @@ private[testrun] object ModuleTestSupport:
     test("a failed suite is not a quick success"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
           built <- ZIO.fromEither(Projects(app))
@@ -651,9 +661,11 @@ private[testrun] object ModuleTestSupport:
   )
 
   private def feeds(root: Path, built: histos.ProjectGraph) =
-    TestMachine.runtimes(root)
-      .flatMap(here => ModuleTest.console(root, built, Nil, jdk, here, Nil, quick = true).runCollect)
-      .provide(Resolve.live(root.resolve("coursier")))
+    GraphCompile.jdkHere.flatMap: jdk =>
+      TestMachine
+        .runtimes(root)
+        .flatMap(here => ModuleTest.console(root, built, Nil, jdk, here, Nil, quick = true).runCollect)
+        .provide(Resolve.live(root.resolve("coursier")))
 
   private def out(feeds: zio.Chunk[TestFeed]): String =
     feeds.collect { case TestFeed.Out(text) => text }.mkString("\n")

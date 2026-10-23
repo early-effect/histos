@@ -21,7 +21,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, NonEmptyChunk, UIO, ZIO, ZLayer}
+import zio.{Chunk, IO, NonEmptyChunk, System, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
 
 private def platformToken(platform: Platform): String =
@@ -177,22 +177,21 @@ object GraphCompile:
         case Nil          => ZIO.succeed(cells)
         case head :: rest => ZIO.fail(GraphCompileError.Cells(head, rest))
 
+  /** The JDK this fiber's `zio.System` is running. The release file is the version. */
   def jdkHere: IO[GraphCompileError, ResolvedJdk] =
-    val home = Option(java.lang.System.getProperty("java.home"))
-      .filter(_.nonEmpty)
-      .map(Path.of(_))
-    home match
-      case None       => ZIO.fail(GraphCompileError.Jdk(Path.of(".")))
-      case Some(path) =>
-        ZIO
-          .attemptBlocking(Files.readString(path.resolve("release")))
-          .mapBoth(
-            _ => GraphCompileError.Jdk(path),
-            text => histos.jdk.JdkVersion.fromRelease(text)
-          )
-          .flatMap:
-            case Right(version) => ZIO.succeed(ResolvedJdk(path, version))
-            case Left(_)        => ZIO.fail(GraphCompileError.Jdk(path))
+    System.property("java.home").mapError(_ => GraphCompileError.Jdk(Path.of("."))).flatMap:
+      case Some(raw) if raw.nonEmpty => fromHome(Path.of(raw))
+      case _                         => ZIO.fail(GraphCompileError.Jdk(Path.of(".")))
+
+  private def fromHome(home: Path): IO[GraphCompileError, ResolvedJdk] =
+    ZIO.attemptBlocking(releaseText(home)).mapError(_ => GraphCompileError.Jdk(home)).flatMap: text =>
+      histos.jdk.JdkVersion.fromRelease(text) match
+        case Right(version) => ZIO.succeed(ResolvedJdk(home, version))
+        case Left(_)        => ZIO.fail(GraphCompileError.Jdk(home))
+
+  private def releaseText(home: Path): String =
+    val file = home.resolve("release")
+    if Files.isRegularFile(file) then Files.readString(file) else ""
 
   /** `<module>/src` wins. The repository `src` is only for a graph with one
     * module. The build file stays outside it.

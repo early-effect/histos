@@ -1,7 +1,6 @@
 package histos.publish
 
 import histos.central.Publisher
-import histos.jdk.{JdkMajor, JdkVersion}
 import histos.native.NativeOrigin
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
 import histos.version.{ManualVersion, ShipNumber}
@@ -17,17 +16,11 @@ import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
 object PublishSpec extends ZIOSpecDefault:
-  private val jdk: ResolvedJdk =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        => ResolvedJdk(home, JdkVersion.trusted("21.0.2", JdkMajor.trusted(21)))
-
   private val publish = suite("local publish")(
     test("a manual library is a jar a second project can compile against"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           repo <- temp
           _ <- ZIO.attempt {
@@ -56,6 +49,7 @@ object PublishSpec extends ZIOSpecDefault:
     test("a module on Jvm and Js publishes one coordinate per platform"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           repo <- temp
           _ <- ZIO.attempt {
@@ -82,6 +76,7 @@ object PublishSpec extends ZIOSpecDefault:
     test("development does not publish, and a catalog without an organization does not write"):
       ZIO.scoped:
         for
+          jdk <- GraphCompile.jdkHere
           root <- temp
           repo <- temp
           develop <- ZIO.fromEither(development)
@@ -155,4 +150,4 @@ object PublishSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = publish @@ TestAspect.timeout(3.minutes)
+  def spec = publish @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

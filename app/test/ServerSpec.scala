@@ -3,6 +3,7 @@ package histos.server
 import histos.bsp.{Frame, Rpc}
 import histos.cli.{Cli, CliExit, Command}
 import histos.jdk.{Machine, Os, Settled}
+import histos.native.NativeOrigin
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
 import histos.resolve.Resolve
 import histos.zinc.GraphCompile
@@ -478,7 +479,7 @@ object ServerSpec extends ZIOSpecDefault:
       ZLayer.succeed(histos.cache.ContentStore.in(root.resolve("cache")))
 
   private def machine(root: Path): Machine =
-    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No, NativeOrigin.Central)
 
   private final case class Answered(reply: String, notes: List[String])
 
@@ -580,5 +581,6 @@ object ServerSpec extends ZIOSpecDefault:
         }.ignore
 
   def spec =
-    suite("server")(protocol, attached, lifecycle) @@ TestAspect
-      .timeout(4.minutes)
+    suite("server")(protocol, attached, lifecycle) @@
+      TestAspect.withLiveSystem @@
+      TestAspect.timeout(4.minutes)
