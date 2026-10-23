@@ -33,7 +33,7 @@ The same build serves a person at a terminal, Metals over BSP, and an agent over
 
 ## Where we are
 
-About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge.
+About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge. The step algebra is in `histos.step`. Compile does not run on it yet.
 
 | Capability | State | Notes |
 | --- | --- | --- |
@@ -101,27 +101,7 @@ The signatures below are sketches of unbuilt code, kept until each one lands and
 
 `Step` lives in `histos.api`, under the package `histos.step`, so plugins build steps with the same type the engine uses. The api already depends on ZIO for `HistosPlugin.run`, and this commits to that dependency (decision 1).
 
-```scala
-package histos.step
-
-enum Phase:
-  case Generate, Compile, TestCompile, Link, Test, Package, Publish, Run
-
-/** Stable identity of a step in one graph. */
-enum StepId:
-  case Cell(module: ProjectName, version: ScalaVersion, platform: Platform, phase: Phase)
-  case Plugin(task: PluginTaskId)
-
-/** What identifies the work. The digest is these inputs plus the content hash of each upstream value. */
-final case class StepInfo(id: StepId, inputs: Chunk[Input], needs: Set[Need])
-
-/** How a value is kept in the action cache, hashed into a downstream key, and which files a hit must find. */
-@implicitNotFound("${A} has no Stored codec, so it cannot be cached or feed a hermetic step")
-trait Stored[A]:
-  def encode(value: A): Chunk[Byte]
-  def decode(bytes: Chunk[Byte]): Either[StoredError, A]
-  def outputs(value: A): Chunk[OutputFile]
-```
+The types are [`Phase`](../api/src/histos/step/Model.scala), [`StepId`](../api/src/histos/step/Model.scala), [`StepInfo`](../api/src/histos/step/Model.scala), and [`Stored`](../api/src/histos/step/Model.scala).
 
 ### Kinds are subtypes, names are aliases
 
@@ -132,40 +112,7 @@ Steps differ in what the cache may do with them, and that difference belongs in 
 
 The kind is a covariant phantom parameter on one core class. The aliases hide it, so the name people write is still `Step[R, E, A]`.
 
-```scala
-sealed trait StepKind
-object StepKind:
-  sealed trait Local extends StepKind     // never cached: run, publish, open plugin tasks
-  sealed trait Cached extends StepKind    // the local action cache may serve it: test
-  sealed trait Hermetic extends Cached    // local and remote caches may serve it: compile, link, package
-
-type Step[-R, +E, +A]         = Step.Of[R, E, A, StepKind]
-type LocalStep[-R, +E, +A]    = Step.Of[R, E, A, StepKind.Local]
-type CachedStep[-R, +E, +A]   = Step.Of[R, E, A, StepKind.Cached]
-type HermeticStep[-R, +E, +A] = Step.Of[R, E, A, StepKind.Hermetic]
-
-object Step:
-  sealed trait Of[-R, +E, +A, +K <: StepKind]:
-    def @@[R1 <: R, E1 >: E, K2 <: StepKind](aspect: StepAspect[R1, E1, K2])(using Fits[K, K2]): Of[R1, E1, A, K]
-    def zip[R1 <: R, E1 >: E, B, K1 >: K <: StepKind](that: Of[R1, E1, B, K1]): Of[R1, E1, (A, B), K1]
-    /** A pure derivation. It keeps the kind and is never stored. `@@` decorates the step it derives from. */
-    def map[B](f: A => B): Of[R, E, B, K]
-
-  /** Each constructor pins the output type first, so `R` and `E` come from the effect. */
-  def local[A]: MakeLocal[A]
-  def cached[A: Stored]: MakeCached[A]
-  def hermetic[A: Stored]: MakeHermetic[A]
-
-  extension [R, E, A, K <: StepKind](upstream: Of[R, E, A, K])
-    /** The key hashes the upstream value, so a step of any kind may feed a hermetic one if its value has a codec. */
-    def andThenHermetic[B: Stored](info: StepInfo)(using Stored[A]): ThenHermetic[R, E, A, B]
-
-  extension [R, E, A](step: CachedStep[R, E, A])
-    def sandboxed: HermeticStep[R, E, A]
-
-@implicitNotFound("this aspect decorates ${Need} steps, and the step is ${Have}")
-final class Fits[-Have, +Need] private (val proof: Have <:< Need)
-```
+[`StepKind`](../api/src/histos/step/StepKind.scala) is `Local`, `Cached`, and `Hermetic`, with `Mixed` for a zip the cache cannot treat as one. The aliases and the constructors are [`Step`](../api/src/histos/step/Step.scala). [`Fits`](../api/src/histos/step/Fits.scala) is the evidence `@@` requires.
 
 Domain aliases sit on top of the kinds and live next to the services they name. The engine defines the built-in ones, and a plugin defines its own the same way.
 
@@ -203,7 +150,7 @@ What the kinds buy:
 
 ZIO-style shorthand such as `UStep[A]` and `URStep[R, A]` waits until the first infallible step needs it.
 
-**Proved in two miniatures on 2026-10-22** (Scala 3.10.0, ZIO 2.1.27, clean under `-Wunused:all`, no casts):
+**Proved by [`StepSpec`](../api/test/StepSpec.scala):**
 
 - `@@` keeps the kind: `compiled @@ timed @@ cached @@ remote` is still a `CompileStep`.
 - An aspect on the wrong kind is a compile error with a readable message, for example "this aspect decorates StepKind.Hermetic steps, and the step is StepKind.Local". That covers `remote` or `cached` on a local step, `remote` on a cached test, `remote` on a mapped cached step, and `remote` on a zip that mixes hermetic and local steps.
@@ -221,7 +168,7 @@ ZIO-style shorthand such as `UStep[A]` and `URStep[R, A]` waits until the first 
 
 **Left for implementation:**
 
-- The message for a mixed group names the top kind `StepKind`. It should say "mixed".
+- A mixed zip is `StepKind.Mixed`, so the rejection names `Mixed` rather than the top trait.
 - The `Stored` codec for class directories hashes the class files. That is the cost of early cutoff.
 - How `Histos` performs on a large graph, measured in M3.
 
@@ -266,6 +213,8 @@ enum Source:
 `StepNote` carries diagnostics, suite events, and child output lines. The CLI renders events. BSP maps diagnostics to `build/publishDiagnostics`. MCP maps events to progress notifications.
 
 ### Aspects
+
+[`StepAspect`](../api/src/histos/step/StepAspect.scala) has `identity`, `lift`, and `timed`. The cache and remote aspects below arrive with the executor, because their services are not in the api yet.
 
 The aspect has heddle's `Middleware` shape, plus the lowest kind it accepts. It receives the step, including its key and codec, so a cache aspect can encode values without a cast. Because `K` is contravariant, an aspect for any kind applies everywhere, and a hermetic-only aspect applies to hermetic steps alone. The check is `Fits` evidence on `Step.@@`, which is what gives the readable message.
 
