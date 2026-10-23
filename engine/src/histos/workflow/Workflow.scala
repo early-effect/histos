@@ -273,12 +273,15 @@ object Workflow:
       case JobPermissions.ContentsRead  => "read"
       case JobPermissions.ContentsWrite => "write"
 
+  /** A pull request runs once. `push` is only `main`, so the branch push that updates a PR does not start a second run. */
   private val header: List[String] =
     List(
       "name: ci",
       "on:",
       "  pull_request:",
       "  push:",
+      "    branches:",
+      "      - main",
       "permissions:",
       "  contents: read",
       "jobs:",
