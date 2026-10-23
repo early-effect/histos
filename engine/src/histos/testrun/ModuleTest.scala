@@ -61,19 +61,22 @@ final case class TestedCell(
 )
 
 /** What one cell did. `NoTests` means there was nothing to run. It is not a
-  * passing suite.
+  * passing suite. The output is not here: the console streams it once.
   */
 enum TestStatus:
   case NoTests
   case Unmatched
-  case Passed(out: String, err: String)
-  case Failed(exit: Int, out: String, err: String)
+  case Passed
+  case Failed(exit: Int)
 
   def label: String = this match
-    case NoTests            => "no tests"
-    case Unmatched          => "unmatched"
-    case Passed(_, _)       => "passed"
-    case Failed(exit, _, _) => s"failed $exit"
+    case NoTests      => "no tests"
+    case Unmatched    => "unmatched"
+    case Passed       => "passed"
+    case Failed(exit) => s"failed $exit"
+
+/** A finished cell and the lines its process wrote. */
+final case class TestReport(cell: TestedCell, transcript: Transcript)
 
 /** What the test console is doing. Suites are not merged: one tree finishes,
   * then the next starts.
@@ -168,11 +171,21 @@ object ModuleTest:
       quick: Boolean = false,
       onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit] =
         (_, _, _) => ZIO.unit
-  ): ZIO[Resolve, ModuleTestError, List[TestedCell]] =
+  ): ZIO[Resolve, ModuleTestError, List[TestReport]] =
     console(repo, graph, names, jdk, patterns, quick, onTestCompile)
-      .collect { case TestFeed.Done(cell) => cell }
-      .runCollect
-      .map(_.toList)
+      .runFold(Reports(Transcript.empty, Chunk.empty))(report)
+      .map(_.done.toList)
+
+  private final case class Reports(heard: Transcript, done: Chunk[TestReport])
+
+  /** Cells do not interleave, so the lines since the last cell belong to the next `Done`. */
+  private def report(have: Reports, feed: TestFeed): Reports =
+    feed match
+      case TestFeed.Begin(_, _, _)     => have.copy(heard = Transcript.empty)
+      case TestFeed.Out(text)          => have.copy(heard = have.heard.withOut(text))
+      case TestFeed.Err(text)          => have.copy(heard = have.heard.withErr(text))
+      case TestFeed.Done(cell)         => Reports(Transcript.empty, have.done :+ TestReport(cell, have.heard))
+      case TestFeed.Cached(_, _, _, _) => have
 
   /** Test compiles stay parallel. The console is `concatAll`: one suite's
     * lines, then the next, in module name order. Merging the trees would make
@@ -403,7 +416,7 @@ object ModuleTest:
               _,
               _,
               _,
-              TestStatus.Passed(_, _) | TestStatus.Failed(_, _, _)
+              TestStatus.Passed | TestStatus.Failed(_)
             )
           ) =>
         matched.set(true)
@@ -749,9 +762,7 @@ object ModuleTest:
       TestProcess
         .command(argv, work, env)
         .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapAccumZIO(Transcript("", "")) { (acc, event) =>
-          hear(module, version, platform, None, acc, event)
-        }
+        .mapZIO(hear(module, version, platform, None, _))
 
   private def finished(
       cell: CompiledCell,
@@ -816,7 +827,7 @@ object ModuleTest:
               shown ++ stream.tap {
                 case TestFeed.Done(done) =>
                   done.status match
-                    case TestStatus.Passed(_, _) =>
+                    case TestStatus.Passed =>
                       ZIO.foreachDiscard(dirty):
                         case (name, Some(digest)) =>
                           QuickRecord.save(
@@ -828,7 +839,7 @@ object ModuleTest:
                             digest
                           )
                         case _ => ZIO.unit
-                    case TestStatus.Failed(_, _, _) =>
+                    case TestStatus.Failed(_) =>
                       ZIO.foreachDiscard(dirty)((name, _) =>
                         QuickRecord.clear(
                           repo,
@@ -1008,8 +1019,6 @@ object ModuleTest:
       suiteEnv(repo)
     )
 
-  private final case class Transcript(out: String, err: String)
-
   /** Header, then lines as the process writes them, then the cell. `NoneFound`
     * fails the stream.
     */
@@ -1024,51 +1033,35 @@ object ModuleTest:
       TestProcess
         .events(asked)
         .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapAccumZIO(Transcript("", "")) { (acc, event) =>
-          hear(module, version, shown, provider, acc, event)
-        }
+        .mapZIO(hear(module, version, shown, provider, _))
 
   private def hear(
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
       provider: Option[TestProvider],
-      acc: Transcript,
       event: TestEvent
-  ): ZIO[Any, ModuleTestError, (Transcript, TestFeed)] =
+  ): ZIO[Any, ModuleTestError, TestFeed] =
     event match
-      case TestEvent.Out(text) =>
-        val next = acc.copy(out = join(acc.out, text))
-        ZIO.succeed((next, TestFeed.Out(text)))
-      case TestEvent.Err(text) =>
-        val next = acc.copy(err = join(acc.err, text))
-        ZIO.succeed((next, TestFeed.Err(text)))
+      case TestEvent.Out(text) => ZIO.succeed(TestFeed.Out(text))
+      case TestEvent.Err(text) => ZIO.succeed(TestFeed.Err(text))
       case TestEvent.Exited(code) =>
         provider match
           case Some(_) if code.value == ProviderRunner.NoneMatched =>
             ZIO.succeed(
-              (
-                acc,
-                TestFeed.Done(
-                  TestedCell(module, version, platform, TestStatus.Unmatched)
-                )
+              TestFeed.Done(
+                TestedCell(module, version, platform, TestStatus.Unmatched)
               )
             )
           case Some(found) if code.value == ProviderRunner.NoneFound =>
             ZIO.fail(ModuleTestError.NoneDiscovered(module, found))
           case _ =>
             val status =
-              if code.value == 0 then TestStatus.Passed(acc.out, acc.err)
-              else TestStatus.Failed(code.value, acc.out, acc.err)
+              if code.value == 0 then TestStatus.Passed
+              else TestStatus.Failed(code.value)
             ZIO.succeed(
-              (
-                acc,
-                TestFeed.Done(TestedCell(module, version, platform, status))
-              )
+              TestFeed.Done(TestedCell(module, version, platform, status))
             )
-
-  private def join(have: String, line: String): String =
-    s"$have$line\n"
 
   private def satisfied(module: Module, provider: TestProvider): Boolean =
     val library = provider.library

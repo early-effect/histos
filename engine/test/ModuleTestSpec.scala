@@ -43,12 +43,12 @@ object ModuleTestSpec extends ZIOSpecDefault:
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/app/3.10.0/jvm")))
           testEntries <- ZIO.attempt(entries(root.resolve(".histos/test-classes/app/3.10.0/jvm")))
         yield assertTrue(
-          cells.map(cell => (cell.module.value, cell.status.label)) == List(
+          cells.map(report => (report.cell.module.value, report.cell.status.label)) == List(
             ("app", "passed"),
             ("core", "no tests"),
             ("extra", "no tests"),
           ),
-          named.map(cell => (cell.module.value, cell.status.label)) == List(("app", "passed")),
+          named.map(report => (report.cell.module.value, report.cell.status.label)) == List(("app", "passed")),
           !mainEntries.exists(_.endsWith("Check.class")),
           testEntries.exists(_.endsWith("Check.class")),
         )
@@ -66,7 +66,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/e2e/3.10.0/jvm")))
           testEntries <- ZIO.attempt(entries(root.resolve(".histos/test-classes/e2e/3.10.0/jvm")))
         yield assertTrue(
-          cells.map(cell => (cell.module.value, cell.status.label)) == List(("e2e", "passed")),
+          cells.map(report => (report.cell.module.value, report.cell.status.label)) == List(("e2e", "passed")),
           mainEntries.isEmpty,
           testEntries.exists(_.endsWith("Check.class")),
         )
@@ -85,11 +85,8 @@ object ModuleTestSpec extends ZIOSpecDefault:
           compiled <- ZIO.attempt(entries(root.resolve(".histos/test-classes/probe/3.10.0/js")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/probe/3.10.0/js")))
         yield assertTrue(
-          cells match
-            case TestedCell(module, version, platform, TestStatus.Passed(out, _)) :: Nil =>
-              module.value == "probe" && version == scala3 && platform == Js && out.contains("hi")
-            case _ => false
-          ,
+          placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
+          cells.map(text).exists(_.contains("hi")),
           compiled.exists(_.endsWith(".sjsir")),
           mainEntries.isEmpty,
         )
@@ -108,11 +105,8 @@ object ModuleTestSpec extends ZIOSpecDefault:
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
           compiled <- ZIO.attempt(entries(root.resolve(".histos/test-classes/probe/3.9.0/native")))
         yield assertTrue(
-          cells match
-            case TestedCell(module, version, platform, TestStatus.Passed(out, _)) :: Nil =>
-              module.value == "probe" && version.value == "3.9.0" && platform == Native && out.contains("hi")
-            case _ => false
-          ,
+          placed(cells) == List(("probe", ScalaVersion("3.9.0"), Native, TestStatus.Passed)),
+          cells.map(text).exists(_.contains("hi")),
           compiled.exists(_.endsWith(".nir")),
         )
     @@ Requires(Tool.Clang(ClangMajor(21)))
@@ -129,7 +123,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
-          cells.map(cell => (cell.module.value, cell.version.value, cell.status.label)) == List(("core", "3.10.0", "passed"))
+          cells.map(report => (report.cell.module.value, report.cell.version.value, report.cell.status.label)) == List(("core", "3.10.0", "passed"))
     ,
     test("a non-zero main is a failed cell and its output is kept"):
       ZIO.scoped:
@@ -142,11 +136,10 @@ object ModuleTestSpec extends ZIOSpecDefault:
                }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
-        yield assertTrue:
-          cells match
-            case List(TestedCell(_, version, _, TestStatus.Failed(exit, out, _))) =>
-              version.value == "3.10.0" && exit == 1 && out.contains("nope")
-            case _ => false
+        yield assertTrue(
+          cells.map(report => (report.cell.version.value, report.cell.status)) == List(("3.10.0", TestStatus.Failed(1))),
+          cells.exists(_.transcript.outText.text.contains("nope")),
+        )
     ,
   )
 
@@ -167,11 +160,11 @@ object ModuleTestSpec extends ZIOSpecDefault:
                }
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
-        yield assertTrue:
-          cells match
-            case List(TestedCell(failed, _, _, TestStatus.Failed(exit, out, err)), TestedCell(passed, _, _, TestStatus.Passed(report, _))) =>
-              failed.value == "bad" && passed.value == "core" && exit == 1 && (out + err).contains("nope") && report.contains("adds")
-            case _ => false
+        yield assertTrue(
+          cells.map(report => (report.cell.module.value, report.cell.status)) == List(("bad", TestStatus.Failed(1)), ("core", TestStatus.Passed)),
+          cells.headOption.map(text).exists(_.contains("nope")),
+          cells.lastOption.exists(_.transcript.outText.text.contains("adds")),
+        )
     ,
     test("a suite pattern runs one provider suite"):
       ZIO.scoped:
@@ -188,11 +181,11 @@ object ModuleTestSpec extends ZIOSpecDefault:
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           pattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           cells <- ModuleTest.run(root, built, Nil, jdk, List(pattern)).provide(Resolve.live(root.resolve("coursier")))
-          report = cells.map {
-            case TestedCell(_, _, _, TestStatus.Passed(out, err)) => out + err
-            case TestedCell(_, _, _, status)                      => status.label
-          }.mkString("\n")
-        yield assertTrue(report.contains("alpha") && !report.contains("beta"))
+        yield assertTrue(
+          cells.map(_.cell.status) == List(TestStatus.Passed),
+          cells.map(text).exists(_.contains("alpha")),
+          !cells.map(text).exists(_.contains("beta")),
+        )
     ,
     test("a js provider links the Scala.js bridge and runs on node"):
       ZIO.scoped:
@@ -205,11 +198,10 @@ object ModuleTestSpec extends ZIOSpecDefault:
           _ <- ZIO.attempt(write(root, "probe/src/test/scala/demo/ProbeFramework.scala", probeFramework))
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
-        yield assertTrue:
-          cells match
-            case TestedCell(module, version, platform, TestStatus.Passed(out, _)) :: Nil =>
-              module.value == "probe" && version == scala3 && platform == Js && out.contains("hi")
-            case _ => false
+        yield assertTrue(
+          placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
+          cells.map(text).exists(_.contains("hi")),
+        )
     @@ Requires(Tool.Node)
     ,
     test("a js provider runs under jsdom"):
@@ -231,18 +223,10 @@ object ModuleTestSpec extends ZIOSpecDefault:
           _ <- ZIO.attempt(write(root, "probe/src/test/scala/demo/ProbeFramework.scala", nativeProbe))
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
-          got = cells match
-            case TestedCell(module, version, platform, TestStatus.Passed(out, _)) :: Nil
-                if module.value == "probe" && version.value == "3.9.0" && platform == Native && out.contains("hi") => "passed"
-            case other =>
-              other.map { cell =>
-                cell.status match
-                  case TestStatus.Passed(out, err)       => s"passed\n$out\n$err"
-                  case TestStatus.Failed(code, out, err) => s"failed $code\n$out\n$err"
-                  case TestStatus.NoTests                => "no tests"
-                  case TestStatus.Unmatched              => "unmatched"
-              }.mkString("\n")
-        yield assertTrue(got == "passed")
+        yield assertTrue(
+          placed(cells) == List(("probe", ScalaVersion("3.9.0"), Native, TestStatus.Passed)),
+          cells.map(text).exists(_.contains("hi")),
+        )
     @@ Requires(Tool.Clang(ClangMajor(21)))
   )
 
@@ -280,14 +264,11 @@ object ModuleTestSpec extends ZIOSpecDefault:
           onePattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           both <- ModuleTest.run(root, built, Nil, jdk, List(bothPattern)).provide(Resolve.live(root.resolve("coursier")))
           one <- ModuleTest.run(root, built, Nil, jdk, List(onePattern)).provide(Resolve.live(root.resolve("coursier")))
-          text = (cells: List[TestedCell]) =>
-            cells.map {
-              case TestedCell(module, _, _, TestStatus.Passed(out, _)) => s"${module.value}:$out"
-              case TestedCell(module, _, _, status)                    => s"${module.value}:${status.label}"
-            }.mkString(" ")
+          said = (reports: List[TestReport]) =>
+            reports.map(report => s"${report.cell.module.value}:${report.cell.status.label}:${text(report)}").mkString(" ")
         yield assertTrue(
-          text(both).contains("alpha") && text(both).contains("beta"),
-          text(one).contains("alpha") && !text(one).contains("beta"),
+          said(both).contains("alpha") && said(both).contains("beta"),
+          said(one).contains("alpha") && !said(one).contains("beta"),
         )
     ,
     test("a suite pattern that matches nothing fails"):
@@ -336,18 +317,10 @@ object ModuleTestSpec extends ZIOSpecDefault:
       _ <- ZIO.when(installJsdom)(npm(root, "jsdom@27"))
       _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
       cells <- ModuleTest.run(root, built, Nil, jdk).provide(Resolve.live(root.resolve("coursier")))
-      got = cells match
-        case TestedCell(module, version, platform, TestStatus.Passed(out, _)) :: Nil
-            if module.value == "probe" && version == scala3 && platform == Js && out.contains("hi") => "passed"
-        case other =>
-          other.map { cell =>
-            cell.status match
-              case TestStatus.Passed(out, err)       => s"passed\n$out\n$err"
-              case TestStatus.Failed(code, out, err) => s"failed $code\n$out\n$err"
-              case TestStatus.NoTests                => "no tests"
-              case TestStatus.Unmatched              => "unmatched"
-          }.mkString("\n")
-    yield assertTrue(got == "passed")
+    yield assertTrue(
+      placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
+      cells.map(text).exists(_.contains("hi")),
+    )
 
   /** jsdom's node process resolves `require("jsdom")` by walking up from the work directory. */
   private def npm(root: Path, pkg: String): ZIO[Any, Throwable, Unit] =
@@ -636,7 +609,14 @@ object ModuleTestSpec extends ZIOSpecDefault:
     feeds.collect { case TestFeed.Cached(_, _, _, suite) => suite }.toList
 
   private def failed(feeds: zio.Chunk[TestFeed]): Boolean =
-    feeds.exists { case TestFeed.Done(TestedCell(_, _, _, TestStatus.Failed(_, _, _))) => true; case _ => false }
+    feeds.collect { case TestFeed.Done(TestedCell(_, _, _, TestStatus.Failed(exit))) => exit }.nonEmpty
+
+  private def placed(reports: List[TestReport]): List[(String, ScalaVersion, histos.Platform, TestStatus)] =
+    reports.map(report => (report.cell.module.value, report.cell.version, report.cell.platform, report.cell.status))
+
+  /** Stdout, then stderr. */
+  private def text(report: TestReport): String =
+    report.transcript.outText.text + report.transcript.errText.text
 
   private def lib(word: String): String = libNamed("Lib", word)
 

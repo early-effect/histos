@@ -3,16 +3,16 @@ package histos.testrun
 import histos.Platform
 import histos.jdk.Toolchain
 import histos.pack.MainClass
+import histos.process.ProcessTree
 
 import java.io.InputStream
-import java.nio.charset.StandardCharsets
+import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
 import java.nio.file.{Files, Path}
-import java.util.concurrent.atomic.AtomicBoolean
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
-import zio.stream.ZStream
+import zio.{Chunk, IO, Scope, UIO, ZIO}
+import zio.stream.{ZPipeline, ZStream}
 
 /** The status the operating system reported. Zero and non-zero are both statuses. */
 opaque type ProcessExit = Int
@@ -114,7 +114,7 @@ object TestProcess:
 
   /**
    * One subprocess for one main. Stdout and stderr are lines, merged so neither pipe fills up.
-   * The environment is the request's map. Interrupt kills the process group.
+   * The environment is the request's map. Interrupt kills the process group and every descendant.
    */
   def events(request: TestRequest): ZStream[Any, TestError, TestEvent] =
     if request.platform != Platform.Jvm then ZStream.fail(TestError.UnsupportedPlatform(request.platform))
@@ -124,12 +124,14 @@ object TestProcess:
           _        <- require(request)
           compiler <- ZIO.fromEither(javac(request.java))
           entry    <- bootstrap(request.work, compiler)
-          process  <- start(request, entry)
-          _        <- ZIO.addFinalizer(stop(process))
-        yield console(process) ++ ZStream.fromZIO(finish(request, process).map(TestEvent.Exited(_)))
+          child    <- spawn(start(request, entry), Group.Own)
+        yield child.console ++ ZStream.fromZIO(finish(request, child.process).map(TestEvent.Exited(_)))
       }
 
-  /** A linked program: `node`, or a native binary. No JVM bootstrap. Interrupt destroys the process. */
+  /**
+   * A linked program: `node`, or a native binary. No JVM bootstrap, so the child has no group of its own.
+   * Interrupt kills the process and its descendants. A descendant that outlives the leader is reparented and not reached.
+   */
   def command(
       argv: List[String],
       work: Path,
@@ -138,66 +140,61 @@ object TestProcess:
     argv match
       case Nil => ZStream.fail(TestError.Io(TestIo.Spawn))
       case _ =>
-        ZStream.unwrapScoped {
-          for
-            _ <- directory(work, TestError.Work(work))
-            process <- startCommand(argv, work, environment)
-            _ <- ZIO.addFinalizer(stop(process))
-          yield console(process) ++ ZStream.fromZIO(wait(process).map(TestEvent.Exited(_)))
-        }
+        ZStream.fromZIO(directory(work, TestError.Work(work))).flatMap: _ =>
+          watched(startCommand(argv, work, environment), Group.Inherited)
 
   /** Collect [[events]] for a caller that wants the text after the process ends. */
   def run(request: TestRequest): IO[TestError, TestOutcome] =
-    events(request).runFold(Captured("", "", None))(capture).flatMap: captured =>
+    collect(events(request))
+
+  private def watched(start: IO[TestError, Process], group: Group): ZStream[Any, TestError, TestEvent] =
+    ZStream.unwrapScoped:
+      spawn(start, group).map: child =>
+        child.console ++ ZStream.fromZIO(wait(child.process).map(TestEvent.Exited(_)))
+
+  private def collect(events: ZStream[Any, TestError, TestEvent]): IO[TestError, TestOutcome] =
+    events.runFold(Captured(Transcript.empty, None))(capture).flatMap: captured =>
       captured.exit match
-        case Some(code) => ZIO.succeed(TestOutcome(code, ProcessOutput.from(captured.out), ProcessOutput.from(captured.err)))
+        case Some(code) => ZIO.succeed(TestOutcome(code, captured.heard.outText, captured.heard.errText))
         case None       => ZIO.fail(TestError.Io(TestIo.Wait))
 
-  private final case class Captured(out: String, err: String, exit: Option[ProcessExit])
+  private final case class Captured(heard: Transcript, exit: Option[ProcessExit])
 
   private def capture(have: Captured, event: TestEvent): Captured =
     event match
-      case TestEvent.Out(text)     => have.copy(out = join(have.out, text))
-      case TestEvent.Err(text)     => have.copy(err = join(have.err, text))
-      case TestEvent.Exited(code)  => have.copy(exit = Some(code))
+      case TestEvent.Out(text)    => have.copy(heard = have.heard.withOut(text))
+      case TestEvent.Err(text)    => have.copy(heard = have.heard.withErr(text))
+      case TestEvent.Exited(code) => have.copy(exit = Some(code))
 
-  private def join(have: String, line: String): String =
-    s"$have$line\n"
+  /** Only a child can make itself a group leader once it has exec'd. The JVM bootstrap does. */
+  private enum Group:
+    case Own, Inherited
 
-  /** `HaltStrategy.Both`: one pipe ending does not cancel the other. A failure does. */
-  private def console(process: Process): ZStream[Any, TestError, TestEvent] =
-    text(process.getInputStream).map(TestEvent.Out(_))
-      .merge(text(process.getErrorStream).map(TestEvent.Err(_)))
+  private final case class Child(process: Process, console: ZStream[Any, TestError, TestEvent])
 
   /**
-   * One line at a time. Interrupting closes the stream, because `InputStream.read` does not
-   * return on `Thread.interrupt`.
+   * One fiber per pipe. The readers' scope is forked before the process starts, so it closes after `stop`:
+   * a blocked pipe read does not return on interrupt, so the tree dies first and each reader then reaches
+   * the end of its pipe. `HaltStrategy.Both`: one pipe ending does not cancel the other. A failure does.
    */
-  private def text(input: InputStream): ZStream[Any, TestError, String] =
-    val reader = new java.io.BufferedReader(new java.io.InputStreamReader(input, StandardCharsets.UTF_8))
-    ZStream.repeatZIOOption(line(reader, input))
+  private def spawn(start: IO[TestError, Process], group: Group): ZIO[Scope, TestError, Child] =
+    for
+      readers <- ZIO.scopeWith(_.fork)
+      process <- ZIO.acquireRelease(start)(stop(_, group))
+      out     <- readers.extend(text(process.getInputStream).map(TestEvent.Out(_)).toQueue())
+      err     <- readers.extend(text(process.getErrorStream).map(TestEvent.Err(_)).toQueue())
+    yield Child(process, ZStream.fromQueue(out).flattenTake.merge(ZStream.fromQueue(err).flattenTake))
 
-  private def line(reader: java.io.BufferedReader, input: InputStream): ZIO[Any, Option[TestError], String] =
-    ZIO.asyncInterrupt[Any, Option[TestError], String] { callback =>
-      val open = new AtomicBoolean(true)
-      val worker = new Thread(() =>
-        try
-          val found = reader.readLine()
-          if open.get() then
-            if found == null then callback(ZIO.fail(None))
-            else callback(ZIO.succeed(found))
-        catch case _: java.io.IOException =>
-          if open.get() then callback(ZIO.fail(None))
-      , "histos-test-read")
-      worker.setDaemon(true)
-      worker.start()
-      Left(ZIO.succeed {
-        open.set(false)
-        try input.close()
-        catch case _: java.io.IOException => ()
-        worker.interrupt()
-      })
-    }
+  private def text(input: InputStream): ZStream[Any, TestError, String] =
+    ZStream.fromInputStream(input).via(decode >>> ZPipeline.splitLines).mapError(_ => TestError.Io(TestIo.Read))
+
+  /** A malformed byte becomes U+FFFD, where `utf8Decode` would fail the whole console. */
+  private def decode: ZPipeline[Any, CharacterCodingException, Byte, String] =
+    ZPipeline.decodeCharsWithDecoder(
+      StandardCharsets.UTF_8.newDecoder()
+        .onMalformedInput(CodingErrorAction.REPLACE)
+        .onUnmappableCharacter(CodingErrorAction.REPLACE)
+    ) >>> ZPipeline.mapChunks((chars: Chunk[Char]) => Chunk.single(new String(chars.toArray)))
 
   private def finish(request: TestRequest, process: Process): IO[TestError, ProcessExit] =
     for
@@ -243,25 +240,31 @@ object TestProcess:
       case Some(bin) => Right(bin.resolve("javac"))
       case None      => Left(TestError.Java(java))
 
+  /** `javac` is a child like the test itself, so an interrupt kills it instead of waiting out the compile. */
   private def bootstrap(work: Path, javac: Path): IO[TestError, Path] =
+    for
+      written <- ZIO.attemptBlocking {
+        val root    = work.resolve("bootstrap")
+        val sources = root.resolve("subprocess")
+        Files.createDirectories(sources)
+        val source  = sources.resolve("Entry.java")
+        Files.writeString(source, EntrySource)
+        val classes = root.resolve("classes")
+        Files.createDirectories(classes)
+        (source, classes)
+      }.mapError(_ => TestError.Io(TestIo.Bootstrap))
+      (source, classes) = written
+      compiled <- collect(watched(startJavac(javac, source, classes), Group.Inherited))
+      _ <- ZIO.unless(compiled.exit == ProcessExit(0))(ZIO.fail(TestError.Bootstrap(compiled.out)))
+    yield classes
+
+  /** Stderr joins stdout, so a failed compile reports one text in order. */
+  private def startJavac(javac: Path, source: Path, classes: Path): IO[TestError, Process] =
     ZIO.attemptBlocking {
-      val root    = work.resolve("bootstrap")
-      val sources = root.resolve("subprocess")
-      Files.createDirectories(sources)
-      val source  = sources.resolve("Entry.java")
-      Files.writeString(source, EntrySource)
-      val classes = root.resolve("classes")
-      Files.createDirectories(classes)
-      val process = new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString)
+      new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString)
         .redirectErrorStream(true)
         .start()
-      val text = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-      val code = process.waitFor()
-      (code, text, classes)
-    }.mapError(_ => TestError.Io(TestIo.Bootstrap)).flatMap { (code, text, classes) =>
-      if code == 0 then ZIO.succeed(classes)
-      else ZIO.fail(TestError.Bootstrap(ProcessOutput.from(text)))
-    }
+    }.mapError(_ => TestError.Io(TestIo.Bootstrap))
 
   private def startCommand(
       argv: List[String],
@@ -308,16 +311,28 @@ object TestProcess:
   private def read(path: Path): IO[TestError, ProcessOutput] =
     ZIO.attemptBlocking(ProcessOutput.from(Files.readString(path))).mapError(_ => TestError.Io(TestIo.Read))
 
-  private def stop(process: Process): zio.UIO[Unit] =
-    ZIO.attemptBlocking {
-      close(process.getInputStream)
-      close(process.getErrorStream)
-      close(process.getOutputStream)
-      if process.isAlive then
-        val pid = process.pid()
-        if pid > 0 && pid <= Int.MaxValue then Posix.killGroup(pid.toInt)
-        process.destroyForcibly()
-        process.waitFor()
+  /**
+   * The tree is taken before anything dies. The group kill also reaches members that left the tree,
+   * and it runs after the leader exited too, because the group outlives its leader.
+   */
+  private def stop(process: Process, group: Group): UIO[Unit] =
+    for
+      tree <- ProcessTree.of(process)
+      _ <- group match
+        case Group.Own       => killGroup(process)
+        case Group.Inherited => ZIO.unit
+      _ <- tree.destroy
+      _ <- ZIO.succeed {
+        close(process.getInputStream)
+        close(process.getErrorStream)
+        close(process.getOutputStream)
+      }
+    yield ()
+
+  private def killGroup(process: Process): UIO[Unit] =
+    ZIO.attempt {
+      val pid = process.pid()
+      if pid > 0 && pid <= Int.MaxValue then Posix.killGroup(pid.toInt)
     }.ignore
 
   private def close(stream: java.io.Closeable): Unit =

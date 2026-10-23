@@ -77,8 +77,8 @@ A test cell runs in its own subprocess: one per module, Scala version, and platf
 
 - The default framework is ZIO Test (`TestProvider.Zio`) when a module names neither a provider nor a main. `.testProvider(...)` names another sbt test-interface framework, and `.test(TestMain(...))` runs one main instead.
 - The child classpath is the module's main and test classes, upstream main classes, and the locked compile and test jars. The engine is never on it.
-- The child environment is `HISTOS_REPO`, plus `PATH`, `HOME`, and `XDG_CACHE_HOME` from the parent. The child calls `setpgid` before user code, and cancel kills the JVM child's process group. Node and native children are not put in their own group (B17).
-- Output streams to the console as it arrives, one suite tree per cell in module order.
+- The child environment is `HISTOS_REPO`, plus `PATH`, `HOME`, and `XDG_CACHE_HOME` from the parent. A JVM child calls `setpgid` before user code. Stopping or cancelling a child kills every process below it, and for a JVM child its whole process group, which also reaches what a test left running after its main returned. Node and native children have no group of their own, so a descendant that outlives the node or native process is not reached.
+- Output streams to the console as it arrives, one suite tree per cell in module order. One fiber reads each pipe, and the cell's status does not keep a copy of the output.
 - `testOnly <pattern>` filters suites by fully qualified name (`*` crosses dots, `?` is one character). A pattern that matches nothing fails.
 - `testQuick` skips a suite whose stamp and last success match. The stamp covers the suite's referenced classes and misses upstream jars, the JDK, and flags (P6).
 - `~ <command>` reruns a command when a watched file changes.
@@ -98,7 +98,7 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 ## Toolchains
 
-`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK and waits for it (B20). Engine staging handles zip archives only (B24).
+`.histos/jdk.lock` names the JDK major and per-platform Temurin downloads. The engine picks a JDK in this order: `.histos/toolchain.local`, `JAVA_HOME`, `PATH`, Coursier, sdkman. When a manager is installed but holds no match, Histos prints an install hint. Otherwise it uses the Histos cache, then provisions the locked Temurin. When the running JVM is not the chosen one, the engine starts a child on the chosen JDK that shares the terminal, and exits with the child's status. Interrupting the engine sends SIGTERM to that child and every process below it, then force-kills whatever is still running 2 seconds later. Engine staging handles zip archives only (B24).
 
 `.histos/node.lock` pins Node, and `histos toolchain` reports which Node it would use. Execution does not use that choice yet (B22).
 

@@ -83,12 +83,14 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.4 Child processes
 
-- [ ] **B16** (resources) `engine:testrun/TestProcess.scala:126-127,144-145`: `start` then `addFinalizer` is not atomic, so an interrupt between them leaks the child.
-- [ ] **B17** (resources) `TestProcess.scala:266-279,316-320`: non-JVM children (node, native binaries) never get their own process group, and `stop` skips the group kill once the leader exited.
-- [ ] **B18** (concurrency) `TestProcess.scala:180-199` starts a new `Thread` per line read, outside ZIO supervision.
-- [ ] **B19** (performance) `ModuleTest.scala:69-70,1070` and `TestProcess.scala:164` build output with `s"$have$line\n"` (quadratic), and `TestStatus` keeps a second copy of streamed output.
-- [ ] **B20** (resources) `engine:jdk/Toolchain.scala:206-210`: the JDK hand-off is a raw `ProcessBuilder` plus `waitFor`, and the child survives an interrupt.
-- [ ] **B21** (resources) `engine:pack/Assembly.scala:268-270` opens a `URLClassLoader` over every jar and never closes it.
+- [x] **B16** (resources) `engine:testrun/TestProcess.scala:126-127,144-145`: `start` then `addFinalizer` is not atomic, so an interrupt between them leaks the child. The gap is a race no deterministic test can hit, and `start` is now the acquire of `ZIO.acquireRelease`, which is uninterruptible.
+- [x] **B17** (resources) `TestProcess.scala:266-279,316-320`: non-JVM children (node, native binaries) never get their own process group, and `stop` skips the group kill once the leader exited. The `sleep` started by `sh -c` and the `sleep` a JVM test left behind after its main returned both survived. This branch kills every descendant of a live child, taken with `ProcessHandle.descendants()` before anything dies, and a JVM child's whole group even after its leader exited (`process/ProcessTree.scala`). B42 holds the rest: a descendant that outlives a node or native child.
+- [x] **B18** (concurrency) `TestProcess.scala:180-199` starts a new `Thread` per line read, outside ZIO supervision. Each pipe is now `ZStream.fromInputStream` read by one fiber, in a scope that closes after the tree is killed, because a blocked pipe read ignores interrupt.
+- [x] **B19** (performance) `ModuleTest.scala:69-70,1070` and `TestProcess.scala:164` build output with `s"$have$line\n"` (quadratic), and `TestStatus` keeps a second copy of streamed output. 200,000 lines took 13.1 s through `TestProcess.run` and now take about 0.4 s. `TestStatus` carries no output, and `Transcript` (one `Chunk` per stream) is the one accumulator, for `TestProcess.run` and `ModuleTest.run`.
+- [x] **B20** (resources) `engine:jdk/Toolchain.scala:206-210`: the JDK hand-off is a raw `ProcessBuilder` plus `waitFor`, and the child survives an interrupt. An interrupted hand-off left the child and the `sleep` it started running, and the child is now an `acquireRelease` resource whose release kills its tree.
+- [x] **B21** (resources) `engine:pack/Assembly.scala:268-270` opens a `URLClassLoader` over every jar and never closes it. The loader still served `demo/Lib.class` after its scope closed, and it is now closed by `acquireRelease`.
+- [x] **B44** (resources) `engine:jdk/Toolchain.scala` `replace`: an interrupted hand-off force-killed the child before its TERM handler could run (a child that traps TERM never exited 130), and the release now sends SIGTERM to the tree, waits up to 2 seconds, then force-kills what is left.
+- [x] **B45** (resources) `engine:testrun/TestProcess.scala` `bootstrap`: an interrupt waited out the `javac` compile and left `javac` running (it did not finish within 3 seconds against a `javac` that sleeps), and `javac` is now an `acquireRelease` child whose release kills its tree.
 
 ## M1.5 Toolchain decisions reach execution
 
@@ -153,6 +155,8 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **S12** (api-shape) More than five parameters: `PluginInputs.hash` (7), `Loader.link` (8), `Scheduler.publish` (7), `Program.one` (8), `JsSuite.run` (9), `NativeSuite.run` (8), `NativeLink` (7), `JsRun.start` (6), `JsLink.link` (6).
 - [ ] **S13** (typed-errors) `program/EntryPoints.scala:16` uses `.orDie` on IO. `watch/SourceWatch.scala:30` names the first root, not the one that failed.
 - [ ] **T12** (duplication) Ten specs build their own JDK fixture from `java.lang.System.getProperty("java.home")`, several with an invented `21.0.2` fallback, beside the production `GraphCompile.jdkHere`, which reads the property the same way. They move to the `Machine` source with S1. Found in M0.3.
+- [ ] **B42** (resources) `engine:testrun/TestProcess.scala` `command`: a node or native child has no process group of its own, so a descendant that outlives it is reparented and nothing can find it. The fix is a small exec launcher that calls `setpgid` before `execvp`. Found in M1.4.
+- [ ] **B43** (resources) `TestProcess.scala` `stop`: on Linux, closing a pipe does not wake a read that is already blocked, so `stop` can wait on a writer outside the process tree that still holds the pipe. On macOS the close freed the read in 7 ms. Found in M1.4.
 
 ## M4 The lock covers every jar
 
@@ -203,7 +207,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **A13** (typed-errors) `Bsp.scala:792,842,936` use `.orDie` on file IO, so a defect kills the splice.
 - [ ] **A14** (concurrency) `Bsp.scala:388-416` feeds a `ConcurrentLinkedQueue` from a `CompileProblem => Unit` callback.
 - [ ] **A15** (dead code) `mcp/ToolchainView.scala` (174 lines) is unused.
-- [ ] **A16** (duplication) `pin`, `placed` (twice in `Calls`), `relative` (also in `Lines`), the program exit mapping, and the compile renderer (four copies) are repeated between `Cli.scala` and `Calls.scala`.
+- [ ] **A16** (duplication) `pin`, `placed` (twice in `Calls`), `relative` (also in `Lines`), the program exit mapping, the compile renderer (four copies), and `Cli.failedCell` and `Calls.failedSuite` are repeated between `Cli.scala` and `Calls.scala`.
 - [ ] **A17** (correctness) A missing lock exits 8 from `compile` and 5 from `test` and `run` (`Cli.scala:448-459,749-758`), and `CliSpec.scala:201-219` asserts the split.
 - [ ] **A18** (services) `server` and `client` import `CliExit`, `Lines`, and `Cli.testFailure`, and `cli` imports `server`. That is a package cycle.
 - [ ] **A19** (booleanly) `dryRun`, `update`/`check`, and `test: Boolean` (`Cli.scala:68`, `Grammar.scala:24-25`, `Bsp.scala:599`), `ContentStore.clean(dryRun: Boolean)`, and `HeaderScan.scala:56` (`dependency: Boolean`).

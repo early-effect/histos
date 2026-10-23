@@ -3,13 +3,14 @@ package histos.pack
 import histos.jdk.Toolchain
 
 import java.io.{BufferedOutputStream, InputStream, OutputStream}
+import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.util.zip.{ZipEntry, ZipException, ZipFile, ZipOutputStream}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{IO, Scope, ZIO}
 
 enum AssemblyError:
   case NotADirectory(path: Path)
@@ -224,23 +225,25 @@ object Assembly:
       resources: List[AssemblyFile],
       main: MainClass,
   ): IO[AssemblyError, Int] =
-    ZIO.attemptBlocking {
-      Files.createDirectories(parent)
-      val stream = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(temp)))
-      try
-        val packed = LazyVals.catalog(ownBytes(files) ++ jarBytes(jars)) match
-          case Left(error) => Left(AssemblyError.LazyVal(error))
-          case Right(handles) =>
-            val merge = Merge(stream, classFile(main), handles, hierarchy(classes, jars))
-            merge.manifest(manifest(main))
-            writeOwn(merge, files).flatMap: _ =>
-              writeResources(merge, resources).flatMap: _ =>
-                writeJars(merge, jars).flatMap: _ =>
-                  merge.writeServices()
-                  if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
-        packed
-      finally stream.close()
-    }.mapError(_ => AssemblyError.Io(JarIo.Write)).flatMap(ZIO.fromEither)
+    ZIO.scoped:
+      hierarchy(classes, jars).flatMap: loader =>
+        ZIO.attemptBlocking {
+          Files.createDirectories(parent)
+          val stream = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(temp)))
+          try
+            val packed = LazyVals.catalog(ownBytes(files) ++ jarBytes(jars)) match
+              case Left(error) => Left(AssemblyError.LazyVal(error))
+              case Right(handles) =>
+                val merge = Merge(stream, classFile(main), handles, loader)
+                merge.manifest(manifest(main))
+                writeOwn(merge, files).flatMap: _ =>
+                  writeResources(merge, resources).flatMap: _ =>
+                    writeJars(merge, jars).flatMap: _ =>
+                      merge.writeServices()
+                      if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
+            packed
+          finally stream.close()
+        }.mapError(_ => AssemblyError.Io(JarIo.Write)).flatMap(ZIO.fromEither)
 
   private def ownBytes(files: List[(String, Path)]): List[(String, Array[Byte])] =
     files.collect:
@@ -265,9 +268,12 @@ object Assembly:
           finally zip.close()
         catch case _: ZipException => Nil
 
-  private def hierarchy(classes: List[Path], jars: List[Path]): ClassLoader =
-    val urls = (classes ++ jars).map(_.toUri.toURL).toArray
-    new java.net.URLClassLoader(urls, ClassLoader.getPlatformClassLoader)
+  /** Every class directory and jar, for the frames of rewritten lazy vals. */
+  private[pack] def hierarchy(classes: List[Path], jars: List[Path]): ZIO[Scope, AssemblyError, URLClassLoader] =
+    ZIO.acquireRelease(
+      ZIO.attempt(URLClassLoader((classes ++ jars).map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader))
+        .mapError(_ => AssemblyError.Io(JarIo.Read))
+    )(loader => ZIO.attemptBlocking(loader.close()).ignore)
 
   private def writeOwn(merge: Merge, files: List[(String, Path)]): Either[AssemblyError, Unit] =
     files.foldLeft[Either[AssemblyError, Unit]](Right(())): (acc, file) =>

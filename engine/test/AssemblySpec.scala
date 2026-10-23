@@ -161,6 +161,17 @@ object AssemblySpec extends ZIOSpecDefault:
           text(body, "bootstrap/histos-api.jar").contains("api-jar"),
         )
     ,
+    test("the class hierarchy loader is closed with its scope"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          lib     = root.resolve("lib.jar")
+          _      <- ZIO.attempt(jar(lib, List("demo/Lib.class" -> Array[Byte](1))))
+          inside <- ZIO.scoped(Assembly.hierarchy(Nil, List(lib)).map(loader => (loader, Option(loader.getResource("demo/Lib.class")).nonEmpty)))
+          (loader, open) = inside
+          after   = Option(loader.getResource("demo/Lib.class")).nonEmpty
+        yield assertTrue(open, !after)
+    ,
   )
 
   private def writeClasses(root: Path, files: List[(String, Array[Byte])], name: String = "classes"): Path =

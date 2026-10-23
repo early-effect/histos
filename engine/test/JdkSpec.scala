@@ -3,6 +3,7 @@ package histos.jdk
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
+import scala.jdk.OptionConverters.*
 
 import zio.*
 import zio.test.*
@@ -321,6 +322,78 @@ object JdkSpec extends ZIOSpecDefault:
     ,
   )
 
+  private val handOff = suite("hand-off")(
+    test("the hand-off returns the child's status and marks the child settled"):
+      ZIO.scoped:
+        for
+          root    <- temp
+          stub    <- script(root, s"echo \"$$HISTOS_JDK_SETTLED\" > '$root/settled'\nexit 7\n")
+          code    <- Toolchain.replace(stub, root.resolve("app.jar"), Nil)
+          settled <- ZIO.attempt(Files.readString(root.resolve("settled")).trim)
+        yield assertTrue(code == 7, settled == "1")
+    ,
+    test("interrupting the hand-off kills the child and what it started"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          stub   <- script(root, s"echo $$$$ > '$root/leader.pid'\nsleep 300 &\necho $$! > '$root/child.pid'\nwait\n")
+          fiber  <- Toolchain.replace(stub, root.resolve("app.jar"), Nil).fork
+          leader <- awaitPid(root.resolve("leader.pid"))
+          child  <- awaitPid(root.resolve("child.pid"))
+          exit   <- fiber.interrupt
+          dead   <- ZIO.foreach(leader.toList ++ child.toList)(awaitDead)
+        yield assertTrue(exit.isInterrupted, leader.nonEmpty, child.nonEmpty, dead == List(true, true))
+    ,
+    test("an interrupted hand-off lets the child handle SIGTERM before anything is killed"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          stub   <- script(root, trapsTerm(root))
+          fiber  <- Toolchain.replace(stub, root.resolve("app.jar"), Nil).fork
+          leader <- awaitPid(root.resolve("leader.pid"))
+          child  <- awaitPid(root.resolve("child.pid"))
+          _      <- fiber.interrupt
+          status <- ZIO.attempt(Option.when(Files.isRegularFile(root.resolve("status")))(Files.readString(root.resolve("status")).trim))
+        yield assertTrue(leader.nonEmpty, child.nonEmpty, status.contains("130"))
+  ) @@ TestAspect.withLiveClock
+
+  /**
+   * The child traps TERM and exits 130. The leader ignores TERM, which the child must not inherit,
+   * so it starts the child first, then records the child's real exit status.
+   */
+  private def trapsTerm(root: Path): String =
+    s"""sh -c 'trap "exit 130" TERM; echo $$$$ > "$$0"; while :; do sleep 0.2; done' '$root/child.pid' 2>/dev/null &
+       |trap '' TERM
+       |echo $$$$ > '$root/leader.pid'
+       |wait $$!
+       |echo $$? > '$root/status'
+       |""".stripMargin
+
+  /** A stand-in for `java`: the hand-off runs whatever executable it is given. */
+  private def script(root: Path, body: String): Task[Path] =
+    ZIO.attempt:
+      val path = root.resolve("java")
+      Files.writeString(path, s"#!/bin/sh\n$body")
+      Files.setPosixFilePermissions(path, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"))
+
+  private def awaitPid(path: Path): UIO[Option[Long]] =
+    ZIO.suspendSucceed {
+      readPid(path) match
+        case Some(pid) => ZIO.succeed(Some(pid))
+        case None      => ZIO.sleep(20.millis) *> awaitPid(path)
+    }.timeout(2.seconds).map(_.flatten)
+
+  private def readPid(path: Path): Option[Long] =
+    if !Files.isRegularFile(path) then None
+    else
+      try Files.readString(path).trim.toLongOption.filter(_ > 0)
+      catch case _: java.io.IOException => None
+
+  private def awaitDead(pid: Long): UIO[Boolean] =
+    ZIO.suspendSucceed {
+      if ProcessHandle.of(pid).toScala.exists(_.isAlive) then ZIO.sleep(20.millis) *> awaitDead(pid) else ZIO.succeed(true)
+    }.timeout(1.second).map(_.getOrElse(false))
+
   private def machine(root: Path): Machine =
     Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
 
@@ -366,4 +439,4 @@ object JdkSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  def spec = suite("jdk")(policy, versions, locks, stage, startup) @@ TestAspect.sequential
+  def spec = suite("jdk")(policy, versions, locks, stage, startup, handOff) @@ TestAspect.sequential

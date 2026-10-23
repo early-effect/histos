@@ -613,9 +613,8 @@ object Calls:
 
   private def failedSuite(status: TestStatus): Boolean =
     status match
-      case TestStatus.Failed(_, _, _) => true
-      case TestStatus.NoTests | TestStatus.Unmatched |
-          TestStatus.Passed(_, _) =>
+      case TestStatus.Failed(_) => true
+      case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed =>
         false
 
   private def told(say: Say, text: String): IO[ServerError, Unit] =
