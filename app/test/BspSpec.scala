@@ -109,7 +109,11 @@ object BspSpec extends ZIOSpecDefault:
           resultOf(down).contains(Json.Null),
           done == Bsp.Answer.Stop(0),
         )
-      run.provide(Resolve.live(Path.of(java.lang.System.getProperty("java.io.tmpdir")).resolve("histos-bsp-spec"))),
+      ZIO.scoped:
+        for
+          cache <- temp
+          result <- run.provide(Resolve.live(cache.resolve("coursier")))
+        yield result,
   )
 
   private val client = suite("client")(
@@ -621,4 +625,4 @@ object BspSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("bsp")(protocol, client) @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)
+  def spec = suite("bsp")(protocol, client) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)

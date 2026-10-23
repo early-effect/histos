@@ -14,7 +14,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, System, ZIO, durationInt}
 import zio.test.*
 
-object ModuleTestSpec extends ZIOSpecDefault:
+private[testrun] object ModuleTestSupport:
   private val scala3 = ScalaVersion("3.10.0")
 
   private val jdk: ResolvedJdk =
@@ -24,7 +24,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
       case Right(version) => ResolvedJdk(home, version)
       case Left(_)        => ResolvedJdk(home, JdkVersion.trusted("21.0.2", JdkMajor.trusted(21)))
 
-  private val ran = suite("subprocess")(
+  private[testrun] val subprocess = suite("subprocess")(
     test("a named main runs against main classes, and a module with nothing to run is not a pass"):
       ZIO.scoped:
         for
@@ -179,7 +179,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
     ,
   )
 
-  private val providers = suite("provider")(
+  private[testrun] val providers = suite("provider")(
     test("ZIO Test is the default provider, and a failing spec is not a pass"):
       ZIO.scoped:
         for
@@ -273,7 +273,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
     @@ Requires(Tool.Clang(ClangMajor(21)))
   )
 
-  private val refused = suite("refused before the subprocess")(
+  private[testrun] val refused = suite("refused before the subprocess")(
     test("test sources without a provider library are refused"):
       ZIO.scoped:
         for
@@ -608,7 +608,7 @@ object ModuleTestSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  private val quick = suite("quick")(
+  private[testrun] val quick = suite("quick")(
     test("testQuick reruns a suite when a referenced class changes and skips it otherwise"):
       ZIO.scoped:
         for
@@ -697,4 +697,21 @@ object ModuleTestSpec extends ZIOSpecDefault:
       |    System.exit(1)
       |""".stripMargin
 
-  def spec = suite("module test")(ran, providers, refused, quick) @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)
+/** One running compile per core. More than that and each test sits past a minute. */
+private[testrun] def moduleTests[R, E](group: Spec[R, E]): Spec[R, E] =
+  suite("module test")(group) @@
+    TestAspect.parallelN(java.lang.Runtime.getRuntime.availableProcessors.max(1)) @@
+    TestAspect.withLiveSystem @@
+    TestAspect.timeout(4.minutes)
+
+object ModuleTestJvmSpec extends ZIOSpecDefault:
+  def spec = moduleTests(ModuleTestSupport.subprocess)
+
+object ModuleTestProviderSpec extends ZIOSpecDefault:
+  def spec = moduleTests(ModuleTestSupport.providers)
+
+object ModuleTestRefusedSpec extends ZIOSpecDefault:
+  def spec = moduleTests(ModuleTestSupport.refused)
+
+object ModuleTestQuickSpec extends ZIOSpecDefault:
+  def spec = moduleTests(ModuleTestSupport.quick)

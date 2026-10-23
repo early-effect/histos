@@ -580,5 +580,5 @@ object ServerSpec extends ZIOSpecDefault:
         }.ignore
 
   def spec =
-    suite("server")(protocol, attached, lifecycle) @@ TestAspect.sequential @@ TestAspect
+    suite("server")(protocol, attached, lifecycle) @@ TestAspect
       .timeout(4.minutes)

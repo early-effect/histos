@@ -179,4 +179,4 @@ object ProgramSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = ran @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)
+  def spec = ran @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)

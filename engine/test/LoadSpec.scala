@@ -948,6 +948,8 @@ object LoadSpec extends ZIOSpecDefault:
     finally walk.close()
 
   private val pluginStore: ZLayer[Any, Nothing, ContentStore] =
-    ZLayer.succeed(ContentStore.in(Files.createTempDirectory("histos-plugin-cache")))
+    ZLayer.scoped:
+      ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-plugin-cache")).orDie)(deleteTree).map(ContentStore.in)
 
-  def spec = suite("load")(loads, header, plugins).provideShared(Loader.live ++ ZLayer.succeed(IdleResolve) ++ pluginStore) @@ TestAspect.sequential
+  def spec =
+    suite("load")(loads, header, plugins).provide(Loader.live, ZLayer.succeed(IdleResolve), pluginStore)

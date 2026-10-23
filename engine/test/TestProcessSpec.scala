@@ -185,12 +185,13 @@ object TestProcessSpec extends ZIOSpecDefault:
   private def alive(pid: Long): Boolean =
     ProcessHandle.of(pid).toScala.exists(_.isAlive)
 
+  /** The file appears once the JVM reaches main. A busy runner spends the wait on bootstrap compile and process start. */
   private def awaitPid(path: Path): ZIO[Any, Nothing, Option[Long]] =
     ZIO.suspendSucceed {
       readPid(path) match
         case Some(pid) => ZIO.succeed(Some(pid))
         case None      => ZIO.sleep(20.millis) *> awaitPid(path)
-    }.timeout(2.seconds).map(_.flatten)
+    }.timeout(10.seconds).map(_.flatten)
 
   private def readPid(path: Path): Option[Long] =
     if !Files.isRegularFile(path) then None
@@ -305,4 +306,4 @@ object TestProcessSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("test subprocess")(types, process) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(15.seconds)
+  def spec = suite("test subprocess")(types, process) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(45.seconds)

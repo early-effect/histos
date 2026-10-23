@@ -180,7 +180,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
               contributed,
               noted,
             )
-    ).provideShared(Loader.live) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+    ).provideShared(Loader.live) @@ TestAspect.timeout(3.minutes)
 
   private def publish(work: Path, api: Path, hex: String): IO[LoadError, Path] =
     val textClasses = work.resolve("text-classes")
