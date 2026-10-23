@@ -10,25 +10,22 @@ import _root_.scala.jdk.CollectionConverters.*
 import zio.{System, Trace, UIO, ZIO}
 import zio.test.{Live, Spec, TestAspectPoly}
 
-/** A machine tool a spec needs beyond the JDK that runs the tests. */
 enum Tool:
   case AnyClang
   case Clang(major: ClangMajor)
   case Node
   case Npm
-  /** The Playwright driver and Firefox build that Chekhov runs. */
   case Firefox
-  /** Scala Native jars published to `~/.ivy2/local`. */
   case IvyLocalNative(revision: NativeVersion)
 
-/** Ignores a spec unless every tool it names is on this machine. CI installs them all. */
+/** CI installs every tool, so a gated spec still runs there. */
 object Requires:
   def apply(tool: Tool, more: Tool*): TestAspectPoly =
     new TestAspectPoly:
       def some[R, E](spec: Spec[R, E])(using trace: Trace): Spec[R, E] =
         spec.whenZIO(Live.live(ZIO.forall(tool :: more.toList)(present)))
 
-  /** The Playwright pin of the chekhov-jsenv the engine links Js tests with. */
+  /** Must match the chekhov-jsenv the engine links Js tests with. */
   private val chekhovPlaywright = "1.62.1"
 
   private def present(tool: Tool): UIO[Boolean] =
@@ -53,7 +50,7 @@ object Requires:
     val dirs = env.get("PATH").toList.flatMap(_.split(File.pathSeparatorChar).toList).filter(_.nonEmpty)
     ZIO.attemptBlocking(dirs.exists(dir => Files.isExecutable(Path.of(dir, name)))).orElseSucceed(false)
 
-  /** Chekhov's lookup: an explicit driver or its own cache, and a Firefox build in Playwright's browser cache. */
+  /** Chekhov's own lookup for the Playwright driver and its Firefox build. */
   private def firefox(env: Map[String, String], home: Option[String], os: Option[String]): UIO[Boolean] =
     home match
       case None => ZIO.succeed(false)

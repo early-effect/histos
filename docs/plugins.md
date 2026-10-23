@@ -4,9 +4,9 @@
 **Org:** early-effect
 **Repo:** `early-effect/histos`
 
-This document is the plugin contract: what a plugin author writes, what a build author writes, and what the engine guarantees. The api types live in `api/src/histos/plugin`. The loader and the runtime live in `engine/src/histos/load`. Command dispatch lives in `app/src/histos/cli`. [architecture.md](architecture.md) describes the rest of the tree as built, and [roadmap.md](roadmap.md) holds planned work, including the Specular plugin in the Specular repository.
+This document is the plugin contract: what a plugin author writes, what a build author writes, and what the engine guarantees. The api types live in [`api/src/histos/plugin`](../api/src/histos/plugin). The loader and the runtime live in [`engine/src/histos/load`](../engine/src/histos/load). Command dispatch lives in [`app/src/histos/cli`](../app/src/histos/cli). [architecture.md](architecture.md) describes the rest of the tree as built, and [roadmap.md](roadmap.md) holds planned work, including the Specular plugin in the Specular repository.
 
-Code blocks marked as excerpts copy declarations verbatim from the named file and leave out doc comments, `CanEqual` givens, and unrelated members. Every other Scala block is user or plugin code that compiles against today's api.
+Declarations live in the source files this document links, and examples live in the tests it links. CI compiles both. This document holds the rules, the reasons, and the invariants that the code does not state.
 
 ## Overview
 
@@ -49,8 +49,8 @@ Publishing is a task a plugin can implement. `central` compiles as an in-tree mo
 
 - sbt 1.x plugin API compatibility: no AutoPlugin, `SettingKey`, `TaskKey`, `plugins.sbt`, `sbt.AutoPlugin` entry, or `project/plugins.sbt`.
 - A binary-compatibility promise for `histos.api` before 1.0: no MiMa and no shim. `LinkStrategy.Api` exists so a header can name it and get a typed refusal.
-- Test frameworks. `TestProvider` (`api/src/histos/TestProvider.scala`) names an `sbt.testing.Framework` that the test child process loads, and `ProviderRunner` runs in that child. A test framework is a different seam.
-- Scala Native compiler plugins. `NativeComponent.Plugin` in `engine/src/histos/native/NativeLibs.scala` is the `nscplugin` jar passed as `-Xplugin`, a compiler plugin.
+- Test frameworks. `TestProvider` in [`TestProvider.scala`](../api/src/histos/TestProvider.scala) names an `sbt.testing.Framework` that the test child process loads, and `ProviderRunner` runs in that child. A test framework is a different seam.
+- Scala Native compiler plugins. `NativeComponent.Plugin` in [`NativeLibs.scala`](../engine/src/histos/native/NativeLibs.scala) is the `nscplugin` jar passed as `-Xplugin`, a compiler plugin.
 - Loading `central` through the plugin classloader.
 - A filesystem or network sandbox. Enforcement is the declaration plus `Sendable`. [roadmap.md](roadmap.md) tracks the sandbox.
 - Remote execution. A remote cache stores results and runs nothing elsewhere.
@@ -60,31 +60,11 @@ Publishing is a task a plugin can implement. `central` compiles as an in-tree mo
 
 ## The plugin is data plus a runner
 
-One object in the plugin jar extends `HistosPlugin`. `contribute` returns data and is not a `ZIO`. `run` is the effect. The engine calls both. The plugin never calls the engine and never sees `Scheduler` or `Workflow`.
-
-Excerpt from `api/src/histos/plugin/HistosPlugin.scala`:
-
-```scala
-trait HistosPlugin:
-  def id: PluginId
-  def contribute: Contribution
-  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput]
-
-object HistosPlugin:
-  val entryResource: String = "META-INF/histos/plugin"
-```
+One object in the plugin jar extends `HistosPlugin` in [`HistosPlugin.scala`](../api/src/histos/plugin/HistosPlugin.scala). It has an `id`, a `contribute` that returns a `Contribution` and is not a `ZIO`, and a `run` that takes a `RunRequest` and is the effect. The engine calls both. The plugin never calls the engine and never sees `Scheduler` or `Workflow`.
 
 `contribute` runs while `Projects` evaluates `graph`, on the load fiber, because that is when the data is copied onto the graph. It must be total: no I/O and no `throw`. Its return type is not a `ZIO`, which is the enforcement. A throw anyway becomes `BuildError.PluginDefect(plugin, binary)`, where `binary` is the exception class name. The exception message never enters the typed error. Load never calls `run`.
 
-`ProjectGraph.plugins` holds data only. The plugin instance and the classloader stay with the loader. Excerpt from `api/src/histos/plugin/Request.scala`:
-
-```scala
-final case class RegisteredPlugin(
-    id: PluginId,
-    entry: EntryName,
-    contribution: Contribution,
-)
-```
+`ProjectGraph.plugins` holds data only: `RegisteredPlugin` in [`Request.scala`](../api/src/histos/plugin/Request.scala) is the plugin id, its `EntryName`, and its `Contribution`. The plugin instance and the classloader stay with the loader.
 
 `EntryName` is the JVM binary name of the module class, including the trailing `$`. `Projects` records `EntryName.fromClass(plugin.getClass)`. During load, the loader defines each header entry on `BuildLoader` and reads its public `MODULE$` field. `PluginRuntime` keeps those instances, and `run` calls them. A Scala object is a singleton on its loader, so this is the same instance `Projects` called `contribute` on.
 
@@ -94,156 +74,52 @@ final case class RegisteredPlugin(
 
 ### Ids and tokens
 
-Every id and token is an opaque type in `histos.plugin`. Each has `inline def apply(inline raw: String)`, backed by a macro in `PluginMacros` (`api/src/histos/plugin/Macros.scala`) that rejects a bad literal when the plugin compiles, and `from(raw)`, the runtime parser, which returns an error enum. `ProjectPath`, `dep"..."`, and `path"..."` follow the same pattern. The examples below call `apply`.
-
-Excerpt from `api/src/histos/plugin/PluginId.scala`:
-
-```scala
-opaque type PluginId = String
-
-object PluginId:
-  inline def apply(inline raw: String): PluginId = ${ PluginMacros.pluginId('raw) }
-
-  def from(raw: String): Either[PluginIdError, PluginId] =
-    if Tokens.pluginId(raw) then Right(trusted(raw))
-    else if raw.isEmpty then Left(PluginIdError.Empty)
-    else Left(PluginIdError.Bad(raw))
-
-  extension (id: PluginId) def value: String = id
-
-enum PluginIdError:
-  case Empty
-  case Bad(raw: String)
-```
+Every id and token is an opaque type in `histos.plugin`. Each has `inline def apply(inline raw: String)`, backed by a macro in `PluginMacros` ([`Macros.scala`](../api/src/histos/plugin/Macros.scala)) that rejects a bad literal when the plugin compiles. Each also has `from(raw)`, the runtime parser, which returns that type's own error enum, and a `.value` extension that returns the text. `PluginId` in [`PluginId.scala`](../api/src/histos/plugin/PluginId.scala) shows the shape: `PluginId.from` fails with `PluginIdError.Empty` or `PluginIdError.Bad(raw)`. The `ids` and `paths and digests` suites in [`PluginSpec.scala`](../api/test/PluginSpec.scala) check the parsers for most grammars below, plus the compile error for a bad `PluginId` or `RepoPath` literal. `ProjectPath`, `dep"..."`, and `path"..."` follow the same pattern.
 
 | Type | File | Grammar |
 | --- | --- | --- |
-| `PluginId` | `PluginId.scala` | Dot-separated segments. Each segment starts with a letter, and the rest are letters, digits, or hyphens. `dev.earlyeffect.specular` is valid. Empty, a slash, a colon, whitespace, an empty segment, or a leading or trailing dot fails. |
-| `TaskName`, `CommandName`, `JobName`, `OutputName`, `ParamName`, `FlagName`, `NoteKey` | `Names.scala` | A letter, then letters, digits, or hyphens. No slash and no dot. |
-| `EntryName` | `EntryName.scala` | A JVM binary class name: dot-separated identifiers, where a segment may contain single `$` separators and end with `$`. |
-| `RepoPath` | `RepoPath.scala` | A repo-relative file or directory. Empty, a leading `/`, a backslash, or a `:` fails. Each `/` segment matches `[A-Za-z][A-Za-z0-9._-]*`, so `.`, `..`, and empty segments fail and `docs/index.html` passes. |
-| `NoteText`, `PluginDetail` | `Texts.scala` | Non-empty, one line, no control characters. |
-| `InputKey` | `Texts.scala` | Non-empty, no whitespace. |
-| `EnvName` | `Texts.scala` | A letter or `_`, then letters, digits, or `_`. |
-| `ApiDigest`, `ContentHash` | `ApiDigest.scala` | 64 hex digits, stored lowercase. |
-| `Cron` | `Cron.scala` | Five whitespace-separated GitHub Actions cron fields, stored single-spaced. Month and weekday names are accepted. |
+| `PluginId` | [`PluginId.scala`](../api/src/histos/plugin/PluginId.scala) | Dot-separated segments. Each segment starts with a letter, and the rest are letters, digits, or hyphens. `dev.earlyeffect.specular` is valid. Empty, a slash, a colon, whitespace, an empty segment, or a leading or trailing dot fails. |
+| `TaskName`, `CommandName`, `JobName`, `OutputName`, `ParamName`, `FlagName`, `NoteKey` | [`Names.scala`](../api/src/histos/plugin/Names.scala) | A letter, then letters, digits, or hyphens. No slash and no dot. |
+| `EntryName` | [`EntryName.scala`](../api/src/histos/plugin/EntryName.scala) | A JVM binary class name: dot-separated identifiers, where a segment may contain single `$` separators and end with `$`. |
+| `RepoPath` | [`RepoPath.scala`](../api/src/histos/plugin/RepoPath.scala) | A repo-relative file or directory. Empty, a leading `/`, a backslash, or a `:` fails. Each `/` segment matches `[A-Za-z][A-Za-z0-9._-]*`, so `.`, `..`, and empty segments fail and `docs/index.html` passes. |
+| `NoteText`, `PluginDetail` | [`Texts.scala`](../api/src/histos/plugin/Texts.scala) | Non-empty, one line, no control characters. |
+| `InputKey` | [`Texts.scala`](../api/src/histos/plugin/Texts.scala) | Non-empty, no whitespace. |
+| `EnvName` | [`Texts.scala`](../api/src/histos/plugin/Texts.scala) | A letter or `_`, then letters, digits, or `_`. |
+| `ApiDigest`, `ContentHash` | [`ApiDigest.scala`](../api/src/histos/plugin/ApiDigest.scala) | 64 hex digits, stored lowercase. |
+| `Cron` | [`Cron.scala`](../api/src/histos/plugin/Cron.scala) | Five whitespace-separated GitHub Actions cron fields, stored single-spaced. Month and weekday names are accepted. |
 
 `TaskName`, `CommandName`, and `JobName` share one grammar and stay distinct types. `inspect` is a legal `TaskName`, and it still cannot shadow the built-in, because a plugin task id always has a slash.
 
 `ProjectPath` keeps the module-directory grammar, which rejects a dot in a segment. `plugin(path"...")` and `.in` take `ProjectPath`. Declared inputs and outputs take `RepoPath`.
 
-Excerpt from `api/src/histos/plugin/PluginTaskId.scala`:
-
-```scala
-final case class PluginTaskId(plugin: PluginId, name: TaskName):
-  def render: String = s"${plugin.value}/${name.value}"
-
-enum PluginTaskError:
-  case Shape(raw: String)
-  case Plugin(error: PluginIdError)
-  case Task(error: TaskNameError)
-
-object PluginTaskId:
-  def parse(raw: String): Either[PluginTaskError, PluginTaskId] =
-    raw.split("/", -1).toList match
-      case plugin :: name :: Nil =>
-        for
-          id   <- PluginId.from(plugin).left.map(PluginTaskError.Plugin(_))
-          task <- TaskName.from(name).left.map(PluginTaskError.Task(_))
-        yield PluginTaskId(id, task)
-      case _ => Left(PluginTaskError.Shape(raw))
-```
-
-`parse` requires exactly one slash. `inspect` and `versions` fail with `Shape`. `dev.earlyeffect.specular/versions` parses, and it does not occupy `TaskId.Versions`, because it is a different string.
+`PluginTaskId` in [`PluginTaskId.scala`](../api/src/histos/plugin/PluginTaskId.scala) pairs a `PluginId` with a `TaskName`, and `render` joins them as `plugin/task`. `PluginTaskId.parse` requires exactly one slash. A wrong slash count is `PluginTaskError.Shape`, and a bad segment is `PluginTaskError.Plugin` or `PluginTaskError.Task`, wrapping that segment's own error. `inspect` and `versions` fail with `Shape`. `dev.earlyeffect.specular/versions` parses, and it does not occupy `TaskId.Versions`, because it is a different string.
 
 ### Seal and Need
 
-Excerpt from `api/src/histos/plugin/Seal.scala`:
-
-```scala
-enum Seal:
-  case Hermetic
-  case Open
-
-enum Need:
-  case Network
-  case Docker
-```
-
-`histos.schedule.Sendable` imports both. `Sendable.decide` is the one policy for core and plugin actions.
+`Seal` and `Need` live in [`Seal.scala`](../api/src/histos/plugin/Seal.scala). `Seal.Hermetic` claims that the declared inputs are everything the task reads. `Seal.Open` makes no claim. `Need.Network` and `Need.Docker` name a capability that keeps the task on this machine. `histos.schedule.Sendable` imports both enums, and `Sendable.decide` is the one policy for core and plugin actions.
 
 ### Contribution
 
-Excerpt from `api/src/histos/plugin/Contribution.scala`:
+`Contribution` in [`Contribution.scala`](../api/src/histos/plugin/Contribution.scala) holds three lists: tasks, commands, and CI jobs. A `DeclaredTask` carries its `TaskName`, its `Seal`, its set of `Need`, its inputs, its outputs, and its dependencies. The other contribution types in that file:
 
-```scala
-final case class Contribution(
-    tasks: List[DeclaredTask],
-    commands: List[CommandSpec],
-    jobs: List[CiJob],
-)
-
-final case class DeclaredTask(
-    name: TaskName,
-    seal: Seal,
-    needs: Set[Need],
-    inputs: List[DeclaredInput],
-    outputs: List[DeclaredOutput],
-    dependsOn: List[TaskDep],
-)
-
-enum DeclaredInput:
-  case File(path: RepoPath)
-  case Directory(path: RepoPath)
-  case Module(name: ProjectName, version: Option[ScalaVersion], platform: Option[Platform])
-  case Note(module: ProjectName, key: NoteKey)
-  case Text(name: InputKey, value: String)
-  case Env(name: EnvName)
-
-final case class DeclaredOutput(name: OutputName, path: RepoPath)
-
-enum TaskDep:
-  case Compile(module: ProjectName, version: Option[ScalaVersion], platform: Option[Platform])
-  case Same(name: TaskName)
-
-final case class CommandSpec(
-    name: CommandName,
-    params: List[CliParam],
-    task: TaskName,
-    summary: PluginDetail,
-)
-
-enum CliParam:
-  case Text(name: ParamName)
-  case OptionalText(name: ParamName)
-  case Flag(name: FlagName)
-
-final case class CiJob(
-    name: JobName,
-    task: TaskName,
-    when: JobWhen,
-    permissions: JobPermissions = JobPermissions.ContentsRead,
-)
-
-enum JobWhen:
-  case Always
-  case Schedule(cron: Cron)
-
-enum JobPermissions:
-  case ContentsRead
-  case ContentsWrite
-```
+| Type | Shape | Rule |
+| --- | --- | --- |
+| `DeclaredInput` | `File`, `Directory`, `Module`, `Note`, `Text`, or `Env` | Each case is a cache input. [The digest](#the-digest) lists what each one contributes. |
+| `DeclaredOutput` | an `OutputName` and a `RepoPath` | A regular file the run must write. |
+| `TaskDep` | `Compile` names a module cell, `Same` names a task of the same plugin | Nothing names a task of another plugin. |
+| `CommandSpec` | a `CommandName`, a list of `CliParam`, the `TaskName` it runs, and a `PluginDetail` summary | [Commands](#commands) gives the argv rules. |
+| `CiJob` | a `JobName`, the `TaskName`, a `JobWhen`, and `JobPermissions` | `permissions` defaults to `JobPermissions.ContentsRead`. [CI jobs](#ci-jobs) gives the rendering rules. |
 
 Inputs and outputs:
 
 - `Directory` hashes every regular file under that directory, keyed by relative path and sorted. There is no glob dialect.
 - A declared output is a regular file. The engine hashes it after `run`. A directory cannot be an output.
 - A declared `File` or `Directory` that is missing, or an `Env` that is unset, fails the run with `PluginRunError.Failed` before `run` is called.
-- A task with `outputs = Nil` stores `PluginOutput.text` and nothing else, and that text is a legal cache hit. A task that declares files is a hit only when every declared file exists with the sha256 the manifest recorded.
+- A task with no declared outputs stores `PluginOutput.text` and nothing else, and that text is a legal cache hit. A task that declares files is a hit only when every declared file exists with the sha256 the manifest recorded.
 
 Cells:
 
-- `TaskDep.Compile` and `DeclaredInput.Module` name cells. A module builds one cell per Scala version and platform. `None` means every cell that module builds, Js and Native included. `Some` must name a cell that module builds, or `Projects` returns `BuildError.PluginMissingCell`. An unknown name, or an aggregate, is `BuildError.PluginMissingModule`.
+- `TaskDep.Compile` and `DeclaredInput.Module` name cells: a module, plus an optional Scala version and an optional platform. A module builds one cell per Scala version and platform. `None` means every cell that module builds, Js and Native included. `Some` must name a cell that module builds, or `Projects` returns `BuildError.PluginMissingCell`. An unknown name, or an aggregate, is `BuildError.PluginMissingModule`.
 - `TaskDep.Compile` compiles the selected cells before the task is hashed, and `RunRequest.compiled` carries their classpaths.
 - `DeclaredInput.Module` hashes the selected cells' class directories as they are on disk, sorted by Scala version, then platform token. Pair it with `TaskDep.Compile` on the same cells when the task needs fresh classes.
 
@@ -260,108 +136,25 @@ Text, commands, and cron:
 
 ### Link strategy and the api digest
 
-Excerpt from `api/src/histos/plugin/Contribution.scala`:
-
-```scala
-enum LinkStrategy:
-  case ExactBinary
-  case Source
-  case BinaryOrSource
-  case Api
-
-enum PluginLinked:
-  case FromBinary(api: ApiDigest)
-  case FromSource(published: ApiDigest, running: ApiDigest)
-```
+`LinkStrategy` in [`Contribution.scala`](../api/src/histos/plugin/Contribution.scala) is what a header asks for: `ExactBinary`, `Source`, `BinaryOrSource`, or `Api`. `PluginLinked`, in the same file, records which bytes defined the plugin classes. `FromBinary(api)` carries the digest both sides share. `FromSource(published, running)` carries the digest the published binary was built against and the digest of the api jar this process loads. [Link strategies](#link-strategies) is the decision table.
 
 `LinkStrategy.Api` is a real case with no success path. A header `.link(Api)` fails the scan with `PluginLoadError.ApiLink`, even when the digests would match. Nothing rewrites bytecode and nothing runs MiMa.
 
-Excerpt from `api/src/histos/plugin/ApiDigest.scala`:
-
-```scala
-opaque type ApiDigest = String
-
-object ApiDigest:
-  val resource: String = "META-INF/histos/version"
-
-  inline def apply(inline raw: String): ApiDigest = ${ PluginMacros.apiDigest('raw) }
-
-  def from(raw: String): Either[ApiDigestError, ApiDigest] =
-    Tokens.sha256(raw) match
-      case Some(hex) => Right(trusted(hex))
-      case None      => Left(ApiDigestError.Bad(raw))
-
-  extension (digest: ApiDigest) def value: String = digest
-```
-
-`ApiDigest` is the sha256 of the `histos-api` jar bytes. When the launcher runs from an assembly, `BuildClasspath` extracts that jar to `api/<sha>/histos-api.jar` under the cache. A binary plugin's `META-INF/histos/version` resource is one line holding that hex, and the loader compares it to the sha256 of the api jar it loads. The product label `0.0.1-SNAPSHOT` (`Cli.VersionText`, `Bsp.ServerVersion`, `.histos-version`) stays put when `histos.api` breaks, so every 0.x binary would match it. The label and the digest are independent, and neither derives from the other.
+`ApiDigest` in [`ApiDigest.scala`](../api/src/histos/plugin/ApiDigest.scala) is the sha256 of the `histos-api` jar bytes, and `ApiDigest.resource` is `META-INF/histos/version`, the jar resource that carries it. When the launcher runs from an assembly, `BuildClasspath` extracts that jar to `api/<sha>/histos-api.jar` under the cache. A binary plugin's `META-INF/histos/version` resource is one line holding that hex, and the loader compares it to the sha256 of the api jar it loads. The product label `0.0.1-SNAPSHOT` (`Cli.VersionText`, `Bsp.ServerVersion`, `.histos-version`) stays put when `histos.api` breaks, so every 0.x binary would match it. The label and the digest are independent, and neither derives from the other.
 
 ### Errors
 
-Load and run fail with separate enums. Excerpt from `api/src/histos/plugin/Errors.scala`:
+Load and run fail with separate enums, `PluginLoadError` and `PluginRunError` in [`Errors.scala`](../api/src/histos/plugin/Errors.scala). A load error raised before the plugin object exists names a `PluginCoordinate` from [`Coordinate.scala`](../api/src/histos/plugin/Coordinate.scala): `Published(dependency)` for a `plugin(dep)` line, or `Path(path)` for a `plugin(path)` line.
 
-```scala
-enum PluginLoadError:
-  case BadCoordinate(raw: String)
-  case Misplaced(line: Int)
-  case Unlocked(coordinate: String)
-  case NoEntry(coordinate: String)
-  case AmbiguousEntry(coordinate: String)
-  case Unversioned(coordinate: String)
-  case VersionMismatch(dependency: Dep, pluginApi: ApiDigest, launcher: ApiDigest)
-  case ApiLink(dependency: Dep)
-  case NoSource(coordinate: PluginCoordinate)
-  case PathIsSource(path: ProjectPath)
-  case ReservedPackage(binary: String)
-  case EngineLeak(coordinate: PluginCoordinate, binary: String)
-  case ForeignEntry(plugin: PluginId, entry: EntryName)
-  case NotEntry(plugin: PluginId, entry: EntryName, expected: EntryName)
-  case IdMismatch(declared: PluginId, found: PluginId)
-  case Undeclared(plugin: PluginId)
-  case Defect(coordinate: PluginCoordinate, binary: String)
-  case Io(op: PluginIo)
+Every case has `message`, the same way `BuildError` and `LoadError` do. Neither enum carries a `Throwable`. `Defect` carries the exception class name. `Linkage` carries the missing class name the JDK reports. `PluginDetail` is the plugin's own message, used when the plugin fails a run on purpose. `PluginLoadError.Io(op)` names the step that failed (`PluginIo.Read`, `Resolve`, `Compile`, or `Open`) and carries no exception. `PluginRunError.MissingNote` is the run-time form of `BuildError.MissingNote`, raised when the engine reads a declared `Note` input and finds no note.
 
-enum PluginIo:
-  case Read, Resolve, Compile, Open
-
-enum PluginRunError:
-  case Failed(detail: PluginDetail)
-  case MissingOutput(name: OutputName)
-  case ExtraOutput(path: String)
-  case MissingArg(name: ParamName)
-  case MissingNote(module: ProjectName, key: NoteKey)
-  case Unknown(id: PluginTaskId)
-  case Defect(binary: String)
-  case EngineLeak(binary: String)
-  case Linkage(binary: String)
-```
-
-Excerpt from `api/src/histos/plugin/Coordinate.scala`:
-
-```scala
-enum PluginCoordinate:
-  case Published(dependency: Dep)
-  case Path(path: ProjectPath)
-```
-
-Every case has `message`, the same way `BuildError` and `LoadError` do. Neither enum carries a `Throwable`. `Defect` carries the exception class name. `Linkage` carries the missing class name the JDK reports. `PluginDetail` is the plugin's own message, used when the plugin fails a run on purpose.
-
-`ApiLink`, `VersionMismatch`, `NoSource`, `EngineLeak`, and `Defect` fire before the plugin object exists, so they name the header coordinate and never a `PluginId`. `VersionMismatch` also names both digests. `ForeignEntry`, `NotEntry`, `IdMismatch`, and `Undeclared` fire after `graph` returns and name the `PluginId`. `Loader.load` wraps every `PluginLoadError` as `LoadError.Plugin(error)`, and the CLI exits 3 with `error.message`.
+`ApiLink`, `VersionMismatch`, `NoSource`, `EngineLeak`, and `Defect` fire before the plugin object exists, so they name the header coordinate and never a `PluginId`. `VersionMismatch` also names both digests. `ForeignEntry`, `NotEntry`, `IdMismatch`, and `Undeclared` fire after `graph` returns and name the `PluginId`. `Loader.load` wraps every `PluginLoadError` as `LoadError.Plugin(error)`, and the CLI exits 3 with `error.message`. The `contract` suite in [`PluginSpec.scala`](../api/test/PluginSpec.scala) asserts that the `VersionMismatch`, `ApiLink`, `NoSource`, `EngineLeak`, and `Defect` messages name the coordinate.
 
 A slash id that is not in the graph is `PluginRunError.Unknown`, a task failure with exit 1.
 
 ## Registration
 
-Excerpt from `api/src/histos/Builder.scala`:
-
-```scala
-final case class Uses(plugins: List[HistosPlugin])
-
-def use(plugin: HistosPlugin, rest: HistosPlugin*): Uses =
-  Uses(plugin :: rest.toList)
-```
-
-`use` only builds `Uses`. It does not call `contribute`. `Projects` and `Organized` have overloads whose first parameter is `Uses`, beside the `Splits` and `CatalogSpec` overloads in `api/src/histos/Graph.scala`. `Uses` is not a `ProjectDef`, so `Projects(docs, use(...))` does not compile. The list goes first: `Projects(use(Specular.plugin), docs)`. A build that never calls `use` has `plugins = Nil`.
+`use` in [`Builder.scala`](../api/src/histos/Builder.scala) takes one or more `HistosPlugin` values and builds `Uses`. It does not call `contribute`. `Projects` and `Organized` have overloads whose first parameter is `Uses`, beside the `Splits` and `CatalogSpec` overloads in [`Graph.scala`](../api/src/histos/Graph.scala). `Uses` is not a `ProjectDef`, so `Projects(docs, use(...))` does not compile. The list goes first: `Projects(use(Specular.plugin), docs)`. A build that never calls `use` has `plugins = Nil`.
 
 `Projects` registers each plugin inside the `Either[BuildError, ProjectGraph]` it already returns. It calls `contribute` under a `NonFatal` catch and records `EntryName.fromClass(plugin.getClass)`. A throw from `contribute` becomes `BuildError.PluginDefect` with the exception class name. A class name that is not a valid `EntryName` becomes `PluginDefect` with that class name. The throw never escapes the `Either`, and it never becomes a `PluginLoadError`.
 
@@ -376,35 +169,21 @@ def use(plugin: HistosPlugin, rest: HistosPlugin*): Uses =
 - `DuplicateJob`: two jobs share a name across plugins.
 - `DuplicateNote`, `MissingNote`, `PluginMissingModule`, and `PluginMissingCell`, as described under Contribution.
 
+The `registration` suite in [`PluginSpec.scala`](../api/test/PluginSpec.scala) builds a graph for each check, plus the compile error for `use` in second position.
+
 A defect in `contribute` reaches the CLI as `LoadError.BrokenGraph`, exit 3.
 
 ## Enablement in `histos.scala`
 
 Two words, two jobs. `plugin(...)` puts a jar on the build classpath. `use(...)` registers its tasks, commands, and jobs. A header plugin that is never `use`d is still resolved, version-checked, and loaded, so the build file can import from it, and it contributes nothing.
 
-The compiler cannot see a jar that the file it is compiling declares. sbt split `plugins.sbt` off for that reason. Histos keeps one file and reads a constrained prefix as text before compiling:
-
-```scala
-plugin(dep"dev.earlyeffect::specular:0.2.0")
-plugin(path"tools/docs-preview")
-plugin(dep"dev.earlyeffect::coverage:0.1.0").link(ExactBinary)
-
-import histos.*
-import dev.earlyeffect.specular.Specular
-
-object build extends HistosBuild:
-  def graph =
-    val docs =
-      module("docs", Jvm)(scala"3.9.0")
-        .pipe(Specular.site)
-    Projects(use(Specular.plugin), docs)
-```
+The compiler cannot see a jar that the file it is compiling declares. sbt split `plugins.sbt` off for that reason. Histos keeps one file and reads a constrained prefix as text before compiling. The file starts with its `plugin(...)` lines, then `import histos.*`, the imports from the plugins, and the usual `object build extends HistosBuild`. The build file in [`SpecularFixtureSpec.scala`](../engine/test/SpecularFixtureSpec.scala) is a complete example: one `plugin(dep"...")` line, `.pipe(Specular.site)` on the `docs` module, and `Projects(use(Specular.plugin), docs)`. The `plugin header` suite in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) scans every header form, including `.link(...)` with each strategy and `plugin(path"...")`.
 
 There is no `plugin` method in `histos`. `dep` and `path` are `StringContext` extensions in `histos.Literals`, which are out of scope above `import histos.*`. The header lines never reach the compiler.
 
 ### Header grammar
 
-`HeaderScan` (`engine/src/histos/load/HeaderScan.scala`) is a text scanner, and it runs before compile. From the start of the file it skips blank lines and whole-line `//` comments. Each remaining header line, trimmed, is one of:
+`HeaderScan` in [`HeaderScan.scala`](../engine/src/histos/load/HeaderScan.scala) is a text scanner, and it runs before compile. From the start of the file it skips blank lines and whole-line `//` comments. Each remaining header line, trimmed, is one of:
 
 ```text
 plugin(dep"<coordinate>")
@@ -427,61 +206,13 @@ A coordinate built by concatenation or bound to a `val` is invisible to the scan
 
 ### The compilation unit
 
-Excerpt from `engine/src/histos/load/HeaderScan.scala`:
+`HeaderScan.scan` returns a `ScannedBuild` from [`HeaderScan.scala`](../engine/src/histos/load/HeaderScan.scala): `requests`, one `PluginRequest` per header line (`Dep(dependency, link)` or `Path(path)`), and `source`. `Loader` in [`Loader.scala`](../engine/src/histos/load/Loader.scala) exposes `scan(repo)`, which returns that `ScannedBuild`, and `load(repo, apiJar)`, which compiles and loads the build inside a `Scope` that also needs `Resolve` and `ContentStore`.
 
-```scala
-enum PluginRequest:
-  case Dep(dependency: histos.Dep, link: LinkStrategy)
-  case Path(path: ProjectPath)
-
-final case class ScannedBuild(requests: List[PluginRequest], source: String)
-```
-
-Excerpt from `engine/src/histos/load/Loader.scala`:
-
-```scala
-trait Loader:
-  def scan(repo: Path): IO[LoadError, ScannedBuild]
-  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]
-  def buildClasspath(apiJar: Path): IO[LoadError, List[Path]]
-  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes]
-```
-
-`requests` is the header. `source` is the text of the compilation unit: each header `plugin(...)` line becomes an empty line, and blank and comment lines stay as they are. The line count matches the file on disk, so a diagnostic line is the line the author sees. `Loader.load` writes `source` to a temp file, compiles that temp file with `dotty.tools.dotc.Driver`, and deletes it when the load `Scope` closes. Diagnostics that mention the temp path are rewritten to `histos.scala` before `LoadError.CompileFailed`. `Fingerprint.read` hashes the on-disk `histos.scala`, header included.
-
-For the example above, the compiler sees:
-
-```scala
-
-
-
-
-import histos.*
-import dev.earlyeffect.specular.Specular
-
-object build extends HistosBuild:
-  def graph =
-    val docs =
-      module("docs", Jvm)(scala"3.9.0")
-        .pipe(Specular.site)
-    Projects(use(Specular.plugin), docs)
-```
+`source` is the text of the compilation unit: each header `plugin(...)` line becomes an empty line, and blank and comment lines stay as they are. The line count matches the file on disk, so a diagnostic line is the line the author sees. `Loader.load` writes `source` to a temp file, compiles that temp file with `dotty.tools.dotc.Driver`, and deletes it when the load `Scope` closes. Diagnostics that mention the temp path are rewritten to `histos.scala` before `LoadError.CompileFailed`. `Fingerprint.read` hashes the on-disk `histos.scala`, header included. The `plugin header` suite in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) asserts the blanked `source` for a header with a comment and one plugin line.
 
 ### Module settings and notes
 
-Excerpts from `api/src/histos/ProjectDef.scala` (methods on `ModuleDef`) and `api/src/histos/plugin/Request.scala`:
-
-```scala
-  def pipe(f: ModuleDef => ModuleDef): ModuleDef =
-    f(this)
-
-  def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef =
-    copy(notes = notes :+ ModuleNote(plugin, key, value))
-```
-
-```scala
-final case class ModuleNote(plugin: PluginId, key: NoteKey, value: NoteText)
-```
+`pipe` and `note` are methods on `ModuleDef` in [`ProjectDef.scala`](../api/src/histos/ProjectDef.scala). `pipe(f)` applies a `ModuleDef => ModuleDef` to the module. `note(plugin, key, value)` appends a `ModuleNote` from [`Request.scala`](../api/src/histos/plugin/Request.scala). The `registration` suite in [`PluginSpec.scala`](../api/test/PluginSpec.scala) pipes a module through a function that leaves a note and finds the note on the built `Module`.
 
 `Specular.site` is a `ModuleDef => ModuleDef`. It may do only what any build author can do: call `libraryDependencies`, `in`, `note`, and the other methods that return a new `ModuleDef`. It receives no settings DSL.
 
@@ -500,9 +231,9 @@ flowchart TD
   boundary -->|other names| platform
 ```
 
-`ApiBoundary` (`engine/src/histos/load/BuildLoader.scala`) has no URLs, and its parent is the platform loader. A boundary name loads from the host, the loader that defined `HistosBuild`, so `ProjectGraph` and `HistosPlugin` are the engine's own classes. A refused name throws `ClassNotFoundException`. Every other name goes to the platform loader, which supplies the JDK.
+`ApiBoundary` in [`BuildLoader.scala`](../engine/src/histos/load/BuildLoader.scala) has no URLs, and its parent is the platform loader. A boundary name loads from the host, the loader that defined `HistosBuild`, so `ProjectGraph` and `HistosPlugin` are the engine's own classes. A refused name throws `ClassNotFoundException`. Every other name goes to the platform loader, which supplies the JDK.
 
-Boundary names (`ClassHome.boundary` in `engine/src/histos/load/Boundary.scala`):
+Boundary names (`ClassHome.boundary` in [`Boundary.scala`](../engine/src/histos/load/Boundary.scala)):
 
 - classes in package `histos` with no subpackage (the api surface: `HistosBuild`, `ModuleDef`, `Dep`, and the rest)
 - `histos.version.*`
@@ -528,7 +259,7 @@ When plugin code reaches for an engine class:
 - At compile time the engine is off the classpath, so scalac fails before a jar exists.
 - At load or `run`, `ApiBoundary` does not define it, and `BuildLoader` does not search plugin URLs for it. Linkage failures are caught around entry load and around `run`. A refused `histos.*` name is `EngineLeak`, and any other missing class during a run is `PluginRunError.Linkage`. The task fails and nothing is cached.
 
-That guarantee covers parent delegation and classes defined from plugin URLs. Engine types remain reachable by other means. `./histos` runs with `java -jar`, so the system class loader is the assembly, which contains `histos.schedule` and the rest. `ClassLoader.getSystemClassLoader.loadClass("histos.schedule.Sendable")` still links the engine. The engine sets the thread context class loader to `BuildLoader` while it evaluates `graph` (which calls `contribute`) and on the thread that starts `run`, and restores the previous loader afterwards, including on failure and interruption. The `LoadSpec` test that vendors `histos/schedule/Sendable.class` covers the plugin-URL path, and nothing covers `getSystemClassLoader`.
+That guarantee covers parent delegation and classes defined from plugin URLs. Engine types remain reachable by other means. `./histos` runs with `java -jar`, so the system class loader is the assembly, which contains `histos.schedule` and the rest. `ClassLoader.getSystemClassLoader.loadClass("histos.schedule.Sendable")` still links the engine. The engine sets the thread context class loader to `BuildLoader` while it evaluates `graph` (which calls `contribute`) and on the thread that starts `run`, and restores the previous loader afterwards, including on failure and interruption. The engine-leak test in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) vendors `histos/schedule/Sendable.class` and covers the plugin-URL path. Nothing covers `getSystemClassLoader`.
 
 ### Compile classpath
 
@@ -541,27 +272,19 @@ The build file, and every plugin compiled from sources, compile against `Loader.
 - `zio-stacktracer`, the code source of `zio.internal.stacktracer.Tracer`, because `ZIO.succeed` summons a `Trace` from it
 - `izumi-reflect`, the code source of `izumi.reflect.Tag`, because `zio.Tag` extends it and a compile that sees `Tag` without it aborts
 
-Scala 3.10 class files link `scala.runtime` types from `scala3-library`, so a classpath of `scala-library` alone fails to define `build$` for any Scala 3.10 build. `LoadSpec` loads an enum build with no plugin to keep that list honest.
+Scala 3.10 class files link `scala.runtime` types from `scala3-library`, so a classpath of `scala-library` alone fails to define `build$` for any Scala 3.10 build. [`LoadSpec.scala`](../engine/test/LoadSpec.scala) loads an enum build with no plugin to keep that list honest.
 
 With plugins, `Driver.process` compiles the temp file against those jars plus each plugin's classpath. `Driver.process` takes one flat `-classpath`, where parent-first delegation does not apply, so every plugin classpath leaves out the cell jars the boundary already supplies. `Boundary.supplied` names them: `scala-library`, `scala3-library_3`, `zio_3`, `zio-stacktracer_3`, `izumi-reflect_3`, and any name starting with `histos-api`. A published copy would otherwise be the one the compiler links.
 
 ### Project compiles
 
-Project compiles never receive plugin URLs. `GraphCompile` keeps the module classpath (upstream class directories, then locked jars). `JvmCompile.jarBan` and `directoryBan` reject any classpath entry that contains `META-INF/histos/plugin`, the marker every direct plugin jar has and the api jar lacks. The ban is `ClasspathBan.Histos`, the same ban as `histos/HistosBuild.class`. `directoryBan` skips the `HistosBuild` marker on purpose, because a classes directory may contain the build trait. The plugin marker gets no skip. A module that lists a plugin coordinate in `libraryDependencies`, or depends on a directory that holds the marker, fails to compile.
+Project compiles never receive plugin URLs. `GraphCompile` in [`GraphCompile.scala`](../engine/src/histos/zinc/GraphCompile.scala) keeps the module classpath (upstream class directories, then locked jars). `jarBan` and `directoryBan` in [`JvmCompile.scala`](../engine/src/histos/zinc/JvmCompile.scala) reject any classpath entry that contains `META-INF/histos/plugin`, the marker every direct plugin jar has and the api jar lacks. The ban is `ClasspathBan.Histos`, the same ban as `histos/HistosBuild.class`. `directoryBan` skips the `HistosBuild` marker on purpose, because a classes directory may contain the build trait. The plugin marker gets no skip. A module that lists a plugin coordinate in `libraryDependencies`, or depends on a directory that holds the marker, fails to compile.
 
 ## How a jar is chosen and loaded
 
 ### Lock cells
 
-A header coordinate resolves like a module cell: the direct jar plus every transitive jar, each with its own sha256, resolved for Scala 3.10.0 on the JVM. One checksum cannot carry a plugin that calls a markdown parser or any other library. `DependencyLock.plugins: List[LockedPlugin]` holds these cells, rendered after the module cells:
-
-```text
-plugin dev.earlyeffect specular 0.2.0 binary-or-source
-direct dev.earlyeffect specular 0.2.0 binary
-artifact dev.earlyeffect specular_3 0.2.0 <sha256> central
-artifact dev.earlyeffect specular-text_3 0.2.0 <sha256> central
-source dev.earlyeffect specular_3 0.2.0 <sha256> central
-```
+A header coordinate resolves like a module cell: the direct jar plus every transitive jar, each with its own sha256, resolved for Scala 3.10.0 on the JVM. One checksum cannot carry a plugin that calls a markdown parser or any other library. `DependencyLock.plugins` in [`DependencyLock.scala`](../engine/src/histos/resolve/DependencyLock.scala) holds these cells as `LockedPlugin` values, rendered after the module cells. A cell is a `plugin` line (organization, name, revision, link token), a `direct` line, one `artifact` line per jar, and an optional `source` line. The plugin-cell tests in [`ResolveSpec.scala`](../engine/test/ResolveSpec.scala) parse each form and the refused ones.
 
 - The link tokens are `exact-binary`, `source`, and `binary-or-source`. `Api` has no token, because the scan refuses it before any write.
 - `direct` and `artifact` reuse the module-cell grammar. The repository token is the existing `central`, `ivy-local`, or `maven:<url>`.
@@ -572,7 +295,7 @@ source dev.earlyeffect specular_3 0.2.0 <sha256> central
 
 ### Resolve phases
 
-`Loader.scan` reads the header. It does not check the lock, touch the network, or compile. Coordinates live on `ScannedBuild` and stay off the graph.
+`Loader.scan` reads the header. It does not check the lock, touch the network, or compile. Coordinates live on `ScannedBuild` and stay off the graph. `updatePlugins`, `checkPlugins`, and `ranged` live in [`Resolve.scala`](../engine/src/histos/resolve/Resolve.scala).
 
 - `histos resolve --update` scans, then `Resolve.updatePlugins` resolves each header dep against Maven Central and writes the plugin cells into `.histos/dependencies.lock`, keeping the module cells. The write needs no `use`, no successful compile, and no `PluginRuntime`, and it happens only after every coordinate resolves. A failed resolve leaves the previous file. Then the build loads and `Resolve.update` rewrites the module cells, keeping the plugin cells. A later compile failure does not roll back the plugin write. `.link(Api)` fails at scan and writes nothing.
 - `histos resolve --check` scans, refuses a missing plugin cell as `Unlocked`, re-resolves each plugin cell and fails on drift, then loads and checks the module cells. It never appends a line.
@@ -609,6 +332,8 @@ The loader decides each cell from the lock strategy and the two digests:
 
 A path plugin always links as `FromSource`, with the running digest as both values.
 
+The link tests in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) cover this table, the path plugin, and the engine leak.
+
 Compiled plugin classes live under `<cache>/plugins/<digest>`. The digest covers the running `ApiDigest`, the compiler version, the source bytes (the sources jar, or the path-plugin tree), and the cell's artifact checksums. A directory is reused only after its `.complete` marker exists. Builds never delete these directories. `histos cache list` lists them. `histos cache clean` removes those unused for `ContentStore.Retention` (30 days) whose digest is not on the store's keep list, and `--dry-run` previews. Every load that compiles or reuses a plugin directory adds its digest to that keep list, so `clean` keeps every plugin directory a load has used.
 
 ### Entry checks
@@ -626,22 +351,9 @@ After `graph` returns, the loader loads each registered entry class from `BuildL
 
 ### The runtime
 
-Excerpts from `engine/src/histos/load/LoadedBuild.scala` and `engine/src/histos/load/PluginRuntime.scala`:
+`LoadedBuild` in [`LoadedBuild.scala`](../engine/src/histos/load/LoadedBuild.scala) pairs the `ProjectGraph` with a `PluginRuntime` from [`PluginRuntime.scala`](../engine/src/histos/load/PluginRuntime.scala). `PluginRuntime.run(id, args)` runs one plugin task against `ActionCache`, `RemoteCache`, and `Resolve`, and fails with `PluginRunError`. `bind` maps every plugin task id to a run with `PluginArgs.empty`. `links` holds one `PluginLink` per loaded plugin: its id, its `PluginLinked`, and its runtime classpath as `artifacts`.
 
-```scala
-final case class LoadedBuild(graph: ProjectGraph, plugins: PluginRuntime)
-```
-
-```scala
-final case class PluginLink(id: PluginId, linked: PluginLinked, artifacts: List[String])
-
-trait PluginRuntime:
-  def run(id: PluginTaskId, args: PluginArgs): ZIO[ActionCache & RemoteCache & Resolve, PluginRunError, PluginOutput]
-  def bind: ZIO[ActionCache & RemoteCache & Resolve, Nothing, Map[TaskId, IO[TaskError, TaskResult]]]
-  def links: List[PluginLink]
-```
-
-`PluginRuntime` is an engine type, off `histos.api`. `Loader.load` builds it while it still holds `BuildLoader`, and the load `Scope` closes that loader through an `acquireRelease` finalizer. Nothing reads the classloader back out of the `Scope`. `links` lists each loaded plugin with its link and its runtime classpath. `bind` maps every plugin task id to a run with `PluginArgs.empty`. Today only `LoadSpec` calls `bind`.
+`PluginRuntime` is an engine type, off `histos.api`. `Loader.load` builds it while it still holds `BuildLoader`, and the load `Scope` closes that loader through an `acquireRelease` finalizer. Nothing reads the classloader back out of the `Scope`. No production code calls `bind` today. [`LoadSpec.scala`](../engine/test/LoadSpec.scala) and [`PluginRunSpec.scala`](../engine/test/PluginRunSpec.scala) call it.
 
 ### Task ids and dispatch
 
@@ -652,51 +364,21 @@ trait PluginRuntime:
 - MCP: the `run` tool sends `Call.Task` for a slash id, to the server or to the MCP process's own held graph. `cancel` interrupts the fiber that `Calls.tracked` forked for that id. There is no plugin-specific MCP tool and no BSP target.
 - `Call.Task` carries only the id, so a run through the server or MCP receives `PluginArgs.empty`. Command arguments reach the runner only in process.
 
-`histos graph`, the server's graph call, and the MCP `graph` tool print the same text (`GraphText.render` in `app/src/histos/cli/GraphText.scala`). After the project lines, each plugin prints:
+`histos graph`, the server's graph call, and the MCP `graph` tool print the same text (`GraphText.render` in [`GraphText.scala`](../app/src/histos/cli/GraphText.scala)). After the project lines, each plugin prints:
 
 - `plugin <id> binary`, or `plugin <id> source <published> <running>` for a `FromSource` link
 - `task <plugin>/<task> <seal> <needs> <paths>`, where `<paths>` lists declared `File` and `Directory` paths and never env values
 - `command <name>` and `job <name>`
 
+[`CliSpec.scala`](../app/test/CliSpec.scala) parses slash ids and unknown roots, and asserts the graph text for a contribution with an `Env` input.
+
 `./histos server` holds the loaded graph. Before each call it compares `Fingerprint.read` with the held fingerprint, and a change calls `Loader.load`. Success swaps the generation and closes the previous build classloader after the last call holding it finishes. Failure keeps the previous graph and is that call's error. `Fingerprint.read` hashes `histos.scala`, `.histos/dependencies.lock`, and every regular file under each header `plugin(path)` directory, in sorted relative order. The lock hash covers binary plugins.
 
 ### The action
 
-Excerpt from `engine/src/histos/schedule/Action.scala`:
+`Action` in [`Action.scala`](../engine/src/histos/schedule/Action.scala) carries a `Policy`. Core tasks use `Policy.Core`, the default. Each plugin task is an `Action` with `TaskKind.Plugin` (from [`Task.scala`](../engine/src/histos/task/Task.scala)) and `Policy.Plugin(seal, needs, Some(repo), outputs)`. `root` and `outputs` drive the file check on a cache hit and stay out of the digest. `Digest.of`, in the same file, appends a `plugin <seal> <needs>` line only for `Policy.Plugin`, so a seal change invalidates the key and `Policy.Core` keys keep their text.
 
-```scala
-enum Policy:
-  case Core
-  case Plugin(seal: Seal, needs: Set[Need], root: Option[Path] = None, outputs: List[RepoPath] = Nil)
-
-final case class Action(
-    id: ActionId,
-    kind: TaskKind,
-    inputs: List[Input],
-    dependencies: List[ActionId],
-    policy: Policy = Policy.Core,
-)
-```
-
-`TaskKind` (`engine/src/histos/task/Task.scala`) is `Inspect`, `Compile`, `Versions`, or `Plugin`. Each plugin task is an `Action` with `TaskKind.Plugin` and `Policy.Plugin(seal, needs, Some(repo), outputs)`. `root` and `outputs` drive the file check on a cache hit and stay out of the digest. `Digest.of` appends a `plugin <seal> <needs>` line only for `Policy.Plugin`, so a seal change invalidates the key and `Policy.Core` keys keep their text.
-
-Excerpt from `engine/src/histos/schedule/Sendable.scala`:
-
-```scala
-  def ofAction(action: Action): Verdict =
-    action.policy match
-      case Policy.Core =>
-        val runner = action.kind match
-          case TaskKind.Compile  => Runner.Compile
-          case TaskKind.Inspect  => Runner.Inspect
-          case TaskKind.Versions => Runner.Versions
-          case TaskKind.Plugin   => Runner.Plugin(Seal.Open)
-        decide(runner, Set.empty)
-      case Policy.Plugin(seal, needs, _, _) =>
-        decide(Runner.Plugin(seal), needs)
-```
-
-A `TaskKind.Plugin` without a plugin policy counts as `Seal.Open` and stays local. `decide` returns `Send` for `Hermetic` with no needs. Any `Need`, or `Open`, is `Stay`.
+`Sendable.ofAction` in [`Sendable.scala`](../engine/src/histos/schedule/Sendable.scala) maps `Policy.Plugin` to `decide(Runner.Plugin(seal), needs)`. Under `Policy.Core`, a `TaskKind.Plugin` counts as `Seal.Open` and stays local. `decide` returns `Send` for `Hermetic` with no needs. Any `Need`, or `Open`, is `Stay`. [`SchedulerSpec.scala`](../engine/test/SchedulerSpec.scala) checks the digest line, that an open plugin is never stored, and that a hermetic task with no outputs stores its text.
 
 ### The digest
 
@@ -721,82 +403,31 @@ Declared inputs contribute:
 
 ### The request
 
-Excerpt from `api/src/histos/plugin/Request.scala`:
+`RunRequest` in [`Request.scala`](../api/src/histos/plugin/Request.scala) carries the task id, the repo root, `modules`, `args`, `inputs`, and `compiled`. The same file defines what the runner reads and returns:
 
-```scala
-final case class ModuleView(
-    name: ProjectName,
-    baseDirectory: String,
-    notes: List[ModuleNote],
-)
-
-final case class NamedText(name: ParamName, value: String)
-
-final case class PluginArgs(texts: List[NamedText], flags: Set[FlagName]):
-  def get(name: ParamName): Option[String] =
-    texts.collectFirst:
-      case NamedText(key, value) if key == name => value
-
-  def flag(name: FlagName): Boolean =
-    flags.contains(name)
-
-  def require(name: ParamName): Either[PluginRunError, String] =
-    get(name) match
-      case Some(value) => Right(value)
-      case None        => Left(PluginRunError.MissingArg(name))
-
-object PluginArgs:
-  val empty: PluginArgs = PluginArgs(Nil, Set.empty)
-
-enum MaterialInput:
-  case File(path: RepoPath, sha256: ContentHash)
-  case Directory(path: RepoPath, sha256: ContentHash)
-  case Module(name: ProjectName, sha256: ContentHash)
-  case Note(module: ProjectName, key: NoteKey, value: NoteText)
-  case Text(name: InputKey, value: String)
-  case Env(name: EnvName, value: String)
-
-final case class WrittenFile(name: OutputName, path: RepoPath)
-
-final case class PluginOutput(text: String, files: List[WrittenFile])
-
-final case class CellClasspath(
-    module: ProjectName,
-    version: ScalaVersion,
-    platform: Platform,
-    compile: List[Path],
-    test: List[Path],
-)
-
-final case class RunRequest(
-    id: PluginTaskId,
-    repo: Path,
-    modules: List[ModuleView],
-    args: PluginArgs,
-    inputs: List[MaterialInput],
-    compiled: List[CellClasspath] = Nil,
-)
-```
-
-- `modules` has one `ModuleView` per module, and `ModuleView.notes` holds only the running plugin's notes.
-- `inputs` is each declared input after hashing, in declaration order. `Env` carries the raw value, because the runner has to read what it declared. The raw value never reaches the manifest, the workflow, or `histos graph`.
+- `modules` has one `ModuleView` per module: its name, its base directory, and its notes. `ModuleView.notes` holds only the running plugin's notes.
+- `args` is a `PluginArgs`: named texts and a set of flags. `get` and `flag` read them, and `require` fails with `PluginRunError.MissingArg`.
+- `inputs` is each declared input after hashing, as a `MaterialInput`, in declaration order. Each case mirrors a `DeclaredInput` case and adds the hash or the value the engine read. `Env` carries the raw value, because the runner has to read what it declared. The raw value never reaches the manifest, the workflow, or `histos graph`.
 - `compiled` has one `CellClasspath` per cell the task's `TaskDep.Compile` entries select. `compile` is the main class directory, upstream class directories, the JVM standard library, and compile-scope jars. `test` starts with the test class directory and ends with test-scope jars when the module has test sources, and equals `compile` otherwise.
+- `run` returns a `PluginOutput`: the text, plus one `WrittenFile` (an `OutputName` and a `RepoPath`) per file it wrote.
 
 ### Execution
 
-`PluginRuntime.run` plans the plugin actions, then runs the requested task through `Scheduler.execute` (`engine/src/histos/schedule/Scheduler.scala`):
+`PluginRuntime.run` plans the plugin actions, then runs the requested task through `Scheduler.execute` in [`Scheduler.scala`](../engine/src/histos/schedule/Scheduler.scala):
 
 1. Every cell that a reachable task names in `TaskDep.Compile` compiles first, test sources included when the module has them. A compile failure fails the run with `PluginRunError.Failed`.
 2. Dependencies run before dependents. A `TaskDep.Same` sibling runs with `PluginArgs.empty`, and only the requested task receives the caller's arguments. A dependency cycle fails the run with `PluginRunError.Failed` carrying the scheduler's cycle message.
-3. For each plugin action the scheduler looks in the remote cache when one is on, then in the local action cache. A hit for a task with declared outputs must find every declared file under the repo with the sha256 the manifest recorded. A missing or changed file is a miss. A text-only hit (`outputs = Nil`) is always accepted.
+3. For each plugin action the scheduler looks in the remote cache when one is on, then in the local action cache. A hit for a task with declared outputs must find every declared file under the repo with the sha256 the manifest recorded. A missing or changed file is a miss. A text-only hit (no declared outputs) is always accepted.
 4. On a miss, the engine hashes the inputs, builds the `RunRequest`, sets the context class loader, and calls `plugin.run(request)` inside `ZIO.scoped`, on the task fiber.
 5. After success, every `WrittenFile` must name a declared output (otherwise `ExtraOutput`), and every declared output must exist as a regular file (otherwise `MissingOutput`). A failed check stores nothing.
-6. The stored value is the manifest (`PluginManifest`): `PluginOutput.text` when `outputs = Nil`, or a `histos-manifest v1` header, the file count, one `<sha256> <path>` line per declared output, then the text. Both caches store only that UTF-8 text, and output bytes stay in the work tree.
+6. The stored value is the manifest (`PluginManifest` in [`PluginManifest.scala`](../engine/src/histos/schedule/PluginManifest.scala)): `PluginOutput.text` when the task declares no outputs, or a `histos-manifest v1` header, the file count, one `<sha256> <path>` line per declared output, then the text. Both caches store only that UTF-8 text, and output bytes stay in the work tree.
 7. `Policy.Plugin` stores a result only when the verdict is `Send`. A `Stay` result is returned and never written. `Policy.Core` stores every local success and uploads only a `Send`.
 
 On a hit, `run` returns the stored text, plus a `WrittenFile` for each declared output.
 
 The CLI and the server run plugin tasks against the local action cache in the content store, with the remote cache off. Output file bytes never travel through `RemoteCache`. Another machine that receives a manifest without the files misses and runs locally.
+
+[`PluginRunSpec.scala`](../engine/test/PluginRunSpec.scala) runs scripted plugins through `PluginRuntime.run` and covers note isolation, the missing and undeclared output checks, an unknown id, argument routing to the requested task only, a compile failure before the run, and interruption.
 
 ### Failure and cancellation
 
@@ -810,7 +441,7 @@ Each carries a class name in `message`. The CLI prints `message` and never branc
 
 ## Commands
 
-`Grammar.root` (`app/src/histos/cli/Grammar.scala`) is a closed zio-cli tree built in source. It cannot grow a subcommand per plugin, and `Cli.execute` parses before `Loader.load`, so the grammar never sees plugin specs. A dynamic zio-cli tree has the same ordering problem. Plugin commands use one fallback, on an unknown root word.
+`Grammar.root` in [`Grammar.scala`](../app/src/histos/cli/Grammar.scala) is a closed zio-cli tree built in source. It cannot grow a subcommand per plugin, and `Cli.execute` parses before `Loader.load`, so the grammar never sees plugin specs. A dynamic zio-cli tree has the same ordering problem. Plugin commands use one fallback, on an unknown root word.
 
 `Grammar.reject` maps a zio-cli `CommandMismatch` to `CliParseError.UnknownRoot` when the first token is outside `CommandName.reserved`, and to `UnknownCommand` when it is inside (`histos cache nope`). Flag and argument errors keep their own cases (`histos test --nope`). Only `UnknownRoot` loads the build.
 
@@ -820,18 +451,14 @@ Each carries a class name in `message`. The CLI prints `message` and never branc
 4. A match parses the remaining tokens with the spec's `CliParam`s and becomes `Command.Plugin(id, args)`. No match, or a parameter error, prints usage with each plugin command and its summary appended, exit 2.
 5. `~` applies the same rule to the inner tokens. `~ test` never loads in order to decide the command. `~ site` loads once, the same as `site`, and wraps the result in `Command.Watch`.
 
-Excerpt from `app/src/histos/cli/PluginCommands.scala`:
-
-```scala
-final case class BoundCommand(plugin: PluginId, spec: CommandSpec)
-```
-
-`PluginCommands.parse(commands: List[BoundCommand], args: List[String])` returns `Either[CliParseError, (PluginTaskId, PluginArgs)]`. The argv schema is the spec's data, and the plugin never parses argv:
+`PluginCommands.parse` in [`PluginCommands.scala`](../app/src/histos/cli/PluginCommands.scala) takes a list of `BoundCommand` (a `CommandSpec` paired with its `PluginId`) and the argv, and returns the `PluginTaskId` and `PluginArgs` or a `CliParseError`. The argv schema is the spec's data, and the plugin never parses argv:
 
 - `CliParam.Text` parameters are required positionals, in declaration order.
 - At most one `CliParam.OptionalText` follows them. A spec with two is rejected every time it is invoked.
 - `CliParam.Flag(name)` is the boolean `--name`, anywhere in the tokens. An unknown flag is rejected.
 - Too few positionals is `MissingArgument`, and too many is `UnexpectedArguments`.
+
+[`CliSpec.scala`](../app/test/CliSpec.scala) parses a contributed command with one positional and one flag, and checks which failures load the build.
 
 `histos run <plugin>/<task>` passes `PluginArgs.empty`. A runner that needs an argument and starts through `run` returns `PluginRunError.MissingArg` from `PluginArgs.require`.
 
@@ -839,29 +466,13 @@ A typo of a root word (`histos tst`) loads the build before printing usage, so a
 
 ## CI jobs
 
-`Workflow.document` (`engine/src/histos/workflow/Workflow.scala`) renders `ci.yml` as the `test` job, a `versions` job when the catalog is non-empty, one job per `JobWhen.Always` plugin job, then the `workflow` drift job. The plugin never writes YAML:
-
-```yaml
-  docs:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - run: "./histos run dev.earlyeffect.specular/site"
-```
+`Workflow.document` in [`Workflow.scala`](../engine/src/histos/workflow/Workflow.scala) renders `ci.yml` as the `test` job, a `versions` job when the catalog is non-empty, one job per `JobWhen.Always` plugin job, then the `workflow` drift job. The plugin never writes YAML. The golden [`plugin-always.yml`](../engine/test/fixtures/ci/plugin-always.yml) is the rendered `ci.yml` for one `JobWhen.Always` job named `docs`, and [`WorkflowSpec.scala`](../engine/test/WorkflowSpec.scala) compares `Workflow.render` against it.
 
 The step is `./histos run` plus the rendered task id, quoted the same way as test cells, so CI does not depend on `CommandSpec`. `JobPermissions.ContentsRead` renders `contents: read`, the default and the workflow header's value. `ContentsWrite` renders `contents: write` on that job only. No other permission token exists, so a plugin cannot emit `id-token: write`.
 
-`JobWhen.Schedule(cron)` renders a separate `.github/workflows/histos-<job>.yml`, because `cron` is a workflow-level key and would schedule `test` too. That file has `on.schedule` with the cron, a top-level `permissions: contents: read`, and the same job.
+`JobWhen.Schedule(cron)` renders a separate `.github/workflows/histos-<job>.yml`, because `cron` is a workflow-level key and would schedule `test` too. That file has `on.schedule` with the cron, a top-level `permissions: contents: read`, and the same job. `WorkflowSpec` holds the expected `histos-nightly.yml` body, both `ContentsWrite` cases, and the drift and orphan cases below.
 
-Excerpt from `engine/src/histos/workflow/Workflow.scala`:
-
-```scala
-final case class RenderedWorkflow(name: String, body: String)
-```
-
-- `Workflow.render(graph, setup)` returns the `ci.yml` text. `Workflow.renderAll(graph, setup)` returns `ci.yml` plus every scheduled file.
+- `Workflow.render(graph, setup)` returns the `ci.yml` text. `Workflow.renderAll(graph, setup)` returns `ci.yml` plus every scheduled file, each a `RenderedWorkflow` (file name and body).
 - `histos workflow --check` fails with `CiError.Drift` when a rendered body differs, when a scheduled file is missing, or when a `histos-*.yml` exists that `renderAll` did not emit.
 - `histos workflow --update` writes every rendered file and deletes those orphans. A workflow with any other name stays. Removing a `CiJob` stops its schedule on the next update, and `--check` fails until then.
 
@@ -869,132 +480,31 @@ A dependency-update bot fits this shape: `Seal.Open` or `Need.Network`, `JobWhen
 
 ## What the author tests
 
-Excerpt from `api/src/histos/plugin/PluginFixture.scala`:
-
-```scala
-object PluginFixture:
-  def request(
-      plugin: PluginId,
-      task: TaskName,
-      repo: Path,
-      modules: List[ModuleView] = Nil,
-      args: PluginArgs = PluginArgs.empty,
-      inputs: List[MaterialInput] = Nil,
-  ): RunRequest =
-    RunRequest(PluginTaskId(plugin, task), repo, modules, args, inputs)
-```
-
-`PluginFixture` builds a `RunRequest` and does nothing else: it loads no jar, opens no scheduler, and hashes nothing. The author passes the `MaterialInput` values the test cares about. `compiled` is always empty.
+`PluginFixture.request` in [`PluginFixture.scala`](../api/src/histos/plugin/PluginFixture.scala) builds a `RunRequest` from a plugin id, a task name, and a repo path, with optional modules, args, and inputs. It does nothing else: it loads no jar, opens no scheduler, and hashes nothing. The author passes the `MaterialInput` values the test cares about. `compiled` is always empty.
 
 A plugin suite is ZIO Test (`ZIOSpecDefault`) on `histos.api` and `zio-test`. ZIO Test provides `Scope`. The suite calls `plugin.run(PluginFixture.request(...))` and asserts on the `PluginOutput` or the `PluginRunError`.
 
-The in-tree fake is `Echo` in `api/test/PluginSpec.scala`, so testing the api module compiles it without the engine. Written outside `histos.plugin`, it needs two imports:
+The in-tree fake is `Echo` in [`PluginSpec.scala`](../api/test/PluginSpec.scala), so testing the api module compiles it without the engine. It declares one `Seal.Open` task named `echo` and returns `PluginOutput("echo", Nil)` from `ZIO.succeed`. Written outside `histos.plugin`, it needs `import histos.plugin.*` and `import zio.{Scope, ZIO}`.
 
-```scala
-import histos.plugin.*
-import zio.{Scope, ZIO}
-
-object Echo extends HistosPlugin:
-  val id: PluginId = PluginId("test.echo")
-
-  def contribute: Contribution =
-    Contribution(
-      tasks = List(DeclaredTask(
-        name = TaskName("echo"),
-        seal = Seal.Open,
-        needs = Set.empty,
-        inputs = Nil,
-        outputs = Nil,
-        dependsOn = Nil,
-      )),
-      commands = Nil,
-      jobs = Nil,
-    )
-
-  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
-    ZIO.succeed(PluginOutput("echo", Nil))
-```
-
-`PluginSpec` registers it with `Projects(use(Echo), module("core", Jvm)(scala"3.9.0"))`-shaped builds and asserts the graph holds the task. A second fake, `Quiet`, throws from `run`, which proves `Projects` never calls `run`. `Echo` stays a single class with `ZIO.succeed` and is not a loader test.
+`PluginSpec` registers it through `Projects(use(Echo), ...)` and asserts the graph holds the matching `RegisteredPlugin`. A second fake, `Quiet`, throws from `run`, which proves `Projects` never calls `run`. A third, `Boom`, throws from `contribute`, which proves the message stays out of `BuildError.PluginDefect`. `Echo` stays a single class with `ZIO.succeed` and is not a loader test.
 
 ## Worked example: a Specular-shaped fixture
 
-`engine/test/SpecularFixtureSpec.scala` is a test fixture shaped like the Specular plugin, so the build-file shape is real. It is not the Specular repository, and it is not part of the engine. The id is `dev.earlyeffect.specular`. The `site` task is `Seal.Open`, because a preview reads the work tree and writes a site.
+[`SpecularFixtureSpec.scala`](../engine/test/SpecularFixtureSpec.scala) is a test fixture shaped like the Specular plugin, so the build-file shape is real. It is not the Specular repository, and it is not part of the engine. The id is `dev.earlyeffect.specular`. The `site` task is `Seal.Open`, because a preview reads the work tree and writes a site.
 
-A second jar, `dev.earlyeffect::specular-text`, holds:
+The spec holds three sources as text and compiles them during the test:
 
-```scala
-package dev.earlyeffect.specular.text
+- a second jar, `dev.earlyeffect::specular-text`, whose `SiteText.render(root)` returns `site:<root>`
+- the plugin jar, with `Specular.site` (a `ModuleDef => ModuleDef` that leaves a `role` note), `Specular.plugin`, and the entry object `SpecularPlugin`, which declares the `site` task, a `site` command, and a `docs` CI job
+- the `histos.scala` described under [Enablement](#enablement-in-histosscala)
 
-object SiteText:
-  def render(root: String): String = s"site:$root"
-```
-
-The plugin jar:
-
-```scala
-package dev.earlyeffect.specular
-
-import dev.earlyeffect.specular.text.SiteText
-import histos.{ModuleDef, ProjectName}
-import histos.plugin.*
-import zio.{Scope, ZIO}
-
-object Specular:
-  val plugin: HistosPlugin = SpecularPlugin
-
-  def site(module: ModuleDef): ModuleDef =
-    module.note(plugin.id, NoteKey("role"), NoteText("site"))
-
-object SpecularPlugin extends HistosPlugin:
-  val id: PluginId = PluginId("dev.earlyeffect.specular")
-
-  def contribute: Contribution =
-    ProjectName.from("docs") match
-      case Right(docs) =>
-        Contribution(
-          tasks = List(DeclaredTask(
-            name = TaskName("site"),
-            seal = Seal.Open,
-            needs = Set.empty,
-            inputs = List(
-              DeclaredInput.Directory(RepoPath("docs")),
-              DeclaredInput.Note(docs, NoteKey("role")),
-            ),
-            outputs = List(DeclaredOutput(OutputName("site"), RepoPath("docs/index.html"))),
-            dependsOn = Nil,
-          )),
-          commands = List(CommandSpec(CommandName("site"), Nil, TaskName("site"), PluginDetail("write the site"))),
-          jobs = List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always)),
-        )
-      case Left(_) => Contribution(Nil, Nil, Nil)
-
-  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
-    val text = SiteText.render("docs")
-    ZIO.succeed(PluginOutput(text, List(WrittenFile(OutputName("site"), RepoPath("docs/index.html")))))
-```
+The plugin source shows the rules a real plugin follows:
 
 - `SpecularPlugin` is a public object, because the loader reads its public `MODULE$` field.
 - The package `dev.earlyeffect.specular` is the build file's import.
 - `ProjectName` has no literal, so `contribute` builds the name with `ProjectName.from`. The literal `"docs"` always parses, and the `Left` branch keeps `contribute` total.
 - `run` calls `SiteText.render` from the second jar, so a loader that put only the direct jar on `BuildLoader` would fail that call with `PluginRunError.Linkage`.
 - The declared output is the file `docs/index.html`. `ProjectPath` rejects the dot in `index.html`, and `RepoPath` accepts it.
-
-The fixture's build file:
-
-```scala
-plugin(dep"dev.earlyeffect::specular:0.2.0")
-
-import histos.*
-import dev.earlyeffect.specular.Specular
-
-object build extends HistosBuild:
-  def graph =
-    val docs =
-      module("docs", Jvm)(scala"3.9.0")
-        .pipe(Specular.site)
-    Projects(use(Specular.plugin), docs)
-```
 
 The test publishes both jars into a temp Maven directory, runs `Resolve.updatePlugins` against it, loads the build, and asserts:
 
@@ -1117,15 +627,15 @@ Later, `6dd46d3` made MCP a client of the server, so MCP runs plugin tasks throu
 
 - [architecture.md](architecture.md): the modules, the process model, and the error enums around this contract.
 - [roadmap.md](roadmap.md): plugin isolation, plugin tasks as typed steps, the sandbox, and the real plugins (Specular, Central, docs, docker, deploy, coverage, the dependency-update bot).
-- `api/src/histos/plugin/`: `HistosPlugin`, the ids, `Contribution`, `Request`, `Errors`, `PluginFixture`, and `PluginMacros`.
-- `api/src/histos/Builder.scala`, `api/src/histos/ProjectDef.scala`, `api/src/histos/Graph.scala`: `use`, `pipe`, `note`, and plugin registration in `Projects`.
-- `engine/src/histos/load/`: `HeaderScan`, `Loader`, `Boundary`, `BuildLoader`, `PluginJar`, `PluginCompile`, `PluginInputs`, `PluginCells`, and `PluginRuntime`.
-- `engine/src/histos/resolve/DependencyLock.scala` and `engine/src/histos/resolve/Resolve.scala`: plugin cells, `updatePlugins`, `checkPlugins`, and `ranged`.
-- `engine/src/histos/schedule/`: `Action`, `Policy`, `Digest`, `Sendable`, `Scheduler`, and `PluginManifest`.
-- `engine/src/histos/workflow/Workflow.scala`: `renderAll`, plugin jobs, and orphan drift.
-- `engine/src/histos/zinc/JvmCompile.scala` and `engine/src/histos/zinc/ClassMarker.scala`: the project-classpath bans.
-- `engine/src/histos/cache/ContentStore.scala`: `Retention`, the keep list, and `clean` over `cas` and `plugins`.
-- `app/src/histos/cli/Grammar.scala`, `app/src/histos/cli/Cli.scala`, `app/src/histos/cli/PluginCommands.scala`, `app/src/histos/cli/GraphText.scala`: dispatch, `UnknownRoot`, argv, and the graph text.
-- `app/src/histos/server/Daemon.scala` and `app/src/histos/server/Calls.scala`: `Fingerprint.read`, reload, and `Call.Task`.
-- `app/src/histos/mcp/HistosMcp.scala` and `app/src/histos/client/Session.scala`: the MCP `run` and `cancel` tools.
-- `engine/test/LoadSpec.scala`, `engine/test/PluginRunSpec.scala`, `engine/test/SpecularFixtureSpec.scala`, `api/test/PluginSpec.scala`, `app/test/CliSpec.scala`: the tests that hold this contract.
+- [`api/src/histos/plugin`](../api/src/histos/plugin): `HistosPlugin`, the ids, `Contribution`, `Request`, `Errors`, `PluginFixture`, and `PluginMacros`.
+- [`Builder.scala`](../api/src/histos/Builder.scala), [`ProjectDef.scala`](../api/src/histos/ProjectDef.scala), [`Graph.scala`](../api/src/histos/Graph.scala): `use`, `pipe`, `note`, and plugin registration in `Projects`.
+- [`engine/src/histos/load`](../engine/src/histos/load): `HeaderScan`, `Loader`, `Boundary`, `BuildLoader`, `PluginJar`, `PluginCompile`, `PluginInputs`, `PluginCells`, and `PluginRuntime`.
+- [`DependencyLock.scala`](../engine/src/histos/resolve/DependencyLock.scala) and [`Resolve.scala`](../engine/src/histos/resolve/Resolve.scala): plugin cells, `updatePlugins`, `checkPlugins`, and `ranged`.
+- [`engine/src/histos/schedule`](../engine/src/histos/schedule): `Action`, `Policy`, `Digest`, `Sendable`, `Scheduler`, and `PluginManifest`.
+- [`Workflow.scala`](../engine/src/histos/workflow/Workflow.scala): `renderAll`, plugin jobs, and orphan drift.
+- [`JvmCompile.scala`](../engine/src/histos/zinc/JvmCompile.scala) and [`ClassMarker.scala`](../engine/src/histos/zinc/ClassMarker.scala): the project-classpath bans.
+- [`ContentStore.scala`](../engine/src/histos/cache/ContentStore.scala): `Retention`, the keep list, and `clean` over `cas` and `plugins`.
+- [`Grammar.scala`](../app/src/histos/cli/Grammar.scala), [`Cli.scala`](../app/src/histos/cli/Cli.scala), [`PluginCommands.scala`](../app/src/histos/cli/PluginCommands.scala), [`GraphText.scala`](../app/src/histos/cli/GraphText.scala): dispatch, `UnknownRoot`, argv, and the graph text.
+- [`Daemon.scala`](../app/src/histos/server/Daemon.scala) and [`Calls.scala`](../app/src/histos/server/Calls.scala): `Fingerprint.read`, reload, and `Call.Task`.
+- [`HistosMcp.scala`](../app/src/histos/mcp/HistosMcp.scala) and [`Session.scala`](../app/src/histos/client/Session.scala): the MCP `run` and `cancel` tools.
+- [`LoadSpec.scala`](../engine/test/LoadSpec.scala), [`PluginRunSpec.scala`](../engine/test/PluginRunSpec.scala), [`SpecularFixtureSpec.scala`](../engine/test/SpecularFixtureSpec.scala), [`ResolveSpec.scala`](../engine/test/ResolveSpec.scala), [`SchedulerSpec.scala`](../engine/test/SchedulerSpec.scala), [`WorkflowSpec.scala`](../engine/test/WorkflowSpec.scala), [`PluginSpec.scala`](../api/test/PluginSpec.scala), [`CliSpec.scala`](../app/test/CliSpec.scala): the tests that hold this contract.
