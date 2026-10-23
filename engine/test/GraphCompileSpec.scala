@@ -632,4 +632,4 @@ object GraphCompileSpec extends ZIOSpecDefault:
     compile,
     roots,
     refused
-  ) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+  ) @@ TestAspect.timeout(3.minutes)

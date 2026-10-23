@@ -697,4 +697,4 @@ object ModuleTestSpec extends ZIOSpecDefault:
       |    System.exit(1)
       |""".stripMargin
 
-  def spec = suite("module test")(ran, providers, refused, quick) @@ TestAspect.sequential @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)
+  def spec = suite("module test")(ran, providers, refused, quick) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)

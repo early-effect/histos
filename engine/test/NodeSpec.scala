@@ -389,4 +389,4 @@ object NodeSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("node")(policy, versions, locks, asks, layouts) @@ TestAspect.sequential @@ TestAspect.timeout(2.minutes)
+  def spec = suite("node")(policy, versions, locks, asks, layouts) @@ TestAspect.timeout(2.minutes)

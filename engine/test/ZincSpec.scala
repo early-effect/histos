@@ -265,4 +265,4 @@ object ZincSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("jvm compile")(keys, banned, builds) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+  def spec = suite("jvm compile")(keys, banned, builds) @@ TestAspect.timeout(3.minutes)

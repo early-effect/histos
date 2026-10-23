@@ -305,4 +305,4 @@ object TestProcessSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("test subprocess")(types, process) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(15.seconds)
+  def spec = suite("test subprocess")(types, process) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(15.seconds)

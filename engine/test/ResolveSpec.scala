@@ -670,4 +670,4 @@ object ResolveSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     .ignore
 
-  def spec = suite("resolve")(names, lockFile, fetch) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+  def spec = suite("resolve")(names, lockFile, fetch) @@ TestAspect.timeout(3.minutes)

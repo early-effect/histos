@@ -282,4 +282,4 @@ object Scala213Spec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("scala 2.13")(layout, compile) @@ TestAspect.sequential @@ TestAspect.timeout(3.minutes)
+  def spec = suite("scala 2.13")(layout, compile) @@ TestAspect.timeout(3.minutes)

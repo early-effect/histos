@@ -278,4 +278,4 @@ object NativeSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = suite("scala native")(versions, probe, declare, toolchain, origin, link) @@ TestAspect.sequential @@ TestAspect.timeout(5.minutes)
+  def spec = suite("scala native")(versions, probe, declare, toolchain, origin, link) @@ TestAspect.timeout(5.minutes)

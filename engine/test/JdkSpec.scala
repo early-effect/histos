@@ -544,4 +544,4 @@ object JdkSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  def spec = suite("jdk")(policy, versions, locks, stage, startup, handOff) @@ TestAspect.sequential
+  def spec = suite("jdk")(policy, versions, locks, stage, startup, handOff)
