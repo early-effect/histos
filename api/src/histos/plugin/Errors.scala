@@ -69,6 +69,7 @@ enum PluginRunError:
   case MissingArg(name: ParamName)
   case MissingNote(module: ProjectName, key: NoteKey)
   case Unknown(id: PluginTaskId)
+  case Cycle(path: List[PluginTaskId])
   case Defect(binary: String)
   case EngineLeak(binary: String)
   case Linkage(binary: String)
@@ -80,6 +81,7 @@ enum PluginRunError:
     case MissingArg(name) => s"plugin argument ${name.value} is missing"
     case MissingNote(module, key) => s"module ${module.value} has no note ${key.value}"
     case Unknown(id) => s"plugin task ${id.render} is not in the graph"
+    case Cycle(path) => s"plugin task cycle ${path.map(_.render).mkString(" -> ")}"
     case Defect(binary) => s"plugin task failed ($binary)"
     case EngineLeak(binary) => s"plugin task links '$binary'"
     case Linkage(binary) => s"plugin task is missing class $binary"

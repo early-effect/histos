@@ -134,7 +134,7 @@ The remote cache is off. The only implementation is in memory, used by tests, an
 
 `Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Built-in tasks are `inspect` and `versions`.
 
-`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. `Scheduler` builds an action's steps and asks `Histos` to run them. Only plugin tasks use that path today. Compile, test, publish, and run are separate pipelines (K1).
+`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. A plugin task is a step. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. `pluginLoader` and `declaredOutputs` are step aspects. Test, publish, and run are still separate pipelines (K1).
 
 ## Plugins
 

@@ -340,9 +340,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           ).either
           stored <- values.get
         yield assertTrue(
-          out == Left(
-            PluginRunError.MissingOutput(OutputName("page"))
-          ) && stored.isEmpty
+          out == Left(PluginFault.Task(PluginRunError.MissingOutput(OutputName("page")))) && stored.isEmpty
         )
     ,
     test("an undeclared written path is not stored"):
@@ -372,7 +370,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           ).either
           stored <- values.get
         yield assertTrue(
-          out == Left(PluginRunError.ExtraOutput("extra.txt")) && stored.isEmpty
+          out == Left(PluginFault.Task(PluginRunError.ExtraOutput("extra.txt"))) && stored.isEmpty
         )
     ,
     test("a task that is not in the graph is unknown"):
@@ -400,7 +398,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             PluginArgs.empty,
             cache
           ).either
-        yield assertTrue(out == Left(PluginRunError.Unknown(missing)))
+        yield assertTrue(out == Left(PluginFault.Task(PluginRunError.Unknown(missing))))
     ,
     test("only the requested root receives the caller's arguments"):
       ZIO.scoped:
@@ -576,12 +574,10 @@ object PluginRunSpec extends ZIOSpecDefault:
           ).either
           count <- calls.get
         yield
-          val failure = ran.left.toOption.collect:
-            case PluginRunError.Failed(detail) => detail.value
-          assertTrue(
-            failure.is(_.some).startsWith("'docs' 3.9.0 jvm failed to compile"),
-            count == 0
-          )
+          val failed = ran.left.toOption.collect:
+            case PluginFault.Compiled(histos.zinc.GraphCompileError.Failed(module, version, platform, _)) =>
+              module.value == "docs" && version.value == "3.9.0" && platform == Jvm
+          assertTrue(failed.contains(true), count == 0)
     ,
     test("interrupting a parked plugin releases its scope and stores nothing"):
       ZIO.scoped:

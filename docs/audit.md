@@ -126,7 +126,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M2 Steps, executor, and aspects
 
-- [ ] **K1** (services) Plugin tasks still go through `Scheduler` (`PluginRuntime.scala:69`). Compile cells run on `Histos`. Test (`testrun/ModuleTest`), publish (`publish/LocalPublish`), and run (`program/Program`) are still hand-wired pipelines.
+- [ ] **K1** (services) Compile cells and plugin tasks run on `Histos`. Test (`testrun/ModuleTest`), publish (`publish/LocalPublish`), and run (`program/Program`) are still hand-wired pipelines.
 - [ ] **K2** (api-shape) Scheduler outputs are `String`, dependents never receive upstream values, and dispatch is `if action.kind == ...` (`PluginRuntime.scala:104`).
 - [x] **K3** (concurrency) `schedule/Scheduler.scala:128,144`: parallelism is unbounded, and `foreachParDiscard` fails fast, which contradicts design Key Decision 9. `Histos` takes one permit per resource class, and a failed side of a zip does not cancel the other side. `HistosSpec` holds a cpu limit of one and a dependent that does not run.
 - [ ] **K4** (services) `Scheduler.scala:146-214` hardcodes four aspects inline: local cache, manifest check, remote lookup, and upload by verdict.
@@ -135,13 +135,13 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **K7** (api-shape) `GraphCompile.scala:448,488,552` took 9, 10, and 12 parameters. `CompilePlan` and `CellRun` carry them.
 - [x] **K8** (dead code) `CompileKey` had only `ZincSpec` as a caller, and nothing called `GraphCompile.runCells`. The compile path keeps the key, and `runCells` is gone.
 - [x] **K9** (performance) `JvmCompile.scala:256,288-294,338`: `hashSources(..) *> invoke` read every source into one `Chunk` and discarded the digest. The digest is `CompileOutput.key`, and a compiled cell keeps it.
-- [ ] **K10** (correctness) `PluginRuntime.scala:104,196-205`: compile dependencies are stub actions that return `"compiled"` with no inputs. Their verdict is `Send`, so a write-mode remote would upload them.
-- [ ] **K11** (performance) `PluginRuntime.scala:123,169-177` plans and hashes every task of every plugin on each run.
+- [x] **K10** (correctness) `PluginRuntime.scala:104,196-205`: compile dependencies were stub actions that returned `"compiled"` with no inputs. A `TaskDep.Compile` is now a compile step, and a plugin failure from that step is `PluginFault.Compiled`.
+- [x] **K11** (performance) `PluginRuntime.scala:123,169-177` planned and hashed every task of every plugin on each run. The step graph is only the task being run and the tasks it depends on.
 - [ ] **K12** (api-shape) `task/Task.scala:53,56,70`: `TaskResult.text` is a `String`, the doc says a cancelled run dies (it is interrupted), and the registry finalizer does nothing.
 - [ ] **K13** (api-shape) `TaskKind` is closed, and nothing in main code uses `ZIOAspect` or `@@`. There is no decoration seam.
 - [ ] **K14** (minor) `Scheduler.scala:180,185` computes the verdict twice, `:25` `Failed.message` drops the inner error, `Action.scala:91` has `getOrElse(id, "")`, `:112` has a no-op `put` default, and `RemoteCache.scala:48-75` keeps test helpers in main code.
 - [ ] **K15** (tests) `SchedulerSpec` lacks: a failure stops only its dependents, `DuplicateAction`, `MissingDependency`, `DuplicateInput`, the context loader under parallel plugins, the sticky refusal, and temp cleanup on interrupt.
-- [ ] **K16** (typed-errors) `load/PluginCells.scala:84,114,121,156,250,265,272,296-303,322-327` turns `GraphCompileError`, `ResolveError`, `LockError`, and `ModuleTestError` into `PluginRunError.Failed(PluginDetail(text))`. `PluginRuntime.scala:273-279` does the same with `ScheduleError`.
+- [ ] **K16** (typed-errors) A plugin compile failure is `PluginFault.Compiled`. `load/PluginCells.scala` still flattens `ResolveError`, `LockError`, and `ModuleTestError` into `PluginRunError.Failed(PluginDetail(text))`.
 - [ ] **K17** (api-shape) `GraphCompileError.Cells(first, rest)` is a hand-rolled non-empty list where `NonEmptyChunk` fits. Found in M0.2.
 - [ ] **K18** (correctness) `PluginRuntime.bind` drops a task whose `TaskId.from` fails (`.toOption.toList`) without reporting it. Found in M0.2.
 

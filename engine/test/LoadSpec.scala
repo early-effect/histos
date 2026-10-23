@@ -530,7 +530,7 @@ object LoadSpec extends ZIOSpecDefault:
           leaked <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("leak"))).either
           echoed <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("echo"))).either
         yield assertTrue(
-          leaked == Left(PluginRunError.EngineLeak("histos.schedule.Sendable")),
+          leaked == Left(PluginFault.Task(PluginRunError.EngineLeak("histos.schedule.Sendable"))),
           echoed == Right(PluginOutput("echo", Nil)),
         )
     ,
@@ -588,7 +588,7 @@ object LoadSpec extends ZIOSpecDefault:
           _ <- plant(repo, "tools/docs", eagerSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
           ran <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("echo"))).either
-        yield assertTrue(ran == Left(PluginRunError.Defect("java.lang.IllegalStateException")))
+        yield assertTrue(ran == Left(PluginFault.Task(PluginRunError.Defect("java.lang.IllegalStateException"))))
   )
 
   private def plant(repo: Path, path: String, source: String, entry: String): IO[LoadError, Unit] =
@@ -600,7 +600,7 @@ object LoadSpec extends ZIOSpecDefault:
       ()
     }.mapError(_ => LoadError.Io(LoadIo.Temp))
 
-  private def runOf(loaded: LoadedBuild, task: PluginTaskId): IO[PluginRunError, PluginOutput] =
+  private def runOf(loaded: LoadedBuild, task: PluginTaskId): IO[PluginFault, PluginOutput] =
     loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
 
   private val echoTask =

@@ -67,25 +67,6 @@ private[load] object PluginCells:
             Left(failed(s"'${name.value}' does not build the requested cell"))
           case some => Right(some)
 
-  def prepare(
-      repo: Path,
-      graph: ProjectGraph,
-      tasks: List[DeclaredTask]
-  ): ZIO[Resolve, PluginRunError, Unit] =
-    val chosen = tasks.foldLeft[Either[PluginRunError, List[Cell]]](Right(Nil)):
-      (acc, task) => acc.flatMap(soFar => selected(graph, task).map(soFar ++ _))
-    ZIO
-      .fromEither(chosen)
-      .flatMap: found =>
-        val distinct = found.distinct
-        if distinct.isEmpty then ZIO.unit
-        else
-          for
-            jdk <- GraphCompile.jdkHere
-              .mapError(error => failed(line(error.message)))
-            _ <- ZIO.foreachDiscard(distinct)(compile(repo, graph, _, jdk))
-          yield ()
-
   def classpath(
       repo: Path,
       graph: ProjectGraph,
@@ -96,12 +77,12 @@ private[load] object PluginCells:
       .flatMap: found =>
         ZIO.foreach(found.distinct)(paths(repo, graph, _))
 
-  private def compile(
+  private[load] def compile(
       repo: Path,
       graph: ProjectGraph,
       cell: Cell,
       jdk: histos.zinc.ResolvedJdk
-  ): ZIO[Resolve, PluginRunError, Unit] =
+  ): ZIO[Resolve, PluginFault, Unit] =
     for
       _ <- GraphCompile
         .cellFeed(
@@ -110,20 +91,17 @@ private[load] object PluginCells:
           List(cell.module.name -> cell.version),
           cell.platform,
           jdk,
-          NativeOrigin.Central
+          NativeOrigin.Central,
         )
         .runCollect
-        .mapError(error => failed(line(error.message)))
+        .mapError(error => PluginFault.Compiled(error))
         .flatMap: chunk =>
-          val errors = chunk.toList.collect:
-            case CompileFeed.Failed(error) => error
-          errors match
-            case Nil                             => ZIO.unit
-            case (error: GraphCompileError) :: _ =>
-              ZIO.fail(failed(line(error.message)))
-      sources <- testSources(repo, graph, cell)
+          chunk.toList.collect { case CompileFeed.Failed(error) => error } match
+            case Nil          => ZIO.unit
+            case error :: _ => ZIO.fail(PluginFault.Compiled(error))
+      sources <- testSources(repo, graph, cell).mapError(error => PluginFault.Task(error))
       _ <- ZIO.unless(sources.isEmpty)(
-        compileTests(repo, graph, cell, sources, jdk)
+        compileTests(repo, graph, cell, sources, jdk).mapError(error => PluginFault.Task(error))
       )
     yield ()
 
