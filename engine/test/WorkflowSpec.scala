@@ -25,7 +25,8 @@ object WorkflowSpec extends ZIOSpecDefault:
       yield assertTrue(
         rendered == Right(golden),
         golden.contains("./histos test") && golden.contains("contents: read") && golden.contains("workflow --check"),
-        !golden.contains("setup-java") && !golden.contains("format") && !golden.contains("publish") && !golden.contains("branches:"),
+        !golden.contains("setup-java") && !golden.contains("format") && !golden.contains("publish") &&
+          golden.contains("push:\n    branches:\n      - main") && !golden.contains("tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List("./histos", "test"),
       )
