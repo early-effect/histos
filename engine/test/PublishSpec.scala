@@ -5,7 +5,7 @@ import histos.jdk.{JdkMajor, JdkVersion}
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
 import histos.version.{ManualVersion, ShipNumber}
 import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
-import histos.{BuildError, Dep, Jvm, Organization, Projects, RepositoryUrl, RepositoryUrlError, Resolver, ScalaVersion, module}
+import histos.{BuildError, Dep, Js, Jvm, Organization, Projects, RepositoryUrl, RepositoryUrlError, Resolver, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -52,6 +52,32 @@ object PublishSpec extends ZIOSpecDefault:
           used,
         )
     ,
+    test("a module on Jvm and Js publishes one coordinate per platform"):
+      ZIO.scoped:
+        for
+          root <- temp
+          repo <- temp
+          _ <- ZIO.attempt {
+                 write(root, "core/src/main/scala/demo/Hello.scala", "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n")
+                 write(root, "app/src/main/scala/App.scala", "object App {\n  def text: String = demo.Hello.greet\n}\n")
+                 write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell core 3.10.0 js\ncell app 3.10.0 jvm\ncell app 3.10.0 js\n")
+               }
+          built <- ZIO.fromEither(crossLibrary)
+          published <- LocalPublish.run(root, built, Nil, jdk, Map.empty).provide(Resolve.live(root.resolve("coursier")), Publisher.local(repo))
+          jvm <- ZIO.attempt(zipNames(repo.resolve("com/example/core_3/1.0.0/core_3-1.0.0.jar")))
+          js <- ZIO.attempt(zipNames(repo.resolve("com/example/core_sjs1_3/1.0.0/core_sjs1_3-1.0.0.jar")))
+          jvmPom <- ZIO.attempt(Files.readString(repo.resolve("com/example/app_3/1.0.0/app_3-1.0.0.pom")))
+          jsPom <- ZIO.attempt(Files.readString(repo.resolve("com/example/app_sjs1_3/1.0.0/app_sjs1_3-1.0.0.pom")))
+        yield assertTrue(
+          published.modules.map(_.artifact) == List("app_3", "app_sjs1_3", "core_3", "core_sjs1_3"),
+          jvm.contains("demo/Hello.class"),
+          !jvm.exists(_.endsWith(".sjsir")),
+          js.exists(_.endsWith(".sjsir")),
+          jvmPom.contains("<artifactId>core_3</artifactId>"),
+          jsPom.contains("<artifactId>core_sjs1_3</artifactId>"),
+          !jsPom.contains("<artifactId>core_3</artifactId>"),
+        )
+    ,
     test("development does not publish, and a catalog without an organization does not write"):
       ZIO.scoped:
         for
@@ -91,6 +117,12 @@ object PublishSpec extends ZIOSpecDefault:
     val scalaVersion = ScalaVersion("3.10.0")
     val core = module("core", Jvm)(scalaVersion)
     val app = module("app", Jvm)(scalaVersion).dependsOn(core).testDependencies(Dep("dev.zio::zio-test:2.1.27"))
+    Projects.organization(Organization("com.example"))(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)), core, app)
+
+  private val crossLibrary =
+    val scalaVersion = ScalaVersion("3.10.0")
+    val core = module("core", Jvm, Js)(scalaVersion)
+    val app = module("app", Jvm, Js)(scalaVersion).dependsOn(core)
     Projects.organization(Organization("com.example"))(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)), core, app)
 
   private val development =

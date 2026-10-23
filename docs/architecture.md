@@ -107,7 +107,7 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 The version scheme is the zipx scheme, implemented in `histos.version`: everyday builds are `<version>-ci`, a snapshot is `<version>-<sha>-SNAPSHOT`, the default branch also updates a `<version>-SNAPSHOT` pointer, and a ship number is the next release. A catalog can state a manual version, which is what this repository does. `histos run versions` checks the catalog and the registry.
 
-`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31). A module that builds Jvm and Js writes both cells to one coordinate (B1).
+`histos publish <directory> [project ...]` writes jars and poms into a local Maven directory. Each platform cell is its own coordinate (`core_3`, `core_sjs1_3`, `core_native0.5_3`), with a pom that names that platform's dependencies. `histos publish snapshots` uploads to Sonatype's snapshot repository and reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD` from the environment (B31).
 
 ## Assembly and the launcher
 

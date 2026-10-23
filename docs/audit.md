@@ -57,7 +57,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.1 Publish one coordinate per platform
 
-- [ ] **B1** (correctness, *verified*) `engine:publish/LocalPublish.scala:137-145,300-308,432-440` compiles every platform, and `jobs` filters cells by module only. A Jvm+Js module gets two parallel writers on one `jvm.jar` under one `_3` coordinate.
+- [x] **B1** (correctness, *verified*) `engine:publish/LocalPublish.scala:137-145,300-308,432-440` compiles every platform, and `jobs` filters cells by module only. A Jvm+Js module gets two parallel writers on one `jvm.jar` under one `_3` coordinate.
 
 ## M1.2 Server lifecycle
 
