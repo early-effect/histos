@@ -2,7 +2,7 @@ package histos.node
 
 import histos.jdk.{ArchiveSource, HttpsUrl, Machine, Os, Settled, Sha256}
 import histos.native.NativeOrigin
-import histos.testrun.{ProcessExit, TestEvent, TestProcess}
+import histos.process.{ChildEvent, ChildProcess, ProcessExit}
 import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
 import java.nio.charset.StandardCharsets
@@ -293,7 +293,7 @@ object NodeSpec extends ZIOSpecDefault:
     Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No, NativeOrigin.Central)
 
   private def pack(argv: List[String], root: Path, env: Map[String, String]) =
-    TestProcess.command(argv, root.resolve("pack"), env).runCollect.map(_.lastOption.contains(TestEvent.Exited(ProcessExit(0))))
+    ChildProcess.command(argv, root.resolve("pack"), env).runCollect.map(_.lastOption.contains(ChildEvent.Exited(ProcessExit(0))))
 
   private def stageFile(file: Path, machine: Machine) =
     ZIO.attempt(Files.readAllBytes(file)).flatMap: bytes =>

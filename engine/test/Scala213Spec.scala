@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.pack.MainClass
-import histos.testrun.{TestClasspath, TestProcess, TestRequest}
+import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
 import histos.{Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -138,10 +138,10 @@ object Scala213Spec extends ZIOSpecDefault:
           main = MainClass.from("Hello")
           ran <- (compiled, main) match
             case (Right(_), Right(name)) =>
-              TestProcess.run(TestRequest(
+              ChildProcess.run(ChildRequest(
                 Platform.Jvm,
                 jdk.home.resolve("bin").resolve("java"),
-                TestClasspath(classes, found.runtime),
+                ChildClasspath(classes, found.runtime),
                 name,
                 work,
               )).either.map(Some(_))

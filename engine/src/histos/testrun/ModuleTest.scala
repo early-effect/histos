@@ -15,6 +15,7 @@ import histos.resolve.{
   ResolveError
 }
 import histos.workflow.CiError
+import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -108,7 +109,7 @@ enum ModuleTestError:
   case NoneDiscovered(module: ProjectName, provider: TestProvider)
   case NoneMatched(patterns: List[SuitePattern])
   case Mixed(module: ProjectName)
-  case Process(module: ProjectName, version: ScalaVersion, error: TestError)
+  case Process(module: ProjectName, version: ScalaVersion, error: ChildError)
   case Main(error: MainClassError)
   case Absent(module: ProjectName)
   case MissingUpstream(
@@ -801,7 +802,7 @@ object ModuleTest:
       env: Map[String, String]
   ): ZStream[Any, ModuleTestError, TestFeed] =
     ZStream.succeed(TestFeed.Begin(module, version, platform)) ++
-      TestProcess
+      ChildProcess
         .command(argv, work, env)
         .mapError(error => ModuleTestError.Process(module, version, error))
         .mapZIO(hear(module, version, platform, None, _))
@@ -1058,11 +1059,11 @@ object ModuleTest:
       classpath: List[Path],
       main: MainClass,
       work: Path
-  ): TestRequest =
-    TestRequest(
+  ): ChildRequest =
+    ChildRequest(
       Platform.Jvm,
       jdk.home.resolve("bin").resolve("java"),
-      TestClasspath(classes, classpath),
+      ChildClasspath(classes, classpath),
       main,
       work,
       suiteEnv(repo, runtimes.env)
@@ -1075,11 +1076,11 @@ object ModuleTest:
       module: ProjectName,
       version: ScalaVersion,
       provider: Option[TestProvider],
-      asked: TestRequest,
+      asked: ChildRequest,
       shown: Platform
   ): ZStream[Any, ModuleTestError, TestFeed] =
     ZStream.succeed(TestFeed.Begin(module, version, shown)) ++
-      TestProcess
+      ChildProcess
         .events(asked)
         .mapError(error => ModuleTestError.Process(module, version, error))
         .mapZIO(hear(module, version, shown, provider, _))
@@ -1089,12 +1090,12 @@ object ModuleTest:
       version: ScalaVersion,
       platform: Platform,
       provider: Option[TestProvider],
-      event: TestEvent
+      event: ChildEvent
   ): ZIO[Any, ModuleTestError, TestFeed] =
     event match
-      case TestEvent.Out(text) => ZIO.succeed(TestFeed.Out(text))
-      case TestEvent.Err(text) => ZIO.succeed(TestFeed.Err(text))
-      case TestEvent.Exited(code) =>
+      case ChildEvent.Out(text) => ZIO.succeed(TestFeed.Out(text))
+      case ChildEvent.Err(text) => ZIO.succeed(TestFeed.Err(text))
+      case ChildEvent.Exited(code) =>
         provider match
           case Some(_) if code.value == ProviderRunner.NoneMatched =>
             ZIO.succeed(

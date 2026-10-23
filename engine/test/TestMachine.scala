@@ -3,7 +3,7 @@ package histos
 import histos.jdk.{ArchiveSource, Machine, Os, Settled, Sha256}
 import histos.native.NativeOrigin
 import histos.node.{NodeLock, NodeVersion}
-import histos.testrun.{TestEvent, TestProcess}
+import histos.process.{ChildEvent, ChildProcess}
 import histos.toolchain.Runtimes
 
 import java.io.File
@@ -49,7 +49,7 @@ object TestMachine:
         .fromOption(onPath(env, "node"))
         .orElseFail(new IllegalStateException("no node on PATH"))
       _ <- ZIO.attemptBlocking(Files.createDirectories(root.resolve("probe")))
-      said <- TestProcess
+      said <- ChildProcess
         .command(
           List(real.toString, "--version"),
           root.resolve("probe"),
@@ -58,7 +58,7 @@ object TestMachine:
         .runCollect
         .mapError(error => new IllegalStateException(error.message))
       text = said
-        .collectFirst { case TestEvent.Out(line) => line.trim }
+        .collectFirst { case ChildEvent.Out(line) => line.trim }
         .getOrElse("")
       version <- ZIO
         .fromEither(NodeVersion.from(text))

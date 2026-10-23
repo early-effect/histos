@@ -1,7 +1,7 @@
 package histos.js
 
 import histos.pack.MainClass
-import histos.testrun.{TestClasspath, TestProcess, TestRequest}
+import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
 import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
 import histos.ScalaVersion
 
@@ -47,10 +47,10 @@ object JsLink:
            )).mapError(JsLinkError.Library(_))
       _ <- empty(output)
       _ <- empty(child)
-      ran <- TestProcess.run(TestRequest(
+      ran <- ChildProcess.run(ChildRequest(
                histos.Platform.Jvm,
                jdk.home.resolve("bin").resolve("java"),
-               TestClasspath(classes, linker),
+               ChildClasspath(classes, linker),
                MainClass.trusted(BridgeMain),
                child,
                Map(

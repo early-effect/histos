@@ -1,4 +1,4 @@
-package histos.testrun
+package histos.process
 
 import java.lang.foreign.{FunctionDescriptor, Linker, ValueLayout}
 import java.lang.invoke.MethodHandle
@@ -6,7 +6,7 @@ import java.lang.invoke.MethodHandle
 import scala.jdk.OptionConverters.*
 
 /** `setpgid` and `kill` from libc. A negative pid is the process group, which is how cancel reaches children. */
-private[testrun] object Posix:
+private[process] object Posix:
   val SigKill: Int = 9
 
   def killGroup(pid: Int): Either[GroupOp, Int] =
