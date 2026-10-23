@@ -65,7 +65,7 @@ The lock does not yet cover the toolchain: Scala compiler jars, semanticdb-scala
 The engine compiles JVM, Scala.js, and Scala Native cells with Zinc 2.0.4 and the compiler the module names. Scala 3 and Scala 2.13 are accepted. Scala 2.12 and older are `CompileError.UnsupportedScala`.
 
 - Outputs go to `.histos/classes/<module>/<scala>/<platform>`. Test outputs go to `.histos/test-classes`.
-- Upstream cells compile first. Cells in one topological layer compile in parallel, and a layer waits for the whole previous layer (K5).
+- Upstream cells compile first. A cell starts when its own upstreams finish, and independent cells run together.
 - A failed cell does not cancel an independent sibling. The command fails after the last cell.
 - SemanticDB is on for every cell: `-Xsemanticdb` for Scala 3, and the `semanticdb-scalac` plugin for 2.13.
 - The compile classpath is the locked compile cell plus upstream classes. Jars that contain the Scala compiler or a Histos build marker are refused, so the engine never reaches user code.
