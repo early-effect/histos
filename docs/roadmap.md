@@ -33,7 +33,7 @@ The same build serves a person at a terminal, Metals over BSP, and an agent over
 
 ## Where we are
 
-About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge. Cache temp files and the keep list still need work (B35 to B37).
+About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge.
 
 | Capability | State | Notes |
 | --- | --- | --- |

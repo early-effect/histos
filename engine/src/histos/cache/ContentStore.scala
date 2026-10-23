@@ -1,13 +1,24 @@
 package histos.cache
 
+import histos.jdk.Sha256
 import histos.schedule.{ActionCache, CacheError, CacheOp, Digest}
 
+import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path, StandardCopyOption}
+import java.nio.file.{Files, Path, StandardCopyOption, StandardOpenOption}
 import java.time.{Duration, Instant}
 import scala.jdk.CollectionConverters.*
 
 import zio.*
+
+/** One project's keep set. The key is the sha256 of its absolute path, so the file name is safe. */
+opaque type CacheProject = String
+
+object CacheProject:
+  def of(repo: Path): CacheProject =
+    Sha256.of(Chunk.fromArray(repo.toAbsolutePath.normalize.toString.getBytes(StandardCharsets.UTF_8))).value
+
+  extension (project: CacheProject) def value: String = project
 
 final case class CacheEntry(digest: Digest, path: Path, bytes: Long, lastUsed: Instant)
 
@@ -17,7 +28,8 @@ trait ContentStore:
   def put(digest: Digest, bytes: Chunk[Byte], at: Instant): IO[CacheError, Unit]
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]]
   def list: IO[CacheError, List[CacheEntry]]
-  def remember(digest: Digest): IO[CacheError, Unit]
+  /** Replace this project's keep set. Other projects are left alone. */
+  def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit]
   def kept: IO[CacheError, Set[Digest]]
   def clean(now: Instant, retention: Duration, dryRun: Boolean): IO[CacheError, List[CacheEntry]]
 
@@ -41,15 +53,18 @@ object ContentStore:
       case None      => Path.of(userHome, ".cache", "histos")
 
 private final class DiskStore(val root: Path) extends ContentStore:
+  /** One JVM can lock a file only once. Fibers take this first, then the file lock covers other processes. */
+  private val gate = java.util.concurrent.locks.ReentrantLock()
   def put(digest: Digest, bytes: Chunk[Byte], at: Instant): IO[CacheError, Unit] =
     val dest = objectPath(digest)
-    for
-      tmp <- tempFile
-      _   <- write(tmp, bytes)
-      _   <- readBack(tmp, bytes, digest)
-      _   <- move(tmp, dest)
-      _   <- stamp(dest, at)
-    yield ()
+    ZIO.scoped:
+      ZIO.acquireRelease(tempFile)(delete(_).ignore).flatMap: tmp =>
+        for
+          _ <- write(tmp, bytes)
+          _ <- readBack(tmp, bytes, digest)
+          _ <- move(tmp, dest)
+          _ <- stamp(dest, at)
+        yield ()
 
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]] =
     val dest = objectPath(digest)
@@ -64,21 +79,25 @@ private final class DiskStore(val root: Path) extends ContentStore:
   def list: IO[CacheError, List[CacheEntry]] =
     ZIO.attempt(casEntries ++ pluginEntries).mapError(io(CacheOp.List))
 
-  def remember(digest: Digest): IO[CacheError, Unit] =
-    ZIO.attempt {
-      Files.createDirectories(root)
-      val file = root.resolve("keep")
-      val have = if Files.isRegularFile(file) then Files.readString(file) else ""
-      if !have.split('\n').contains(digest.value) then
-        Files.writeString(file, have + digest.value + "\n")
-    }.mapError(io(CacheOp.Keep)).unit
+  def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit] =
+    withKeep: dir =>
+      val file = dir.resolve(project.value)
+      val tmp = dir.resolve(s".${project.value}.tmp")
+      val lines = digests.map(_.value).toList.sorted
+      val text = if lines.isEmpty then "" else lines.mkString("\n") + "\n"
+      Files.writeString(tmp, text)
+      try Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+      catch
+        case _: java.nio.file.AtomicMoveNotSupportedException =>
+          Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+      ()
 
   def kept: IO[CacheError, Set[Digest]] =
-    ZIO.attempt {
-      val file = root.resolve("keep")
-      if !Files.isRegularFile(file) then Set.empty[String]
-      else Files.readString(file).split('\n').toSet.filter(_.nonEmpty)
-    }.mapError(io(CacheOp.Keep)).map(_.flatMap(Digest.from))
+    withKeep: dir =>
+      val listed = Files.list(dir)
+      try
+        listed.iterator.asScala.filter(Files.isRegularFile(_)).flatMap(linesOf).flatMap(Digest.from).toSet
+      finally listed.close()
 
   def clean(now: Instant, retention: Duration, dryRun: Boolean): IO[CacheError, List[CacheEntry]] =
     val cutoff = now.minus(retention)
@@ -86,7 +105,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
       entries <- list
       keep    <- kept
       stale    = entries.filter(entry => entry.lastUsed.isBefore(cutoff) && !keep.contains(entry.digest))
-      _       <- ZIO.unless(dryRun)(ZIO.foreachDiscard(stale)(entry => delete(entry.path)))
+      _       <- ZIO.unless(dryRun)(ZIO.foreachDiscard(stale)(entry => delete(entry.path)) *> sweepTemps(cutoff))
     yield stale
 
   private def objectPath(digest: Digest): Path =
@@ -107,7 +126,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
   private def readBack(path: Path, bytes: Chunk[Byte], digest: Digest): IO[CacheError, Unit] =
     ZIO.attempt(Chunk.fromArray(Files.readAllBytes(path))).mapError(io(CacheOp.Read)).flatMap: found =>
       if found == bytes then ZIO.unit
-      else delete(path) *> ZIO.fail(CacheError.Corrupt(digest))
+      else ZIO.fail(CacheError.Corrupt(digest))
 
   private def move(from: Path, to: Path): IO[CacheError, Unit] =
     ZIO.attempt {
@@ -170,6 +189,56 @@ private final class DiskStore(val root: Path) extends ContentStore:
         Digest.from(shard + rest).map: digest =>
           CacheEntry(digest, path, Files.size(path), Files.getLastModifiedTime(path).toInstant)
       case _ => None
+
+  /** Temps older than the cutoff are leftovers. A put that is still running stamped its file just now. */
+  private def sweepTemps(cutoff: Instant): IO[CacheError, Unit] =
+    ZIO.attempt {
+      val dir = root.resolve("tmp")
+      if Files.isDirectory(dir) then
+        val listed = Files.list(dir)
+        val old =
+          try
+            listed.iterator.asScala.filter(Files.isRegularFile(_)).filter { path =>
+              Files.getLastModifiedTime(path).toInstant.isBefore(cutoff)
+            }.toList
+          finally listed.close()
+        old.foreach(path => Files.deleteIfExists(path))
+      ()
+    }.mapError(io(CacheOp.Delete))
+
+  private def withKeep[A](use: Path => A): IO[CacheError, A] =
+    ZIO.attemptBlockingInterrupt {
+      gate.lockInterruptibly()
+      try
+        Files.createDirectories(root)
+        val channel = FileChannel.open(
+          root.resolve("keep.lock"),
+          StandardOpenOption.CREATE,
+          StandardOpenOption.WRITE,
+        )
+        try
+          val lock = channel.lock()
+          try use(keepDir())
+          finally lock.close()
+        finally channel.close()
+      finally gate.unlock()
+    }.mapError(io(CacheOp.Keep))
+
+  /** `keep` used to be one file. A directory holds one file per project, and that old file becomes `legacy`. */
+  private def keepDir(): Path =
+    val path = root.resolve("keep")
+    if Files.isRegularFile(path) then
+      val text = Files.readString(path)
+      Files.delete(path)
+      Files.createDirectories(path)
+      if text.nonEmpty then Files.writeString(path.resolve("legacy"), text)
+      path
+    else
+      Files.createDirectories(path)
+      path
+
+  private def linesOf(path: Path): List[String] =
+    Files.readString(path).split('\n').toList.map(_.trim).filter(_.nonEmpty)
 
   private def io(op: CacheOp): Throwable => CacheError = _ => CacheError.Io(op)
 end DiskStore

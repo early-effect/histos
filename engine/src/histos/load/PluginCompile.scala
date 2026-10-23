@@ -55,11 +55,11 @@ private[load] object PluginCompile:
       val plugins = store.root.resolve("plugins")
       val dest = plugins.resolve(hex)
       ZIO.attempt(ready(dest)).mapError(_ => LoadError.Io(LoadIo.Stat)).flatMap:
-        case true => touch(store, dest, hex)
+        case true => touch(dest, hex)
         case false =>
           ZIO.attempt(Files.createDirectories(plugins)).mapError(_ => LoadError.Io(LoadIo.Temp)) *>
             ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
-              fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(store, dest, hex)
+              fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
 
   private def fillJar(jar: Path, classpath: List[Path])(classes: Path): IO[LoadError, Unit] =
     parentOf(classes).flatMap: plugins =>
@@ -205,14 +205,13 @@ private[load] object PluginCompile:
       ()
     }.mapError(_ => LoadError.Io(LoadIo.Write))
 
-  private def touch(store: ContentStore, dest: Path, hex: String): IO[LoadError, Path] =
-    val stamped =
-      ZIO.attempt(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(java.time.Instant.now)))
-        .mapError(_ => LoadError.Io(LoadIo.Write))
-    val remembered = Digest.from(hex) match
-      case Some(digest) => store.remember(digest).mapError(_ => LoadError.Io(LoadIo.Write))
-      case None         => ZIO.fail(LoadError.Io(LoadIo.Write))
-    stamped *> remembered.as(dest)
+  private def touch(dest: Path, hex: String): IO[LoadError, Path] =
+    Digest.from(hex) match
+      case None => ZIO.fail(LoadError.Io(LoadIo.Write))
+      case Some(_) =>
+        ZIO.attempt(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(java.time.Instant.now)))
+          .mapError(_ => LoadError.Io(LoadIo.Write))
+          .as(dest)
 
   private def ready(dir: Path): Boolean =
     Files.isRegularFile(dir.resolve(".complete"))

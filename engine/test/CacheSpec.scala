@@ -38,6 +38,8 @@ object CacheSpec extends ZIOSpecDefault:
       }.ignore
 
   private val bytes = Chunk.fromArray("payload".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+  private val project = CacheProject.of(Path.of("/repo/a"))
+  private val elsewhere = CacheProject.of(Path.of("/repo/b"))
 
   private val cache = suite("content store")(
     test("a put reads back and leaves no temp file"):
@@ -75,7 +77,7 @@ object CacheSpec extends ZIOSpecDefault:
           hold = digest("hold")
           _ <- saved.put(drop, bytes, at)
           _ <- saved.put(hold, bytes, at)
-          _ <- saved.remember(hold)
+          _ <- saved.replace(project, Set(hold))
           removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
           gone <- saved.read(drop)
           kept <- saved.read(hold)
@@ -90,7 +92,7 @@ object CacheSpec extends ZIOSpecDefault:
           fresh = pluginDigest("plugin-fresh")
           _ <- plant(saved, old, at)
           _ <- plant(saved, held, at)
-          _ <- saved.remember(held)
+          _ <- saved.replace(project, Set(held))
           partial = saved.root.resolve("plugins").resolve(".partial-old")
           _ <- ZIO.attempt {
                  Files.createDirectories(partial)
@@ -115,6 +117,72 @@ object CacheSpec extends ZIOSpecDefault:
           remains,
           partialLeft,
         )
+    ,
+    test("clean sweeps an old temp and leaves a fresh one"):
+      ZIO.scoped:
+        for
+          saved <- store
+          old = saved.root.resolve("tmp").resolve("old")
+          fresh = saved.root.resolve("tmp").resolve("fresh")
+          _ <- ZIO.attempt {
+                 Files.createDirectories(old.getParent)
+                 Files.writeString(old, "leftover")
+                 Files.writeString(fresh, "live")
+                 Files.setLastModifiedTime(old, FileTime.from(at))
+                 Files.setLastModifiedTime(fresh, FileTime.from(later))
+               }
+          _ <- saved.clean(later, ContentStore.Retention, dryRun = true)
+          previewOld <- ZIO.attempt(Files.isRegularFile(old))
+          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          gone <- ZIO.attempt(Files.exists(old))
+          kept <- ZIO.attempt(Files.isRegularFile(fresh))
+        yield assertTrue(previewOld, removed.isEmpty, !gone, kept)
+    ,
+    test("each project keeps its own set, and replacing one does not drop the other"):
+      ZIO.scoped:
+        for
+          saved <- store
+          hold = digest("hold")
+          other = digest("other")
+          drop = digest("drop")
+          _ <- saved.put(hold, bytes, at)
+          _ <- saved.put(other, bytes, at)
+          _ <- saved.put(drop, bytes, at)
+          _ <- saved.replace(project, Set(hold))
+          _ <- saved.replace(elsewhere, Set(other))
+          first <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          _ <- saved.replace(project, Set.empty)
+          second <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          holdGone <- saved.read(hold)
+          otherKept <- saved.read(other)
+        yield assertTrue(
+          first.map(_.digest) == List(drop),
+          second.map(_.digest) == List(hold),
+          holdGone.isEmpty,
+          otherKept.contains(bytes),
+        )
+    ,
+    test("a legacy keep file is still honored"):
+      ZIO.scoped:
+        for
+          saved <- store
+          hold = digest("legacy")
+          _ <- saved.put(hold, bytes, at)
+          _ <- ZIO.attempt(Files.writeString(saved.root.resolve("keep"), hold.value + "\n"))
+          kept <- saved.kept
+          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          still <- saved.read(hold)
+        yield assertTrue(kept.contains(hold), removed.isEmpty, still.contains(bytes))
+    ,
+    test("replacing a project's set does not append"):
+      ZIO.scoped:
+        for
+          saved <- store
+          hold = digest("hold")
+          other = digest("other")
+          _ <- ZIO.foreachParDiscard(List(hold, other))(key => saved.replace(project, Set(key)))
+          after <- saved.kept
+        yield assertTrue(after.size == 1, after.contains(hold) || after.contains(other))
     ,
     test("a fresh entry is kept"):
       ZIO.scoped:

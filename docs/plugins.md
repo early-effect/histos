@@ -335,7 +335,7 @@ A path plugin always links as `FromSource`, with the running digest as both valu
 
 The link tests in [`LoadSpec.scala`](../engine/test/LoadSpec.scala) cover this table, the path plugin, and the engine leak.
 
-Compiled plugin classes live under `<cache>/plugins/<digest>`. The digest covers the running `ApiDigest`, the compiler version, the source bytes (the sources jar, or the path-plugin tree), and the cell's artifact checksums. A directory is reused only after its `.complete` marker exists. Builds never delete these directories. `histos cache list` lists them. `histos cache clean` removes those unused for `ContentStore.Retention` (30 days) whose digest is not on the store's keep list, and `--dry-run` previews. Every load that compiles or reuses a plugin directory adds its digest to that keep list, so `clean` keeps every plugin directory a load has used.
+Compiled plugin classes live under `<cache>/plugins/<digest>`. The digest covers the running `ApiDigest`, the compiler version, the source bytes (the sources jar, or the path-plugin tree), and the cell's artifact checksums. A directory is reused only after its `.complete` marker exists. Builds never delete these directories. `histos cache list` lists them. `histos cache clean` removes those unused for `ContentStore.Retention` (30 days) whose digest is not in any project's keep file, and `--dry-run` previews. A successful load replaces that project's keep file with the plugin directories that load used, so a plugin this project no longer uses can age out. Another project's file still keeps its own.
 
 ### Entry checks
 

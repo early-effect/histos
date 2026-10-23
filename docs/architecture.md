@@ -126,7 +126,7 @@ The version scheme is the zipx scheme, implemented in `histos.version`: everyday
 
 ## Cache
 
-The content store lives in `$XDG_CACHE_HOME/histos` or `~/.cache/histos`. Entries are content-addressed under `cas/`. `histos cache path`, `cache list`, and `cache clean [--dry-run]` manage it. `clean` removes entries under `cas/` and `plugins/` that the current projects have not used for 30 days, and it does not touch JDKs or launchers (B37).
+The content store lives in `$XDG_CACHE_HOME/histos` or `~/.cache/histos`. Entries are content-addressed under `cas/`. `histos cache path`, `cache list`, and `cache clean [--dry-run]` manage it. `clean` removes entries under `cas/` and `plugins/` that no current project has used for 30 days, and temp files in `tmp/` older than that. It does not touch JDKs or launchers. Each project has its own keep file, replaced by the plugins that load used.
 
 The remote cache is off. The only implementation is in memory, used by tests, and there is no configuration path (D10).
 

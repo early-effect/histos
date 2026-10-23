@@ -2,7 +2,7 @@ package histos.load
 
 import dotty.tools.dotc.Driver
 import dotty.tools.dotc.reporting.StoreReporter
-import histos.cache.ContentStore
+import histos.cache.{CacheProject, ContentStore}
 import histos.jdk.Sha256
 import histos.plugin.{
   ApiDigest,
@@ -108,8 +108,11 @@ private object LoaderLive extends Loader:
       else Resolve.readLock(repo).mapError(absent(dependencies))
     locked.flatMap: lock =>
       ZIO.foreach(requests):
-        case PluginRequest.Path(path)       => pathPlugin(repo, path, launcher, boundary)
+        case PluginRequest.Path(path)        => pathPlugin(repo, path, launcher, boundary)
         case PluginRequest.Dep(dependency, _) => one(lock, dependency, launcher, boundary)
+      .flatMap: matched =>
+        val pins = matched.flatMap(row => digestName(row.origin)).toSet
+        ZIO.serviceWithZIO[ContentStore](_.replace(CacheProject.of(repo), pins)).mapError(_ => LoadError.Io(LoadIo.Write)).as(matched)
 
   private def one(
       lock: DependencyLock,
@@ -196,6 +199,9 @@ private object LoaderLive extends Loader:
       entry   <- PluginJar.readTree(coordinate, classes)
       _       <- refuseLeak(classes, coordinate)
     yield Matched(List(classes), classes, entry, coordinate, PluginLinked.FromSource(launcher, launcher))
+
+  private def digestName(path: Path): Option[histos.schedule.Digest] =
+    Option(path.getFileName).map(_.toString).flatMap(histos.schedule.Digest.from)
 
   private def refuseLeak(classes: Path, coordinate: PluginCoordinate): IO[LoadError, Unit] =
     ZIO.attempt(PluginCompile.engineClass(classes)).mapError(failed(LoadIo.Walk)).flatMap:
