@@ -252,5 +252,5 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M8 CI from what the graph needs
 
-- [ ] **C1** (booleanly) `engine:workflow/Workflow.scala:107,112,219-223,290-304`: `setup: Boolean` comes from the presence of `.github/ci-tools` and emits hardcoded Node 22, LLVM 21.1.8, Playwright 1.62.1, and Firefox steps, including Chekhov's private cache path. No test passes `true`, and no doc mentions it. The steps run uncached on every job, so on 2026-10-22 the `test` job took 12 to 31 minutes, depending on the Ubuntu mirror serving the Firefox packages.
+- [ ] **C1** (booleanly) `engine:workflow/Workflow.scala:107,112,219-223,290-304`: `setup: Boolean` comes from the presence of `.github/ci-tools` and emits hardcoded Node 22, LLVM 21.1.8, Playwright 1.62.1, and Firefox steps, including Chekhov's private cache path. No test passes `true`. The steps run uncached on every job, so on 2026-10-22 the `test` job took 12 to 31 minutes, depending on the Ubuntu mirror serving the Firefox packages. Closing this row deletes the marker and restores each install the graph still needs from a cache keyed by tool revision and package set. Seeding that cache once is expected. Repeating `install-deps` or the browser download on a later job is not.
 - [ ] **C2** (api-shape) Split axes render `--platform` and `--scala`, which the CLI rejects.
