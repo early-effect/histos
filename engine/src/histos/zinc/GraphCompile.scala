@@ -309,13 +309,14 @@ object GraphCompile:
             selected <- ZIO.fromEither(picked)
             _ <- ZIO.fromEither(layersOf(selected))
             lock <- readLock(repo)
-            plan = CompilePlan(repo, modulesOf(graph), lock, jdk, native, BuildResolvers(graph.resolvers))
-            goal = ScheduleCells.goal(plan, selected, only, platform, hold, offer)
             outcome <- ZIO.scoped {
-              ZIO
-                .serviceWithZIO[Histos](_.start(goal))
-                .provideSome[Resolve & zio.Scope](ZLayer.succeed(parallelism), Histos.live)
-                .flatMap(_.outcome)
+              CompilerPool.make.flatMap: pool =>
+                val plan = CompilePlan(repo, modulesOf(graph), lock, jdk, native, BuildResolvers(graph.resolvers), pool)
+                val goal = ScheduleCells.goal(plan, selected, only, platform, hold, offer)
+                ZIO
+                  .serviceWithZIO[Histos](_.start(goal))
+                  .provideSome[Resolve & zio.Scope](ZLayer.succeed(parallelism), Histos.live)
+                  .flatMap(_.outcome)
             }
             _ <- outcome match
               case Outcome.Done(_) => end(emit, None)
@@ -436,7 +437,7 @@ object GraphCompile:
               analysis(plan.repo, module.name, version, platform),
               libraries.hashes,
             )
-            compiled <- compile(module, request, plan.native, SemanticDb.argv(plan.repo, version), hear).mapError(failed)
+            compiled <- compile(module, request, plan.native, plan.pool, SemanticDb.argv(plan.repo, version), hear).mapError(failed)
           yield CompiledCell(module.name, version, platform, compiled.classes, compiled.classFiles, Some(compiled.key))
     yield compiled
 
@@ -466,11 +467,12 @@ object GraphCompile:
       module: Module,
       request: CompileRequest,
       native: NativeOrigin,
+      pool: CompilerPool,
       extra: List[String],
       hear: CompileProblem => Unit
   ): IO[CompileError, CompileOutput] =
     request.toolchain.platform match
-      case Platform.Jvm    => JvmCompile.compile(request, extra, hear)
+      case Platform.Jvm    => JvmCompile.compilePooled(pool, request, extra, hear)
       case Platform.Js     => ScalaJs.compile(request, extra, hear)
       case Platform.Native =>
         val revision =

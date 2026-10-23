@@ -5,7 +5,7 @@ import dotty.tools.dotc.reporting.StoreReporter
 import histos.cache.ContentStore
 import histos.jdk.Sha256
 import histos.plugin.*
-import histos.resolve.*
+import histos.resolve.{PluginRequest, *}
 import histos.schedule.{ActionCache, RemoteCache}
 import histos.workspace.Workspace
 import histos.{BuildError, Dep, ProjectPath}

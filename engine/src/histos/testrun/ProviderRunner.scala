@@ -14,9 +14,8 @@ object ProviderRunner:
   /** Suites were discovered, and none of them matched the pattern. */
   val NoneMatched: Int = 3
 
-  def source(framework: String, classes: Path, patterns: List[SuitePattern]): String =
-    val frameworkLit = escape(framework)
-    val classesLit = escape(classes.toAbsolutePath.toString)
+  /** Stable source. The framework, the class directory, and the patterns are `provider.txt` in the work directory. */
+  def source: String =
     s"""package subprocess
        |
        |import sbt.testing._
@@ -25,8 +24,9 @@ object ProviderRunner:
        |
        |object Provider {
        |  def main(args: Array[String]): Unit = {
-       |    val frameworkName = "$frameworkLit"
-       |    val classes = java.nio.file.Path.of("$classesLit")
+       |    val lines = java.nio.file.Files.readString(java.nio.file.Path.of(System.getenv("HISTOS_PROVIDER"))).split("\\n", -1)
+       |    val frameworkName = if (lines.length > 0) lines(0) else ""
+       |    val classes = java.nio.file.Path.of(if (lines.length > 1) lines(1) else "")
        |    val loader = getClass.getClassLoader
        |    val raw = Class.forName(frameworkName, true, loader).getDeclaredConstructor().newInstance()
        |    val framework = classOf[Framework].cast(raw)
@@ -66,7 +66,28 @@ object ProviderRunner:
        |    def trace(thrown: Throwable): Unit = thrown.printStackTrace(System.err)
        |  }
        |
-       |__SUITES__
+       |  private val suitePatterns: Array[String] = {
+       |    val lines = java.nio.file.Files.readString(java.nio.file.Path.of(System.getenv("HISTOS_PROVIDER"))).split("\\n", -1)
+       |    if (lines.length <= 2) Array.empty[String]
+       |    else lines.drop(2).filter(_.nonEmpty).map(compiled)
+       |  }
+       |
+       |  private def compiled(pattern: String): String = {
+       |    val body = pattern.flatMap {
+       |      case '*' => ".*"
+       |      case '?' => "."
+       |      case c if "\\\\.+()[]{}^$$|".contains(c) => "\\\\" + c
+       |      case c => c.toString
+       |    }
+       |    "^" + body + "$$"
+       |  }
+       |
+       |  private def suiteAllowed(name: String): Boolean = {
+       |    val shown = if (name.endsWith("$$") && !name.endsWith("$$$$")) name.substring(0, name.length - 1) else name
+       |    if (suitePatterns.length == 0) true
+       |    else suitePatterns.exists(pattern => shown.matches(pattern) || name.matches(pattern))
+       |  }
+       |
        |  private def discover(root: java.nio.file.Path, fingerprints: Array[Fingerprint], loader: ClassLoader): List[TaskDef] = {
        |    val names = classNames(root)
        |    fingerprints.toList.flatMap {
@@ -125,12 +146,7 @@ object ProviderRunner:
        |    }
        |  }
        |}
-       |""".stripMargin.replace("__SUITES__", SuitePattern.embed(patterns))
+       |""".stripMargin
 
-  private def escape(raw: String): String =
-    raw.flatMap {
-      case '\\' => "\\\\"
-      case '"'  => "\\\""
-      case '\n' => "\\n"
-      case char => char.toString
-    }
+  def note(framework: String, classes: Path, patterns: List[SuitePattern]): String =
+    (framework :: classes.toAbsolutePath.toString :: patterns.map(_.value)).mkString("\n") + "\n"

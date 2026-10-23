@@ -966,32 +966,29 @@ object ModuleTest:
       quick: Boolean
   ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     val classes = testClasses(repo, module.name, cell.version, cell.platform)
-    val runner = providerSource(repo, module.name, cell.version, cell.platform)
     def launch(
         selected: List[SuitePattern]
     ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
       for
-        _ <- writeRunner(
-          runner,
-          ProviderRunner.source(provider.framework.value, classes, selected)
-        )
         linked <- compiledTests(
           repo,
           modules,
           module,
           cell,
-          sources :+ runner,
+          sources,
           jdk,
           runtimes.native,
           lock,
           repositories
         )
+        runnerClasses <- installRunner(repo, module.name, cell.version, jdk, linked.paths)
         keep <- narrowed(classes, selected)
         stream <-
           if !keep then ZIO.succeed(ZStream.empty)
           else
-            fresh(testWork(repo, module.name, cell.version, cell.platform)).map:
-              work =>
+            fresh(testWork(repo, module.name, cell.version, cell.platform)).flatMap: work =>
+              val note = repo.resolve(".histos").resolve("provider").resolve(cell.version.value).resolve("provider.txt")
+              writeNote(note, provider.framework.value, classes, selected).as:
                 session(
                   module.name,
                   cell.version,
@@ -1001,9 +998,10 @@ object ModuleTest:
                     jdk,
                     runtimes,
                     classes,
-                    linked.paths,
+                    runnerClasses :: linked.paths,
                     ProviderRunner.Main,
-                    work
+                    work,
+                    Map("HISTOS_PROVIDER" -> note.toString),
                   ),
                   cell.platform
                 )
@@ -1058,7 +1056,8 @@ object ModuleTest:
       classes: Path,
       classpath: List[Path],
       main: MainClass,
-      work: Path
+      work: Path,
+      extra: Map[String, String] = Map.empty,
   ): ChildRequest =
     ChildRequest(
       Platform.Jvm,
@@ -1066,7 +1065,7 @@ object ModuleTest:
       ChildClasspath(classes, classpath),
       main,
       work,
-      suiteEnv(repo, runtimes.env)
+      suiteEnv(repo, runtimes.env) ++ extra,
     )
 
   /** Header, then lines as the process writes them, then the cell. `NoneFound`
@@ -1152,33 +1151,43 @@ object ModuleTest:
         val binary = name.stripSuffix(".class").replace('/', '.')
         if binary.isEmpty || binary.contains("$$") then None else Some(binary)
 
-  private def providerSource(
+  private def installRunner(
       repo: Path,
       module: ProjectName,
       version: ScalaVersion,
-      platform: Platform
-  ): Path =
-    repo
-      .resolve(".histos")
-      .resolve("provider-src")
-      .resolve(module.value)
-      .resolve(version.value)
-      .resolve(platformToken(platform))
-      .resolve("subprocess")
-      .resolve("Provider.scala")
+      jdk: ResolvedJdk,
+      classpath: List[Path],
+  ): IO[ModuleTestError, Path] =
+    val root = repo.resolve(".histos").resolve("provider").resolve(version.value)
+    val source = root.resolve("src").resolve("subprocess").resolve("Provider.scala")
+    val classes = root.resolve("classes")
+    for
+      _ <- ZIO.attemptBlocking {
+        Files.createDirectories(source.getParent)
+        Files.writeString(source, ProviderRunner.source)
+      }.mapError(_ => ModuleTestError.Runner(source))
+      _ <- JvmCompile
+        .compile(
+          CompileRequest(
+            CompileToolchain(version, Platform.Jvm, jdk, ScalacFlags.empty),
+            List(source),
+            classpath,
+            classes,
+            root.resolve("analysis"),
+            Nil,
+          )
+        )
+        .mapError(error => ModuleTestError.Sources(module, version, error))
+    yield classes
 
-  private def writeRunner(
-      path: Path,
-      source: String
-  ): IO[ModuleTestError, Unit] =
+  private def writeNote(path: Path, framework: String, classes: Path, patterns: List[SuitePattern]): IO[ModuleTestError, Unit] =
     ZIO
       .attemptBlocking {
-        Option(path.getParent)
-          .foreach(parent => Files.createDirectories(parent))
-        Files.writeString(path, source)
-        ()
+        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+        Files.writeString(path, ProviderRunner.note(framework, classes, patterns))
       }
       .mapError(_ => ModuleTestError.Runner(path))
+      .unit
 
   /** The framework a test target launches, or a refusal when that library is
     * not a test dependency. A named test main opts out of the framework.
