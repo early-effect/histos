@@ -1,7 +1,6 @@
 package histos.pack
 
-import histos.jdk.{JdkMajor, JdkVersion}
-import histos.zinc.{CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
+import histos.zinc.{CompileRequest, CompileToolchain, GraphCompile, GraphCompileError, JvmCompile, ScalacFlags}
 
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -46,7 +45,8 @@ object JarSpec extends ZIOSpecDefault:
                       Files.writeString(path, "object Hello:\n  def greet: String = \"hi\"\n")
                       path
                     }
-          compiled <- JvmCompile.compile(request(root, source))
+          ask <- request(root, source)
+          compiled <- JvmCompile.compile(ask)
           packed <- ClassJar.write(compiled.classes, root.resolve("hello.jar"))
           names <- ZIO.attempt {
                      val zip = new ZipFile(packed.path.toFile)
@@ -63,20 +63,16 @@ object JarSpec extends ZIOSpecDefault:
     ,
   )
 
-  private def request(root: Path, source: Path): CompileRequest =
-    val home = Path.of(java.lang.System.getProperty("java.home"))
-    val text = if Files.isRegularFile(home.resolve("release")) then Files.readString(home.resolve("release")) else ""
-    val jdk = JdkVersion.fromRelease(text) match
-      case Right(version) => ResolvedJdk(home, version)
-      case Left(_)        => ResolvedJdk(home, JdkVersion.trusted("21.0.2", JdkMajor.trusted(21)))
-    CompileRequest(
-      CompileToolchain(JvmCompile.Scala390, histos.Platform.Jvm, jdk, ScalacFlags.empty),
-      List(source),
-      Nil,
-      root.resolve("classes"),
-      root.resolve("analysis"),
-      Nil,
-    )
+  private def request(root: Path, source: Path): zio.IO[GraphCompileError, CompileRequest] =
+    GraphCompile.jdkHere.map: jdk =>
+      CompileRequest(
+        CompileToolchain(JvmCompile.Scala390, histos.Platform.Jvm, jdk, ScalacFlags.empty),
+        List(source),
+        Nil,
+        root.resolve("classes"),
+        root.resolve("analysis"),
+        Nil,
+      )
 
   private def temp: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-jar"))): dir =>
@@ -89,4 +85,4 @@ object JarSpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = jar
+  def spec = jar @@ TestAspect.withLiveSystem

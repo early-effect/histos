@@ -13,7 +13,7 @@ import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, UIO, ZIO}
+import zio.{Chunk, Clock, IO, UIO, ZIO}
 
 /**
  * Compiles a plugin before the build file. The class directory lives under `plugins/<digest>`
@@ -209,9 +209,10 @@ private[load] object PluginCompile:
     Digest.from(hex) match
       case None => ZIO.fail(LoadError.Io(LoadIo.Write))
       case Some(_) =>
-        ZIO.attempt(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(java.time.Instant.now)))
-          .mapError(_ => LoadError.Io(LoadIo.Write))
-          .as(dest)
+        Clock.instant.flatMap: now =>
+          ZIO.attempt(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(now)))
+            .mapError(_ => LoadError.Io(LoadIo.Write))
+            .as(dest)
 
   private def ready(dir: Path): Boolean =
     Files.isRegularFile(dir.resolve(".complete"))

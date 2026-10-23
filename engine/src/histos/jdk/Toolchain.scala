@@ -1,12 +1,13 @@
 package histos.jdk
 
+import histos.native.{NativeOrigin, NativeToolchain}
 import histos.process.ProcessTree
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Duration, IO, ZIO, durationInt}
+import zio.{Config, ConfigProvider, Duration, IO, ZIO, ZLayer, durationInt}
 
 enum Os:
   case Mac, Linux, Windows, Other
@@ -37,7 +38,63 @@ final case class Machine(
     repo: Path,
     running: Option[Path],
     settled: Settled,
+    native: NativeOrigin,
 )
+
+object Machine:
+  /** `HISTOS_NATIVE` and `HISTOS_JDK_SETTLED` from one environment map. */
+  final case class Settings(native: NativeOrigin, settled: Settled)
+
+  val native: Config[NativeOrigin] =
+    Config.string("HISTOS_NATIVE").optional.map:
+      case None => NativeOrigin.Central
+      case Some(raw) =>
+        NativeToolchain.parse(raw) match
+          case Left(error)   => NativeOrigin.Refused(error)
+          case Right(source) => NativeOrigin.Chosen(source)
+
+  val settled: Config[Settled] =
+    Config.string("HISTOS_JDK_SETTLED").optional.map:
+      case Some("1") => Settled.Yes
+      case _         => Settled.No
+
+  val config: Config[Settings] =
+    (native ++ settled).map { case (origin, flag) => Settings(origin, flag) }
+
+  /**
+   * One read of the fiber's `zio.System`. `HISTOS_*` is `zio.Config` over that
+   * map. ZIO keeps `System` on the default-services fiber ref, so this effect's
+   * environment stays empty: tests swap the ref, they do not provide a layer.
+   */
+  def load(repo: Path): IO[ToolchainError, Machine] =
+    ZIO.systemWith: system =>
+      for
+        env <- system.envs.mapError(_ => ToolchainError.Denied)
+        home <- system.property("user.home").mapError(_ => ToolchainError.Denied).flatMap:
+          case Some(value) if value.nonEmpty => ZIO.succeed(value)
+          case _                              => ZIO.fail(ToolchainError.NoUserHome)
+        os <- system.property("os.name").mapError(_ => ToolchainError.Denied).map:
+          case Some(name) if name.nonEmpty => Os.from(name)
+          case _                            => Os.Other
+        running <- system.property("java.home").mapError(_ => ToolchainError.Denied).map: value =>
+          value.filter(_.nonEmpty).map(Path.of(_))
+        settings <- ZIO
+          .config(config)
+          .provideLayer(zio.Runtime.setConfigProvider(ConfigProvider.fromMap(env)))
+          .mapError(error => ToolchainError.Config(error))
+      yield Machine(
+        env,
+        home,
+        os,
+        histos.cache.ContentStore.home(env.get("XDG_CACHE_HOME"), home),
+        repo,
+        running,
+        settings.settled,
+        settings.native,
+      )
+
+  def layer(repo: Path): ZLayer[Any, ToolchainError, Machine] =
+    ZLayer.fromZIO(load(repo))
 
 enum Launch:
   case Stay(chosen: Candidate.Match)
@@ -77,6 +134,8 @@ enum ToolchainError:
   case Unreadable(path: Path)
   case NoLock(path: Path)
   case NoUserHome
+  case Denied
+  case Config(error: zio.Config.Error)
   case Reexec
 
   def message: String = this match
@@ -87,7 +146,20 @@ enum ToolchainError:
     case Unreadable(path) => s"could not read $path"
     case NoLock(path)     => s"no jdk lock at $path"
     case NoUserHome       => "user.home is not set"
+    case Denied           => "the process environment could not be read"
+    case Config(error)    => s"configuration: ${configText(error)}"
     case Reexec           => "could not re-exec onto the chosen jdk"
+
+  private def configText(error: zio.Config.Error): String =
+    error.fold(
+      (path, message) => s"${place(path)} $message",
+      (path, message) => s"${place(path)} $message",
+      (path, message, _) => s"${place(path)} $message",
+      (path, message) => s"${place(path)} $message",
+    )((left, right) => s"$left; $right", (left, right) => s"$left or $right")
+
+  private def place(path: zio.Chunk[String]): String =
+    if path.isEmpty then "config" else path.mkString(".")
 
 object JdkLocations:
   def coursierCache(userHome: String, os: Os, env: Map[String, String]): Path =

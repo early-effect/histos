@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.jdk.{Machine, Os, Settled}
+import histos.native.NativeOrigin
 import histos.load.PluginLink
 import histos.plugin.*
 import histos.workflow.WorkflowAction
@@ -586,6 +587,6 @@ object CliSpec extends ZIOSpecDefault:
       histos.resolve.Resolve.live(dir.resolve("cache").resolve("resolve"))
 
   private def machine(dir: Path, env: Map[String, String]): Machine =
-    Machine(env, dir.toString, Os.Linux, dir.resolve("cache"), dir, None, Settled.No)
+    Machine(env, dir.toString, Os.Linux, dir.resolve("cache"), dir, None, Settled.No, NativeOrigin.read(env))
 
-  def spec = cli
+  def spec = cli @@ TestAspect.withLiveSystem

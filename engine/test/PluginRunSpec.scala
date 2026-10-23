@@ -298,7 +298,9 @@ object PluginRunSpec extends ZIOSpecDefault:
           }.orDie
           listed = List(first, second, first)
           id = PluginTaskId(echoId, TaskName("echo"))
-          hashed <- PluginInputs.hash(dir, built, echoId, page, id, listed.map(_.toString), launcher)
+          hashed <- PluginInputs.hash(
+            PluginInputs.HashRequest(dir, built, echoId, page, id, listed.map(_.toString), launcher, Map.empty)
+          )
           (_, cache) <- recording
           out <- run(runtime(dir, built, live, jarsAt(listed)), id, PluginArgs.empty, cache).either
         yield
@@ -447,7 +449,7 @@ object PluginRunSpec extends ZIOSpecDefault:
     test(
       "a compile dependency is compiled and its classpath is on the request"
     ):
-      ZIO.scoped:
+      ZIO.withSystem(zio.System.SystemLive)(ZIO.scoped:
         for
           calls <- Ref.make(0)
           seen <- Ref.make(List.empty[ModuleView])
@@ -527,9 +529,10 @@ object PluginRunSpec extends ZIOSpecDefault:
           text.contains(classes.toString),
           listed.contains("Hello.class")
         )
+      )
     ,
     test("a compile error does not run the plugin"):
-      ZIO.scoped:
+      ZIO.withSystem(zio.System.SystemLive)(ZIO.scoped:
         for
           calls <- Ref.make(0)
           seen <- Ref.make(List.empty[ModuleView])
@@ -578,6 +581,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             case PluginFault.Compiled(histos.zinc.GraphCompileError.Failed(module, version, platform, _)) =>
               module.value == "docs" && version.value == "3.9.0" && platform == Jvm
           assertTrue(failed.contains(true), count == 0)
+      )
     ,
     test("interrupting a parked plugin releases its scope and stores nothing"):
       ZIO.scoped:

@@ -38,14 +38,14 @@ object ContentStore:
 
   def in(root: Path): ContentStore = DiskStore(root)
 
-  /** Plugin manifests are UTF-8 blobs in this store. The stamp is wall time. `ActionCache.put` has no clock. */
+  /** Plugin manifests are UTF-8 blobs in this store. The stamp is the fiber's clock. */
   def actions(store: ContentStore): ActionCache = new ActionCache:
     def get(digest: Digest): IO[CacheError, Option[String]] =
       store.read(digest).map(_.map(bytes => new String(bytes.toArray, StandardCharsets.UTF_8)))
 
     override def put(digest: Digest, value: String): IO[CacheError, Unit] =
       val bytes = Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8))
-      store.put(digest, bytes, Instant.now)
+      Clock.instant.flatMap(at => store.put(digest, bytes, at))
 
   def home(xdgCache: Option[String], userHome: String): Path =
     xdgCache.filter(_.nonEmpty) match

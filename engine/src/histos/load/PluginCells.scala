@@ -81,7 +81,8 @@ private[load] object PluginCells:
       repo: Path,
       graph: ProjectGraph,
       cell: Cell,
-      jdk: histos.zinc.ResolvedJdk
+      jdk: histos.zinc.ResolvedJdk,
+      origin: NativeOrigin,
   ): ZIO[Resolve, PluginFault, Unit] =
     for
       _ <- GraphCompile
@@ -91,7 +92,7 @@ private[load] object PluginCells:
           List(cell.module.name -> cell.version),
           cell.platform,
           jdk,
-          NativeOrigin.Central,
+          origin,
         )
         .runCollect
         .mapError(error => PluginFault.Compiled(error))
@@ -101,7 +102,7 @@ private[load] object PluginCells:
             case error :: _ => ZIO.fail(PluginFault.Compiled(error))
       sources <- testSources(repo, graph, cell).mapError(error => PluginFault.Task(error))
       _ <- ZIO.unless(sources.isEmpty)(
-        compileTests(repo, graph, cell, sources, jdk).mapError(error => PluginFault.Task(error))
+        compileTests(repo, graph, cell, sources, jdk, origin).mapError(error => PluginFault.Task(error))
       )
     yield ()
 
@@ -110,7 +111,8 @@ private[load] object PluginCells:
       graph: ProjectGraph,
       cell: Cell,
       sources: List[Path],
-      jdk: histos.zinc.ResolvedJdk
+      jdk: histos.zinc.ResolvedJdk,
+      origin: NativeOrigin,
   ): ZIO[Resolve, PluginRunError, Unit] =
     val modules = modulesOf(graph)
     val compiled = CompiledCell(
@@ -130,7 +132,7 @@ private[load] object PluginCells:
           compiled,
           sources,
           jdk,
-          NativeOrigin.Central,
+          origin,
           lock,
           BuildResolvers(graph.resolvers)
         )

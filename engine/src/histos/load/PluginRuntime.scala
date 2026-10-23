@@ -1,6 +1,7 @@
 package histos.load
 
-import histos.jdk.Sha256
+import histos.jdk.{Machine, Sha256}
+import histos.native.NativeOrigin
 import histos.plugin.{
   ApiDigest,
   DeclaredTask,
@@ -45,7 +46,7 @@ import histos.{Module, ProjectGraph}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path}
 
-import zio.{Chunk, IO, NonEmptyChunk, Ref, ZIO, ZLayer}
+import zio.{Chunk, ConfigProvider, IO, NonEmptyChunk, Ref, Runtime, System, ZIO, ZLayer}
 
 final case class PluginLink(id: PluginId, linked: PluginLinked, artifacts: List[String])
 
@@ -85,13 +86,17 @@ object PluginRuntime:
         case Some(_) =>
           for
             made <- Ref.make(Map.empty[String, PluginOutput])
-            jdk <- GraphCompile.jdkHere.mapError(error => PluginFault.Compiled(error))
+            env <- System.envs.mapError(_ => PluginFault.Task(PluginRunError.Defect("System")))
+            origin <- ZIO
+              .config(Machine.native)
+              .provideLayer(Runtime.setConfigProvider(ConfigProvider.fromMap(env)))
+              .mapError(_ => PluginFault.Task(PluginRunError.Defect("Config")))
             step <- ZIO.fromEither(PluginSteps.goal(
               id,
               taskOf,
               task => PluginCells.selected(graph, task),
-              cell => PluginCells.compile(repo, graph, cell, jdk),
-              (taskId, task, upstream) => remembered(id, taskId, task, args, made, upstream),
+              cell => compileCell(cell, origin),
+              (taskId, task, upstream) => remembered(id, taskId, task, args, made, upstream, env),
             ))
             outcome <- ZIO.scoped {
               ZIO
@@ -127,6 +132,11 @@ object PluginRuntime:
                 case other                   => TaskError.Plugin(PluginRunError.Failed(PluginDetail.trusted(other.message)))
         bound.toMap
 
+    /** The JDK is read when a compile step runs, on the same fiber `System` the command started with. */
+    private def compileCell(cell: PluginCells.Cell, origin: NativeOrigin): ZIO[Resolve, PluginFault, Unit] =
+      GraphCompile.jdkHere.mapError(error => PluginFault.Compiled(error)).flatMap: jdk =>
+        PluginCells.compile(repo, graph, cell, jdk, origin)
+
     private def remembered(
         root: PluginTaskId,
         id: PluginTaskId,
@@ -134,15 +144,14 @@ object PluginRuntime:
         args: PluginArgs,
         made: Ref[Map[String, PluginOutput]],
         upstream: String,
+        env: Map[String, String],
     ): ZIO[ActionCache & RemoteCache & Resolve & Scheduler, PluginFault, String] =
       val passed = if id == root then args else PluginArgs.empty
       instance(id.plugin) match
         case None => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(plugin) =>
           for
-            hashed <- PluginInputs.hash(repo, graph, id.plugin, task, id, jars(id.plugin), launcher).mapError(error =>
-              PluginFault.Task(error)
-            )
+            hashed <- PluginInputs.hash(hashRequest(id, task, env)).mapError(error => PluginFault.Task(error))
             inputs <- withUpstream(hashed.inputs, upstream)
             compiled <- PluginCells.classpath(repo, graph, task).mapError(error => PluginFault.Task(error))
             action <- ZIO.fromEither(actionOf(id, task, inputs).left.map(error => PluginFault.Task(error)))
@@ -150,7 +159,7 @@ object PluginRuntime:
             info = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
             local = Step.run(
               Step.hermetic[String](info)(
-                produce(id, task, plugin, passed, made, compiled, held).mapError(error => PluginFault.Task(error))
+                produce(id, task, plugin, passed, made, compiled, held, env).mapError(error => PluginFault.Task(error))
               ) @@ PluginAspects.loader(threads) @@ PluginAspects.declaredOutputs(repo, task, held)
             )
             text <- ZIO
@@ -185,9 +194,10 @@ object PluginRuntime:
         made: Ref[Map[String, PluginOutput]],
         compiled: List[histos.plugin.CellClasspath],
         held: Ref[Option[PluginOutput]],
+        env: Map[String, String],
     ): IO[PluginRunError, String] =
       for
-        hashed <- PluginInputs.hash(repo, graph, id.plugin, task, id, jars(id.plugin), launcher)
+        hashed <- PluginInputs.hash(hashRequest(id, task, env))
         output <- invoke(plugin, RunRequest(id, repo, views(id.plugin), args, hashed.material, compiled))
         _      <- check(task, output)
         _      <- held.set(Some(output))
@@ -262,6 +272,9 @@ object PluginRuntime:
 
     private def instance(id: PluginId): Option[HistosPlugin] =
       instances.find(_.id == id)
+
+    private def hashRequest(id: PluginTaskId, task: DeclaredTask, env: Map[String, String]): PluginInputs.HashRequest =
+      PluginInputs.HashRequest(repo, graph, id.plugin, task, id, jars(id.plugin), launcher, env)
 
     private def jars(id: PluginId): List[String] =
       links.collectFirst:

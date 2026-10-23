@@ -2,6 +2,7 @@ package histos.testrun
 
 import histos.Platform
 import histos.pack.{MainClass, MainClassError}
+import histos.zinc.{GraphCompile, GraphCompileError}
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
@@ -15,8 +16,6 @@ import zio.{Chunk, Scope, System, ZIO, durationInt}
 import zio.test.*
 
 object TestProcessSpec extends ZIOSpecDefault:
-  private val javaHome = Path.of(java.lang.System.getProperty("java.home"))
-  private val javaBin  = javaHome.resolve("bin").resolve("java")
   private val exitMain = MainClass.trusted("demo.Exit")
   private val sleepMain = MainClass.trusted("demo.Sleeper")
 
@@ -46,14 +45,16 @@ object TestProcessSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           work <- temp
-          out  <- TestProcess.run(request(work, Platform.Js, exitMain, TestClasspath(work, Nil))).either
+          req  <- request(work, Platform.Js, exitMain, TestClasspath(work, Nil))
+          out  <- TestProcess.run(req).either
         yield assertTrue(out == Left(TestError.UnsupportedPlatform(Platform.Js)))
     ,
     test("a missing java executable is its own error"):
       ZIO.scoped:
         for
           work <- temp
-          out  <- TestProcess.run(request(work, Platform.Jvm, exitMain, TestClasspath(work, Nil)).copy(java = work.resolve("missing-java"))).either
+          req  <- request(work, Platform.Jvm, exitMain, TestClasspath(work, Nil))
+          out  <- TestProcess.run(req.copy(java = work.resolve("missing-java"))).either
         yield assertTrue:
           out match
             case Left(TestError.Java(path)) => path.endsWith("missing-java")
@@ -66,11 +67,12 @@ object TestProcessSpec extends ZIOSpecDefault:
         for
           root    <- temp
           classes <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
-          built   <- ZIO.attempt(libJar(root))
-          compiled <- ZIO.attempt(compile(root, classes, "Exit.java", exitSource, List(built.jar)))
-          work    <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
-          parent   = Option(java.lang.System.getenv("HOME")).filter(_.nonEmpty)
-          outcome <- TestProcess.run(request(work, Platform.Jvm, exitMain, TestClasspath(classes, List(built.jar)))).either
+          built    <- libJar(root)
+          compiled <- compile(root, classes, "Exit.java", exitSource, List(built.jar))
+          work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
+          parent    = Option(java.lang.System.getenv("HOME")).filter(_.nonEmpty)
+          req      <- request(work, Platform.Jvm, exitMain, TestClasspath(classes, List(built.jar)))
+          outcome  <- TestProcess.run(req).either
           lines    = outcome.map(_.out.text.linesIterator.map(_.trim).filter(_.nonEmpty).toList)
           scrubbed = lines match
             case Right(found) => found.contains("home=null") && parent.forall(home => !found.contains(s"home=$home"))
@@ -88,10 +90,11 @@ object TestProcessSpec extends ZIOSpecDefault:
         for
           root    <- temp
           classes <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
-          compiled <- ZIO.attempt(compile(root, classes, "Sleeper.java", sleeperSource, Nil))
+          compiled <- compile(root, classes, "Sleeper.java", sleeperSource, Nil)
           work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
           sleepOk   = Files.isRegularFile(Path.of("/bin/sleep"))
-          fiber    <- TestProcess.run(request(work, Platform.Jvm, sleepMain, TestClasspath(classes, Nil))).fork
+          req      <- request(work, Platform.Jvm, sleepMain, TestClasspath(classes, Nil))
+          fiber    <- TestProcess.run(req).fork
           child    <- awaitPid(work.resolve("child.pid"))
           self     <- awaitPid(work.resolve("self.pid"))
           childBefore = child.exists(alive)
@@ -111,9 +114,10 @@ object TestProcessSpec extends ZIOSpecDefault:
         for
           root     <- temp
           classes  <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
-          compiled <- ZIO.attempt(compile(root, classes, "Leaver.java", leaverSource, Nil))
+          compiled <- compile(root, classes, "Leaver.java", leaverSource, Nil)
           work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
-          outcome  <- TestProcess.run(request(work, Platform.Jvm, leaverMain, TestClasspath(classes, Nil)))
+          req      <- request(work, Platform.Jvm, leaverMain, TestClasspath(classes, Nil))
+          outcome  <- TestProcess.run(req)
           child    <- awaitPid(work.resolve("child.pid"))
           dead     <- ZIO.foreach(child.toList)(awaitDead)
         yield assertTrue(
@@ -137,9 +141,10 @@ object TestProcessSpec extends ZIOSpecDefault:
         for
           root     <- temp
           classes  <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
-          compiled <- ZIO.attempt(compile(root, classes, "Chatty.java", chattySource, Nil))
+          compiled <- compile(root, classes, "Chatty.java", chattySource, Nil)
           work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
-          timed    <- TestProcess.run(request(work, Platform.Jvm, chattyMain, TestClasspath(classes, Nil))).timed
+          req      <- request(work, Platform.Jvm, chattyMain, TestClasspath(classes, Nil))
+          timed    <- TestProcess.run(req).timed
           (took, outcome) = timed
           lines    = outcome.out.text.linesIterator.size
           whole    = outcome.out.text == chattyText
@@ -161,7 +166,8 @@ object TestProcessSpec extends ZIOSpecDefault:
           _       <- executable(bin.resolve("javac"), s"echo $$$$ > '$root/javac.pid'\nexec sleep 30\n")
           classes <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
           work    <- ZIO.attempt(Files.createDirectories(root.resolve("work")))
-          fiber   <- TestProcess.run(request(work, Platform.Jvm, exitMain, TestClasspath(classes, Nil)).copy(java = stub)).fork
+          req     <- request(work, Platform.Jvm, exitMain, TestClasspath(classes, Nil))
+          fiber   <- TestProcess.run(req.copy(java = stub)).fork
           javac   <- awaitPid(root.resolve("javac.pid"))
           exit    <- fiber.interrupt.timeout(3.seconds)
           dead    <- ZIO.foreach(javac.toList)(awaitDead)
@@ -179,8 +185,14 @@ object TestProcessSpec extends ZIOSpecDefault:
   private val ChattyLines = 200000
   private val chattyText  = (0 until ChattyLines).map(index => s"line $index\n").mkString
 
-  private def request(work: Path, platform: Platform, main: MainClass, classpath: TestClasspath): TestRequest =
-    TestRequest(platform, javaBin, classpath, main, work)
+  private def request(
+      work: Path,
+      platform: Platform,
+      main: MainClass,
+      classpath: TestClasspath,
+  ): zio.IO[GraphCompileError, TestRequest] =
+    GraphCompile.jdkHere.map: jdk =>
+      TestRequest(platform, jdk.home.resolve("bin").resolve("java"), classpath, main, work)
 
   private def alive(pid: Long): Boolean =
     ProcessHandle.of(pid).toScala.exists(_.isAlive)
@@ -262,35 +274,55 @@ object TestProcessSpec extends ZIOSpecDefault:
   private final case class Tool(code: Int, text: String)
   private final case class Library(tool: Tool, jar: Path)
 
-  private def libJar(root: Path): Library =
-    val sources = Files.createDirectories(root.resolve("lib-src"))
-    val classes = Files.createDirectories(root.resolve("lib-classes"))
-    val file    = sources.resolve("Lib.java")
-    Files.writeString(file, libSource)
-    val tool = javacTool(List("-d", classes.toString, file.toString))
-    val jar  = root.resolve("lib.jar")
-    if tool.code == 0 then
-      val buffer = new ByteArrayOutputStream
-      val output = new JarOutputStream(buffer)
-      output.putNextEntry(new JarEntry("demo/Lib.class"))
-      output.write(Files.readAllBytes(classes.resolve("demo").resolve("Lib.class")))
-      output.closeEntry()
-      output.close()
-      Files.write(jar, buffer.toByteArray)
-    Library(tool, jar)
+  private def libJar(root: Path): zio.IO[Throwable | GraphCompileError, Library] =
+    for
+      pair <- ZIO.attempt:
+        val sources = Files.createDirectories(root.resolve("lib-src"))
+        val classes = Files.createDirectories(root.resolve("lib-classes"))
+        val file = sources.resolve("Lib.java")
+        Files.writeString(file, libSource)
+        (classes, file)
+      (classes, file) = pair
+      tool <- javacTool(List("-d", classes.toString, file.toString))
+      jar = root.resolve("lib.jar")
+      library <- ZIO.attempt:
+        if tool.code == 0 then
+          val buffer = new ByteArrayOutputStream
+          val output = new JarOutputStream(buffer)
+          output.putNextEntry(new JarEntry("demo/Lib.class"))
+          output.write(Files.readAllBytes(classes.resolve("demo").resolve("Lib.class")))
+          output.closeEntry()
+          output.close()
+          Files.write(jar, buffer.toByteArray)
+        Library(tool, jar)
+    yield library
 
-  private def compile(root: Path, classes: Path, name: String, source: String, classpath: List[Path]): Tool =
-    val sources = Files.createDirectories(root.resolve("src"))
-    val file    = sources.resolve(name)
-    Files.writeString(file, source)
-    val cp = if classpath.isEmpty then Nil else List("-cp", classpath.map(_.toString).mkString(java.io.File.pathSeparator))
-    javacTool(cp ++ List("-d", classes.toString, file.toString))
+  private def compile(
+      root: Path,
+      classes: Path,
+      name: String,
+      source: String,
+      classpath: List[Path],
+  ): zio.IO[Throwable | GraphCompileError, Tool] =
+    for
+      args <- ZIO.attempt:
+        val sources = Files.createDirectories(root.resolve("src"))
+        val file = sources.resolve(name)
+        Files.writeString(file, source)
+        val cp =
+          if classpath.isEmpty then Nil
+          else List("-cp", classpath.map(_.toString).mkString(java.io.File.pathSeparator))
+        cp ++ List("-d", classes.toString, file.toString)
+      tool <- javacTool(args)
+    yield tool
 
-  private def javacTool(args: List[String]): Tool =
-    val javac   = javaHome.resolve("bin").resolve("javac")
-    val process = new ProcessBuilder((javac.toString :: args).asJava).redirectErrorStream(true).start()
-    val text    = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-    Tool(process.waitFor(), text)
+  private def javacTool(args: List[String]): zio.IO[Throwable | GraphCompileError, Tool] =
+    GraphCompile.jdkHere.flatMap: jdk =>
+      val javac = jdk.home.resolve("bin").resolve("javac")
+      ZIO.attemptBlocking:
+        val process = new ProcessBuilder((javac.toString :: args).asJava).redirectErrorStream(true).start()
+        val text    = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
+        Tool(process.waitFor(), text)
 
   private def temp: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-test-run"))): dir =>

@@ -1,5 +1,7 @@
 package histos.jdk
 
+import histos.cache.ContentStore
+import histos.native.{NativeOrigin, NativeSource, NativeToolchainError}
 import histos.testrun.{ProcessExit, TestEvent, TestProcess}
 
 import java.nio.file.{Files, Path}
@@ -493,7 +495,7 @@ object JdkSpec extends ZIOSpecDefault:
     }.timeout(1.second).map(_.getOrElse(false))
 
   private def machine(root: Path): Machine =
-    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No, NativeOrigin.Central)
 
   private def writeLock(root: Path, archive: Path, bytes: Array[Byte]): zio.Task[Unit] =
     ZIO.attempt {
@@ -544,4 +546,48 @@ object JdkSpec extends ZIOSpecDefault:
         paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  def spec = suite("jdk")(policy, versions, locks, stage, startup, handOff)
+  private val config = suite("machine")(
+    test("HISTOS_NATIVE and HISTOS_JDK_SETTLED are config over the one environment read"):
+      TestSystem.save.flatMap: restore =>
+        val body =
+          for
+            _ <- TestSystem.putProperty("user.home", "/home/dev")
+            _ <- TestSystem.putProperty("os.name", "Linux")
+            _ <- TestSystem.putProperty("java.home", "/jdks/21")
+            _ <- TestSystem.putEnv("HISTOS_NATIVE", "ivy-local")
+            _ <- TestSystem.putEnv("HISTOS_JDK_SETTLED", "1")
+            _ <- TestSystem.putEnv("XDG_CACHE_HOME", "/xdg")
+            loaded <- Machine.load(Path.of("/repo"))
+            _ <- TestSystem.clearProperty("user.home")
+            missing <- Machine.load(Path.of("/repo")).either
+            _ <- TestSystem.putProperty("user.home", "")
+            blank <- Machine.load(Path.of("/repo")).either
+            _ <- TestSystem.putProperty("user.home", "/home/dev")
+            _ <- TestSystem.clearProperty("java.home")
+            _ <- TestSystem.putEnv("HISTOS_NATIVE", "nope")
+            _ <- TestSystem.putEnv("HISTOS_JDK_SETTLED", "true")
+            _ <- TestSystem.clearEnv("XDG_CACHE_HOME")
+            refused <- Machine.load(Path.of("/repo"))
+            _ <- TestSystem.clearEnv("HISTOS_NATIVE")
+            central <- Machine.load(Path.of("/repo"))
+          yield assertTrue(
+            loaded.native == NativeOrigin.Chosen(NativeSource.IvyLocal),
+            loaded.settled == Settled.Yes,
+            loaded.os == Os.Linux,
+            loaded.userHome == "/home/dev",
+            loaded.running.contains(Path.of("/jdks/21")),
+            loaded.cache == ContentStore.home(Some("/xdg"), "/home/dev"),
+            loaded.repo == Path.of("/repo"),
+            loaded.env.get("HISTOS_NATIVE").contains("ivy-local"),
+            missing == Left(ToolchainError.NoUserHome),
+            blank == Left(ToolchainError.NoUserHome),
+            refused.native == NativeOrigin.Refused(NativeToolchainError.Origin("nope")),
+            refused.settled == Settled.No,
+            refused.running.isEmpty,
+            central.native == NativeOrigin.Central,
+            central.cache == ContentStore.home(None, "/home/dev"),
+          )
+        body.ensuring(restore)
+  )
+
+  def spec = suite("jdk")(policy, versions, locks, stage, startup, handOff, config)

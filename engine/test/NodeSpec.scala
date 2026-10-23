@@ -1,6 +1,7 @@
 package histos.node
 
 import histos.jdk.{ArchiveSource, HttpsUrl, Machine, Os, Settled, Sha256}
+import histos.native.NativeOrigin
 import histos.testrun.{ProcessExit, TestEvent, TestProcess}
 import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
@@ -173,6 +174,7 @@ object NodeSpec extends ZIOSpecDefault:
                       root,
                       None,
                       Settled.No,
+                      NativeOrigin.Central,
                     )
           url  <- ZIO.fromEither(HttpsUrl.from("https://example.test/node.zip"))
           _    <- ZIO.attempt(writeLock(root, ArchiveSource.Remote(url), Sha256.of(Chunk.fromArray("x".getBytes))))
@@ -189,7 +191,7 @@ object NodeSpec extends ZIOSpecDefault:
           _      <- ZIO.attempt(script(nvm, "v22.14.0"))
           _      <- ZIO.attempt(Files.setPosixFilePermissions(node, PosixFilePermissions.fromString("rw-r--r--")))
           before <- ZIO.attempt(Files.getPosixFilePermissions(node).asScala.toSet)
-          machine = Machine(Map("NVM_DIR" -> root.resolve(".nvm").toString), root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+          machine = Machine(Map("NVM_DIR" -> root.resolve(".nvm").toString), root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No, NativeOrigin.Central)
           url    <- ZIO.fromEither(HttpsUrl.from("https://example.test/node.zip"))
           _      <- ZIO.attempt(writeLock(root, ArchiveSource.Remote(url), Sha256.of(Chunk.fromArray("x".getBytes))))
           found  <- NodeToolchain.explain(machine)
@@ -288,7 +290,7 @@ object NodeSpec extends ZIOSpecDefault:
   )
 
   private def at(root: Path): Machine =
-    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No)
+    Machine(Map.empty, root.toString, Os.Linux, root.resolve("cache"), root, None, Settled.No, NativeOrigin.Central)
 
   private def pack(argv: List[String], root: Path, env: Map[String, String]) =
     TestProcess.command(argv, root.resolve("pack"), env).runCollect.map(_.lastOption.contains(TestEvent.Exited(ProcessExit(0))))

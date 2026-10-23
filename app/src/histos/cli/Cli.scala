@@ -6,15 +6,7 @@ import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
-import histos.jdk.{
-  Machine,
-  Os,
-  Settled,
-  Sha256,
-  Startup,
-  Toolchain,
-  ToolchainError
-}
+import histos.jdk.{Machine, Sha256, Startup, Toolchain, ToolchainError}
 import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.schedule.RemoteCache
@@ -41,8 +33,6 @@ import histos.{Module, Platform}
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
-import java.time.Instant
-
 import zio.*
 
 enum Command:
@@ -801,9 +791,8 @@ object Cli:
 
   private def cacheClean(dryRun: Boolean): URIO[ContentStore, Completed] =
     ZIO
-      .serviceWithZIO[ContentStore](
-        _.clean(Instant.now(), ContentStore.Retention, dryRun)
-      )
+      .serviceWithZIO[ContentStore]: store =>
+        Clock.instant.flatMap(now => store.clean(now, ContentStore.Retention, dryRun))
       .mapBoth(
         err => Completed(CliExit.LoadFailed, "", err.message),
         entries =>
@@ -1367,7 +1356,7 @@ object Main extends ZIOAppDefault:
       repo: Path,
       jars: Jars
   ): URIO[Scope, Unit] =
-    machineHere(repo).foldZIO(
+    Machine.load(repo).foldZIO(
       err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
       machine =>
         Cli
@@ -1436,23 +1425,6 @@ object Main extends ZIOAppDefault:
     Console.printLine(done.out).when(done.out.nonEmpty).ignore *>
       Console.printLineError(done.err).when(done.err.nonEmpty).ignore *>
       stop(done.exit.code)
-
-  private def machineHere(repo: Path): IO[ToolchainError, Machine] =
-    val env = scala.sys.env
-    val os =
-      Option(java.lang.System.getProperty("os.name")).filter(_.nonEmpty) match
-        case Some(name) => Os.from(name)
-        case None       => Os.Other
-    val running = Option(java.lang.System.getProperty("java.home"))
-      .filter(_.nonEmpty)
-      .map(Path.of(_))
-    Option(java.lang.System.getProperty("user.home")).filter(_.nonEmpty) match
-      case None       => ZIO.fail(ToolchainError.NoUserHome)
-      case Some(home) =>
-        val cache = ContentStore.home(env.get("XDG_CACHE_HOME"), home)
-        ZIO.succeed(
-          Machine(env, home, os, cache, repo, running, Settled.from(env))
-        )
 
   private def jars: IO[LoadError, Jars] =
     located.flatMap: program =>

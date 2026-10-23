@@ -28,27 +28,33 @@ import zio.{Chunk, IO, ZIO}
 private[load] object PluginInputs:
   final case class Hashed(inputs: List[Input], material: List[MaterialInput])
 
-  def hash(
+  /** One hash. `env` is the map `Machine.load` already read. */
+  final case class HashRequest(
       repo: Path,
       graph: ProjectGraph,
       plugin: PluginId,
       task: DeclaredTask,
-      taskId: PluginTaskId,
+      id: PluginTaskId,
       jars: List[String],
       launcher: ApiDigest,
-  ): IO[PluginRunError, Hashed] =
+      env: Map[String, String],
+  )
+
+  def hash(request: HashRequest): IO[PluginRunError, Hashed] =
+    val HashRequest(repo, graph, plugin, task, id, jars, launcher, env) = request
     for
-      declared <- ZIO.foreach(task.inputs)(one(repo, graph, plugin, _))
+      declared <- ZIO.foreach(task.inputs)(one(repo, graph, plugin, env, _))
       deps     <- compileInputs(repo, graph, task)
       jarsIn   <- ZIO.foreach(jars.sorted)(jarInput).map(_.distinct)
       api      <- named("plugin.api", InputValue.Hash(digest(launcher.value)))
-      id       <- named("plugin.task", InputValue.Text(taskId.render))
-    yield Hashed(declared.map(_._1) ::: deps ::: jarsIn ::: List(api, id), declared.map(_._2))
+      taskIn   <- named("plugin.task", InputValue.Text(id.render))
+    yield Hashed(declared.map(_._1) ::: deps ::: jarsIn ::: List(api, taskIn), declared.map(_._2))
 
   private def one(
       repo: Path,
       graph: ProjectGraph,
       plugin: PluginId,
+      env: Map[String, String],
       input: DeclaredInput,
   ): IO[PluginRunError, (Input, MaterialInput)] =
     input match
@@ -65,8 +71,7 @@ private[load] object PluginInputs:
       case DeclaredInput.Text(name, value) =>
         pair(s"in:text:${name.value}", InputValue.Text(value), MaterialInput.Text(name, value))
       case DeclaredInput.Env(name) =>
-        val raw = Option(System.getenv(name.value))
-        raw match
+        env.get(name.value) match
           case None =>
             ZIO.fail(PluginRunError.Failed(PluginDetail.trusted(s"env ${name.value} is not set")))
           case Some(value) =>
