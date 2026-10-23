@@ -91,6 +91,10 @@ object ModuleTest:
     * the next, in module name order.
     */
   def suites(asked: TestRun, compiled: List[CompiledCell]): ZStream[Resolve, ModuleTestError, TestFeed] =
+    ZStream.fromZIO(ProviderInstall.make).flatMap: install =>
+      runCells(asked, compiled).provideSomeEnvironment[Resolve](_.add(install))
+
+  private def runCells(asked: TestRun, compiled: List[CompiledCell]): ZStream[Resolve & ProviderInstall, ModuleTestError, TestFeed] =
     val TestRun(repo, graph, names, jdk, runtimes, patterns, quick, onTestCompile) = asked
     val repositories = BuildResolvers(graph.resolvers)
     ZStream.unwrap {
@@ -151,7 +155,7 @@ object ModuleTest:
       matched: Ref[Boolean],
       quick: Boolean,
       onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit]
-  ): ZIO[Resolve, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     val modules = graph.projects.collect { case module: Module => module }
     graph.get(cell.module) match
       case Some(module: Module) =>

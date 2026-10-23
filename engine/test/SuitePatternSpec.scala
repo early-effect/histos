@@ -29,6 +29,17 @@ object SuitePatternSpec extends ZIOSpecDefault:
             !SuitePattern.allows(List(mark), "com.acme.FooAB")
           case _ => false
     ,
+    test("an exact class does not match a different class"):
+      val found = SuitePattern.from("histos.testrun.ProviderNoteSpec")
+      assertTrue:
+        found match
+          case Right(pattern) =>
+            SuitePattern.allows(List(pattern), "histos.testrun.ProviderNoteSpec") &&
+            SuitePattern.allows(List(pattern), "histos.testrun.ProviderNoteSpec$") &&
+            !SuitePattern.allows(List(pattern), "histos.load.SpecularFixtureSpec") &&
+            !SuitePattern.allows(List(pattern), "histos.load.SpecularFixtureSpec$")
+          case Left(_) => false
+    ,
     test("an exact name does not match a longer one"):
       val found = SuitePattern.from("com.acme.FooA")
       assertTrue(

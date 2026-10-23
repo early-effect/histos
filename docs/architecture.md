@@ -106,7 +106,7 @@ Scala.js and Scala Native cells compile through Zinc with the platform's compile
 
 A JVM compile keeps Zinc's analysis in `.histos/analysis/<module>/<version>/<platform>/inc.zip` and passes it back as the previous result. An unchanged class file is not rewritten. A removed source deletes its class file. One compile holds a compiler for each toolchain and reuses it for the next cell. The pool does not sleep: `ZKeyedPool`'s shrink timer waits on the test clock.
 
-The provider runner is compiled once per Scala version. The framework, class directory, and suite patterns are a file the child reads, not source that changes every run.
+The provider runner is one install per Scala version and compile classpath. The cells that need that install share it, and one of them writes it. The framework, class directory, and suite patterns are a value on the child request. Spawn copies that value into the child process. Nothing on disk is shared between cells.
 
 `Workspace` is the filesystem the build owns. `Resolve.readLock` is the one reader of `.histos/dependencies.lock`. A missing file is `ResolveError.NoLock`. A failed read is `ResolveError.Io`, which carries the path and an `IoFault`. `Workspace.delete` is the one tree delete. `Workspace.work` is a temporary directory removed when its scope closes, including on interrupt. The api jar tests pack, the loader's build classes, and assembly's scratch directory use it.
 

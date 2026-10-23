@@ -52,44 +52,6 @@ import zio.{Chunk, IO, Ref, UIO, ZIO}
 import zio.stream.ZStream
 
 private[histos] object TestCompile:
-  private[testrun] def installRunner(
-      repo: Path,
-      module: ProjectName,
-      version: ScalaVersion,
-      jdk: ResolvedJdk,
-      classpath: List[Path],
-  ): IO[ModuleTestError, Path] =
-    val root = repo.resolve(".histos").resolve("provider").resolve(version.value)
-    val source = root.resolve("src").resolve("subprocess").resolve("Provider.scala")
-    val classes = root.resolve("classes")
-    for
-      _ <- ZIO.attemptBlocking {
-        Files.createDirectories(source.getParent)
-        Files.writeString(source, ProviderRunner.source)
-      }.mapError(_ => ModuleTestError.Runner(source))
-      _ <- JvmCompile
-        .compile(
-          CompileRequest(
-            CompileToolchain(version, Platform.Jvm, jdk, ScalacFlags.empty),
-            List(source),
-            classpath,
-            classes,
-            root.resolve("analysis"),
-            Nil,
-          )
-        )
-        .mapError(error => ModuleTestError.Sources(module, version, error))
-    yield classes
-
-  private[testrun] def writeNote(path: Path, framework: String, classes: Path, patterns: List[SuitePattern]): IO[ModuleTestError, Unit] =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        Files.writeString(path, ProviderRunner.note(framework, classes, patterns))
-      }
-      .mapError(_ => ModuleTestError.Runner(path))
-      .unit
-
   /** The framework a test target launches, or a refusal when that library is
     * not a test dependency. A named test main opts out of the framework.
     */
