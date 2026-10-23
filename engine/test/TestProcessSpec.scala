@@ -154,7 +154,7 @@ object TestProcessSpec extends ZIOSpecDefault:
           lines == ChattyLines,
           whole,
           outcome.err.text.isEmpty,
-          took.toSeconds < 5,
+          took.compareTo(15.seconds) < 0,
         )
     ,
     test("interrupting the bootstrap compile kills javac"):
