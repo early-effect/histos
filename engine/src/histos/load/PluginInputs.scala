@@ -40,7 +40,7 @@ private[load] object PluginInputs:
     for
       declared <- ZIO.foreach(task.inputs)(one(repo, graph, plugin, _))
       deps     <- compileInputs(repo, graph, task)
-      jarsIn   <- ZIO.foreach(jars.sorted)(jarInput)
+      jarsIn   <- ZIO.foreach(jars.sorted)(jarInput).map(_.distinct)
       api      <- named("plugin.api", InputValue.Hash(digest(launcher.value)))
       id       <- named("plugin.task", InputValue.Text(taskId.render))
     yield Hashed(declared.map(_._1) ::: deps ::: jarsIn ::: List(api, id), declared.map(_._2))
@@ -162,6 +162,7 @@ private[load] object PluginInputs:
   private enum PluginFile:
     case Absent, Directory, Jar
 
+  /** Named by content, so a path never enters the key and two jars that share a file name stay two inputs. */
   private def jarInput(path: String): IO[PluginRunError, Input] =
     val file = Path.of(path)
     ZIO.attempt {
@@ -170,10 +171,12 @@ private[load] object PluginInputs:
       else PluginFile.Absent
     }.orElseFail(missing(path)).flatMap:
       case PluginFile.Absent => ZIO.fail(missing(path))
-      case PluginFile.Directory => dirHash(file, path).flatMap(sha => named(s"plugin.jar:$path", InputValue.Hash(sha)))
+      case PluginFile.Directory => dirHash(file, path).flatMap(byContent)
       case PluginFile.Jar =>
-        ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(file)))).orElseFail(missing(path)).flatMap: sha =>
-          named(s"plugin.jar:$path", InputValue.Hash(sha))
+        ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(file)))).orElseFail(missing(path)).flatMap(byContent)
+
+  private def byContent(sha: Sha256): IO[PluginRunError, Input] =
+    named(s"plugin.jar:${sha.value}", InputValue.Hash(sha))
 
   private def pair(name: String, value: InputValue, material: MaterialInput): IO[PluginRunError, (Input, MaterialInput)] =
     named(name, value).map(input => (input, material))

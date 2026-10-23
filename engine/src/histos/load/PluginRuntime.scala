@@ -28,7 +28,7 @@ import zio.{Chunk, IO, Ref, ZIO, ZLayer}
 final case class PluginLink(id: PluginId, linked: PluginLinked, artifacts: List[String])
 
 /**
- * Loaded plugin classes. The load `Scope` owns `loader` and closes it when the caller finishes.
+ * Loaded plugin classes. The load `Scope` owns `loader` and `threads` and closes them when the caller finishes.
  * `run` uses an inner `Scope`, so a plugin's finalizer runs when the task ends, including on interrupt.
  */
 trait PluginRuntime:
@@ -41,16 +41,18 @@ object PluginRuntime:
       repo: Path,
       graph: ProjectGraph,
       loader: ClassLoader,
+      threads: PluginThreads,
       instances: List[HistosPlugin],
       links: List[PluginLink],
       launcher: ApiDigest,
   ): PluginRuntime =
-    Running(repo, graph, loader, instances, links, launcher)
+    Running(repo, graph, loader, threads, instances, links, launcher)
 
   private final class Running(
       repo: Path,
       graph: ProjectGraph,
       loader: ClassLoader,
+      threads: PluginThreads,
       instances: List[HistosPlugin],
       val links: List[PluginLink],
       launcher: ApiDigest,
@@ -128,10 +130,8 @@ object PluginRuntime:
       yield text
 
     private def invoke(plugin: HistosPlugin, request: RunRequest): IO[PluginRunError, PluginOutput] =
-      val ran =
-        ZIO.acquireReleaseWith(swap(loader))(restoreLoader): _ =>
-          ZIO.scoped(plugin.run(request).catchSomeDefect(defect => ZIO.fail(classify(defect))))
-      ran.flatMap(leak).catchAll(refuse)
+      val ran = ZIO.suspendSucceed(plugin.run(request)).catchSomeDefect(defect => ZIO.fail(classify(defect)))
+      threads.run(ZIO.scoped(ran)).flatMap(leak).catchAll(refuse)
 
     private def leak(output: PluginOutput): IO[PluginRunError, PluginOutput] =
       refused match
@@ -247,18 +247,8 @@ object PluginRuntime:
 
     private def refused: Option[String] =
       loader match
-        case build: BuildLoader => build.takeRefused
+        case build: BuildLoader => build.takeRefused.map(_.binary)
         case _                  => None
-
-    private def swap(next: ClassLoader): ZIO[Any, Nothing, ClassLoader] =
-      ZIO.succeed {
-        val previous = Thread.currentThread.getContextClassLoader
-        Thread.currentThread.setContextClassLoader(next)
-        previous
-      }
-
-    private def restoreLoader(previous: ClassLoader): ZIO[Any, Nothing, Unit] =
-      ZIO.succeed(Thread.currentThread.setContextClassLoader(previous)).ignore
 
     private def classify(err: Throwable): PluginRunError =
       err match

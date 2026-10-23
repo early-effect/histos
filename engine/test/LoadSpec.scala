@@ -494,12 +494,7 @@ object LoadSpec extends ZIOSpecDefault:
           jar <- apiJar
           hex <- apiHex(jar)
           repo <- withRepo(usingPath)
-          _ <- ZIO.attempt {
-                 val root = repo.resolve("tools").resolve("docs")
-                 Files.createDirectories(root.resolve("META-INF").resolve("histos"))
-                 Files.writeString(root.resolve("Echo.scala"), echoSource)
-                 Files.writeString(root.resolve("META-INF").resolve("histos").resolve("plugin"), "dev.example.Echo$\n")
-               }.mapError(_ => LoadError.Io(LoadIo.Temp))
+          _ <- plant(repo, "tools/docs", echoSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
           ran <- loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
@@ -512,7 +507,241 @@ object LoadSpec extends ZIOSpecDefault:
           ,
           ran == PluginOutput("", Nil),
         )
+    ,
+    test("a plugin's blocking step has the build loader as its context loader"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(usingPath)
+          _ <- plant(repo, "tools/docs", blockingSource, "dev.example.Echo$")
+          loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
+          // An idle default blocking thread keeps the context loader of the thread that started it.
+          _ <- ZIO.attemptBlocking(()).ignore
+          ran <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("echo"))).either
+        yield assertTrue(ran == Right(PluginOutput("dev.example.Echo$", Nil)))
+    ,
+    test("a refused lookup fails only the run that made it"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(usingPath)
+          _ <- plant(repo, "tools/docs", leakSource, "dev.example.Echo$")
+          loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
+          leaked <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("leak"))).either
+          echoed <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("echo"))).either
+        yield assertTrue(
+          leaked == Left(PluginRunError.EngineLeak("histos.schedule.Sendable")),
+          echoed == Right(PluginOutput("echo", Nil)),
+        )
+    ,
+    test("a plugin initializer that throws is a defect that names its coordinate"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(pathBuild)
+          _ <- plant(repo, "tools/docs", boomSource, "dev.example.Boom$")
+          out <- ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either
+        yield assertTrue(
+          out.is(_.left) == LoadError.Plugin(
+            PluginLoadError.Defect(PluginCoordinate.Path(ProjectPath("tools/docs")), "java.lang.ExceptionInInitializerError")
+          )
+        )
+    ,
+    test("an engine leak while the graph runs names the plugin whose class asked"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(usingTwo)
+          _ <- plant(repo, "tools/a", quietSource, "dev.a.A$")
+          _ <- plant(repo, "tools/b", askingSource, "dev.b.B$")
+          out <- ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either
+        yield assertTrue(
+          out.is(_.left) == LoadError.Plugin(
+            PluginLoadError.EngineLeak(PluginCoordinate.Path(ProjectPath("tools/b")), "histos.schedule.Sendable")
+          )
+        )
+    ,
+    test("build diagnostics compile the blanked header against the path plugin"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(usingPath)
+          _ <- plant(repo, "tools/docs", echoSource, "dev.example.Echo$")
+          notes <- ZIO.serviceWithZIO[Loader](_.reportBuild(repo, jar))
+        yield assertTrue(notes == BuildNotes(false, Nil))
+    ,
+    test("a plugin that summons a Tag at run time links izumi-reflect"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(usingPath)
+          _ <- plant(repo, "tools/docs", taggedSource, "dev.example.Echo$")
+          loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
+          ran <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("echo"))).either
+        yield assertTrue(ran == Right(PluginOutput("hi", Nil)))
+    ,
+    test("a run that throws before it returns an effect is a typed defect"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          repo <- withRepo(usingPath)
+          _ <- plant(repo, "tools/docs", eagerSource, "dev.example.Echo$")
+          loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
+          ran <- runOf(loaded, PluginTaskId(PluginId("dev.example"), TaskName("echo"))).either
+        yield assertTrue(ran == Left(PluginRunError.Defect("java.lang.IllegalStateException")))
   )
+
+  private def plant(repo: Path, path: String, source: String, entry: String): IO[LoadError, Unit] =
+    ZIO.attempt {
+      val root = repo.resolve(path)
+      Files.createDirectories(root.resolve("META-INF").resolve("histos"))
+      Files.writeString(root.resolve("Plugin.scala"), source)
+      Files.writeString(root.resolve("META-INF").resolve("histos").resolve("plugin"), s"$entry\n")
+      ()
+    }.mapError(_ => LoadError.Io(LoadIo.Temp))
+
+  private def runOf(loaded: LoadedBuild, task: PluginTaskId): IO[PluginRunError, PluginOutput] =
+    loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
+
+  private val echoTask =
+    "DeclaredTask(TaskName(\"echo\"), Seal.Open, Set.empty, Nil, Nil, Nil)"
+
+  private val blockingSource =
+    s"""package dev.example
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object Echo extends HistosPlugin:
+      |  val id: PluginId = PluginId("dev.example")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(List($echoTask), Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    ZIO.attemptBlocking(Thread.currentThread.getContextClassLoader.loadClass("dev.example.Echo$$"))
+      |      .fold(error => PluginOutput(error.getClass.getName, Nil), found => PluginOutput(found.getName, Nil))
+      |""".stripMargin
+
+  private val leakSource =
+    s"""package dev.example
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object Echo extends HistosPlugin:
+      |  val id: PluginId = PluginId("dev.example")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(List(DeclaredTask(TaskName("leak"), Seal.Open, Set.empty, Nil, Nil, Nil), $echoTask), Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    if request.id.name == TaskName("leak") then
+      |      ZIO.attempt(Class.forName("histos.schedule.Sendable")).ignore.as(PluginOutput("leak", Nil))
+      |    else ZIO.succeed(PluginOutput("echo", Nil))
+      |""".stripMargin
+
+  private val boomSource =
+    """package dev.example
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object Boom extends HistosPlugin:
+      |  throw new IllegalStateException("boom")
+      |
+      |  val id: PluginId = PluginId("dev.example")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(Nil, Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    ZIO.succeed(PluginOutput("", Nil))
+      |""".stripMargin
+
+  private val quietSource =
+    """package dev.a
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object A extends HistosPlugin:
+      |  val id: PluginId = PluginId("dev.a")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(Nil, Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    ZIO.succeed(PluginOutput("", Nil))
+      |""".stripMargin
+
+  private val askingSource =
+    """package dev.b
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object B extends HistosPlugin:
+      |  val id: PluginId = PluginId("dev.b")
+      |
+      |  def contribute: Contribution =
+      |    scala.util.Try(Class.forName("histos.schedule.Sendable"))
+      |    Contribution(Nil, Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    ZIO.succeed(PluginOutput("", Nil))
+      |""".stripMargin
+
+  private val taggedSource =
+    s"""package dev.example
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO, ZLayer}
+      |
+      |final case class Greeting(text: String)
+      |
+      |object Echo extends HistosPlugin:
+      |  val id: PluginId = PluginId("dev.example")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(List($echoTask), Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    ZIO.serviceWith[Greeting](_.text).provideLayer(ZLayer.succeed(Greeting("hi"))).map(text => PluginOutput(text, Nil))
+      |""".stripMargin
+
+  private val eagerSource =
+    s"""package dev.example
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object Echo extends HistosPlugin:
+      |  val id: PluginId = PluginId("dev.example")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(List($echoTask), Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      |    throw new IllegalStateException("eager")
+      |""".stripMargin
+
+  private val pathBuild =
+    """plugin(path"tools/docs")
+      |import histos.*
+      |object build extends HistosBuild:
+      |  def graph = Projects(module("core", Jvm)(scala"3.9.0"))
+      |""".stripMargin
+
+  private val usingTwo =
+    """plugin(path"tools/a")
+      |plugin(path"tools/b")
+      |import histos.*
+      |import dev.a.A
+      |import dev.b.B
+      |object build extends HistosBuild:
+      |  def graph = Projects(use(A, B), module("core", Jvm)(scala"3.9.0"))
+      |""".stripMargin
 
   private val pluginBuild =
     """plugin(dep"dev.example::echo:1.0.0")
@@ -618,7 +847,7 @@ object LoadSpec extends ZIOSpecDefault:
         try
           build.loadClass("histos.schedule.Sendable")
           None
-        catch case _: ClassNotFoundException => build.takeRefused
+        catch case _: ClassNotFoundException => build.takeRefused.map(_.binary)
       val list = build.loadClass("scala.collection.immutable.List")
       val buildTrait = build.loadClass("histos.HistosBuild")
       Refused(refused, list.getClassLoader != build, buildTrait.getClassLoader != build)

@@ -16,6 +16,7 @@ enum PluginLoadError:
   case PathIsSource(path: ProjectPath)
   case ReservedPackage(binary: String)
   case EngineLeak(coordinate: PluginCoordinate, binary: String)
+  case BuildLeak(binary: String)
   case ForeignEntry(plugin: PluginId, entry: EntryName)
   case NotEntry(plugin: PluginId, entry: EntryName, expected: EntryName)
   case IdMismatch(declared: PluginId, found: PluginId)
@@ -41,6 +42,7 @@ enum PluginLoadError:
     case PathIsSource(path) => s"plugin path '${path.value}' is source and does not take that link strategy"
     case ReservedPackage(binary) => s"'$binary' is in a reserved package"
     case EngineLeak(coordinate, binary) => s"plugin ${coordinate.render} links '$binary'"
+    case BuildLeak(binary) => s"the build links '$binary', and no plugin class asked for it"
     case ForeignEntry(plugin, entry) =>
       s"plugin ${plugin.value} entry ${entry.value} was not defined by its header jar"
     case NotEntry(plugin, entry, expected) =>

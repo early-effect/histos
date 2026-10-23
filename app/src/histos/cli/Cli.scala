@@ -1070,7 +1070,8 @@ object Cli:
       repo: Path,
       apiJar: Path
   ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
-    ZIO.serviceWithZIO[Machine] { machine =>
+    ZIO.environmentWithZIO[Machine & Resolve & ContentStore] { env =>
+      val machine = env.get[Machine]
       ZIO.serviceWithZIO[Loader] { loader =>
         loader
           .load(repo, apiJar)
@@ -1101,7 +1102,9 @@ object Cli:
                             VersionText,
                             apiJar,
                             classpath,
-                            loader.reportBuild(repo, apiJar),
+                            loader
+                              .reportBuild(repo, apiJar)
+                              .provideEnvironment(env),
                             loaded.plugins,
                             machine
                           )
@@ -1176,7 +1179,8 @@ object Cli:
       repo: Path,
       apiJar: Path
   ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    ZIO.serviceWithZIO[Loader]: loader =>
+    ZIO.environmentWithZIO[Loader & Resolve & ContentStore]: env =>
+      val loader = env.get[Loader]
       loader
         .load(repo, apiJar)
         .foldZIO(
@@ -1206,7 +1210,9 @@ object Cli:
                           jdk,
                           classpath,
                           notify,
-                          loader.reportBuild(repo, apiJar)
+                          loader
+                            .reportBuild(repo, apiJar)
+                            .provideEnvironment(env)
                         )
                         .flatMap: session =>
                           speak(session).foldZIO(

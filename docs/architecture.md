@@ -40,12 +40,13 @@ A module's directory is its name, or the path given to `.in(...)`. Sources are `
 
 ## Load
 
-`Loader.load(repo, apiJar)` is a `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build class loader.
+`Loader.load(repo, apiJar)` is a `ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]`. The `Scope` closes the build class loader and its plugin threads.
 
 1. `Loader.scan` reads the plugin header (`plugin(dep"...")`, `plugin(path"...")`) at the top of `histos.scala`.
 2. The loader resolves header plugins through the lock, compiles source and path plugins first, and writes the build file to a temporary copy with the header lines blanked, so line numbers match.
 3. The Scala 3 compiler compiles that copy in process against the api classpath and the plugin classpaths.
-4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+4. The build object loads in a `BuildLoader` whose parent is `ApiBoundary`. `ApiBoundary` is parented on the platform class loader and loads the boundary names (`histos` with no subpackage, `histos.plugin`, `histos.version`, `zio.*`, `izumi.reflect.*`, `scala.*`) from the engine host, so `ProjectGraph` is one class. Other `histos.*` names are refused.
+5. `graph` and every plugin `run` execute on [`PluginThreads`](../engine/src/histos/load/PluginThreads.scala): a fixed pool and a blocking pool whose daemon threads have `BuildLoader` as their context class loader. A fiber that moves to another thread, including a blocking step, still sees it.
 
 Loading is the same in the batch command and the server. A load error is a `LoadError` and exits 3.
 
@@ -165,7 +166,7 @@ A command that attaches never loads the build in the client. `histos server` exi
 | `workspace/buildTargets` | One JVM main target per module and Scala version, a test target when the module has tests, and a target for `histos.scala`. Js and Native targets appear only when `.histos/bsp-platforms` names them. |
 | `buildTarget/sources`, `buildTarget/dependencySources` | Source roots and locked source jars. |
 | `buildTarget/scalacOptions` | The module flags, then SemanticDB options, and the classpath. |
-| `buildTarget/compile` | Compiles the cell without linking. Diagnostics go out as `build/publishDiagnostics`. |
+| `buildTarget/compile` | Compiles the cell without linking. Diagnostics go out as `build/publishDiagnostics`. The `histos.scala` target goes through `Loader.reportBuild`, which prepares the file as a load does (header blanked, plugins resolved and compiled) and compiles it against the api and plugin classpaths. |
 | `buildTarget/scalaMainClasses`, `buildTarget/scalaTestClasses` | Discovered from class files. |
 | `buildTarget/jvmRunEnvironment`, `buildTarget/jvmTestEnvironment` | The classpath and environment Metals launches with. |
 | `buildTarget/didChange` | Sent after a reload changes the target list. |
