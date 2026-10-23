@@ -28,7 +28,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **D12** (docs) `design.md:420,621` say `ci.yml` is `test` plus `workflow` with an empty catalog. It has a `versions` job and tool steps, and `design.md:256` already says the catalog is non-empty.
 - [x] **D13** (docs) `design.md:69,482` say the launcher refuses a mismatched sha256. The snapshot path skips the check (`histos:80-84`). M0.1 states the current behavior, and L7 fixes the script.
 - [x] **D14** (docs) `design.md:69` says the engine re-execs. It starts a child and waits (`engine:jdk/Toolchain.scala:206-210`).
-- [x] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection is display only (B22).
+- [x] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection was display only. B22 now launches that Node for Js test and run.
 - [x] **D16** (docs) `design.md:484` says publish takes no password. `engine:publish/PublishWhere.scala:37-41` reads `SONATYPE_PASSWORD`. `design.md:118` calls `central` a local Maven publisher, but it also uploads snapshots.
 - [x] **D17** (docs) `plugins.md` cites retired design section numbers (5.3, 5.7, 5.9, 5.10, 5.11) throughout.
 - [x] **D18** (docs) `plugins.md` uses stale names: `PluginIdMacro`, `ScannedBuild.source: Path` (it is a `String`), `closeLoader`, `Loader.classpath`, `PluginRuntime.run` and `bind` signatures, `Policy.Plugin` arity, `CommandSpec.summary: String` (it is `PluginDetail`), and "`LoaderLive.compile` passes the on-disk path".
@@ -105,14 +105,14 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M1.6 Snapshot publisher
 
-- [ ] **B28** (resources) `central:central/Snapshots.scala:97,230-232` creates an `HttpClient` in a constructor and never closes it. The layer is `ZLayer.succeed`.
-- [ ] **B29** (concurrency) `Snapshots.scala:208-210` sends with `attemptBlocking`, so a cancel waits out each PUT.
-- [ ] **B30** (security) `Snapshots.scala:165-168` accepts `http://` with Basic auth, and a bad URL surfaces only at publish time.
-- [ ] **B31** (security, stringly) `Snapshots.scala:91-96`, `Publisher.scala:151`, and `engine:publish/PublishWhere.scala:37-41`: URL, user, and password are `String`s read from the environment directly. A `toString` override hides the password.
-- [ ] **B32** (tests) `Snapshots.scala:111,151` reads a `java.time.Clock` inside a pure binding, so `TestClock` cannot drive it.
-- [ ] **B33** (api-shape) `Snapshots.scala:126-131` and `Publisher.scala:68`: `Published.jar` is a fake relative `Path` for a remote publish, and `jarSha256` is a `String`.
-- [ ] **B34** (typed-errors) `Snapshots.scala:210` and `Publisher.scala:48-50`: `Transport(getMessage)`, `Status(detail)`, and `Metadata(detail: String)` carry raw text.
-- [ ] **B40** (typed-errors) `ArtifactId.from`, `DependencyVersion.from`, and `SnapshotMetadata.base` fail with the whole `PublishError`, so parse errors share an enum with HTTP failures, and a malformed base URL is `PublishError.Transport`. `SnapshotMetadata.render` takes 7 positional parameters. Found in M0.2.
+- [x] **B28** (resources) `central:central/Snapshots.scala:97,230-232` creates an `HttpClient` in a constructor and never closes it. The layer is `ZLayer.succeed`. The publisher now takes heddle's `Client` from `Client.layer`, which is scoped and closes its pool. Heddle tests that lifetime. Histos does not.
+- [x] **B29** (concurrency) `Snapshots.scala:208-210` sends with `attemptBlocking`, so a cancel waits out each PUT. Uploads go through `Client.batched`. Heddle's socket reads are interruptible, and Histos does not retest the client.
+- [x] **B30** (security) `Snapshots.scala:165-168` accepts `http://` with Basic auth, and a bad URL surfaces only at publish time. `SnapshotRepository.from` accepts `https`, or `http` on loopback, and a bad url is `SnapshotRepository.Error` before a publisher exists.
+- [x] **B31** (security, stringly) `Snapshots.scala:91-96`, `Publisher.scala:151`, and `engine:publish/PublishWhere.scala:37-41`: URL, user, and password are `String`s read from the environment directly. A `toString` override hides the password. The password is a `Config.Secret`, the user is a `RepositoryUser`, and neither the secret nor `PublishWhere.Snapshots` renders the password.
+- [x] **B32** (tests) `Snapshots.scala:111,151` reads a `java.time.Clock` inside a pure binding, so `TestClock` cannot drive it. The unique version is stamped with `ZIO.clockWith(_.instant)`, and `TestClock.setTime` fixes the build in `SnapshotSpec`.
+- [x] **B33** (api-shape) `Snapshots.scala:126-131` and `Publisher.scala:68`: `Published.jar` is a fake relative `Path` for a remote publish, and `jarSha256` is a `String`. `Published.Local` carries the files and `Published.Snapshot` carries the unique version. The digest is a `Checksum`.
+- [x] **B34** (typed-errors) `Snapshots.scala:210` and `Publisher.scala:48-50`: `Transport(getMessage)`, `Status(detail)`, and `Metadata(detail: String)` carry raw text. `TransportFault` names the target, `Status` keeps the code, and `MetadataFault` names why the build number could not advance. A trust failure and an HTTP 500 both drop the body text.
+- [x] **B40** (typed-errors) `ArtifactId.from`, `DependencyVersion.from`, and `SnapshotMetadata.base` fail with the whole `PublishError`, so parse errors share an enum with HTTP failures, and a malformed base URL is `PublishError.Transport`. `SnapshotMetadata.render` takes 7 positional parameters. Found in M0.2. The parsers return `ArtifactIdError`, `DependencyVersionError`, and `SnapshotRevisionError`. A bad repository url is `SnapshotRepository.Error`. `render` takes a `SnapshotDocument`.
 
 ## M1.7 Cache hygiene
 
@@ -244,7 +244,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [ ] **G15** (stringly) Module notes are one-line strings that every plugin parses itself.
 - [ ] **G16** (api-shape) `TaskDep` is closed to `Compile` and `Same`, so a plugin task cannot depend on link, test, or package.
 - [ ] **G17** (tests) `PluginFixture` cannot set `RunRequest.compiled`.
-- [ ] **G18** (duplication) `central`: `ArtifactId` duplicates `ArtifactBase` with no literal, `Digest` duplicates `ContentHash`, `central.Revision` shadows `version.Revision`, `SnapshotLayer` duplicates `Publisher.snapshots`, `render` takes 7 parameters, and `Planned` has 9 string fields.
+- [ ] **G18** (duplication) `central`: `ArtifactId` duplicates `ArtifactBase` with no literal, `Digest` duplicates `ContentHash`, and `central.Revision` shadows `version.Revision`.
 - [ ] **G19** (correctness) `BuildError.MissingProject.referencedFrom` holds the position of the missing module's own `module(...)` call, where it should point at the `dependsOn` or `ship` call that references it, and its `name` is a `String`. Found in M0.2.
 - [ ] **G20** (correctness) `ShipLink.asBuild` maps `CatalogError.DuplicateName` to `BadShipName` with a made-up `SourcePos("<catalog>", 1, 1)`, and `Catalog.from` repeats checks `ShipLink` already made, so those branches look unreachable. Found in M0.2.
 - [ ] **G21** (api-shape) Aggregates and edges find their children by name, not by the definition passed in, which is the only reason `BuildError.AggregateChild` can happen. Found in M0.2.

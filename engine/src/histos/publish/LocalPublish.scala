@@ -6,6 +6,7 @@ import histos.central.{
   DependencyVersion,
   MavenDependency,
   PublishError,
+  Published,
   Publisher,
   Revision
 }
@@ -41,24 +42,24 @@ final case class PublishedModule(
     group: Organization,
     artifact: String,
     revision: String,
-    jar: Path,
+    jar: Option[Path],
     unique: Option[String] = None
 ):
-  /** A snapshot prints its unique version. A directory publish prints the jar
-    * under `root`.
-    */
+  /** A snapshot prints its unique version. A directory publish prints the jar under `root`. */
   def rendered(root: Option[Path]): String =
     val place = unique match
       case Some(id) => id
       case None     =>
-        root match
-          case None       => jar.toString.replace('\\', '/')
-          case Some(base) =>
-            val from = base.toAbsolutePath.normalize
-            val full = jar.toAbsolutePath.normalize
-            val shown =
-              if full.startsWith(from) then from.relativize(full) else full
-            shown.toString.replace('\\', '/')
+        jar match
+          case None       => revision
+          case Some(path) =>
+            root match
+              case None       => path.toString.replace('\\', '/')
+              case Some(base) =>
+                val from = base.toAbsolutePath.normalize
+                val full = path.toAbsolutePath.normalize
+                val shown = if full.startsWith(from) then from.relativize(full) else full
+                shown.toString.replace('\\', '/')
     s"${group.value} $artifact $revision $place"
 
 /** Skipped aggregate members are named. The modules are what was written. */
@@ -337,13 +338,13 @@ object LocalPublish:
           _.publish(Artifact(group, name, job.revision, bytes, deps))
         )
         .mapError(LocalPublishError.Publish(_))
-    yield PublishedModule(
-      group,
-      artifact,
-      job.revision.render,
-      published.jar,
-      published.unique
-    )
+      (jarPath, unique) = placed(published)
+    yield PublishedModule(group, artifact, job.revision.render, jarPath, unique)
+
+  private def placed(published: Published): (Option[Path], Option[String]) =
+    published match
+      case Published.Local(jar, _, _)        => (Some(jar), None)
+      case Published.Snapshot(unique, _)     => (None, Some(unique.value))
 
   private def dependencies(
       graph: ProjectGraph,

@@ -33,12 +33,12 @@ The same build serves a person at a terminal, Metals over BSP, and an agent over
 
 ## Where we are
 
-About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, errors are flattened to strings at the protocol edge, and several toolchain decisions never reach the processes that run.
+About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. The scheduler exists and only plugins use it, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge. Cache temp files and the keep list still need work (B35 to B37).
 
 | Capability | State | Notes |
 | --- | --- | --- |
 | Typed graph, literals, `BuildError` | Works | Reports the first error only. `Module` has 18 fields and many overloads (G1 to G3). |
-| Build file load, plugin header, `ApiBoundary` | Works | Context class loader handling and sticky refusals are unsafe in a long-lived server (B10, B11). |
+| Build file load, plugin header, `ApiBoundary` | Works | `graph` and `run` execute on threads that carry the build loader. A refusal lasts one run. |
 | Dependency resolution and lock | Works for module dependencies | Compilers, linkers, semanticdb, and bridges bypass the lock (L1). |
 | JVM compile, Scala 3 and 2.13, via Zinc | Works, never incremental | Fresh compiler and empty previous result on every compile (S8). Layer barrier between topological layers (K5). |
 | Failed cell does not cancel siblings | Compile yes, test no | P4. |
@@ -47,18 +47,18 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | Scala Native link, run, test | Works on a prepared machine | `HISTOS_NATIVE` is read once per command and reaches compile, test, and link. Relinks from scratch (P2). |
 | JDK selection and provisioning | Selection and `file:` staging work | Staging unpacks zip and tar.gz into a scratch directory and moves it into place. An https lock is refused (L8). |
 | Node selection | Works | Js test and run launch the chosen Node. Staging takes a locked `file:` zip, tar.gz, or tar.xz. |
-| Local Maven publish | Works for JVM-only modules | Jvm+Js collide on one jar (B1). |
-| Snapshot upload | Works | Accepts http with Basic auth, never closes its client, ignores interrupt (B28 to B34). |
+| Local Maven publish | Works | One coordinate per platform cell (`core_3`, `core_sjs1_3`, `core_native0.5_3`). |
+| Snapshot upload | Works | `https`, or `http` on loopback. Credentials are a `Config.Secret`. Uploads go through heddle's scoped `Client`, and the unique version comes from the fiber's clock. |
 | Assembly | Works for this repository only | Hardcoded modules and main class (P8). |
 | Version catalog (zipx scheme) | Works | |
 | CI render and drift check | Works | Tool steps come from a marker file and a Boolean (C1). |
 | Plugins: loader, link strategies, run, CI jobs | Works against a fixture | No real plugin yet. |
 | Scheduler and action cache | Plugins only | Compile, test, publish, and run bypass it (K1). |
 | Remote cache | In-memory stub | No client or configuration (D10). |
-| Server: attach, reload, reboot | Partial | Client loads before attaching, reboot leaves the old JVM, a Metals-only session never reloads (B2 to B8). |
+| Server: attach, reload, reboot | Works | A command that attaches does not load the build. Reboot starts the replacement and the old JVM exits. Each BSP request reloads a changed build, and every spliced session hears `buildTarget/didChange`. |
 | BSP for Metals | Works on JVM | Single in-flight request, no cancel (A10). |
 | MCP | Works | String results, serial requests, no progress (A2, A8, A23). |
-| ACP | Handshake only | It is not the Agent Client Protocol. Dropped in M0 until an agent client needs it (A11). |
+| ACP | Dropped | Until an agent client needs the real protocol. `acp` stays a reserved command name. |
 
 ## What we keep, change, and drop
 
@@ -89,7 +89,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 **Drop.**
 
 - ACP, until an agent client needs the real protocol.
-- Dead code: `ToolchainView`, `runCells`, stub compile nodes, stale `Stale` cases, test-only code in main sources.
+- Dead code still in the tree: `ToolchainView`, `runCells`, stub compile nodes, and test-only code in main sources.
 - Scala source generated as strings.
 - Design prose that narrates code line by line.
 
@@ -420,7 +420,7 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, digests use coordinate plus checksum, BSP build-file diagnostics compile the header-stripped unit with the plugin jars, and `izumi.reflect` crosses the boundary if a test proves it must. Closes B10 to B14, B38, B39, B41.
 - `histos/child-process`: `acquireRelease` around every child, including `javac` and the JDK hand-off. A stop kills every descendant of a live child, and a JVM child's whole group even after its leader exited. One fiber reads each pipe, output is kept once, the hand-off gets SIGTERM and a 2 second grace before a force kill, and the assembly class loader is closed. Closes B16 to B21, B44, B45.
 - `histos/toolchain-execution`: the resolved Node runs Js, `HISTOS_NATIVE` travels as a value, tar.gz staging that keeps file modes, atomic staging into a scoped temp directory, and a read-only probe. Closes B22 to B27, B47, B48.
-- `histos/snapshot-publisher`: an https-only `SnapshotRepository`, `Config.Secret` credentials, a scoped `HttpClient`, an interruptible send, `zio.Clock`, a `Published` ADT, and parse errors with their own enums. Closes B28 to B34, B40.
+- `histos/snapshot-publisher`: `SnapshotRepository` is `https`, or `http` on loopback. Credentials are a `Config.Secret`. Uploads go through heddle's scoped `Client`. The unique version comes from the fiber's clock. `Published` is an ADT, and parse errors have their own enums. Closes B28 to B34, B40.
 - `histos/cache-hygiene`: temp files scoped and swept, a per-project keep set, and `cache clean` matching its contract. Closes B35 to B37.
 - `histos/compile-exit`: a failed cell fails `compile` with the compile exit code, locally and through the server. Closes B46.
 

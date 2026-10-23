@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.central.{Artifact, ArtifactId, Publisher, Revision}
+import histos.central.{Artifact, ArtifactId, Published, Publisher, Revision}
 import histos.version.{Catalog, ManualVersion}
 import histos.{Organization, ProjectGraph}
 
@@ -39,9 +39,11 @@ object LauncherPublish:
           revision <- ZIO.fromEither(manualRevision(version))
           bytes <- ZIO.attemptBlocking(Chunk.fromArray(Files.readAllBytes(path))).mapError(_ => LocalPublishError.Read(path))
           published <- ZIO.serviceWithZIO[Publisher](_.publish(Artifact(group, id, revision, bytes))).mapError(LocalPublishError.Publish(_))
+          line = published match
+            case Published.Local(jar, _, _)    => PublishedModule(group, name.value, version, Some(jar))
+            case Published.Snapshot(unique, _) => PublishedModule(group, name.value, version, None, Some(unique.value))
         yield written.copy(modules =
-          (written.modules :+ PublishedModule(group, name.value, version, published.jar, published.unique))
-            .sortBy(line => (line.group.value, line.artifact, line.revision))
+          (written.modules :+ line).sortBy(row => (row.group.value, row.artifact, row.revision))
         )
 
   private def organization(graph: ProjectGraph): Either[LocalPublishError, Organization] =

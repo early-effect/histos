@@ -34,4 +34,4 @@ object PublishRun:
             written <- LocalPublish.run(repo, graph, names, jdk, env, report)
             done <- LauncherPublish.upload(repo, graph, written)
           yield Report(where, done)
-        body.provideSome[histos.resolve.Resolve](where.layer)
+        body.provideSome[histos.resolve.Resolve](where.layer.mapError(LocalPublishError.Publish(_)))
