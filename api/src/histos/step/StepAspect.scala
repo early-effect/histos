@@ -21,6 +21,10 @@ object StepAspect:
       def apply[R1 <: R, E1 >: E, A, K1 <: StepKind](step: Step.Leaf[R1, E1, A, K1]): Step.Leaf[R1, E1, A, K1] =
         step.copy(run = aspect(step.run))
 
+  val traced: StepAspect[Any, Nothing, StepKind] = new StepAspect[Any, Nothing, StepKind]:
+    def apply[R1 <: Any, E1 >: Nothing, A, K1 <: StepKind](step: Step.Leaf[R1, E1, A, K1]): Step.Leaf[R1, E1, A, K1] =
+      step.copy(run = ZIO.logSpan(step.info.id.toString)(step.run))
+
   val timed: StepAspect[Any, Nothing, StepKind] =
     lift(new ZIOAspect[Nothing, Any, Nothing, Any, Nothing, Any]:
       def apply[R >: Nothing <: Any, E >: Nothing <: Any, A >: Nothing <: Any](zio: ZIO[R, E, A])(using

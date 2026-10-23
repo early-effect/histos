@@ -12,6 +12,8 @@ enum Phase:
 enum StepId:
   case Cell(module: ProjectName, version: ScalaVersion, platform: Platform, phase: Phase)
   case Plugin(task: PluginTaskId)
+  /** A key that is not a cell or a plugin task. The scheduler uses the action id. */
+  case Work(key: String)
 
 opaque type InputName = String
 

@@ -134,7 +134,7 @@ The remote cache is off. The only implementation is in memory, used by tests, an
 
 `Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Built-in tasks are `inspect` and `versions`.
 
-`Scheduler` in `histos.schedule` runs an action graph with digests, a local action cache, and the remote verdict from `Sendable.decide`. Only plugin tasks use it today. Compile, test, publish, and run are separate pipelines (K1).
+`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. `Scheduler` builds an action's steps and asks `Histos` to run them. Only plugin tasks use that path today. Compile, test, publish, and run are separate pipelines (K1).
 
 ## Plugins
 

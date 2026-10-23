@@ -53,7 +53,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | Version catalog (zipx scheme) | Works | |
 | CI render and drift check | Works | Tool steps come from a marker file and a Boolean (C1). |
 | Plugins: loader, link strategies, run, CI jobs | Works against a fixture | No real plugin yet. |
-| Scheduler and action cache | Plugins only | Compile, test, publish, and run bypass it (K1). |
+| Scheduler and action cache | Plugins only | `Histos` runs the steps, with a permit per resource class. Compile, test, publish, and run still bypass it (K1). |
 | Remote cache | In-memory stub | No client or configuration (D10). |
 | Server: attach, reload, reboot | Works | A command that attaches does not load the build. Reboot starts the replacement and the old JVM exits. Each BSP request reloads a changed build, and every spliced session hears `buildTarget/didChange`. |
 | BSP for Metals | Works on JVM | Single in-flight request, no cancel (A10). |
@@ -178,37 +178,7 @@ The executor is the `Histos` service, named for the tool the same way ZIO's effe
 
 `Histos` generalizes today's `SchedulerLive`: one promise gate per distinct `StepId`, digests from declared inputs plus the content hash of each upstream value, and execution as soon as a step's own upstreams finish. Parallelism is bounded per resource class (CPU-heavy compile, IO-heavy fetch, child processes).
 
-```scala
-package histos.schedule
-
-trait Histos:
-  def start[R, E, A](goal: Step[R, E, A]): URIO[R & Scope, Running[E, A]]
-
-object Histos:
-  val live: ZLayer[ActionCache & RemoteCache & Parallelism, Nothing, Histos]
-
-final case class Running[+E, +A](
-    events: ZStream[Any, Nothing, StepEvent[E]],
-    outcome: UIO[Outcome[E, A]],
-)
-
-enum Outcome[+E, +A]:
-  case Done(value: A)
-  case Failed(failures: NonEmptyChunk[StepFailure[E]])
-
-enum StepFailure[+E]:
-  case Failed(id: StepId, cause: Cause[E])
-  case Skipped(id: StepId, upstream: NonEmptyChunk[StepId])
-
-enum StepEvent[+E]:
-  case Started(id: StepId)
-  case Noted(id: StepId, note: StepNote)
-  case Finished(id: StepId, source: Source, took: Duration)
-  case Stopped(failure: StepFailure[E])
-
-enum Source:
-  case Ran, LocalHit, RemoteHit
-```
+The service, the outcome, and the events are [`Histos`](../engine/src/histos/schedule/Histos.scala). `Parallelism` bounds each resource class. `StepAspect.traced` names the step in the log.
 
 `StepNote` carries diagnostics, suite events, and child output lines. The CLI renders events. BSP maps diagnostics to `build/publishDiagnostics`. MCP maps events to progress notifications.
 
