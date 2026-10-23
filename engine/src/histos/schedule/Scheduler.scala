@@ -3,6 +3,10 @@ package histos.schedule
 import java.nio.ByteBuffer
 import java.nio.charset.{CharsetDecoder, CodingErrorAction, StandardCharsets}
 
+import histos.step.{Input as StepInput, InputName as StepInputName, InputValue as StepInputValue, Need as StepNeed, Step, StepId, StepInfo}
+
+import Histos.given
+
 import zio.*
 
 enum ScheduleError[+E]:
@@ -36,9 +40,10 @@ trait Scheduler:
   ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String]
 
 object Scheduler:
-  val live: ULayer[Scheduler] = ZLayer.succeed(SchedulerLive)
+  val live: ULayer[Scheduler] =
+    Parallelism.live >>> Histos.live >>> ZLayer.fromFunction(SchedulerLive.apply)
 
-private object SchedulerLive extends Scheduler:
+private final class SchedulerLive(runner: Histos) extends Scheduler:
   def execute[E](
       root: ActionId,
       actions: List[Action],
@@ -122,44 +127,77 @@ private object SchedulerLive extends Scheduler:
       remote: RemoteCache,
       local: Action => IO[E, String],
       verdict: Action => Verdict,
-  ): IO[ScheduleError[E], String] =
+  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
     for
-      gates <- ZIO.foreach(ready.order)(id => Promise.make[ScheduleError[E], String].map(id -> _)).map(_.toMap)
-      _     <- ZIO.foreachParDiscard(ready.order)(id => publish(id, ready, gates, cache, remote, local, verdict))
-      out   <- gate(gates, root).flatMap(_.await)
-    yield out
+      step    <- build(root, ready, local, verdict)
+      outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
+      result  <- outcome match
+                   case Outcome.Done(value)     => ZIO.succeed(value)
+                   case Outcome.Failed(failures) => recover(failures)
+    yield result
 
-  private def publish[E](
+  private def recover[E](failures: NonEmptyChunk[StepFailure[ScheduleError[E]]]): IO[ScheduleError[E], Nothing] =
+    failures.head match
+      case StepFailure.Failed(_, cause) => ZIO.failCause(cause)
+      case StepFailure.Skipped(id, _)   =>
+        val key = id match
+          case StepId.Work(text) => text
+          case other             => other.toString
+        ZIO.fail(ScheduleError.UnknownAction(ActionId.trusted(key)))
+
+  private def build[E](
       id: ActionId,
       ready: Ready,
-      gates: Map[ActionId, Promise[ScheduleError[E], String]],
-      cache: ActionCache,
-      remote: RemoteCache,
       local: Action => IO[E, String],
       verdict: Action => Verdict,
-  ): IO[ScheduleError[E], Unit] =
-    val compute =
-      for
-        action <- ZIO.fromEither(ready.byId.get(id).toRight(ScheduleError.UnknownAction(id)))
-        _      <- ZIO.foreachParDiscard(action.dependencies)(dep => gate(gates, dep).flatMap(_.await))
-        digest <- ZIO.fromEither(ready.digests.get(id).toRight(ScheduleError.UnknownAction(id)))
-        remoteHit <- lookup(remote, action, digest)
-        out <- remoteHit match
-                 case Some(value) => ZIO.succeed(value)
-                 case None =>
-                   cache.get(digest).mapError(ScheduleError.Cache(_)).flatMap:
-                     case Some(value) =>
-                       accept(action, value).flatMap:
-                         case true  => ZIO.succeed(value)
-                         case false => miss(action, digest, cache, remote, local, verdict)
-                     case None => miss(action, digest, cache, remote, local, verdict)
-      yield out
-    compute.exit.flatMap: exit =>
-      val resumed = exit match
-        case Exit.Success(value) => ZIO.succeed(value)
-        case Exit.Failure(cause) => ZIO.failCause(cause)
-      gate(gates, id).flatMap(_.done(exit)) *> resumed
-    .unit
+  ): IO[ScheduleError[E], histos.step.HermeticStep[ActionCache & RemoteCache, ScheduleError[E], String]] =
+    for
+      action <- ZIO.fromEither(ready.byId.get(id).toRight(ScheduleError.UnknownAction(id)))
+      digest <- ZIO.fromEither(ready.digests.get(id).toRight(ScheduleError.UnknownAction(id)))
+      body    = perform(action, digest, local, verdict)
+      info    = stepInfo(action, digest)
+      step    = Step.hermetic[String](info)(body)
+      wired  <- action.dependencies match
+                  case Nil => ZIO.succeed(step)
+                  case head :: tail =>
+                    ZIO.foreach(head :: tail)(dep => build(dep, ready, local, verdict)).map: ups =>
+                      val upstream = ups match
+                        case only :: Nil  => only.map(_ => "")
+                        case first :: rest =>
+                          rest.foldLeft[histos.step.Step[ActionCache & RemoteCache, ScheduleError[E], String]](first.map(_ => ""))(
+                            (acc, next) => acc.zip(next).map(_ => "")
+                          )
+                        case Nil => step.map(_ => "")
+                      upstream.andThenHermetic[String](info)(_ => body)
+    yield wired
+
+  private def stepInfo(action: Action, digest: Digest): StepInfo =
+    StepInfo(
+      StepId.Work(action.id.value),
+      Chunk(StepInput(StepInputName(digest.value), StepInputValue.Digest(digest.value))),
+      Set(StepNeed.Cpu),
+    )
+
+  private def perform[E](
+      action: Action,
+      digest: Digest,
+      local: Action => IO[E, String],
+      verdict: Action => Verdict,
+  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
+    for
+      cache     <- ZIO.service[ActionCache]
+      remote    <- ZIO.service[RemoteCache]
+      remoteHit <- lookup(remote, action, digest)
+      out <- remoteHit match
+               case Some(value) => ZIO.succeed(value)
+               case None =>
+                 cache.get(digest).mapError(ScheduleError.Cache(_)).flatMap:
+                   case Some(value) =>
+                     accept(action, value).flatMap:
+                       case true  => ZIO.succeed(value)
+                       case false => miss(action, digest, cache, remote, local, verdict)
+                   case None => miss(action, digest, cache, remote, local, verdict)
+    yield out
 
   /**
    * `Policy.Core` stores every local success. A plugin stores only a sendable result.
@@ -221,9 +259,4 @@ private object SchedulerLive extends Scheduler:
       .onMalformedInput(CodingErrorAction.REPORT)
       .onUnmappableCharacter(CodingErrorAction.REPORT)
 
-  private def gate[E](
-      gates: Map[ActionId, Promise[ScheduleError[E], String]],
-      id: ActionId,
-  ): IO[ScheduleError[E], Promise[ScheduleError[E], String]] =
-    ZIO.fromEither(gates.get(id).toRight(ScheduleError.UnknownAction(id)))
 end SchedulerLive

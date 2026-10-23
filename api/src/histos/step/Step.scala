@@ -12,6 +12,8 @@ object Step:
   sealed trait Of[-R, +E, +A, +K <: StepKind]:
     def mirror: RuntimeKind
 
+    def visit[R1 <: R, E1 >: E, F[+_]](visitor: StepVisitor[R1, E1, F]): F[A]
+
     def @@[R1 <: R, E1 >: E, K2 <: StepKind](aspect: StepAspect[R1, E1, K2])(using Fits[K, K2]): Of[R1, E1, A, K]
 
     /** The weakest kind that still describes both sides. */
@@ -29,6 +31,8 @@ object Step:
   ) extends Of[R, E, A, K]:
     def mirror: RuntimeKind = kind
 
+    def visit[R1 <: R, E1 >: E, F[+_]](visitor: StepVisitor[R1, E1, F]): F[A] = visitor.onLeaf(this)
+
     def @@[R1 <: R, E1 >: E, K2 <: StepKind](aspect: StepAspect[R1, E1, K2])(using Fits[K, K2]): Of[R1, E1, A, K] =
       aspect(this)
 
@@ -36,11 +40,15 @@ object Step:
       extends Of[R, E, (A, B), K]:
     def mirror: RuntimeKind = RuntimeKind.join(left.mirror, right.mirror)
 
+    def visit[R1 <: R, E1 >: E, F[+_]](visitor: StepVisitor[R1, E1, F]): F[(A, B)] = visitor.onZip(left, right)
+
     def @@[R1 <: R, E1 >: E, K2 <: StepKind](aspect: StepAspect[R1, E1, K2])(using Fits[K, K2]): Of[R1, E1, (A, B), K] =
       Zipped(left @@ aspect, right @@ aspect)
 
   final case class Mapped[-R, +E, A, B, +K <: StepKind](inner: Of[R, E, A, K], f: A => B) extends Of[R, E, B, K]:
     def mirror: RuntimeKind = inner.mirror
+
+    def visit[R1 <: R, E1 >: E, F[+_]](visitor: StepVisitor[R1, E1, F]): F[B] = visitor.onMap(inner, f)
 
     def @@[R1 <: R, E1 >: E, K2 <: StepKind](aspect: StepAspect[R1, E1, K2])(using Fits[K, K2]): Of[R1, E1, B, K] =
       Mapped(inner @@ aspect, f)
@@ -54,6 +62,8 @@ object Step:
       next: A => ZIO[R, E, B],
   ) extends Of[R, E, B, StepKind.Hermetic]:
     def mirror: RuntimeKind = RuntimeKind.Hermetic
+
+    def visit[R1 <: R, E1 >: E, F[+_]](visitor: StepVisitor[R1, E1, F]): F[B] = visitor.onThen(this)
 
     def @@[R1 <: R, E1 >: E, K2 <: StepKind](aspect: StepAspect[R1, E1, K2])(using
         Fits[StepKind.Hermetic, K2]
@@ -75,18 +85,24 @@ object Step:
 
   /** Run the algebra. Caching and scheduling are the executor's job. */
   def run[R, E, A](step: Of[R, E, A, StepKind]): ZIO[R, E, A] =
-    step match
-      case Leaf(_, _, _, effect)         => effect
-      case Zipped(left, right)           => run(left).zip(run(right))
-      case Mapped(inner, f)              => run(inner).map(f)
-      case Then(upstream, _, _, _, next) => run(upstream).flatMap(next)
+    step.visit(new StepVisitor[R, E, [X] =>> ZIO[R, E, X]]:
+      def onLeaf[B, K <: StepKind](leaf: Leaf[R, E, B, K]): ZIO[R, E, B] = leaf.run
+      def onZip[B, C, K <: StepKind](left: Of[R, E, B, K], right: Of[R, E, C, K]): ZIO[R, E, (B, C)] =
+        run(left).zip(run(right))
+      def onMap[B, C, K <: StepKind](inner: Of[R, E, B, K], f: B => C): ZIO[R, E, C] = run(inner).map(f)
+      def onThen[B, C](step: Then[R, E, B, C]): ZIO[R, E, C] = run(step.upstream).flatMap(step.next)
+    )
 
   private[step] def promote[R, E, A](step: Of[R, E, A, StepKind.Cached]): Of[R, E, A, StepKind.Hermetic] =
-    step match
-      case Leaf(info, _, stored, effect) => Leaf(info, RuntimeKind.Hermetic, stored, effect)
-      case Zipped(left, right)           => Zipped(promote(left), promote(right))
-      case Mapped(inner, f)              => Mapped(promote(inner), f)
-      case done: Then[r, e, a, b]        => done
+    step.visit(new StepVisitor[R, E, [X] =>> Of[R, E, X, StepKind.Hermetic]]:
+      def onLeaf[B, K <: StepKind](leaf: Leaf[R, E, B, K]): Of[R, E, B, StepKind.Hermetic] =
+        Leaf(leaf.info, RuntimeKind.Hermetic, leaf.stored, leaf.run)
+      def onZip[B, C, K <: StepKind](left: Of[R, E, B, K], right: Of[R, E, C, K]): Of[R, E, (B, C), StepKind.Hermetic] =
+        Zipped(left.visit(this), right.visit(this))
+      def onMap[B, C, K <: StepKind](inner: Of[R, E, B, K], f: B => C): Of[R, E, C, StepKind.Hermetic] =
+        Mapped(inner.visit(this), f)
+      def onThen[B, C](chain: Then[R, E, B, C]): Of[R, E, C, StepKind.Hermetic] = chain
+    )
 
   final class MakeLocal[A]:
     def apply[R, E](info: StepInfo)(effect: ZIO[R, E, A]): LocalStep[R, E, A] =
@@ -116,3 +132,9 @@ object Step:
   ):
     def apply(next: A => ZIO[R, E, B]): HermeticStep[R, E, B] =
       Then(upstream, info, storedIn, storedOut, next)
+
+trait StepVisitor[R, E, F[+_]]:
+  def onLeaf[A, K <: StepKind](leaf: Step.Leaf[R, E, A, K]): F[A]
+  def onZip[A, B, K <: StepKind](left: Step.Of[R, E, A, K], right: Step.Of[R, E, B, K]): F[(A, B)]
+  def onMap[A, B, K <: StepKind](inner: Step.Of[R, E, A, K], f: A => B): F[B]
+  def onThen[A, B](step: Step.Then[R, E, A, B]): F[B]
