@@ -140,9 +140,9 @@ The remote cache is off. The only implementation is in memory, used by tests, an
 
 ## Tasks and the scheduler
 
-`Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Built-in tasks are `inspect` and `versions`.
+`Tasks` is the run registry: it starts a task, returns a `RunId`, and cancels by interrupting the fiber. Its results are typed inspect, version, and plugin reports, rendered only by the terminal or server surface. Built-in tasks are `inspect` and `versions`.
 
-`Histos` in `histos.schedule` runs a step graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. `Scheduler` is that executor plus the action cache and the remote cache for one run. A plugin task is a step, and the loaded runtime keeps one `Histos` for every task it runs. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. That compile step uses the native origin from the command's `Machine`, not a hardcoded Central. `pluginLoader` and `declaredOutputs` are step aspects. Test, publish, and run are still separate pipelines (K1).
+`Histos` in `histos.schedule` runs every compile, test, publish, run, and plugin `Step` graph: one promise per step id, a permit per resource class, and a failure recorded on the outcome instead of cancelling siblings. Test cells, publish jobs, and run cells keep their domain values and errors while the executor handles their scheduling. A plugin task is a step, and the loaded runtime keeps one `Histos` for every task it runs. A `TaskDep.Compile` is a compile step, and only the tasks reachable from the one being run are built. That compile step uses the native origin from the command's `Machine`, not a hardcoded Central. `pluginLoader`, `declaredOutputs`, cache, and remote behavior are step aspects.
 
 ## Plugins
 

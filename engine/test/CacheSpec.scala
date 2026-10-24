@@ -2,8 +2,6 @@ package histos.cache
 
 import histos.jdk.Sha256
 import histos.schedule.{Action, ActionId, Digest, Input, InputName, InputValue}
-import histos.task.TaskKind
-
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.FileTime
 import java.time.Instant
@@ -19,8 +17,16 @@ object CacheSpec extends ZIOSpecDefault:
 
   private def digest(label: String): Digest =
     ActionId.from(label) match
-      case Right(id) => Digest.of(Action(id, TaskKind.Inspect, List(Input(InputName.trusted("n"), InputValue.Text(label))), Nil), Map.empty)
-      case Left(_)   => Digest.of(Action(idOf("n"), TaskKind.Inspect, Nil, Nil), Map.empty)
+      case Right(id) =>
+        Digest.of(
+          Action(
+            id,
+            List(Input(InputName.trusted("n"), InputValue.Text(label))),
+            Nil
+          ),
+          Map.empty
+        )
+      case Left(_) => Digest.of(Action(idOf("n"), Nil, Nil), Map.empty)
 
   private def idOf(label: String): ActionId =
     ActionId.from(label) match
@@ -28,16 +34,22 @@ object CacheSpec extends ZIOSpecDefault:
       case Left(_)   => idOf("n")
 
   private def store: ZIO[Scope, Nothing, ContentStore] =
-    ZIO.acquireRelease(ZIO.succeed(ContentStore.in(Files.createTempDirectory("histos-cache")))): saved =>
+    ZIO.acquireRelease(
+      ZIO.succeed(ContentStore.in(Files.createTempDirectory("histos-cache")))
+    ): saved =>
       ZIO.succeed {
         val walk = Files.walk(saved.root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
+        paths
+          .sortBy(_.getNameCount)
+          .reverse
+          .foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  private val bytes = Chunk.fromArray("payload".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+  private val bytes =
+    Chunk.fromArray("payload".getBytes(java.nio.charset.StandardCharsets.UTF_8))
   private val project = CacheProject.of(Path.of("/repo/a"))
   private val elsewhere = CacheProject.of(Path.of("/repo/b"))
 
@@ -67,7 +79,9 @@ object CacheSpec extends ZIOSpecDefault:
           _ <- saved.put(key, bytes, at)
           preview <- saved.clean(later, ContentStore.Retention, dryRun = true)
           still <- saved.read(key)
-        yield assertTrue(preview.map(_.digest) == List(key) && still.contains(bytes))
+        yield assertTrue(
+          preview.map(_.digest) == List(key) && still.contains(bytes)
+        )
     ,
     test("clean deletes an old entry and keeps a remembered one"):
       ZIO.scoped:
@@ -81,9 +95,15 @@ object CacheSpec extends ZIOSpecDefault:
           removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
           gone <- saved.read(drop)
           kept <- saved.read(hold)
-        yield assertTrue(removed.map(_.digest) == List(drop) && gone.isEmpty && kept.contains(bytes))
+        yield assertTrue(
+          removed.map(_.digest) == List(drop) && gone.isEmpty && kept.contains(
+            bytes
+          )
+        )
     ,
-    test("clean lists an old plugin class directory, keeps a remembered one, and deletes the rest"):
+    test(
+      "clean lists an old plugin class directory, keeps a remembered one, and deletes the rest"
+    ):
       ZIO.scoped:
         for
           saved <- store
@@ -95,17 +115,27 @@ object CacheSpec extends ZIOSpecDefault:
           _ <- saved.replace(project, Set(held))
           partial = saved.root.resolve("plugins").resolve(".partial-old")
           _ <- ZIO.attempt {
-                 Files.createDirectories(partial)
-                 Files.writeString(partial.resolve("Echo.class"), "class")
-               }
+            Files.createDirectories(partial)
+            Files.writeString(partial.resolve("Echo.class"), "class")
+          }
           preview <- saved.clean(later, ContentStore.Retention, dryRun = true)
-          still <- ZIO.attempt(Files.isDirectory(saved.root.resolve("plugins").resolve(old.value)))
+          still <- ZIO.attempt(
+            Files.isDirectory(saved.root.resolve("plugins").resolve(old.value))
+          )
           removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
-          gone <- ZIO.attempt(Files.exists(saved.root.resolve("plugins").resolve(old.value)))
-          kept <- ZIO.attempt(Files.isDirectory(saved.root.resolve("plugins").resolve(held.value)))
+          gone <- ZIO.attempt(
+            Files.exists(saved.root.resolve("plugins").resolve(old.value))
+          )
+          kept <- ZIO.attempt(
+            Files.isDirectory(saved.root.resolve("plugins").resolve(held.value))
+          )
           _ <- plant(saved, fresh, later)
           after <- saved.clean(later, ContentStore.Retention, dryRun = false)
-          remains <- ZIO.attempt(Files.isDirectory(saved.root.resolve("plugins").resolve(fresh.value)))
+          remains <- ZIO.attempt(
+            Files.isDirectory(
+              saved.root.resolve("plugins").resolve(fresh.value)
+            )
+          )
           partialLeft <- ZIO.attempt(Files.isDirectory(partial))
         yield assertTrue(
           preview.map(_.digest) == List(old),
@@ -115,7 +145,7 @@ object CacheSpec extends ZIOSpecDefault:
           kept,
           after.isEmpty,
           remains,
-          partialLeft,
+          partialLeft
         )
     ,
     test("clean sweeps an old temp and leaves a fresh one"):
@@ -125,12 +155,12 @@ object CacheSpec extends ZIOSpecDefault:
           old = saved.root.resolve("tmp").resolve("old")
           fresh = saved.root.resolve("tmp").resolve("fresh")
           _ <- ZIO.attempt {
-                 Files.createDirectories(old.getParent)
-                 Files.writeString(old, "leftover")
-                 Files.writeString(fresh, "live")
-                 Files.setLastModifiedTime(old, FileTime.from(at))
-                 Files.setLastModifiedTime(fresh, FileTime.from(later))
-               }
+            Files.createDirectories(old.getParent)
+            Files.writeString(old, "leftover")
+            Files.writeString(fresh, "live")
+            Files.setLastModifiedTime(old, FileTime.from(at))
+            Files.setLastModifiedTime(fresh, FileTime.from(later))
+          }
           _ <- saved.clean(later, ContentStore.Retention, dryRun = true)
           previewOld <- ZIO.attempt(Files.isRegularFile(old))
           removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
@@ -138,7 +168,9 @@ object CacheSpec extends ZIOSpecDefault:
           kept <- ZIO.attempt(Files.isRegularFile(fresh))
         yield assertTrue(previewOld, removed.isEmpty, !gone, kept)
     ,
-    test("each project keeps its own set, and replacing one does not drop the other"):
+    test(
+      "each project keeps its own set, and replacing one does not drop the other"
+    ):
       ZIO.scoped:
         for
           saved <- store
@@ -159,7 +191,7 @@ object CacheSpec extends ZIOSpecDefault:
           first.map(_.digest) == List(drop),
           second.map(_.digest) == List(hold),
           holdGone.isEmpty,
-          otherKept.contains(bytes),
+          otherKept.contains(bytes)
         )
     ,
     test("a legacy keep file is still honored"):
@@ -168,11 +200,17 @@ object CacheSpec extends ZIOSpecDefault:
           saved <- store
           hold = digest("legacy")
           _ <- saved.put(hold, bytes, at)
-          _ <- ZIO.attempt(Files.writeString(saved.root.resolve("keep"), hold.value + "\n"))
+          _ <- ZIO.attempt(
+            Files.writeString(saved.root.resolve("keep"), hold.value + "\n")
+          )
           kept <- saved.kept
           removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
           still <- saved.read(hold)
-        yield assertTrue(kept.contains(hold), removed.isEmpty, still.contains(bytes))
+        yield assertTrue(
+          kept.contains(hold),
+          removed.isEmpty,
+          still.contains(bytes)
+        )
     ,
     test("replacing a project's set does not append"):
       ZIO.scoped:
@@ -180,9 +218,14 @@ object CacheSpec extends ZIOSpecDefault:
           saved <- store
           hold = digest("hold")
           other = digest("other")
-          _ <- ZIO.foreachParDiscard(List(hold, other))(key => saved.replace(project, Set(key)))
+          _ <- ZIO.foreachParDiscard(List(hold, other))(key =>
+            saved.replace(project, Set(key))
+          )
           after <- saved.kept
-        yield assertTrue(after.size == 1, after.contains(hold) || after.contains(other))
+        yield assertTrue(
+          after.size == 1,
+          after.contains(hold) || after.contains(other)
+        )
     ,
     test("a fresh entry is kept"):
       ZIO.scoped:
@@ -196,16 +239,26 @@ object CacheSpec extends ZIOSpecDefault:
     test("the home directory follows XDG, then the user cache"):
       assertTrue(
         ContentStore.home(Some("/xdg"), "/home/me") == Path.of("/xdg/histos"),
-        ContentStore.home(Some(""), "/home/me") == Path.of("/home/me/.cache/histos"),
-        ContentStore.home(None, "/home/me") == Path.of("/home/me/.cache/histos"),
-      ),
+        ContentStore.home(Some(""), "/home/me") == Path.of(
+          "/home/me/.cache/histos"
+        ),
+        ContentStore.home(None, "/home/me") == Path.of("/home/me/.cache/histos")
+      )
   )
 
   private def pluginDigest(label: String): Digest =
-    val hex = Sha256.of(Chunk.fromArray(label.getBytes(java.nio.charset.StandardCharsets.UTF_8))).value
+    val hex = Sha256
+      .of(
+        Chunk.fromArray(label.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+      )
+      .value
     Digest.from(hex).getOrElse(digest(label))
 
-  private def plant(saved: ContentStore, key: Digest, at: Instant): zio.Task[Unit] =
+  private def plant(
+      saved: ContentStore,
+      key: Digest,
+      at: Instant
+  ): zio.Task[Unit] =
     ZIO.attempt {
       val dir = saved.root.resolve("plugins").resolve(key.value)
       Files.createDirectories(dir)
