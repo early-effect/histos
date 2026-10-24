@@ -1,7 +1,7 @@
 package histos.cli
 
 import heddle.LinePipe
-import histos.bsp.{Bsp, Frame}
+import histos.bsp.{Bsp, Connection, Frame}
 import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
@@ -142,7 +142,8 @@ object Cli:
       repo: Path,
       apiJar: Path
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
-    parse(args).foldZIO(
+    Connection.ensure(repo).ignore *>
+      parse(args).foldZIO(
       {
         case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
         case detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message))
