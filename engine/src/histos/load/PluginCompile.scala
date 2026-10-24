@@ -114,16 +114,16 @@ private[load] object PluginCompile:
                 finally stream.close()
                 Right(())
       finally zip.close()
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read))).flatMap(ZIO.fromEither)
+    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(jar)))).flatMap(ZIO.fromEither)
 
   private def safe(root: Path, name: String): Either[LoadError, Path] =
     if name.isEmpty || name.startsWith("/") || name.contains('\\') then
-      Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
+      Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
     else
       val target = root.resolve(name).normalize
       val base = root.normalize
       if target.startsWith(base) then Right(target)
-      else Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
+      else Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
 
   private def scalaSources(root: Path): IO[LoadError, List[Path]] =
     ZIO.attempt {
@@ -136,7 +136,7 @@ private[load] object PluginCompile:
             .toList
             .sortBy(_.toString)
         finally walk.close()
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
+    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
 
   private def scalac(sources: List[Path], classpath: List[Path], out: Path): IO[LoadError, Unit] =
     sources match
@@ -168,11 +168,11 @@ private[load] object PluginCompile:
               Option(dest.getParent).foreach(Files.createDirectories(_))
               Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING)
         finally walk.close()
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
+    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(from))))
 
   private def fileSha(path: Path): IO[LoadError, String] =
     ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value)
-      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
+      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(path))))
 
   private def treeSha(root: Path): IO[LoadError, String] =
     ZIO.attempt {
@@ -190,7 +190,7 @@ private[load] object PluginCompile:
         val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
         s"${rel(root, path)} $sha"
       Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))).value
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
+    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
 
   private def mark(dir: Path): IO[LoadError, Unit] =
     ZIO.attemptBlocking(Files.writeString(dir.resolve(".complete"), "ok\n")).mapError(_ => LoadError.Io(IoFailure(dir, IoFault.Write))).unit

@@ -317,9 +317,11 @@ object Resolve:
   private def replace(parent: Path, path: Path, text: String): Unit =
     Files.createDirectories(parent)
     val name = Option(path.getFileName).map(_.toString).getOrElse("dependencies.lock")
-    val temp = parent.resolve(s"$name.tmp")
-    Files.writeString(temp, text)
-    try Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-    catch
-      case _: AtomicMoveNotSupportedException =>
-        Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING)
+    val temp = Files.createTempFile(parent, s".$name.", ".tmp")
+    try
+      Files.writeString(temp, text)
+      try Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+      catch
+        case _: AtomicMoveNotSupportedException =>
+          Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING)
+    finally Files.deleteIfExists(temp)

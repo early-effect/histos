@@ -67,6 +67,7 @@ enum ChildError:
   case Bootstrap(output: ProcessOutput)
   case NoProgram
   case Start(program: String)
+  case Property(name: String)
   case Status
   case Console
   case Io(failure: IoFailure)
@@ -81,6 +82,7 @@ enum ChildError:
     case Bootstrap(output)             => s"child bootstrap failed: ${output.text}"
     case NoProgram                     => "a child needs a program"
     case Start(program)                => s"could not start $program"
+    case Property(name)                => s"could not read system property $name"
     case Status                        => "the child did not report a status"
     case Console                       => "could not read the child's output"
     case Io(failure)                   => failure.message
@@ -338,7 +340,7 @@ object ChildProcess:
       |}
       |""".stripMargin
 
-  private val launcherGate = new Object
+  private val launcherGate = new java.util.concurrent.Semaphore(1)
 
   /** Changes when `ExecSource` changes, so a stale class file is not reused. */
   private val launcherId: String =
@@ -348,7 +350,7 @@ object ChildProcess:
       .take(16)
 
   private def runningJava: IO[ChildError, Path] =
-    System.property("java.home").mapError(_ => ChildError.Io(IoFailure(Path.of("java.home"), IoFault.Read))).flatMap:
+    System.property("java.home").mapError(_ => ChildError.Property("java.home")).flatMap:
       case Some(home) if home.nonEmpty =>
         val bin = Path.of(home, "bin", "java")
         file(bin, ChildError.Java(bin)).as(bin)
@@ -357,7 +359,7 @@ object ChildProcess:
   /** Compiled once per machine. A later command reuses the class file. */
   private def launcher(java: Path): IO[ChildError, Path] =
     for
-      tmp <- System.property("java.io.tmpdir").mapError(_ => ChildError.Io(IoFailure(Path.of("java.io.tmpdir"), IoFault.Read)))
+      tmp <- System.property("java.io.tmpdir").mapError(_ => ChildError.Property("java.io.tmpdir"))
       root = Path.of(tmp.filter(_.nonEmpty).getOrElse("/tmp"), s"histos-exec-$launcherId")
       compiler <- ZIO.fromEither(javac(java))
       classes <- ensureLauncher(compiler, root)
@@ -366,28 +368,37 @@ object ChildProcess:
   private def ensureLauncher(javac: Path, root: Path): IO[ChildError, Path] =
     val classes = root.resolve("classes")
     val mark = classes.resolve(".complete")
-    ZIO.attemptBlocking {
-      launcherGate.synchronized {
-        if !Files.isRegularFile(mark) then
-          val sources = root.resolve("subprocess")
-          Files.createDirectories(sources)
-          val source = sources.resolve("Exec.java")
-          Files.writeString(source, ExecSource)
-          Files.createDirectories(classes)
-          val process = new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString)
-            .redirectErrorStream(true)
-            .start()
-          val text = new String(process.getInputStream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
-          val code = process.waitFor()
-          if code != 0 then Left(text)
-          else
-            Files.writeString(mark, "ok\n")
-            Right(classes)
-        else Right(classes)
-      }
-    }.mapError(_ => ChildError.Io(IoFailure(root, IoFault.Write))).flatMap:
-      case Left(text)     => ZIO.fail(ChildError.Bootstrap(ProcessOutput.from(text)))
-      case Right(classes) => ZIO.succeed(classes)
+    ZIO.acquireReleaseWith(
+      ZIO.attemptBlockingInterrupt(launcherGate.acquire()).mapError(_ => ChildError.Io(IoFailure(root, IoFault.Write)))
+    )(_ => ZIO.succeed(launcherGate.release())): _ =>
+      ZIO.attemptBlocking(Files.isRegularFile(mark))
+        .mapError(_ => ChildError.Io(IoFailure(mark, IoFault.Stat)))
+        .flatMap:
+          case true => ZIO.succeed(classes)
+          case false =>
+            for
+              (source, _) <- prepareLauncher(root, classes)
+              _           <- compileLauncher(javac, source, classes)
+              _ <- ZIO
+                     .attemptBlocking(Files.writeString(mark, "ok\n"))
+                     .mapError(_ => ChildError.Io(IoFailure(mark, IoFault.Write)))
+            yield classes
+
+  private def prepareLauncher(root: Path, classes: Path): IO[ChildError, (Path, Path)] =
+    ZIO
+      .attemptBlocking:
+        val sources = root.resolve("subprocess")
+        Files.createDirectories(sources)
+        val source = sources.resolve("Exec.java")
+        Files.writeString(source, ExecSource)
+        Files.createDirectories(classes)
+        (source, classes)
+      .mapError(_ => ChildError.Io(IoFailure(root, IoFault.Write)))
+
+  private def compileLauncher(javac: Path, source: Path, classes: Path): IO[ChildError, Unit] =
+    ZIO.scoped:
+      collect(watched(startJavac(javac, source, classes), Group.Inherited)).flatMap: compiled =>
+        ZIO.unless(compiled.exit == ProcessExit(0))(ZIO.fail(ChildError.Bootstrap(compiled.out))).unit
 
   private def startCommand(
       java: Path,

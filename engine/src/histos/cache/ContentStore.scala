@@ -69,32 +69,36 @@ private final class DiskStore(val root: Path) extends ContentStore:
 
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]] =
     val dest = objectPath(digest)
-    ZIO.attemptBlocking(Files.isRegularFile(dest)).mapError(io(dest, IoFault.Stat)).flatMap:
-      case false => ZIO.none
-      case true  =>
-        ZIO.attemptBlocking {
-          val found = Chunk.fromArray(Files.readAllBytes(dest))
-          found
-        }.mapError(io(dest, IoFault.Read)).map(Some(_))
+    ZIO
+      .attemptBlocking:
+        if Files.notExists(dest) then Right(None)
+        else if !Files.isRegularFile(dest) then Left(CacheError.Io(IoFailure(dest, IoFault.Stat)))
+        else Right(Some(Chunk.fromArray(Files.readAllBytes(dest))))
+      .mapError(io(dest, IoFault.Read))
+      .flatMap:
+        case Left(error)   => ZIO.fail(error)
+        case Right(result) => ZIO.succeed(result)
 
   def list: IO[CacheError, List[CacheEntry]] =
     ZIO.attemptBlocking(casEntries ++ pluginEntries).mapError(io(root, IoFault.Walk))
 
   def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit] =
-    withKeep: dir =>
+    withKeep(IoFault.Write): dir =>
       val file = dir.resolve(project.value)
-      val tmp = dir.resolve(s".${project.value}.tmp")
+      val tmp = Files.createTempFile(dir, s".${project.value}.", ".tmp")
       val lines = digests.map(_.value).toList.sorted
       val text = if lines.isEmpty then "" else lines.mkString("\n") + "\n"
-      Files.writeString(tmp, text)
-      try Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-      catch
-        case _: java.nio.file.AtomicMoveNotSupportedException =>
-          Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+      try
+        Files.writeString(tmp, text)
+        try Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        catch
+          case _: java.nio.file.AtomicMoveNotSupportedException =>
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING)
+      finally Files.deleteIfExists(tmp)
       ()
 
   def kept: IO[CacheError, Set[Digest]] =
-    withKeep: dir =>
+    withKeep(IoFault.Read): dir =>
       val listed = Files.list(dir)
       try
         listed.iterator.asScala.filter(Files.isRegularFile(_)).flatMap(linesOf).flatMap(Digest.from).toSet
@@ -207,7 +211,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
       ()
     }.mapError(io(root.resolve("tmp"), IoFault.Delete))
 
-  private def withKeep[A](use: Path => A): IO[CacheError, A] =
+  private def withKeep[A](fault: IoFault)(use: Path => A): IO[CacheError, A] =
     ZIO.attemptBlockingInterrupt {
       gate.lockInterruptibly()
       try
@@ -223,7 +227,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
           finally lock.close()
         finally channel.close()
       finally gate.unlock()
-    }.mapError(io(root.resolve("keep"), IoFault.Write))
+    }.mapError(io(root.resolve("keep"), fault))
 
   /** `keep` used to be one file. A directory holds one file per project, and that old file becomes `legacy`. */
   private def keepDir(): Path =

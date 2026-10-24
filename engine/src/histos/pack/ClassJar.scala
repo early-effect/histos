@@ -9,7 +9,19 @@ import scala.jdk.CollectionConverters.*
 import zio.{IO, ZIO}
 
 enum JarIo:
-  case Read, Write, Move
+  case Read(path: Path)
+  case Write(path: Path)
+  case Move(path: Path)
+
+  def word: String = this match
+    case Read(_)  => "read"
+    case Write(_) => "write"
+    case Move(_)  => "move"
+
+  def location: Path = this match
+    case Read(path)  => path
+    case Write(path) => path
+    case Move(path)  => path
 
 enum JarError:
   case NotADirectory(path: Path)
@@ -23,7 +35,7 @@ enum JarError:
     case Empty(path)           => s"$path has no class files"
     case Escaped(name)         => s"'$name' leaves the classes directory"
     case DestinationInside(path) => s"$path is inside the classes directory"
-    case Io(op)                => s"jar failed while ${op.toString.toLowerCase}"
+    case Io(op)                => s"jar failed while ${op.word} ${op.location}"
 
 final case class Jarred(path: Path, entries: Int)
 
@@ -55,7 +67,7 @@ object ClassJar:
             else Right(seen :+ (name, file))
         .flatMap: named =>
           if named.isEmpty then Left(JarError.Empty(classes)) else Right(named)
-    }.mapError(_ => JarError.Io(JarIo.Read)).flatMap(ZIO.fromEither)
+    }.mapError(_ => JarError.Io(JarIo.Read(classes))).flatMap(ZIO.fromEither)
 
   private def place(destination: Path, files: List[(String, Path)]): IO[JarError, Unit] =
     val parent = Option(destination.getParent).getOrElse(destination)
@@ -76,5 +88,5 @@ object ClassJar:
           case _: AtomicMoveNotSupportedException =>
             Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING)
         ()
-      }.mapError(_ => JarError.Io(JarIo.Write))
+      }.mapError(_ => JarError.Io(JarIo.Write(temp)))
     }

@@ -1,7 +1,8 @@
 package histos.cache
 
 import histos.jdk.Sha256
-import histos.schedule.{Action, ActionId, Digest, Input, InputName, InputValue}
+import histos.schedule.{Action, ActionId, CacheError, Digest, Input, InputName, InputValue}
+import histos.workspace.{IoFailure, IoFault}
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.FileTime
 import java.time.Instant
@@ -70,6 +71,16 @@ object CacheSpec extends ZIOSpecDefault:
               finally list.close()
           }
         yield assertTrue(found.contains(bytes) && empty)
+    ,
+    test("a directory at an object path is a typed stat failure"):
+      ZIO.scoped:
+        for
+          saved <- store
+          key = digest("directory")
+          objectPath = saved.root.resolve("cas").resolve(key.value.take(2)).resolve(key.value.drop(2))
+          _ <- ZIO.attempt(Files.createDirectories(objectPath))
+          found <- saved.read(key).either
+        yield assertTrue(found == Left(CacheError.Io(IoFailure(objectPath, IoFault.Stat))))
     ,
     test("clean --dry-run lists an old entry and does not delete it"):
       ZIO.scoped:

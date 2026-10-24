@@ -6,7 +6,7 @@ import histos.jdk.{ArchiveKind, ArchiveSource, ExtractFailure, HttpsUrl, Machine
 
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
-import java.util.zip.ZipInputStream
+import java.util.zip.{ZipException, ZipInputStream}
 
 import scala.jdk.CollectionConverters.*
 
@@ -18,6 +18,7 @@ enum NodeStageError:
   case Checksum(expected: Sha256, actual: Sha256)
   case UnsafePath(entry: String)
   case NoHome
+  case Version(path: Path, error: NodeVersionError)
   case Extract(archive: Path, failure: ExtractFailure)
   case Io(failure: IoFailure)
 
@@ -28,6 +29,7 @@ enum NodeStageError:
     case Checksum(expected, actual) => s"node checksum was ${actual.value}, lock has ${expected.value}"
     case UnsafePath(entry)          => s"node archive entry escapes the cache: $entry"
     case NoHome                     => "node archive has no bin/node of the locked major"
+    case Version(path, error)       => s"could not read the Node version at $path: ${error.message}"
     case Io(failure)                => failure.message
 
 /**
@@ -102,7 +104,7 @@ object NodeStage:
   private def stageProbe(root: Path)(error: NodeError): NodeStageError =
     error match
       case NodeError.Unreadable(path)    => NodeStageError.Io(IoFailure(path, IoFault.Read))
-      case NodeError.Version(path, _)    => NodeStageError.Io(IoFailure(path, IoFault.Read))
+      case NodeError.Version(path, error) => NodeStageError.Version(path, error)
       case NodeError.NoLock(path)        => NodeStageError.Io(IoFailure(path, IoFault.Read))
       case NodeError.Stage(stage)        => stage
       case NodeError.BadMajor(_) | NodeError.PathScan | NodeError.Lock(_) | NodeError.Override(_) =>
@@ -137,17 +139,27 @@ object NodeStage:
     Workspace.delete(root).mapError(NodeStageError.Io(_))
 
   private def unpackZip(archive: Path, dest: Path): IO[NodeStageError, Unit] =
-    ZIO.attemptBlocking(unpackEntries(archive, dest.normalize)).mapError(_ => NodeStageError.Io(IoFailure(dest, IoFault.Write))).flatMap:
-      case Left(error) => ZIO.fail(error)
-      case Right(_)    => ZIO.unit
+    val root = dest.normalize
+    for
+      _ <- ZIO
+             .attemptBlocking(Files.createDirectories(root))
+             .mapError(_ => NodeStageError.Io(IoFailure(root, IoFault.Create)))
+      result <- ZIO
+                  .attemptBlocking(unpackEntries(archive, root))
+                  .mapError:
+                    case _: ZipException => NodeStageError.Extract(archive, ExtractFailure.Malformed)
+                    case _ => NodeStageError.Extract(archive, ExtractFailure.Io(IoFailure(archive, IoFault.Read)))
+      _ <- result match
+             case Left(error) => ZIO.fail(error)
+             case Right(_)    => ZIO.unit
+    yield ()
 
   private def unpackEntries(archive: Path, root: Path): Either[NodeStageError, Unit] =
-    Files.createDirectories(root)
     val input = new ZipInputStream(Files.newInputStream(archive))
-    try readEntries(input, root)
+    try readEntries(input, root, archive)
     finally input.close()
 
-  private def readEntries(input: ZipInputStream, root: Path): Either[NodeStageError, Unit] =
+  private def readEntries(input: ZipInputStream, root: Path, archive: Path): Either[NodeStageError, Unit] =
     Option(input.getNextEntry) match
       case None => Right(())
       case Some(entry) =>
@@ -161,10 +173,12 @@ object NodeStage:
                 Files.copy(input, path, StandardCopyOption.REPLACE_EXISTING)
                 if launcher(path) then path.toFile.setExecutable(true)
                 Right(())
-              catch case _: java.io.IOException => Left(NodeStageError.Io(IoFailure(path, IoFault.Write)))
+              catch
+                case _: ZipException => Left(NodeStageError.Extract(archive, ExtractFailure.Malformed))
+                case _: java.io.IOException => Left(NodeStageError.Io(IoFailure(path, IoFault.Write)))
         step.flatMap: _ =>
           input.closeEntry()
-          readEntries(input, root)
+          readEntries(input, root, archive)
 
   /** A zip entry read here carries no mode, and the staged `bin/node` has to run. */
   private def launcher(path: Path): Boolean =

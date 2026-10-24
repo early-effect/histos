@@ -3,6 +3,7 @@ package histos.workflow
 import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin}
 import histos.resolve.PlatformToken
 import histos.version.Catalog
+import histos.workspace.{IoFailure, IoFault}
 import histos.{Aggregate, Axis, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, Splits}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
@@ -40,9 +41,6 @@ enum TestJob:
   case Aggregate(target: TestTarget)
   case Split(module: ModuleRef, platform: PlatformRef, version: VersionRef)
 
-enum CiIo:
-  case Read, Write
-
 enum WorkflowAction:
   case Check, Update
 
@@ -56,7 +54,7 @@ enum CiError:
   case Duplicate(name: ProjectName)
   case Missing(path: Path)
   case Drift
-  case Io(op: CiIo)
+  case Io(failure: IoFailure)
 
   def message: String = this match
     case BadName(raw)  => s"'$raw' is not a project name"
@@ -65,7 +63,7 @@ enum CiError:
     case Duplicate(name) => s"'${name.value}' is listed twice"
     case Missing(path) => s"no workflow at $path"
     case Drift         => "workflow does not match the graph"
-    case Io(op)        => s"workflow failed while ${op.toString.toLowerCase}"
+    case Io(failure)   => failure.message
 
 object Workflow:
   val fileName: String = "ci.yml"
@@ -132,7 +130,9 @@ object Workflow:
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.foreachDiscard(extra): orphan =>
-        ZIO.attemptBlocking(Files.deleteIfExists(orphan)).mapError(_ => CiError.Io(CiIo.Write))
+        ZIO
+          .attemptBlocking(Files.deleteIfExists(orphan))
+          .mapError(_ => CiError.Io(IoFailure(orphan, IoFault.Delete)))
     yield path(repo)
 
   /** The process boundary. The command is `./histos test` plus the cell, nothing else. */
@@ -220,7 +220,9 @@ object Workflow:
     repo.resolve(".github").resolve("ci-tools")
 
   private def present(repo: Path): IO[CiError, Boolean] =
-    ZIO.attemptBlocking(Files.isRegularFile(toolsMarker(repo))).mapError(_ => CiError.Io(CiIo.Read))
+    ZIO
+      .attemptBlocking(Files.isRegularFile(toolsMarker(repo)))
+      .mapError(_ => CiError.Io(IoFailure(toolsMarker(repo), IoFault.Stat)))
 
   private def document(graph: ProjectGraph, jobs: List[TestJob], setup: Boolean): String =
     val test = jobs match
@@ -399,7 +401,7 @@ object Workflow:
     ZIO.attemptBlocking {
       if Files.isDirectory(dir) then histosFiles(dir).filter(path => !emitted.contains(fileNameOf(path)))
       else Nil
-    }.mapError(_ => CiError.Io(CiIo.Read))
+    }.mapError(_ => CiError.Io(IoFailure(dir, IoFault.Walk)))
 
   private def histosFiles(dir: Path): List[Path] =
     val stream = Files.list(dir)
@@ -416,13 +418,15 @@ object Workflow:
   private def read(file: Path): IO[CiError, String] =
     ZIO.attemptBlocking {
       if Files.isRegularFile(file) then Right(Files.readString(file)) else Left(CiError.Missing(file))
-    }.mapError(_ => CiError.Io(CiIo.Read)).flatMap(ZIO.fromEither)
+    }.mapError(_ => CiError.Io(IoFailure(file, IoFault.Read))).flatMap(ZIO.fromEither)
 
   private def write(file: Path, text: String): IO[CiError, Unit] =
     Option(file.getParent) match
-      case None => ZIO.fail(CiError.Io(CiIo.Write))
+      case None => ZIO.fail(CiError.Io(IoFailure(file, IoFault.Write)))
       case Some(parent) =>
-        ZIO.attemptBlocking(replace(parent, file, text)).mapError(_ => CiError.Io(CiIo.Write))
+        ZIO
+          .attemptBlocking(replace(parent, file, text))
+          .mapError(_ => CiError.Io(IoFailure(file, IoFault.Write)))
 
   private def replace(parent: Path, file: Path, text: String): Unit =
     Files.createDirectories(parent)

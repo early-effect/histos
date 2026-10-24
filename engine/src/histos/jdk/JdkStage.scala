@@ -5,6 +5,7 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
+import java.util.zip.ZipException
 
 import scala.jdk.CollectionConverters.*
 
@@ -122,12 +123,22 @@ object JdkStage:
     Workspace.delete(root).mapError(StageError.Io(_))
 
   private def unpackZip(archive: Path, dest: Path): IO[StageError, Unit] =
-    ZIO.attemptBlocking(unpackEntries(archive, dest.normalize)).mapError(_ => StageError.Io(IoFailure(dest, IoFault.Write))).flatMap:
-      case Left(error) => ZIO.fail(error)
-      case Right(_)    => ZIO.unit
+    val root = dest.normalize
+    for
+      _ <- ZIO
+             .attemptBlocking(Files.createDirectories(root))
+             .mapError(_ => StageError.Io(IoFailure(root, IoFault.Create)))
+      result <- ZIO
+                  .attemptBlocking(unpackEntries(archive, root))
+                  .mapError:
+                    case _: ZipException => StageError.Extract(archive, ExtractFailure.Malformed)
+                    case _ => StageError.Extract(archive, ExtractFailure.Io(IoFailure(archive, IoFault.Read)))
+      _ <- result match
+             case Left(error) => ZIO.fail(error)
+             case Right(_)    => ZIO.unit
+    yield ()
 
   private def unpackEntries(archive: Path, root: Path): Either[StageError, Unit] =
-    Files.createDirectories(root)
     val input = new java.util.zip.ZipInputStream(Files.newInputStream(archive))
     try
       var entry  = input.getNextEntry
@@ -145,7 +156,9 @@ object JdkStage:
                   Option(path.getParent).foreach(Files.createDirectories(_))
                   Files.copy(input, path, StandardCopyOption.REPLACE_EXISTING)
                   None
-                catch case _: java.io.IOException => Some(StageError.Io(IoFailure(path, IoFault.Write)))
+                catch
+                  case _: ZipException => Some(StageError.Extract(archive, ExtractFailure.Malformed))
+                  case _: java.io.IOException => Some(StageError.Io(IoFailure(path, IoFault.Write)))
         if failed.isEmpty then
           input.closeEntry()
           entry = input.getNextEntry
