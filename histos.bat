@@ -75,8 +75,8 @@ function PrivateDirectory([string] $path) {
   $ancestor=[IO.Directory]::GetParent([IO.Path]::GetFullPath($path))
   while ($ancestor) {
     $acl=Get-Acl -LiteralPath $ancestor.FullName
-    $trusted=@($owner.Value,'S-1-5-18','S-1-5-32-544')
-    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { Fail 'untrusted cache ancestor owner' }
+    $trusted=@($owner.Value,'S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { Fail ('untrusted cache ancestor owner: '+$ancestor.FullName) }
     $write=[Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
     foreach ($rule in $acl.Access) {
       if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin $trusted -and ($rule.FileSystemRights -band $write)) { Fail 'unsafe shared cache ancestor ACL' }

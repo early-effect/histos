@@ -165,7 +165,7 @@ Client and LauncherCommit are constructor-injected seams, not business logic hid
 
 [`LauncherScript`](../engine/src/histos/publish/LauncherScript.scala) generates POSIX and stock PowerShell launchers. They select the exact JDK host pin, privately stage safe archives and check the whole installed runtime before Java, including library/image/link/mode changes. Windows uses a suspended process assigned to a kill-on-close job before resuming. Actual Windows execution remains T16.
 
-**Verified delivery:** launcher `0.0.1-20261024.180900-15`, SHA-256 `91949ade8d0bad6a7137fd8e2f9d8ee14565dcab540b21e70591104224c784ad`, was published and pinned after the full source suite. The three real 80 MiB transport tests pass with published Heddle 0.13.0. The exact published launcher cold-download and warm offline boot passed using an owner-private cache. Stock Windows execution remains T16. MacOS shared-temp ancestor mode reporting remains P23; its conservative rejection preserves the private-cache boundary.
+**Verified delivery:** launcher `0.0.1-20261024.182342-16`, SHA-256 `046c3ec7409867f9b2477997ee8d9e0507fe520d234cca860a9d307181ad81b9`, was published and pinned after the full source suite. The three real 80 MiB transport tests pass with published Heddle 0.13.0. The exact published launcher cold-download and warm offline boot passed using an owner-private cache. Stock Windows execution remains T16. MacOS shared-temp ancestor mode reporting remains P23; its conservative rejection preserves the private-cache boundary.
 
 ## Server, BSP, and MCP
 
