@@ -2,7 +2,9 @@ package histos.native
 
 import histos.{NativeVersion, RepositoryUrl, RepositoryUrlError}
 
-/** Where the linker fetches the Scala Native version the module named. The build file does not name this. */
+/** Where the linker fetches the Scala Native version the module named. The
+  * build file does not name this.
+  */
 enum NativeSource:
   case Central
   case IvyLocal
@@ -20,17 +22,29 @@ object NativeToolchain:
   /** The revision a native module uses when it does not name one. */
   val ReleaseRevision: NativeVersion = NativeVersion("0.5.12")
 
-  val Release: NativeToolchain = NativeToolchain(NativeSource.Central, ReleaseRevision)
+  def revision(named: Option[NativeVersion]): NativeVersion =
+    named.getOrElse(ReleaseRevision)
+
+  val Release: NativeToolchain =
+    NativeToolchain(NativeSource.Central, ReleaseRevision)
 
   val Key: String = "HISTOS_NATIVE"
 
-  def of(revision: NativeVersion, origin: NativeOrigin): Either[NativeToolchainError, NativeToolchain] =
+  def of(
+      revision: NativeVersion,
+      origin: NativeOrigin
+  ): Either[NativeToolchainError, NativeToolchain] =
     origin match
-      case NativeOrigin.Chosen(source)  => Right(NativeToolchain(source, revision))
+      case NativeOrigin.Chosen(source) =>
+        Right(NativeToolchain(source, revision))
       case NativeOrigin.Refused(error) => Left(error)
 
-  /** Unset is Central. `ivy-local` or `file:/path` replaces the origin. The revision stays on the module. */
-  def source(env: Map[String, String]): Either[NativeToolchainError, NativeSource] =
+  /** Unset is Central. `ivy-local` or `file:/path` replaces the origin. The
+    * revision stays on the module.
+    */
+  def source(
+      env: Map[String, String]
+  ): Either[NativeToolchainError, NativeSource] =
     env.get(Key) match
       case None      => Right(NativeSource.Central)
       case Some(raw) => parse(raw)
@@ -45,10 +59,10 @@ object NativeToolchain:
         case Right(url)  => Right(NativeSource.Maven(url))
     else Left(NativeToolchainError.Origin(raw))
 
-/**
- * `HISTOS_NATIVE` as one command read it from the machine. A refusal fails only the Native cells that fetch,
- * so a graph without Native does not care what it says.
- */
+/** `HISTOS_NATIVE` as one command read it from the machine. A refusal fails
+  * only the Native cells that fetch, so a graph without Native does not care
+  * what it says.
+  */
 enum NativeOrigin:
   case Chosen(source: NativeSource)
   case Refused(error: NativeToolchainError)
@@ -66,7 +80,9 @@ enum NativeToolchainError:
   case Repository(error: RepositoryUrlError)
 
   def message: String = this match
-    case Empty             => "HISTOS_NATIVE is empty"
-    case Origin(raw)       => s"'$raw' is not HISTOS_NATIVE. Use ivy-local or file:/path"
-    case Revision(raw)     => s"'$raw' puts a revision in HISTOS_NATIVE. Name nativeVersion on the module"
+    case Empty       => "HISTOS_NATIVE is empty"
+    case Origin(raw) =>
+      s"'$raw' is not HISTOS_NATIVE. Use ivy-local or file:/path"
+    case Revision(raw) =>
+      s"'$raw' puts a revision in HISTOS_NATIVE. Name nativeVersion on the module"
     case Repository(error) => error.message

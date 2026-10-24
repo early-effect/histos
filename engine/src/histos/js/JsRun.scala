@@ -3,13 +3,18 @@ package histos.js
 import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
-import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
+import histos.workspace.Workspace
+import histos.zinc.{
+  CompileError,
+  CompileRequest,
+  CompileToolchain,
+  JvmCompile,
+  ResolvedJdk,
+  ScalacFlags
+}
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
-
-import scala.jdk.CollectionConverters.*
+import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
@@ -21,10 +26,12 @@ final case class JsRunRequest(
     work: Path,
     jdk: ResolvedJdk,
     processEnv: Map[String, String],
-    node: NodeBinary,
+    node: NodeBinary
 )
 
-/** Start a linked script in the module's JavaScript environment. The engine does not load a `JSEnv`. */
+/** Start a linked script in the module's JavaScript environment. The engine
+  * does not load a `JSEnv`.
+  */
 object JsRun:
   private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
   private val FirefoxScala: ScalaVersion = ScalaVersion.trusted("3.9.0")
@@ -34,19 +41,32 @@ object JsRun:
     val JsRunRequest(env, kind, script, work, jdk, processEnv, node) = request
     val bridgeRoot = work.resolve("js-run")
     val classes = bridgeRoot.resolve("classes")
-    val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")
+    val source =
+      bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")
     val child = work.resolve("js-run-child")
     for
-      tools <- ZIO.attemptBlockingInterrupt(fetch(env)).mapError(_ => JsRunError.Unavailable).flatMap(ZIO.fromEither)
+      tools <- ZIO
+        .attemptBlockingInterrupt(fetch(env))
+        .mapError(_ => JsRunError.Unavailable)
+        .flatMap(ZIO.fromEither)
       _ <- write(source, runner(env))
-      _ <- JvmCompile.compile(CompileRequest(
-             CompileToolchain(compiler(env), histos.Platform.Jvm, jdk, ScalacFlags.empty),
-             List(source),
-             tools,
-             classes,
-             bridgeRoot.resolve("analysis"),
-             Nil,
-           )).mapError(JsRunError.Compile(_))
+      _ <- JvmCompile
+        .compile(
+          CompileRequest(
+            CompileToolchain(
+              compiler(env),
+              histos.Platform.Jvm,
+              jdk,
+              ScalacFlags.empty
+            ),
+            List(source),
+            tools,
+            classes,
+            bridgeRoot.resolve("analysis"),
+            Nil
+          )
+        )
+        .mapError(JsRunError.Compile(_))
       _ <- empty(child)
     yield ChildRequest(
       histos.Platform.Jvm,
@@ -56,14 +76,17 @@ object JsRun:
       child,
       processEnv ++ nodeEnv(env, node) ++ Map(
         "JS_SCRIPT" -> script.toAbsolutePath.toString,
-        "JS_MODULE" -> kind.token,
-      ),
+        "JS_MODULE" -> kind.token
+      )
     )
 
-  /** The child hands the chosen `node` to its `JSEnv`. Chekhov's Playwright driver reads `PLAYWRIGHT_NODEJS_PATH`. */
-  private[js] def nodeEnv(env: JsEnv, node: NodeBinary): Map[String, String] = env match
-    case JsEnv.Node | JsEnv.Jsdom => Map("JS_NODE" -> node.path.toString)
-    case JsEnv.Firefox            => Map("PLAYWRIGHT_NODEJS_PATH" -> node.path.toString)
+  /** The child hands the chosen `node` to its `JSEnv`. Chekhov's Playwright
+    * driver reads `PLAYWRIGHT_NODEJS_PATH`.
+    */
+  private[js] def nodeEnv(env: JsEnv, node: NodeBinary): Map[String, String] =
+    env match
+      case JsEnv.Node | JsEnv.Jsdom => Map("JS_NODE" -> node.path.toString)
+      case JsEnv.Firefox => Map("PLAYWRIGHT_NODEJS_PATH" -> node.path.toString)
 
   /** The expression that builds the `JSEnv` on the `node` in `JS_NODE`. */
   private[js] def envExpr(env: JsEnv): String = env match
@@ -75,33 +98,43 @@ object JsRun:
       "new chekhov.jsenv.ChekhovJSEnv(chekhov.ChekhovBrowser.Firefox, true, false, scala.collection.immutable.Map.empty[String, String])"
 
   private def compiler(env: JsEnv): ScalaVersion = env match
-    case JsEnv.Firefox        => FirefoxScala
+    case JsEnv.Firefox            => FirefoxScala
     case JsEnv.Node | JsEnv.Jsdom => BridgeScala
 
   private def fetch(env: JsEnv): Either[JsRunError, List[Path]] =
     val wanted = env match
-      case JsEnv.Node => List(Artifact("org.scala-js", "scalajs-env-nodejs_2.13", "1.6.0"))
-      case JsEnv.Jsdom => List(Artifact("org.scala-js", "scalajs-env-jsdom-nodejs_2.13", "1.1.1"))
-      case JsEnv.Firefox => List(Artifact("rocks.earlyeffect", "chekhov-jsenv_3", "0.1.3"))
+      case JsEnv.Node =>
+        List(Artifact("org.scala-js", "scalajs-env-nodejs_2.13", "1.6.0"))
+      case JsEnv.Jsdom =>
+        List(Artifact("org.scala-js", "scalajs-env-jsdom-nodejs_2.13", "1.1.1"))
+      case JsEnv.Firefox =>
+        List(Artifact("rocks.earlyeffect", "chekhov-jsenv_3", "0.1.3"))
     val dependencies = wanted.map: item =>
       coursier.Dependency(
-        coursier.Module(coursier.Organization(item.organization), coursier.ModuleName(item.name)),
-        coursier.version.VersionConstraint(item.revision),
+        coursier.Module(
+          coursier.Organization(item.organization),
+          coursier.ModuleName(item.name)
+        ),
+        coursier.version.VersionConstraint(item.revision)
       )
-    val got = coursier.Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
+    val got = coursier
+      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
       .noMirrors
       .withGradleModuleSupport(false)
       .withRepositories(Seq(coursier.Repositories.central))
       .addDependencies(dependencies*)
       .eitherResult()
     got match
-      case Left(_) => Left(JsRunError.Unavailable)
+      case Left(_)       => Left(JsRunError.Unavailable)
       case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap: (_, publication, _, file) =>
-          val classified = publication match
-            case Right(published) => published.classifier.nonEmpty
-            case Left(variant)    => variant.classifier.nonEmpty
-          if file.getName.endsWith(".jar") && !classified then List(file.toPath) else Nil
+        val jars = result.detailedArtifacts0.toList.flatMap:
+          (_, publication, _, file) =>
+            val classified = publication match
+              case Right(published) => published.classifier.nonEmpty
+              case Left(variant)    => variant.classifier.nonEmpty
+            if file.getName.endsWith(".jar") && !classified then
+              List(file.toPath)
+            else Nil
         if jars.isEmpty then Left(JsRunError.Unavailable) else Right(jars)
 
   private def runner(env: JsEnv): String =
@@ -144,26 +177,17 @@ object JsRun:
       |}
       |""".stripMargin.replace("__ENV__", envExpr(env))
 
-  private final case class Artifact(organization: String, name: String, revision: String)
+  private final case class Artifact(
+      organization: String,
+      name: String,
+      revision: String
+  )
 
   private def write(path: Path, text: String): IO[JsRunError, Unit] =
-    ZIO.attemptBlocking {
-      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-      Files.writeString(path, text, StandardCharsets.UTF_8)
-      ()
-    }.mapError(_ => JsRunError.Write(path))
+    Workspace.writeString(path, text).mapError(_ => JsRunError.Write(path))
 
   private def empty(path: Path): IO[JsRunError, Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(path) then
-        val walk = Files.walk(path)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(file => Files.deleteIfExists(file))
-      Files.createDirectories(path)
-      ()
-    }.mapError(_ => JsRunError.Write(path))
+    Workspace.recreate(path).mapError(_ => JsRunError.Write(path)).unit
 
 enum JsRunError:
   case Unavailable

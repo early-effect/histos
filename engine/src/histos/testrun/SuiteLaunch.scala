@@ -1,8 +1,23 @@
 package histos.testrun
 
 import histos.jdk.Sha256
-import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
-import histos.native.{NativeCompile, NativeLink, NativeLinkRequest, NativeOrigin, NativeSuite, NativeSuiteRequest, NativeToolchain}
+import histos.js.{
+  JsLink,
+  JsLinkError,
+  JsLinkRequest,
+  JsSuite,
+  JsSuiteRequest,
+  ScalaJs
+}
+import histos.native.{
+  NativeCompile,
+  NativeLink,
+  NativeLinkRequest,
+  NativeOrigin,
+  NativeSuite,
+  NativeSuiteRequest,
+  NativeToolchain
+}
 import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
 import histos.resolve.{
@@ -15,7 +30,13 @@ import histos.resolve.{
   ResolveError
 }
 import histos.workflow.CiError
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
+import histos.process.{
+  ChildClasspath,
+  ChildError,
+  ChildEvent,
+  ChildProcess,
+  ChildRequest
+}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -64,8 +85,13 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
-    val linkDir = TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
+    val linkDir =
+      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
     for
       binary <- ZIO.fromEither(
         MainClass.from(main.value).left.map(ModuleTestError.Main(_))
@@ -81,7 +107,12 @@ private[testrun] object SuiteLaunch:
         lock,
         repositories
       )
-      classes = TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
+      classes = TestCompile.testClasses(
+        repo,
+        module.name,
+        cell.version,
+        cell.platform
+      )
       stream <- remember(
         repo,
         cell,
@@ -94,10 +125,23 @@ private[testrun] object SuiteLaunch:
             chosen <- node(cell, runtimes)
             _ <- TestCompile.fresh(linkDir)
             script <- JsLink
-              .link(JsLinkRequest(cell.version, binary, classes :: linked.paths, linkDir, jdk))
+              .link(
+                JsLinkRequest(
+                  cell.version,
+                  binary,
+                  classes :: linked.paths,
+                  linkDir,
+                  jdk
+                )
+              )
               .mapError(error => linkFailed(cell, error.message))
             work <- TestCompile.fresh(
-              TestCompile.testWork(repo, module.name, cell.version, cell.platform)
+              TestCompile.testWork(
+                repo,
+                module.name,
+                cell.version,
+                cell.platform
+              )
             )
           yield runCommand(
             module.name,
@@ -123,13 +167,23 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
-    val linkDir = TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
-    val classes = TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
+    val linkDir =
+      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
+    val classes =
+      TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
     def launch(
         selected: List[SuitePattern],
         linked: TestCompile.Linked
-    ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+    ): ZIO[
+      Resolve & ProviderInstall,
+      ModuleTestError,
+      ZStream[Any, ModuleTestError, TestFeed]
+    ] =
       for
         keep <- narrowed(classes, selected)
         stream <-
@@ -139,18 +193,20 @@ private[testrun] object SuiteLaunch:
               chosen <- node(cell, runtimes)
               _ <- TestCompile.fresh(linkDir)
               asked <- JsSuite
-                .run(JsSuiteRequest(
-                  cell.version,
-                  module.jsEnv,
-                  module.jsModule,
-                  provider.framework.value,
-                  classes :: linked.paths,
-                  linkDir,
-                  jdk,
-                  TestCompile.suiteEnv(repo, runtimes.env),
-                  chosen,
-                  selected,
-                ))
+                .run(
+                  JsSuiteRequest(
+                    cell.version,
+                    module.jsEnv,
+                    module.jsModule,
+                    provider.framework.value,
+                    classes :: linked.paths,
+                    linkDir,
+                    jdk,
+                    TestCompile.suiteEnv(repo, runtimes.env),
+                    chosen,
+                    selected
+                  )
+                )
                 .mapError(error => linkFailed(cell, error.message))
             yield session(
               module.name,
@@ -213,8 +269,13 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
-    val linkDir = TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
+    val linkDir =
+      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
     for
       major <- nativeMajor(module)
       binary <- ZIO.fromEither(
@@ -231,7 +292,12 @@ private[testrun] object SuiteLaunch:
         lock,
         repositories
       )
-      classes = TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
+      classes = TestCompile.testClasses(
+        repo,
+        module.name,
+        cell.version,
+        cell.platform
+      )
       stream <- remember(
         repo,
         cell,
@@ -245,12 +311,24 @@ private[testrun] object SuiteLaunch:
             toolchain <- nativeToolchain(module, cell, runtimes.native)
             program <- NativeLink
               .linkClasspath(
-                NativeLinkRequest(major, toolchain, TestCompile.suiteEnv(repo, runtimes.env), linkDir, jdk, binary),
-                classes :: linked.paths,
+                NativeLinkRequest(
+                  major,
+                  toolchain,
+                  TestCompile.suiteEnv(repo, runtimes.env),
+                  linkDir,
+                  jdk,
+                  binary
+                ),
+                classes :: linked.paths
               )
               .mapError(error => linkFailed(cell, error.message))
             work <- TestCompile.fresh(
-              TestCompile.testWork(repo, module.name, cell.version, cell.platform)
+              TestCompile.testWork(
+                repo,
+                module.name,
+                cell.version,
+                cell.platform
+              )
             )
           yield runCommand(
             module.name,
@@ -276,15 +354,25 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
-    val linkDir = TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
-    val classes = TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
+    val linkDir =
+      TestCompile.linkWork(repo, module.name, cell.version, cell.platform)
+    val classes =
+      TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
     val entry = MainClass.trusted("scala.scalanative.testinterface.TestMain")
     def launch(
         selected: List[SuitePattern],
         linked: TestCompile.Linked,
         major: histos.ClangMajor
-    ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+    ): ZIO[
+      Resolve & ProviderInstall,
+      ModuleTestError,
+      ZStream[Any, ModuleTestError, TestFeed]
+    ] =
       for
         keep <- narrowed(classes, selected)
         stream <-
@@ -296,21 +384,30 @@ private[testrun] object SuiteLaunch:
               toolchain <- nativeToolchain(module, cell, runtimes.native)
               binary <- NativeLink
                 .linkClasspath(
-                  NativeLinkRequest(major, toolchain, TestCompile.suiteEnv(repo, runtimes.env), linkDir, jdk, entry),
-                  classpath,
+                  NativeLinkRequest(
+                    major,
+                    toolchain,
+                    TestCompile.suiteEnv(repo, runtimes.env),
+                    linkDir,
+                    jdk,
+                    entry
+                  ),
+                  classpath
                 )
                 .mapError(error => linkFailed(cell, error.message))
               asked <- NativeSuite
-                .run(NativeSuiteRequest(
-                  toolchain,
-                  provider.framework.value,
-                  binary,
-                  classpath,
-                  linkDir,
-                  jdk,
-                  TestCompile.suiteEnv(repo, runtimes.env),
-                  selected,
-                ))
+                .run(
+                  NativeSuiteRequest(
+                    toolchain,
+                    provider.framework.value,
+                    binary,
+                    classpath,
+                    linkDir,
+                    jdk,
+                    TestCompile.suiteEnv(repo, runtimes.env),
+                    selected
+                  )
+                )
                 .mapError(error => linkFailed(cell, error.message))
             yield session(
               module.name,
@@ -377,7 +474,10 @@ private[testrun] object SuiteLaunch:
           )
         )
 
-  private[testrun] def linkFailed(cell: CompiledCell, detail: String): ModuleTestError =
+  private[testrun] def linkFailed(
+      cell: CompiledCell,
+      detail: String
+  ): ModuleTestError =
     ModuleTestError.LinkFailed(cell.module, cell.version, cell.platform, detail)
 
   private[testrun] def nativeToolchain(
@@ -385,13 +485,18 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       native: NativeOrigin
   ): IO[ModuleTestError, NativeToolchain] =
-    val revision = module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
+    val revision = NativeToolchain.revision(module.nativeVersion)
     ZIO
       .fromEither(NativeToolchain.of(revision, native))
       .mapError(error => linkFailed(cell, error.message))
 
-  private[testrun] def node(cell: CompiledCell, runtimes: Runtimes): IO[ModuleTestError, NodeBinary] =
-    runtimes.node.mapError(miss => ModuleTestError.NoNode(cell.module, cell.version, miss))
+  private[testrun] def node(
+      cell: CompiledCell,
+      runtimes: Runtimes
+  ): IO[ModuleTestError, NodeBinary] =
+    runtimes.node.mapError(miss =>
+      ModuleTestError.NoNode(cell.module, cell.version, miss)
+    )
 
   private[testrun] def runCommand(
       module: ProjectName,
@@ -432,7 +537,11 @@ private[testrun] object SuiteLaunch:
         ModuleTestError,
         ZStream[Any, ModuleTestError, TestFeed]
       ]
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
     if !quick then run(suites)
     else
       val jars = hashes.map(_.value)
@@ -513,7 +622,11 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
     for
       binary <- ZIO.fromEither(
         MainClass.from(main.value).left.map(ModuleTestError.Main(_))
@@ -529,7 +642,12 @@ private[testrun] object SuiteLaunch:
         lock,
         repositories
       )
-      classes = TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
+      classes = TestCompile.testClasses(
+        repo,
+        module.name,
+        cell.version,
+        cell.platform
+      )
       stream <- remember(
         repo,
         cell,
@@ -538,16 +656,28 @@ private[testrun] object SuiteLaunch:
         linked.hashes,
         quick,
         _ =>
-          TestCompile.fresh(TestCompile.testWork(repo, module.name, cell.version, cell.platform)).map {
-            work =>
+          TestCompile
+            .fresh(
+              TestCompile
+                .testWork(repo, module.name, cell.version, cell.platform)
+            )
+            .map { work =>
               session(
                 module.name,
                 cell.version,
                 None,
-                request(repo, jdk, runtimes, classes, linked.paths, binary, work),
+                request(
+                  repo,
+                  jdk,
+                  runtimes,
+                  classes,
+                  linked.paths,
+                  binary,
+                  work
+                ),
                 cell.platform
               )
-          }
+            }
       )
     yield stream
 
@@ -564,11 +694,20 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
-    val classes = TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
+  ): ZIO[
+    Resolve & ProviderInstall,
+    ModuleTestError,
+    ZStream[Any, ModuleTestError, TestFeed]
+  ] =
+    val classes =
+      TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
     def launch(
         selected: List[SuitePattern]
-    ): ZIO[Resolve & ProviderInstall, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+    ): ZIO[
+      Resolve & ProviderInstall,
+      ModuleTestError,
+      ZStream[Any, ModuleTestError, TestFeed]
+    ] =
       for
         linked <- TestCompile.compiledTests(
           repo,
@@ -581,30 +720,38 @@ private[testrun] object SuiteLaunch:
           lock,
           repositories
         )
-        runnerClasses <- ZIO.serviceWithZIO[ProviderInstall](_.classes(repo, module.name, cell.version, jdk, linked.paths))
+        runnerClasses <- ZIO.serviceWithZIO[ProviderInstall](
+          _.classes(repo, module.name, cell.version, jdk, linked.paths)
+        )
         keep <- narrowed(classes, selected)
         stream <-
           if !keep then ZIO.succeed(ZStream.empty)
           else
-            TestCompile.fresh(TestCompile.testWork(repo, module.name, cell.version, cell.platform)).map: work =>
-              val note = ProviderNote(provider.framework.value, classes, selected)
-              // The runner is the program, so it precedes the test classes. Those classes can contain another subprocess.Provider.
-              session(
-                module.name,
-                cell.version,
-                Some(provider),
-                request(
-                  repo,
-                  jdk,
-                  runtimes,
-                  runnerClasses,
-                  classes :: linked.paths,
-                  ProviderRunner.Main,
-                  work,
-                  note.environment,
-                ),
-                cell.platform
+            TestCompile
+              .fresh(
+                TestCompile
+                  .testWork(repo, module.name, cell.version, cell.platform)
               )
+              .map: work =>
+                val note =
+                  ProviderNote(provider.framework.value, classes, selected)
+                // The runner is the program, so it precedes the test classes. Those classes can contain another subprocess.Provider.
+                session(
+                  module.name,
+                  cell.version,
+                  Some(provider),
+                  request(
+                    repo,
+                    jdk,
+                    runtimes,
+                    runnerClasses,
+                    classes :: linked.paths,
+                    ProviderRunner.Main,
+                    work,
+                    note.environment
+                  ),
+                  cell.platform
+                )
       yield stream
     for
       _ <- ZIO.unless(satisfied(module, provider))(
@@ -657,7 +804,7 @@ private[testrun] object SuiteLaunch:
       classpath: List[Path],
       main: MainClass,
       work: Path,
-      extra: Map[String, String] = Map.empty,
+      extra: Map[String, String] = Map.empty
   ): ChildRequest =
     ChildRequest(
       Platform.Jvm,
@@ -665,7 +812,7 @@ private[testrun] object SuiteLaunch:
       ChildClasspath(classes, classpath),
       main,
       work,
-      TestCompile.suiteEnv(repo, runtimes.env) ++ extra,
+      TestCompile.suiteEnv(repo, runtimes.env) ++ extra
     )
 
   /** Header, then lines as the process writes them, then the cell. `NoneFound`
@@ -692,8 +839,8 @@ private[testrun] object SuiteLaunch:
       event: ChildEvent
   ): ZIO[Any, ModuleTestError, TestFeed] =
     event match
-      case ChildEvent.Out(text) => ZIO.succeed(TestFeed.Out(text))
-      case ChildEvent.Err(text) => ZIO.succeed(TestFeed.Err(text))
+      case ChildEvent.Out(text)    => ZIO.succeed(TestFeed.Out(text))
+      case ChildEvent.Err(text)    => ZIO.succeed(TestFeed.Err(text))
       case ChildEvent.Exited(code) =>
         provider match
           case Some(_) if code.value == ProviderRunner.NoneMatched =>
@@ -712,7 +859,10 @@ private[testrun] object SuiteLaunch:
               TestFeed.Done(TestedCell(module, version, platform, status))
             )
 
-  private[testrun] def satisfied(module: Module, provider: TestProvider): Boolean =
+  private[testrun] def satisfied(
+      module: Module,
+      provider: TestProvider
+  ): Boolean =
     val library = provider.library
     library.organization.nonEmpty && library.name.nonEmpty &&
     module.testDependencies.exists(dep =>

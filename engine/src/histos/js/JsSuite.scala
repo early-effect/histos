@@ -4,17 +4,24 @@ import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
 import histos.testrun.SuitePattern
-import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
+import histos.workspace.Workspace
+import histos.zinc.{
+  CompileError,
+  CompileRequest,
+  CompileToolchain,
+  JvmCompile,
+  ResolvedJdk,
+  ScalacFlags
+}
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
-
-import scala.jdk.CollectionConverters.*
+import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** One Scala.js test-adapter run. The engine does not load the linker or a `JSEnv`. */
+/** One Scala.js test-adapter run. The engine does not load the linker or a
+  * `JSEnv`.
+  */
 final case class JsSuiteRequest(
     version: ScalaVersion,
     env: JsEnv,
@@ -25,13 +32,13 @@ final case class JsSuiteRequest(
     jdk: ResolvedJdk,
     processEnv: Map[String, String],
     node: NodeBinary,
-    patterns: List[SuitePattern] = Nil,
+    patterns: List[SuitePattern] = Nil
 )
 
-/**
- * Link the Scala.js test bridge and run `org.scalajs.testing.adapter.TestAdapter` in a child JVM.
- * The engine does not load `org.scalajs.linker` or a `JSEnv`.
- */
+/** Link the Scala.js test bridge and run
+  * `org.scalajs.testing.adapter.TestAdapter` in a child JVM. The engine does
+  * not load `org.scalajs.linker` or a `JSEnv`.
+  */
 object JsSuite:
   private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
   private val FirefoxScala: ScalaVersion = ScalaVersion.trusted("3.9.0")
@@ -40,29 +47,64 @@ object JsSuite:
   private val BridgeJar: String = "scalajs-test-bridge_2.13"
 
   def run(request: JsSuiteRequest): IO[JsSuiteError, ChildRequest] =
-    val JsSuiteRequest(version, env, kind, framework, classpath, work, jdk, processEnv, node, patterns) = request
+    val JsSuiteRequest(
+      version,
+      env,
+      kind,
+      framework,
+      classpath,
+      work,
+      jdk,
+      processEnv,
+      node,
+      patterns
+    ) = request
     val output = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
     val classes = bridgeRoot.resolve("classes")
-    val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("JsSuite.scala")
+    val source =
+      bridgeRoot.resolve("src").resolve("subprocess").resolve("JsSuite.scala")
     val listed = work.resolve("classpath.txt")
     val child = work.resolve("child")
     for
       libraries <- ScalaJs.libraries(version).mapError(JsSuiteError.Library(_))
-      tools <- ZIO.attemptBlockingInterrupt(fetch(artifacts(env))).mapError(_ => JsSuiteError.Unavailable).flatMap(ZIO.fromEither)
-      bridge <- ZIO.attemptBlockingInterrupt(fetch(List(Artifact("org.scala-js", BridgeJar, Linker)), transitive = false))
+      tools <- ZIO
+        .attemptBlockingInterrupt(fetch(artifacts(env)))
         .mapError(_ => JsSuiteError.Unavailable)
         .flatMap(ZIO.fromEither)
-      _ <- write(listed, (classpath ++ libraries ++ bridge).map(_.toAbsolutePath.toString).mkString("\n"))
+      bridge <- ZIO
+        .attemptBlockingInterrupt(
+          fetch(
+            List(Artifact("org.scala-js", BridgeJar, Linker)),
+            transitive = false
+          )
+        )
+        .mapError(_ => JsSuiteError.Unavailable)
+        .flatMap(ZIO.fromEither)
+      _ <- write(
+        listed,
+        (classpath ++ libraries ++ bridge)
+          .map(_.toAbsolutePath.toString)
+          .mkString("\n")
+      )
       _ <- write(source, suite(env, patterns))
-      _ <- JvmCompile.compile(CompileRequest(
-             CompileToolchain(compiler(env), histos.Platform.Jvm, jdk, ScalacFlags.empty),
-             List(source),
-             tools,
-             classes,
-             bridgeRoot.resolve("analysis"),
-             Nil,
-           )).mapError(JsSuiteError.Library(_))
+      _ <- JvmCompile
+        .compile(
+          CompileRequest(
+            CompileToolchain(
+              compiler(env),
+              histos.Platform.Jvm,
+              jdk,
+              ScalacFlags.empty
+            ),
+            List(source),
+            tools,
+            classes,
+            bridgeRoot.resolve("analysis"),
+            Nil
+          )
+        )
+        .mapError(JsSuiteError.Library(_))
       _ <- empty(output)
       _ <- empty(child)
     yield ChildRequest(
@@ -75,12 +117,12 @@ object JsSuite:
         "JS_OUT" -> output.toAbsolutePath.toString,
         "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
         "JS_FRAMEWORK" -> framework,
-        "JS_MODULE" -> kind.token,
-      ),
+        "JS_MODULE" -> kind.token
+      )
     )
 
   private def compiler(env: JsEnv): ScalaVersion = env match
-    case JsEnv.Firefox => FirefoxScala
+    case JsEnv.Firefox            => FirefoxScala
     case JsEnv.Node | JsEnv.Jsdom => BridgeScala
 
   private def artifacts(env: JsEnv): List[Artifact] = env match
@@ -88,24 +130,26 @@ object JsSuite:
       List(
         Artifact("org.scala-js", "scalajs-linker_2.13", Linker),
         Artifact("org.scala-js", "scalajs-sbt-test-adapter_2.13", Linker),
-        Artifact("org.scala-js", "scalajs-env-nodejs_2.13", "1.6.0"),
+        Artifact("org.scala-js", "scalajs-env-nodejs_2.13", "1.6.0")
       )
     case JsEnv.Jsdom =>
       List(
         Artifact("org.scala-js", "scalajs-linker_2.13", Linker),
         Artifact("org.scala-js", "scalajs-sbt-test-adapter_2.13", Linker),
-        Artifact("org.scala-js", "scalajs-env-jsdom-nodejs_2.13", "1.1.1"),
+        Artifact("org.scala-js", "scalajs-env-jsdom-nodejs_2.13", "1.1.1")
       )
     case JsEnv.Firefox =>
       List(
         Artifact("org.scala-js", "scalajs-linker_3", Linker),
         Artifact("org.scala-js", "scalajs-sbt-test-adapter_3", Linker),
-        Artifact("rocks.earlyeffect", "chekhov-jsenv_3", "0.1.3"),
+        Artifact("rocks.earlyeffect", "chekhov-jsenv_3", "0.1.3")
       )
 
-  /** Chekhov rejects `RunConfig` env. Node and jsdom take the child environment, which is only `PATH`. */
+  /** Chekhov rejects `RunConfig` env. Node and jsdom take the child
+    * environment, which is only `PATH`.
+    */
   private def useRunEnv(env: JsEnv): Boolean = env match
-    case JsEnv.Firefox        => false
+    case JsEnv.Firefox            => false
     case JsEnv.Node | JsEnv.Jsdom => true
 
   private def suite(env: JsEnv, patterns: List[SuitePattern]): String =
@@ -276,51 +320,60 @@ object JsSuite:
       |}
       |
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
-      |""".stripMargin.replace("__ENV__", JsRun.envExpr(env)).replace("__USE_ENV__", if useRunEnv(env) then "true" else "false").replace("__SUITES__", SuitePattern.embed(patterns))
+      |""".stripMargin
+      .replace("__ENV__", JsRun.envExpr(env))
+      .replace("__USE_ENV__", if useRunEnv(env) then "true" else "false")
+      .replace("__SUITES__", SuitePattern.embed(patterns))
 
-  private final case class Artifact(organization: String, name: String, revision: String)
+  private final case class Artifact(
+      organization: String,
+      name: String,
+      revision: String
+  )
 
-  private def fetch(wanted: List[Artifact], transitive: Boolean = true): Either[JsSuiteError, List[Path]] =
+  private def fetch(
+      wanted: List[Artifact],
+      transitive: Boolean = true
+  ): Either[JsSuiteError, List[Path]] =
     val dependencies = wanted.map: item =>
       val base = coursier.Dependency(
-        coursier.Module(coursier.Organization(item.organization), coursier.ModuleName(item.name)),
-        coursier.version.VersionConstraint(item.revision),
+        coursier.Module(
+          coursier.Organization(item.organization),
+          coursier.ModuleName(item.name)
+        ),
+        coursier.version.VersionConstraint(item.revision)
       )
       if transitive then base else base.copy(transitive = false)
-    val got = coursier.Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
+    val got = coursier
+      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
       .noMirrors
       .withGradleModuleSupport(false)
       .withRepositories(Seq(coursier.Repositories.central))
       .addDependencies(dependencies*)
       .eitherResult()
     got match
-      case Left(_) => Left(JsSuiteError.Unavailable)
+      case Left(_)       => Left(JsSuiteError.Unavailable)
       case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap: (_, publication, _, file) =>
-          val classified = publication match
-            case Right(published) => published.classifier.nonEmpty
-            case Left(variant)    => variant.classifier.nonEmpty
-          if file.getName.endsWith(".jar") && !classified then List(file.toPath) else Nil
+        val jars = result.detailedArtifacts0.toList.flatMap:
+          (_, publication, _, file) =>
+            val classified = publication match
+              case Right(published) => published.classifier.nonEmpty
+              case Left(variant)    => variant.classifier.nonEmpty
+            if file.getName.endsWith(".jar") && !classified then
+              List(file.toPath)
+            else Nil
         if jars.isEmpty then Left(JsSuiteError.Unavailable) else Right(jars)
 
   private def write(path: Path, text: String): IO[JsSuiteError, Unit] =
-    ZIO.attemptBlocking {
-      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-      Files.writeString(path, text, StandardCharsets.UTF_8)
-      ()
-    }.mapError(_ => JsSuiteError.Run(s"could not write $path"))
+    Workspace
+      .writeString(path, text)
+      .mapError(_ => JsSuiteError.Run(s"could not write $path"))
 
   private def empty(path: Path): IO[JsSuiteError, Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(path) then
-        val walk = Files.walk(path)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(file => Files.deleteIfExists(file))
-      Files.createDirectories(path)
-      ()
-    }.mapError(_ => JsSuiteError.Run(s"could not prepare $path"))
+    Workspace
+      .recreate(path)
+      .mapError(_ => JsSuiteError.Run(s"could not prepare $path"))
+      .unit
 
 enum JsSuiteError:
   case Unavailable

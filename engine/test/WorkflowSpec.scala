@@ -1,8 +1,32 @@
 package histos.workflow
 
-import histos.plugin.{CiJob, Contribution, Cron, EntryName, JobName, JobPermissions, JobWhen, PluginId, RegisteredPlugin, TaskName}
+import histos.plugin.{
+  CiJob,
+  Contribution,
+  Cron,
+  EntryName,
+  JobName,
+  JobPermissions,
+  JobWhen,
+  PluginId,
+  RegisteredPlugin,
+  TaskName
+}
 import histos.version.{Catalog, Ship, ShipName, ShipNumber}
-import histos.{Axis, Module, Platform, Platforms, ProjectDep, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos, Splits}
+import histos.{
+  Axis,
+  Module,
+  Platform,
+  Platforms,
+  ProjectDep,
+  ProjectGraph,
+  ProjectName,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+  Splits
+}
+import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
 
@@ -19,16 +43,23 @@ object WorkflowSpec extends ZIOSpecDefault:
   private val render = suite("render")(
     test("the empty split set is one aggregate test job"):
       for
-        golden  <- text("aggregate.yml")
+        golden <- text("aggregate.yml")
         drifted <- text("drifted.yml")
         rendered = Workflow.render(graph(Splits.aggregate))
       yield assertTrue(
         rendered == Right(golden),
-        golden.contains("./histos test") && golden.contains("contents: read") && golden.contains("workflow --check"),
-        !golden.contains("setup-java") && !golden.contains("format") && !golden.contains("publish") &&
-          golden.contains("push:\n    branches:\n      - main") && !golden.contains("tags:"),
+        golden.contains("./histos test") && golden.contains(
+          "contents: read"
+        ) && golden.contains("workflow --check"),
+        !golden.contains("setup-java") && !golden.contains("format") && !golden
+          .contains("publish") &&
+          golden.contains("push:\n    branches:\n      - main") && !golden
+            .contains("tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
-        Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List("./histos", "test"),
+        Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List(
+          "./histos",
+          "test"
+        )
       )
     ,
     test("a module split is a matrix, one cell per module"):
@@ -47,9 +78,17 @@ object WorkflowSpec extends ZIOSpecDefault:
         case (Right(name), Right(number)) =>
           Catalog.from(List(Ship.Line(name, number, ::(core, Nil)))) match
             case Right(catalog) =>
-              Workflow.render(ProjectGraph.trusted(List(module("core", Platform.Jvm, Nil)), Splits.aggregate, catalog)) match
+              Workflow.render(
+                ProjectGraph.trusted(
+                  List(module("core", Platform.Jvm, Nil)),
+                  Splits.aggregate,
+                  catalog
+                )
+              ) match
                 case Right(yaml) =>
-                  yaml.contains("./histos run versions") && !yaml.contains("publish") && !yaml.contains("format")
+                  yaml.contains("./histos run versions") && !yaml.contains(
+                    "publish"
+                  ) && !yaml.contains("format")
                 case Left(_) => false
             case Left(_) => false
         case _ => false
@@ -62,67 +101,101 @@ object WorkflowSpec extends ZIOSpecDefault:
           file <- Workflow.update(root, graph(Splits.aggregate))
           read <- ZIO.attempt(Files.readString(file))
           again <- Workflow.check(root, graph(Splits.aggregate))
-          wrote  = Files.isRegularFile(file)
+          wrote = Files.isRegularFile(file)
           _ <- ZIO.attempt(Files.writeString(file, read + "\n"))
           drifted <- Workflow.check(root, graph(Splits.aggregate)).either
-          gone <- Workflow.check(root.resolve("absent"), graph(Splits.aggregate)).either
+          gone <- Workflow
+            .check(root.resolve("absent"), graph(Splits.aggregate))
+            .either
         yield assertTrue(
           file == Workflow.path(root) && wrote,
           again == file,
           drifted == Left(CiError.Drift),
           gone match
-            case Left(CiError.Missing(path)) => path == Workflow.path(root.resolve("absent"))
-            case _                           => false
-          ,
+            case Left(CiError.Missing(path)) =>
+              path == Workflow.path(root.resolve("absent"))
+            case _ => false
         )
   )
 
   private val affected = suite("affected")(
-    test("a pull request runs the changed module and its dependents, not its dependencies"):
+    test(
+      "a pull request runs the changed module and its dependents, not its dependencies"
+    ):
       val built = graph(Splits.aggregate)
       val plan = Workflow.plan(built, CiEvent.PullRequest(Set(core)))
       val leaf = Workflow.plan(built, CiEvent.PullRequest(Set(tests)))
       val none = Workflow.plan(built, CiEvent.PullRequest(Set.empty))
       val full = Workflow.plan(built, CiEvent.Other)
       assertTrue(
-        plan == Right(List(TestJob.Aggregate(TestTarget.Named(core, List(tests))))),
+        plan == Right(
+          List(TestJob.Aggregate(TestTarget.Named(core, List(tests))))
+        ),
         leaf == Right(List(TestJob.Aggregate(TestTarget.Named(tests, Nil)))),
         none == Right(Nil),
-        full == Right(List(TestJob.Aggregate(TestTarget.Entire))),
+        full == Right(List(TestJob.Aggregate(TestTarget.Entire)))
       )
     ,
     test("names select modules and do not pull in dependents"):
       val built = graph(Splits.aggregate)
       assertTrue(
         Workflow.target(built, Nil) == Right(TestTarget.Entire),
-        Workflow.target(built, List("core")) == Right(TestTarget.Named(core, Nil)),
-        Workflow.target(built, List("core", "core")) == Left(CiError.Duplicate(core)),
+        Workflow.target(built, List("core")) == Right(
+          TestTarget.Named(core, Nil)
+        ),
+        Workflow.target(built, List("core", "core")) == Left(
+          CiError.Duplicate(core)
+        ),
         Workflow.target(built, List("1core")) == Left(CiError.BadName("1core")),
-        Workflow.target(built, List("missing")) == Left(CiError.Unknown(project("missing"))),
+        Workflow.target(built, List("missing")) == Left(
+          CiError.Unknown(project("missing"))
+        )
       )
     ,
     test("an unknown project is not dropped"):
       val missing = project("missing")
       assertTrue(
-        Workflow.plan(graph(Splits.aggregate), CiEvent.PullRequest(Set(missing))) == Left(CiError.Unknown(missing)),
+        Workflow.plan(
+          graph(Splits.aggregate),
+          CiEvent.PullRequest(Set(missing))
+        ) == Left(CiError.Unknown(missing))
       )
     ,
     test("a module matrix drops the unchanged module"):
       val built = graph(Splits.of(Axis.Module))
       val plan = Workflow.plan(built, CiEvent.PullRequest(Set(tests)))
       assertTrue(
-        plan == Right(List(TestJob.Split(ModuleRef.One(tests), PlatformRef.All, VersionRef.All))),
+        plan == Right(
+          List(
+            TestJob.Split(ModuleRef.One(tests), PlatformRef.All, VersionRef.All)
+          )
+        )
       )
     ,
     test("a platform cell stays only when an affected module targets it"):
       val js = module("jsapp", Platform.Js, Nil)
       val jvm = module("core", Platform.Jvm, Nil)
       val built = ProjectGraph.trusted(List(jvm, js), Splits.of(Axis.Platform))
-      val plan = Workflow.plan(built, CiEvent.PullRequest(Set(project("jsapp"))))
+      val plan =
+        Workflow.plan(built, CiEvent.PullRequest(Set(project("jsapp"))))
       assertTrue(
-        plan == Right(List(TestJob.Split(ModuleRef.All, PlatformRef.One(Platform.Js), VersionRef.All))),
-        Workflow.argv(TestJob.Split(ModuleRef.All, PlatformRef.One(Platform.Js), VersionRef.All)) ==
-          List("./histos", "test", "--platform", "js"),
+        plan == Right(
+          List(
+            TestJob.Split(
+              ModuleRef.All,
+              PlatformRef.One(Platform.Js),
+              VersionRef.All
+            )
+          )
+        ),
+        Workflow.argv(
+          TestJob.Split(
+            ModuleRef.All,
+            PlatformRef.One(Platform.Js),
+            VersionRef.All
+          )
+        ) ==
+          List("./histos", "test", "--platform", "js")
       )
   )
 
@@ -131,14 +204,18 @@ object WorkflowSpec extends ZIOSpecDefault:
     val suite = module("tests", Platform.Jvm, List(core))
     ProjectGraph.trusted(List(library, suite), splits)
 
-  private def module(name: String, platform: Platform, depends: List[ProjectName]): Module =
+  private def module(
+      name: String,
+      platform: Platform,
+      depends: List[ProjectName]
+  ): Module =
     Module(
       project(name),
       Platforms(platform, Nil),
       ScalaVersions(v390, Nil),
       Nil,
       depends.map(name => ProjectDep(name, None)),
-      SourcePos("histos.scala", 1, 1),
+      SourcePos("histos.scala", 1, 1)
     )
 
   private def project(raw: String): ProjectName =
@@ -147,43 +224,68 @@ object WorkflowSpec extends ZIOSpecDefault:
       case Left(_)     => project("core")
 
   private def text(name: String): ZIO[Any, Throwable, String] =
-    val relative = List(Path.of("engine/test/fixtures/ci").resolve(name), Path.of("test/fixtures/ci").resolve(name))
-    System.env("HISTOS_REPO").flatMap: root =>
-      val candidates = root.filter(_.nonEmpty).toList.map(Path.of(_).resolve("engine/test/fixtures/ci").resolve(name)) ++ relative
-      ZIO.attempt(candidates.find(Files.isRegularFile(_))).flatMap:
-        case Some(file) => ZIO.attempt(Files.readString(file))
-        case None       => ZIO.fail(new java.io.FileNotFoundException(name))
+    val relative = List(
+      Path.of("engine/test/fixtures/ci").resolve(name),
+      Path.of("test/fixtures/ci").resolve(name)
+    )
+    System
+      .env("HISTOS_REPO")
+      .flatMap: root =>
+        val candidates = root
+          .filter(_.nonEmpty)
+          .toList
+          .map(
+            Path.of(_).resolve("engine/test/fixtures/ci").resolve(name)
+          ) ++ relative
+        ZIO
+          .attempt(candidates.find(Files.isRegularFile(_)))
+          .flatMap:
+            case Some(file) => ZIO.attempt(Files.readString(file))
+            case None       => ZIO.fail(new java.io.FileNotFoundException(name))
 
   private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-workflow"))): dir =>
-      ZIO.attempt {
-        if Files.exists(dir) then
-          val walk = Files.walk(dir)
-          val paths =
-            try walk.iterator.asScala.toList
-            finally walk.close()
-          paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-      }.ignore
+    Workspace
+      .work("histos-workflow")
+      .mapError(error => new java.io.IOException(error.message))
 
   private val plugins = suite("plugins")(
-    test("an always job is rendered after test and before workflow, and the plugin supplies no yaml"):
+    test(
+      "an always job is rendered after test and before workflow, and the plugin supplies no yaml"
+    ):
       for
         golden <- text("plugin-always.yml")
-        rendered = Workflow.render(withJobs(List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always))))
+        rendered = Workflow.render(
+          withJobs(
+            List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always))
+          )
+        )
       yield assertTrue(rendered == Right(golden))
     ,
     test("render stays the ci.yml body and a schedule is a separate file"):
-      val nightly = CiJob(JobName("nightly"), TaskName("site"), JobWhen.Schedule(Cron("0 6 * * 1")))
+      val nightly = CiJob(
+        JobName("nightly"),
+        TaskName("site"),
+        JobWhen.Schedule(Cron("0 6 * * 1"))
+      )
       val built = withJobs(List(nightly))
       val all = Workflow.renderAll(built)
       val one = Workflow.render(built)
       val plain = Workflow.render(graph(Splits.aggregate))
       assertTrue:
         (all, one, plain) match
-          case (Right(RenderedWorkflow("ci.yml", body) :: RenderedWorkflow(name, scheduled) :: Nil), Right(text), Right(untouched)) =>
+          case (
+                Right(
+                  RenderedWorkflow("ci.yml", body) :: RenderedWorkflow(
+                    name,
+                    scheduled
+                  ) :: Nil
+                ),
+                Right(text),
+                Right(untouched)
+              ) =>
             body == text && body == untouched && name == "histos-nightly.yml" &&
-              scheduled ==
-                """name: histos-nightly
+            scheduled ==
+              """name: histos-nightly
                   |on:
                   |  schedule:
                   |    - cron: "0 6 * * 1"
@@ -201,8 +303,15 @@ object WorkflowSpec extends ZIOSpecDefault:
               !body.contains("schedule:") && !body.contains("cron:")
           case _ => false
     ,
-    test("an always job sits after versions and contents write stays on the job"):
-      val job = CiJob(JobName("docs"), TaskName("site"), JobWhen.Always, JobPermissions.ContentsWrite)
+    test(
+      "an always job sits after versions and contents write stays on the job"
+    ):
+      val job = CiJob(
+        JobName("docs"),
+        TaskName("site"),
+        JobWhen.Always,
+        JobPermissions.ContentsWrite
+      )
       val rendered = (ShipName.from("libs"), ShipNumber.from("1.4.2")) match
         case (Right(name), Right(number)) =>
           Catalog.from(List(Ship.Line(name, number, ::(core, Nil)))) match
@@ -213,7 +322,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                 catalog,
                 None,
                 Nil,
-                List(registered(List(job))),
+                List(registered(List(job)))
               )
               Workflow.render(built) match
                 case Right(yaml) =>
@@ -221,29 +330,33 @@ object WorkflowSpec extends ZIOSpecDefault:
                   val docsAt = yaml.indexOf("  docs:")
                   val workflowAt = yaml.indexOf("  workflow:")
                   versionsAt >= 0 && docsAt > versionsAt && workflowAt > docsAt &&
-                    yaml.contains("    permissions:\n      contents: write\n") &&
-                    yaml.contains("permissions:\n  contents: read\n") &&
-                    yaml.contains("\"./histos run dev.example/site\"") &&
-                    !yaml.contains("id-token")
+                  yaml.contains("    permissions:\n      contents: write\n") &&
+                  yaml.contains("permissions:\n  contents: read\n") &&
+                  yaml.contains("\"./histos run dev.example/site\"") &&
+                  !yaml.contains("id-token")
                 case Left(_) => false
             case Left(_) => false
         case _ => false
       assertTrue(rendered)
     ,
-    test("a scheduled contents write overrides the job and leaves the workflow header read"):
+    test(
+      "a scheduled contents write overrides the job and leaves the workflow header read"
+    ):
       val job = CiJob(
         JobName("nightly"),
         TaskName("site"),
         JobWhen.Schedule(Cron("0 6 * * 1")),
-        JobPermissions.ContentsWrite,
+        JobPermissions.ContentsWrite
       )
       val rendered = Workflow.renderAll(withJobs(List(job)))
       assertTrue:
         rendered match
-          case Right(_ :: RenderedWorkflow("histos-nightly.yml", body) :: Nil) =>
+          case Right(
+                _ :: RenderedWorkflow("histos-nightly.yml", body) :: Nil
+              ) =>
             body.contains("permissions:\n  contents: read\n") &&
-              body.contains("    permissions:\n      contents: write\n") &&
-              !body.contains("id-token")
+            body.contains("    permissions:\n      contents: write\n") &&
+            !body.contains("id-token")
           case _ => false
     ,
     test("a missing scheduled file is drift and check does not rewrite ci.yml"):
@@ -251,17 +364,27 @@ object WorkflowSpec extends ZIOSpecDefault:
         for
           root <- temp
           _ <- Workflow.update(root, graph(Splits.aggregate))
-          nightly = CiJob(JobName("nightly"), TaskName("site"), JobWhen.Schedule(Cron("0 6 * * 1")))
+          nightly = CiJob(
+            JobName("nightly"),
+            TaskName("site"),
+            JobWhen.Schedule(Cron("0 6 * * 1"))
+          )
           checked <- Workflow.check(root, withJobs(List(nightly))).either
           ci <- ZIO.attempt(Files.readString(Workflow.path(root)))
           plain <- ZIO.fromEither(Workflow.render(graph(Splits.aggregate)))
         yield assertTrue(checked == Left(CiError.Drift), ci == plain)
     ,
-    test("update deletes an orphan histos workflow and leaves an unrelated file"):
+    test(
+      "update deletes an orphan histos workflow and leaves an unrelated file"
+    ):
       ZIO.scoped:
         for
           root <- temp
-          nightly = CiJob(JobName("nightly"), TaskName("site"), JobWhen.Schedule(Cron("0 6 * * 1")))
+          nightly = CiJob(
+            JobName("nightly"),
+            TaskName("site"),
+            JobWhen.Schedule(Cron("0 6 * * 1"))
+          )
           _ <- Workflow.update(root, withJobs(List(nightly)))
           orphan = Workflow.file(root, "histos-retired.yml")
           other = Workflow.file(root, "release.yml")
@@ -269,31 +392,37 @@ object WorkflowSpec extends ZIOSpecDefault:
           _ <- ZIO.attempt(Files.writeString(other, "release\n"))
           drifted <- Workflow.check(root, withJobs(List(nightly))).either
           _ <- Workflow.update(root, graph(Splits.aggregate))
-          gone = !Files.exists(Workflow.file(root, "histos-nightly.yml")) && !Files.exists(orphan)
+          gone = !Files.exists(
+            Workflow.file(root, "histos-nightly.yml")
+          ) && !Files.exists(orphan)
           kept <- ZIO.attempt(Files.readString(other))
           clean <- Workflow.check(root, graph(Splits.aggregate))
         yield assertTrue(
           drifted == Left(CiError.Drift),
           gone && kept == "release\n",
-          clean == Workflow.path(root),
+          clean == Workflow.path(root)
         )
   )
 
   private def withJobs(jobs: List[CiJob]): ProjectGraph =
     ProjectGraph.trusted(
-      List(module("core", Platform.Jvm, Nil), module("tests", Platform.Jvm, List(core))),
+      List(
+        module("core", Platform.Jvm, Nil),
+        module("tests", Platform.Jvm, List(core))
+      ),
       Splits.aggregate,
       Catalog.empty,
       None,
       Nil,
-      List(registered(jobs)),
+      List(registered(jobs))
     )
 
   private def registered(jobs: List[CiJob]): RegisteredPlugin =
     RegisteredPlugin(
       PluginId("dev.example"),
       EntryName.trusted("dev.example.Echo$"),
-      Contribution(Nil, Nil, jobs),
+      Contribution(Nil, Nil, jobs)
     )
 
-  def spec = suite("workflow")(render, affected, plugins) @@ TestAspect.withLiveSystem
+  def spec =
+    suite("workflow")(render, affected, plugins) @@ TestAspect.withLiveSystem

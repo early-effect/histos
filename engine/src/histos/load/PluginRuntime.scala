@@ -337,7 +337,9 @@ object PluginRuntime:
           ZIO.foreachDiscard(task.outputs): declaredOutput =>
             val file = repo.resolve(declaredOutput.path.value)
             ZIO
-              .attempt(Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS))
+              .attemptBlocking(
+                Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
+              )
               .orElseFail(PluginRunError.MissingOutput(declaredOutput.name))
               .flatMap:
                 case true  => ZIO.unit
@@ -351,7 +353,7 @@ object PluginRuntime:
       if task.outputs.isEmpty then ZIO.succeed(output.text)
       else
         ZIO
-          .attempt {
+          .attemptBlocking {
             val files = task.outputs.map: declaredOutput =>
               val file = repo.resolve(declaredOutput.path.value)
               declaredOutput.path -> Sha256.of(

@@ -10,7 +10,9 @@ import zio.test.*
 
 object WorkspaceSpec extends ZIOSpecDefault:
   def spec = suite("workspace")(
-    test("a missing dependency lock names the path, and an unreadable one is a read fault"):
+    test(
+      "a missing dependency lock names the path, and an unreadable one is a read fault"
+    ):
       ZIO.scoped:
         for
           root <- Workspace.work("histos-lock")
@@ -19,14 +21,23 @@ object WorkspaceSpec extends ZIOSpecDefault:
           _ <- ZIO.attempt:
             Files.createDirectories(path.getParent)
             Files.writeString(path, "x")
-            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("---------"))
+            Files.setPosixFilePermissions(
+              path,
+              PosixFilePermissions.fromString("---------")
+            )
           failed <- Resolve.readLock(root).either
-          _ <- ZIO.attempt(Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------")))
+          _ <- ZIO.attempt(
+            Files.setPosixFilePermissions(
+              path,
+              PosixFilePermissions.fromString("rw-------")
+            )
+          )
         yield assertTrue(
           missing == Left(ResolveError.NoLock(path)),
           failed match
-            case Left(ResolveError.Io(IoFailure(found, IoFault.Read))) => found == path
-            case _                                                      => false
+            case Left(ResolveError.Io(IoFailure(found, IoFault.Read))) =>
+              found == path
+            case _ => false
         )
     ,
     test("a lock that is not a lock keeps the parse error"):
@@ -41,7 +52,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
         yield assertTrue:
           failed match
             case Left(ResolveError.Lock(_)) => true
-            case _                           => false
+            case _                          => false
     ,
     test("a work directory is removed when its scope closes"):
       for
@@ -61,4 +72,15 @@ object WorkspaceSpec extends ZIOSpecDefault:
           nested <- ZIO.attempt(Files.exists(file))
           parent <- ZIO.attempt(Files.exists(root))
         yield assertTrue(!nested, parent)
+    ,
+    test("writeString creates parents and recreate removes old contents"):
+      ZIO.scoped:
+        for
+          root <- Workspace.work("histos-write")
+          file = root.resolve("a").resolve("b.txt")
+          _ <- Workspace.writeString(file, "x")
+          before <- ZIO.attempt(Files.readString(file))
+          _ <- Workspace.recreate(root.resolve("a"))
+          after <- ZIO.attempt(Files.exists(file))
+        yield assertTrue(before == "x", !after)
   )

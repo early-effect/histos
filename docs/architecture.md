@@ -69,7 +69,7 @@ The engine compiles JVM, Scala.js, and Scala Native cells with Zinc 2.0.4 and th
 - A failed cell does not cancel an independent sibling. The command fails after the last cell.
 - SemanticDB is on for every cell: `-Xsemanticdb` for Scala 3, and the `semanticdb-scalac` plugin for 2.13.
 - The compile classpath is the locked compile cell plus upstream classes. Jars that contain the Scala compiler or a Histos build marker are refused, so the engine never reaches user code.
-- Each compile starts a fresh Zinc compiler with an empty previous result, so every compile is full and a deleted source leaves its class files behind (S8).
+- JVM compile reuses the persisted Zinc analysis and a compiler from the scoped `CompilerPool`. An unchanged class keeps its timestamp, and a removed source deletes its class file.
 
 ## Test
 
@@ -108,7 +108,7 @@ A JVM compile keeps Zinc's analysis in `.histos/analysis/<module>/<version>/<pla
 
 The provider runner is one install per Scala version and compile classpath. The cells that need that install share it, and one of them writes it. The framework, class directory, and suite patterns are a value on the child request. Spawn copies that value into the child process. Nothing on disk is shared between cells.
 
-`Workspace` is the filesystem the build owns. `Resolve.readLock` is the one reader of `.histos/dependencies.lock`. A missing file is `ResolveError.NoLock`. A failed read or write is `ResolveError.Io`, which carries the path and an `IoFault`. Compile, load, the content store, a Coursier cache session, an artifact digest, a child file check, and JDK and Node staging filesystem work use that same failure. Archive extraction and Node version probing preserve their domain failures. A local publish reports `PublishError.Io` with the path, because central does not depend on the engine. `Workspace.delete` is the one tree delete. `Workspace.work` is a temporary directory removed when its scope closes, including on interrupt. The api jar tests pack, the loader's build classes, and assembly's scratch directory use it.
+`Workspace` is the filesystem the build owns. `Resolve.readLock` is the one reader of `.histos/dependencies.lock`. A missing file is `ResolveError.NoLock`. A failed read or write is `ResolveError.Io`, which carries the path and an `IoFault`. Compile, load, the content store, a Coursier cache session, an artifact digest, a child file check, and JDK and Node staging filesystem work use that same failure. Archive extraction and Node version probing preserve their domain failures. A local publish reports `PublishError.Io` with the path, because central does not depend on the engine. `Workspace.delete` is the one tree delete, and `Workspace.writeString` and `Workspace.recreate` own shared file writes and directory preparation. `Workspace.work` is a temporary directory removed when its scope closes, including on interrupt. The api jar tests pack, the loader's build classes, and assembly's scratch directory use it.
 
 `histos toolchain` prints the JDK decision, then Node when the graph has Js, then clang when it has Native.
 

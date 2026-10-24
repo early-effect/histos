@@ -433,8 +433,7 @@ object Program:
         case other                    => ProgramError.Lock(other)
 
   private def fresh(work: Path): IO[ProgramError, Path] =
-    Workspace.delete(work).mapError(_ => ProgramError.Work(work)) *>
-      Workspace.createDirectories(work).mapError(_ => ProgramError.Work(work))
+    Workspace.recreate(work).mapError(_ => ProgramError.Work(work))
 
   private def workDir(repo: Path, cell: histos.zinc.CompiledCell): Path =
     workDir(repo, cell.module, cell.version, cell.platform)
