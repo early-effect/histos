@@ -1,5 +1,7 @@
 package histos.zinc
 
+import histos.workspace.{IoFailure, IoFault}
+
 import java.net.URLClassLoader
 
 import scala.util.control.NonFatal
@@ -63,7 +65,7 @@ private[zinc] final class CompilerPool(
         prepared(id).flatMap: ready =>
           ZIO
             .attemptBlockingInterrupt(JvmCompile.once(request, ready, extra, hear, digest))
-            .mapError(_ => CompileError.Io(CompileIo.Compile))
+            .mapError(_ => CompileError.Io(IoFailure(request.classes, IoFault.Write)))
             .flatMap(ZIO.fromEither)
 
   private def prepared(id: CompilerKey): IO[CompileError, Prepared] =

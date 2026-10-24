@@ -24,7 +24,7 @@ import histos.resolve.{
   ResolveError,
   ResolvedArtifact,
 }
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileProblem, CompileSeverity, PositionBase}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
 
@@ -37,7 +37,7 @@ import zio.{Chunk, IO, Scope, UIO, ZIO}
 /** Diagnostics from compiling `histos.scala`. Positions are 0-based dotty positions. */
 private[load] object BuildFile:
   private[load] def tempDir(prefix: String): ZIO[Scope, LoadError, Path] =
-    Workspace.work(prefix).mapError(_ => LoadError.Io(LoadIo.Temp))
+    Workspace.work(prefix).mapError(LoadError.Io(_))
 
   private[load] def writeTemp(text: String): ZIO[Scope, LoadError, Path] =
     ZIO.acquireRelease(
@@ -45,7 +45,7 @@ private[load] object BuildFile:
         val path = Files.createTempFile("histos-build", ".scala")
         Files.writeString(path, text)
         path
-      }.mapError(_ => LoadError.Io(LoadIo.Temp))
+      }.mapError(_ => LoadError.Io(IoFailure(Path.of("histos-build.scala"), IoFault.Temp)))
     )(path => ZIO.attemptBlocking(Files.deleteIfExists(path)).ignore)
 
   private[load] def compile(source: Path, classpath: List[Path], out: Path): IO[LoadError, Unit] =
@@ -69,7 +69,7 @@ private[load] object BuildFile:
         reporter,
       )
       reporter
-    }.mapError(failed(LoadIo.Compile))
+    }.mapError(failed(out, IoFault.Write))
 
   private[load] def notesOf(reporter: StoreReporter, display: Path, temp: Path): BuildNotes =
     val problems = reporter.allErrors.map(error => noted(error, display, temp))
@@ -102,7 +102,7 @@ private[load] object BuildFile:
       val parent = new ApiBoundary(host)
       val build = new BuildLoader((classes :: jars).map(_.toUri.toURL).toArray, parent)
       Opened(build)
-    }.mapError(failed(LoadIo.OpenLoader))
+    }.mapError(failed(classes, IoFault.Read))
 
   private[load] def close(opened: Opened): UIO[Unit] =
     ZIO.attempt(opened.build.close()).ignore
@@ -112,11 +112,11 @@ private[load] object BuildFile:
       ZIO.foreach(files)(loadOne(loader, out, _)).map(_.flatten)
 
   private[load] def classFiles(out: Path): IO[LoadError, List[Path]] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       val walk = Files.walk(out)
       try walk.iterator.asScala.filter(isClass).toList
       finally walk.close()
-    }.mapError(failed(LoadIo.Walk))
+    }.mapError(failed(out, IoFault.Walk))
 
   private[load] def isClass(path: Path): Boolean =
     Option(path.getFileName).map(_.toString) match
@@ -124,7 +124,7 @@ private[load] object BuildFile:
       case None       => false
 
   private[load] def loadOne(loader: ClassLoader, out: Path, file: Path): IO[LoadError, Option[HistosBuild]] =
-    ZIO.attempt(module(loader.loadClass(className(out, file)))).mapError(failed(LoadIo.LoadClass))
+    ZIO.attemptBlocking(module(loader.loadClass(className(out, file)))).mapError(failed(file, IoFault.Read))
 
   private[load] def className(out: Path, file: Path): String =
     val relative = out.relativize(file).toString
@@ -147,7 +147,7 @@ private[load] object BuildFile:
       case Nil          => ZIO.fail(LoadError.NoEntry)
       case many         => ZIO.fail(LoadError.AmbiguousEntry(many.map(build => BinaryName.fromClass(build.getClass))))
 
-  private[load] def failed(op: LoadIo): Throwable => LoadError =
-    _ => LoadError.Io(op)
+  private[load] def failed(path: Path, fault: IoFault): Throwable => LoadError =
+    _ => LoadError.Io(IoFailure(path, fault))
 
 end BuildFile

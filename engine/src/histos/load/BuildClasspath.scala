@@ -1,6 +1,7 @@
 package histos.load
 
 import histos.jdk.Sha256
+import histos.workspace.{IoFailure, IoFault}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.util.zip.{ZipException, ZipFile}
@@ -13,7 +14,7 @@ object BuildClasspath:
   private val Program = "histos/cli/Main.class"
 
   def apply(codeSource: Path, cache: Path): IO[LoadError, Path] =
-    ZIO.attemptBlocking(kind(codeSource)).mapError(_ => LoadError.Io(LoadIo.Stat)).flatMap:
+    ZIO.attemptBlocking(kind(codeSource)).mapError(_ => LoadError.Io(IoFailure(codeSource, IoFault.Stat))).flatMap:
       case Kind.Assembly => extract(codeSource, cache)
       case Kind.Plain    => ZIO.succeed(codeSource)
 
@@ -45,7 +46,7 @@ object BuildClasspath:
               finally input.close()
             Right(bytes)
       finally zip.close()
-    }.mapError(_ => LoadError.Io(LoadIo.Walk)).flatMap(ZIO.fromEither).flatMap(bytes => place(cache, bytes))
+    }.mapError(_ => LoadError.Io(IoFailure(assembly, IoFault.Read))).flatMap(ZIO.fromEither).flatMap(bytes => place(cache, bytes))
 
   private def place(cache: Path, bytes: Array[Byte]): IO[LoadError, Path] =
     val sha = Sha256.of(Chunk.fromArray(bytes)).value
@@ -61,4 +62,4 @@ object BuildClasspath:
           case _: AtomicMoveNotSupportedException =>
             Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING)
       destination
-    }.mapError(_ => LoadError.Io(LoadIo.Write))
+    }.mapError(_ => LoadError.Io(IoFailure(destination, IoFault.Write)))
