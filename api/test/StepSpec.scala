@@ -22,15 +22,8 @@ object StepSpec extends ZIOSpecDefault:
     Set(Need.Cpu),
   )
 
-  private val remote: StepAspect[Any, Nothing, StepKind.Hermetic] =
-    new StepAspect[Any, Nothing, StepKind.Hermetic]:
-      def apply[R1 <: Any, E1 >: Nothing, A, K1 <: StepKind](step: Step.Leaf[R1, E1, A, K1]): Step.Leaf[R1, E1, A, K1] =
-        step
-
-  private val cached: StepAspect[Any, Nothing, StepKind.Cached] =
-    new StepAspect[Any, Nothing, StepKind.Cached]:
-      def apply[R1 <: Any, E1 >: Nothing, A, K1 <: StepKind](step: Step.Leaf[R1, E1, A, K1]): Step.Leaf[R1, E1, A, K1] =
-        step
+  private val remote = StepAspect.remote
+  private val cached = StepAspect.cached
 
   private enum Extra:
     case Boom

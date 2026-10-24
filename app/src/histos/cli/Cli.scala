@@ -144,12 +144,13 @@ object Cli:
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     Connection.ensure(repo).ignore *>
       parse(args).foldZIO(
-      {
-        case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
-        case detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message))
-      },
-      command => perform(repo, apiJar, command)
-    )
+        {
+          case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
+          case detail                    =>
+            ZIO.succeed(Completed(CliExit.Usage, "", detail.message))
+        },
+        command => perform(repo, apiJar, command)
+      )
 
   private def perform(
       repo: Path,
@@ -353,7 +354,7 @@ object Cli:
           for
             run <- ZIO.serviceWithZIO[Tasks](_.run(id))
             out <- run.await
-          yield Completed(CliExit.Success, out.text, "")
+          yield Completed(CliExit.Success, out.render, "")
         .provide(Tasks.live(loaded.graph, runners))
         .catchAll(err => ZIO.succeed(Completed(taskExit(err), "", err.message)))
 
@@ -444,7 +445,15 @@ object Cli:
       jdk =>
         ZIO.serviceWithZIO[Machine]: machine =>
           GraphCompile
-            .strict(GraphCompile.console(repo, loaded.graph, projects, jdk, NativeOrigin.read(machine.env)))
+            .strict(
+              GraphCompile.console(
+                repo,
+                loaded.graph,
+                projects,
+                jdk,
+                NativeOrigin.read(machine.env)
+              )
+            )
             .foreach(showCompile(repo, _))
             .foldZIO(
               error =>
@@ -496,7 +505,13 @@ object Cli:
                 case Right(jdk) =>
                   ZIO
                     .serviceWithZIO[Machine](machine =>
-                      Assemble.run(repo, loaded.graph, jdk, NativeOrigin.read(machine.env), path)
+                      Assemble.run(
+                        repo,
+                        loaded.graph,
+                        jdk,
+                        NativeOrigin.read(machine.env),
+                        path
+                      )
                     )
                     .either
                     .flatMap:
@@ -568,9 +583,10 @@ object Cli:
     error match
       case GraphCompileError.Failed(module, version, _, _) =>
         s"'${module.value}' ${version.value} failed to compile"
-      case GraphCompileError.Cells(_, rest) =>
-        val count = rest.size + 1
-        if count == 1 then "1 cell failed to compile" else s"$count cells failed to compile"
+      case GraphCompileError.Cells(errors) =>
+        val count = errors.size
+        if count == 1 then "1 cell failed to compile"
+        else s"$count cells failed to compile"
       case other => other.message
 
   private def showCompile(repo: Path, feed: CompileFeed): UIO[Unit] =
@@ -690,9 +706,10 @@ object Cli:
                   runtimes,
                   patterns,
                   quick,
-                  (module, version, platform) => say(Lines.compilingTests(module, version, platform)),
+                  (module, version, platform) =>
+                    say(Lines.compilingTests(module, version, platform))
                 ),
-                cells.toList,
+                cells.toList
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>
@@ -712,7 +729,11 @@ object Cli:
             val compileFailed = missed match
               case Nil          => None
               case head :: rest =>
-                Some(GraphCompileError.Cells(head, rest).message)
+                Some(
+                  GraphCompileError
+                    .Cells(zio.NonEmptyChunk(head, rest*))
+                    .message
+                )
             compileFailed match
               case Some(message) => Completed(CliExit.TestFailed, "", message)
               case None          =>
@@ -732,7 +753,9 @@ object Cli:
                   Completed(
                     CliExit.TestFailed,
                     "",
-                    GraphCompileError.Cells(head, rest).message
+                    GraphCompileError
+                      .Cells(zio.NonEmptyChunk(head, rest*))
+                      .message
                   )
                 case _ =>
                   Completed(testExit(error), "", error.message)
@@ -767,7 +790,7 @@ object Cli:
 
   private def failedCell(status: TestStatus): Boolean =
     status match
-      case TestStatus.Failed(_) => true
+      case TestStatus.Failed(_)                                          => true
       case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed =>
         false
 
@@ -795,7 +818,9 @@ object Cli:
   private def cacheClean(dryRun: Boolean): URIO[ContentStore, Completed] =
     ZIO
       .serviceWithZIO[ContentStore]: store =>
-        Clock.instant.flatMap(now => store.clean(now, ContentStore.Retention, dryRun))
+        Clock.instant.flatMap(now =>
+          store.clean(now, ContentStore.Retention, dryRun)
+        )
       .mapBoth(
         err => Completed(CliExit.LoadFailed, "", err.message),
         entries =>
@@ -1152,7 +1177,7 @@ object Cli:
           remote(socket, call).foldZIO(
             {
               case ServerError.Unreachable(_) => local
-              case error                                          =>
+              case error                      =>
                 ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
             },
             done => ZIO.succeed(done)
@@ -1208,35 +1233,41 @@ object Cli:
                       val output = java.lang.System.out
                       val notify = (line: String) =>
                         histos.bsp.Frame.write(output, line).ignore
-                      Runtimes.read(env.get[Machine]).flatMap: runtimes =>
-                        Bsp
-                          .open(
-                            repo,
-                            loaded.graph,
-                            jdk,
-                            runtimes,
-                            classpath,
-                            notify,
-                            loader
-                              .reportBuild(repo, apiJar)
-                              .provideEnvironment(env)
-                          )
-                          .flatMap: session =>
-                            speak(session).foldZIO(
-                              error =>
-                                ZIO.succeed(
-                                  Completed(CliExit.LoadFailed, "", error.message)
-                                ),
-                              code =>
-                                ZIO.succeed(
-                                  Completed(
-                                    if code == 0 then CliExit.Success
-                                    else CliExit.TaskFailed,
-                                    "",
-                                    ""
-                                  )
-                                )
+                      Runtimes
+                        .read(env.get[Machine])
+                        .flatMap: runtimes =>
+                          Bsp
+                            .open(
+                              repo,
+                              loaded.graph,
+                              jdk,
+                              runtimes,
+                              classpath,
+                              notify,
+                              loader
+                                .reportBuild(repo, apiJar)
+                                .provideEnvironment(env)
                             )
+                            .flatMap: session =>
+                              speak(session).foldZIO(
+                                error =>
+                                  ZIO.succeed(
+                                    Completed(
+                                      CliExit.LoadFailed,
+                                      "",
+                                      error.message
+                                    )
+                                  ),
+                                code =>
+                                  ZIO.succeed(
+                                    Completed(
+                                      if code == 0 then CliExit.Success
+                                      else CliExit.TaskFailed,
+                                      "",
+                                      ""
+                                    )
+                                  )
+                              )
                   )
             )
         )
@@ -1363,44 +1394,48 @@ object Main extends ZIOAppDefault:
       repo: Path,
       jars: Jars
   ): URIO[Scope, Unit] =
-    Machine.load(repo).foldZIO(
-      err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
-      machine =>
-        Cli
-          .parse(args)
-          .either
-          .flatMap:
-            case Left(_) => runCommand(args, repo, jars.api, machine)
-            case Right(Command.Toolchain) =>
-              runCommand(args, repo, jars.api, machine)
-            case Right(_) =>
-              Toolchain
-                .prepare(machine)
-                .foldZIO(
-                  err =>
-                    finish(Completed(CliExit.ToolchainFailed, "", err.message)),
-                  {
-                    case Startup.Continue =>
-                      runCommand(args, repo, jars.api, machine)
-                    case Startup.Refuse(text) =>
-                      finish(Completed(CliExit.ToolchainFailed, "", text))
-                    case Startup.Replace(javaBin) =>
-                      Toolchain
-                        .replace(javaBin, jars.program, args)
-                        .foldZIO(
-                          err =>
-                            finish(
-                              Completed(
-                                CliExit.ToolchainFailed,
-                                "",
-                                err.message
-                              )
-                            ),
-                          code => stop(code)
-                        )
-                  }
-                )
-    )
+    Machine
+      .load(repo)
+      .foldZIO(
+        err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
+        machine =>
+          Cli
+            .parse(args)
+            .either
+            .flatMap:
+              case Left(_) => runCommand(args, repo, jars.api, machine)
+              case Right(Command.Toolchain) =>
+                runCommand(args, repo, jars.api, machine)
+              case Right(_) =>
+                Toolchain
+                  .prepare(machine)
+                  .foldZIO(
+                    err =>
+                      finish(
+                        Completed(CliExit.ToolchainFailed, "", err.message)
+                      ),
+                    {
+                      case Startup.Continue =>
+                        runCommand(args, repo, jars.api, machine)
+                      case Startup.Refuse(text) =>
+                        finish(Completed(CliExit.ToolchainFailed, "", text))
+                      case Startup.Replace(javaBin) =>
+                        Toolchain
+                          .replace(javaBin, jars.program, args)
+                          .foldZIO(
+                            err =>
+                              finish(
+                                Completed(
+                                  CliExit.ToolchainFailed,
+                                  "",
+                                  err.message
+                                )
+                              ),
+                            code => stop(code)
+                          )
+                    }
+                  )
+      )
 
   private final case class Jars(program: Path, api: Path)
 
@@ -1447,16 +1482,33 @@ object Main extends ZIOAppDefault:
       case Some(url) =>
         ZIO
           .attempt(Path.of(url.toURI))
-          .orElseFail(LoadError.Io(histos.workspace.IoFailure(Path.of(url.toString), histos.workspace.IoFault.Read)))
+          .orElseFail(
+            LoadError.Io(
+              histos.workspace
+                .IoFailure(Path.of(url.toString), histos.workspace.IoFault.Read)
+            )
+          )
 
   private def cacheHome: IO[LoadError, Path] =
     for
       xdg <- System
         .env("XDG_CACHE_HOME")
-        .orElseFail(LoadError.Io(histos.workspace.IoFailure(Path.of("XDG_CACHE_HOME"), histos.workspace.IoFault.Read)))
+        .orElseFail(
+          LoadError.Io(
+            histos.workspace.IoFailure(
+              Path.of("XDG_CACHE_HOME"),
+              histos.workspace.IoFault.Read
+            )
+          )
+        )
       home <- System
         .property("user.home")
-        .orElseFail(LoadError.Io(histos.workspace.IoFailure(Path.of("user.home"), histos.workspace.IoFault.Read)))
+        .orElseFail(
+          LoadError.Io(
+            histos.workspace
+              .IoFailure(Path.of("user.home"), histos.workspace.IoFault.Read)
+          )
+        )
       root <- (xdg.filter(_.nonEmpty), home.filter(_.nonEmpty)) match
         case (Some(dir), _) => ZIO.succeed(Path.of(dir, "histos"))
         case (_, Some(dir)) => ZIO.succeed(Path.of(dir, ".cache", "histos"))

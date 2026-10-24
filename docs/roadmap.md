@@ -53,7 +53,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | Version catalog (zipx scheme) | Works | |
 | CI render and drift check | Works | Tool steps come from a marker file and a Boolean (C1). |
 | Plugins: loader, link strategies, run, CI jobs | Works against a fixture | No real plugin yet. |
-| Scheduler and action cache | Plugins only | `Histos` runs the steps, with a permit per resource class. Compile, test, publish, and run still bypass it (K1). |
+| Histos executor and action cache | Build steps and plugin cache adapter | `Histos` runs compile, test, publish, run, and plugin steps with a permit per resource class. The plugin cache adapter remains available for declared-output and remote-cache policy. |
 | Remote cache | In-memory stub | No client or configuration (D10). |
 | Server: attach, reload, reboot | Works | A command that attaches does not load the build. Reboot starts the replacement and the old JVM exits. Each BSP request reloads a changed build, and every spliced session hears `buildTarget/didChange`. |
 | BSP for Metals | Works on JVM | Single in-flight request, no cancel (A10). |
@@ -174,7 +174,7 @@ ZIO-style shorthand such as `UStep[A]` and `URStep[R, A]` waits until the first 
 
 ### The `Histos` executor
 
-The executor is the `Histos` service, named for the tool the same way ZIO's effect type is named for its library. It lives in the engine package `histos.schedule` and replaces `Scheduler` there. The root `histos` package is the api surface that `ApiBoundary` shows to plugins, so the executor stays out of it.
+The executor is the `Histos` service, named for the tool the same way ZIO's effect type is named for its library. It lives in the engine package `histos.schedule`. `Scheduler` remains a narrow action-cache adapter for plugin cache policy, while all build orchestration enters through `Histos`. The root `histos` package is the api surface that `ApiBoundary` shows to plugins, so the executor stays out of it.
 
 `Histos` generalizes today's `SchedulerLive`: one promise gate per distinct `StepId`, digests from declared inputs plus the content hash of each upstream value, and execution as soon as a step's own upstreams finish. Parallelism is bounded per resource class (CPU-heavy compile, IO-heavy fetch, child processes).
 
@@ -184,7 +184,7 @@ The service, the outcome, and the events are [`Histos`](../engine/src/histos/sch
 
 ### Aspects
 
-[`StepAspect`](../api/src/histos/step/StepAspect.scala) has `identity`, `lift`, and `timed`. The cache and remote aspects below arrive with the executor, because their services are not in the api yet.
+[`StepAspect`](../api/src/histos/step/StepAspect.scala) has typed `cached`, `remote`, `identity`, `lift`, `timed`, and `traced` decorations. The engine's `ScheduleAspects` interprets local cache, declared outputs, remote lookup, and remote upload at the cache boundary.
 
 The aspect has heddle's `Middleware` shape, plus the lowest kind it accepts. It receives the step, including its key and codec, so a cache aspect can encode values without a cast. Because `K` is contravariant, an aspect for any kind applies everywhere, and a hermetic-only aspect applies to hermetic steps alone. The check is `Fits` evidence on `Step.@@`, which is what gives the readable message.
 
@@ -350,9 +350,10 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 **Goal:** The kernel from the target architecture runs compile, which is the hottest path, and plugin tasks.
 
 - `histos/steps-api`: `histos.step` on the api: kinds, aliases, constructors, `zip`, `map`, `andThenHermetic`, `sandboxed`, `Fits`, `Stored`, and `StepAspect` with `lift`. The two 2026-10-22 miniatures become an api spec that asserts each accepted composition and each rejection message with `typeCheckErrors`, and the sketches in this roadmap become links to that code.
-- `histos/executor`: the `Histos` executor service replaces `Scheduler`, with bounded parallelism, failure as data, and the event stream. The cache, manifest, remote lookup, and upload logic move out of `Scheduler` into `cached`, `declaredOutputs`, and `remote`. `timed` and `traced` are added.
+- `histos/executor`: the `Histos` executor service runs the build's typed step graphs with bounded parallelism, failure as data, and the event stream. Cache, manifest, remote lookup, and upload behavior live in separate schedule aspects. `timed`, `traced`, `cached`, and `remote` are typed decorations.
 - `histos/compile-steps`: compile cells become steps keyed by `CompileKey`. This deletes the layer barrier, the blocking-queue side channel, `runCells`, the discarded source hash, and the 9 to 12 parameter methods.
 - `histos/plugin-steps`: plugin tasks run on `Histos`. `TaskDep.Compile` depends on real compile steps, the stub nodes go away, `pluginLoader` and `declaredOutputs` become aspects, and planning covers only reachable steps. Typed errors are nested.
+- Test cells, publish jobs, and run cells now enter `Histos` as typed local steps while retaining their existing provider, publisher, linker, and child-process adapters.
 
 **Exit:** a gated spec shows an unrelated cell compiling while a slow upstream in an earlier layer is still running. An identical second compile is a `LocalHit` through `cached`. `rg 'LinkedBlockingQueue|AtomicBoolean' engine/src` is empty. Closes K1 to K18.
 

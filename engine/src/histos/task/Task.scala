@@ -1,14 +1,10 @@
 package histos.task
 
 import histos.ProjectGraph
+import histos.plugin.PluginOutput
+import histos.version.Decision
 
 import zio.*
-
-enum TaskKind:
-  case Inspect
-  case Compile
-  case Versions
-  case Plugin
 
 opaque type TaskId = String
 
@@ -50,9 +46,17 @@ enum TaskError:
     case Version(error) => error.message
     case Plugin(error)  => error.message
 
-final case class TaskResult(kind: TaskKind, text: String)
+enum TaskResult:
+  case Inspect(projects: List[histos.ProjectName])
+  case Versions(decision: Decision)
+  case Plugin(output: PluginOutput)
 
-/** A started run. `await` finishes with the result, or dies if the run is cancelled. */
+  def render: String = this match
+    case Inspect(projects)  => projects.map(_.value).mkString(",")
+    case Versions(decision) => Decision.text(decision)
+    case Plugin(output)     => output.text
+
+/** A started run. `await` is interrupted when the run is cancelled. */
 final case class Run(id: RunId, await: IO[TaskError, TaskResult])
 
 trait Tasks:
@@ -63,33 +67,48 @@ object Tasks:
   def live(graph: ProjectGraph): ULayer[Tasks] =
     live(graph, Map.empty)
 
-  def live(graph: ProjectGraph, extra: Map[TaskId, IO[TaskError, TaskResult]]): ULayer[Tasks] =
+  def live(
+      graph: ProjectGraph,
+      extra: Map[TaskId, IO[TaskError, TaskResult]]
+  ): ULayer[Tasks] =
     ZLayer.scoped:
       for
         registry <- Ref.make(Map.empty[RunId, Fiber[TaskError, TaskResult]])
-        _        <- ZIO.addFinalizer(registry.set(Map.empty))
+        _ <- ZIO.addFinalizer(
+          registry.get.flatMap(fibers =>
+            ZIO.foreachDiscard(fibers.values)(_.interrupt)
+          )
+        )
       yield TasksLive(inspect(graph) ++ extra, registry)
 
-  private def inspect(graph: ProjectGraph): Map[TaskId, IO[TaskError, TaskResult]] =
-    Map(TaskId.Inspect -> ZIO.succeed(TaskResult(TaskKind.Inspect, graph.projects.map(_.name.value).mkString(","))))
+  private def inspect(
+      graph: ProjectGraph
+  ): Map[TaskId, IO[TaskError, TaskResult]] =
+    Map(
+      TaskId.Inspect -> ZIO.succeed(
+        TaskResult.Inspect(graph.projects.map(_.name))
+      )
+    )
 
 private final class TasksLive(
     runners: Map[TaskId, IO[TaskError, TaskResult]],
-    registry: Ref[Map[RunId, Fiber[TaskError, TaskResult]]],
+    registry: Ref[Map[RunId, Fiber[TaskError, TaskResult]]]
 ) extends Tasks:
   def run(id: TaskId): ZIO[Scope, TaskError, Run] =
     runners.get(id) match
-      case None => ZIO.fail(TaskError.NoRunner(id))
+      case None         => ZIO.fail(TaskError.NoRunner(id))
       case Some(effect) =>
         for
-          uuid  <- Random.nextUUID
-          runId  = RunId.trusted(uuid.toString)
+          uuid <- Random.nextUUID
+          runId = RunId.trusted(uuid.toString)
           fiber <- effect.forkScoped
-          _     <- registry.update(_ + (runId -> fiber))
-          _     <- ZIO.addFinalizer(registry.update(_ - runId))
+          _ <- registry.update(_ + (runId -> fiber))
+          _ <- ZIO.addFinalizer(registry.update(_ - runId))
         yield Run(runId, fiber.join)
 
   def cancel(id: RunId): IO[TaskError, Unit] =
-    registry.modify(runs => (runs.get(id), runs - id)).flatMap:
-      case Some(fiber) => fiber.interrupt.unit
-      case None        => ZIO.fail(TaskError.UnknownRun(id))
+    registry
+      .modify(runs => (runs.get(id), runs - id))
+      .flatMap:
+        case Some(fiber) => fiber.interrupt.unit
+        case None        => ZIO.fail(TaskError.UnknownRun(id))
