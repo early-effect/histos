@@ -27,3 +27,5 @@ target/
 .histos/server.sock
 *.class
 *.semanticdb
+.cursor/
+.vscode/
