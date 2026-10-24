@@ -2,7 +2,7 @@
 
 A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI, BSP, and MCP use the same graph; their request and result contracts are not yet one application service.
 
-Pre-release. M0-M3 are delivered. M4 implementation and local verification are complete; stock Windows bootstrap verification runs in PR CI.
+Pre-release. Tool and runtime locking use explicit updates and checksum-verified identities. The roadmap and audit describe delivered work and remaining capabilities.
 
 - [Roadmap](docs/roadmap.md): delivered foundations, current acceptance gates, and remaining milestones.
 - [Architecture](docs/architecture.md): current types, resource ownership, command behavior, and trust boundaries.
@@ -17,9 +17,9 @@ Pre-release. M0-M3 are delivered. M4 implementation and local verification are c
 
 JDK and Node locks contain a nonempty table of OS/CPU archive pins. Selection requires an exact host match. `.histos/toolchain.local` and `.histos/node.local` explicitly opt into local runtimes; their content identities are build inputs. Without a runtime lock, bootstrap trusts the installed runtime. This repository currently commits neither a JDK nor Node lock.
 
-The remote launcher has an immutable timestamped revision and SHA-256 in `.histos/launcher.lock`. Only `histos launcher --update` advances it. Workflow generation consumes the existing pin without refreshing metadata. The verified M4 launcher is pinned to `0.0.1-20261024.182342-16`.
+The remote launcher has an immutable timestamped revision and SHA-256 in `.histos/launcher.lock`. Only `histos launcher --update` advances it. Workflow generation consumes the existing pin without refreshing metadata. See [the committed launcher pin](.histos/launcher.lock).
 
-These locks do not make arbitrary plugin code, clang, browsers, or system packages hermetic. See the [architecture and migration rules](docs/architecture.md) and the [M4 verification checkpoint](docs/audit.md).
+These locks do not make arbitrary plugin code, clang, browsers, or system packages hermetic. See the [architecture and migration rules](docs/architecture.md) and the [audit ledger](docs/audit.md).
 
 ## License
 

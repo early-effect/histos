@@ -1,8 +1,6 @@
 # Histos architecture
 
-**Checkpoint:** 2026-10-24, M3 baseline `d2b4630` plus locally verified M4 implementation.
-
-The final source-built suite passed **663 tests, zero failures**, with one Windows-only fixture ignored on macOS. Heddle 0.13.0 is published and locked; the unchanged 80 MiB fixed-length, chunked, and close-delimited updater tests passed. Generated workflow/scripts and dependency verification passed. Warm command-level graph, resolve, compile, full/quick test, application/plugin run, workflow and BSP proofs passed with external outbound networking denied. Actual Windows execution remains the PR CI gate. [audit.md](audit.md) records verification and remaining findings; [roadmap.md](roadmap.md) separates delivered code from future services. A behavior change updates these documents in the same PR.
+This describes the implemented types, service boundaries and resource ownership. [audit.md](audit.md) tracks remaining concerns; [roadmap.md](roadmap.md) owns their milestone plan. A behavior change updates these documents in the same PR.
 
 ## Modules and build model
 
@@ -71,7 +69,7 @@ There are three compiler selections:
 | Module compilation | The module cell's Scala version | Checksum-verified compiler/bridge/support tool cell |
 | Js/Native bridge compilation | Catalog-selected auxiliary Scala version | Its own locked compiler and platform-support requests |
 
-A version string is not a byte identity. Source-plugin cache code uses CompilerIdentity in addition to API/source/dependency digests. Current BuildCompiler.identity hashes Dotty, TASTy and compiler-interface code sources plus the supplied boundary/classpath content; assembly locations naturally identify the whole jar. The executing JVM runtime is included separately. Changed-support-byte and non-assembly regressions passed under L14.
+A version string is not a byte identity. Source-plugin cache code uses CompilerIdentity in addition to API/source/dependency digests. Current BuildCompiler.identity hashes Dotty, TASTy and compiler-interface code sources plus the supplied boundary/classpath content; assembly locations naturally identify the whole jar. The executing JVM runtime is included separately. [SelectedToolsSpec](../engine/test/SelectedToolsSpec.scala) covers changed support bytes and non-assembly provenance.
 
 Loader scans the constrained plugin header, materializes locked plugins, compiles source/path plugins first, and blanks header lines in a temporary build file while preserving diagnostic positions. It compiles that file against boundary/API and plugin classpaths, then evaluates the graph.
 
@@ -87,7 +85,7 @@ Loader scans the constrained plugin header, materializes locked plugins, compile
 
 The live raw Coursier fetch boundary is [`CoursierResolve`](../engine/src/histos/resolve/CoursierResolve.scala); its library runner and IO failures map to ResolveError. No compiler/platform adapter has authority to silently repair a missing tool cell.
 
-One operation must use one lock generation through compile, test, classpath, link, run, and package. CompileSession, suitesLocked, and BSP request capture implement parts of that wiring. Plugin task compile/classpath preparation now shares a memoized captured lock/runtime in source. Plugin and application operation-barrier regressions passed under L11. Atomic writes alone do not make repeated reads one snapshot.
+One operation must use one lock generation through compile, test, classpath, link, run, and package. CompileSession, suitesLocked, and BSP request capture implement parts of that wiring. Plugin task compile/classpath preparation now shares a memoized captured lock/runtime in source. Plugin and application tests exercise generation replacement between operation phases. Atomic writes alone do not make repeated reads one snapshot.
 
 ### CLI authority
 
@@ -110,13 +108,13 @@ Exact fetches can need a network on a cold cache. “Offline generation” means
 
 Compilation uses Zinc for Scala 3 and 2.13. Main outputs are `.histos/classes/<module>/<scala>/<platform>`; tests use `.histos/test-classes`. SemanticDB is enabled. Persisted `inc.zip` analysis under `.histos/analysis` is passed to the next compile, preserving unchanged classes and deleting outputs for removed sources. The module classpath never includes engine/plugin jars; compiler and Histos markers are refused.
 
-[`ToolInput`](../engine/src/histos/resolve/ToolInput.scala) fingerprints a selected request and its verified artifact identities/hashes. Compile keys, compiler pool keys, and Zinc setup fingerprints use different relevant subsets, not an undifferentiated whole-lock list. Selected platform revision and runtime identity must change the appropriate key; unrelated tools must not. Run steps retain their selected verified inputs; production relevance tests passed under L10. Absolute source paths remain a separate portability problem (P16).
+[`ToolInput`](../engine/src/histos/resolve/ToolInput.scala) fingerprints a selected request and its verified artifact identities/hashes. Compile keys, compiler pool keys, and Zinc setup fingerprints use different relevant subsets, not an undifferentiated whole-lock list. Selected platform revision and runtime identity must change the appropriate key; unrelated tools must not. Run steps retain their selected verified inputs; [SelectedToolsSpec](../engine/test/SelectedToolsSpec.scala) covers production relevance. Absolute source paths remain a separate portability problem (P16).
 
 Js runs through Node, Jsdom, or Firefox/Chekhov. Node is selected once within an operation and passed to child launches, including Playwright's Node path. Native application Scala version selects application libraries; `native.bridgeScala` selects the JVM linker bridge compiler. Native origin comes from the captured Machine and reaches compilation/linking. Clang is still an installed tool. Generated Scala bridge sources and forced link-cache recreation remain P1/P2, even though their jar dependencies are locked.
 
 Tests run in child processes, not inside the engine. The default is ZIO Test; an sbt test-interface provider or one TestMain can replace it. Children get main/test classes, upstream main classes, and locked jars, with a reduced environment. Unix JVM and Node/Native launch helpers own process groups so cancellation reaches descendants after their leader exits. Windows engine support is still P12; standalone Windows bootstrap is a separate gate.
 
-`testOnly` uses fully qualified suite patterns and fails when none match. `testQuick` still uses SuiteStamp and QuickRecord. [`TestContext`](../engine/src/histos/testrun/TestContext.scala) now verifies selected compilation/execution tools and runtime inputs before cached success in source. Its final regressions passed under L20; upstream jars, flags, synchronous bytecode scanning and persistence errors remain P6/P15. Histos `test` and `testQuick` are distinct commands.
+`testOnly` uses fully qualified suite patterns and fails when none match. `testQuick` still uses SuiteStamp and QuickRecord. [`TestContext`](../engine/src/histos/testrun/TestContext.scala) now verifies selected compilation/execution tools and runtime inputs before cached success in source. Its regressions cover cached success and corrupt selected tools; upstream jars, flags, synchronous bytecode scanning and persistence errors remain P6/P15. Histos `test` and `testQuick` are distinct commands.
 
 `run <module> [jvm|js|native]` starts its named main. A multiplatform module requires a platform. `run inspect`, `run versions`, and `run <plugin>/<task>` use the task registry. Watch reruns a command after source changes. See [GraphCompileSpec](../engine/test/GraphCompileSpec.scala), [ZincSpec](../engine/test/ZincSpec.scala), [ModuleTestSpec](../engine/test/ModuleTestSpec.scala), and [ProgramSpec](../engine/test/ProgramSpec.scala).
 
@@ -132,19 +130,19 @@ With a lock, its verified archive is the default. `toolchain.local` or `node.loc
 
 Without a lock, startup retains the installed JVM and Node execution may use PATH. This repository has no committed runtime locks. That is a deliberate local trust seam, not authenticated provisioning. Locked Node selection must not execute unrelated PATH/manager/cached candidates just for a trace (L16). Explanation currently requires a lock even where execution supports bootstrap (P10).
 
-RuntimeIdentity is either the selected archive checksum or canonical local home plus content. Local hashing includes names, linked content/targets and executable state. JdkRuntime and NodeRuntime retain identity; Node's compatibility choose projections have been removed. Compiler/platform requests now reuse JdkRuntime rather than a duplicate ResolvedJdk. Final local cross-consumer verification passed.
+RuntimeIdentity is either the selected archive checksum or canonical local home plus content. Local hashing includes names, linked content/targets and executable state. JdkRuntime and NodeRuntime retain identity; Node's compatibility choose projections have been removed. Compiler/platform requests now reuse JdkRuntime rather than a duplicate ResolvedJdk.
 
 ## Archive decoder and installation
 
 [`ArchiveDecoder`](../engine/src/histos/archive/Archive.scala) is a swappable trait. Its fold callback owns each DecodedEntry body: a file body is consumed once, completely, before advancing; it is closed when that callback ends. Consumers cannot collect advancing tar cursors and later read substituted entry bytes.
 
-[`CommonsArchiveDecoder`](../engine/src/histos/archive/CommonsArchiveDecoder.scala) supplies maintained ZIP/tar/gzip/XZ parsing. [`ArchiveExtract`](../engine/src/histos/archive/ArchiveExtract.scala) separately owns containment, entry/link/duplicate/mode policy. Replacing a parser does not replace that security policy. [`ArchiveBudget`](../engine/src/histos/archive/ArchiveBudget.scala) bounds download, decompression, extracted/per-entry bytes, entry count, metadata, and decoder memory. Published Adoptium archive sizing informed the defaults and deterministic budget tests passed. These delivered-entry bounds are not a process-wide heap cap: Commons ZIP central-directory allocation precedes the entry checks (P21).
+[`CommonsArchiveDecoder`](../engine/src/histos/archive/CommonsArchiveDecoder.scala) supplies maintained ZIP/tar/gzip/XZ parsing. [`ArchiveExtract`](../engine/src/histos/archive/ArchiveExtract.scala) separately owns containment, entry/link/duplicate/mode policy. Replacing a parser does not replace that security policy. [`ArchiveBudget`](../engine/src/histos/archive/ArchiveBudget.scala) bounds download, decompression, extracted/per-entry bytes, entry count, metadata, and decoder memory. Published Adoptium archive sizing informed the defaults. These delivered-entry bounds are not a process-wide heap cap: Commons ZIP central-directory allocation precedes the entry checks (P21).
 
 ArchiveStage streams and hashes file/HTTPS downloads into unique same-filesystem scratch, verifies the archive, extracts to scoped scratch, validates the exact full runtime version, records installation content, and publishes a complete tree atomically. Warm reuse rechecks archive and tree. Response scopes remain open through body consumption; stream/channel/scratch resources close on failure and interruption. Only bounded writes/publication are masked, not downloads or lock waits.
 
 [`RuntimeCache`](../engine/src/histos/archive/RuntimeCache.scala) enforces owner-private roots and ancestor/ownership policy. Extraction preserves executable capability without importing unsafe write/special permissions. Installation manifests operate within this protected local-owner boundary; they do not authenticate against an attacker controlling the launching account. Legacy unmarked installations fail validation. Engine `unpack` manifests and standalone `install.*` inventories are distinct layouts.
 
-Runtime errors preserve selected-source, host, checksum, extraction, budget, cache, version and path-bearing IO failures through JDK/Node adapters. See [ArchiveStageSpec](../engine/test/ArchiveStageSpec.scala), [ArchiveDecoderSpec](../engine/test/ArchiveDecoderSpec.scala), [RuntimeSecuritySpec](../engine/test/RuntimeSecuritySpec.scala), and [RuntimeInterruptionSpec](../engine/test/RuntimeInterruptionSpec.scala). All 12 owned runtime/archive suites passed 132 tests in standalone source runs, then passed again with external outbound networking denied. Those fixtures are not the full Histos command/launcher/Windows integration gate.
+Runtime errors preserve selected-source, host, checksum, extraction, budget, cache, version and path-bearing IO failures through JDK/Node adapters. See [ArchiveStageSpec](../engine/test/ArchiveStageSpec.scala), [ArchiveDecoderSpec](../engine/test/ArchiveDecoderSpec.scala), [RuntimeSecuritySpec](../engine/test/RuntimeSecuritySpec.scala), and [RuntimeInterruptionSpec](../engine/test/RuntimeInterruptionSpec.scala).
 
 ## Launcher pin and update transaction
 
@@ -165,7 +163,7 @@ Client and LauncherCommit are constructor-injected seams, not business logic hid
 
 [`LauncherScript`](../engine/src/histos/publish/LauncherScript.scala) generates POSIX and stock PowerShell launchers. They select the exact JDK host pin, privately stage safe archives and check the whole installed runtime before Java, including library/image/link/mode changes. Windows uses a suspended process assigned to a kill-on-close job before resuming. Actual Windows execution remains T16.
 
-**Verified delivery:** launcher `0.0.1-20261024.182342-16`, SHA-256 `046c3ec7409867f9b2477997ee8d9e0507fe520d234cca860a9d307181ad81b9`, was published and pinned after the full source suite. The three real 80 MiB transport tests pass with published Heddle 0.13.0. The exact published launcher cold-download and warm offline boot passed using an owner-private cache. Stock Windows execution remains T16. MacOS shared-temp ancestor mode reporting remains P23; its conservative rejection preserves the private-cache boundary.
+The committed [.histos/launcher.lock](../.histos/launcher.lock) is the authoritative remote revision and checksum. Bootstrap, framing, corruption and offline behavior are exercised by [LauncherPinSpec](../engine/test/LauncherPinSpec.scala), [BootstrapSpec](../app/test/BootstrapSpec.scala), and the [Windows workflow](../.github/workflows/launcher-windows.yml). Remaining platform-policy concerns belong to the audit ledger.
 
 ## Server, BSP, and MCP
 
@@ -183,7 +181,7 @@ Local publish writes one coordinate per platform cell, with main-scope dependenc
 
 The content store uses XDG_CACHE_HOME or the user's cache directory. Cache clean removes old unused CAS/plugin entries and scratch, with per-project keep sets; it does not remove shared JDK/launcher installations. Remote cache remains test-only/in-memory, without live configuration. Plugins declare inputs/outputs and use Scheduler/ScheduleAspects for manifests, while Histos owns orchestration.
 
-Generated [`ci.yml`](../.github/workflows/ci.yml) runs test, catalog versions, plugin jobs and workflow drift. It still derives hardcoded uncached Node/LLVM/browser steps from `.github/ci-tools` (C1). Split axes still need CLI support (C2). The hand-written [`launcher-windows.yml`](../.github/workflows/launcher-windows.yml) is an M4 bootstrap verification exception; M8 must eventually absorb it without losing coverage. Its [PowerShell fixture](../engine/test/fixtures/launcher-windows.ps1) has not yet run on Windows.
+Generated [`ci.yml`](../.github/workflows/ci.yml) runs test, catalog versions, plugin jobs and workflow drift. It still derives hardcoded uncached Node/LLVM/browser steps from `.github/ci-tools` (C1). Split axes still need CLI support (C2). The hand-written [`launcher-windows.yml`](../.github/workflows/launcher-windows.yml) is an M4 bootstrap verification exception; M8 must eventually absorb it without losing coverage. Its [PowerShell fixture](../engine/test/fixtures/launcher-windows.ps1) exercises the stock Windows bootstrap.
 
 ## Errors, exits, and migration
 

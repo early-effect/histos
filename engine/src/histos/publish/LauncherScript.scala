@@ -493,9 +493,11 @@ function PrivateDirectory([string] $path) {
     $acl=Get-Acl -LiteralPath $ancestor.FullName
     $trusted=@($owner.Value,'S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
     if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $trusted) { Fail ('untrusted cache ancestor owner: '+$ancestor.FullName) }
-    $write=[Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
+    $replace=[Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
     foreach ($rule in $acl.Access) {
-      if ($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -notin $trusted -and ($rule.FileSystemRights -band $write)) { Fail 'unsafe shared cache ancestor ACL' }
+      $applies = !($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)
+      $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+      if ($applies -and $rule.AccessControlType -eq 'Allow' -and $sid -notin $trusted -and ($rule.FileSystemRights -band $replace)) { Fail ('unsafe shared cache ancestor ACL: '+$ancestor.FullName+' '+$sid) }
     }
     $ancestor=$ancestor.Parent
   }

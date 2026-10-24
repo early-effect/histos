@@ -1,6 +1,6 @@
 # Histos roadmap
 
-**Checkpoint:** 2026-10-24. M0-M3 are delivered through `d2b4630`. M4 implementation and local acceptance are verified in one PR, including resource-ownership follow-ups. Its API/launcher snapshots are published and repinned; stock Windows execution remains the PR CI gate.
+M0-M3 establish the kernel and resource ownership. M4 adds tool/runtime identity and bootstrap trust; its platform acceptance is tracked in the audit. Later milestones build on those contracts.
 
 [architecture.md](architecture.md) describes current source contracts. [audit.md](audit.md) preserves historical findings and owns every remaining concern. [plugins.md](plugins.md) is the current plugin contract. This roadmap is a plan, not another copy of implemented APIs.
 
@@ -20,7 +20,7 @@ The lock is authoritative for the dependency/tool artifacts it records. A select
 | M1 | Delivered | Platform publish coordinates, server lifecycle, plugin isolation, scoped child ownership, runtime choices reaching execution, safe snapshot publisher and cache hygiene |
 | M2 | Delivered | Step kinds/composition/aspects, Histos executor, compile dependencies without layer barriers, real plugin compile steps, test/run/publish orchestration |
 | M3 | Delivered | Captured Machine/config, path-bearing IO and Workspace scopes, shared ChildProcess, incremental Zinc and scoped batch compiler reuse, provider installation reuse, service/package separation |
-| M4 | Local acceptance verified; Windows CI pending | Typed tool catalog/lock cells, classifiers, selected byte identities, staged updates, shared host runtime locks/maintained decoder, immutable launcher pin and update transaction |
+| M4 | Implementation delivered; platform acceptance tracked in audit | Typed tool catalog/lock cells, classifiers, selected byte identities, staged updates, shared host runtime locks/maintained decoder, immutable launcher pin and update transaction |
 | M5-M8 | Partly enabled, not delivered | M4 supplies tool/runtime data and verification seams. Backend, application, public plugin/API and graph-derived CI contracts remain |
 | M9 | Future | Real second-repository adoption, real plugins and measured performance |
 
@@ -52,11 +52,9 @@ See [ToolCatalog](../api/src/histos/ToolCatalog.scala), [LockedTools](../engine/
 3. **Launcher and transport:** Realistic fixed/chunked/close-delimited payloads, bounded atomic update, cross-process conflict, full-tree bootstrap checks, script drift and actual stock Windows fixture execution. Owns L7, L19, T13/T16 and S16's compiler-acquisition follow-up.
 4. **Integrated proof:** Rebuild the final source runtime, run the complete repository suite and targeted regressions, check lock/workflow/scripts, prove warm local commands with external networking denied, then publish the approved API/launcher snapshots and verify/repin their exact bytes. Re-review every general/security/simplicity finding.
 
-The published launcher is pinned to `0.0.1-20261024.182342-16` with SHA-256 `046c3ec7409867f9b2477997ee8d9e0507fe520d234cca860a9d307181ad81b9`. The user merged [Heddle PR 95](https://github.com/early-effect/heddle/pull/95) and released 0.13.0; Histos locks those published bytes.
+Acceptance is defined by the complete suite, deterministic lock/workflow/script checks, selected-byte cache regressions, offline command behavior and stock Windows bootstrap coverage. The exact artifact identity lives in the [launcher lock](../.histos/launcher.lock); current test and CI results belong to the PR. Publishing and deliberate remote updates use the network.
 
-The final source-built suite passed **663 tests, zero failures**, with one Windows-only fixture ignored on macOS. Heddle 0.13.0 is published and locked; the unchanged 80 MiB fixed-length, chunked, and close-delimited updater tests passed. Generated workflow/scripts and dependency verification passed. Warm command-level graph, resolve, compile, full/quick test, application/plugin run, workflow and BSP proofs passed with external outbound networking denied. Actual Windows execution remains the PR CI gate.
-
-**Final platform gate:** execute the stock Windows bootstrap workflow, retain its actual result, and close T16 and the associated composite runtime/launcher rows. Future source-root portability, clang/browser packaging and sandboxing retain their later milestone owners.
+Remaining platform acceptance and composite rows are recorded under T16. Source-root portability, clang/browser packaging and sandboxing retain their later milestone owners.
 
 ## Target boundaries still to build
 

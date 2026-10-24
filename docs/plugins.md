@@ -1,6 +1,6 @@
 # Histos plugin contract
 
-**Checkpoint:** 2026-10-24. The loader, isolation boundary and Step-based engine orchestration are implemented. M4 lock/provenance integration passed the final local suite; Windows bootstrap remains a separate platform gate. The public typed plugin-step API and remaining fixtures are M7 work, not current guarantees.
+The loader, isolation boundary, captured lock/provenance contract and Step-based engine orchestration are implemented. The public typed plugin-step API and remaining author fixtures belong to M7.
 
 Plugins compile against [`histos.api`](../api/src/histos/plugin). Loader/runtime code lives in [`histos.load`](../engine/src/histos/load); commands live in [`histos.cli`](../app/src/histos/cli). [architecture.md](architecture.md) describes resources and surfaces; [audit.md](audit.md) owns known limits. Examples are linked tests, not duplicated declarations here.
 
@@ -73,7 +73,7 @@ A compile or later solve failure leaves the prior committed lock intact. Populat
 - Resolve check requires existing cells and re-solves plugin/module drift without writing. Planned tool cells are materialized, not re-solved.
 - Cold exact materialization may need network. No silent tool solve or missing-cell repair is authorized by loading.
 
-One command's plugin compile dependencies and classpath preparation must share one captured lock/runtime view. Current PluginRuntime memoizes one captured lock/runtime and supplies it to compile/classpath preparation. Real plugin/application lock-replacement barriers and request-runtime freshness regressions passed under L11/L13.
+One command's plugin compile dependencies and classpath preparation must share one captured lock/runtime view. Current PluginRuntime memoizes one captured lock/runtime and supplies it to compile/classpath preparation. PluginRunSpec and ProgramSpec exercise lock-replacement barriers; ServerSpec covers request-runtime freshness.
 
 ## Entry resources and linking
 
@@ -98,7 +98,7 @@ The entry is initialized inside the load failure boundary. The registered object
 
 [`PluginCompile`](../engine/src/histos/load/PluginCompile.scala) stores completed class directories under `<cache>/plugins/<digest>`. Its key contains API digest, source content, dependency checksums and CompilerIdentity. CompilerIdentity combines validated running revision, actual embedded/support byte provenance and the JVM runtime executing in-process Dotty. Module/bridge tool-cell hashes cannot substitute for those actual bytes.
 
-Current wiring hashes Dotty/TASTy/compiler-interface sources plus the supplied boundary/classpath, with the actual executing JVM identity. Changed-support-byte and non-assembly scenarios passed final integration review tests under L14. The value formerly called launcher in this path is the API digest; it is not evidence for the complete launcher. Runtime/content or support-byte changes must invalidate the source cache even when version/API bytes match.
+Current wiring hashes Dotty/TASTy/compiler-interface sources plus the supplied boundary/classpath, with the actual executing JVM identity. SelectedToolsSpec covers changed support bytes and non-assembly scenarios. The value formerly called launcher in this path is the API digest; it is not evidence for the complete launcher. Runtime/content or support-byte changes must invalidate the source cache even when version/API bytes match.
 
 A directory is reusable after its complete marker. Load replaces its project's keep set; another project's keep set still protects its plugin cache. Cache clean ages out unused completed directories after retention, without deleting shared runtimes/launchers. See [ContentStore](../engine/src/histos/cache/ContentStore.scala).
 
