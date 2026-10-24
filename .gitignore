@@ -19,6 +19,8 @@ target/
 .histos/test-work
 .histos/test-quick
 .histos/provider-src
+.histos/provider
+.mcp.json
 .histos/jars
 .histos/server.json
 .histos/server.json.tmp
