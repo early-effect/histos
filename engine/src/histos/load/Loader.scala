@@ -24,7 +24,7 @@ import histos.resolve.{
   ResolveError,
   ResolvedArtifact,
 }
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileProblem, CompileSeverity, PositionBase}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
 
@@ -75,7 +75,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
     val source = repo.resolve("histos.scala")
     for
       _    <- ZIO.unlessZIO(exists(source))(ZIO.fail(LoadError.MissingFile(source)))
-      text <- ZIO.attempt(Files.readString(source)).mapError(BuildFile.failed(LoadIo.Stat))
+      text <- ZIO.attemptBlocking(Files.readString(source)).mapError(BuildFile.failed(source, IoFault.Read))
       out  <- ZIO.fromEither(HeaderScan.scan(text)).mapError(LoadError.Plugin(_))
     yield out
 
@@ -121,7 +121,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
         case PluginRequest.Dep(dependency, _) => one(lock, dependency, launcher, boundary)
       .flatMap: matched =>
         val pins = matched.flatMap(row => digestName(row.origin)).toSet
-        store.replace(CacheProject.of(repo), pins).mapError(_ => LoadError.Io(LoadIo.Write)).as(matched)
+        store.replace(CacheProject.of(repo), pins).mapError(_ => LoadError.Io(IoFailure(repo, IoFault.Write))).as(matched)
 
   private def one(
       lock: DependencyLock,
@@ -205,7 +205,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
     val root = repo.resolve(path.value)
     val coordinate = PluginCoordinate.Path(path)
     for
-      present <- ZIO.attempt(Files.isDirectory(root)).mapError(BuildFile.failed(LoadIo.Stat))
+      present <- ZIO.attemptBlocking(Files.isDirectory(root)).mapError(BuildFile.failed(root, IoFault.Stat))
       _       <- ZIO.unless(present)(ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(coordinate.render))))
       classes <- PluginCompile.fromTree(store, launcher, root, boundary)
       entry   <- PluginJar.readTree(coordinate, classes)
@@ -216,7 +216,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
     Option(path.getFileName).map(_.toString).flatMap(histos.schedule.Digest.from)
 
   private def refuseLeak(classes: Path, coordinate: PluginCoordinate): IO[LoadError, Unit] =
-    ZIO.attempt(PluginCompile.engineClass(classes)).mapError(BuildFile.failed(LoadIo.Walk)).flatMap:
+    ZIO.attemptBlocking(PluginCompile.engineClass(classes)).mapError(BuildFile.failed(classes, IoFault.Walk)).flatMap:
       case Some(binary) => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(coordinate, binary)))
       case None         => ZIO.unit
 
@@ -238,7 +238,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
       case ResolveError.NoLock(_) =>
         dependencies match
           case head :: _ => LoadError.Plugin(PluginLoadError.Unlocked(PluginCoordinate.Published(head).render))
-          case Nil       => LoadError.Io(LoadIo.Stat)
+          case Nil       => LoadError.Io(IoFailure(Path.of(".histos/dependencies.lock"), IoFault.Read))
       case other => LoadError.Resolve(other)
 
   private def define(loader: BuildLoader, matched: List[Matched], row: Matched): IO[LoadError, HistosPlugin] =
@@ -327,11 +327,11 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
     catch case scala.util.control.NonFatal(_) => left.toAbsolutePath.normalize == right.toAbsolutePath.normalize
 
   private def digestOf(apiJar: Path): IO[LoadError, ApiDigest] =
-    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(apiJar)))).mapError(BuildFile.failed(LoadIo.Stat)).flatMap: sha =>
+    ZIO.attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(apiJar)))).mapError(BuildFile.failed(apiJar, IoFault.Read)).flatMap: sha =>
       ApiDigest.from(sha.value) match
         case Right(digest) => ZIO.succeed(digest)
-        case Left(_)       => ZIO.fail(LoadError.Io(LoadIo.Stat))
+        case Left(_)       => ZIO.fail(LoadError.Io(IoFailure(apiJar, IoFault.Stat)))
 
   private def exists(path: Path): IO[LoadError, Boolean] =
-    ZIO.attempt(Files.isRegularFile(path)).mapError(BuildFile.failed(LoadIo.Stat))
+    ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(BuildFile.failed(path, IoFault.Stat))
 

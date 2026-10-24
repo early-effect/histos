@@ -1,11 +1,12 @@
 package histos.cli
 
 import histos.jdk.{Machine, Os, Settled}
+import histos.workspace.{IoFailure, IoFault}
 import histos.native.NativeOrigin
 import histos.load.PluginLink
 import histos.plugin.*
 import histos.workflow.WorkflowAction
-import histos.load.{ApiJar, LoadError, LoadIo}
+import histos.load.{ApiJar, LoadError}
 import histos.*
 
 import java.nio.file.{Files, Path}
@@ -51,15 +52,15 @@ object CliSpec extends ZIOSpecDefault:
 
   private def bare: ZIO[Scope, LoadError, Path] =
     for
-      dir <- ZIO.attempt(Files.createTempDirectory("histos-bare")).mapError(t => LoadError.Io(LoadIo.Temp))
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-bare")).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _   <- ZIO.addFinalizer(delete(dir))
     yield dir
 
   private def repo: ZIO[Scope, LoadError, Path] =
     for
-      dir <- ZIO.attempt(Files.createTempDirectory("histos-cli")).mapError(t => LoadError.Io(LoadIo.Temp))
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-cli")).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _   <- ZIO.addFinalizer(delete(dir))
-      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Io(LoadIo.Temp))
+      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
     yield dir
 
   private def delete(root: Path): UIO[Unit] =
@@ -219,7 +220,7 @@ object CliSpec extends ZIOSpecDefault:
                  Files.writeString(dir.resolve("core/src/Bad.scala"), "object Bad:\n  val n: Int = \"text\"\n")
                  Files.createDirectories(dir.resolve(".histos"))
                  Files.writeString(dir.resolve(".histos/dependencies.lock"), "cell core 3.9.0 jvm\n")
-               }.mapError(_ => LoadError.Io(LoadIo.Temp))
+               }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("compile"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(done.exit == CliExit.CompileFailed)
     ,
@@ -262,7 +263,7 @@ object CliSpec extends ZIOSpecDefault:
                      |sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
                      |""".stripMargin,
                  )
-               }.mapError(t => LoadError.Io(LoadIo.Temp))
+               }.mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("toolchain"), dir, jar).provideSome[Scope](layers(dir, Map("JAVA_HOME" -> jdk.toString)))
         yield assertTrue(
           done.exit == CliExit.Success && done.out.contains("chosen JavaHome") && done.out.contains("21.0.2") && done.out.contains("lock 21.0.2"),
@@ -298,7 +299,7 @@ object CliSpec extends ZIOSpecDefault:
                      |    Projects(core)
                      |""".stripMargin,
                  )
-               }.mapError(t => LoadError.Io(LoadIo.Temp))
+               }.mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("toolchain"), dir, jar).provideSome[Scope](layers(dir, Map("JAVA_HOME" -> jdk.toString)))
         yield assertTrue(
           done.exit == CliExit.ToolchainFailed,
@@ -344,7 +345,7 @@ object CliSpec extends ZIOSpecDefault:
                      |""".stripMargin,
                  )
                  Files.writeString(dir.resolve(".histos").resolve("releases"), "libs matches\n")
-               }.mapError(t => LoadError.Io(LoadIo.Temp))
+               }.mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           env = Map(
             "HISTOS_SESSION" -> "snapshot",
             "HISTOS_SHA" -> "1234567890abcdef1234567890abcdef12345678",
@@ -352,7 +353,7 @@ object CliSpec extends ZIOSpecDefault:
           )
           held <- Cli.execute(List("run", "versions"), dir, jar).provideSome[Scope](layers(dir, env))
           _ <- ZIO.attempt(Files.writeString(dir.resolve(".histos").resolve("releases"), "libs moved\n"))
-            .mapError(t => LoadError.Io(LoadIo.Temp))
+            .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           refused <- Cli.execute(List("run", "versions"), dir, jar).provideSome[Scope](layers(dir, env))
         yield assertTrue(
           held.exit == CliExit.Success && held.out.contains("hold already-released") && held.out.contains("1.4.2-ci"),
@@ -374,7 +375,7 @@ object CliSpec extends ZIOSpecDefault:
                 |    Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core)
                 |""".stripMargin,
             )
-          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          ).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("run", "versions"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(
           done.exit == CliExit.Success,
@@ -430,7 +431,7 @@ object CliSpec extends ZIOSpecDefault:
                 |    Projects(app)
                 |""".stripMargin,
             )
-          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          ).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("run", "app"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(
           done.exit == CliExit.TaskFailed,
@@ -453,7 +454,7 @@ object CliSpec extends ZIOSpecDefault:
                 |    Projects(app)
                 |""".stripMargin,
             )
-          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          ).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("run", "app", "native"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(
           done.exit == CliExit.TaskFailed && done.err.contains("does not build native") && done.out.isEmpty,
@@ -463,7 +464,7 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           jar  <- apiJar
-          dir  <- ZIO.attempt(Files.createTempDirectory("histos-none")).mapError(t => LoadError.Io(LoadIo.Temp))
+          dir  <- ZIO.attempt(Files.createTempDirectory("histos-none")).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _    <- ZIO.addFinalizer(delete(dir))
           done <- Cli.execute(List("graph"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(done.exit == CliExit.LoadFailed && done.exit.code == 3 && done.err.contains("histos.scala"))
@@ -531,7 +532,7 @@ object CliSpec extends ZIOSpecDefault:
                 |  def graph = Projects(module("core", Jvm)(scala"3.9.0"))
                 |""".stripMargin,
             )
-          ).mapError(t => LoadError.Io(LoadIo.Temp))
+          ).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli.execute(List("graph"), dir, jar).provideSome[Scope](layers(dir))
         yield assertTrue(done.exit == CliExit.LoadFailed && done.err.contains("LinkStrategy.Api"))
     ,

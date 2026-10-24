@@ -3,7 +3,7 @@ package histos.load
 import dotty.tools.dotc.Driver
 import dotty.tools.dotc.reporting.StoreReporter
 import histos.cache.ContentStore
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.jdk.Sha256
 import histos.plugin.{ApiDigest, PluginIo, PluginLoadError}
 import histos.schedule.Digest
@@ -56,10 +56,10 @@ private[load] object PluginCompile:
     val hex = key(launcher, sources, checksums)
     val plugins = store.root.resolve("plugins")
     val dest = plugins.resolve(hex)
-    ZIO.attempt(ready(dest)).mapError(_ => LoadError.Io(LoadIo.Stat)).flatMap:
+    ZIO.attemptBlocking(ready(dest)).mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat))).flatMap:
       case true => touch(dest, hex)
       case false =>
-        ZIO.attempt(Files.createDirectories(plugins)).mapError(_ => LoadError.Io(LoadIo.Temp)) *>
+        ZIO.attemptBlocking(Files.createDirectories(plugins)).mapError(_ => LoadError.Io(IoFailure(plugins, IoFault.Create))) *>
           ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
             fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
 
@@ -87,12 +87,12 @@ private[load] object PluginCompile:
     Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))).value
 
   private def partial(parent: Path, prefix: String = ".partial-"): IO[LoadError, Path] =
-    ZIO.attempt(Files.createTempDirectory(parent, prefix)).mapError(_ => LoadError.Io(LoadIo.Temp))
+    ZIO.attemptBlocking(Files.createTempDirectory(parent, prefix)).mapError(_ => LoadError.Io(IoFailure(parent, IoFault.Temp)))
 
   private def parentOf(path: Path): IO[LoadError, Path] =
     Option(path.getParent) match
       case Some(parent) => ZIO.succeed(parent)
-      case None         => ZIO.fail(LoadError.Io(LoadIo.Temp))
+      case None         => ZIO.fail(LoadError.Io(IoFailure(path, IoFault.Temp)))
 
   private def extract(jar: Path, dest: Path): IO[LoadError, Unit] =
     ZIO.attempt {
@@ -155,7 +155,7 @@ private[load] object PluginCompile:
           if reporter.hasErrors then
             Left(LoadError.CompileFailed(reporter.allErrors.map(error => CompilerMessage.fromCompiler(error.message))))
           else Right(())
-        }.mapError(_ => LoadError.Io(LoadIo.Compile)).flatMap(ZIO.fromEither)
+        }.mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write))).flatMap(ZIO.fromEither)
 
   private def copyResources(from: Path, to: Path): IO[LoadError, Unit] =
     ZIO.attempt {
@@ -193,10 +193,10 @@ private[load] object PluginCompile:
     }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read)))
 
   private def mark(dir: Path): IO[LoadError, Unit] =
-    ZIO.attempt(Files.writeString(dir.resolve(".complete"), "ok\n")).mapError(_ => LoadError.Io(LoadIo.Write)).unit
+    ZIO.attemptBlocking(Files.writeString(dir.resolve(".complete"), "ok\n")).mapError(_ => LoadError.Io(IoFailure(dir, IoFault.Write))).unit
 
   private def publish(tmp: Path, dest: Path): IO[LoadError, Unit] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       if ready(dest) then Workspace.deleteSync(tmp)
       else
         if Files.exists(dest) then Workspace.deleteSync(dest)
@@ -205,15 +205,15 @@ private[load] object PluginCompile:
           case _: java.nio.file.AtomicMoveNotSupportedException =>
             Files.move(tmp, dest)
       ()
-    }.mapError(_ => LoadError.Io(LoadIo.Write))
+    }.mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Write)))
 
   private def touch(dest: Path, hex: String): IO[LoadError, Path] =
     Digest.from(hex) match
-      case None => ZIO.fail(LoadError.Io(LoadIo.Write))
+      case None => ZIO.fail(LoadError.Io(IoFailure(dest, IoFault.Write)))
       case Some(_) =>
         Clock.instant.flatMap: now =>
-          ZIO.attempt(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(now)))
-            .mapError(_ => LoadError.Io(LoadIo.Write))
+          ZIO.attemptBlocking(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(now)))
+            .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Write)))
             .as(dest)
 
   private def ready(dir: Path): Boolean =

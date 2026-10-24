@@ -1,12 +1,13 @@
 package histos.mcp
 
 import heddle.LinePipe
+import histos.workspace.{IoFailure, IoFault}
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
 import histos.cli.{CliParseError, Command}
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os, Settled}
 import histos.native.NativeOrigin
-import histos.load.{ApiJar, LoadError, LoadIo, Loader}
+import histos.load.{ApiJar, LoadError, Loader}
 import histos.resolve.{
   Classpath,
   LockedArtifact,
@@ -85,11 +86,11 @@ object ProtocolSpec extends ZIOSpecDefault:
     for
       dir <- ZIO
         .attempt(Files.createTempDirectory("histos-mcp"))
-        .mapError(t => LoadError.Io(LoadIo.Temp))
+        .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _ <- ZIO.addFinalizer(delete(dir))
       _ <- ZIO
         .attempt(Files.writeString(dir.resolve("histos.scala"), source))
-        .mapError(t => LoadError.Io(LoadIo.Temp))
+        .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
     yield dir
 
   private def delete(root: Path): UIO[Unit] =
@@ -201,7 +202,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           dir <- repo
           _ <- ZIO
             .attempt(writeJdk(dir))
-            .mapError(t => LoadError.Io(LoadIo.Temp))
+            .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           (client, server) <- LinePipe.connected
           done <- HistosMcp
             .serve(
@@ -277,7 +278,7 @@ object ProtocolSpec extends ZIOSpecDefault:
                      |""".stripMargin
               )
             }
-            .mapError(t => LoadError.Io(LoadIo.Temp))
+            .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           (client, server) <- LinePipe.connected
           done <- HistosMcp
             .serve(

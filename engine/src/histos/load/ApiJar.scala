@@ -1,7 +1,7 @@
 package histos.load
 
 import histos.pack.ClassJar
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.file.{Files, Path}
 
@@ -12,10 +12,10 @@ import zio.{Scope, System, ZIO}
 /** The api jar tests compile a build file against. `dist/histos-api.jar` wins. Otherwise the classes just compiled. */
 object ApiJar:
   def locate: ZIO[Scope, LoadError, Path] =
-    System.env("HISTOS_REPO").mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: named =>
+    System.env("HISTOS_REPO").mapError(_ => LoadError.Io(IoFailure(Path.of("HISTOS_REPO"), IoFault.Read))).flatMap: named =>
       val roots = repoRoots(named.filter(_.nonEmpty).map(Path.of(_)))
       val packed = roots.map(_.resolve("dist").resolve("histos-api.jar"))
-      ZIO.attemptBlocking(packed.find(path => Files.isRegularFile(path))).mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap:
+      ZIO.attemptBlocking(packed.find(path => Files.isRegularFile(path))).mapError(_ => LoadError.Io(IoFailure(Path.of("dist/histos-api.jar"), IoFault.Stat))).flatMap:
         case Some(jar) => ZIO.succeed(jar)
         case None =>
           compiled(roots) match
@@ -46,6 +46,6 @@ object ApiJar:
         case _           => None
 
   private def jarOf(classes: Path): ZIO[Scope, LoadError, Path] =
-    Workspace.work("histos-api-jar").mapError(_ => LoadError.Io(LoadIo.Temp)).flatMap: dir =>
+    Workspace.work("histos-api-jar").mapError(LoadError.Io(_)).flatMap: dir =>
       val dest = dir.resolve("histos-api.jar")
-      ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(LoadIo.Temp), _.path)
+      ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(IoFailure(dest, IoFault.Write)), _.path)
