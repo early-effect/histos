@@ -7,8 +7,7 @@ root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 version=0.0.1-SNAPSHOT
 cache=${XDG_CACHE_HOME:-${HOME:?HOME is unset}/.cache}/histos
 work=
-install=
-cleanup() { rm -rf "$work"; if [ -n "$install" ]; then rm -rf "$install"; fi; }
+cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 fail() { echo "histos $version: $*" >&2; exit 1; }
@@ -35,13 +34,6 @@ private_dir() {
 }
 present() { [ -e "$1" ] || [ -L "$1" ]; }
 regular() { [ -f "$1" ] && [ -r "$1" ] || fail "invalid file path: $1"; }
-host_key() {
-  os=$(uname -s) || fail "could not identify runtime OS"
-  cpu=$(uname -m | tr '[:upper:]' '[:lower:]' | awk '{print $1}') || fail "could not identify runtime architecture"
-  case $os in Darwin) os=macos ;; Linux) os=linux ;; *) os=unsupported ;; esac
-  case $cpu in x86_64|amd64) cpu=x86_64 ;; aarch64|arm64) cpu=aarch64 ;; *) cpu=unsupported ;; esac
-  printf '%s-%s\n' "$os" "$cpu"
-}
 valid_url() {
   printf '%s\n' "$1" | LC_ALL=C awk -v kind="$2" '
     function ipv4(s, p,n,i) {n=split(s,p,"."); if(n!=4) return 0; for(i=1;i<=4;i++) if(p[i]!~/^[0-9]+$/ || p[i]+0>255) return 0; return 1}
@@ -61,13 +53,6 @@ valid_url() {
       if($0 ~ /[^!-~]/ || $0 ~ /["<>\\^`{|}#]/) exit 1
       raw=$0
       for(i=1;i<=length(raw);i++) if(substr(raw,i,1)=="%") {if(substr(raw,i+1,2)!~/^[0-9a-fA-F][0-9a-fA-F]$/) exit 1; i+=2}
-      if(kind=="archive" && raw~/^file:\//) {
-        path=substr(raw,6); if(path~/^\/\// && path!~/^\/\/\//) exit 1
-        if(path~/^\/\/\//) path=substr(path,3)
-        if(path~/^\/\// || path~/\?/ || tolower(path)~/%(00|0[1-9a-f]|1[0-9a-f]|7f)/) exit 1
-        if(path!~/^\// || path~/[\[\]]/) exit 1
-        ok=1; exit
-      }
       scheme=raw; sub(/:.*/,"",scheme)
       if(scheme!="https" && !(scheme=="http" && kind=="repository")) exit 1
       rest=raw; if(rest!~/^[a-z]+:\/\//) exit 1; sub(/^[a-z]+:\/\//,"",rest)
@@ -84,83 +69,8 @@ valid_url() {
     }
     END {exit !ok}'
 }
-validate_graph() {
-  LC_ALL=C awk -F '\t' '
-    function canonical(s, p,n,i,result) {n=split(s,p,"/"); result=""; for(i=1;i<=n;i++) if(p[i]!="" && p[i]!=".") result=result (result=="" ? "" : "/") p[i]; return result}
-    function resolve(s,hops,hard,p,n,i,stack,depth,name,base,rest,j) {
-      if(hops>count+1 || s~/^\// || s~/[\\:[:space:]]/) return "#unsafe"
-      n=split(s,p,"/"); depth=0
-      for(i=1;i<=n;i++) {
-        if(p[i]=="" || p[i]==".") continue
-        if(p[i]=="..") {if(!depth) return "#unsafe"; depth--; continue}
-        base=""; for(j=1;j<=depth;j++) base=base (j==1 ? "" : "/") stack[j]
-        name=base (base=="" ? "" : "/") p[i]
-        if(type[name]=="l" || type[name]=="h") {
-          if(hard && type[name]=="l") return "#unsafe"
-          rest=""; for(j=i+1;j<=n;j++) rest=rest "/" p[j]
-          return resolve((type[name]=="h" ? "" : base (base=="" ? "" : "/")) target[name] rest,hops+1,hard)
-        }
-        stack[++depth]=p[i]
-      }
-      name=""; for(j=1;j<=depth;j++) name=name (j==1 ? "" : "/") stack[j]
-      return name
-    }
-    {
-      name=canonical($2)
-      if($2~/^\// || $2~/(^|\/)\.\.(\/|$)/ || $2~/[\\:[:space:]]/ || (name=="" && $1!="d") || seen[name]++) {failed=1; exit 1}
-      type[name]=$1; target[name]=$3; count++
-    }
-    END {
-      if(failed) exit 1
-      for(name in type) {
-        for(link in type) if((type[link]=="l" || type[link]=="h") && index(name,link "/")==1) exit 1
-        if(type[name]=="l" || type[name]=="h") {
-          base=name; sub(/[^\/]*$/,"",base)
-          resolved=resolve((type[name]=="h" ? "" : base) target[name],0,type[name]=="h")
-          if(resolved=="#unsafe" || (resolved!="" && !(resolved in type)) || (type[name]=="h" && type[resolved]!="-")) exit 1
-        }
-      }
-    }' "$1" || fail "unsafe jdk archive link graph"
-}
-runtime_hash() (
-  home=$1
-  [ -d "$home" ] && [ ! -L "$home" ] || fail "invalid installed runtime"
-  find "$home" -print | LC_ALL=C sort > "$work/tree.paths"
-  : > "$work/tree.inventory"
-  : > "$work/tree.graph"
-  while IFS= read -r item; do
-    relative=${item#"$home"}; relative=${relative#/}
-    printf '%s\n' "$relative" | LC_ALL=C awk '/[[:space:]\\:]/ {exit 1}' || fail "unsafe installed runtime name"
-    mode=$(file_mode "$item")
-    uid=${mode%% *}; mode=${mode#* }
-    [ "$uid" = "$(id -u)" ] || fail "runtime is not owned by current user"
-    if [ -L "$item" ]; then
-      target=$(readlink "$item")
-      printf 'l\t%s\t%s\n' "$relative" "$target" >> "$work/tree.graph"
-      printf 'l\t%s\t%s\t%s\n' "$relative" "$mode" "$target" >> "$work/tree.inventory"
-    elif [ -d "$item" ]; then
-      printf 'd\t%s\n' "$relative" >> "$work/tree.graph"
-      printf 'd\t%s\t%s\n' "$relative" "$mode" >> "$work/tree.inventory"
-    elif [ -f "$item" ]; then
-      printf -- '-\t%s\n' "$relative" >> "$work/tree.graph"
-      printf 'f\t%s\t%s\t%s\n' "$relative" "$mode" "$(hash_of "$item")" >> "$work/tree.inventory"
-    else fail "unsupported runtime entry"; fi
-  done < "$work/tree.paths"
-  validate_graph "$work/tree.graph"
-  hash_of "$work/tree.inventory"
-)
-
-private_dir "$cache"
-work=$(mktemp -d "$cache/.bootstrap.XXXXXX")
-fetch() {
-  case $1 in
-    file:///*) valid_url "$1" archive || fail "invalid file url"; curl -fsS --proto '=file' "$1" -o "$2" ;;
-    *) valid_url "$1" "${3:-archive}" || fail "invalid download url"; curl -fsSL --proto '=https,http' --proto-redir '=https' "$1" -o "$2" ;;
-  esac
-}
-# Standalone lock validation mirrors the Scala parser before any field is used.
 parse_lock() {
-  LC_ALL=C awk -v kind="$2" '
+  LC_ALL=C awk '
     function bad() {failed=1; exit 1}
     function integer(s) {return s ~ /^[+]?[0-9]+$/ && s+0>0 && s+0<=2147483647}
     function stamp(s, y,m,d,h,n,t,days) {
@@ -175,34 +85,26 @@ parse_lock() {
     {
       if($0 !~ /^[a-z0-9]+[ \t]+[^ \t].*$/) bad()
       name=$1; value=$0; sub(/^[^ \t]+[ \t]+/,"",value)
-      if(kind=="jdk" && name=="archive") {
-        if(NF!=4 || $2 !~ /^(macos|linux|windows)-(x86_64|aarch64)$/ || hosts[$2]++ || length($4)!=64 || $4 ~ /[^0-9a-fA-F]/) bad()
-        rows[++count]=$2 "\t" $3 "\t" tolower($4)
-      } else {
-        if(seen[name]++) bad()
-        if(kind=="launcher" && name!="repository" && name!="version" && name!="revision" && name!="sha256") bad()
-        if(kind=="jdk" && name!="major" && name!="version") bad()
-        fields[name]=value
-      }
+      if(name!="repository" && name!="version" && name!="revision" && name!="sha256") bad()
+      if(seen[name]++) bad()
+      fields[name]=value
     }
     END {
       if(failed) exit 1
-      if(kind=="launcher") {
-        if(length(fields["sha256"])!=64 || fields["sha256"] ~ /[^0-9a-fA-F]/) exit 1
-        if(fields["repository"]=="" || fields["version"] !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$/) exit 1
-        base=fields["version"]; sub(/-SNAPSHOT$/,"",base); prefix=base "-"
-        if(substr(fields["revision"],1,length(prefix))!=prefix) exit 1
-        tail=substr(fields["revision"],length(prefix)+1); build=substr(tail,17)
-        if(substr(tail,16,1)!="-" || build !~ /^[1-9][0-9]*$/ || !integer(build) || !stamp(substr(tail,1,15))) exit 1
-        print fields["repository"]; print fields["version"]; print fields["revision"]; print tolower(fields["sha256"])
-      } else {
-        major=fields["major"]; v=fields["version"]
-        if(!integer(major) || v !~ /^[0-9][A-Za-z0-9.+_-]*$/ || !count) exit 1
-        if(v ~ /^1\./) v=substr(v,3); sub(/[^0-9].*$/, "",v)
-        if(!integer(v) || major+0!=v+0) exit 1
-        for(i=1;i<=count;i++) print rows[i]
-      }
-    }' "$1" > "$work/fields" || fail "invalid $2 lock"
+      if(length(fields["sha256"])!=64 || fields["sha256"] ~ /[^0-9a-fA-F]/) exit 1
+      if(fields["repository"]=="" || fields["version"] !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$/) exit 1
+      base=fields["version"]; sub(/-SNAPSHOT$/,"",base); prefix=base "-"
+      if(substr(fields["revision"],1,length(prefix))!=prefix) exit 1
+      tail=substr(fields["revision"],length(prefix)+1); build=substr(tail,17)
+      if(substr(tail,16,1)!="-" || build !~ /^[1-9][0-9]*$/ || !integer(build) || !stamp(substr(tail,1,15))) exit 1
+      print fields["repository"]; print fields["version"]; print fields["revision"]; print tolower(fields["sha256"])
+    }' "$1" > "$work/fields" || fail "invalid launcher lock"
+}
+private_dir "$cache"
+work=$(mktemp -d "$cache/.bootstrap.XXXXXX")
+fetch() {
+  valid_url "$1" repository || fail "invalid download url"
+  curl -fsSL --proto '=https,http' --proto-redir '=https' "$1" -o "$2"
 }
 if present "$root/.histos"; then
   [ -d "$root/.histos" ] && [ -r "$root/.histos" ] && [ -x "$root/.histos" ] || fail "invalid configuration directory"
@@ -220,7 +122,7 @@ if [ -n "$jar" ]; then
 else
   regular "$root/.histos/launcher.lock"
   [ -f "$root/.histos/launcher.lock" ] || fail "missing launcher.lock; restore the committed pin or use a source assembly"
-  parse_lock "$root/.histos/launcher.lock" launcher
+  parse_lock "$root/.histos/launcher.lock"
   { IFS= read -r repository; IFS= read -r locked_version; IFS= read -r revision; IFS= read -r expected; } < "$work/fields"
   [ "$version" = "$locked_version" ] || fail "launcher lock version does not match script"
   valid_url "$repository" repository || fail "invalid launcher repository"
@@ -230,91 +132,13 @@ else
   jar=$dest/histos.jar
   if [ -f "$local_jar" ] && [ "$(hash_of "$local_jar")" = "$expected" ]; then jar=$local_jar
   elif [ ! -f "$jar" ] || [ "$(hash_of "$jar")" != "$expected" ]; then
-    fetch "${repository%/}/rocks/earlyeffect/histos/$locked_version/histos-$revision.jar" "$work/launcher.jar" repository || fail "launcher download failed"
+    fetch "${repository%/}/rocks/earlyeffect/histos/$locked_version/histos-$revision.jar" "$work/launcher.jar" || fail "launcher download failed"
     [ "$(hash_of "$work/launcher.jar")" = "$expected" ] || fail "launcher checksum mismatch"
     mv -f "$work/launcher.jar" "$jar"
   fi
   [ "$(hash_of "$jar")" = "$expected" ] || fail "launcher checksum mismatch"
 fi
-safe_archive() {
-  tar -tf "$1" > "$work/names" || fail "invalid jdk archive"
-  LC_ALL=C awk '/(^\/|[[:space:]\\:]|(^|\/)\.\.(\/|$))/ {exit 1}' "$work/names" || fail "unsafe jdk archive path"
-  tar -tvf "$1" > "$work/entries" || fail "invalid jdk archive"
-  awk '
-    {
-      type=substr($0,1,1); name=$NF; target=""
-      if(type=="l") {if($(NF-1)!="->") exit 1; name=$(NF-2); target=$NF}
-      if(type=="h") {if($(NF-2)!="link" || $(NF-1)!="to") exit 1; name=$(NF-3); target=$NF}
-      if(type!="-" && type!="d" && type!="l" && type!="h") exit 1
-      printf "%s\t%s\t%s\n",type,name,target
-    }' "$work/entries" > "$work/archive.graph" || fail "invalid jdk archive entries"
-  validate_graph "$work/archive.graph"
-}
-jdk_present=
-if present "$root/.histos/jdk.lock"; then
-  regular "$root/.histos/jdk.lock"
-  parse_lock "$root/.histos/jdk.lock" jdk
-  while IFS="$(printf '\t')" read -r row_host row_url row_sha; do
-    valid_url "$row_url" archive || fail "invalid jdk url for $row_host"
-  done < "$work/fields"
-  jdk_present=yes
-fi
-if present "$root/.histos/toolchain.local"; then
-  regular "$root/.histos/toolchain.local"
-  home=$(awk '{sub(/\r$/,""); sub(/^[[:space:]]+/,""); sub(/[[:space:]]+$/,""); if(length) {n++; path=$0}} END {if(n!=1) exit 1; print path}' "$root/.histos/toolchain.local") || fail "invalid toolchain.local"
-  case $home in /*) ;; *) fail "toolchain.local must be absolute" ;; esac
-  java_bin=$home/bin/java
-  [ -x "$java_bin" ] || fail "toolchain.local has no bin/java"
-elif [ "$jdk_present" = yes ]; then
-  host=$(host_key)
-  url=; sha=
-  while IFS="$(printf '\t')" read -r row_host row_url row_sha; do
-    if [ "$row_host" = "$host" ]; then url=$row_url; sha=$row_sha; fi
-  done < "$work/fields"
-  [ -n "$url" ] || fail "no archive for runtime host $host"
-  case $url in file:/*) case $url in file:///*) ;; *) url=file://${url#file:} ;; esac ;; esac
-  dest=$cache/jdks/$sha
-  private_dir "$dest"
-  archive=$dest/archive
-  if [ ! -f "$archive" ] || [ "$(hash_of "$archive")" != "$sha" ]; then
-    fetch "$url" "$work/jdk.archive" || fail "jdk download failed"
-    [ "$(hash_of "$work/jdk.archive")" = "$sha" ] || fail "jdk checksum mismatch"
-    mv -f "$work/jdk.archive" "$archive"
-  fi
-  [ "$(hash_of "$archive")" = "$sha" ] || fail "jdk checksum mismatch"
-  java_bin=
-  for parent in "$dest"/install.*; do
-    [ -f "$parent/runtime.sha256" ] && [ -f "$parent/java.path" ] || continue
-    private_dir "$parent"
-    regular "$parent/runtime.sha256"
-    relative=$(cat "$parent/java.path")
-    case $relative in *..*|/*) continue ;; esac
-    expected_tree=$(cat "$parent/runtime.sha256")
-    valid_sha "$expected_tree" || continue
-    if actual_tree=$(runtime_hash "$parent/home") && [ "$actual_tree" = "$expected_tree" ] && [ -x "$parent/home/$relative" ]; then
-      java_bin=$parent/home/$relative; break
-    fi
-  done
-  if [ -z "$java_bin" ]; then
-    safe_archive "$archive"
-    mkdir "$work/unpack"
-    tar --no-same-owner --no-same-permissions -xf "$archive" -C "$work/unpack" || fail "jdk extraction failed"
-    found=$(find "$work/unpack" -type f -path '*/bin/java')
-    [ "$(printf '%s\n' "$found" | awk 'NF {n++} END {print n+0}')" = 1 ] || fail "locked jdk must have one bin/java"
-    relative=${found#"$work/unpack/"}
-    find "$work/unpack" -type d -exec chmod 700 {} +
-    find "$work/unpack" -type f -exec chmod u+rw,go-rwx,u-s,g-s,o-t {} +
-    chmod u+x "$found"
-    install=$(mktemp -d "$dest/install.XXXXXX")
-    runtime_hash "$work/unpack" > "$install/runtime.sha256"
-    printf '%s\n' "$relative" > "$install/java.path"
-    mv "$work/unpack" "$install/home"
-    java_bin=$install/home/$relative
-    install=
-  fi
-else
-  java_bin=$(command -v java) || fail "java is not on PATH and .histos/jdk.lock is missing"
-fi
+java_bin=$(command -v java) || fail "java is not on PATH"
 cleanup
 trap - EXIT HUP INT TERM
 exec "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"

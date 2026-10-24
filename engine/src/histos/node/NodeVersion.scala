@@ -15,7 +15,13 @@ object NodeMajor:
 /** A full Node version, such as `22.14.0`. The leading `v` from
   * `node --version` is not part of it.
   */
-final case class NodeVersion private (value: String, major: NodeMajor)
+final case class NodeVersion private (value: String, major: NodeMajor):
+  def atLeast(floor: NodeVersion): Boolean =
+    histos.toolchain.VersionOrder.atLeast(
+      value,
+      floor.value,
+      stripJavaOne = false
+    )
 
 object NodeVersion:
   given CanEqual[NodeVersion, NodeVersion] = CanEqual.derived

@@ -13,7 +13,7 @@ import histos.testrun.{
   TestStatus
 }
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
-import histos.jdk.{Machine, Os, Settled}
+import histos.jdk.{Machine, Os}
 import histos.jdk.Sha256
 import histos.load.{LoadError, PluginLink, PluginRuntime}
 import histos.load.PluginFault
@@ -67,7 +67,6 @@ object Calls:
       Path.of(".histos"),
       Path.of("."),
       None,
-      Settled.No,
       NativeOrigin.Central
     )
 

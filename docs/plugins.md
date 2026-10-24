@@ -159,7 +159,7 @@ Graph text shows plugin binary/source provenance, task seal/needs/declared paths
 
 [`Workflow`](../engine/src/histos/workflow/Workflow.scala) renders always jobs beside test/versions/workflow and scheduled jobs as separate `histos-<job>.yml` files. Job permissions are typed ContentsRead/ContentsWrite. The step runs the task id, not its contributed CLI command. Check detects changed/missing/orphan scheduled files; update writes rendered files and deletes only those orphans. See [WorkflowSpec](../engine/test/WorkflowSpec.scala) and the [plugin job golden](../engine/test/fixtures/ci/plugin-always.yml).
 
-The dedicated Windows launcher fixture is hand-written M4 verification, not a contributed plugin job. Graph-derived tool installation/caching and eventual ownership of that workflow remain M8.
+Graph-derived CI does not install a JDK or Node. Caching of the tools a job already requires remains M8.
 
 ## Author tests and surviving limits
 

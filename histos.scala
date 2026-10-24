@@ -26,9 +26,7 @@ object build extends HistosBuild:
         dep"org.scala-lang.modules::scala-parser-combinators:2.5.0",
         dep"io.get-coursier::coursier:2.1.26",
         dep"org.ow2.asm:asm:9.11.1",
-        dep"org.ow2.asm:asm-tree:9.11.1",
-        dep"org.apache.commons:commons-compress:1.28.0",
-        dep"org.tukaani:xz:1.12"
+        dep"org.ow2.asm:asm-tree:9.11.1"
       )
       .testDependencies(zioTest, zioTestSbt)
     val app = module("app", Jvm)(scala3)

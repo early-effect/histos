@@ -12,7 +12,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Duration, IO, Scope, System, UIO, ZIO}
+import zio.{Chunk, IO, Scope, System, UIO, ZIO}
 import zio.stream.{ZPipeline, ZStream}
 
 /** The status the operating system reported. Zero and non-zero are both statuses. */
@@ -157,20 +157,6 @@ object ChildProcess:
             classes <- launcher(java)
             child <- spawn(startCommand(java, classes, argv, work, environment), Group.Own)
           yield child.console ++ ZStream.fromZIO(wait(child.process).map(ChildEvent.Exited(_)))
-
-  /**
-   * A child that shares this process's terminal. Interrupt sends SIGTERM, waits `grace`, then kills
-   * whatever is still running. The JDK hand-off uses this.
-   */
-  def attached(argv: List[String], extra: Map[String, String], grace: Duration): IO[ChildError, Int] =
-    argv match
-      case Nil => ZIO.fail(ChildError.NoProgram)
-      case _ =>
-        ZIO.scoped:
-          ZIO.acquireRelease(startAttached(argv, extra))(process =>
-            ProcessTree.of(process).flatMap(_.terminate(grace))
-          ).flatMap: process =>
-            ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => ChildError.Status)
 
   /** Collect [[events]] for a caller that wants the text after the process ends. */
   def run(request: ChildRequest): IO[ChildError, ChildOutcome] =
@@ -417,16 +403,6 @@ object ChildProcess:
       builder.redirectInput(ProcessBuilder.Redirect.PIPE)
       builder.start()
     }.mapError(_ => ChildError.Start(java.toString))
-
-  private def startAttached(argv: List[String], extra: Map[String, String]): IO[ChildError, Process] =
-    argv match
-      case Nil => ZIO.fail(ChildError.NoProgram)
-      case program :: _ =>
-        ZIO.attemptBlocking {
-          val builder = new ProcessBuilder(argv.asJava).inheritIO()
-          extra.foreach((key, value) => builder.environment().put(key, value))
-          builder.start()
-        }.mapError(_ => ChildError.Start(program))
 
   private def start(request: ChildRequest, entry: Path): IO[ChildError, Process] =
     ZIO.attemptBlocking {

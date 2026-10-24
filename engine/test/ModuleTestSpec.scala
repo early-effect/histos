@@ -1,6 +1,6 @@
 package histos.testrun
 
-import histos.node.{NodeError, NodeMiss}
+import histos.node.{NodeMiss, NodeToolchain}
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.toolchain.Runtimes
 import histos.zinc.GraphCompile
@@ -307,9 +307,7 @@ private[testrun] object ModuleTestSupport:
             ModuleTestError.NoNode(
               name,
               scala3,
-              NodeMiss.Unresolved(
-                NodeError.NoRuntime
-              )
+              NodeMiss.Absent(NodeToolchain.Floor)
             )
           ),
           !linked

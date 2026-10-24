@@ -1,6 +1,6 @@
 package histos.cli
 
-import histos.jdk.{Machine, Os, Settled}
+import histos.jdk.{Machine, Os}
 import histos.workspace.{IoFailure, IoFault}
 import histos.native.NativeOrigin
 import histos.load.PluginLink
@@ -325,12 +325,13 @@ object CliSpec extends ZIOSpecDefault:
             .contains("dependencies.lock")
         )
     ,
-    test("toolchain reports a missing lock"):
+    test("toolchain names the running JVM"):
       ZIO.scoped:
         for done <- invoke(List("toolchain"))
         yield assertTrue(
-          done.exit == CliExit.ToolchainFailed && done.exit.code == 4 && done.err
-            .contains("jdk.lock")
+          done.exit == CliExit.Success && done.out.startsWith("jdk "),
+          !done.out.contains("node"),
+          !done.out.contains("clang")
         )
     ,
     test("toolchain prints the chosen home"):
@@ -352,13 +353,6 @@ object CliSpec extends ZIOSpecDefault:
                 dir.resolve(".histos/toolchain.local"),
                 jdk.toString + "\n"
               )
-              Files.writeString(
-                dir.resolve(".histos").resolve("jdk.lock"),
-                """major 21
-                     |version 21.0.2
-                     |archive linux-x86_64 https://example.test/jdk.zip aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-                     |""".stripMargin
-              )
             }
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli
@@ -366,13 +360,13 @@ object CliSpec extends ZIOSpecDefault:
             .provideSome[Scope](layers(dir, Map("JAVA_HOME" -> jdk.toString)))
         yield assertTrue(
           done.exit == CliExit.Success && done.out.contains(
-            "chosen Override"
-          ) && done.out.contains("21.0.2") && done.out.contains("lock 21.0.2"),
+            s"jdk 21.0.2 $jdk"
+          ),
           !done.out.contains("node"),
           !done.out.contains("clang")
         )
     ,
-    test("a js project asks for a node lock and still prints the jdk"):
+    test("a js project without Node still prints the jdk"):
       ZIO.scoped:
         for
           jar <- apiJar
@@ -392,13 +386,6 @@ object CliSpec extends ZIOSpecDefault:
                 jdk.toString + "\n"
               )
               Files.writeString(
-                dir.resolve(".histos").resolve("jdk.lock"),
-                """major 21
-                     |version 21.0.2
-                     |archive linux-x86_64 https://example.test/jdk.zip aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-                     |""".stripMargin
-              )
-              Files.writeString(
                 dir.resolve("histos.scala"),
                 """import histos.*
                      |object build extends HistosBuild:
@@ -414,8 +401,8 @@ object CliSpec extends ZIOSpecDefault:
             .provideSome[Scope](layers(dir, Map("JAVA_HOME" -> jdk.toString)))
         yield assertTrue(
           done.exit == CliExit.ToolchainFailed,
-          done.out.contains("chosen Override"),
-          done.err.contains("node.lock")
+          done.out.contains(s"jdk 21.0.2 $jdk"),
+          done.err.contains("25")
         )
     ,
     test("unknown commands and missing ids are usage"):
@@ -823,7 +810,6 @@ object CliSpec extends ZIOSpecDefault:
       dir.resolve("cache"),
       dir,
       None,
-      Settled.No,
       NativeOrigin.read(env)
     )
 

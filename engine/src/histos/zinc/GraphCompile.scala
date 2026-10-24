@@ -23,7 +23,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, NonEmptyChunk, System, UIO, ZIO, ZLayer}
+import zio.{Chunk, IO, NonEmptyChunk, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
 
 final case class CompiledCell(
@@ -73,7 +73,6 @@ enum GraphCompileError:
       error: CompileError
   )
   case Cells(errors: NonEmptyChunk[GraphCompileError])
-  case Jdk(home: Path)
 
   def message: String = this match
     case Runtime(error)               => error.message
@@ -94,7 +93,6 @@ enum GraphCompileError:
     case Failed(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to compile\n${error.message}"
     case Cells(errors) => errors.map(_.message).mkString("\n")
-    case Jdk(home)     => s"could not read the JDK release file under $home"
 
 final case class CompileSession(
     repo: Path,
@@ -237,47 +235,18 @@ object GraphCompile:
         case head :: rest =>
           ZIO.fail(GraphCompileError.Cells(NonEmptyChunk(head, rest*)))
 
-  /** The JDK this fiber's `zio.System` is running. The release file is the
-    * version.
-    */
+  /** The running JVM, checked against this Histos version's JDK floor. */
   def jdk(machine: histos.jdk.Machine): IO[GraphCompileError, JdkRuntime] =
     histos.jdk.Toolchain
       .resolve(machine)
-      .catchSome { case histos.jdk.ToolchainError.NoLock(_) =>
-        jdkHere
-      }
-      .mapError {
-        case error: histos.jdk.ToolchainError =>
-          GraphCompileError.Runtime(error)
-        case error: GraphCompileError => error
-      }
+      .mapError(GraphCompileError.Runtime(_))
 
+  /** This process's JVM. Plugin compile and tests run on it. */
   def jdkHere: IO[GraphCompileError, JdkRuntime] =
-    System
-      .property("java.home")
-      .mapError(_ => GraphCompileError.Jdk(Path.of(".")))
-      .flatMap:
-        case Some(raw) if raw.nonEmpty => fromHome(Path.of(raw))
-        case _ => ZIO.fail(GraphCompileError.Jdk(Path.of(".")))
-
-  private def fromHome(home: Path): IO[GraphCompileError, JdkRuntime] =
-    ZIO
-      .attemptBlocking(releaseText(home))
-      .mapError(_ => GraphCompileError.Jdk(home))
-      .flatMap: text =>
-        histos.jdk.JdkVersion.fromRelease(text) match
-          case Right(version) =>
-            histos.toolchain.RuntimeFiles
-              .identity(home)
-              .map(identity => JdkRuntime(home, version, identity))
-              .mapError(failure =>
-                GraphCompileError.Runtime(histos.jdk.ToolchainError.Io(failure))
-              )
-          case Left(_) => ZIO.fail(GraphCompileError.Jdk(home))
-
-  private def releaseText(home: Path): String =
-    val file = home.resolve("release")
-    if Files.isRegularFile(file) then Files.readString(file) else ""
+    histos.jdk.Machine
+      .load(Path.of("."))
+      .mapError(GraphCompileError.Runtime(_))
+      .flatMap(jdk)
 
   /** `<module>/src` wins. The repository `src` is only for a graph with one
     * module. The build file stays outside it.

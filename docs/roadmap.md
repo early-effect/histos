@@ -1,6 +1,6 @@
 # Histos roadmap
 
-M0-M3 establish the kernel and resource ownership. M4 adds tool/runtime identity and bootstrap trust; its platform acceptance is tracked in the audit. Later milestones build on those contracts.
+M0-M3 establish the kernel and resource ownership. M4 adds tool identity, the JDK and Node floors, and the launcher pin. Later milestones build on those contracts.
 
 [architecture.md](architecture.md) describes current source contracts. [audit.md](audit.md) preserves historical findings and owns every remaining concern. [plugins.md](plugins.md) is the current plugin contract. This roadmap is a plan, not another copy of implemented APIs.
 
@@ -10,7 +10,7 @@ The build is immutable data. Work is a typed effect. Dependencies compose as Ste
 
 The CLI, server, BSP and MCP already share a graph, but not one application contract. The target is one Build service with typed requests, streamed events, reports and faults. Protocols become codecs; cancellation names a run rather than a task string.
 
-The lock is authoritative for the dependency/tool artifacts it records. A selected runtime pin is authoritative for its host archive. Deliberate local overrides retain local identity. Neither declared inputs nor these locks make arbitrary plugin code, system packages, clang or browsers hermetic. Portable source-root identity and a real sandbox remain distinct work.
+The lock is authoritative for the dependency and tool artifacts it records. A JDK or Node floor is a minimum already installed on the machine. `.histos/toolchain.local` and `.histos/node.local` name a home the user already chose. Neither declared inputs nor these locks make arbitrary plugin code, system packages, clang, or browsers hermetic. Portable source-root identity and a real sandbox remain distinct work.
 
 ## Delivered foundations and current scope
 
@@ -20,7 +20,7 @@ The lock is authoritative for the dependency/tool artifacts it records. A select
 | M1 | Delivered | Platform publish coordinates, server lifecycle, plugin isolation, scoped child ownership, runtime choices reaching execution, safe snapshot publisher and cache hygiene |
 | M2 | Delivered | Step kinds/composition/aspects, Histos executor, compile dependencies without layer barriers, real plugin compile steps, test/run/publish orchestration |
 | M3 | Delivered | Captured Machine/config, path-bearing IO and Workspace scopes, shared ChildProcess, incremental Zinc and scoped batch compiler reuse, provider installation reuse, service/package separation |
-| M4 | Implementation delivered; platform acceptance tracked in audit | Typed tool catalog/lock cells, classifiers, selected byte identities, staged updates, shared host runtime locks/maintained decoder, immutable launcher pin and update transaction |
+| M4 | Implementation delivered | Typed tool catalog and lock cells, classifiers, selected byte identities, staged updates, JDK 21 and Node 25 floors, immutable launcher pin and update transaction |
 | M5-M8 | Partly enabled, not delivered | M4 supplies tool/runtime data and verification seams. Backend, application, public plugin/API and graph-derived CI contracts remain |
 | M9 | Future | Real second-repository adoption, real plugins and measured performance |
 
@@ -38,23 +38,22 @@ M3 compiler reuse is scoped to a compile batch. Server-lifetime pool reuse and c
 - **Explicit dependency transaction.** `resolve --update` stages plugins, loads that generation, solves module/tool cells, and commits once after success. Ordinary execution fetches/checks exact locked bytes. `--check` still re-solves module/plugin drift, but not tool graphs.
 - **Selected tool identity.** ToolInput names the chosen role/version/variant and verified artifacts, including classifiers. Compile, pool and execution keys need their relevant subsets. One captured lock generation covers an operation; the next request can choose a new one.
 - **Embedded provenance is separate.** Running Dotty compiles the build/source plugins; module and auxiliary bridge compilers come from tool cells. Source cache keys need actual embedded support/runtime bytes, not only the API digest and version text.
-- **Portable host tables.** JDK/Node locks contain nonempty OS/CPU archive entries. Exact host selection has no other-host fallback. File URIs stay platform-neutral until selection. Local override files explicitly choose local trust; genuine absence preserves bootstrap on the installed runtime.
-- **Maintained decoding, explicit policy.** Commons Compress and XZ are approved behind the swappable ArchiveDecoder trait. Callback-owned entry bodies, path/link/mode policy, private cache boundaries, budgets and interruption cleanup remain Histos responsibilities.
-- **Immutable launcher pin.** Startup consumes exact revision/hash, never latest metadata. Only dedicated launcher update reads metadata, streams bounded bytes, serializes commit across processes, checks for concurrent pin changes, and replaces the pin last. Workflow rendering consumes the existing pin offline.
+- **Installed platform floors.** Histos does not install a JDK or Node. The running JVM, or `toolchain.local`, must be JDK 21 or newer. A Js module needs `node` on `PATH`, or `node.local`, at Node 25 or newer. A newer version satisfies the floor. A present override that is missing or too old is rejected.
+- **Immutable launcher pin.** Startup consumes exact revision and hash, never latest metadata. Only dedicated launcher update reads metadata, streams bounded bytes, serializes commit across processes, checks for concurrent pin changes, and replaces the pin last. Workflow rendering consumes the existing pin offline. The script finds `java` and runs that jar.
 - **One current PR.** The M3 resource follow-ups and M4 concerns stay together by explicit approval. The prior M3 merge remains historical; no extra stack is required for this integration.
 
-See [ToolCatalog](../api/src/histos/ToolCatalog.scala), [LockedTools](../engine/src/histos/resolve/LockedTools.scala), [ToolInput](../engine/src/histos/resolve/ToolInput.scala), [BuildCompiler](../engine/src/histos/toolchain/BuildCompiler.scala), [ToolLock](../engine/src/histos/toolchain/ToolLock.scala), [ArchiveDecoder](../engine/src/histos/archive/Archive.scala), and [LauncherPin](../engine/src/histos/publish/LauncherPin.scala).
+See [ToolCatalog](../api/src/histos/ToolCatalog.scala), [LockedTools](../engine/src/histos/resolve/LockedTools.scala), [ToolInput](../engine/src/histos/resolve/ToolInput.scala), [BuildCompiler](../engine/src/histos/toolchain/BuildCompiler.scala), [Toolchain](../engine/src/histos/jdk/Toolchain.scala), [NodeToolchain](../engine/src/histos/node/NodeToolchain.scala), and [LauncherPin](../engine/src/histos/publish/LauncherPin.scala).
 
 ### Delivered acceptance slices and final platform gate
 
 1. **Consumers and keys:** Js TestMain override/kind, Native application Scala versus bridge Scala, selected-key relevance, root completeness, classifiers, empty-graph mandatory tools, quick-success validation, current runtime selection and embedded provenance. Owns L1-L3, B15, L9-L14 and L20.
-2. **Host runtime trust:** Shared schema/URL parity, exact-host selection before transport/probes, explicit-local/present-file rules, owned decoder bodies, namespace/field simplification, full installation integrity, private permissions, budgets and interruption. Owns L4-L6, L8, L15-L18.
-3. **Launcher and transport:** Realistic fixed/chunked/close-delimited payloads, bounded atomic update, cross-process conflict, full-tree bootstrap checks, script drift and actual stock Windows fixture execution. Owns L7, L19, T13/T16 and S16's compiler-acquisition follow-up.
+2. **Platform floors:** JDK 21 and Node 25, numeric comparison, and rejection of a present override that is missing or too old. Owns L4-L6, L8, and L15-L18, which are superseded: Histos does not install a JDK or Node.
+3. **Launcher and transport:** Realistic fixed, chunked, and close-delimited payloads, bounded atomic update, cross-process conflict, pin and cache-privacy checks, and script drift. Owns L7, L19, T13, and S16's compiler-acquisition follow-up. T16 is superseded.
 4. **Integrated proof:** Rebuild the final source runtime, run the complete repository suite and targeted regressions, check lock/workflow/scripts, prove warm local commands with external networking denied, then publish the approved API/launcher snapshots and verify/repin their exact bytes. Re-review every general/security/simplicity finding.
 
-Acceptance is defined by the complete suite, deterministic lock/workflow/script checks, selected-byte cache regressions, offline command behavior and stock Windows bootstrap coverage. The exact artifact identity lives in the [launcher lock](../.histos/launcher.lock); current test and CI results belong to the PR. Publishing and deliberate remote updates use the network.
+Acceptance is defined by the complete suite, deterministic lock, workflow, and script checks, selected-byte cache regressions, and offline command behavior. The exact artifact identity lives in the [launcher lock](../.histos/launcher.lock); current test and CI results belong to the PR. Publishing and deliberate remote updates use the network.
 
-Remaining platform acceptance and composite rows are recorded under T16. Source-root portability, clang/browser packaging and sandboxing retain their later milestone owners.
+Source-root portability, clang and browser packaging, and sandboxing retain their later milestone owners. The Windows launcher script is not an execution gate.
 
 ## Target boundaries still to build
 
@@ -71,15 +70,15 @@ The existing Step algebra does not by itself provide these services, a sandbox, 
 
 **Goal:** Complete test/link/run/cache semantics before consolidating platform adapters.
 
-Some work once assigned here already exists: test/run/publish are Steps, chosen Node reaches Js launches, and M4 provides shared runtime stages/identities. Do not reimplement those foundations.
+Some work once assigned here already exists: test, run, and publish are Steps, the chosen Node reaches Js launches, and M4 provides the JDK and Node floors. Do not reimplement those foundations.
 
 Proposed focused slices:
 
 - **Test outcomes and cache:** Preserve independent preparation/suite failures as data, emit full test-compile diagnostics, replace incomplete SuiteStamp/QuickRecord behavior with a complete typed digest/persistence contract, including upstream jars and flags. M4's verified runtime/tool seam stays in M4. Owns P4-P7/P15.
 - **Fixtures and portable keys:** Share typed scoped fixture construction without broad Central catalog substitution, retain resolver/cache policy, and model source roots explicitly. Owns T10/T11/T15 and P16. Incorrect M4 fixture policy remains an M4 verification obligation (T17).
 - **Compiled bridges:** Ship bridge modules compiled by this build and pinned through tools; cache bridge/link work by selected revision and inputs. Permit coexisting Js/Native revisions/environments behind a narrow Bridge seam. Owns P1/P2.
-- **Backends and runtime reports:** Consolidate the repeated test/provider/run paths and dispatch, finish typed adapter errors, remove dead APIs, repair eager machine/path probes and Windows engine gaps. Owns P3/P9/P10/P12-P14/P18; preserve the shared archive trait and operation runtime values.
-- **Packaging/resource policy:** Honor the graph assembly spec, move publisher filesystem checks into effects, remove LazyVals partiality/casts, and define cleanup-failure reporting without weakening ordinary cancellation safety. Owns P8/P11/P20/P21, including the distinction between entry budgets and decoder index/heap allocation.
+- **Backends and runtime reports:** Consolidate the repeated test, provider, and run paths and dispatch, finish typed adapter errors, remove dead APIs, repair eager machine and path probes, and close Windows engine gaps. Owns P3, P9, P10, and P12-P14. P18 is superseded: toolchain reports the runtime it accepted.
+- **Packaging/resource policy:** Honor the graph assembly spec, move publisher filesystem checks into effects, remove LazyVals partiality and casts, and define cleanup-failure reporting without weakening ordinary cancellation safety. Owns P8, P11, and P20. P21 is superseded: Histos does not parse JDK or Node archives.
 
 Tool request namespace/component duplication remains current integration work (L21), not a promise that a constant magnet is the final backend design.
 
@@ -117,11 +116,11 @@ M4's ToolCatalog and JsVersion are partial progress, not platform-safe modules o
 
 **Goal:** Render required tools/platforms and restore installs by exact revision/package set.
 
-M4 supplies catalog revisions and host archive pins, so CI needs/caches can start without requiring every PlatformBackend implementation. Bridge/browser details align with M5 as they stabilize.
+M4 supplies catalog revisions and the JDK and Node floors, so CI needs and caches can start without requiring every PlatformBackend implementation. Bridge and browser details align with M5 as they stabilize. Generated CI does not install a JDK or Node.
 
 - **Needs and caches:** ToolSetup ADT derived from module/test/environment needs; remove `.github/ci-tools` and setup Boolean. Cache runtime/tool/browser/system packages by exact compatible inputs; warm jobs do not repeat browser downloads or install-deps. Owns C1.
 - **Matrix and selection:** CLI accepts platform/Scala filters that split axes render, with affected-module PR selection. Owns C2.
-- **Workflow ownership:** Absorb the temporary hand-written Windows bootstrap job only when generated CI preserves host, argument, ACL, link and descendant-lifetime coverage.
+- **Workflow ownership:** Generated jobs stay in the workflow renderer. The Windows launcher script is not a CI job.
 - **Publish plugin:** Snapshot publication on the default branch through an explicit plugin, with scoped credentials. Non-snapshot releases remain a separate authorized action.
 
 **Exit:** Workflow check passes without the marker; fixture graph changes alter rendered needs; a warm job restores rather than reinstalls the same browser/package set.

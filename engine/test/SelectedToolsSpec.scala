@@ -24,7 +24,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
   private val jdk = JdkRuntime(
     Path.of("jdk"),
     JdkVersion.trusted("25.0.5", JdkMajor.trusted(25)),
-    RuntimeIdentity.Locked(digest)
+    RuntimeIdentity.Local(Path.of("jdk"), digest)
   )
   private val request = CompileRequest(
     CompileToolchain(version, Platform.Js, jdk, ScalacFlags.empty),
@@ -121,7 +121,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             histos.testrun.ModuleTestError.NoNode(
               name,
               version,
-              histos.node.NodeMiss.Unresolved(histos.node.NodeError.NoRuntime)
+              histos.node.NodeMiss.Absent(histos.node.NodeToolchain.Floor)
             )
           )
         )

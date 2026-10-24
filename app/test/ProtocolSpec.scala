@@ -5,7 +5,7 @@ import histos.workspace.{IoFailure, IoFault}
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
 import histos.cli.{CliParseError, Command}
 import histos.cache.ContentStore
-import histos.jdk.{Machine, Os, Settled}
+import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{ApiJar, LoadError, Loader}
 import histos.resolve.{
@@ -121,7 +121,6 @@ object ProtocolSpec extends ZIOSpecDefault:
       dir.resolve("cache"),
       dir,
       None,
-      Settled.No,
       NativeOrigin.read(env)
     )
 
@@ -134,13 +133,6 @@ object ProtocolSpec extends ZIOSpecDefault:
     Files.writeString(
       dir.resolve(".histos/toolchain.local"),
       jdk.toString + "\n"
-    )
-    Files.writeString(
-      dir.resolve(".histos").resolve("jdk.lock"),
-      """major 21
-        |version 21.0.2
-        |archive linux-x86_64 https://example.test/jdk.zip aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        |""".stripMargin
     )
 
   private def readLines(pipe: LinePipe, n: Int): UIO[List[String]] =
@@ -234,12 +226,12 @@ object ProtocolSpec extends ZIOSpecDefault:
         yield
           val text = lines.mkString("\n")
           assertTrue(
-            text.contains("JavaHome"),
             text.contains("21.0.2"),
+            text.contains(dir.resolve("jdk").toString),
             !text.contains(""""isError":true""")
           )
     ,
-    test("toolchain reports a missing jdk lock"):
+    test("toolchain reports a missing JDK"):
       ZIO.scoped:
         for
           jar <- apiJar
@@ -264,10 +256,10 @@ object ProtocolSpec extends ZIOSpecDefault:
           val text = lines.mkString("\n")
           assertTrue(
             text.contains(""""isError":true"""),
-            text.contains("jdk.lock")
+            text.contains("21")
           )
     ,
-    test("a js graph without a node lock keeps the jdk decision"):
+    test("a js graph without Node keeps the jdk decision"):
       ZIO.scoped:
         for
           jar <- apiJar
@@ -311,8 +303,8 @@ object ProtocolSpec extends ZIOSpecDefault:
           val text = lines.mkString("\n")
           assertTrue(
             text.contains(""""isError":true"""),
-            text.contains("node.lock"),
-            text.contains("JavaHome")
+            text.contains("25"),
+            text.contains("21.0.2")
           )
     ,
     test("an unknown plugin task says it is not in the graph"):

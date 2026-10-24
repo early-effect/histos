@@ -34,7 +34,6 @@ final class Runtimes private (
 
 object Runtimes:
   def identityToken(identity: RuntimeIdentity): String = identity match
-    case RuntimeIdentity.Locked(hash)         => s"locked:${hash.value}"
     case RuntimeIdentity.Local(home, content) =>
       s"local:${home.toString}:${content.value}"
 

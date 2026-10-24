@@ -296,7 +296,7 @@ object Workflow:
     List(
       "      - uses: actions/setup-node@v4",
       "        with:",
-      "          node-version: \"22\"",
+      "          node-version: \"25\"",
       "      - uses: KyleMayes/install-llvm-action@v2.0.9",
       "        with:",
       "          version: \"21.1.8\"",

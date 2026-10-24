@@ -133,30 +133,6 @@ object LauncherPinSpec extends ZIOSpecDefault:
               case _ => false
         assertTrue(cases.nonEmpty, cases.forall(identity))
     ,
-    test("archive URLs match the runtime owner's canonical corpus"):
-      for
-        repo <- zio.System
-          .env("HISTOS_REPO")
-          .mapError(_ => LauncherProcessError.Environment)
-        root <- ZIO
-          .fromOption(repo.map(Path.of(_)))
-          .orElseFail(LauncherProcessError.Environment)
-        text <- Workspace.readString(
-          root.resolve("engine/test/fixtures/runtime-lock/urls.tsv")
-        )
-      yield
-        val cases = text.linesIterator.toList.map: line =>
-          line.split("\t", 2).toList match
-            case expected :: encoded :: Nil =>
-              val raw = encoded
-                .replace("{TAB}", "\t")
-                .replace("{CR}", "\r")
-                .replace("{LF}", "\n")
-                .replace("{NUL}", "\u0000")
-              LauncherUrl.archive(raw).isRight == (expected == "accept")
-            case _ => false
-        assertTrue(cases.nonEmpty, cases.forall(identity))
-    ,
     test(
       "snapshot metadata validates coordinates and its unclassified jar entry"
     ):
@@ -977,19 +953,13 @@ object LauncherPinSpec extends ZIOSpecDefault:
           read <- LauncherPin.read(root)
         yield assertTrue(read.revision == revision, read.sha256.value == sha)
     ,
-    test(
-      "Windows contracts use PowerShell, unique staging, checksums and finally cleanup"
-    ):
+    test("the Windows script finds java.exe and runs the pinned jar"):
       val script = LauncherScript.windows(version)
       assertTrue(
-        script.contains("powershell.exe"),
-        script.contains("[Guid]::NewGuid()"),
-        script.contains("Get-FileHash -LiteralPath"),
-        script.contains("finally"),
+        script.contains("java.exe"),
         script.contains("launcher.lock"),
-        script.contains("toolchain.local"),
-        script.contains("[IO.Directory]::Move"),
-        script.contains("[IO.File]::Replace"),
+        script.contains("Get-FileHash -LiteralPath"),
+        script.contains("--enable-native-access=ALL-UNNAMED"),
         !script.contains("certutil"),
         !script.contains("maven-metadata.xml"),
         !script.contains(".jar.sha256")

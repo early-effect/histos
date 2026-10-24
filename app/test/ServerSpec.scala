@@ -2,7 +2,7 @@ package histos.server
 
 import histos.bsp.{Frame, Rpc}
 import histos.cli.{Cli, CliExit, Command}
-import histos.jdk.{Machine, Os, Settled}
+import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
 import histos.resolve.Resolve
@@ -679,7 +679,6 @@ object ServerSpec extends ZIOSpecDefault:
       root.resolve("cache"),
       root,
       None,
-      Settled.No,
       NativeOrigin.Central
     )
 

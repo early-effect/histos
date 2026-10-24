@@ -102,9 +102,6 @@ private[histos] object RuntimeCache:
         _ <- privateDirectory(absolute, principal)
       yield ()
 
-  def installation(root: Path): IO[RuntimeCacheError, Unit] =
-    owner.flatMap(privateDirectory(root, _))
-
   private def owner: IO[RuntimeCacheError, UserPrincipal] =
     ZIO.scoped:
       // A newly created private directory supplies the process's filesystem principal without another environment reader.

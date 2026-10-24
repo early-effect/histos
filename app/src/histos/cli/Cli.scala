@@ -6,7 +6,7 @@ import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
-import histos.jdk.{Machine, Sha256, Startup, Toolchain, ToolchainError}
+import histos.jdk.{Machine, Sha256, Toolchain, ToolchainError}
 import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.schedule.RemoteCache
@@ -1489,26 +1489,7 @@ object Main extends ZIOAppDefault:
                       finish(
                         Completed(CliExit.ToolchainFailed, "", err.message)
                       ),
-                    {
-                      case Startup.Continue =>
-                        runCommand(args, repo, jars.api, machine)
-                      case Startup.Refuse(text) =>
-                        finish(Completed(CliExit.ToolchainFailed, "", text))
-                      case Startup.Replace(javaBin) =>
-                        Toolchain
-                          .replace(javaBin, jars.program, args)
-                          .foldZIO(
-                            err =>
-                              finish(
-                                Completed(
-                                  CliExit.ToolchainFailed,
-                                  "",
-                                  err.message
-                                )
-                              ),
-                            code => stop(code)
-                          )
-                    }
+                    _ => runCommand(args, repo, jars.api, machine)
                   )
       )
 

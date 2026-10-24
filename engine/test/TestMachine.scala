@@ -1,7 +1,6 @@
 package histos
 
-import histos.archive.{ArchiveSource}
-import histos.jdk.{Machine, Os, Settled, Sha256}
+import histos.jdk.{Machine, Os, Sha256}
 import histos.native.NativeOrigin
 import histos.node.NodeVersion
 import histos.process.{ChildEvent, ChildProcess}
@@ -29,7 +28,6 @@ object TestMachine:
       root.resolve("cache"),
       root,
       None,
-      Settled.No,
       NativeOrigin.read(env)
     )
 

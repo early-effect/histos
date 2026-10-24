@@ -2,7 +2,7 @@
 
 A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI, BSP, and MCP use the same graph; their request and result contracts are not yet one application service.
 
-Pre-release. Tool and runtime locking use explicit updates and checksum-verified identities. The roadmap and audit describe delivered work and remaining capabilities.
+Pre-release. Histos does not install a JDK or Node. If JDK 21 or Node 25 is not already there, it explains what it found and fails. The roadmap and audit describe delivered work and remaining capabilities.
 
 - [Roadmap](docs/roadmap.md): delivered foundations, current acceptance gates, and remaining milestones.
 - [Architecture](docs/architecture.md): current types, resource ownership, command behavior, and trust boundaries.
@@ -15,7 +15,7 @@ Pre-release. Tool and runtime locking use explicit updates and checksum-verified
 
 `histos resolve --update` explicitly solves module, plugin, and tool dependencies, then commits them together in `.histos/dependencies.lock`. Ordinary execution fetches recorded artifacts and checks their SHA-256 values. Missing, changed, or corrupt tool cells fail with typed errors rather than an implicit solve. Classifier identity is part of the lock.
 
-JDK and Node locks contain a nonempty table of OS/CPU archive pins. Selection requires an exact host match. `.histos/toolchain.local` and `.histos/node.local` explicitly opt into local runtimes; their content identities are build inputs. Without a runtime lock, bootstrap trusts the installed runtime. This repository currently commits neither a JDK nor Node lock.
+The running JVM is the JDK. A Js module also needs `node` on `PATH`. Both are floors: JDK 21 or newer, and Node 25 or newer. A newer install satisfies the floor. `.histos/toolchain.local` and `.histos/node.local` name a home the user already chose. A present file that is missing, unreadable, or below the floor is rejected. Histos does not create that home and does not fall through to another install.
 
 The remote launcher has an immutable timestamped revision and SHA-256 in `.histos/launcher.lock`. Only `histos launcher --update` advances it. Workflow generation consumes the existing pin without refreshing metadata. See [the committed launcher pin](.histos/launcher.lock).
 
