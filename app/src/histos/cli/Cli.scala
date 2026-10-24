@@ -17,7 +17,7 @@ import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
 import histos.task.{TaskError, TaskId, Tasks}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.publish.PublishRun
+import histos.publish.{LauncherScript, PublishRun}
 import histos.testrun.{
   ModuleTest,
   ModuleTestError,
@@ -916,12 +916,16 @@ object Cli:
           ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
         case Right(loaded) =>
           val effect = action match
-            case WorkflowAction.Check  => Workflow.check(repo, loaded.graph)
-            case WorkflowAction.Update => Workflow.update(repo, loaded.graph)
+            case WorkflowAction.Check =>
+              Workflow.check(repo, loaded.graph).mapError(_.message) *>
+                LauncherScript.check(repo, loaded.graph).mapError(_.message)
+            case WorkflowAction.Update =>
+              Workflow.update(repo, loaded.graph).mapError(_.message) *>
+                LauncherScript.update(repo, loaded.graph).mapError(_.message)
           effect
             .mapBoth(
-              error => Completed(CliExit.WorkflowFailed, "", error.message),
-              file => Completed(CliExit.Success, file.toString, "")
+              message => Completed(CliExit.WorkflowFailed, "", message),
+              _ => Completed(CliExit.Success, Workflow.path(repo).toString, "")
             )
             .merge
 

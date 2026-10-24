@@ -1,8 +1,9 @@
 @echo off
 setlocal EnableExtensions
-rem Frozen Windows entry point. Not executed by the POSIX test.
+rem Generated from the manual ship. histos workflow --update rewrites this file.
+rem Not executed by the POSIX test.
 set "ROOT=%~dp0"
-set /p VERSION=<"%ROOT%.histos-version"
+set "VERSION=0.0.1-SNAPSHOT"
 if defined HISTOS_ASSEMBLY (
   set "JAR=%HISTOS_ASSEMBLY%"
 ) else if exist "%ROOT%dist\histos.jar" (
