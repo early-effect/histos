@@ -1,5 +1,6 @@
 package histos.server
 
+import histos.jdk.JdkRuntime
 import histos.assembly.Assemble
 import histos.cache.ContentStore
 import histos.cli.{Cli, CliExit, GraphText, Lines}
@@ -11,8 +12,8 @@ import histos.testrun.{
   TestRun,
   TestStatus
 }
-import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, ResolvedJdk}
-import histos.jdk.{Machine, Os, Settled}
+import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
+import histos.jdk.{Machine, Os}
 import histos.jdk.Sha256
 import histos.load.{LoadError, PluginLink, PluginRuntime}
 import histos.load.PluginFault
@@ -62,10 +63,10 @@ object Calls:
       Map.empty,
       ".",
       Os.Other,
+      histos.toolchain.Architecture.Unsupported("fixture"),
       Path.of(".histos"),
       Path.of("."),
       None,
-      Settled.No,
       NativeOrigin.Central
     )
 
@@ -84,7 +85,7 @@ object Calls:
       repo: Path,
       graph: ProjectGraph,
       machine: Machine,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       repository: String,
       projects: List[String],
       say: Say
@@ -112,7 +113,7 @@ object Calls:
   def run(
       repo: Path,
       graph: ProjectGraph,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       machine: Machine,
       id: String,
       platform: Option[String],
@@ -213,7 +214,8 @@ object Calls:
       repo: Path,
       graph: ProjectGraph,
       action: String,
-      say: Say
+      say: Say,
+      native: histos.native.NativeOrigin
   ): ZIO[Resolve & histos.load.Loader, ServerError, Unit] =
     resolveAction(action) match
       case None =>
@@ -237,7 +239,8 @@ object Calls:
                       Resolve.verify(
                         repo,
                         graph,
-                        BuildResolvers(graph.resolvers)
+                        BuildResolvers(graph.resolvers),
+                        native
                       )
                   case histos.cli.ResolveAction.Check =>
                     Resolve.requirePlugins(repo, scanned.requests) *>
@@ -249,21 +252,23 @@ object Calls:
                       Resolve.check(
                         repo,
                         graph,
-                        BuildResolvers(graph.resolvers)
+                        BuildResolvers(graph.resolvers),
+                        native
                       )
                   case histos.cli.ResolveAction.Update =>
-                    Resolve
-                      .updatePlugins(
-                        repo,
+                    for
+                      plugins <- Resolve.planPlugins(
                         scanned.requests,
                         Repositories.central
                       )
-                      .unit *>
-                      Resolve.update(
+                      updated <- Resolve.update(
                         repo,
                         graph,
-                        BuildResolvers(graph.resolvers)
+                        BuildResolvers(graph.resolvers),
+                        native = native,
+                        plugins = histos.resolve.PluginUpdate.Replace(plugins)
                       )
+                    yield updated
               followed.foldZIO(
                 {
                   case error: LoadError =>
@@ -300,7 +305,7 @@ object Calls:
   def assembly(
       repo: Path,
       graph: ProjectGraph,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       machine: Machine,
       destination: Option[String],
       say: Say
@@ -329,7 +334,7 @@ object Calls:
       repo: Path,
       graph: ProjectGraph,
       projects: List[String],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       machine: Machine,
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
@@ -364,7 +369,7 @@ object Calls:
       projects: List[String],
       patterns: List[String],
       quick: Boolean,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       machine: Machine,
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
@@ -373,8 +378,19 @@ object Calls:
         val ran =
           for
             runtimes <- Runtimes.read(machine)
+            _ <- ZIO
+              .fromEither(histos.select.Selection.select(graph, projects))
+              .mapError(error =>
+                ModuleTestError.Compile(GraphCompileError.Target(error))
+              )
+            lock <- Resolve.readLock(repo).mapError(ModuleTestError.Lock(_))
             cells <- GraphCompile
-              .console(repo, graph, projects, jdk, runtimes.native)
+              .console(
+                histos.zinc
+                  .CompileSession(repo, graph, jdk, runtimes.native, lock),
+                projects,
+                None
+              )
               .mapError(ModuleTestError.Compile(_))
               .mapZIO { feed =>
                 val sent = feed match
@@ -409,7 +425,7 @@ object Calls:
                 )
               )
             _ <- ModuleTest
-              .suites(
+              .suitesLocked(
                 TestRun(
                   repo,
                   graph,
@@ -424,7 +440,8 @@ object Calls:
                         .Out(Lines.compilingTests(module, version, platform))
                     ).ignore
                 ),
-                cells.toList
+                cells.toList,
+                lock
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>

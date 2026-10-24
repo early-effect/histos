@@ -1,8 +1,10 @@
 package histos.zinc
 
-import histos.jdk.{JdkVersion, Sha256}
+import histos.jdk.JdkRuntime
+import histos.jdk.Sha256
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
+import histos.resolve.{LockedTools, ResolveError}
 
 import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
@@ -92,6 +94,7 @@ enum ToolchainMiss:
       s"the ${requested.value} fetch brought Scala library ${found.value}"
 
 enum CompileError:
+  case Resolved(error: ResolveError)
   case UnsupportedPlatform(platform: Platform)
   case UnsupportedScala(version: ScalaVersion)
   case NoSources
@@ -100,9 +103,12 @@ enum CompileError:
   case Toolchain(miss: ToolchainMiss)
   case Io(failure: histos.workspace.IoFailure)
   case JsLibrary(miss: JsLibraryMiss)
+  case NativeFetch(error: histos.native.NativeFetch)
+  case NativeOrigin(error: histos.native.NativeToolchainError)
   case NativeLibrary(text: String)
 
   def message: String = this match
+    case Resolved(error)               => error.message
     case UnsupportedPlatform(platform) => s"compile does not support $platform"
     case UnsupportedScala(version)     =>
       s"compile supports Scala 3 and Scala 2.13, not ${version.value}"
@@ -113,6 +119,8 @@ enum CompileError:
     case Toolchain(miss)     => miss.message
     case Io(failure)         => failure.message
     case JsLibrary(miss)     => miss.message
+    case NativeFetch(error)  => error.message
+    case NativeOrigin(error) => error.message
     case NativeLibrary(text) => text
 
 /** Why the Scala.js standard library did not arrive. The compiler's `-scalajs`
@@ -126,12 +134,10 @@ enum JsLibraryMiss:
     case Unavailable => "the Scala.js library could not be fetched"
     case Empty       => "the Scala.js library resolve was empty"
 
-final case class ResolvedJdk(home: Path, version: JdkVersion)
-
 final case class CompileToolchain(
     version: ScalaVersion,
     platform: Platform,
-    jdk: ResolvedJdk,
+    jdk: JdkRuntime,
     flags: ScalacFlags
 )
 
@@ -141,7 +147,9 @@ final case class CompileRequest(
     classpath: List[Path],
     classes: Path,
     analysis: Path,
-    artifactHashes: List[Sha256]
+    artifactHashes: List[Sha256],
+    compilationTools: List[histos.resolve.ToolInput] = Nil,
+    compilerPlugins: List[histos.resolve.ToolInput] = Nil
 )
 
 final case class CompileOutput(classes: Path, classFiles: Int, key: Sha256)
@@ -206,43 +214,26 @@ object CompileProblem:
   * `-sourceroot` carries a path.
   */
 object SemanticDb:
-  val Revision: String = "4.17.3"
-
-  /** The Scala 2.13 compiler plugin. Scala 3 emits SemanticDB without this jar.
-    */
-  def plugin(version: ScalaVersion): IO[CompileError, Path] =
-    ZIO
-      .attemptBlockingInterrupt(fetchPlugin(version))
-      .mapError(_ => CompileError.Toolchain(ToolchainMiss.Plugin(version)))
-      .flatMap(ZIO.fromEither)
-
-  private def fetchPlugin(version: ScalaVersion): Either[CompileError, Path] =
-    val artifact = s"semanticdb-scalac_${version.value}"
-    val dependency = coursier.Dependency(
-      coursier.Module(
-        coursier.Organization("org.scalameta"),
-        coursier.ModuleName(artifact)
-      ),
-      coursier.version.VersionConstraint(Revision)
-    )
-    val got = coursier
-      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
-      .addDependencies(dependency)
-      .eitherResult()
-    got match
-      case Left(_) =>
-        Left(CompileError.Toolchain(ToolchainMiss.Plugin(version)))
-      case Right(result) =>
-        val found = result.files
-          .map(_.toPath)
-          .filter(path =>
-            Option(path.getFileName)
-              .exists(_.toString.startsWith("semanticdb-scalac_"))
-          )
-          .toList
-        found match
-          case path :: Nil => Right(path)
-          case _ => Left(CompileError.Toolchain(ToolchainMiss.Plugin(version)))
+  def plugin(version: ScalaVersion): ZIO[LockedTools, CompileError, Path] =
+    ZIO.serviceWithZIO[LockedTools]: tools =>
+      val request =
+        histos.zinc.CompilerRequests.semanticdb(
+          version,
+          tools.catalog,
+          tools.repositories
+        )
+      tools
+        .materialize(request)
+        .mapError(CompileError.Resolved(_))
+        .flatMap: classpath =>
+          classpath.artifacts.find(artifact =>
+            request.roots.exists(root =>
+              root.organization == artifact.organization && root.name == artifact.name
+            )
+          ) match
+            case Some(artifact) => ZIO.succeed(artifact.path)
+            case None           =>
+              ZIO.fail(CompileError.Toolchain(ToolchainMiss.Plugin(version)))
 
   def argv(repo: Path, version: ScalaVersion): List[String] =
     val root = repo.toAbsolutePath.normalize.toString
@@ -253,6 +244,14 @@ object SemanticDb:
       case None => Nil
 
 object CompileKey:
+  def withTools(key: Sha256, hashes: List[Sha256]): Sha256 =
+    Sha256.of(
+      Chunk.fromArray(
+        (key.value + "\n" + hashes.map(_.value).mkString("\n"))
+          .getBytes(StandardCharsets.UTF_8)
+      )
+    )
+
   /** Identity of a compile. The classes directory is not part of it. Artifact
     * checksums are.
     */
@@ -262,14 +261,15 @@ object CompileKey:
       s"""${tool.version.value}
          |${tool.platform}
          |${tool.jdk.version.value}
+         |${histos.toolchain.Runtimes.identityToken(tool.jdk.identity)}
          |${tool.flags.canonical}
          |${sources.value}
          |${request.artifactHashes.map(_.value).mkString("\n")}
+         |${request.compilationTools.map(_.fingerprint.value).mkString("\n")}
          |""".stripMargin
     Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
 
 object JvmCompile:
-  val Scala390: ScalaVersion = ScalaVersion.trusted("3.9.0")
 
   def sourceDigest(sources: List[Path]): IO[CompileError, Sha256] = hashSources(
     sources
@@ -279,7 +279,7 @@ object JvmCompile:
       request: CompileRequest,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => ()
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then
       ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
@@ -293,7 +293,7 @@ object JvmCompile:
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then
       ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
@@ -320,7 +320,7 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => ()
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
        else
@@ -388,7 +388,7 @@ object JvmCompile:
     */
   private[histos] def scalaJars(
       version: ScalaVersion
-  ): IO[CompileError, List[Path]] =
+  ): ZIO[LockedTools, CompileError, List[Path]] =
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3) =>
         Scala3
@@ -410,7 +410,7 @@ object JvmCompile:
     */
   private[histos] def runtime(
       version: ScalaVersion
-  ): IO[CompileError, List[Path]] =
+  ): ZIO[LockedTools, CompileError, List[Path]] =
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3)     => Scala3.jars(version).map(_.runtime)
       case Some(ScalaSeries.Scala2(13)) =>
@@ -444,7 +444,7 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit = _ => ()
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then
       ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
@@ -468,7 +468,7 @@ object JvmCompile:
       stdlib: Option[List[Path]] = None,
       key: Sha256,
       pool: Option[CompilerPool] = None
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     pool match
       case Some(found) => drive(found, request, extra, hear, stdlib, key)
       case None        =>
@@ -483,39 +483,70 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
       key: Sha256
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     val version = request.toolchain.version
-    ScalaSeries.of(version) match
-      case Some(ScalaSeries.Scala3) =>
-        Scala3
-          .jars(version)
-          .flatMap: toolchain =>
-            pool.compile(
-              request,
-              stdlib.getOrElse(toolchain.runtime),
-              toolchain.compilerClasspath,
-              toolchain.bridgeJar,
-              extra,
-              hear,
-              key
-            )
-      case Some(ScalaSeries.Scala2(13)) =>
-        for
-          jars <- Scala213.jars(version)
-          plugin <- SemanticDb.plugin(version)
-          argv = s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra
-          compiled <- pool.compile(
-            request,
-            jars.runtime,
-            jars.compilerClasspath,
-            jars.bridgeJar,
-            argv,
-            hear,
-            key
+    ZIO.serviceWithZIO[LockedTools]: tools =>
+      for
+        compiler <- tools
+          .selected(
+            histos.zinc.CompilerRequests.compiler(version, tools.repositories)
           )
-        yield compiled
-      case _ =>
-        ZIO.fail(CompileError.UnsupportedScala(version))
+          .mapError(CompileError.Resolved(_))
+        output <- ScalaSeries.of(version) match
+          case Some(ScalaSeries.Scala3) =>
+            Scala3
+              .jars(version)
+              .flatMap: toolchain =>
+                val inputs =
+                  compiler :: request.compilerPlugins ++ request.compilationTools
+                pool.compile(
+                  request,
+                  CompilerArtifacts(
+                    stdlib.getOrElse(toolchain.runtime),
+                    toolchain.compilerClasspath,
+                    toolchain.bridgeJar,
+                    inputs
+                  ),
+                  extra,
+                  hear,
+                  CompileKey.withTools(
+                    key,
+                    (compiler :: request.compilerPlugins).map(_.fingerprint)
+                  )
+                )
+          case Some(ScalaSeries.Scala2(13)) =>
+            for
+              jars <- Scala213.jars(version)
+              semantic <- tools
+                .selected(
+                  histos.zinc.CompilerRequests
+                    .semanticdb(version, tools.catalog, tools.repositories)
+                )
+                .mapError(CompileError.Resolved(_))
+              plugin <- SemanticDb.plugin(version)
+              inputs = List(
+                compiler,
+                semantic
+              ) ++ request.compilerPlugins ++ request.compilationTools
+              compiled <- pool.compile(
+                request,
+                CompilerArtifacts(
+                  jars.runtime,
+                  jars.compilerClasspath,
+                  jars.bridgeJar,
+                  inputs
+                ),
+                s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra,
+                hear,
+                CompileKey.withTools(
+                  key,
+                  (List(compiler, semantic) ++ request.compilerPlugins)
+                    .map(_.fingerprint)
+                )
+              )
+            yield compiled
+          case _ => ZIO.fail(CompileError.UnsupportedScala(version))
+      yield output
 
   /** One compile against a pooled compiler. The analysis file is the previous
     * result and the next one.
@@ -544,7 +575,12 @@ object JvmCompile:
       reporter,
       None,
       None,
-      Array.empty[xsbti.T2[String, String]]
+      Array(new xsbti.T2[String, String]:
+        def get1(): String = "histos.toolchain"
+        def get2(): String =
+          prepared.toolFingerprint + "\n" + request.compilationTools
+            .map(_.fingerprint.value)
+            .mkString("\n"))
     )
     val classpath = (request.classes :: prepared.runtime ++ request.classpath)
       .map(converter.toVirtualFile)
@@ -586,8 +622,7 @@ object JvmCompile:
       dir: Path
   ): PreviousResult =
     val got = FileAnalysisStore.binary(dir.resolve("inc.zip").toFile).get()
-    if got.isPresent then zinc.previousResult(got.get)
-    else zinc.emptyPreviousResult
+    got.toScala.fold(zinc.emptyPreviousResult)(zinc.previousResult)
 
   private def countClasses(root: Path): Int =
     if !Files.isDirectory(root) then 0
@@ -604,20 +639,23 @@ object JvmCompile:
 
 private final class CollectingReporter(hear: CompileProblem => Unit)
     extends xsbti.Reporter:
-  private var found: List[xsbti.Problem] = Nil
+  private val found =
+    new java.util.concurrent.ConcurrentLinkedQueue[xsbti.Problem]
 
   def diagnostics: List[CompileDiagnostic] =
-    found.reverse.map(problem =>
+    found.iterator.asScala.toList.map(problem =>
       CompileDiagnostic.fromCompiler(problem.message)
     )
 
-  def reset(): Unit = found = Nil
-  def hasErrors: Boolean = found.exists(_.severity == xsbti.Severity.Error)
-  def hasWarnings: Boolean = found.exists(_.severity == xsbti.Severity.Warn)
+  def reset(): Unit = found.clear()
+  def hasErrors: Boolean =
+    found.iterator.asScala.exists(_.severity == xsbti.Severity.Error)
+  def hasWarnings: Boolean =
+    found.iterator.asScala.exists(_.severity == xsbti.Severity.Warn)
   def printSummary(): Unit = ()
-  def problems(): Array[xsbti.Problem] = found.reverse.toArray
+  def problems(): Array[xsbti.Problem] = found.iterator.asScala.toArray
   def log(problem: xsbti.Problem): Unit =
-    found = problem :: found
+    found.add(problem)
     hear(CompileProblem.fromZinc(problem))
   def comment(position: xsbti.Position, message: String): Unit = ()
 end CollectingReporter

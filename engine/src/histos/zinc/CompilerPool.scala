@@ -1,10 +1,10 @@
 package histos.zinc
 
+import histos.resolve.LockedTools
 import histos.workspace.{IoFailure, IoFault}
 
 import java.net.URLClassLoader
-
-import scala.util.control.NonFatal
+import java.nio.file.Path
 
 import sbt.internal.inc.{ScalaInstance, ZincUtil}
 import xsbti.compile.{
@@ -27,27 +27,33 @@ private[zinc] final class Prepared(
     val bridge: java.nio.file.Path,
     val runtime: List[java.nio.file.Path],
     val compilerJars: List[java.nio.file.Path],
-    loaders: List[URLClassLoader],
-    val id: Int
-):
-  private[zinc] def close(): Unit =
-    loaders.foreach(loader =>
-      try loader.close()
-      catch case NonFatal(_) => ()
-    )
+    val id: Int,
+    val toolFingerprint: String
+)
 
 /** Version, JDK, and the jars the compiler itself loads. The project's
   * classpath is not part of the key.
   */
 private[zinc] final case class CompilerKey(
-    version: String,
-    jdk: String,
-    runtime: List[String],
-    compiler: List[String],
-    bridge: String
+    version: histos.ScalaVersion,
+    jdk: Path,
+    runtime: List[Path],
+    compiler: List[Path],
+    bridge: Path,
+    hashes: List[histos.jdk.Sha256],
+    jdkIdentity: histos.toolchain.RuntimeIdentity
+)
+
+private[zinc] final case class CompilerArtifacts(
+    runtime: List[Path],
+    compiler: List[Path],
+    bridge: Path,
+    inputs: List[histos.resolve.ToolInput]
 )
 
 private[zinc] final class CompilerPool(
+    scope: Scope,
+    tools: LockedTools,
     made: Ref[Int],
     held: Ref[Map[CompilerKey, Prepared]],
     permits: Ref[Map[CompilerKey, Semaphore]],
@@ -57,19 +63,19 @@ private[zinc] final class CompilerPool(
 
   def compile(
       request: CompileRequest,
-      runtime: List[java.nio.file.Path],
-      compilerJars: List[java.nio.file.Path],
-      bridge: java.nio.file.Path,
+      artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
       digest: histos.jdk.Sha256
   ): IO[CompileError, CompileOutput] =
     val id = CompilerKey(
-      request.toolchain.version.value,
-      request.toolchain.jdk.home.toString,
-      runtime.map(_.toString),
-      compilerJars.map(_.toString),
-      bridge.toString
+      request.toolchain.version,
+      request.toolchain.jdk.home,
+      artifacts.runtime,
+      artifacts.compiler,
+      artifacts.bridge,
+      artifacts.inputs.map(_.fingerprint),
+      request.toolchain.jdk.identity
     )
     permit(id).flatMap: sem =>
       sem.withPermit:
@@ -88,8 +94,10 @@ private[zinc] final class CompilerPool(
       have.get(id) match
         case Some(found) => ZIO.succeed(found)
         case None        =>
-          CompilerPool
-            .open(id)
+          scope
+            .extend(
+              CompilerPool.open(id, tools)
+            )
             .tap: created =>
               held.update(_.updated(id, created)) *> made.update(_ + 1)
 
@@ -108,36 +116,32 @@ private[zinc] final class CompilerPool(
                     .tap(created => permits.update(_.updated(id, created)))
 
 private[zinc] object CompilerPool:
-  def make: ZIO[Scope, Nothing, CompilerPool] =
+  def make: ZIO[Scope & LockedTools, Nothing, CompilerPool] =
     for
+      scope <- ZIO.service[Scope]
+      tools <- ZIO.service[LockedTools]
       made <- Ref.make(0)
       held <- Ref.make(Map.empty[CompilerKey, Prepared])
       permits <- Ref.make(Map.empty[CompilerKey, Semaphore])
       guard <- Semaphore.make(1)
-      _ <- ZIO.addFinalizer(
-        held.get.flatMap(have =>
-          ZIO.foreachDiscard(have.values)(item =>
-            ZIO.attemptBlocking(item.close()).ignore
-          )
-        )
-      )
-    yield CompilerPool(made, held, permits, guard)
+    yield CompilerPool(scope, tools, made, held, permits, guard)
 
-  private[zinc] def open(key: CompilerKey): IO[CompileError, Prepared] =
-    val version = histos.ScalaVersion.trusted(key.version)
+  private[zinc] def open(
+      key: CompilerKey,
+      tools: LockedTools
+  ): ZIO[Scope, CompileError, Prepared] =
+    val version = key.version
     ScalaSeries.of(version) match
       case Some(ScalaSeries.Scala3) =>
         Scala3
           .jars(version)
-          .flatMap(toolchain =>
-            ZIO.attemptBlocking(scala3(key, toolchain)).mapError(failed)
-          )
+          .provide(zio.ZLayer.succeed(tools))
+          .flatMap(toolchain => scala3(key, toolchain))
       case Some(ScalaSeries.Scala2(13)) =>
         Scala213
           .jars(version)
-          .flatMap(toolchain =>
-            ZIO.attemptBlocking(scala213(key, toolchain)).mapError(failed)
-          )
+          .provide(zio.ZLayer.succeed(tools))
+          .flatMap(toolchain => scala213(key, toolchain))
       case _ =>
         ZIO.fail(CompileError.UnsupportedScala(version))
 
@@ -147,56 +151,86 @@ private[zinc] object CompilerPool:
       .getOrElse(thrown.getClass.getName)
     CompileError.Failed(List(CompileDiagnostic.fromCompiler(text)))
 
-  private def scala3(key: CompilerKey, toolchain: Scala3.Toolchain): Prepared =
-    val loader = toolchain.openLoader(getClass.getClassLoader)
-    val library = libraryLoader(key.runtime)
-    val instance = instanceOf(key, loader, library)
-    val options = ClasspathOptionsUtil.noboot(key.version)
-    val scalac = ZincUtil.scalaCompiler(instance, toolchain.bridgeJar, options)
-    val zinc = new sbt.internal.inc.IncrementalCompilerImpl
-    Prepared(
-      zinc.compilers(
-        instance,
-        options,
-        Some(java.nio.file.Path.of(key.jdk)),
-        scalac
-      ),
-      CompilerCache.fresh,
-      toolchain.bridgeJar,
-      key.runtime.map(java.nio.file.Path.of(_)),
-      key.compiler.map(java.nio.file.Path.of(_)),
-      List(loader, library),
-      Prepared.next
-    )
+  private def scala3(
+      key: CompilerKey,
+      toolchain: Scala3.Toolchain
+  ): ZIO[Scope, CompileError, Prepared] =
+    for
+      loader <- acquireLoader(toolchain.openLoader(getClass.getClassLoader))
+      library <- acquireLoader(libraryLoader(key.runtime))
+      ready <- ZIO
+        .attemptBlocking {
+          val instance = instanceOf(key, loader, library)
+          val options = ClasspathOptionsUtil.noboot(key.version.value)
+          val scalac =
+            ZincUtil.scalaCompiler(instance, toolchain.bridgeJar, options)
+          val zinc = new sbt.internal.inc.IncrementalCompilerImpl
+          Prepared(
+            zinc.compilers(
+              instance,
+              options,
+              Some(key.jdk),
+              scalac
+            ),
+            CompilerCache.fresh,
+            toolchain.bridgeJar,
+            key.runtime,
+            key.compiler,
+            Prepared.next,
+            key.version.value + "\n" + histos.toolchain.Runtimes
+              .identityToken(key.jdkIdentity) + "\n" + key.hashes
+              .map(_.value)
+              .mkString("\n")
+          )
+        }
+        .mapError(failed)
+    yield ready
 
   private def scala213(
       key: CompilerKey,
       toolchain: Scala213.Toolchain
-  ): Prepared =
-    val loader = toolchain.openLoader()
-    val library = libraryLoader(key.runtime)
-    val instance = instanceOf(key, loader, library)
-    val options = ClasspathOptionsUtil.noboot(key.version)
-    val scalac = ZincUtil.scalaCompiler(instance, toolchain.bridgeJar, options)
-    val zinc = new sbt.internal.inc.IncrementalCompilerImpl
-    Prepared(
-      zinc.compilers(
-        instance,
-        options,
-        Some(java.nio.file.Path.of(key.jdk)),
-        scalac
-      ),
-      CompilerCache.fresh,
-      toolchain.bridgeJar,
-      key.runtime.map(java.nio.file.Path.of(_)),
-      key.compiler.map(java.nio.file.Path.of(_)),
-      List(loader, library),
-      Prepared.next
+  ): ZIO[Scope, CompileError, Prepared] =
+    for
+      loader <- acquireLoader(toolchain.openLoader())
+      library <- acquireLoader(libraryLoader(key.runtime))
+      ready <- ZIO
+        .attemptBlocking {
+          val instance = instanceOf(key, loader, library)
+          val options = ClasspathOptionsUtil.noboot(key.version.value)
+          val scalac =
+            ZincUtil.scalaCompiler(instance, toolchain.bridgeJar, options)
+          val zinc = new sbt.internal.inc.IncrementalCompilerImpl
+          Prepared(
+            zinc.compilers(
+              instance,
+              options,
+              Some(key.jdk),
+              scalac
+            ),
+            CompilerCache.fresh,
+            toolchain.bridgeJar,
+            key.runtime,
+            key.compiler,
+            Prepared.next,
+            key.version.value + "\n" + histos.toolchain.Runtimes
+              .identityToken(key.jdkIdentity) + "\n" + key.hashes
+              .map(_.value)
+              .mkString("\n")
+          )
+        }
+        .mapError(failed)
+    yield ready
+
+  private[zinc] def acquireLoader(
+      make: => URLClassLoader
+  ): ZIO[Scope, CompileError, URLClassLoader] =
+    ZIO.acquireRelease(ZIO.attemptBlocking(make).mapError(failed))(loader =>
+      ZIO.attemptBlocking(loader.close()).ignore
     )
 
-  private def libraryLoader(jars: List[String]): URLClassLoader =
+  private def libraryLoader(jars: List[Path]): URLClassLoader =
     new URLClassLoader(
-      jars.map(path => java.nio.file.Path.of(path).toUri.toURL).toArray,
+      jars.map(_.toUri.toURL).toArray,
       ClassLoader.getPlatformClassLoader
     )
 
@@ -205,17 +239,17 @@ private[zinc] object CompilerPool:
       compiler: ClassLoader,
       library: ClassLoader
   ): ScalaInstance =
-    val runtime = key.runtime.map(java.nio.file.Path.of(_).toFile).toArray
-    val jars = key.compiler.map(java.nio.file.Path.of(_).toFile).toArray
+    val runtime = key.runtime.map(_.toFile).toArray
+    val jars = key.compiler.map(_.toFile).toArray
     new ScalaInstance(
-      key.version,
+      key.version.value,
       compiler,
       compiler,
       library,
       runtime,
       jars,
       runtime ++ jars,
-      Some(key.version)
+      Some(key.version.value)
     )
 
 private[zinc] object Prepared:

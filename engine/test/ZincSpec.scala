@@ -1,5 +1,6 @@
 package histos.zinc
 
+import histos.jdk.JdkRuntime
 import histos.jdk.{JdkMajor, JdkVersion, Sha256}
 import histos.workspace.{IoFailure, IoFault}
 import histos.schedule.{
@@ -34,12 +35,17 @@ object ZincSpec extends ZIOSpecDefault:
       "flags, the Scala version, the platform, the JDK, and artifact checksums are part of the key"
     ):
       val base =
-        sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390)
+        sample(
+          ScalacFlags.empty,
+          v21,
+          Platform.Jvm,
+          histos.ScalaVersion("3.9.0")
+        )
       val flags = sample(
         ScalacFlags.of(ScalacFlag.EncodingUtf8),
         v21,
         Platform.Jvm,
-        JvmCompile.Scala390
+        histos.ScalaVersion("3.9.0")
       )
       val older = sample(
         ScalacFlags.empty,
@@ -47,9 +53,19 @@ object ZincSpec extends ZIOSpecDefault:
         Platform.Jvm,
         ScalaVersion.trusted("3.8.1")
       )
-      val js = sample(ScalacFlags.empty, v21, Platform.Js, JvmCompile.Scala390)
+      val js = sample(
+        ScalacFlags.empty,
+        v21,
+        Platform.Js,
+        histos.ScalaVersion("3.9.0")
+      )
       val jdk17 =
-        sample(ScalacFlags.empty, v17, Platform.Jvm, JvmCompile.Scala390)
+        sample(
+          ScalacFlags.empty,
+          v17,
+          Platform.Jvm,
+          histos.ScalaVersion("3.9.0")
+        )
       val jar = Sha256.of(Chunk.fromArray("jar".getBytes))
       val hashed = base.copy(artifactHashes = List(jar))
       val key = CompileKey.of(base, sha)
@@ -62,10 +78,41 @@ object ZincSpec extends ZIOSpecDefault:
         key == CompileKey.of(base, sha)
       )
     ,
+    test("locked tool bytes and local runtime identity affect compile keys"):
+      val request = sample(
+        ScalacFlags.empty,
+        v21,
+        Platform.Jvm,
+        histos.ScalaVersion("3.9.0")
+      )
+      val key = CompileKey.of(request, sha)
+      val one = Sha256.of(Chunk.fromArray(Array[Byte](1)))
+      val two = Sha256.of(Chunk.fromArray(Array[Byte](2)))
+      val changedRuntime = request.copy(toolchain =
+        request.toolchain.copy(jdk =
+          request.toolchain.jdk.copy(identity =
+            histos.toolchain.RuntimeIdentity
+              .Local(request.toolchain.jdk.home, two)
+          )
+        )
+      )
+      assertTrue(
+        CompileKey.withTools(key, List(one)) != CompileKey
+          .withTools(key, List(two)),
+        CompileKey.withTools(key, List(one)) == CompileKey
+          .withTools(key, List(one)),
+        key != CompileKey.of(changedRuntime, sha)
+      )
+    ,
     test(
       "js and Scala 2.12 are rejected, and Scala 3 and 2.13 reach the compiler"
     ):
-      val js = sample(ScalacFlags.empty, v21, Platform.Js, JvmCompile.Scala390)
+      val js = sample(
+        ScalacFlags.empty,
+        v21,
+        Platform.Js,
+        histos.ScalaVersion("3.9.0")
+      )
       val scala212 = sample(
         ScalacFlags.empty,
         v21,
@@ -108,7 +155,12 @@ object ZincSpec extends ZIOSpecDefault:
           api <- located(classOf[histos.HistosBuild])
           onCompiler <- JvmCompile
             .compile(
-              sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390)
+              sample(
+                ScalacFlags.empty,
+                v21,
+                Platform.Jvm,
+                histos.ScalaVersion("3.9.0")
+              )
                 .copy(
                   classes = root.resolve("c1"),
                   analysis = root.resolve("a1"),
@@ -118,7 +170,12 @@ object ZincSpec extends ZIOSpecDefault:
             .either
           onApi <- JvmCompile
             .compile(
-              sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390)
+              sample(
+                ScalacFlags.empty,
+                v21,
+                Platform.Jvm,
+                histos.ScalaVersion("3.9.0")
+              )
                 .copy(
                   classes = root.resolve("c2"),
                   analysis = root.resolve("a2"),
@@ -157,7 +214,12 @@ object ZincSpec extends ZIOSpecDefault:
           }
           onJar <- JvmCompile
             .compile(
-              sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390)
+              sample(
+                ScalacFlags.empty,
+                v21,
+                Platform.Jvm,
+                histos.ScalaVersion("3.9.0")
+              )
                 .copy(
                   classes = root.resolve("c1"),
                   analysis = root.resolve("a1"),
@@ -167,7 +229,12 @@ object ZincSpec extends ZIOSpecDefault:
             .either
           onDir <- JvmCompile
             .compile(
-              sample(ScalacFlags.empty, v21, Platform.Jvm, JvmCompile.Scala390)
+              sample(
+                ScalacFlags.empty,
+                v21,
+                Platform.Jvm,
+                histos.ScalaVersion("3.9.0")
+              )
                 .copy(
                   classes = root.resolve("c2"),
                   analysis = root.resolve("a2"),
@@ -183,6 +250,89 @@ object ZincSpec extends ZIOSpecDefault:
 
   private val builds = suite("zinc")(
     test(
+      "production compiler keys ignore unused tools and reject corruption before a cache hit"
+    ):
+      ZIO.scoped:
+        for
+          root <- temp
+          source <- ZIO.attempt(write(root, "Hello.scala", hello))
+          jdk <- running
+          request = liveRequest(root, source, jdk)
+          tools <- ZIO.service[histos.resolve.LockedTools]
+          first <- JvmCompile.compile(request).provide(ZLayer.succeed(tools))
+          unused = histos.resolve.LockedTool(
+            histos.resolve.ToolId(
+              histos.resolve.ToolRole.JsEnvironment,
+              histos.ScalaVersion("3.9.0"),
+              histos.resolve.ToolVariant.Firefox
+            ),
+            Nil,
+            Nil,
+            Nil,
+            Nil
+          )
+          second <- JvmCompile
+            .compile(request)
+            .provide(
+              ZLayer.succeed(
+                tools.copy(lock =
+                  tools.lock.copy(tools = tools.lock.tools :+ unused)
+                )
+              )
+            )
+          broken = tools.copy(lock =
+            tools.lock.copy(tools =
+              tools.lock.tools.map(cell =>
+                if cell.id.role == histos.resolve.ToolRole.Compiler && cell.id.scalaVersion == request.toolchain.version
+                then
+                  cell.copy(artifacts =
+                    cell.artifacts.map(_.copy(sha256 = Sha256.of(Chunk.empty)))
+                  )
+                else cell
+              )
+            )
+          )
+          rejected <- JvmCompile
+            .compile(request)
+            .provide(ZLayer.succeed(broken))
+            .either
+        yield assertTrue(
+          first.key == second.key,
+          rejected.left.toOption.exists {
+            case CompileError.Resolved(
+                  histos.resolve.ResolveError.Checksum(_, _, _)
+                ) =>
+              true;
+            case _ => false
+          }
+        )
+    ,
+    test("compiler loader leases close when later construction fails"):
+      val compilerClosed = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val libraryClosed = new java.util.concurrent.atomic.AtomicBoolean(false)
+      def loader(closed: java.util.concurrent.atomic.AtomicBoolean) =
+        new java.net.URLClassLoader(Array.empty[java.net.URL]):
+          override def close(): Unit =
+            super.close()
+            closed.set(true)
+      ZIO
+        .scoped(
+          for
+            _ <- CompilerPool.acquireLoader(loader(compilerClosed))
+            _ <- CompilerPool.acquireLoader(loader(libraryClosed))
+            result <- ZIO.fail(CompileError.NoSources)
+          yield result
+        )
+        .either
+        .map(result =>
+          assertTrue(
+            result == Left(CompileError.NoSources),
+            compilerClosed.get(),
+            libraryClosed.get()
+          )
+        )
+    ,
+    test(
       "the second identical compile is a cache hit, and a changed source is not"
     ):
       ZIO.scoped:
@@ -197,9 +347,11 @@ object ZincSpec extends ZIOSpecDefault:
             .orElseFail(CompileError.NoSources)
           calls <- Ref.make(0)
           cache <- memory
+          tools <- ZIO.service[histos.resolve.LockedTools]
           local = (_: Action, _: String) =>
             calls.update(_ + 1) *> JvmCompile
               .compile(req)
+              .provide(ZLayer.succeed(tools))
               .map(_.classFiles.toString)
           run = (actionKey: Sha256) =>
             val action = Action(
@@ -381,7 +533,12 @@ object ZincSpec extends ZIOSpecDefault:
       CompileToolchain(
         scalaVersion,
         platform,
-        ResolvedJdk(Path.of("/jdks").resolve(version.value), version),
+        JdkRuntime(
+          Path.of("/jdks").resolve(version.value),
+          version,
+          histos.toolchain.RuntimeIdentity
+            .Local(Path.of("/jdks").resolve(version.value), sha)
+        ),
         flags
       ),
       Nil,
@@ -391,7 +548,7 @@ object ZincSpec extends ZIOSpecDefault:
       Nil
     )
 
-  private def running: zio.IO[GraphCompileError, ResolvedJdk] =
+  private def running: zio.IO[GraphCompileError, JdkRuntime] =
     GraphCompile.jdkHere
 
   private val namedTuple =
@@ -403,7 +560,7 @@ object ZincSpec extends ZIOSpecDefault:
   private def request(
       root: Path,
       source: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       version: ScalaVersion
   ): CompileRequest =
     CompileRequest(
@@ -418,11 +575,11 @@ object ZincSpec extends ZIOSpecDefault:
   private def liveRequest(
       root: Path,
       source: Path,
-      jdk: ResolvedJdk
+      jdk: JdkRuntime
   ): CompileRequest =
     CompileRequest(
       CompileToolchain(
-        JvmCompile.Scala390,
+        histos.ScalaVersion("3.9.0"),
         Platform.Jvm,
         jdk,
         ScalacFlags.empty
@@ -484,4 +641,12 @@ object ZincSpec extends ZIOSpecDefault:
     keys,
     banned,
     builds
+  ).provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+    histos.ToolFixture.jvm(
+      histos.ScalaVersion("3.9.0"),
+      histos.ScalaVersion("3.8.1"),
+      histos.ScalaVersion("2.13.15"),
+      histos.ScalaVersion("3.3.7"),
+      histos.ScalaVersion("3.10.0")
+    )
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

@@ -5,7 +5,7 @@ import histos.workspace.{IoFailure, IoFault}
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
 import histos.cli.{CliParseError, Command}
 import histos.cache.ContentStore
-import histos.jdk.{Machine, Os, Settled}
+import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{ApiJar, LoadError, Loader}
 import histos.resolve.{
@@ -32,6 +32,9 @@ import zio.test.*
 
 object ProtocolSpec extends ZIOSpecDefault:
   private object IdleResolve extends Resolve:
+    def resolveTool(
+        request: histos.resolve.ToolRequest
+    ): IO[ResolveError, Classpath] = ZIO.fail(ResolveError.NoTool(request.id))
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -56,7 +59,7 @@ object ProtocolSpec extends ZIOSpecDefault:
     ZLayer.make[Loader & histos.resolve.Resolve & histos.cache.ContentStore](
       Loader.live,
       ZLayer.succeed(IdleResolve),
-      ZLayer.succeed(ContentStore.in(dir.resolve("cache"))),
+      ZLayer.succeed(ContentStore.in(dir.resolve("cache")))
     )
   private val source =
     """import histos.*
@@ -114,11 +117,11 @@ object ProtocolSpec extends ZIOSpecDefault:
       env,
       dir.toString,
       Os.Linux,
+      histos.toolchain.Architecture.X86_64,
       dir.resolve("cache"),
       dir,
       None,
-      Settled.No,
-      NativeOrigin.read(env),
+      NativeOrigin.read(env)
     )
 
   private def writeJdk(dir: Path): Unit =
@@ -128,12 +131,8 @@ object ProtocolSpec extends ZIOSpecDefault:
     Files.writeString(jdk.resolve("bin").resolve("javac"), "")
     Files.writeString(jdk.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
     Files.writeString(
-      dir.resolve(".histos").resolve("jdk.lock"),
-      """major 21
-        |version 21.0.2
-        |url https://example.test/jdk.zip
-        |sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-        |""".stripMargin
+      dir.resolve(".histos/toolchain.local"),
+      jdk.toString + "\n"
     )
 
   private def readLines(pipe: LinePipe, n: Int): UIO[List[String]] =
@@ -227,12 +226,12 @@ object ProtocolSpec extends ZIOSpecDefault:
         yield
           val text = lines.mkString("\n")
           assertTrue(
-            text.contains("JavaHome"),
             text.contains("21.0.2"),
+            text.contains(dir.resolve("jdk").toString),
             !text.contains(""""isError":true""")
           )
     ,
-    test("toolchain reports a missing jdk lock"):
+    test("toolchain reports a missing JDK"):
       ZIO.scoped:
         for
           jar <- apiJar
@@ -257,10 +256,10 @@ object ProtocolSpec extends ZIOSpecDefault:
           val text = lines.mkString("\n")
           assertTrue(
             text.contains(""""isError":true"""),
-            text.contains("jdk.lock")
+            text.contains("21")
           )
     ,
-    test("a js graph without a node lock keeps the jdk decision"):
+    test("a js graph without Node keeps the jdk decision"):
       ZIO.scoped:
         for
           jar <- apiJar
@@ -304,8 +303,8 @@ object ProtocolSpec extends ZIOSpecDefault:
           val text = lines.mkString("\n")
           assertTrue(
             text.contains(""""isError":true"""),
-            text.contains("node.lock"),
-            text.contains("JavaHome")
+            text.contains("25"),
+            text.contains("21.0.2")
           )
     ,
     test("an unknown plugin task says it is not in the graph"):

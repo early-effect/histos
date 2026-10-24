@@ -1,112 +1,94 @@
 package histos.node
 
-import histos.jdk.{ArchiveSource, Machine}
+import histos.jdk.{Machine, Os}
+import histos.toolchain.{
+  LocalOverride,
+  LocalOverrideError,
+  RuntimeFiles,
+  RuntimeIdentity
+}
+import histos.workspace.IoFailure
 
-import java.nio.file.{Files, Path}
+import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** The lock that was read and the decision it produced. Printing is
-  * [[NodeToolchain.text]].
-  */
-final case class NodeSurvey(lock: NodeLock, resolution: NodeResolution)
+/** The Node a Js launch will run. */
+final case class NodeSurvey(
+    binary: NodeBinary,
+    version: NodeVersion,
+    identity: RuntimeIdentity
+)
+
+final case class NodeRuntime(
+    binary: NodeBinary,
+    version: NodeVersion,
+    identity: RuntimeIdentity
+)
 
 object NodeToolchain:
-  /** Read the Node decision. Does not download. A missing lock is an error: the
-    * caller already knows Js needs Node.
-    */
-  def explain(machine: Machine): IO[NodeError, NodeSurvey] =
-    readLock(machine.repo).flatMap:
-      case None       => ZIO.fail(NodeError.NoLock(lockPath(machine.repo)))
-      case Some(lock) =>
-        resolution(machine, lock).map(found => NodeSurvey(lock, found))
+  /** Scala.js Wasm needs Node 25, so every Js launch uses that floor. */
+  val Floor: NodeVersion =
+    NodeVersion.trusted("25", NodeMajor.trusted(25))
 
-  /** The `node` a Js launch runs: the one selected, or the locked archive
-    * staged into the cache.
-    */
-  def choose(machine: Machine): IO[NodeMiss, NodeBinary] =
-    for
-      survey <- explain(machine).mapError(NodeMiss.Unresolved(_))
-      home <- survey.resolution match
-        case NodeResolution.Selected(chosen, _) => ZIO.succeed(chosen.home)
-        case NodeResolution.OverrideRejected(reason, _) =>
-          ZIO.fail(NodeMiss.Rejected(reason))
-        case NodeResolution.Install(hint, _) => ZIO.fail(NodeMiss.Install(hint))
-        case NodeResolution.Provision(_, _)  =>
-          NodeStage
-            .stage(survey.lock, machine)
-            .mapBoth(
-              error => NodeMiss.Unresolved(NodeError.Stage(error)),
-              _.path
-            )
-      binary <- NodeProbe.binary(home).mapError(NodeMiss.Unresolved(_))
-    yield binary
+  def explain(machine: Machine): IO[NodeMiss, NodeSurvey] =
+    resolve(machine).map(runtime =>
+      NodeSurvey(runtime.binary, runtime.version, runtime.identity)
+    )
 
   def text(survey: NodeSurvey): String =
-    render(survey.lock, survey.resolution)
+    s"node ${survey.version.value} ${survey.binary.path}"
 
-  def render(lock: NodeLock, resolution: NodeResolution): String =
-    val tail = resolution match
-      case NodeResolution.Provision(_, _) =>
-        s"archive ${NodeLock.url(lock.source)}"
-      case _ => s"lock ${lock.version.value}"
-    Node.report(resolution) + "\n" + tail
-
-  private def resolution(
-      machine: Machine,
-      lock: NodeLock
-  ): IO[NodeError, NodeResolution] =
-    for
-      explicit <- readOverride(machine.repo)
-      input <- NodeLocations.probe(machine, explicit)
-      view <- NodeProbe.scan(input)
-    yield Node.resolve(lock.major, view)
-
-  private def readLock(repo: Path): IO[NodeError, Option[NodeLock]] =
-    val file = lockPath(repo)
-    ZIO
-      .attemptBlocking(Files.isRegularFile(file))
-      .mapError(_ => NodeError.Unreadable(file))
+  /** `node` on `PATH`, or the home in `node.local`. A missing binary or one
+    * older than [[Floor]] fails. Histos does not fetch Node.
+    */
+  def resolve(machine: Machine): IO[NodeMiss, NodeRuntime] =
+    readOverride(machine.repo)
+      .mapError(NodeMiss.Unresolved(_))
       .flatMap:
-        case false => ZIO.none
-        case true  =>
-          ZIO
-            .attemptBlocking(Files.readString(file))
-            .mapError(_ => NodeError.Unreadable(file))
-            .flatMap: text =>
-              ZIO
-                .fromEither(NodeLock.parse(text))
-                .mapBoth(NodeError.Lock(_), Some(_))
+        case Some(path) => accept(path)
+        case None       =>
+          val name = if machine.os == Os.Windows then "node.exe" else "node"
+          RuntimeFiles
+            .firstOnPath(machine.env.get("PATH"), List(name))
+            .mapError(error => NodeMiss.Unresolved(NodeError.Locations(error)))
+            .flatMap:
+              case Some(binary) =>
+                RuntimeFiles.homeOf(binary) match
+                  case Some(home) => accept(home)
+                  case None       => ZIO.fail(NodeMiss.Absent(Floor))
+              case None => ZIO.fail(NodeMiss.Absent(Floor))
+
+  private def accept(path: Path): IO[NodeMiss, NodeRuntime] =
+    for
+      home <- NodeProbe.home(path).mapError(NodeMiss.Unresolved(_))
+      _ <- ZIO
+        .fail(NodeMiss.Rejected(path, NodeReject.NoBinary))
+        .unless(home.hasBinary)
+      version <- ZIO
+        .fromEither(home.version)
+        .mapError(error =>
+          NodeMiss.Rejected(path, NodeReject.UnreadableVersion(error))
+        )
+      _ <- ZIO
+        .fail(NodeMiss.TooOld(Floor, version, path))
+        .unless(version.atLeast(Floor))
+      binary <- NodeProbe.binary(path).mapError(NodeMiss.Unresolved(_))
+      identity <- RuntimeFiles
+        .identity(path)
+        .mapError(failure => NodeMiss.Unresolved(NodeError.Io(failure)))
+    yield NodeRuntime(binary, version, identity)
 
   private def readOverride(repo: Path): IO[NodeError, Option[Path]] =
-    val file = repo.resolve(".histos").resolve("node.local")
-    ZIO
-      .attemptBlocking(Files.isRegularFile(file))
-      .mapError(_ => NodeError.Unreadable(file))
-      .flatMap:
-        case false => ZIO.none
-        case true  =>
-          ZIO
-            .attemptBlocking(Files.readString(file))
-            .mapError(_ => NodeError.Unreadable(file))
-            .flatMap: text =>
-              ZIO
-                .fromEither(parseOverride(text))
-                .mapBoth(NodeError.Override(_), Some(_))
-
-  private def parseOverride(text: String): Either[NodeOverrideError, Path] =
-    val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-    lines match
-      case Nil        => Left(NodeOverrideError.Empty)
-      case raw :: Nil =>
-        try
-          val path = Path.of(raw)
-          if path.isAbsolute then Right(path)
-          else Left(NodeOverrideError.Relative(raw))
-        catch
-          case _: java.nio.file.InvalidPathException =>
-            Left(NodeOverrideError.Invalid(raw))
-      case _ => Left(NodeOverrideError.Multiple)
-
-  private def lockPath(repo: Path): Path =
-    repo.resolve(".histos").resolve("node.lock")
+    LocalOverride
+      .read(repo.resolve(".histos/node.local"))
+      .mapError:
+        case failure: IoFailure       => NodeError.Io(failure)
+        case LocalOverrideError.Empty =>
+          NodeError.Override(NodeOverrideError.Empty)
+        case LocalOverrideError.Multiple =>
+          NodeError.Override(NodeOverrideError.Multiple)
+        case LocalOverrideError.Relative(raw) =>
+          NodeError.Override(NodeOverrideError.Relative(raw))
+        case LocalOverrideError.Invalid(raw) =>
+          NodeError.Override(NodeOverrideError.Invalid(raw))

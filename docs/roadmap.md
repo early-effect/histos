@@ -1,499 +1,162 @@
 # Histos roadmap
 
-**Status:** Draft for review
-**Date:** 2026-10-22
-**Baseline:** `main` at `7eeacb3`
-**Companion:** [audit.md](audit.md), the ledger every milestone below closes
+M0-M3 establish the kernel and resource ownership. M4 adds tool identity, the JDK and Node floors, and the launcher pin. Later milestones build on those contracts.
 
-This file states what Histos is for, what exists today, the architecture we are building toward, and the order of work. [architecture.md](architecture.md) describes the tree as built, and [plugins.md](plugins.md) is the plugin contract. M0 retired `plan.md` and turned `design.md` into `architecture.md`. "Design decision 12" below is the rule from that retired file that MCP results are the CLI text.
+[architecture.md](architecture.md) describes current source contracts. [audit.md](audit.md) preserves historical findings and owns every remaining concern. [plugins.md](plugins.md) is the current plugin contract. This roadmap is a plan, not another copy of implemented APIs.
 
-## Why Histos
+## Direction
 
-Scala deserves a build tool built from the language's best idea about effects.
+The build is immutable data. Work is a typed effect. Dependencies compose as Step values; Histos schedules them with bounded concurrency and independent failures as outcome data. Scoped construction owns compilers, classloaders, sockets, processes, temporary files and HTTP clients.
 
-sbt's task engine predates effect systems. Its settings and three scope axes form a macro language, AutoPlugin triggers change builds the author never named, and the meta-build is a second project with its own classpath. Mill made tasks cached functions, which was the right step, but a Mill task is plain Scala: failure is an exception or a `Result`, a long-lived resource is a worker with a close hook, and concurrency is the evaluator's thread pool. Those pieces do not compose the way an effect does.
+The CLI, server, BSP and MCP already share a graph, but not one application contract. The target is one Build service with typed requests, streamed events, reports and faults. Protocols become codecs; cancellation names a run rather than a task string.
 
-Histos treats a build as a typed value and every capability of the build as a ZIO effect. Effects compose, so compile, link, test, package, and publish are steps that combine. The `Histos` executor runs them in parallel along the dependency graph, keeps going past independent failures, and interrupts cleanly. Services and scoped layers own every resource a build opens: compilers, class loaders, child processes, sockets, temp directories, and HTTP clients. Aspects decorate capabilities the way `TestAspect` decorates a spec and heddle `Middleware` decorates routes: caching, remote send, timing, tracing, retries, permits, and sandboxing are decorations applied with `@@`.
+The lock is authoritative for the dependency and tool artifacts it records. A JDK or Node floor is a minimum already installed on the machine. `.histos/toolchain.local` and `.histos/node.local` name a home the user already chose. Neither declared inputs nor these locks make arbitrary plugin code, system packages, clang, or browsers hermetic. Portable source-root identity and a real sandbox remain distinct work.
 
-The same build serves a person at a terminal, Metals over BSP, and an agent over MCP, through one application service.
+## Delivered foundations and current scope
 
-## Principles
-
-1. **The build is a value.** Evaluating `histos.scala` yields an immutable, validated `ProjectGraph`. Literals for versions, coordinates, and names fail at compile time. The graph holds descriptions and the engine holds effects.
-2. **Every capability is a typed effect.** A build step is `Step[R, E, A]`: a stable identity, declared inputs, and a `ZIO[R & Scope, E, A]`. Built-in work and plugin work use the same type. What the cache may do with a step is a subtype (`LocalStep`, `CachedStep`, `HermeticStep`), so the compiler rejects caching a publish. Specific work gets domain aliases (`CompileStep`, `TestStep`).
-3. **Steps compose and `Histos` runs them.** Dependencies are step values, so the `Histos` executor sees the whole graph before it runs. A step starts when its own upstreams finish. An independent failure never hides another one: failures are data in the outcome.
-4. **Resources belong to services, and services come from scoped layers.** Anything that opens closes on success, failure, and interruption. Long-lived resources (a compiler instance, a build class loader, a socket) are pooled or versioned by a layer, and nothing escapes its scope.
-5. **Aspects decorate capabilities.** Cross-cutting behavior is a `StepAspect` applied with `@@`, composed like `TestAspect` and heddle `Middleware`. The build file attaches decorations as data, and the engine interprets them, so the graph stays pure.
-6. **Errors are typed all the way out.** Every service has an error enum. Adapters map platform failures at the boundary, with the path, coordinate, or URL and a reason enum. Wrapping nests the inner error. `message` is a rendering for surfaces. Tests match values.
-7. **The lock is the authority for every byte.** User dependencies, compilers, linkers, bridges, plugins, JDKs, and Node all resolve through the lock with a checksum. A cache key is portable across machines.
-8. **One application service, many surfaces.** The CLI, BSP, MCP, and the server wire are codecs over one `Build` service. A surface decodes, calls the service, and encodes.
-9. **Agent-native means typed.** The type rule holds on MCP too: every tool returns a typed report or a typed fault, and none returns a bare `String`. Agents receive streamed progress, and they cancel by run id.
-10. **The build describes CI, and CI does not repeat work.** The workflow is a render of the graph's needs, with a drift check. A job installs a tool only when the graph needs it. That install is keyed and restored. Seeding a cache is expected. Downloading the same browser, toolchain, or apt set on every run is waste.
-11. **Histos builds Histos at every step.** Each PR keeps `./histos test` and `./histos workflow --check` green on this repository and keeps the snapshot launcher loop working.
-
-## Where we are
-
-About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The house style holds in the basics: more than 100 error enums, opaque types with literal macros, and an `app` module with no `throw`, `return`, `null`, `var`, casts, or partial accessors. The gaps are architectural. Plugin tasks still go through the scheduler, most layers are `ZLayer.succeed` of an `object`, and errors are flattened to strings at the protocol edge. The step algebra is in `histos.step`. Compile cells run on `Histos`.
-
-| Capability | State | Notes |
+| Milestone | State | What is present |
 | --- | --- | --- |
-| Typed graph, literals, `BuildError` | Works | Reports the first error only. `Module` has 18 fields and many overloads (G1 to G3). |
-| Build file load, plugin header, `ApiBoundary` | Works | `graph` and `run` execute on threads that carry the build loader. A refusal lasts one run. |
-| Dependency resolution and lock | Works for module dependencies | Compilers, linkers, semanticdb, and bridges bypass the lock (L1). |
-| JVM compile, Scala 3 and 2.13, via Zinc | Works, incremental | Persisted analysis and a scoped compiler pool preserve unchanged outputs. A cell starts when its own upstreams finish. |
-| Failed cell does not cancel siblings | Compile yes, test no | P4. |
-| Test subprocess, providers, `testOnly`, `testQuick`, watch | Works | A stop kills every descendant of a live child and a JVM child's whole group, and one fiber reads each pipe. A descendant that outlives a node or native child (B42), a blocked Linux pipe read (B43), and the quick stamp (P6) need work. |
-| Scala.js link, run, test | Works on a prepared machine | Bridges are Scala source in strings, recompiled per run (P1, P2). Js runs on the Node that the lock and the selection choose. |
-| Scala Native link, run, test | Works on a prepared machine | `HISTOS_NATIVE` is read once per command, including plugin compile, and reaches compile, test, and link. Relinks from scratch (P2). |
-| JDK selection and provisioning | Selection and `file:` staging work | Staging unpacks zip and tar.gz into a scratch directory and moves it into place. An https lock is refused (L8). |
-| Node selection | Works | Js test and run launch the chosen Node. Staging takes a locked `file:` zip, tar.gz, or tar.xz. |
-| Local Maven publish | Works | One coordinate per platform cell (`core_3`, `core_sjs1_3`, `core_native0.5_3`). |
-| Snapshot upload | Works | `https`, or `http` on loopback. Credentials are a `Config.Secret`. Uploads go through heddle's scoped `Client`, and the unique version comes from the fiber's clock. |
-| Assembly | Works for this repository only | Hardcoded modules and main class (P8). |
-| Version catalog (zipx scheme) | Works | |
-| CI render and drift check | Works | Tool steps come from a marker file and a Boolean (C1). |
-| Plugins: loader, link strategies, run, CI jobs | Works against a fixture | No real plugin yet. |
-| Histos executor and action cache | Build steps and plugin cache adapter | `Histos` runs compile, test, publish, run, and plugin steps with a permit per resource class. The plugin cache adapter remains available for declared-output and remote-cache policy. |
-| Remote cache | In-memory stub | No client or configuration (D10). |
-| Server: attach, reload, reboot | Works | A command that attaches does not load the build. Reboot starts the replacement and the old JVM exits. Each BSP request reloads a changed build, and every spliced session hears `buildTarget/didChange`. |
-| BSP for Metals | Works on JVM | Single in-flight request, no cancel (A10). |
-| MCP | Works | String results, serial requests, no progress (A2, A8, A23). |
-| ACP | Dropped | Until an agent client needs the real protocol. `acp` stays a reserved command name. |
-
-## What we keep, change, and drop
-
-**Keep.** These parts of the vision earned their place:
-
-- The pure, validated graph with compile-time literals and exact Scala versions.
-- Explicit plugin enablement: a header names the jar and `use` names the plugin. The `ApiBoundary` class loader design. Plugins compile against `histos.api` only.
-- The lock as the authority, with checksums and no silent re-solve.
-- Separate classpaths per module, one subprocess per test cell, and continuation past independent failures.
-- One-shot batch by default, an opt-in warm server, and reload in the same JVM.
-- The frozen script launcher and a JVM engine.
-- Metals through a native BSP session. No Bloop export and no presentation compiler of our own.
-- Sendability through `Seal`, `Need`, and `Sendable.decide`.
-- zipx version identity and the rendered workflow with a drift check.
-- From the 2026-10-16 draft: one action type for local runs, the local cache, a remote cache, and later remote execution. Generators (protobuf, OpenAPI) as steps whose outputs feed compile. Publishers behind one interface, with credentials and signing as layers.
-
-**Change.**
-
-- A closed `TaskKind` plus hand-wired pipelines becomes `Step` values run by the `Histos` executor, with caching and remote send as aspects.
-- `ZLayer.succeed(object)` becomes services with constructor injection that own their resources in scoped layers, including a pooled compiler.
-- Per-platform copies become `PlatformBackend` layers.
-- Toolchain fetches outside the lock become locked tool cells.
-- String results on MCP become typed reports and typed faults. This retires design decision 12 (MCP results as CLI text).
-- CI tool steps from a marker file become steps derived from the graph's needs.
-- Anonymous `ModuleDef => ModuleDef` settings become recorded module aspects, and string notes become typed keys.
-- Errors flattened to `message` become nested enums.
-
-**Drop.**
-
-- ACP, until an agent client needs the real protocol.
-- Dead code still in the tree: `ToolchainView`, stub compile nodes, and test-only code in main sources.
-- Scala source generated as strings.
-- Design prose that narrates code line by line.
-
-## Target architecture
-
-The signatures below are sketches of unbuilt code, kept until each one lands and becomes a link. Sections that say a miniature proved them record what Scala accepted.
-
-### Steps
-
-`Step` lives in `histos.api`, under the package `histos.step`, so plugins build steps with the same type the engine uses. The api already depends on ZIO for `HistosPlugin.run`, and this commits to that dependency (decision 1).
-
-The types are [`Phase`](../api/src/histos/step/Model.scala), [`StepId`](../api/src/histos/step/Model.scala), [`StepInfo`](../api/src/histos/step/Model.scala), and [`Stored`](../api/src/histos/step/Model.scala).
-
-### Kinds are subtypes, names are aliases
-
-Steps differ in what the cache may do with them, and that difference belongs in the type. One rule decides between the two tools:
-
-- **Subtype** when `Histos` or an aspect treats the step differently. The compiler then rejects the wrong combination.
-- **Alias** when only the name changes, so signatures read like the domain.
-
-The kind is a covariant phantom parameter on one core class. The aliases hide it, so the name people write is still `Step[R, E, A]`.
-
-[`StepKind`](../api/src/histos/step/StepKind.scala) is `Local`, `Cached`, and `Hermetic`, with `Mixed` for a zip the cache cannot treat as one. The aliases and the constructors are [`Step`](../api/src/histos/step/Step.scala). [`Fits`](../api/src/histos/step/Fits.scala) is the evidence `@@` requires.
-
-Domain aliases sit on top of the kinds and live next to the services they name. The engine defines the built-in ones, and a plugin defines its own the same way.
-
-```scala
-type GenerateStep = HermeticStep[Generators, GenerateError, GeneratedSources]
-type CompileStep  = HermeticStep[Compilers, CompileError, CompiledCell]
-type LinkStep     = HermeticStep[Linkers, LinkError, Linked]
-type PackageStep  = HermeticStep[Workspace, PackageError, PackagedJar]
-type TestStep     = CachedStep[ChildProcess, TestError, TestReport]
-type PublishStep  = LocalStep[Publisher, PublishError, Published]
-type RunStep      = LocalStep[ChildProcess, ProgramError, ExitStatus]
-
-def compile(plan: CompilePlan): CompileStep =
-  Step.hermetic[CompiledCell](plan.info)(ZIO.serviceWithZIO[Compilers](_.compile(plan)))
-
-val linked: HermeticStep[Compilers & Linkers, CompileError | LinkError, Linked] =
-  compile(plan).andThenHermetic[Linked](info.link(cell)): classes =>
-    ZIO.serviceWithZIO[Linkers](_.link(classes))
-
-// A network generator is local, and its output is content, so the compile it feeds stays hermetic.
-val generated: LocalStep[Network, FetchError, GeneratedSources] = fetchSchema(url)
-val compiledGenerated =
-  generated.andThenHermetic[CompiledCell](info.compile(cell)): sources =>
-    ZIO.serviceWithZIO[Compilers](_.compile(plan.withSources(sources)))
-```
-
-What the kinds buy:
-
-- `publish @@ StepAspect.cached` and `run @@ StepAspect.remote` fail to compile. Today `Sendable.decide` catches them at runtime.
-- `testQuick` becomes `test @@ StepAspect.cached` over the step digest, which already covers every declared input. `SuiteStamp` and its incomplete stamp go away (P6).
-- `sandboxed` turns the original rule "tests become sendable only after the jail exists" into a type: a test is a `CachedStep` until the sandbox lifts it to `HermeticStep`.
-- A plugin task's kind is its type. The seal printed on the graph is read from the step, so the declaration and the effect cannot disagree.
-- `Histos` reads a runtime mirror of the kind, set by the same constructor that sets the phantom, together with the step's `Need`s. That is what `Sendable.decide` becomes.
-- A hermetic step keys its upstream by content. A comment-only edit that leaves the classes byte-identical makes link and package cache hits (early cutoff), and a network generator can feed a hermetic compile.
-
-ZIO-style shorthand such as `UStep[A]` and `URStep[R, A]` waits until the first infallible step needs it.
-
-**Proved by [`StepSpec`](../api/test/StepSpec.scala):**
-
-- `@@` keeps the kind: `compiled @@ timed @@ cached @@ remote` is still a `CompileStep`.
-- An aspect on the wrong kind is a compile error with a readable message, for example "this aspect decorates StepKind.Hermetic steps, and the step is StepKind.Local". That covers `remote` or `cached` on a local step, `remote` on a cached test, `remote` on a mapped cached step, and `remote` on a zip that mixes hermetic and local steps.
-- The aspect's kind is contravariant, so widening `remote` to an any-kind aspect is rejected, and the restriction cannot be bypassed by an upcast.
-- Composing aspects intersects their kinds in either order: `remote @@ timed` and `timed @@ remote` both decorate a compile and are both rejected on a test.
-- `zip` infers the weakest kind: hermetic with hermetic stays `HermeticStep`, and hermetic with local is `Step`.
-- The partially applied constructors infer `R` and `E` from the effect, and a dependent step's lambda input is already typed.
-- Error channels infer as unions: a compile, link, test, package chain is `CompileError | LinkError | TestError | PackageError`, and a zip adds a fifth type without widening.
-- A local step whose value has a codec feeds a hermetic step. A value without one fails with "Opaque has no Stored codec, so it cannot be cached or feed a hermetic step".
-- `map` keeps the kind, and `@@ remote` on a mapped compile decorates the compile.
-- `StepAspect.lift` accepts ZIO aspects, including `timeoutFail`, which adds its error to the union.
-- `sandboxed` lifts a cached step, after which `@@ remote` compiles.
-- The runner is a pattern match over the step ADT with no casts or unchecked patterns.
-- `@@` on a `zip` group decorates every member, the way `TestAspect` decorates a suite. `@@` on a dependent step or a mapped step decorates the step that does the work.
-
-**Left for implementation:**
-
-- A mixed zip is `StepKind.Mixed`, so the rejection names `Mixed` rather than the top trait.
-- The `Stored` codec for class directories hashes the class files. That is the cost of early cutoff.
-- How `Histos` performs on a large graph, measured in M3.
-
-### The `Histos` executor
-
-The executor is the `Histos` service, named for the tool the same way ZIO's effect type is named for its library. It lives in the engine package `histos.schedule`. `Scheduler` remains a narrow action-cache adapter for plugin cache policy, while all build orchestration enters through `Histos`. The root `histos` package is the api surface that `ApiBoundary` shows to plugins, so the executor stays out of it.
-
-`Histos` generalizes today's `SchedulerLive`: one promise gate per distinct `StepId`, digests from declared inputs plus the content hash of each upstream value, and execution as soon as a step's own upstreams finish. Parallelism is bounded per resource class (CPU-heavy compile, IO-heavy fetch, child processes).
-
-The service, the outcome, and the events are [`Histos`](../engine/src/histos/schedule/Histos.scala). `Parallelism` bounds each resource class. `StepAspect.traced` names the step in the log.
-
-`StepNote` carries diagnostics, suite events, and child output lines. The CLI renders events. BSP maps diagnostics to `build/publishDiagnostics`. MCP maps events to progress notifications.
-
-### Aspects
-
-[`StepAspect`](../api/src/histos/step/StepAspect.scala) has typed `cached`, `remote`, `identity`, `lift`, `timed`, and `traced` decorations. The engine's `ScheduleAspects` interprets local cache, declared outputs, remote lookup, and remote upload at the cache boundary.
-
-The aspect has heddle's `Middleware` shape, plus the lowest kind it accepts. It receives the step, including its key and codec, so a cache aspect can encode values without a cast. Because `K` is contravariant, an aspect for any kind applies everywhere, and a hermetic-only aspect applies to hermetic steps alone. The check is `Fits` evidence on `Step.@@`, which is what gives the readable message.
-
-```scala
-trait StepAspect[-R, +E, -K <: StepKind]:
-  def apply[R1 <: R, E1 >: E, A, K1 <: StepKind](step: Step.Leaf[R1, E1, A, K1]): Step.Leaf[R1, E1, A, K1]
-  /** The composite accepts only the steps both sides accept. */
-  def @@[R1 <: R, E1 >: E, K2 <: StepKind](that: StepAspect[R1, E1, K2]): StepAspect[R1, E1, K & K2]
-
-object StepAspect:
-  val identity: StepAspect[Any, Nothing, StepKind]
-  def lift[R, E](aspect: ZIOAspect[Nothing, R, E, Any, Nothing, Any]): StepAspect[R, E, StepKind]
-  val timed: StepAspect[Any, Nothing, StepKind]
-  val traced: StepAspect[Any, Nothing, StepKind]
-  def exclusive(locks: OutputLocks): StepAspect[Any, Nothing, StepKind]
-  def limited(pool: Parallelism): StepAspect[Any, Nothing, StepKind]
-  def retry(policy: Schedule[Any, FetchFault, Any]): StepAspect[Any, Nothing, StepKind]
-  def pluginLoader(loader: BuildLoaderLease): StepAspect[Any, Nothing, StepKind]
-  val cached: StepAspect[ActionCache, Nothing, StepKind.Cached]
-  val declaredOutputs: StepAspect[Any, Nothing, StepKind.Cached]
-  val remote: StepAspect[RemoteCache, Nothing, StepKind.Hermetic]
-```
-
-`Scheduler.publish` already contains four aspects written inline: the local cache, the manifest file check, the remote lookup, and the upload by verdict. M2 extracts them. `ZIOAspect` from ZIO core covers effect-only decorations through `lift`.
-
-Aspects come from three places:
-
-- **The engine** applies defaults: `cached`, `remote`, `exclusive`, `limited`, `timed`.
-- **A plugin** decorates its own steps, for example `retry` on a network fetch.
-- **The build file** attaches `Decoration` values, which the engine interprets. The graph never stores a function.
-
-```scala
-// histos.api
-enum Decoration:
-  case Timeout(limit: Duration)
-  case Retry(attempts: Attempts)
-  case Serial
-  case NeverCache
-
-module("core", Jvm)(scala"3.10.0").decorate(Decoration.Timeout(10.minutes))
-```
-
-Histos's own tests already use the idea: [`Requires`](../engine/test/Requires.scala) is a ZIO Test aspect that ignores a spec when a machine tool is missing.
-
-### Services and layers
-
-```mermaid
-flowchart TD
-  system[zio.System and ZIO Config] --> machine[Machine]
-  machine --> workspace[Workspace: layout, lock, scoped work dirs]
-  machine --> store[ContentStore]
-  store --> actions[ActionCache]
-  config[RemoteConfig] --> remote[RemoteCache]
-  workspace --> resolve[Resolve: Coursier adapter, lock-only fetch]
-  resolve --> tools[Toolchains: JDK, Node, clang, compilers, linkers, bridges]
-  tools --> pool[CompilerPool: ZKeyedPool by toolchain]
-  machine --> proc[ProcessRunner: scoped children, group kill]
-  resolve --> loader[Loader: scoped build generations]
-  actions --> exec[Histos: the executor]
-  remote --> exec
-  pool --> backends[PlatformBackend: Jvm, Js, Native]
-  proc --> backends
-  tools --> backends
-  loader --> local[Build.local]
-  exec --> local
-  backends --> local
-  workspace --> local
-  socket[Server socket] --> remoteBuild[Build.remote]
-  local --> attached[Build.attached]
-  remoteBuild --> attached
-  attached --> cli[CLI]
-  attached --> bsp[BSP]
-  attached --> mcp[MCP]
-  local --> server[SocketServer: scoped bind, record, accept fiber]
-```
-
-Rules for this graph:
-
-- Implementations are case classes with constructor injection (`ZLayer.derive` where it fits). A trait exists only where two real implementations exist: `Build.local` and `Build.remote`, a live and an in-memory `RemoteCache`, three `PlatformBackend`s.
-- `Machine` is the only reader of the environment and JVM properties. `HISTOS_*` settings are ZIO Config, validated at startup.
-- The batch command builds the graph once and exits. The server builds it once and keeps the scoped resources (`CompilerPool`, build generations, the socket) for its lifetime.
-
-### Errors
-
-- Every service has an error enum, and IO cases carry `path` and an `IoFault` reason enum mapped at the adapter.
-- A wrapping case nests the inner enum. `PluginRunError.Compile(GraphCompileError)` replaces `Failed(PluginDetail(error.message))`.
-- Inside composition, error channels are inferred unions. The `Build` service maps each union into one closed `CellError` enum that nests each domain error. That gives the wire codec, the MCP schemas, and `CliExit` a tagged, exhaustive shape, and it works because a closed enum has the `Mirror` that `derives JsonCodec, Schema` needs, where a union has none.
-- Step failures are `Outcome` data. `BuildFault` is for requests that could not start: a bad selection, a broken build file, a different server version.
-- Defects keep their `Cause` in `StepFailure` and render by class name.
-
-### One application service
-
-```scala
-trait Build:
-  def submit(request: Request): ZStream[Any, BuildFault, BuildEvent]
-  def cancel(run: RunId): IO[BuildFault, Unit]
+| M0 | Delivered | Truthful baseline docs, typed test assertions, machine-tool test aspects, ACP deletion |
+| M1 | Delivered | Platform publish coordinates, server lifecycle, plugin isolation, scoped child ownership, runtime choices reaching execution, safe snapshot publisher and cache hygiene |
+| M2 | Delivered | Step kinds/composition/aspects, Histos executor, compile dependencies without layer barriers, real plugin compile steps, test/run/publish orchestration |
+| M3 | Delivered | Captured Machine/config, path-bearing IO and Workspace scopes, shared ChildProcess, incremental Zinc and scoped batch compiler reuse, provider installation reuse, service/package separation |
+| M4 | Implementation delivered | Typed tool catalog and lock cells, classifiers, selected byte identities, staged updates, JDK 21 and Node 25 floors, immutable launcher pin and update transaction |
+| M5-M8 | Partly enabled, not delivered | M4 supplies tool/runtime data and verification seams. Backend, application, public plugin/API and graph-derived CI contracts remain |
+| M9 | Future | Real second-repository adoption, real plugins and measured performance |
 
-enum Request derives JsonCodec:
-  case Compile(selection: Selection)
-  case Test(selection: Selection, suites: TestSelection)
-  case Publish(target: PublishTarget, selection: Selection)
-  case Run(target: RunTarget)
-  case Graph, Toolchain, Reload
-  case Resolve(action: ResolveAction)
-  case Workflow(action: WorkflowAction)
-  case Assembly(destination: Option[RepoPath])
+The core is linked rather than recopied: [Step](../api/src/histos/step/Step.scala), [StepKind](../api/src/histos/step/StepKind.scala), [Fits](../api/src/histos/step/Fits.scala), [Stored](../api/src/histos/step/Model.scala), [StepAspect](../api/src/histos/step/StepAspect.scala), [StepSpec](../api/test/StepSpec.scala), [Histos](../engine/src/histos/schedule/Histos.scala), and [ScheduleAspects](../engine/src/histos/schedule/ScheduleAspects.scala). Mixed-kind composition already exists. Public plugin submission of arbitrary typed Steps does not: its SPI remains descriptions plus run (G16).
 
-enum TestSelection derives JsonCodec:
-  case All
-  case Only(patterns: NonEmptyChunk[SuitePattern])
-  case Quick
+M3 compiler reuse is scoped to a compile batch. Server-lifetime pool reuse and cold/warm/no-op/edit measurements were earlier goals without supplied completion evidence; they survive under P19, not as proof of S8. Unix Node/Native descendant ownership and pipe cleanup were completed under B42/B43. Windows engine support still belongs to P12.
 
-enum BuildEvent derives JsonCodec:
-  case Started(run: RunId)
-  case Step(event: StepEvent[CellError])
-  case Finished(report: Report)
-```
+## M4. Verify selected tool and runtime bytes
 
-`Build.attached` reads `.histos/server.json` and picks `Build.remote` or `Build.local`. The CLI maps a `Report` to `CliExit` in one function.
+**Goal:** Exact artifact/runtime identities survive every consumer and cache boundary, with explicit update authority and no hidden tool solve.
 
-MCP follows the same type rule as every other surface. Each tool's output schema is a tagged enum of its report and `BuildFault`, so a fault is typed and still validates against the declared schema, which is the check that pushed design decision 12 to strings. `isError` marks the fault case. A build that ran and failed is a report, because the outcome is data.
+### Decisions and tradeoffs
 
-```scala
-enum CompileResult derives Schema, JsonCodec:
-  case Report(outcome: ReportOutcome, cells: Chunk[CellReport], diagnostics: Chunk[Diagnostic], text: String)
-  case Fault(fault: BuildFault)
-```
+- **Catalog as data.** ToolCatalog separates compiler, Js and Native defaults; modules override Js/Native revisions. New versions do not require another engine literal. The broader platform-only builder shape remains M7.
+- **Explicit dependency transaction.** `resolve --update` stages plugins, loads that generation, solves module/tool cells, and commits once after success. Ordinary execution fetches/checks exact locked bytes. `--check` still re-solves module/plugin drift, but not tool graphs.
+- **Selected tool identity.** ToolInput names the chosen role/version/variant and verified artifacts, including classifiers. Compile, pool and execution keys need their relevant subsets. One captured lock generation covers an operation; the next request can choose a new one.
+- **Embedded provenance is separate.** Running Dotty compiles the build/source plugins; module and auxiliary bridge compilers come from tool cells. Source cache keys need actual embedded support/runtime bytes, not only the API digest and version text.
+- **Installed platform floors.** Histos does not install a JDK or Node. The running JVM, or `toolchain.local`, must be JDK 21 or newer. A Js module needs `node` on `PATH`, or `node.local`, at Node 25 or newer. A newer version satisfies the floor. A present override that is missing or too old is rejected.
+- **Immutable launcher pin.** Startup consumes exact revision and hash, never latest metadata. Only dedicated launcher update reads metadata, streams bounded bytes, serializes commit across processes, checks for concurrent pin changes, and replaces the pin last. Workflow rendering consumes the existing pin offline. The script finds `java` and runs that jar.
+- **One current PR.** The M3 resource follow-ups and M4 concerns stay together by explicit approval. The prior M3 merge remains historical; no extra stack is required for this integration.
 
-The `text` field on a report is a rendering for agents that want prose. Cancellation is one path: the server mints the `RunId`, and socket EOF, MCP `notifications/cancelled`, and BSP `$/cancelRequest` all call `cancel`.
+See [ToolCatalog](../api/src/histos/ToolCatalog.scala), [LockedTools](../engine/src/histos/resolve/LockedTools.scala), [ToolInput](../engine/src/histos/resolve/ToolInput.scala), [BuildCompiler](../engine/src/histos/toolchain/BuildCompiler.scala), [Toolchain](../engine/src/histos/jdk/Toolchain.scala), [NodeToolchain](../engine/src/histos/node/NodeToolchain.scala), and [LauncherPin](../engine/src/histos/publish/LauncherPin.scala).
 
-## Milestones
+### Delivered acceptance slices and final platform gate
 
-Each milestone is one GitHub stack. Each PR closes named ledger rows and checks them in [audit.md](audit.md). A bug PR starts with the failing test. A PR that questions a ZIO mechanism starts with a miniature spec.
+1. **Consumers and keys:** Js TestMain override/kind, Native application Scala versus bridge Scala, selected-key relevance, root completeness, classifiers, empty-graph mandatory tools, quick-success validation, current runtime selection and embedded provenance. Owns L1-L3, B15, L9-L14 and L20.
+2. **Platform floors:** JDK 21 and Node 25, numeric comparison, and rejection of a present override that is missing or too old. Owns L4-L6, L8, and L15-L18, which are superseded: Histos does not install a JDK or Node.
+3. **Launcher and transport:** Realistic fixed, chunked, and close-delimited payloads, bounded atomic update, cross-process conflict, pin and cache-privacy checks, and script drift. Owns L7, L19, T13, and S16's compiler-acquisition follow-up. T16 is superseded.
+4. **Integrated proof:** Rebuild the final source runtime, run the complete repository suite and targeted regressions, check lock/workflow/scripts, prove warm local commands with external networking denied, then publish the approved API/launcher snapshots and verify/repin their exact bytes. Re-review every general/security/simplicity finding.
 
-### M0. Truth and a safety net
+Acceptance is defined by the complete suite, deterministic lock, workflow, and script checks, selected-byte cache regressions, and offline command behavior. The exact artifact identity lives in the [launcher lock](../.histos/launcher.lock); current test and CI results belong to the PR. Publishing and deliberate remote updates use the network.
 
-**Goal:** Docs describe this tree, tests catch a refactor that changes an error, and unused surface is gone before the refactors start.
+Source-root portability, clang and browser packaging, and sandboxing retain their later milestone owners. The Windows launcher script is not an execution gate.
 
-- `histos/drop-acp`: delete `app/src/histos/acp`, the `acp` root command, its tests, and its mentions in the README and docs. `acp` stays in `CommandName.reserved`, so a plugin cannot claim the word before ACP returns. Closes A11.
-- `histos/docs-truth`: `design.md` becomes `architecture.md` (modules, process model, BSP table, error enums, without line references). `plan.md` is deleted. `plugins.md` is corrected and its examples compile. README points at the roadmap. Closes D1 to D21.
-- `histos/typed-asserts`: tests match error values, cover the four untested `BuildError` cases, and stop flattening errors to `IllegalStateException`. Closes T1 to T5.
-- `histos/test-aspects`: a `Requires(Tool.*)` `TestAspect` for clang, Node, npm, Firefox, and the ivy-local Scala Native jars. Network use is not gated, because Coursier's cache serves those specs offline. `zio.System` with `withLiveSystem` in tests. Remove stray SemanticDB files and find their writer. Closes T6 to T9.
+## Target boundaries still to build
 
-**Exit:** no test identifies which error happened by its message, and no test flattens a typed error into an exception (`rg 'IllegalStateException\(.*message|left\.map\(_\.message\)' */test` is empty). `.message` appears only where the rendering is the subject. `./histos test` passes on a machine without clang or Firefox and reports the gated specs as ignored.
+- **PlatformBackend:** compile, link, launch and packaging use typed requests/results. Shared orchestration stays outside adapters. Resource/tool views are operation-owned, with verified identity retained until the child boundary. No Tool[T]/Toolchains/ResolvedTools layer is added merely to rename working services.
+- **Build application service:** local and remote implementations share Request, BuildEvent, Report, BuildFault and RunId. Internal error unions map to one closed CellError enum nesting domain errors. A request that cannot start is a fault; completed failed cells are report data.
+- **Surface codecs:** CLI maps a report to an exit in one place. BSP maps typed diagnostics and cancels by run id. MCP exposes tagged report-or-fault schemas plus progress; text is an optional rendering, never the only result shape. The socket codec preserves the same typed contract.
+- **Session resources:** Build owns build-generation leases and scoped compiler/resource reuse. Runtime selections refresh per operation, not indefinitely with an old server graph. Concurrent requests need output-scoped locks, not one global run permit.
+- **Public plugin steps:** A task's cache kind must come from the typed Step rather than a separate declaration that can disagree. Core phase dependencies and a deliberate API classloader boundary replace the current Compile/Same limit.
+- **Recorded build data:** Platform settings, TestRunner, module aspects, typed notes and CI tool needs are data. Illegal combinations do not typecheck; runtime input parsers retain typed errors.
 
-### M1. Fix what is broken today
+The existing Step algebra does not by itself provide these services, a sandbox, a live remote cache or portable cache keys.
 
-**Goal:** No known hang, leak, collision, or ignored toolchain decision. Each PR is small and independent.
+## M5. Execution and platform contracts
 
-- `histos/publish-platform`: one coordinate per platform cell. Closes B1.
-- `histos/server-lifecycle`: attach before load, the listening promise completes from the accept fiber's exit, `serve` ends when accepting ends, interruptible reads (miniature first), finalizer order, fingerprint checks on BSP requests, a set of splices, and the dead `Stale` cases removed. Closes B2 to B9.
-- `histos/plugin-isolation`: the context class loader is pinned to an executor whose threads carry the build loader (miniature first), refusals are per run, entry initialization is inside `attempt`, failures name the right plugin, digests use coordinate plus checksum, BSP build-file diagnostics compile the header-stripped unit with the plugin jars, and `izumi.reflect` crosses the boundary if a test proves it must. Closes B10 to B14, B38, B39, B41.
-- `histos/child-process`: `acquireRelease` around every child, including `javac` and the JDK hand-off. A stop kills every descendant of a live child, and a JVM child's whole group even after its leader exited. One fiber reads each pipe, output is kept once, the hand-off gets SIGTERM and a 2 second grace before a force kill, and the assembly class loader is closed. Closes B16 to B21, B44, B45.
-- `histos/toolchain-execution`: the resolved Node runs Js, `HISTOS_NATIVE` travels as a value, tar.gz staging that keeps file modes, atomic staging into a scoped temp directory, and a read-only probe. Closes B22 to B27, B47, B48.
-- `histos/snapshot-publisher`: `SnapshotRepository` is `https`, or `http` on loopback. Credentials are a `Config.Secret`. Uploads go through heddle's scoped `Client`. The unique version comes from the fiber's clock. `Published` is an ADT, and parse errors have their own enums. Closes B28 to B34, B40.
-- `histos/cache-hygiene`: temp files scoped and swept, a per-project keep set, and `cache clean` matching its contract. Closes B35 to B37.
-- `histos/compile-exit`: a failed cell fails `compile` with the compile exit code, locally and through the server. Closes B46.
+**Goal:** Complete test/link/run/cache semantics before consolidating platform adapters.
 
-**Exit:** each closed row has a test that failed before its fix. `ServerSpec` covers reload, `NoServer`, and reboot.
+Some work once assigned here already exists: test, run, and publish are Steps, the chosen Node reaches Js launches, and M4 provides the JDK and Node floors. Do not reimplement those foundations.
 
-### M2. Steps, executor, aspects
+Proposed focused slices:
 
-**Goal:** The kernel from the target architecture runs compile, which is the hottest path, and plugin tasks.
+- **Test outcomes and cache:** Preserve independent preparation/suite failures as data, emit full test-compile diagnostics, replace incomplete SuiteStamp/QuickRecord behavior with a complete typed digest/persistence contract, including upstream jars and flags. M4's verified runtime/tool seam stays in M4. Owns P4-P7/P15.
+- **Fixtures and portable keys:** Share typed scoped fixture construction without broad Central catalog substitution, retain resolver/cache policy, and model source roots explicitly. Owns T10/T11/T15 and P16. Incorrect M4 fixture policy remains an M4 verification obligation (T17).
+- **Compiled bridges:** Ship bridge modules compiled by this build and pinned through tools; cache bridge/link work by selected revision and inputs. Permit coexisting Js/Native revisions/environments behind a narrow Bridge seam. Owns P1/P2.
+- **Backends and runtime reports:** Consolidate the repeated test, provider, and run paths and dispatch, finish typed adapter errors, remove dead APIs, repair eager machine and path probes, and close Windows engine gaps. Owns P3, P9, P10, and P12-P14. P18 is superseded: toolchain reports the runtime it accepted.
+- **Packaging/resource policy:** Honor the graph assembly spec, move publisher filesystem checks into effects, remove LazyVals partiality and casts, and define cleanup-failure reporting without weakening ordinary cancellation safety. Owns P8, P11, and P20. P21 is superseded: Histos does not parse JDK or Node archives.
 
-- `histos/steps-api`: `histos.step` on the api: kinds, aliases, constructors, `zip`, `map`, `andThenHermetic`, `sandboxed`, `Fits`, `Stored`, and `StepAspect` with `lift`. The two 2026-10-22 miniatures become an api spec that asserts each accepted composition and each rejection message with `typeCheckErrors`, and the sketches in this roadmap become links to that code.
-- `histos/executor`: the `Histos` executor service runs the build's typed step graphs with bounded parallelism, failure as data, and the event stream. Cache, manifest, remote lookup, and upload behavior live in separate schedule aspects. `timed`, `traced`, `cached`, and `remote` are typed decorations.
-- `histos/compile-steps`: compile cells become steps keyed by `CompileKey`. This deletes the layer barrier, the blocking-queue side channel, `runCells`, the discarded source hash, and the 9 to 12 parameter methods.
-- `histos/plugin-steps`: plugin tasks run on `Histos`. `TaskDep.Compile` depends on real compile steps, the stub nodes go away, `pluginLoader` and `declaredOutputs` become aspects, and planning covers only reachable steps. Typed errors are nested.
-- Test cells, publish jobs, and run cells now enter `Histos` as typed local steps while retaining their existing provider, publisher, linker, and child-process adapters.
+Tool request namespace/component duplication remains current integration work (L21), not a promise that a constant magnet is the final backend design.
 
-**Exit:** a gated spec shows an unrelated cell compiling while a slow upstream in an earlier layer is still running. An identical second compile is a `LocalHit` through `cached`. `rg 'LinkedBlockingQueue|AtomicBoolean' engine/src` is empty. Closes K1 to K18.
+**Exit:** Mixed platform/revision tests consume the correct bytes, one preparation failure does not hide independent cell results, no incomplete quick success is accepted, and packaged bridge/cache reuse is measured. File length is not an acceptance criterion.
 
-### M3. Services that own resources
+## M6. One application contract, four codecs
 
-**Goal:** Resource ownership lives in scoped layers, and compile is incremental.
+**Goal:** Structured reports, streaming progress and cancellation are the same operation on every surface.
 
-- `histos/machine-config`: `Machine.layer` from `zio.System`, with `HISTOS_*` as ZIO Config, and the test JDK fixtures read the same source. Closes S1, T12, S14.
-- `histos/workspace`: a `Workspace` service with one lock reader, one tree delete, and scoped work directories. IO errors carry the path and an `IoFault`. Blocking moves to `attemptBlocking`. Closes S2 to S4, S11, S13.
-- `histos/process-runner`: `TestProcess` becomes `histos.process.ChildProcess`, used by test, link, run, and the JDK hand-off. Closes S10, B42, B43.
-- `histos/incremental-zinc`: a persisted analysis store, a previous result, and a `CompilerPool` keyed by the locked toolchain, scoped to one batch. The pool is a semaphore per key. `ZKeyedPool` sleeps on the test clock. A precompiled provider runner removes the second compile. Closes S8, S9.
-- `histos/service-shape`: case-class implementations with constructor injection, no 1:1 traits without a seam, `Resolve.scala` and `Loader.scala` split by concern, the `resolve` to `load` cycle removed, and context types where methods take more than five parameters. Closes S5 to S7, S12. The rendered workflow runs on `ubuntu-26.04` and checks out with `actions/checkout@v7`.
+Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service.
 
-**Exit:** editing one file in this repository recompiles that file and its dependents, and `.histos/analysis` is populated. Two compiles in one server share a compiler instance. Record no-op and one-file-edit times for this repository before and after.
+- **Wire types:** Typed selections, test modes, targets, events, reports, faults and run ids; preserve plugin command arguments. Owns A1/A3/A4/A12/A19/A21/A25.
+- **Build local/remote/attached:** Delete duplicated continuations/renderers and package cycles; centralize exit mapping, generation leasing and resource construction. Owns A5/A16-A18/A20/A24 and P19's session reuse/measurements.
+- **Multiplex and cancel:** Per-request supervised fibers, one serialized writer, run-id cancellation and output-directory locks; propagate diagnostics/progress without IO defects. Owns A8-A10/A13/A14/A23.
+- **Thin BSP/MCP:** Engine classpath service, typed BSP method/target URI, tagged MCP report/fault schemas and progress. Owns A2/A6/A7. A15's unused ToolchainView is now deleted, not a new reporting abstraction to preserve.
+- **Remaining server tests:** NoServer, permit-on-interrupt, testOnly through server, and concurrency/error paths not already covered by M1. Owns remaining A22.
 
-### M4. The lock covers every jar
+**Exit:** An MCP compile failure returns structured path/position/severity, an agent cancels its own in-flight test, and local/attached/BSP operations agree on reports, runtimes and exits. Wire foundations can start after M4 without waiting for every backend rewrite.
 
-**Goal:** Every byte Histos runs is pinned and checksummed, and tool versions are data.
+## M7. Honest public build and plugin APIs
 
-- `histos/tool-lock`: a `ToolLock[T]` parser shared by the JDK and Node locks, one `ArchiveStage`, and one resolution walk. Closes L4 to L6.
-- `histos/tool-cells`: compiler, semanticdb, Scala.js linker and environment, Chekhov, Scala Native tools, and bridge jars resolve through `Resolve` into tool cells in the lock. Every raw `coursier.Fetch(FileCache())` goes away, and one suffix function is used everywhere. Closes L1, L3.
-- `histos/tool-versions`: `jsVersion` on the module beside `nativeVersion`, a typed tool catalog for the remaining defaults, and the build-file compiler version read from the running compiler. Closes L2, B15.
-- `histos/launcher-verify`: the snapshot path verifies the pin, downloads and unpacks atomically, `histos.bat` matches the POSIX script, and `BootstrapSpec` runs as effects. Closes L7, L8, T13.
+**Goal:** Illegal build settings are excluded by types, and plugins extend core phases through typed steps.
 
-**Exit:** with the network off and the cache warm, every command in this repository runs. `rg 'FileCache\(\)' engine/src` is empty.
+- **Early literals/flags:** Validated project/runtime textual literals and a scalac literal checked against supported flags, including BSP fatal-warning rules. Owns G4/G7-G9/G13/G22. This can unblock ascent before the full platform builder redesign.
+- **Module shape:** TestRunner and platform-owned settings, a small builder rather than overload proliferation, accumulated BuildError, reference-based edges/aggregates and positions of referencing calls. Owns G1-G3/G12/G19-G21.
+- **Typed recorded settings:** ModuleAspect ownership/conflicts, NoteKey codecs and decoration data. Owns G14/G15.
+- **Plugin phases and fixtures:** Public typed Step contract with explicit classloader boundary, dependencies on link/test/package, nested registration/version errors, compiled fixture inputs and complete contract examples as tests. Owns G6/G10/G11/G16/G17/T14.
+- **Domain ownership:** Unify artifact/digest/revision duplicates across central/API/runtime namespaces where that removes ambiguity. Owns G5/G18.
 
-### M5. Platforms as backends
+M4's ToolCatalog and JsVersion are partial progress, not platform-safe modules or an accumulated graph error API.
 
-**Goal:** JVM, Js, and Native are three implementations of one service, and test, link, run, package, and publish are steps.
+**Exit:** Repository and ascent build files compile on the new builder; Js settings on JVM-only values do not compile; plugin fixtures exercise the public phases without engine imports.
 
-- `histos/toolchains`: a `Tool[T]` type class (lock, origins, home probe, archive format) with givens for `Jdk`, `Node`, and `Clang`, plus a `Toolchains` service. A scoped `ResolvedTools` layer resolves once per session, and every backend consumes it.
-- `histos/bridges`: the Js and Native bridges become real modules in this repository, compiled by this build, shipped with the launcher snapshot, pinned as tool cells, and cached by tool and revision. Each bridge sits behind a `Bridge` seam keyed by tool and revision, so more than one implementation can coexist: two Scala.js linker revisions, or a Node and a browser JS environment. Closes P1, P2.
-- `histos/backends`: `PlatformBackend` with `compile`, `link`, and `launch`, one layer per platform. The six launch copies in `ModuleTest` and the dispatch in `Program` collapse. Closes P3, P9 to P14.
-- `histos/test-steps`: test cells become steps, and suite failures are data (the test half of design commit 4). Test-compile diagnostics become events. A test cell is a `TestStep`, a `CachedStep`, so `testQuick` is `@@ StepAspect.cached` over a digest that covers the linked classpath, the toolchain, and the flags, and `SuiteStamp` and `QuickRecord` are deleted, and the specs this step rewrites drop their `case _ => false` fallbacks and share one fixture. Closes P4 to P7, P15, T10, T11.
-- `histos/assembly-steps`: assembly reads its modules and main class from the graph's assembly spec, and publish runs as `Step.local`. Closes P8.
+## M8. CI from graph needs
 
-**Exit:** `ModuleTest.scala` is gone or under 400 lines. A Js test uses the locked Node. A test failure in one cell leaves other cells' results in the report.
+**Goal:** Render required tools/platforms and restore installs by exact revision/package set.
 
-### M6. One application service, four codecs
+M4 supplies catalog revisions and the JDK and Node floors, so CI needs and caches can start without requiring every PlatformBackend implementation. Bridge and browser details align with M5 as they stabilize. Generated CI does not install a JDK or Node.
 
-**Goal:** Every surface is a thin codec over `Build`, and agents get structured results.
+- **Needs and caches:** ToolSetup ADT derived from module/test/environment needs; remove `.github/ci-tools` and setup Boolean. Cache runtime/tool/browser/system packages by exact compatible inputs; warm jobs do not repeat browser downloads or install-deps. Owns C1.
+- **Matrix and selection:** CLI accepts platform/Scala filters that split axes render, with affected-module PR selection. Owns C2.
+- **Workflow ownership:** Generated jobs stay in the workflow renderer. The Windows launcher script is not a CI job.
+- **Publish plugin:** Snapshot publication on the default branch through an explicit plugin, with scoped credentials. Non-snapshot releases remain a separate authorized action.
 
-- `histos/wire-types`: `Request`, `BuildEvent`, `Report`, `BuildFault`, and `RunId` with derived codecs on the opaque types. `Call` and `Message(Int, String)` are deleted. Suite patterns are parsed at the edge, and a plugin command's arguments travel with the call. Closes A1, A3, A4, A12, A19, A21, A25.
-- `histos/build-service`: `Build.local`, `Build.remote`, and `Build.attached`. The CLI becomes a renderer, the `*Local` copies and the package cycle go away, and one function maps a report to an exit code. Closes A5, A16 to A18, A20, A24.
-- `histos/surface-aspects`: per-request fibers behind one writer, cancellation by `RunId`, write locks keyed by cell output directory in place of the global permit, and run-scoped log annotations. Closes A8 to A10, A13, A14.
-- `histos/mcp-reports`: each MCP tool returns its tagged report-or-fault enum, progress notifications come from events, and `isError` marks the fault case. No tool result is a `String`. `ToolchainView` returns as the toolchain report or is deleted. The MCP section of `architecture.md` changes with it. Closes A2, A15, A23.
-- `histos/bsp-thin`: a `Classpaths` service in the engine, a `BspMethod` enum, and an opaque `TargetUri`. Closes A6, A7.
-- `histos/server-specs`: concurrent splices, a permit released on interrupt, and `testOnly` through the server. Closes A22.
+**Exit:** Workflow check passes without the marker; fixture graph changes alter rendered needs; a warm job restores rather than reinstalls the same browser/package set.
 
-**Exit:** `Cli.scala` is under 500 lines. An MCP compile failure returns diagnostics with path, line, and severity. An agent cancels its own test run.
+## M9. Dogfood and measured adoption
 
-### M7. The api grows up
+Adopt Histos in the ascent copy and a real early-effect library: tests, mains, flags and ordinary Metals sessions. Integrate the real Specular plugin and snapshot publisher, then docs/docker/deploy/coverage/update-bot capabilities as explicit plugins. Measure cold, warm, no-op and one-file-edit builds, not only microbenchmarks. Move docs to a Histos-built site when its examples are compiled tests.
 
-**Goal:** The build file is shorter, illegal states do not typecheck, and plugins extend the build with typed steps.
+**Exit:** One early-effect library builds, tests and publishes snapshots with Histos alone. Fixture-shaped plugins are not that proof.
 
-- `histos/module-shape`: a `TestRunner` enum, platform settings on platform values (`Js(env, kind)`, `Native(revision, clang)`), one builder value in place of 16 `apply` and 5 `trusted` overloads, `BuildError` accumulated into a `NonEmptyChunk`, aggregates and edges that hold their children by reference, and positions that point at the referencing call. Closes G1 to G3, G12, G19 to G21.
-- `histos/literals`: one `Literal[A, E]` type class behind every literal macro, a `ProjectName` literal and a constant-name check in `module`, interpolators that reject arguments by type, and typed `Dep` fields. Closes G4, G5, G7 to G9.
-- `histos/scalac-literal`: a `scalac"..."` literal checked at compile time against a table of known flags, with the BSP rule for fatal warnings. This unblocks the ascent flags. Closes G13.
-- `histos/module-aspects`: recorded `ModuleAspect(owner, name)` settings visible in `histos graph`, typed `NoteKey[A]` with a codec, and `Decoration`. Closes G14, G15.
-- `histos/plugin-tasks`: a plugin task is a typed spec plus a `Step` of its declared kind. A hermetic plugin task is a `HermeticStep`, and the seal on the graph is read from that kind. `TaskDep` opens to this plugin's steps and to core cell phases, errors are nested, and `PluginFixture` sets compiled inputs, and specs cover what `plugins.md` describes: a run through the fixture, a full plugin lock cell, and a combined header. Closes G6, G10, G11, G16, G17, T14.
-- `histos/central-shape`: one artifact type, one digest type, and the duplicates removed. Closes G18.
-
-**Exit:** this repository's `histos.scala` and the ascent copy compile on the new builder. Moving a `jsEnv` onto a JVM-only module fails to compile.
-
-### M8. CI from what the graph needs
-
-**Goal:** The workflow is a pure function of the graph.
-
-- `histos/ci-needs`: a `ToolSetup` ADT in `histos.workflow`, derived from the graph (Native needs clang of the declared major, a browser environment needs its pinned browser, and test-only tool needs come from the module). The `.github/ci-tools` marker and `setup: Boolean` are deleted. Each install is restored from a cache keyed by the tool revision and the package set. The first run seeds that cache. A later run does not repeat `npm install`, `install-deps`, or the browser download. Closes C1.
-- `histos/ci-matrix`: the CLI accepts `--platform` and `--scala`, and split axes render. Pull requests run the affected set. Closes C2.
-- `histos/ci-publish`: a snapshot publish job on the default branch, contributed by the publish plugin.
-
-**Exit:** `./histos workflow --check` passes with no marker file, and the rendered tool steps change when a Native module is added to a fixture graph. A second run with a warm cache does not execute `install-deps` or download the browser again.
-
-### M9. Dogfood and the ecosystem
-
-**Goal:** Histos replaces sbt and zipx for real early-effect repositories.
-
-- The ascent copy at `~/projects/early-effect/ascent-histos`: tests, mains, flags, and a daily Metals session in Cursor.
-- The Specular `HistosPlugin` in the Specular repository, on a snapshot of `histos.api`.
-- A Central release plugin with credentials and signing as layers, following the 2026-10-16 publisher design.
-- zipx surface plugins: docs, docker, deploy, coverage, and the dependency-update bot.
-- A benchmark of cold, warm, no-op, and one-file-edit builds against sbt 2 and Mill on the ascent copy.
-- These docs move to a Specular site built by Histos, where examples are compiled tests.
-
-**Exit:** one early-effect library builds, tests, and publishes snapshots with Histos alone.
-
-### Order
+## Dependencies and PR boundaries
 
 ```mermaid
 flowchart LR
-  M0 --> M1
-  M1 --> M2
-  M2 --> M3
-  M3 --> M4
+  M0 --> M1 --> M2 --> M3 --> M4
   M4 --> M5
-  M2 --> M6
+  M4 --> M6[ M6 wire and application ]
+  M4 --> M7[ M7 literals and API ]
+  M4 --> M8[ M8 needs and caches ]
   M5 --> M6
-  M2 --> M7
+  M5 --> M7
   M5 --> M8
   M6 --> M9
   M7 --> M9
   M8 --> M9
 ```
 
-The critical path is M0, M1, M2, M3, M4, M5, M6. M7 can run beside M3 to M5 once the step types exist, because it touches the api and the build file. M8 needs the backends to know what each platform requires.
+The M5 edges concern later backend/platform/bridge integration, not a ban on starting wire types, literals or CI needs. M4 identity/security requirements cannot be deferred just to close the milestone. Subsequent concerns can use focused PRs after their interfaces are stable; milestone numbers do not mandate one stack per milestone. The current approved resource-follow-up/M4 work remains one PR.
 
-The order approved on 2026-10-20 maps onto this plan. The Metals BSP session and plugins already exist, and their bugs are in M1 and M6. The ascent tests and flags are M7 and M9. The Specular plugin is M9. Generated CI exists, and its marker file is M8. The Scala.js editor host waits until after M9.
+## Working rules and deferred capabilities
 
-## Decisions
+- A bug starts with the same regression red, then green. A disputed ZIO mechanism or inference rule starts with a miniature.
+- Check ledger rows only with named evidence. Source changes, worker labels, skipped tests and structural Windows checks are not executed acceptance.
+- Keep the complete Histos suite and workflow/script drift green after integration; distinguish full runs from testQuick success stamps.
+- No dependency addition without approval. Use verified snapshots for integration; no non-snapshot release until feature-complete authorization.
+- Docs link to source/tests without line anchors or copied implemented examples. Comments explain constraints, not implementation narration.
+- Humans merge PRs. Publication authority does not authorize releases or merges.
 
-Recorded 2026-10-22.
-
-1. **`Step` lives on `histos.api`, in `histos.step`, and the api commits to ZIO.** Plugins build steps with the same type the engine runs. The api already depended on ZIO for `HistosPlugin.run`.
-2. **Names.** The step type is `Step`, the familiar build word, and it reads cleanly in error text and MCP reports. Its decorator is `StepAspect`, following `ZIOAspect` and `TestAspect`. The executor service is `Histos`, the loom the tool is named for, in the engine package `histos.schedule`. Domain concepts keep their plain names: `ProjectGraph`, `Module`, `Outcome`. The CI renderer's tool steps are `ToolSetup`, which keeps them apart from GitHub's `steps:` and from `Step`.
-3. **The type rule holds on MCP.** Every tool returns a tagged enum of its typed report and `BuildFault`. No tool result is a `String`. This retires design decision 12.
-4. **ACP is dropped until an agent client needs it.** M0 deletes the handshake. The real Agent Client Protocol would return as a codec over `Build`. `acp` stays a reserved command word.
-5. **Bridges are modules in this repository.** They are compiled by this build, shipped with the launcher snapshot, and pinned as tool cells. A `Bridge` seam keyed by tool and revision lets more than one implementation coexist.
-6. **Lean into subtyping and aliasing.** What the cache may do with a step is a subtype (`LocalStep`, `CachedStep`, `HermeticStep`), carried as a phantom kind under the `Step[R, E, A]` alias. Specific work gets domain aliases (`CompileStep`, `TestStep`, `PublishStep`). Subtype when behavior differs, alias when only the name differs.
-7. **A hermetic step keys its upstream by content.** The key hashes the upstream value through its `Stored` codec, which gives early cutoff and lets a network generator feed a hermetic compile. `andThenHermetic` needs a codec for the upstream value, whatever the upstream's kind.
-8. **`map` keeps the kind and is never stored.** It is a pure derivation, and `@@` on it decorates the step it derives from.
-9. **Unions inside, one enum at the edge.** Steps compose with inferred error unions. The `Build` service maps them into one closed `CellError` enum for the wire, MCP, and exit codes.
-
-## Not now
-
-Each has a direction and waits for the milestone that makes it cheap:
-
-- A filesystem and network sandbox, as `StepAspect.sandbox(needs)`, before any test is sendable.
-- A remote cache client and remote execution on the same `Step` and `remote` aspect.
-- MiMa on `histos.api` and `LinkStrategy.Api`, at 1.0.
-- An sbt importer, once a second repository repeats the ascent shape.
-- The Scala.js editor host and a DAP server.
-- A non-snapshot release of Histos. Integration stays on the snapshot channel until the feature is called complete.
-
-## Working rules
-
-- One stack per milestone, one PR per concern, and each PR checks its ledger rows.
-- A suspected bug gets a failing test first. A question about a ZIO mechanism gets a miniature spec first. A question about type inference gets a `scala-cli` miniature first.
-- Tests assert values: graphs, events, reports, and error cases.
-- No new dependency without asking first, with the reason.
-- Docs link to real code and do not copy it. Sketches of unbuilt code are fine until the code lands.
-- Code comments explain only what the code cannot say: a constraint, a reason, or an outside rule.
-- `./histos test` and `./histos workflow --check` stay green on this repository after every PR.
+Sandboxing, live remote cache/execution, MiMa/Api linking at 1.0, an importer, the Scala.js editor host and DAP remain future capabilities. Tests are not sendable until a real isolation policy makes that claim honest. The earlier MCP-as-CLI-text design is current behavior to retire, not the target contract.

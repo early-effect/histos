@@ -1,6 +1,6 @@
 package histos.testrun
 
-import histos.node.{NodeError, NodeMiss}
+import histos.node.{NodeMiss, NodeToolchain}
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.toolchain.Runtimes
 import histos.zinc.GraphCompile
@@ -74,12 +74,22 @@ private[testrun] object ModuleTestSupport:
             }
             .flatMap(graph => ZIO.fromEither(graph))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
-          named <- ModuleTest
-            .run(TestRun(root, built, List("app"), jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          named <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, List("app"), jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           mainEntries <- ZIO.attempt(
             entries(root.resolve(".histos/classes/app/3.10.0/jvm"))
           )
@@ -114,9 +124,14 @@ private[testrun] object ModuleTestSupport:
             Projects(module("e2e", Jvm)(scala3).test(TestMain("demo.Check")))
           )
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           mainEntries <- ZIO.attempt(
             entries(root.resolve(".histos/classes/e2e/3.10.0/jvm"))
           )
@@ -132,14 +147,23 @@ private[testrun] object ModuleTestSupport:
         )
     ,
     test(
-      "a named js main links and runs on the chosen node, not the node on PATH"
+      "a named js main uses only its overridden linker revision and chosen Node"
     ):
       ZIO.scoped:
         for
           jdk <- GraphCompile.jdkHere
           root <- temp
-          probe = module("probe", Js)(scala3).test(TestMain("demo.Check"))
-          built <- ZIO.fromEither(Projects(probe))
+          probe = module("probe", Js)(scala3)
+            .jsVersion(histos.JsVersion("1.22.0"))
+            .test(TestMain("demo.Check"))
+          built <- ZIO.fromEither(
+            Projects.tools(
+              histos.ToolCatalog.default.copy(js =
+                histos.ToolCatalog.default.js
+                  .copy(revision = histos.JsVersion("1.21.0"))
+              )
+            )(probe)
+          )
           _ <- ZIO.attempt {
             write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
             write(root, ".histos/dependencies.lock", "cell probe 3.10.0 js\n")
@@ -152,9 +176,79 @@ private[testrun] object ModuleTestSupport:
             .get("PATH")
             .toList).mkString(java.io.File.pathSeparator)
           here <- Runtimes.read(TestMachine.at(root, env + ("PATH" -> path)))
-          cells <- ModuleTest
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          held <- histos.resolve.Resolve.readLock(root)
+          tools <- ZIO.service[histos.resolve.LockedTools]
+          olderRequests = List(
+            histos.js.JsRequests.linker(
+              histos.JsVersion("1.21.0"),
+              tools.catalog.js.bridgeScala,
+              tools.repositories
+            ),
+            histos.js.JsRequests.libraries(
+              scala3,
+              histos.JsVersion("1.21.0"),
+              tools.repositories,
+              tools.catalog
+            )
+          )
+          older <- ZIO.foreach(olderRequests)(request =>
+            tools.resolve
+              .resolveTool(request)
+              .map(classpath =>
+                histos.resolve.LockedTool(
+                  request.id,
+                  request.roots,
+                  request.repositories.all,
+                  classpath.artifacts.map(artifact =>
+                    histos.resolve.LockedArtifact(
+                      artifact.organization,
+                      artifact.name,
+                      artifact.revision,
+                      artifact.sha256,
+                      artifact.repository,
+                      artifact.classifier
+                    )
+                  ),
+                  classpath.evictions
+                )
+              )
+          )
+          _ <- Workspace.writeString(
+            histos.resolve.Resolve.lockPath(root),
+            histos.resolve.DependencyLock.render(
+              held.copy(tools = held.tools ++ older)
+            )
+          )
+          fetched <- zio.Ref.make(List.empty[histos.resolve.LockedArtifact])
+          resolver = new Resolve:
+            def resolveTool(request: histos.resolve.ToolRequest) =
+              tools.resolve.resolveTool(request)
+            def resolve(cell: histos.resolve.ResolveCell) =
+              tools.resolve.resolve(cell)
+            def fetch(artifact: histos.resolve.LockedArtifact) =
+              fetched.update(_ :+ artifact) *> tools.resolve.fetch(artifact)
+            def resolvePlugin(
+                dependency: Dep,
+                repositories: histos.resolve.Repositories
+            ) = tools.resolve.resolvePlugin(dependency, repositories)
+            def sources(
+                organization: String,
+                name: String,
+                revision: String,
+                repository: histos.resolve.Repository
+            ) = tools.resolve.sources(organization, name, revision, repository)
+          coexisting <- ModuleTest
             .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provide(zio.ZLayer.succeed(resolver))
+          consumed <- fetched.get
           ran <- TestMachine.launches(chosen)
           skipped <- TestMachine.launches(other)
           compiled <- ZIO.attempt(
@@ -164,9 +258,22 @@ private[testrun] object ModuleTestSupport:
             entries(root.resolve(".histos/classes/probe/3.10.0/js"))
           )
         yield assertTrue(
+          held.tools
+            .filter(_.id.role == histos.resolve.ToolRole.JsLinker)
+            .map(_.id.variant) == List(
+            histos.resolve.ToolVariant.Js(histos.JsVersion("1.22.0"))
+          ),
           placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
+          placed(coexisting) == placed(cells),
+          consumed
+            .filter(artifact =>
+              artifact.organization == "org.scala-js" && artifact.name
+                .startsWith("scalajs-linker_")
+            )
+            .map(_.revision)
+            .toSet == Set("1.22.0"),
           cells.map(text).exists(_.contains("hi")),
-          ran.exists(_.endsWith(".js")),
+          ran.size == 2,
           skipped.isEmpty,
           compiled.exists(_.endsWith(".sjsir")),
           mainEntries.isEmpty
@@ -183,10 +290,15 @@ private[testrun] object ModuleTestSupport:
             write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
             write(root, ".histos/dependencies.lock", "cell probe 3.10.0 js\n")
           }
-          here <- TestMachine.runtimes(root)
-          out <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          here <- Runtimes.read(TestMachine.at(root, Map.empty))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
           name <- ZIO.fromEither(ProjectName.from("probe"))
           linked <- ZIO.attempt(Files.exists(root.resolve(".histos/link")))
@@ -195,9 +307,7 @@ private[testrun] object ModuleTestSupport:
             ModuleTestError.NoNode(
               name,
               scala3,
-              NodeMiss.Unresolved(
-                NodeError.NoLock(root.resolve(".histos").resolve("node.lock"))
-              )
+              NodeMiss.Absent(NodeToolchain.Floor)
             )
           ),
           !linked
@@ -221,9 +331,14 @@ private[testrun] object ModuleTestSupport:
             )
           }
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           compiled <- ZIO.attempt(
             entries(root.resolve(".histos/test-classes/probe/3.9.0/native"))
           )
@@ -253,9 +368,14 @@ private[testrun] object ModuleTestSupport:
             Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))
           )
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue:
           cells.map(report =>
             (
@@ -283,9 +403,14 @@ private[testrun] object ModuleTestSupport:
             Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))
           )
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue(
           cells.map(report =>
             (report.cell.version.value, report.cell.status)
@@ -324,11 +449,18 @@ private[testrun] object ModuleTestSupport:
           }
           _ <- Resolve
             .update(root, built, BuildResolvers(built.resolvers))
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue(
           cells.map(report =>
             (report.cell.module.value, report.cell.status)
@@ -367,12 +499,19 @@ private[testrun] object ModuleTestSupport:
           }
           _ <- Resolve
             .update(root, built, BuildResolvers(built.resolvers))
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           pattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here, List(pattern)))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here, List(pattern)))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue(
           cells.map(_.cell.status) == List(TestStatus.Passed),
           cells.map(text).exists(_.contains("alpha")),
@@ -405,12 +544,19 @@ private[testrun] object ModuleTestSupport:
           )
           _ <- Resolve
             .update(root, built, BuildResolvers(built.resolvers))
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           chosen <- TestMachine.chosenNode(root)
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           ran <- TestMachine.launches(chosen)
         yield assertTrue(
           placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
@@ -451,11 +597,18 @@ private[testrun] object ModuleTestSupport:
           )
           _ <- Resolve
             .update(root, built, BuildResolvers(built.resolvers))
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue(
           placed(cells) == List(
             ("probe", ScalaVersion("3.9.0"), Native, TestStatus.Passed)
@@ -482,9 +635,14 @@ private[testrun] object ModuleTestSupport:
           }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -520,12 +678,22 @@ private[testrun] object ModuleTestSupport:
           bothPattern <- ZIO.fromEither(SuitePattern.from("demo.Foo*"))
           onePattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           here <- TestMachine.runtimes(root)
-          both <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here, List(bothPattern)))
-            .provide(Resolve.live(root.resolve("coursier")))
-          one <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here, List(onePattern)))
-            .provide(Resolve.live(root.resolve("coursier")))
+          both <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here, List(bothPattern)))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          one <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here, List(onePattern)))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           said = (reports: List[TestReport]) =>
             reports
               .map(report =>
@@ -554,9 +722,14 @@ private[testrun] object ModuleTestSupport:
           }
           pattern <- ZIO.fromEither(SuitePattern.from("demo.Missing"))
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here, List(pattern)))
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here, List(pattern)))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -581,9 +754,14 @@ private[testrun] object ModuleTestSupport:
             Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))
           )
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              ModuleTest
+                .run(TestRun(root, built, Nil, jdk, here))
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -619,12 +797,19 @@ private[testrun] object ModuleTestSupport:
       _ <- ZIO.when(installJsdom)(npm(root, "jsdom@27"))
       _ <- Resolve
         .update(root, built, BuildResolvers(built.resolvers))
-        .provide(Resolve.live(root.resolve("coursier")))
+        .provideSomeLayer[histos.resolve.LockedTools](
+          histos.ToolFixture.resolver
+        )
       chosen <- TestMachine.chosenNode(root)
       here <- TestMachine.runtimes(root)
-      cells <- ModuleTest
-        .run(TestRun(root, built, Nil, jdk, here))
-        .provide(Resolve.live(root.resolve("coursier")))
+      cells <- histos.ToolFixture
+        .at(root, built)(
+          ModuleTest
+            .run(TestRun(root, built, Nil, jdk, here))
+        )
+        .provideSomeLayer[histos.resolve.LockedTools](
+          histos.ToolFixture.resolver
+        )
       ran <- TestMachine.launches(chosen)
     yield assertTrue(
       placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
@@ -873,6 +1058,131 @@ private[testrun] object ModuleTestSupport:
 
   private[testrun] val quick = suite("quick")(
     test(
+      "quick stamps include selected JDK content but ignore unrelated tools"
+    ):
+      ZIO.scoped:
+        for
+          jdk <- GraphCompile.jdkHere
+          root <- temp
+          app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
+          built <- ZIO.fromEither(Projects(app))
+          _ <- ZIO.attempt {
+            write(
+              root,
+              "app/src/test/scala/demo/Foo.scala",
+              onlyPasses.replace("Check", "Foo")
+            )
+            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          first <- feeds(root, built, Some(jdk))
+          second <- feeds(root, built, Some(jdk))
+          changed = jdk.copy(identity =
+            histos.toolchain.RuntimeIdentity.Local(
+              jdk.home,
+              histos.jdk.Sha256.of(zio.Chunk.single(17.toByte))
+            )
+          )
+          third <- feeds(root, built, Some(changed))
+          lock <- histos.resolve.Resolve.readLock(root)
+          unused = histos.resolve.LockedTool(
+            histos.resolve.ToolId(
+              histos.resolve.ToolRole.JsEnvironment,
+              scala3,
+              histos.resolve.ToolVariant.Firefox
+            ),
+            Nil,
+            List(histos.resolve.Repository.Central),
+            Nil,
+            Nil
+          )
+          _ <- Workspace.writeString(
+            histos.resolve.Resolve.lockPath(root),
+            histos.resolve.DependencyLock.render(
+              lock.copy(tools = lock.tools :+ unused)
+            )
+          )
+          fourth <- feeds(root, built, Some(changed))
+        yield assertTrue(
+          cached(first).isEmpty,
+          cached(second) == List("demo.Foo"),
+          cached(third).isEmpty,
+          cached(fourth) == List("demo.Foo"),
+          first.exists {
+            case TestFeed.Done(cell) => cell.status == TestStatus.Passed;
+            case _                   => false
+          },
+          third.exists {
+            case TestFeed.Done(cell) => cell.status == TestStatus.Passed;
+            case _                   => false
+          }
+        )
+    ,
+    test("a cached JVM success cannot bypass a corrupt selected compiler"):
+      ZIO.scoped:
+        for
+          jdk <- GraphCompile.jdkHere
+          root <- temp
+          app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
+          built <- ZIO.fromEither(Projects(app))
+          _ <- ZIO.attempt {
+            write(
+              root,
+              "app/src/test/scala/demo/Foo.scala",
+              onlyPasses.replace("Check", "Foo")
+            )
+            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          _ <- feeds(root, built, Some(jdk))
+          cachedRun <- feeds(root, built, Some(jdk))
+          lock <- histos.resolve.Resolve.readLock(root)
+          corrupted = lock.copy(tools =
+            lock.tools.map(cell =>
+              if cell.id.role == histos.resolve.ToolRole.Compiler && cell.id.scalaVersion == scala3
+              then
+                cell.copy(artifacts =
+                  cell.artifacts.map(
+                    _.copy(sha256 = histos.jdk.Sha256.of(zio.Chunk.empty))
+                  )
+                )
+              else cell
+            )
+          )
+          _ <- Workspace.writeString(
+            histos.resolve.Resolve.lockPath(root),
+            histos.resolve.DependencyLock.render(corrupted)
+          )
+          runtimes <- TestMachine.runtimes(root)
+          name <- ZIO.fromEither(ProjectName.from(app.name))
+          result <- ModuleTest
+            .suites(
+              TestRun(root, built, Nil, jdk, runtimes, Nil, quick = true),
+              List(
+                histos.zinc.CompiledCell(
+                  name,
+                  scala3,
+                  Jvm,
+                  GraphCompile.classesDir(root, name, scala3),
+                  0
+                )
+              )
+            )
+            .runCollect
+            .either
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+        yield assertTrue(
+          cached(cachedRun) == List("demo.Foo"),
+          result.left.toOption.exists {
+            case ModuleTestError.Lock(
+                  histos.resolve.ResolveError.Checksum(_, _, _)
+                ) =>
+              true
+            case _ => false
+          }
+        )
+    ,
+    test(
       "testQuick reruns a suite when a referenced class changes and skips it otherwise"
     ):
       ZIO.scoped:
@@ -932,16 +1242,28 @@ private[testrun] object ModuleTestSupport:
         )
   )
 
-  private def feeds(root: Path, built: histos.ProjectGraph) =
-    GraphCompile.jdkHere.flatMap: jdk =>
+  private def feeds(
+      root: Path,
+      built: histos.ProjectGraph,
+      selected: Option[histos.jdk.JdkRuntime] = None
+  ) =
+    GraphCompile.jdkHere.flatMap: actual =>
+      val jdk = selected.getOrElse(actual)
       TestMachine
         .runtimes(root)
         .flatMap(here =>
-          ModuleTest
-            .console(TestRun(root, built, Nil, jdk, here, Nil, quick = true))
+          histos.ToolFixture
+            .streamAt(root, built)(
+              ModuleTest
+                .console(
+                  TestRun(root, built, Nil, jdk, here, Nil, quick = true)
+                )
+            )
             .runCollect
         )
-        .provide(Resolve.live(root.resolve("coursier")))
+        .provideSomeLayer[histos.resolve.LockedTools](
+          histos.ToolFixture.resolver
+        )
 
   private def out(feeds: zio.Chunk[TestFeed]): String =
     feeds.collect { case TestFeed.Out(text) => text }.mkString("\n")
@@ -1010,12 +1332,46 @@ private[testrun] def moduleTests[R, E](group: Spec[R, E]): Spec[R, E] =
 
 object ModuleTestJvmSpec extends ZIOSpecDefault:
   def spec = moduleTests(ModuleTestSupport.subprocess)
+    .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+      histos.ToolFixture.layer(
+        histos.Projects(
+          histos.module("jvm", histos.Jvm)(histos.ScalaVersion("3.10.0")),
+          histos.module("js", histos.Js)(histos.ScalaVersion("3.10.0")),
+          histos
+            .module("native", histos.Native)(histos.ScalaVersion("3.9.0"))
+            .clang(histos.ClangMajor(21))
+        )
+      )
+    )
 
 object ModuleTestProviderSpec extends ZIOSpecDefault:
   def spec = moduleTests(ModuleTestSupport.providers)
+    .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+      histos.ToolFixture.layer(
+        histos.Projects(
+          histos.module("jvm", histos.Jvm)(histos.ScalaVersion("3.10.0")),
+          histos.module("node", histos.Js)(histos.ScalaVersion("3.10.0")),
+          histos
+            .module("jsdom", histos.Js)(histos.ScalaVersion("3.10.0"))
+            .jsEnv(histos.JsEnv.Jsdom),
+          histos
+            .module("firefox", histos.Js)(histos.ScalaVersion("3.10.0"))
+            .jsEnv(histos.JsEnv.Firefox),
+          histos
+            .module("native", histos.Native)(histos.ScalaVersion("3.9.0"))
+            .clang(histos.ClangMajor(21))
+        )
+      )
+    )
 
 object ModuleTestRefusedSpec extends ZIOSpecDefault:
   def spec = moduleTests(ModuleTestSupport.refused)
+    .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+      histos.ToolFixture.jvm(histos.ScalaVersion("3.10.0"))
+    )
 
 object ModuleTestQuickSpec extends ZIOSpecDefault:
   def spec = moduleTests(ModuleTestSupport.quick)
+    .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+      histos.ToolFixture.jvm(histos.ScalaVersion("3.10.0"))
+    )

@@ -20,7 +20,6 @@ import zio.{Chunk, Clock, IO, UIO, ZIO}
   * after `.complete` is in place.
   */
 private[load] object PluginCompile:
-  private val Compiler = "3.10.0"
 
   def fromJar(
       store: ContentStore,
@@ -30,7 +29,14 @@ private[load] object PluginCompile:
       classpath: List[Path]
   ): IO[LoadError, Path] =
     fileSha(jar).flatMap(sources =>
-      cached(store, launcher, sources, checksums, fillJar(jar, classpath))
+      cached(
+        store,
+        launcher,
+        sources,
+        checksums,
+        classpath,
+        fillJar(jar, classpath)
+      )
     )
 
   def fromTree(
@@ -40,7 +46,14 @@ private[load] object PluginCompile:
       classpath: List[Path]
   ): IO[LoadError, Path] =
     treeSha(tree).flatMap(sources =>
-      cached(store, launcher, sources, Nil, fillTree(tree, classpath))
+      cached(
+        store,
+        launcher,
+        sources,
+        Nil,
+        classpath,
+        fillTree(tree, classpath)
+      )
     )
 
   /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin
@@ -65,22 +78,43 @@ private[load] object PluginCompile:
       launcher: ApiDigest,
       sources: String,
       checksums: List[String],
+      classpath: List[Path],
       fill: Path => IO[LoadError, Unit]
   ): IO[LoadError, Path] =
-    val hex = key(launcher, sources, checksums)
-    val plugins = store.root.resolve("plugins")
-    val dest = plugins.resolve(hex)
-    ZIO
-      .attemptBlocking(ready(dest))
-      .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat)))
-      .flatMap:
-        case true  => touch(dest, hex)
-        case false =>
-          ZIO
-            .attemptBlocking(Files.createDirectories(plugins))
-            .mapError(_ => LoadError.Io(IoFailure(plugins, IoFault.Create))) *>
-            ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
-              fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
+    (for
+      version <- histos.toolchain.BuildCompiler.version.mapError(
+        LoadError.Resolve(_)
+      )
+      embedded <- histos.toolchain.BuildCompiler
+        .identity(classpath)
+        .mapError(
+          LoadError.Resolve(_)
+        )
+      runtime <- histos.zinc.GraphCompile.jdkHere.mapError(LoadError.Runtime(_))
+    yield histos.toolchain.CompilerIdentity(
+      version,
+      embedded,
+      runtime.identity
+    )).flatMap: compiler =>
+      val hex = key(launcher, sources, checksums, compiler)
+      val plugins = store.root.resolve("plugins")
+      val dest = plugins.resolve(hex)
+      ZIO
+        .attemptBlocking(ready(dest))
+        .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat)))
+        .flatMap:
+          case true  => touch(dest, hex)
+          case false =>
+            ZIO
+              .attemptBlocking(Files.createDirectories(plugins))
+              .mapError(_ =>
+                LoadError.Io(IoFailure(plugins, IoFault.Create))
+              ) *>
+              ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
+                fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(
+                  dest,
+                  hex
+                )
 
   private def fillJar(jar: Path, classpath: List[Path])(
       classes: Path
@@ -107,10 +141,15 @@ private[load] object PluginCompile:
   private def key(
       launcher: ApiDigest,
       sources: String,
-      checksums: List[String]
+      checksums: List[String],
+      compiler: histos.toolchain.CompilerIdentity
   ): String =
     val lines =
-      List(s"api ${launcher.value}", s"scala $Compiler", s"sources $sources") ++
+      List(
+        s"api ${launcher.value}",
+        s"compiler ${compiler.fingerprint.value}",
+        s"sources $sources"
+      ) ++
         checksums.sorted.map(sha => s"artifact $sha")
     Sha256
       .of(

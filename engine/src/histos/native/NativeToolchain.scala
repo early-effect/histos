@@ -20,7 +20,8 @@ final case class NativeToolchain(source: NativeSource, revision: NativeVersion)
 
 object NativeToolchain:
   /** The revision a native module uses when it does not name one. */
-  val ReleaseRevision: NativeVersion = NativeVersion("0.5.12")
+  val ReleaseRevision: NativeVersion =
+    histos.ToolCatalog.default.native.revision
 
   def revision(named: Option[NativeVersion]): NativeVersion =
     named.getOrElse(ReleaseRevision)

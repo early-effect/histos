@@ -15,10 +15,9 @@ import histos.{
 }
 
 import java.nio.file.{Files, Path}
+import histos.workspace.{IoFailure, IoFault, Workspace}
 
-import scala.jdk.CollectionConverters.*
-
-import zio.{Scope, ZIO}
+import zio.{Scope, System, ZIO}
 import zio.test.*
 
 object LauncherSpec extends ZIOSpecDefault:
@@ -28,14 +27,21 @@ object LauncherSpec extends ZIOSpecDefault:
 
   private val checks = suite("launcher publish")(
     test("the committed scripts are the manual ship"):
-      val repo = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
-      repo match
-        case Some(root) =>
-          assertTrue(
-            Files.readString(root.resolve("histos")) == LauncherScript.posix(version),
-            Files.readString(root.resolve("histos.bat")) == LauncherScript.windows(version),
-          )
-        case None => assertTrue(false)
+      for
+        value <- System
+          .env("HISTOS_REPO")
+          .mapError(_ => LauncherFixtureError.Environment)
+        root <- ZIO
+          .fromOption(value.filter(_.nonEmpty).map(Path.of(_)))
+          .orElseFail(LauncherFixtureError.Repository)
+        posix <- Workspace.readString(root.resolve("histos"))
+        windows <- Workspace.readString(root.resolve("histos.bat"))
+        pin <- LauncherPin.read(root)
+      yield assertTrue(
+        posix == LauncherScript.posix(version),
+        windows == LauncherScript.windows(version),
+        pin.version == version
+      )
     ,
     test("the api name keeps the binary suffix and the assembly name does not"):
       ZIO
@@ -65,9 +71,11 @@ object LauncherSpec extends ZIOSpecDefault:
       val authed = present match
         case Right(where: PublishWhere.Snapshots) =>
           where.user.value == "maven" &&
-            where.password == zio.Config.Secret(zio.Chunk.fromArray("secret".toCharArray)) &&
-            !where.password.toString.contains("secret") &&
-            !where.toString.contains("secret")
+          where.password == zio.Config.Secret(
+            zio.Chunk.fromArray("secret".toCharArray)
+          ) &&
+          !where.password.toString.contains("secret") &&
+          !where.toString.contains("secret")
         case _ => false
       val folder = directory match
         case Right(PublishWhere.Directory(path)) =>
@@ -80,7 +88,9 @@ object LauncherSpec extends ZIOSpecDefault:
         for
           root <- temp
           graph <- ZIO.fromEither(opened)
-          ready = LauncherPublish.ready(root, graph)
+          ready <- ZIO
+            .attemptBlocking(LauncherPublish.ready(root, graph))
+            .mapError(_ => IoFailure(root, IoFault.Stat))
           missingJar = ready match
             case Left(LocalPublishError.NoAssembly(path)) =>
               path.endsWith(Path.of("dist", "histos.jar"))
@@ -96,10 +106,22 @@ object LauncherSpec extends ZIOSpecDefault:
           group <- ZIO.fromEither(Organization.from("rocks.earlyeffect"))
           written = PublishOutput(
             Nil,
-            List(PublishedModule(group, "histos-api_3", "9.9.9", Some(root.resolve("api.jar"))))
+            List(
+              PublishedModule(
+                group,
+                "histos-api_3",
+                "9.9.9",
+                Some(root.resolve("api.jar"))
+              )
+            )
           )
-          refused <- LauncherPublish.upload(root, graph, written).provide(Publisher.local(repo)).either
-        yield assertTrue(refused == Left(LocalPublishError.VersionMismatch(version, "9.9.9")))
+          refused <- LauncherPublish
+            .upload(root, graph, written)
+            .provide(Publisher.local(repo))
+            .either
+        yield assertTrue(
+          refused == Left(LocalPublishError.VersionMismatch(version, "9.9.9"))
+        )
     ,
     test("the assembly is a jar with an empty pom"):
       ZIO.scoped:
@@ -107,10 +129,12 @@ object LauncherSpec extends ZIOSpecDefault:
           root <- temp
           repo <- temp
           graph <- ZIO.fromEither(opened)
-          _ <- ZIO.attempt {
-            Files.createDirectories(root.resolve("dist"))
-            Files.write(root.resolve("dist").resolve("histos.jar"), jarBytes)
-          }
+          _ <- ZIO
+            .attemptBlocking {
+              Files.createDirectories(root.resolve("dist"))
+              Files.write(root.resolve("dist").resolve("histos.jar"), jarBytes)
+            }
+            .mapError(_ => IoFailure(root, IoFault.Write))
           group <- ZIO.fromEither(Organization.from("rocks.earlyeffect"))
           written = PublishOutput(
             Nil,
@@ -126,13 +150,15 @@ object LauncherSpec extends ZIOSpecDefault:
           published <- LauncherPublish
             .upload(root, graph, written)
             .provide(Publisher.local(repo))
-          pom <- ZIO.attempt(
-            Files.readString(
-              repo.resolve(
-                "rocks/earlyeffect/histos/0.0.1-SNAPSHOT/histos-0.0.1-SNAPSHOT.pom"
+          pom <- ZIO
+            .attemptBlocking(
+              Files.readString(
+                repo.resolve(
+                  "rocks/earlyeffect/histos/0.0.1-SNAPSHOT/histos-0.0.1-SNAPSHOT.pom"
+                )
               )
             )
-          )
+            .mapError(_ => IoFailure(repo, IoFault.Read))
         yield assertTrue(
           published.modules.map(line =>
             s"${line.group.value} ${line.artifact} ${line.revision}"
@@ -158,19 +184,10 @@ object LauncherSpec extends ZIOSpecDefault:
         api
       )
 
-  private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-launch"))):
-      path =>
-        ZIO.attempt {
-          if Files.exists(path) then
-            val walk = Files.walk(path)
-            val paths =
-              try walk.iterator.asScala.toList
-              finally walk.close()
-            paths
-              .sortBy(_.getNameCount)
-              .reverse
-              .foreach(item => Files.deleteIfExists(item))
-        }.ignore
+  private def temp: ZIO[Scope, IoFailure, Path] =
+    Workspace.work("histos-launch")
 
-  def spec = checks
+  def spec = checks @@ TestAspect.withLiveSystem
+
+private enum LauncherFixtureError:
+  case Environment, Repository

@@ -12,7 +12,7 @@ object build extends HistosBuild:
       .testDependencies(zioTest, zioTestSbt)
     val central = module("central", Jvm)(scala3)
       .dependsOn(api)
-      .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.12.0")
+      .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.13.0")
       .testDependencies(zioTest, zioTestSbt)
     val engine = module("engine", Jvm)(scala3)
       .dependsOn(central, api)
@@ -33,7 +33,7 @@ object build extends HistosBuild:
       .dependsOn(engine, central, api)
       .libraryDependencies(
         zio,
-        dep"rocks.earlyeffect::heddle-mcp:0.12.0",
+        dep"rocks.earlyeffect::heddle-mcp:0.13.0",
         dep"dev.zio::zio-cli:0.8.2",
         // zio-cli 0.8.2 still requests zio-process 0.7.1, whose lazy vals call Unsafe.
         dep"dev.zio::zio-process:0.8.1"

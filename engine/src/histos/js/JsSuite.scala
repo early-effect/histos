@@ -1,5 +1,6 @@
 package histos.js
 
+import histos.jdk.JdkRuntime
 import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
@@ -10,10 +11,12 @@ import histos.zinc.{
   CompileRequest,
   CompileToolchain,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags
 }
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
+
+import histos.resolve.{LockedTools, ResolveError}
 
 import java.nio.file.Path
 
@@ -29,10 +32,11 @@ final case class JsSuiteRequest(
     framework: String,
     classpath: List[Path],
     work: Path,
-    jdk: ResolvedJdk,
+    jdk: JdkRuntime,
     processEnv: Map[String, String],
     node: NodeBinary,
-    patterns: List[SuitePattern] = Nil
+    patterns: List[SuitePattern] = Nil,
+    revision: Option[histos.JsVersion] = None
 )
 
 /** Link the Scala.js test bridge and run
@@ -40,13 +44,11 @@ final case class JsSuiteRequest(
   * not load `org.scalajs.linker` or a `JSEnv`.
   */
 object JsSuite:
-  private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
-  private val FirefoxScala: ScalaVersion = ScalaVersion.trusted("3.9.0")
-  private val Linker: String = "1.22.0"
   private val SuiteMain: String = "subprocess.JsSuite"
-  private val BridgeJar: String = "scalajs-test-bridge_2.13"
 
-  def run(request: JsSuiteRequest): IO[JsSuiteError, ChildRequest] =
+  def run(
+      request: JsSuiteRequest
+  ): ZIO[LockedTools, JsSuiteError, ChildRequest] =
     val JsSuiteRequest(
       version,
       env,
@@ -57,7 +59,8 @@ object JsSuite:
       jdk,
       processEnv,
       node,
-      patterns
+      patterns,
+      revision
     ) = request
     val output = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
@@ -67,20 +70,25 @@ object JsSuite:
     val listed = work.resolve("classpath.txt")
     val child = work.resolve("child")
     for
-      libraries <- ScalaJs.libraries(version).mapError(JsSuiteError.Library(_))
-      tools <- ZIO
-        .attemptBlockingInterrupt(fetch(artifacts(env)))
-        .mapError(_ => JsSuiteError.Unavailable)
-        .flatMap(ZIO.fromEither)
-      bridge <- ZIO
-        .attemptBlockingInterrupt(
-          fetch(
-            List(Artifact("org.scala-js", BridgeJar, Linker)),
-            transitive = false
-          )
+      view <- ZIO.service[LockedTools]
+      selected = revision.getOrElse(view.catalog.js.revision)
+      libraries <- ScalaJs
+        .libraries(version, Some(selected))
+        .mapError(JsSuiteError.Library(_))
+      tools <- view
+        .materialize(
+          histos.js.JsRequests
+            .suite(selected, env, view.catalog, view.repositories)
         )
-        .mapError(_ => JsSuiteError.Unavailable)
-        .flatMap(ZIO.fromEither)
+        .mapError(JsSuiteError.Resolved(_))
+        .map(_.artifacts.map(_.path))
+      bridge <- view
+        .materialize(
+          histos.js.JsRequests
+            .testBridge(selected, view.catalog, view.repositories)
+        )
+        .mapError(JsSuiteError.Resolved(_))
+        .map(_.artifacts.map(_.path))
       _ <- write(
         listed,
         (classpath ++ libraries ++ bridge)
@@ -92,7 +100,7 @@ object JsSuite:
         .compile(
           CompileRequest(
             CompileToolchain(
-              compiler(env),
+              histos.js.JsRequests.compiler(env, view.catalog),
               histos.Platform.Jvm,
               jdk,
               ScalacFlags.empty
@@ -120,30 +128,6 @@ object JsSuite:
         "JS_MODULE" -> kind.token
       )
     )
-
-  private def compiler(env: JsEnv): ScalaVersion = env match
-    case JsEnv.Firefox            => FirefoxScala
-    case JsEnv.Node | JsEnv.Jsdom => BridgeScala
-
-  private def artifacts(env: JsEnv): List[Artifact] = env match
-    case JsEnv.Node =>
-      List(
-        Artifact("org.scala-js", "scalajs-linker_2.13", Linker),
-        Artifact("org.scala-js", "scalajs-sbt-test-adapter_2.13", Linker),
-        Artifact("org.scala-js", "scalajs-env-nodejs_2.13", "1.6.0")
-      )
-    case JsEnv.Jsdom =>
-      List(
-        Artifact("org.scala-js", "scalajs-linker_2.13", Linker),
-        Artifact("org.scala-js", "scalajs-sbt-test-adapter_2.13", Linker),
-        Artifact("org.scala-js", "scalajs-env-jsdom-nodejs_2.13", "1.1.1")
-      )
-    case JsEnv.Firefox =>
-      List(
-        Artifact("org.scala-js", "scalajs-linker_3", Linker),
-        Artifact("org.scala-js", "scalajs-sbt-test-adapter_3", Linker),
-        Artifact("rocks.earlyeffect", "chekhov-jsenv_3", "0.1.3")
-      )
 
   /** Chekhov rejects `RunConfig` env. Node and jsdom take the child
     * environment, which is only `PATH`.
@@ -325,45 +309,6 @@ object JsSuite:
       .replace("__USE_ENV__", if useRunEnv(env) then "true" else "false")
       .replace("__SUITES__", SuitePattern.embed(patterns))
 
-  private final case class Artifact(
-      organization: String,
-      name: String,
-      revision: String
-  )
-
-  private def fetch(
-      wanted: List[Artifact],
-      transitive: Boolean = true
-  ): Either[JsSuiteError, List[Path]] =
-    val dependencies = wanted.map: item =>
-      val base = coursier.Dependency(
-        coursier.Module(
-          coursier.Organization(item.organization),
-          coursier.ModuleName(item.name)
-        ),
-        coursier.version.VersionConstraint(item.revision)
-      )
-      if transitive then base else base.copy(transitive = false)
-    val got = coursier
-      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
-      .noMirrors
-      .withGradleModuleSupport(false)
-      .withRepositories(Seq(coursier.Repositories.central))
-      .addDependencies(dependencies*)
-      .eitherResult()
-    got match
-      case Left(_)       => Left(JsSuiteError.Unavailable)
-      case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap:
-          (_, publication, _, file) =>
-            val classified = publication match
-              case Right(published) => published.classifier.nonEmpty
-              case Left(variant)    => variant.classifier.nonEmpty
-            if file.getName.endsWith(".jar") && !classified then
-              List(file.toPath)
-            else Nil
-        if jars.isEmpty then Left(JsSuiteError.Unavailable) else Right(jars)
-
   private def write(path: Path, text: String): IO[JsSuiteError, Unit] =
     Workspace
       .writeString(path, text)
@@ -376,11 +321,13 @@ object JsSuite:
       .unit
 
 enum JsSuiteError:
+  case Resolved(error: ResolveError)
   case Unavailable
   case Library(error: CompileError)
   case Run(text: String)
 
   def message: String = this match
-    case Unavailable    => "the Scala.js test adapter could not be fetched"
-    case Library(error) => error.message
-    case Run(text)      => text
+    case Resolved(error) => error.message
+    case Unavailable     => "the Scala.js test adapter could not be fetched"
+    case Library(error)  => error.message
+    case Run(text)       => text

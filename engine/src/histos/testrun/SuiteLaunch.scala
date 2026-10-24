@@ -1,5 +1,9 @@
 package histos.testrun
 
+import histos.jdk.JdkRuntime
+import histos.js.{JsRun, JsRunRequest}
+
+import histos.resolve.LockedTools
 import histos.jdk.Sha256
 import histos.js.{
   JsLink,
@@ -47,7 +51,7 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags,
   SemanticDb,
   Sources
@@ -80,13 +84,13 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       sources: List[Path],
       main: TestMain,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -131,26 +135,38 @@ private[testrun] object SuiteLaunch:
                   binary,
                   classes :: linked.paths,
                   linkDir,
-                  jdk
+                  jdk,
+                  kind = module.jsModule,
+                  revision = module.jsVersion
                 )
               )
-              .mapError(error => linkFailed(cell, error.message))
-            work <- TestCompile.fresh(
-              TestCompile.testWork(
-                repo,
-                module.name,
-                cell.version,
-                cell.platform
+              .mapError(error =>
+                ModuleTestError.Tool(
+                  cell.module,
+                  cell.version,
+                  histos.toolchain.PlatformToolError.JsLink(error)
+                )
               )
-            )
-          yield runCommand(
-            module.name,
-            cell.version,
-            cell.platform,
-            List(chosen.path.toString, script.toString),
-            work,
-            TestCompile.suiteEnv(repo, runtimes.env)
-          )
+            asked <- JsRun
+              .start(
+                JsRunRequest(
+                  module.jsEnv,
+                  module.jsModule,
+                  script,
+                  linkDir,
+                  jdk,
+                  TestCompile.suiteEnv(repo, runtimes.env),
+                  chosen
+                )
+              )
+              .mapError(error =>
+                ModuleTestError.Tool(
+                  cell.module,
+                  cell.version,
+                  histos.toolchain.PlatformToolError.JsRun(error)
+                )
+              )
+          yield session(module.name, cell.version, None, asked, cell.platform)
       )
     yield stream
 
@@ -161,14 +177,14 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       sources: List[Path],
       provider: TestProvider,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -180,7 +196,7 @@ private[testrun] object SuiteLaunch:
         selected: List[SuitePattern],
         linked: TestCompile.Linked
     ): ZIO[
-      Resolve & ProviderInstall,
+      Resolve & ProviderInstall & LockedTools & TestContext,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed]
     ] =
@@ -204,10 +220,17 @@ private[testrun] object SuiteLaunch:
                     jdk,
                     TestCompile.suiteEnv(repo, runtimes.env),
                     chosen,
-                    selected
+                    selected,
+                    revision = module.jsVersion
                   )
                 )
-                .mapError(error => linkFailed(cell, error.message))
+                .mapError(error =>
+                  ModuleTestError.Tool(
+                    cell.module,
+                    cell.version,
+                    histos.toolchain.PlatformToolError.JsSuite(error)
+                  )
+                )
             yield session(
               module.name,
               cell.version,
@@ -264,13 +287,13 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       sources: List[Path],
       main: TestMain,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -317,11 +340,18 @@ private[testrun] object SuiteLaunch:
                   TestCompile.suiteEnv(repo, runtimes.env),
                   linkDir,
                   jdk,
-                  binary
+                  binary,
+                  histos.ScalaVersion("3.9.0")
                 ),
                 classes :: linked.paths
               )
-              .mapError(error => linkFailed(cell, error.message))
+              .mapError(error =>
+                ModuleTestError.Tool(
+                  cell.module,
+                  cell.version,
+                  histos.toolchain.PlatformToolError.Native(error)
+                )
+              )
             work <- TestCompile.fresh(
               TestCompile.testWork(
                 repo,
@@ -348,14 +378,14 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       sources: List[Path],
       provider: TestProvider,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -369,7 +399,7 @@ private[testrun] object SuiteLaunch:
         linked: TestCompile.Linked,
         major: histos.ClangMajor
     ): ZIO[
-      Resolve & ProviderInstall,
+      Resolve & ProviderInstall & LockedTools & TestContext,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed]
     ] =
@@ -390,11 +420,18 @@ private[testrun] object SuiteLaunch:
                     TestCompile.suiteEnv(repo, runtimes.env),
                     linkDir,
                     jdk,
-                    entry
+                    entry,
+                    histos.ScalaVersion("3.9.0")
                   ),
                   classpath
                 )
-                .mapError(error => linkFailed(cell, error.message))
+                .mapError(error =>
+                  ModuleTestError.Tool(
+                    cell.module,
+                    cell.version,
+                    histos.toolchain.PlatformToolError.Native(error)
+                  )
+                )
               asked <- NativeSuite
                 .run(
                   NativeSuiteRequest(
@@ -408,7 +445,13 @@ private[testrun] object SuiteLaunch:
                     selected
                   )
                 )
-                .mapError(error => linkFailed(cell, error.message))
+                .mapError(error =>
+                  ModuleTestError.Tool(
+                    cell.module,
+                    cell.version,
+                    histos.toolchain.PlatformToolError.NativeSuite(error)
+                  )
+                )
             yield session(
               module.name,
               cell.version,
@@ -484,11 +527,19 @@ private[testrun] object SuiteLaunch:
       module: Module,
       cell: CompiledCell,
       native: NativeOrigin
-  ): IO[ModuleTestError, NativeToolchain] =
-    val revision = NativeToolchain.revision(module.nativeVersion)
-    ZIO
-      .fromEither(NativeToolchain.of(revision, native))
-      .mapError(error => linkFailed(cell, error.message))
+  ): ZIO[LockedTools, ModuleTestError, NativeToolchain] =
+    ZIO.serviceWithZIO[LockedTools]: tools =>
+      val revision =
+        module.nativeVersion.getOrElse(tools.catalog.native.revision)
+      ZIO
+        .fromEither(NativeToolchain.of(revision, native))
+        .mapError(error =>
+          ModuleTestError.Tool(
+            cell.module,
+            cell.version,
+            histos.toolchain.PlatformToolError.NativeOrigin(error)
+          )
+        )
 
   private[testrun] def node(
       cell: CompiledCell,
@@ -533,79 +584,80 @@ private[testrun] object SuiteLaunch:
       hashes: List[Sha256],
       quick: Boolean,
       run: List[String] => ZIO[
-        Resolve & ProviderInstall,
+        Resolve & ProviderInstall & LockedTools & TestContext,
         ModuleTestError,
         ZStream[Any, ModuleTestError, TestFeed]
       ]
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
-    if !quick then run(suites)
-    else
-      val jars = hashes.map(_.value)
-      ZIO
-        .foldLeft(suites)(
-          (List.empty[String], List.empty[(String, Option[String])])
-        ):
-          case ((cached, dirty), name) =>
-            SuiteStamp.digest(name, directories, jars) match
-              case Some(digest) =>
-                QuickRecord
-                  .hit(
-                    repo,
-                    cell.module,
-                    cell.version,
-                    cell.platform,
-                    name,
-                    digest
-                  )
-                  .map { hit =>
-                    if hit then (name :: cached, dirty)
-                    else (cached, (name, Some(digest)) :: dirty)
-                  }
-              case None =>
-                ZIO.succeed((cached, (name, None) :: dirty))
-        .flatMap { (cached, dirty) =>
-          val shown = ZStream.fromIterable(
-            cached.sorted.map(name =>
-              TestFeed.Cached(cell.module, cell.version, cell.platform, name)
+    ZIO.serviceWithZIO[TestContext]: context =>
+      if !quick then run(suites)
+      else
+        val jars = (hashes ++ context.hashes).map(_.value)
+        ZIO
+          .foldLeft(suites)(
+            (List.empty[String], List.empty[(String, Option[String])])
+          ):
+            case ((cached, dirty), name) =>
+              SuiteStamp.digest(name, directories, jars) match
+                case Some(digest) =>
+                  QuickRecord
+                    .hit(
+                      repo,
+                      cell.module,
+                      cell.version,
+                      cell.platform,
+                      name,
+                      digest
+                    )
+                    .map { hit =>
+                      if hit then (name :: cached, dirty)
+                      else (cached, (name, Some(digest)) :: dirty)
+                    }
+                case None =>
+                  ZIO.succeed((cached, (name, None) :: dirty))
+          .flatMap { (cached, dirty) =>
+            val shown = ZStream.fromIterable(
+              cached.sorted.map(name =>
+                TestFeed.Cached(cell.module, cell.version, cell.platform, name)
+              )
             )
-          )
-          if dirty.isEmpty then ZIO.succeed(shown)
-          else
-            run(dirty.map(_._1)).map { stream =>
-              shown ++ stream.tap {
-                case TestFeed.Done(done) =>
-                  done.status match
-                    case TestStatus.Passed =>
-                      ZIO.foreachDiscard(dirty):
-                        case (name, Some(digest)) =>
-                          QuickRecord.save(
+            if dirty.isEmpty then ZIO.succeed(shown)
+            else
+              run(dirty.map(_._1)).map { stream =>
+                shown ++ stream.tap {
+                  case TestFeed.Done(done) =>
+                    done.status match
+                      case TestStatus.Passed =>
+                        ZIO.foreachDiscard(dirty):
+                          case (name, Some(digest)) =>
+                            QuickRecord.save(
+                              repo,
+                              cell.module,
+                              cell.version,
+                              cell.platform,
+                              name,
+                              digest
+                            )
+                          case _ => ZIO.unit
+                      case TestStatus.Failed(_) =>
+                        ZIO.foreachDiscard(dirty)((name, _) =>
+                          QuickRecord.clear(
                             repo,
                             cell.module,
                             cell.version,
                             cell.platform,
-                            name,
-                            digest
+                            name
                           )
-                        case _ => ZIO.unit
-                    case TestStatus.Failed(_) =>
-                      ZIO.foreachDiscard(dirty)((name, _) =>
-                        QuickRecord.clear(
-                          repo,
-                          cell.module,
-                          cell.version,
-                          cell.platform,
-                          name
                         )
-                      )
-                    case _ => ZIO.unit
-                case _ => ZIO.unit
+                      case _ => ZIO.unit
+                  case _ => ZIO.unit
+                }
               }
-            }
-        }
+          }
 
   private[testrun] def exact(names: List[String]): List[SuitePattern] =
     names.flatMap(name => SuitePattern.from(name).toOption)
@@ -617,13 +669,13 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       sources: List[Path],
       main: TestMain,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -688,14 +740,14 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       sources: List[Path],
       provider: TestProvider,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -704,7 +756,7 @@ private[testrun] object SuiteLaunch:
     def launch(
         selected: List[SuitePattern]
     ): ZIO[
-      Resolve & ProviderInstall,
+      Resolve & ProviderInstall & LockedTools & TestContext,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed]
     ] =
@@ -798,7 +850,7 @@ private[testrun] object SuiteLaunch:
 
   private[testrun] def request(
       repo: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       classes: Path,
       classpath: List[Path],

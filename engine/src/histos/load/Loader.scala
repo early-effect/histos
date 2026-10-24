@@ -39,6 +39,11 @@ final case class BuildNotes(failed: Boolean, problems: List[CompileProblem])
 
 trait Loader:
   def scan(repo: Path): IO[LoadError, ScannedBuild]
+  def loadLocked(
+      repo: Path,
+      apiJar: Path,
+      lock: DependencyLock
+  ): ZIO[Scope, LoadError, LoadedBuild]
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild]
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]]
   def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes]
@@ -100,8 +105,21 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore)
     yield out
 
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
+    loadWith(repo, apiJar, None)
+
+  override def loadLocked(
+      repo: Path,
+      apiJar: Path,
+      lock: DependencyLock
+  ): ZIO[Scope, LoadError, LoadedBuild] = loadWith(repo, apiJar, Some(lock))
+
+  private def loadWith(
+      repo: Path,
+      apiJar: Path,
+      lock: Option[DependencyLock]
+  ): ZIO[Scope, LoadError, LoadedBuild] =
     for
-      prepared <- prepare(repo, apiJar)
+      prepared <- prepare(repo, apiJar, lock)
       matched = prepared.matched
       jars = pluginJars(matched)
       _ <- BuildFile.compile(
@@ -131,13 +149,20 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore)
 
   private def prepare(
       repo: Path,
-      apiJar: Path
+      apiJar: Path,
+      supplied: Option[DependencyLock] = None
   ): ZIO[Scope, LoadError, Prepared] =
     for
       scanned <- scan(repo)
       launcher <- digestOf(apiJar)
       boundary <- Boundary.jars(apiJar)
-      matched <- materialize(repo, scanned.requests, launcher, boundary)
+      matched <- materialize(
+        repo,
+        scanned.requests,
+        launcher,
+        boundary,
+        supplied
+      )
       out <- BuildFile.tempDir("histos-classes")
       source <- BuildFile.writeTemp(scanned.source)
     yield Prepared(launcher, boundary, matched, source, out)
@@ -146,15 +171,17 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore)
       repo: Path,
       requests: List[PluginRequest],
       launcher: ApiDigest,
-      boundary: List[Path]
+      boundary: List[Path],
+      supplied: Option[DependencyLock]
   ): IO[LoadError, List[Matched]] =
     val dependencies = requests.collect {
       case PluginRequest.Dep(dependency, _) =>
         dependency
     }
-    val locked =
-      if dependencies.isEmpty then ZIO.succeed(DependencyLock(Nil))
-      else Resolve.readLock(repo).mapError(absent(dependencies))
+    val locked = supplied match
+      case Some(lock)                   => ZIO.succeed(lock)
+      case None if dependencies.isEmpty => ZIO.succeed(DependencyLock(Nil))
+      case None => Resolve.readLock(repo).mapError(absent(dependencies))
     locked.flatMap: lock =>
       ZIO
         .foreach(requests):
@@ -182,8 +209,10 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore)
         for
           artifacts <- ZIO.foreach(locked.artifacts): artifact =>
             resolve.fetch(artifact).mapError(LoadError.Resolve(_))
+          compiler <- histos.toolchain.BuildCompiler.version
+            .mapError(LoadError.Resolve(_))
           direct <- ZIO
-            .fromEither(directJar(dependency, artifacts))
+            .fromEither(directJar(dependency, artifacts, compiler))
             .mapError(LoadError.Plugin(_))
           read <- PluginJar.read(dependency, direct.path)
           linked <- ZIO
@@ -365,10 +394,11 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore)
 
   private def directJar(
       dependency: Dep,
-      artifacts: List[ResolvedArtifact]
+      artifacts: List[ResolvedArtifact],
+      compiler: ScalaVersion
   ): Either[PluginLoadError, ResolvedArtifact] =
     val published =
-      ArtifactName.of(dependency, ScalaVersion.trusted("3.10.0"), Platform.Jvm)
+      ArtifactName.of(dependency, compiler, Platform.Jvm)
     artifacts.find(artifact =>
       artifact.organization == dependency.organization &&
         artifact.name == published &&

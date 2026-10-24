@@ -93,10 +93,19 @@ object PluginRunSpec extends ZIOSpecDefault:
     )
     PluginThreads
       .make(parent)
-      .flatMap(threads => PluginRuntime.loaded(repo, built, parent, threads, List(plugin), links, launcher))
+      .flatMap(threads =>
+        PluginRuntime
+          .loaded(repo, built, parent, threads, List(plugin), links, launcher)
+      )
 
   private def jarsAt(jars: List[Path]): List[PluginLink] =
-    List(PluginLink(echoId, PluginLinked.FromBinary(launcher), jars.map(_.toString)))
+    List(
+      PluginLink(
+        echoId,
+        PluginLinked.FromBinary(launcher),
+        jars.map(_.toString)
+      )
+    )
 
   private def recording: UIO[(Ref[Map[String, String]], ActionCache)] =
     Ref
@@ -146,6 +155,137 @@ object PluginRunSpec extends ZIOSpecDefault:
       .note(otherId, NoteKey("site"), NoteText("other"))
 
   private val plugin = suite("plugin run")(
+    test(
+      "plugin compile and classpath preparation share the in-flight lock generation"
+    ):
+      ZIO.scoped:
+        for
+          calls <- Ref.make(0)
+          seen <- Ref.make(List.empty[ModuleView])
+          argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
+          name <- ZIO.fromEither(ProjectName.from("docs"))
+          page = task(
+            TaskName("echo"),
+            Seal.Open,
+            Nil,
+            List(TaskDep.Compile(name, None, Some(Jvm)))
+          )
+          live = script(
+            echoId,
+            List(page),
+            calls,
+            seen,
+            argsSeen,
+            _ => ZIO.succeed(PluginOutput("captured generation", Nil))
+          )
+          dependency = Dep("dev.fixture:gate:1.0.0")
+          built <- graph(
+            live,
+            module("docs", Jvm)(scala"3.9.0").libraryDependencies(dependency)
+          )
+          dir <- directory
+          _ <- ZIO.attempt {
+            Files.createDirectories(dir.resolve("docs/src"))
+            Files.writeString(
+              dir.resolve("docs/src/Hello.scala"),
+              "object Hello:\n  val value = 1\n"
+            )
+          }
+          jar = dir.resolve("gate.jar")
+          _ <- ZIO.attemptBlocking {
+            val stream =
+              new java.util.jar.JarOutputStream(Files.newOutputStream(jar))
+            stream.close()
+          }
+          hash <- histos.toolchain.RuntimeFiles.sha256(jar)
+          tools <- ZIO.service[histos.resolve.LockedTools]
+          artifact = histos.resolve.LockedArtifact(
+            "dev.fixture",
+            "gate",
+            "1.0.0",
+            hash,
+            histos.resolve.Repository.Central
+          )
+          before = histos.resolve.DependencyLock(
+            List(
+              histos.resolve.LockedCell(
+                name,
+                ScalaVersion("3.9.0"),
+                Jvm,
+                List(
+                  histos.resolve
+                    .LockedDirect("dev.fixture", "gate", "1.0.0", DepKind.Java)
+                ),
+                List(artifact),
+                Nil
+              )
+            ),
+            Nil,
+            tools.lock.tools.filter(_.id.scalaVersion == ScalaVersion("3.9.0"))
+          )
+          after = before.copy(
+            cells =
+              before.cells.map(_.copy(scalaVersion = ScalaVersion("3.10.0"))),
+            tools = tools.lock.tools.filter(
+              _.id.scalaVersion == ScalaVersion("3.10.0")
+            )
+          )
+          _ <- histos.workspace.Workspace.writeString(
+            Resolve.lockPath(dir),
+            histos.resolve.DependencyLock.render(before)
+          )
+          reached <- Promise.make[Nothing, Unit]
+          proceed <- Promise.make[Nothing, Unit]
+          resolver = new Resolve:
+            def resolveTool(request: histos.resolve.ToolRequest) =
+              tools.resolve.resolveTool(request)
+            def resolve(cell: histos.resolve.ResolveCell) =
+              tools.resolve.resolve(cell)
+            def fetch(held: histos.resolve.LockedArtifact) =
+              if held.organization == "dev.fixture" && held.name == "gate" then
+                reached.succeed(()).unit *> proceed.await *>
+                  ZIO.succeed(
+                    histos.resolve.ResolvedArtifact(
+                      held.organization,
+                      held.name,
+                      held.revision,
+                      jar,
+                      hash,
+                      held.repository
+                    )
+                  )
+              else tools.resolve.fetch(held)
+            def resolvePlugin(
+                dependency: Dep,
+                repositories: histos.resolve.Repositories
+            ) = tools.resolve.resolvePlugin(dependency, repositories)
+            def sources(
+                organization: String,
+                name: String,
+                revision: String,
+                repository: histos.resolve.Repository
+            ) = tools.resolve.sources(organization, name, revision, repository)
+          (_, cache) <- recording
+          running <- run(
+            runtime(dir, built, live),
+            PluginTaskId(echoId, TaskName("echo")),
+            PluginArgs.empty,
+            cache,
+            ZLayer.succeed(resolver)
+          ).forkScoped
+          _ <- reached.await
+          _ <- histos.workspace.Workspace.writeString(
+            Resolve.lockPath(dir),
+            histos.resolve.DependencyLock.render(after)
+          )
+          _ <- proceed.succeed(())
+          result <- running.join
+          entered <- calls.get
+        yield assertTrue(
+          result == PluginOutput("captured generation", Nil),
+          entered == 1
+        )
+    ,
     test("a run sees only the notes of its own plugin"):
       ZIO.scoped:
         for
@@ -265,13 +405,25 @@ object PluginRunSpec extends ZIOSpecDefault:
           }.orDie
           (values, cache) <- recording
           id = PluginTaskId(echoId, TaskName("echo"))
-          _ <- run(runtime(dir, built, live, jarsAt(List(first))), id, PluginArgs.empty, cache)
-          _ <- run(runtime(dir, built, live, jarsAt(List(second))), id, PluginArgs.empty, cache)
+          _ <- run(
+            runtime(dir, built, live, jarsAt(List(first))),
+            id,
+            PluginArgs.empty,
+            cache
+          )
+          _ <- run(
+            runtime(dir, built, live, jarsAt(List(second))),
+            id,
+            PluginArgs.empty,
+            cache
+          )
           entered <- calls.get
           stored <- values.get
         yield assertTrue(entered == 1, stored.size == 1)
     ,
-    test("two jars with one file name stay two inputs, and a jar listed twice is one"):
+    test(
+      "two jars with one file name stay two inputs, and a jar listed twice is one"
+    ):
       ZIO.scoped:
         for
           calls <- Ref.make(0)
@@ -299,12 +451,27 @@ object PluginRunSpec extends ZIOSpecDefault:
           listed = List(first, second, first)
           id = PluginTaskId(echoId, TaskName("echo"))
           hashed <- PluginInputs.hash(
-            PluginInputs.HashRequest(dir, built, echoId, page, id, listed.map(_.toString), launcher, Map.empty)
+            PluginInputs.HashRequest(
+              dir,
+              built,
+              echoId,
+              page,
+              id,
+              listed.map(_.toString),
+              launcher,
+              Map.empty
+            )
           )
           (_, cache) <- recording
-          out <- run(runtime(dir, built, live, jarsAt(listed)), id, PluginArgs.empty, cache).either
+          out <- run(
+            runtime(dir, built, live, jarsAt(listed)),
+            id,
+            PluginArgs.empty,
+            cache
+          ).either
         yield
-          val jars = hashed.inputs.filter(_.name.value.startsWith("plugin.jar:"))
+          val jars =
+            hashed.inputs.filter(_.name.value.startsWith("plugin.jar:"))
           assertTrue(
             jars.size == 2,
             jars.map(_.name).distinct.size == 2,
@@ -342,7 +509,9 @@ object PluginRunSpec extends ZIOSpecDefault:
           ).either
           stored <- values.get
         yield assertTrue(
-          out == Left(PluginFault.Task(PluginRunError.MissingOutput(OutputName("page")))) && stored.isEmpty
+          out == Left(
+            PluginFault.Task(PluginRunError.MissingOutput(OutputName("page")))
+          ) && stored.isEmpty
         )
     ,
     test("an undeclared written path is not stored"):
@@ -372,7 +541,9 @@ object PluginRunSpec extends ZIOSpecDefault:
           ).either
           stored <- values.get
         yield assertTrue(
-          out == Left(PluginFault.Task(PluginRunError.ExtraOutput("extra.txt"))) && stored.isEmpty
+          out == Left(
+            PluginFault.Task(PluginRunError.ExtraOutput("extra.txt"))
+          ) && stored.isEmpty
         )
     ,
     test("a task that is not in the graph is unknown"):
@@ -400,7 +571,9 @@ object PluginRunSpec extends ZIOSpecDefault:
             PluginArgs.empty,
             cache
           ).either
-        yield assertTrue(out == Left(PluginFault.Task(PluginRunError.Unknown(missing))))
+        yield assertTrue(
+          out == Left(PluginFault.Task(PluginRunError.Unknown(missing)))
+        )
     ,
     test("only the requested root receives the caller's arguments"):
       ZIO.scoped:
@@ -502,6 +675,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             )
           }.orDie
           (_, cache) <- recording
+          _ <- histos.ToolFixture.seed(dir, built)
           _ <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
@@ -528,8 +702,7 @@ object PluginRunSpec extends ZIOSpecDefault:
         yield assertTrue(
           text.contains(classes.toString),
           listed.contains("Hello.class")
-        )
-      )
+        ))
     ,
     test("a compile error does not run the plugin"):
       ZIO.withSystem(zio.System.SystemLive)(ZIO.scoped:
@@ -568,6 +741,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             )
           }.orDie
           (_, cache) <- recording
+          _ <- histos.ToolFixture.seed(dir, built)
           ran <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
@@ -578,10 +752,12 @@ object PluginRunSpec extends ZIOSpecDefault:
           count <- calls.get
         yield
           val failed = ran.left.toOption.collect:
-            case PluginFault.Compiled(histos.zinc.GraphCompileError.Failed(module, version, platform, _)) =>
+            case PluginFault.Compiled(
+                  histos.zinc.GraphCompileError
+                    .Failed(module, version, platform, _)
+                ) =>
               module.value == "docs" && version.value == "3.9.0" && platform == Jvm
-          assertTrue(failed.contains(true), count == 0)
-      )
+          assertTrue(failed.contains(true), count == 0))
     ,
     test("interrupting a parked plugin releases its scope and stores nothing"):
       ZIO.scoped:
@@ -667,4 +843,7 @@ object PluginRunSpec extends ZIOSpecDefault:
         yield result
   )
 
-  def spec = plugin @@ TestAspect.timeout(30.seconds)
+  def spec =
+    plugin.provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+      histos.ToolFixture.jvm(histos.ScalaVersion("3.9.0"))
+    ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(90.seconds)

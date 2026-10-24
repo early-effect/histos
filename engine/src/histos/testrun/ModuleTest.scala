@@ -1,5 +1,7 @@
 package histos.testrun
 
+import histos.jdk.JdkRuntime
+import histos.resolve.LockedTools
 import histos.jdk.Sha256
 import histos.js.{
   JsLink,
@@ -30,7 +32,16 @@ import histos.resolve.{
   ResolveError
 }
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
-import histos.step.{Need, Phase, Step, StepId, StepInfo}
+import histos.step.{
+  Input,
+  InputName,
+  InputValue,
+  Need,
+  Phase,
+  Step,
+  StepId,
+  StepInfo
+}
 import histos.workflow.CiError
 import histos.process.{
   ChildClasspath,
@@ -49,7 +60,7 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags,
   SemanticDb,
   Sources
@@ -104,39 +115,58 @@ object ModuleTest:
     * them unreadable.
     */
   def console(asked: TestRun): ZStream[Resolve, ModuleTestError, TestFeed] =
-    ZStream
-      .fromZIO(
-        GraphCompile
-          .run(
-            asked.repo,
-            asked.graph,
-            asked.names,
-            asked.jdk,
-            asked.runtimes.native
-          )
-          .mapError(ModuleTestError.Compile(_))
-      )
-      .flatMap: compiled =>
-        suites(asked, compiled)
+    ZStream.unwrap:
+      TestCompile
+        .readLock(asked.repo)
+        .map: lock =>
+          ZStream
+            .fromZIO(
+              GraphCompile
+                .run(
+                  histos.zinc.CompileSession(
+                    asked.repo,
+                    asked.graph,
+                    asked.jdk,
+                    asked.runtimes.native,
+                    lock
+                  ),
+                  asked.names
+                )
+                .mapError(ModuleTestError.Compile(_))
+            )
+            .flatMap(compiled => suitesLocked(asked, compiled, lock))
 
-  /** Test suites for cells that are already compiled. One suite's lines, then
-    * the next, in module name order.
-    */
   def suites(
       asked: TestRun,
       compiled: List[CompiledCell]
   ): ZStream[Resolve, ModuleTestError, TestFeed] =
+    ZStream.unwrap(
+      TestCompile
+        .readLock(asked.repo)
+        .map(lock => suitesLocked(asked, compiled, lock))
+    )
+
+  private[histos] def suitesLocked(
+      asked: TestRun,
+      compiled: List[CompiledCell],
+      lock: DependencyLock
+  ): ZStream[Resolve, ModuleTestError, TestFeed] =
     ZStream
-      .fromZIO(ProviderInstall.make)
-      .flatMap: install =>
-        runCells(asked, compiled).provideSomeEnvironment[Resolve](
-          _.add(install)
+      .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph)))
+      .flatMap: (install, tools) =>
+        runCells(asked, compiled, lock).provideSomeLayer[Resolve](
+          zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools)
         )
 
   private def runCells(
       asked: TestRun,
-      compiled: List[CompiledCell]
-  ): ZStream[Resolve & ProviderInstall, ModuleTestError, TestFeed] =
+      compiled: List[CompiledCell],
+      lock: DependencyLock
+  ): ZStream[
+    Resolve & ProviderInstall & LockedTools,
+    ModuleTestError,
+    TestFeed
+  ] =
     val TestRun(
       repo,
       graph,
@@ -153,26 +183,38 @@ object ModuleTest:
         wanted <- ZIO.fromEither(
           requested(graph, names).left.map(ModuleTestError.Target(_))
         )
-        lock <- TestCompile.readLock(repo)
         matched <- Ref.make(false)
         cells = compiled
           .filter(cell => wanted.contains(cell.module))
           .sortBy: cell =>
             (cell.module.value, cell.version.value, platformRank(cell.platform))
+        tools <- ZIO.service[LockedTools]
         steps = cells.map: cell =>
-          testStep(
-            repo,
-            graph,
-            cell,
-            jdk,
-            runtimes,
-            lock,
-            repositories,
-            patterns,
-            matched,
-            quick,
-            onTestCompile
+          val module = graph.projects.collectFirst {
+            case found: Module if found.name == cell.module => found
+          }
+          val inputs = Chunk(
+            Input(
+              InputName("jdk"),
+              InputValue.Text(Runtimes.identityToken(jdk.identity))
+            ),
+            Input(
+              InputName("tools"),
+              InputValue.Text(
+                module.toList
+                  .flatMap(found =>
+                    tools.declaredCompilation(
+                      found,
+                      cell.version,
+                      cell.platform,
+                      runtimes.native
+                    )
+                  )
+                  .mkString("\n")
+              )
+            )
           )
+          testStep(asked, cell, lock, matched, inputs)
         feeds <- execute(combine(steps))
       yield
         val ran =
@@ -186,21 +228,20 @@ object ModuleTest:
         ran ++ gate
 
   private def testStep(
-      repo: Path,
-      graph: ProjectGraph,
+      asked: TestRun,
       cell: CompiledCell,
-      jdk: ResolvedJdk,
-      runtimes: Runtimes,
       lock: DependencyLock,
-      repositories: Repositories,
-      patterns: List[SuitePattern],
       matched: Ref[Boolean],
-      quick: Boolean,
-      onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit]
-  ): Step[Resolve & ProviderInstall, ModuleTestError, Chunk[TestFeed]] =
+      inputs: Chunk[Input]
+  ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Chunk[
+    TestFeed
+  ]] =
+    val TestRun(repo, graph, _, jdk, runtimes, patterns, quick, onTestCompile) =
+      asked
+    val repositories = BuildResolvers(graph.resolvers)
     val info = StepInfo(
       StepId.Cell(cell.module, cell.version, cell.platform, Phase.Test),
-      Chunk.empty,
+      inputs,
       Set(Need.Process)
     )
     Step.local[Chunk[TestFeed]](info):
@@ -220,30 +261,36 @@ object ModuleTest:
 
   private def combine(
       steps: List[
-        Step[Resolve & ProviderInstall, ModuleTestError, Chunk[TestFeed]]
+        Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Chunk[
+          TestFeed
+        ]]
       ]
-  ): Step[Resolve & ProviderInstall, ModuleTestError, List[Chunk[TestFeed]]] =
+  ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, List[
+    Chunk[TestFeed]
+  ]] =
     steps match
       case Nil =>
         Step.local[List[Chunk[TestFeed]]](
           StepInfo(StepId.Work("test"), Chunk.empty, Set(Need.Process))
         )(ZIO.succeed(Nil))
       case head :: tail =>
-        tail.foldLeft[Step[Resolve & ProviderInstall, ModuleTestError, List[
-          Chunk[TestFeed]
-        ]]](
+        tail.foldLeft[
+          Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, List[
+            Chunk[TestFeed]
+          ]]
+        ](
           head.map(List(_))
         ): (acc, step) =>
           acc.zip(step).map((all, next) => all :+ next)
 
   private def execute[A](
-      goal: Step[Resolve & ProviderInstall, ModuleTestError, A]
-  ): ZIO[Resolve & ProviderInstall, ModuleTestError, A] =
+      goal: Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, A]
+  ): ZIO[Resolve & ProviderInstall & LockedTools, ModuleTestError, A] =
     ZIO.scoped:
       ZIO
         .serviceWithZIO[Histos](_.start(goal))
         .flatMap(_.outcome)
-        .provideSome[Resolve & ProviderInstall & zio.Scope](
+        .provideSome[Resolve & ProviderInstall & LockedTools & zio.Scope](
           Parallelism.live >>> Histos.live
         )
         .flatMap:
@@ -266,7 +313,7 @@ object ModuleTest:
       repo: Path,
       graph: ProjectGraph,
       cell: CompiledCell,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
@@ -275,7 +322,7 @@ object ModuleTest:
       quick: Boolean,
       onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit]
   ): ZIO[
-    Resolve & ProviderInstall,
+    Resolve & ProviderInstall & LockedTools,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
@@ -393,7 +440,23 @@ object ModuleTest:
                         patterns,
                         quick
                       ))
-            chosen.map(watch(matched, _))
+            val executes = sources.nonEmpty && (module.test match
+              case Some(main) => SuitePattern.allows(patterns, main.value)
+              case None       =>
+                SuiteLaunch.satisfied(
+                  module,
+                  module.provider.getOrElse(TestProvider.Zio)
+                ))
+            val context = if executes then
+              TestContext.make(module, cell, jdk, runtimes)
+            else ZIO.succeed(TestContext.empty)
+            context
+              .flatMap(value =>
+                chosen.provideSome[Resolve & ProviderInstall & LockedTools](
+                  zio.ZLayer.succeed(value)
+                )
+              )
+              .map(watch(matched, _))
       case _ =>
         ZIO.fail(ModuleTestError.Absent(cell.module))
 

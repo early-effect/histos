@@ -1,5 +1,6 @@
 package histos.js
 
+import histos.jdk.JdkRuntime
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
@@ -8,10 +9,12 @@ import histos.zinc.{
   CompileRequest,
   CompileToolchain,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags
 }
 import histos.ScalaVersion
+
+import histos.resolve.{LockedTools, ResolveError}
 
 import java.nio.file.{Files, Path}
 
@@ -25,19 +28,19 @@ final case class JsLinkRequest(
     main: MainClass,
     classpath: List[Path],
     work: Path,
-    jdk: ResolvedJdk,
-    kind: histos.JsModuleKind = histos.JsModuleKind.NoModule
+    jdk: JdkRuntime,
+    kind: histos.JsModuleKind = histos.JsModuleKind.NoModule,
+    revision: Option[histos.JsVersion] = None
 )
 
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
   */
 object JsLink:
-  private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
-  private val Linker: String = "1.22.0"
   private val BridgeMain: String = "subprocess.JsBridge"
 
-  def link(request: JsLinkRequest): IO[JsLinkError, Path] =
-    val JsLinkRequest(version, main, classpath, work, jdk, kind) = request
+  def link(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, Path] =
+    val JsLinkRequest(version, main, classpath, work, jdk, kind, revision) =
+      request
     val output = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
     val classes = bridgeRoot.resolve("classes")
@@ -46,11 +49,18 @@ object JsLink:
     val listed = work.resolve("classpath.txt")
     val child = work.resolve("child")
     for
-      libraries <- ScalaJs.libraries(version).mapError(JsLinkError.Library(_))
-      linker <- ZIO
-        .attemptBlockingInterrupt(fetchLinker())
-        .mapError(_ => JsLinkError.Unavailable)
-        .flatMap(ZIO.fromEither)
+      view <- ZIO.service[LockedTools]
+      selected = revision.getOrElse(view.catalog.js.revision)
+      libraries <- ScalaJs
+        .libraries(version, Some(selected))
+        .mapError(JsLinkError.Library(_))
+      linker <- view
+        .materialize(
+          histos.js.JsRequests
+            .linker(selected, view.catalog.js.bridgeScala, view.repositories)
+        )
+        .mapError(JsLinkError.Resolved(_))
+        .map(_.artifacts.map(_.path))
       _ <- write(
         listed,
         (classpath ++ libraries).map(_.toAbsolutePath.toString).mkString("\n")
@@ -60,7 +70,7 @@ object JsLink:
         .compile(
           CompileRequest(
             CompileToolchain(
-              BridgeScala,
+              view.catalog.js.bridgeScala,
               histos.Platform.Jvm,
               jdk,
               ScalacFlags.empty
@@ -153,34 +163,6 @@ object JsLink:
       |}
       |""".stripMargin
 
-  private def fetchLinker(): Either[JsLinkError, List[Path]] =
-    val dependency = coursier.Dependency(
-      coursier.Module(
-        coursier.Organization("org.scala-js"),
-        coursier.ModuleName("scalajs-linker_2.13")
-      ),
-      coursier.version.VersionConstraint(Linker)
-    )
-    val got = coursier
-      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
-      .noMirrors
-      .withGradleModuleSupport(false)
-      .withRepositories(Seq(coursier.Repositories.central))
-      .addDependencies(dependency)
-      .eitherResult()
-    got match
-      case Left(_)       => Left(JsLinkError.Unavailable)
-      case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap:
-          (_, publication, _, file) =>
-            val classified = publication match
-              case Right(published) => published.classifier.nonEmpty
-              case Left(variant)    => variant.classifier.nonEmpty
-            if file.getName.endsWith(".jar") && !classified then
-              List(file.toPath)
-            else Nil
-        if jars.isEmpty then Left(JsLinkError.Unavailable) else Right(jars)
-
   private def readJs(path: Path): IO[JsLinkError, Path] =
     ZIO
       .attemptBlocking {
@@ -207,11 +189,13 @@ object JsLink:
     if text.isEmpty then "the js linker failed" else text
 
 enum JsLinkError:
+  case Resolved(error: ResolveError)
   case Unavailable
   case Library(error: CompileError)
   case Linker(text: String)
 
   def message: String = this match
-    case Unavailable    => "the Scala.js linker could not be fetched"
-    case Library(error) => error.message
-    case Linker(text)   => text
+    case Resolved(error) => error.message
+    case Unavailable     => "the Scala.js linker could not be fetched"
+    case Library(error)  => error.message
+    case Linker(text)    => text

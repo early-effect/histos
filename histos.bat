@@ -1,94 +1,93 @@
 @echo off
 setlocal EnableExtensions
-rem Generated from the manual ship. histos workflow --update rewrites this file.
-rem Not executed by the POSIX test.
-set "ROOT=%~dp0"
-set "VERSION=0.0.1-SNAPSHOT"
-if defined HISTOS_ASSEMBLY (
-  set "JAR=%HISTOS_ASSEMBLY%"
-) else if exist "%ROOT%dist\histos.jar" (
-  set "JAR=%ROOT%dist\histos.jar"
-) else (
-  if defined XDG_CACHE_HOME (
-    set "JAR=%XDG_CACHE_HOME%\histos\launchers\%VERSION%\histos.jar"
-  ) else (
-    set "JAR=%USERPROFILE%\.cache\histos\launchers\%VERSION%\histos.jar"
-  )
-)
-if not exist "%JAR%" (
-  echo histos %VERSION%: no assembly at %JAR% 1>&2
-  exit /b 1
-)
-if not exist "%ROOT%.histos\assembly.sha256" (
-  echo histos %VERSION%: missing assembly.sha256 1>&2
-  exit /b 1
-)
-set /p EXPECTED=<"%ROOT%.histos\assembly.sha256"
-certutil -hashfile "%JAR%" SHA256 | findstr /v "hash" | findstr /v "CertUtil" > "%TEMP%\histos-sha.txt"
-set /p ACTUAL=<"%TEMP%\histos-sha.txt"
-if /I not "%EXPECTED%"=="%ACTUAL%" (
-  echo histos %VERSION%: checksum mismatch 1>&2
-  exit /b 1
-)
-if defined XDG_CACHE_HOME (
-  set "CACHE=%XDG_CACHE_HOME%"
-) else (
-  set "CACHE=%USERPROFILE%\.cache"
-)
-where java >nul 2>&1
+rem Generated from the manual ship. Finds java.exe and runs the pinned launcher jar.
+set "HISTOS_BOOT_ROOT=%~dp0"
+set "HISTOS_BOOT_VERSION=0.0.1-SNAPSHOT"
+for /f "delims=" %%T in ('powershell.exe -NoLogo -NoProfile -Command "[IO.Path]::Combine([IO.Path]::GetTempPath(), 'histos-' + [Guid]::NewGuid().ToString('N'))"') do set "HISTOS_BOOT_TEMP=%%T"
+if not defined HISTOS_BOOT_TEMP exit /b 1
+mkdir "%HISTOS_BOOT_TEMP%"
+powershell.exe -NoLogo -NoProfile -Command "$ErrorActionPreference='Stop'; $text=[IO.File]::ReadAllText($env:HISTOS_BOOT_ROOT+'histos.bat').Replace([string][char]13,''); $marker=[char]10+'# HISTOS_POWERSHELL'+[char]10; $body=$text.Substring($text.LastIndexOf($marker)+$marker.Length); [IO.File]::WriteAllText($env:HISTOS_BOOT_TEMP+'\bootstrap.ps1',$body)"
 if errorlevel 1 (
-  call :provision
-  if errorlevel 1 exit /b 1
-) else (
-  set "JAVA_BIN=java"
-)
-"%JAVA_BIN%" --enable-native-access=ALL-UNNAMED -jar "%JAR%" %*
-exit /b %ERRORLEVEL%
-
-:provision
-set "LOCK=%ROOT%.histos\jdk.lock"
-if not exist "%LOCK%" (
-  echo histos %VERSION%: java is not on PATH and %LOCK% is missing 1>&2
+  if exist "%HISTOS_BOOT_TEMP%" rmdir /s /q "%HISTOS_BOOT_TEMP%"
   exit /b 1
 )
-set "JDK_URL="
-set "JDK_SHA="
-for /f "usebackq tokens=1,2" %%A in ("%LOCK%") do (
-  if "%%A"=="url" set "JDK_URL=%%B"
-  if "%%A"=="sha256" set "JDK_SHA=%%B"
-)
-if "%JDK_URL%"=="" (
-  echo histos %VERSION%: jdk.lock needs url and sha256 1>&2
-  exit /b 1
-)
-if "%JDK_SHA%"=="" (
-  echo histos %VERSION%: jdk.lock needs url and sha256 1>&2
-  exit /b 1
-)
-set "DEST=%CACHE%\histos\jdks\%JDK_SHA%"
-if not exist "%DEST%" mkdir "%DEST%"
-set "ARCHIVE=%DEST%\archive"
-if not exist "%ARCHIVE%" (
-  curl -fsSL "%JDK_URL%" -o "%ARCHIVE%"
-  if errorlevel 1 exit /b 1
-)
-certutil -hashfile "%ARCHIVE%" SHA256 | findstr /v "hash" | findstr /v "CertUtil" > "%TEMP%\histos-jdk-sha.txt"
-set /p ACTUAL=<"%TEMP%\histos-jdk-sha.txt"
-set "ACTUAL=%ACTUAL: =%"
-if /I not "%JDK_SHA%"=="%ACTUAL%" (
-  echo histos %VERSION%: jdk checksum mismatch 1>&2
-  exit /b 1
-)
-set "UNPACK=%DEST%\unpack"
-if not exist "%UNPACK%" mkdir "%UNPACK%"
-tar -xf "%ARCHIVE%" -C "%UNPACK%"
-if errorlevel 1 exit /b 1
-set "JAVA_BIN="
-for /f "delims=" %%J in ('dir /s /b "%UNPACK%\java.exe"') do (
-  if not defined JAVA_BIN set "JAVA_BIN=%%J"
-)
-if not defined JAVA_BIN (
-  echo histos %VERSION%: locked jdk has no bin\java.exe 1>&2
-  exit /b 1
-)
-exit /b 0
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%HISTOS_BOOT_TEMP%\bootstrap.ps1" %*
+set "HISTOS_EXIT=%ERRORLEVEL%"
+if exist "%HISTOS_BOOT_TEMP%" rmdir /s /q "%HISTOS_BOOT_TEMP%"
+exit /b %HISTOS_EXIT%
+# HISTOS_POWERSHELL
+$ErrorActionPreference = 'Stop'
+$launchArgs = $args
+$root = $env:HISTOS_BOOT_ROOT
+$version = $env:HISTOS_BOOT_VERSION
+function Fail([string] $message) {
+  [Console]::Error.WriteLine('histos ' + $version + ': ' + $message)
+  exit 1
+}
+function Hash([string] $path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+$java = $null
+if ($env:JAVA_HOME) {
+  $candidate = Join-Path $env:JAVA_HOME 'bin\java.exe'
+  if (Test-Path -LiteralPath $candidate -PathType Leaf) { $java = $candidate }
+}
+if (-not $java) {
+  $found = Get-Command java.exe -ErrorAction SilentlyContinue
+  if ($found) { $java = $found.Source }
+}
+if (-not $java) { Fail 'java is not on PATH' }
+$jar = $null
+if ($env:HISTOS_ASSEMBLY) { $jar = $env:HISTOS_ASSEMBLY }
+elseif (Test-Path -LiteralPath (Join-Path $root 'dist\histos.jar') -PathType Leaf) {
+  $jar = Join-Path $root 'dist\histos.jar'
+}
+if ($jar) {
+  $sumPath = Join-Path $root '.histos\assembly.sha256'
+  if (-not (Test-Path -LiteralPath $sumPath -PathType Leaf)) { Fail 'missing assembly.sha256' }
+  $expected = ([IO.File]::ReadAllText($sumPath) -replace '\s','').ToLowerInvariant()
+  if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid assembly checksum' }
+  if ((Hash $jar) -ne $expected) { Fail 'checksum mismatch' }
+} else {
+  $lockPath = Join-Path $root '.histos\launcher.lock'
+  if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+    Fail 'missing launcher.lock; restore the committed pin or use a source assembly'
+  }
+  $fields = @{}
+  foreach ($line in [IO.File]::ReadAllLines($lockPath)) {
+    $trim = $line.Trim()
+    if ($trim -eq '' -or $trim.StartsWith('#')) { continue }
+    $parts = $trim -split '\s+', 2
+    if ($parts.Count -ne 2 -or $fields.ContainsKey($parts[0])) { Fail 'invalid launcher lock' }
+    $fields[$parts[0]] = $parts[1]
+  }
+  foreach ($name in @('repository','version','revision','sha256')) {
+    if (-not $fields.ContainsKey($name)) { Fail 'invalid launcher lock' }
+  }
+  if ($fields['version'] -ne $version) { Fail 'launcher lock version does not match script' }
+  $expected = $fields['sha256'].ToLowerInvariant()
+  if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid launcher lock' }
+  $repository = $fields['repository']
+  if ($repository -notmatch '^https://' -and $repository -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])([:/]|$)') {
+    Fail 'invalid launcher repository'
+  }
+  $cacheRoot = if ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME } else { Join-Path $env:USERPROFILE '.cache' }
+  $dest = Join-Path (Join-Path (Join-Path $cacheRoot 'histos\launchers') $fields['revision']) $expected
+  $cached = Join-Path $dest 'histos.jar'
+  $staged = Join-Path (Join-Path (Join-Path $root '.histos\launcher-cache') $expected) 'histos.jar'
+  if ((Test-Path -LiteralPath $staged -PathType Leaf) -and (Hash $staged) -eq $expected) { $jar = $staged }
+  elseif ((Test-Path -LiteralPath $cached -PathType Leaf) -and (Hash $cached) -eq $expected) { $jar = $cached }
+  else {
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    $part = Join-Path $dest 'histos.jar.partial'
+    $address = $repository.TrimEnd('/') + '/rocks/earlyeffect/histos/' + $fields['version'] + '/histos-' + $fields['revision'] + '.jar'
+    Invoke-WebRequest -Uri $address -OutFile $part
+    if ((Hash $part) -ne $expected) {
+      Remove-Item -LiteralPath $part -Force
+      Fail 'launcher checksum mismatch'
+    }
+    Move-Item -LiteralPath $part -Destination $cached -Force
+    $jar = $cached
+  }
+  if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
+}
+& $java --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
+exit $LASTEXITCODE

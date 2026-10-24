@@ -1,6 +1,8 @@
 package histos.native
 
+import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
+import histos.resolve.LockedTools
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
@@ -10,7 +12,7 @@ import histos.zinc.{
   CompileRequest,
   CompileToolchain,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags
 }
 import histos.{Platform, ProjectGraph, ProjectName, ScalaVersion}
@@ -83,26 +85,10 @@ enum NativeDeclaration:
 object NativeProject:
   def declaration(graph: ProjectGraph): NativeDeclaration =
     val pins = graph.projects.flatMap:
-      case histos.Module(
-            name,
-            platforms,
-            _,
-            _,
-            _,
-            _,
-            clang,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _,
-            _
-          ) if platforms.all.contains(Platform.Native) =>
+      case module: histos.Module
+          if module.platforms.all.contains(Platform.Native) =>
+        val name = module.name
+        val clang = module.clang
         clang match
           case histos.ClangPin.Major(major) => List(name -> Some(major))
           case histos.ClangPin.Unused       => List(name -> None)
@@ -129,8 +115,9 @@ final case class NativeLinkRequest(
     toolchain: NativeToolchain,
     env: Map[String, String],
     work: Path,
-    jdk: ResolvedJdk,
-    main: MainClass
+    jdk: JdkRuntime,
+    main: MainClass,
+    version: ScalaVersion
 )
 
 object NativeLink:
@@ -140,23 +127,44 @@ object NativeLink:
   def link(
       request: NativeLinkRequest,
       sourcesRoot: Path
-  ): IO[NativeError, Linked] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main) = request
+  ): ZIO[LockedTools, NativeError, Linked] =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+      request
     for
-      libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
+      view <- ZIO.service[LockedTools]
+      libs <- NativeClasspath
+        .fetch(toolchain, Some(version))
+        .mapError(NativeError.Fetch(_))
       clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       sources <- histos.zinc.Sources
-        .select(sourcesRoot, JvmCompile.Scala390, Platform.Native)
+        .select(sourcesRoot, version, Platform.Native)
         .mapError(NativeError.Compile(_))
       digest <- JvmCompile
         .sourceDigest(sources)
         .mapError(NativeError.Compile(_))
-      compiled <- compile(sources, libs, work, jdk).mapError(
+      compiled <- compile(
+        sources,
+        libs,
+        work,
+        jdk,
+        version
+      ).mapError(
         NativeError.Compile(_)
       )
-      hashes <- NativeClasspath
-        .hashes(libs, toolchain.source)
-        .mapError(NativeError.Fetch(_))
+      linker <- view
+        .selected(
+          NativeRequests.linker(toolchain, view.catalog, view.repositories)
+        )
+        .mapError(error => NativeError.Fetch(NativeFetch.Resolved(error)))
+      bridges <- ZIO
+        .foreach(
+          histos.zinc.CompilerRequests.supporting(
+            List(view.catalog.native.bridgeScala),
+            view.catalog,
+            view.repositories
+          )
+        )(view.selected)
+        .mapError(error => NativeError.Fetch(NativeFetch.Resolved(error)))
       binary <- invoke(
         clang,
         main,
@@ -169,11 +177,15 @@ object NativeLink:
     yield Linked(
       binary,
       NativeKey.of(
-        JvmCompile.Scala390,
+        version,
         clang.version,
         clang.target,
         digest,
-        hashes
+        List(
+          compiled.key,
+          libs.input.fingerprint,
+          linker.fingerprint
+        ) ++ bridges.map(_.fingerprint)
       )
     )
 
@@ -183,10 +195,13 @@ object NativeLink:
   def linkClasspath(
       request: NativeLinkRequest,
       classpath: List[Path]
-  ): IO[NativeError, Path] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main) = request
+  ): ZIO[LockedTools, NativeError, Path] =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+      request
     for
-      libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
+      libs <- NativeClasspath
+        .fetch(toolchain, Some(version))
+        .mapError(NativeError.Fetch(_))
       clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       binary <- invoke(
         clang,
@@ -203,11 +218,12 @@ object NativeLink:
       sources: List[Path],
       libs: NativeClasspath,
       work: Path,
-      jdk: ResolvedJdk
-  ): IO[CompileError, CompileOutput] =
+      jdk: JdkRuntime,
+      version: ScalaVersion
+  ): ZIO[LockedTools, CompileError, CompileOutput] =
     val request = CompileRequest(
       CompileToolchain(
-        JvmCompile.Scala390,
+        version,
         Platform.Native,
         jdk,
         ScalacFlags.empty
@@ -218,7 +234,17 @@ object NativeLink:
       work.resolve("analysis"),
       Nil
     )
-    JvmCompile.compilePrepared(request, List(libs.plugin))
+    JvmCompile.compilePrepared(
+      request.copy(
+        compilationTools = List(libs.input),
+        compilerPlugins = List(
+          libs.input.copy(artifacts =
+            libs.input.artifacts.filter(_.path == libs.plugin)
+          )
+        )
+      ),
+      List(libs.plugin)
+    )
 
   /** The toolchain appends its own native libraries. A resolved test jar of the
     * same file is the same library.
@@ -249,10 +275,10 @@ object NativeLink:
       main: MainClass,
       classpath: List[Path],
       work: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       toolchain: NativeToolchain,
       env: Map[String, String]
-  ): IO[NativeError, Path] =
+  ): ZIO[LockedTools, NativeError, Path] =
     val bridgeRoot = work.resolve("bridge").resolve(toolchain.revision.value)
     val classes = bridgeRoot.resolve("classes")
     val source = bridgeRoot
@@ -261,6 +287,7 @@ object NativeLink:
       .resolve("NativeBridge.scala")
     val child = work.resolve("child")
     for
+      view <- ZIO.service[LockedTools]
       jars <- NativeClasspath
         .bridgeJars(toolchain)
         .mapError(NativeError.Fetch(_))
@@ -278,7 +305,7 @@ object NativeLink:
         .compile(
           CompileRequest(
             CompileToolchain(
-              JvmCompile.Scala390,
+              view.catalog.native.bridgeScala,
               Platform.Jvm,
               jdk,
               ScalacFlags.empty
@@ -321,7 +348,7 @@ object NativeLink:
     val text = List(out, err).filter(_.nonEmpty).mkString("\n")
     if text.isEmpty then "the native linker failed" else text
 
-  private def readBinary(path: Path): IO[NativeError, Path] =
+  private def readBinary(path: Path): ZIO[LockedTools, NativeError, Path] =
     ZIO
       .attemptBlocking {
         if Files.isRegularFile(path) then
@@ -338,14 +365,17 @@ object NativeLink:
       )
       .flatMap(ZIO.fromEither)
 
-  private def write(path: Path, text: String): IO[NativeError, Unit] =
+  private def write(
+      path: Path,
+      text: String
+  ): ZIO[LockedTools, NativeError, Unit] =
     Workspace
       .writeString(path, text)
       .mapError(_ =>
         NativeError.Link(LinkError.Linker(s"could not write $path"))
       )
 
-  private def emptyDir(path: Path): IO[NativeError, Unit] =
+  private def emptyDir(path: Path): ZIO[LockedTools, NativeError, Unit] =
     Workspace
       .recreate(path)
       .mapError(_ =>

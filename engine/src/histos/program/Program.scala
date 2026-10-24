@@ -1,5 +1,7 @@
 package histos.program
 
+import histos.jdk.JdkRuntime
+import histos.resolve.LockedTools
 import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest}
 import histos.native.{NativeLink, NativeLinkRequest, NativeToolchain}
 import histos.node.NodeMiss
@@ -16,9 +18,18 @@ import histos.resolve.{
 import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
-import histos.zinc.{GraphCompile, GraphCompileError, JvmCompile, ResolvedJdk}
+import histos.zinc.{GraphCompile, GraphCompileError, JvmCompile}
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
-import histos.step.{Need, Phase, Step, StepId, StepInfo}
+import histos.step.{
+  Input,
+  InputName,
+  InputValue,
+  Need,
+  Phase,
+  Step,
+  StepId,
+  StepInfo
+}
 import histos.{
   Aggregate,
   ClangPin,
@@ -48,7 +59,7 @@ object Program:
       repo: Path,
       graph: ProjectGraph,
       name: String,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       choice: Option[Platform] = None
   ): ZStream[Resolve, ProgramError, ProgramFeed] =
@@ -65,11 +76,8 @@ object Program:
         lock <- readLock(repo)
         compiled <- GraphCompile
           .run(
-            repo,
-            graph,
+            histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
             List(module.name.value),
-            jdk,
-            runtimes.native,
             Some(platform)
           )
           .mapError(ProgramError.Compile(_))
@@ -110,15 +118,53 @@ object Program:
   private def runCell(
       run: CellRun
   ): ZIO[Resolve, ProgramError, Chunk[ProgramFeed]] =
-    val info = StepInfo(
-      StepId
-        .Cell(run.cell.module, run.cell.version, run.cell.platform, Phase.Run),
-      Chunk.empty,
-      Set(Need.Process)
-    )
-    execute(
-      Step.local[Chunk[ProgramFeed]](info)(one(run).runCollect)
-    )
+    (for
+      tools <- LockedTools.make(run.lock, run.graph)
+      selected <- tools
+        .application(
+          run.module,
+          run.cell.version,
+          run.cell.platform,
+          run.runtimes.native
+        )
+        .mapError(ProgramError.Lock(_))
+      inputs <- run.runtimes
+        .inputs(run.cell.platform)
+        .mapError(error =>
+          ProgramError.NoNode(run.cell.module, run.cell.version, error)
+        )
+    yield (tools, selected, inputs)).flatMap: (tools, selected, inputs) =>
+      val info = StepInfo(
+        StepId
+          .Cell(
+            run.cell.module,
+            run.cell.version,
+            run.cell.platform,
+            Phase.Run
+          ),
+        inputs ++ Chunk(
+          Input(
+            InputName("jdk"),
+            InputValue.Text(Runtimes.identityToken(run.jdk.identity))
+          ),
+          Input(
+            InputName("tools"),
+            InputValue.Text(
+              selected
+                .map(_.fingerprint.value)
+                .mkString("\n")
+            )
+          )
+        ),
+        Set(Need.Process)
+      )
+      execute(
+        Step.local[Chunk[ProgramFeed]](info)(
+          one(run).runCollect.provideSome[Resolve](
+            zio.ZLayer.succeed(tools)
+          )
+        )
+      )
 
   private def execute[A](
       goal: Step[Resolve, ProgramError, A]
@@ -172,11 +218,13 @@ object Program:
       binary: Binary,
       cell: histos.zinc.CompiledCell,
       lock: DependencyLock,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes
   )
 
-  private def one(run: CellRun): ZStream[Resolve, ProgramError, ProgramFeed] =
+  private def one(
+      run: CellRun
+  ): ZStream[Resolve & LockedTools, ProgramError, ProgramFeed] =
     val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes) = run
     val env = runtimes.env
     val modules = graph.projects.collect { case item: Module => item }
@@ -233,15 +281,15 @@ object Program:
                     paths,
                     linkDir,
                     jdk,
-                    module.jsModule
+                    module.jsModule,
+                    revision = module.jsVersion
                   )
                 )
                 .mapError(error =>
-                  ProgramError.Link(
+                  ProgramError.Tool(
                     cell.module,
                     cell.version,
-                    cell.platform,
-                    error.message
+                    histos.toolchain.PlatformToolError.JsLink(error)
                   )
                 )
               asked <- JsRun
@@ -257,11 +305,10 @@ object Program:
                   )
                 )
                 .mapError(error =>
-                  ProgramError.Link(
+                  ProgramError.Tool(
                     cell.module,
                     cell.version,
-                    cell.platform,
-                    error.message
+                    histos.toolchain.PlatformToolError.JsRun(error)
                   )
                 )
             yield events(cell, asked)
@@ -269,6 +316,7 @@ object Program:
           ZStream.unwrap:
             val linkDir = workDir(repo, cell)
             for
+              view <- ZIO.service[LockedTools]
               major <- nativeMajor(module, cell.version)
               paths <- classpath(
                 repo,
@@ -283,16 +331,15 @@ object Program:
                 .fromEither(
                   NativeToolchain.of(
                     module.nativeVersion
-                      .getOrElse(NativeToolchain.ReleaseRevision),
+                      .getOrElse(view.catalog.native.revision),
                     runtimes.native
                   )
                 )
                 .mapError(error =>
-                  ProgramError.Link(
+                  ProgramError.Tool(
                     cell.module,
                     cell.version,
-                    cell.platform,
-                    error.message
+                    histos.toolchain.PlatformToolError.NativeOrigin(error)
                   )
                 )
               program <- NativeLink
@@ -303,16 +350,16 @@ object Program:
                     env,
                     linkDir,
                     jdk,
-                    binary
+                    binary,
+                    cell.version
                   ),
                   paths
                 )
                 .mapError(error =>
-                  ProgramError.Link(
+                  ProgramError.Tool(
                     cell.module,
                     cell.version,
-                    cell.platform,
-                    error.message
+                    histos.toolchain.PlatformToolError.Native(error)
                   )
                 )
               work <- fresh(linkDir.resolve("exec"))
@@ -371,7 +418,7 @@ object Program:
       cell: histos.zinc.CompiledCell,
       lock: DependencyLock,
       repositories: Repositories
-  ): ZIO[Resolve, ProgramError, List[Path]] =
+  ): ZIO[Resolve & LockedTools, ProgramError, List[Path]] =
     val resolveCell = ResolveCell(
       module.name,
       Dep.select(module.dependencies, cell.platform),
@@ -406,7 +453,7 @@ object Program:
         case Platform.Jvm =>
           JvmCompile
             .runtime(cell.version)
-            .mapError(error => ProgramError.Library(error.message))
+            .mapError(ProgramError.Library(_))
         case Platform.Js | Platform.Native => ZIO.succeed(Nil)
       paths = fetched.artifacts.map(_.path).distinct
       jars =
@@ -463,6 +510,11 @@ enum ProgramFeed:
   )
 
 enum ProgramError:
+  case Tool(
+      module: ProjectName,
+      version: ScalaVersion,
+      error: histos.toolchain.PlatformToolError
+  )
   case Absent(name: String)
   case Aggregate(name: ProjectName)
   case NoMain(name: ProjectName)
@@ -471,7 +523,7 @@ enum ProgramError:
   case NoClang(name: ProjectName, version: ScalaVersion)
   case Main(error: MainClassError)
   case Compile(error: GraphCompileError)
-  case Library(detail: String)
+  case Library(error: histos.zinc.CompileError)
   case Lock(error: ResolveError)
   case LockRead(path: Path)
   case Link(
@@ -491,6 +543,7 @@ enum ProgramError:
   case Root(path: Path)
 
   def message: String = this match
+    case Tool(_, _, error)       => error.message
     case Absent(name)            => s"'$name' is not a module"
     case Aggregate(name)         => s"'${name.value}' is an aggregate"
     case NoMain(name)            => s"'${name.value}' does not name a main"
@@ -502,7 +555,7 @@ enum ProgramError:
       s"'${name.value}' ${version.value} native does not name a clang major"
     case Main(error)                             => error.message
     case Compile(error)                          => error.message
-    case Library(detail)                         => detail
+    case Library(error)                          => error.message
     case Lock(error)                             => error.message
     case LockRead(path)                          => s"could not read $path"
     case Link(module, version, platform, detail) =>

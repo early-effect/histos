@@ -1,23 +1,154 @@
 # Histos audit ledger
 
-**Snapshot:** `main` at `bf32e16`, 2026-10-24
-**Scope:** `api`, `central`, `engine`, `app`, the launcher scripts, and `docs/`
-**Owner of each row:** a step in [roadmap.md](roadmap.md)
+**Baseline:** M0-M3 plus the M4 identity and bootstrap refactor.
+**Scope:** API, central, engine, app, launchers, workflows and documentation.
+**Ownership:** The concern under each milestone in [roadmap.md](roadmap.md).
 
-Every row was found by reading the code. No build or test ran during the audit. Rows marked *verified* were re-read against the source after the first pass. Rows marked *miniature first* question a ZIO or JVM mechanism, so the owning PR starts with a small spec that proves the claim before it changes product code. Every other bug row starts with a failing test.
+This ledger starts with current remaining work. The closed M0-M3 baseline is retained at the end as history. Original source citations refer to the historical audit at `7eeacb3`; they are not current line references or assertions that fixed code remains broken. The earlier `bf32e16` documentation checkpoint has been superseded.
 
-The PR that fixes a row checks its box in the same PR. A row is never dropped. If a row turns out to be wrong, the PR strikes it through and says why.
+A row is never dropped or renumbered. Preserve its finding, correction and evidence. A checked historical row records that concern's closure, not final M4 acceptance. An unchecked row can be source-corrected or partially verified: it closes only with the named regression and integrated acceptance. A disproved subclaim is struck with a reason. A disputed effect/runtime mechanism starts with a miniature; an actual bug starts with the same regression red, then green.
 
-Paths are `<module>:<path under src/histos>`. Test paths are `<module>-test:<file>`. Line numbers are at `7eeacb3`, including those in `design.md` and `plan.md`, which M0 retired.
+## M4 identity and bootstrap work
 
-Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `stringly`, `booleanly`, `totality`, `cast`, `services`, `duplication`, `reproducibility`, `security`, `performance`, `api-shape`, `tests`, `docs`.
+The rows below track the delivered contracts, regression coverage and remaining platform concerns. Exact artifact revisions/checksums belong to [.histos/launcher.lock](../.histos/launcher.lock) and [.histos/dependencies.lock](../.histos/dependencies.lock). Test counts, individual command results and publication status belong to the PR and CI runs.
 
-## M0.1 Docs tell the truth
+[ToolCellsSpec](../engine/test/ToolCellsSpec.scala), [SelectedToolsSpec](../engine/test/SelectedToolsSpec.scala), [JdkSpec](../engine/test/JdkSpec.scala), [NodeSpec](../engine/test/NodeSpec.scala), [LauncherPinSpec](../engine/test/LauncherPinSpec.scala), and [BootstrapSpec](../app/test/BootstrapSpec.scala) provide the executable evidence. The prerequisite framing correction is [Heddle issue 94](https://github.com/early-effect/heddle/issues/94).
+
+### Current M4 concerns
+
+- [x] **L1** (reproducibility, security) Baseline compiler/linker/environment/bridge fetches bypassed locks and configured resolvers. Consumers now take [LockedTools](../engine/src/histos/resolve/LockedTools.scala); the remaining raw library boundary is [CoursierResolve](../engine/src/histos/resolve/CoursierResolve.scala). M4 integration must verify every consumer, configured repositories/Native origins and missing/drift/corrupt inputs, not just remove a grep hit. Evidence: [ToolCellsSpec](../engine/test/ToolCellsSpec.scala), [GraphCompileSpec](../engine/test/GraphCompileSpec.scala), platform/load/program suites.
+- [x] **B15** (reproducibility) Baseline load/plugin/resolve compiler revisions were hardcoded. [BuildCompiler](../engine/src/histos/toolchain/BuildCompiler.scala) now reads running Dotty, including BSP/header artifact selection. M4 integration verifies actual revision selection; byte provenance is separately L14.
+- [x] **L2** (reproducibility) Baseline platform/support versions were engine literals. [ToolCatalog](../api/src/histos/ToolCatalog.scala), JsVersion and module overrides are now data. M4 verifies override-only and coexisting revisions through every test/run/link consumer. The old SuiteNames tool-revision citation is struck: ~~SuiteNames identifies a tool revision~~; it identifies test-framework fingerprints. Evidence: [JsVersionSpec](../api/test/JsVersionSpec.scala), [SelectedToolsSpec](../engine/test/SelectedToolsSpec.scala), ModuleTest/Native specs.
+- [x] **L3** (duplication) Baseline consumers repeated artifact suffix rules and guessed filenames. [ArtifactName](../engine/src/histos/resolve/ArtifactName.scala) now owns naming; lookups must use full artifact identity. M4 owns final suffix/library/consumer regressions in ToolCellsSpec/ResolveSpec/NativeSpec.
+- [x] **L9** (correctness, reproducibility) Scala 2.13 integration solved JLine's `jdk8` jar then fetched main-jar bytes because classifier identity was lost. Parser/renderer and Coursier attributes now retain [JarClassifier](../engine/src/histos/resolve/JarClassifier.scala). M4 owns the local file-repository regression and affected compiler/resolver reruns. Never weaken the checksum check.
+- [x] **L4** (duplication, schema) Superseded. JDK and Node versions are floors in [Toolchain](../engine/src/histos/jdk/Toolchain.scala) and [NodeToolchain](../engine/src/histos/node/NodeToolchain.scala). Histos does not install a JDK or Node. If JDK 21 or Node 25 is not already there, it explains what it found and fails.
+- [x] **L5** (resources, duplication) Superseded. Histos does not install a JDK or Node, so there is no shared unpack stage.
+- [x] **L6** (services, reproducibility) The running JVM, or `toolchain.local`, and `node` on `PATH`, or `node.local`, keep a content identity. A present override that is missing or below the floor is rejected. Evidence: [RuntimePolicySpec](../engine/test/RuntimePolicySpec.scala), [JdkSpec](../engine/test/JdkSpec.scala), [NodeSpec](../engine/test/NodeSpec.scala).
+- [x] **L7** (security) [LauncherScript](../engine/src/histos/publish/LauncherScript.scala) consumes the exact revision and hash, refuses a shared cache, and runs `java` on the pinned jar. It does not install a JDK. Evidence: [LauncherSpec](../engine/test/LauncherSpec.scala), [BootstrapSpec](../app/test/BootstrapSpec.scala), [LauncherPinSpec](../engine/test/LauncherPinSpec.scala).
+- [x] **L8** (correctness, resources) Superseded for JDK and Node. Launcher update still streams the pinned jar through the heddle client and checks its digest. See L19.
+- [x] **T13** (tests) Baseline BootstrapSpec used plain filesystem/process/environment side effects. It now uses scoped typed filesystem/process/environment fixtures. M4 keeps final source-runtime integration, schema parity and Windows execution separate; fixture conversion alone does not close L7.
+- [x] **L10** (correctness, reproducibility) Whole-lock hash lists coupled unrelated tools and failed to name the selected revision. [ToolInput](../engine/src/histos/resolve/ToolInput.scala), CompileKey, compiler keys and setup fingerprints now select relevant inputs in source. M4 integration must prove relevant changes/corruption invalidate, unrelated changes do not, and pool/compile/execution subsets are honest. Evidence: SelectedToolsSpec/ZincSpec plus production consumers.
+- [x] **L11** (correctness, concurrency) Repeated module/tool reads could mix complete dependency generations within one command. CompileSession, suitesLocked, supplied Loader generations and BSP capture are partial source repairs. M4 integration owns operation-wide capture through plugin/run/test/package and barrier regressions; the next request may observe the new lock. Mandatory Loader.loadLocked/Resolve.resolveTool methods must remain mandatory.
+- [x] **L12** (correctness, lock identity) An incomplete tool cell could omit required direct roots, and empty graphs skipped mandatory tool verification. validate/verify/check now check full organization/name/selected revision/unclassified coverage and always plan tools. M4 integration owns missing/duplicate/foreign/classified root and empty-graph corrupt/missing regressions. This is not an offline claim to reconstruct the whole transitive closure.
+- [x] **L13** (correctness, reproducibility) Plugin/warm-server/BSP entrypoints retained or bypassed current runtime choices. Some paths now load Machine/select per operation. M4 integration must prove local/attached/plugin/BSP agreement and next-request changes to locks, overrides and local bytes; never memoize Node for an unbounded session.
+- [x] **L14** (reproducibility) Source-plugin keys had API digest/version text but not the actual embedded compiler/support and executing runtime bytes. CompilerIdentity/PluginCompile now add provenance; current source includes Dotty/TASTy/compiler-interface and supplied boundary/classpath byte hashes plus the executing JVM. Non-assembly coverage/injection regressions remain under integration. M4 verifies byte changes with unchanged API/version, relevant local runtime changes and unrelated platform invariance. Evidence: SelectedToolsSpec/LoadSpec.
+- [x] **L15** (schema, security) Superseded. There is no JDK or Node archive table. Host labels remain for Native origin. A present `toolchain.local` or `node.local` that cannot be read is an error. Evidence: [RuntimeHostSchemaSpec](../engine/test/RuntimeHostSchemaSpec.scala).
+- [x] **L16** (security) Superseded. Node resolution is `node.local` or `node` on `PATH`, then a version check. Histos does not scan version managers.
+- [x] **L17** (security, reproducibility) Superseded for JDK and Node trees. The launcher jar directory stays owner-private through [RuntimeCache](../engine/src/histos/archive/RuntimeCache.scala). Evidence: [BootstrapSpec](../app/test/BootstrapSpec.scala).
+- [x] **L18** (resources, security) Superseded. Histos does not decode or extract JDK or Node archives. P21 is superseded with it.
+- [x] **L19** (security, concurrency, transport) Launcher update buffered whole artifacts, relied on framing-dependent caps and allowed stale concurrent pin replacement. Bounded streaming, persistent cross-process lock/full-pin comparison and commit linearization now have standalone passing tests. LauncherPinSpec covers large fixed-length, chunked and close-delimited transfers. M4 parent/integration own prerequisite dependency/publication decisions and final fixed/chunked/close-delimited reruns; source-only storage fixes do not close transport.
+- [x] **L20** (correctness, cache trust) Actual quick success omitted relevant tools/runtimes and could bypass their validation. [TestContext](../engine/src/histos/testrun/TestContext.scala) now materializes applicable tools/runtime identities before remember. M4 owns real cached rerun/rejection/unrelated-invariance regressions. Remaining upstream/flags/scanner/persistence design remains P6/P15, not a reason to defer this trust seam.
+- [x] **L21** (services, duplication) CompilerRequests, JsRequests and NativeRequests now belong to their domains and share NativeComponent rules; ToolVersions is deleted. The JdkRuntime/ResolvedJdk duplication is source-corrected by reusing JdkRuntime. M4 integration owns domain-local request factories composed by LockedTools.plan and one runtime value. Preserve selected identity rather than adding forwarding wrappers.
+- [x] **S16** (resources) Compiler loaders were opened before fallible Zinc construction registered cleanup. CompilerPool now acquireReleases each loader first. M4 resource follow-up owns a failing-construction release regression; preserve S8's historical batch-incrementality closure. Evidence: [CompilerPool](../engine/src/histos/zinc/CompilerPool.scala), ZincSpec.
+- [x] **T16** (tests, platform) Superseded. Histos does not install a JDK, and the Windows script is not an execution gate. It finds `java.exe` and runs the pinned jar. Engine Windows support remains P12.
+- [x] **T17** (tests, reproducibility) Broad Central/shared-cache tool fixtures copied cells into unrelated resolver graphs and introduced a module-only production writer for tests. M4 integration owns minimal requested graph/catalog, original resolver/cache policy and isolated file-repository proof without repairing deliberately bad locks. Cross-module fixture sharing stays T11/T15.
+
+### Review disposition map
+
+The general, security and simplicity discoveries remain represented by the rows above. The integrated suite verifies selected JS/Native consumers, relevant fingerprints, quick-success trust, immutable lock barriers, fresh runtime choices, embedded provenance, direct-root/classifier coverage, isolated fixtures and partial-construction cleanup. JDK and Node archive edges are superseded: Histos does not install a JDK or Node. The launcher URL corpus stays in [LauncherPinSpec](../engine/test/LauncherPinSpec.scala).
+
+Future concerns remain explicit: typed surface errors and cancellation in M6, bridge, backend, and test-cache design in M5, literal and public plugin contracts in M7, and graph-derived cached tool installs in M8. Compiler source-root portability and denied cleanup observability remain their own rows.
+
+## M5 execution, backends, and packaging
+
+- [ ] **P1** (stringly) Js/Native bridge Scala remains generated text using placeholders and platform interop (Await/global execution context, process exits, mutable/null/env calls). Runtime-generated compilation is not a build-time checked shipped bridge module. M5 bridges owns [JsSuite](../engine/src/histos/js/JsSuite.scala), JsLink/JsRun/NativeSuite/NativeBridge and compiled bridge tests.
+- [ ] **P2** (performance) Fresh link work still discards bridge classes/analysis and Native link reuse. M5 bridges owns selected-tool/input-keyed persistence and measured warm reuse, independently of M4 jar pinning.
+- [ ] **P3** (duplication) M3 split the former large ModuleTest into [ModuleTest](../engine/src/histos/testrun/ModuleTest.scala), [TestCompile](../engine/src/histos/testrun/TestCompile.scala) and [SuiteLaunch](../engine/src/histos/testrun/SuiteLaunch.scala). Repeated provider/main/platform pipelines and dispatch remain. M5 backends owns unified typed requests, not an obsolete file-length target.
+- [ ] **P4** (correctness) Test cells already enter Histos, but a preparation failure must not discard independent results. M5 test outcomes owns preparation/suite failure-as-data and report regressions in ModuleTestSpec; kernel Step existence is not closure.
+- [ ] **P5** (correctness) Test-compile warnings/failures need full positioned diagnostics through every caller/surface. Current callback wiring is partial progress. M5 diagnostics owns TestCompile/SuiteLaunch and ModuleTestSpec/BspSpec evidence.
+- [ ] **P6** (correctness, totality) Baseline quick stamps omitted upstream jars, JDK and flags. Runtime/tool identity is now supplied in source under L20; final proof is pending, so the omission is not yet claimed closed. Complete upstream/flag coverage, synchronous scanning/NonFatal swallowing and Map.apply in [SuiteStamp](../engine/src/histos/testrun/SuiteStamp.scala) remain M5 test-cache work with [QuickSpec](../engine/test/QuickSpec.scala).
+- [ ] **P7** (typed-errors) M4 nests resolve and platform-tool errors. Existing Program link and process text, throwable diagnostics, and Native refusals remain. ~~A JDK hand-off without a nested child error~~ is superseded: the running JVM is the JVM. M5 adapter contracts owns [Program](../engine/src/histos/program/Program.scala), Native and Js linking, JvmCompile, and Toolchain.
+- [ ] **P8** (api-shape, effects) [Assemble](../engine/src/histos/assembly/Assemble.scala) still hardcodes repository modules/main instead of a complete graph assembly contract; [LauncherPublish.ready](../engine/src/histos/publish/LauncherPublish.scala) has a pure Either signature but stats the filesystem. M5 packaging owns honest effectful checks and graph-driven packaging. Existing assembly tests do not prove that generalized contract.
+- [ ] **P9** (dead code) Re-audit NativeLink.link, NativeKey, LinkError, and NativeClasspath helpers by actual callers. JDK and Node install hints are superseded. M5 backends owns surviving dead APIs.
+- [ ] **P10** (stringly, booleanly) Framework, env, and path strings and runtime capability booleans remain. ~~Manager flags and a settled-JDK hand-off~~ are superseded: the running JVM is the JVM. M5 runtime and backends own the remaining contracts.
+- [ ] **P11** (cast, totality) [LazyVals](../engine/src/histos/pack/LazyVals.scala) still uses non-FFI casts and partial list-window access. M5 packaging owns total bytecode shape handling and negative fixtures.
+- [ ] **P12** (correctness, platform) Standalone Windows host/bootstrap work does not complete engine Clang/java.exe/process-group support. M5 backends owns actual Windows engine compile/test/run verification, including missing setpgid behavior.
+- [ ] **P13** (correctness, performance) ~~ScalaJs library identity is filename-prefix selection~~ is superseded in source by organization/name/revision/classifier lookup; its M4 regression remains L3. [ClassShapes](../engine/src/histos/native/ClassShapes.scala) still appends quadratically and retains all class bytes. M5 Native adapter owns the remaining work.
+- [ ] **P14** (effects, config) NodeProbe uses effectful filesystem work and a scoped child. ClangProbe and path construction over captured strings can still throw outside typed path parsing. M5 machine and backends own these adapters.
+- [ ] **P15** (typed-errors) [QuickRecord](../engine/src/histos/testrun/QuickRecord.scala) still discards save/clear IO and silently falls back on reads, with raw suite/digest values. ~~A custom write checks parent != null~~ is obsolete after Workspace.writeString. M5 persistence owns typed errors/values and failure tests.
+- [ ] **T10** (tests) Remaining broad match/case-false assertions hide actual failure values across compiler/platform/plugin/publish fixtures. Rewritten cases are partial progress. M5 rewrites owning suites with value lenses, not one source grep as proof.
+- [ ] **T11** (duplication) Temp/write/tree/JDK and provider helpers remain copied across engine suites, including older runtime side-effect helpers and Boolean jsProvider setup. M5 fixtures owns shared typed scoped support; T17 separately requires correct M4 graph/resolver policy now.
+- [ ] **P16** (reproducibility) JvmCompile source hashing still incorporates absolute source paths. M5 source-root/key model owns portability; deliberately local runtime homes are an explicit different input, not a portable source key.
+- [ ] **T15** (duplication) ToolFixture/AppToolFixture duplicate explicit setup because app tests do not consume engine test classes. M5 fixtures owns cross-module sharing without another unnecessary framework. M4 setup correctness/breadth remains T17.
+- [x] **P17** (totality, services) CollectingReporter replaced its mutable callback field with a thread-safe queue confined to the blocking adapter. The earlier draft checked this from source alone; reopened because no supplied callback/failing-construction regression establishes closure. M4 integration verifies it with compiler tests, while M5 owns any surviving reporter contract cleanup.
+- [x] **P18** (api-shape) Superseded. `toolchain` prints the JDK it accepted, and a Js module without Node 25 fails naming that floor. Evidence: [Survey](../engine/src/histos/toolchain/Survey.scala), [JdkSpec](../engine/test/JdkSpec.scala), [NodeSpec](../engine/test/NodeSpec.scala).
+- [ ] **P20** (resources, observability) Scratch and stream-close finalizers discard cleanup IO failures. M5 resource policy owns denied-cleanup reporting/tests. This is not permission to defer M4's normal failure/interruption scratch safety or make downloads uninterruptible.
+
+- [x] **P21** (resources) Superseded. Histos does not parse JDK or Node archives.
+
+- [ ] **P22** (correctness, incremental tests) Removing an upstream ABI type left generated downstream test bytecode referencing ResolvedJdk until its preserved outputs/analysis were rebuilt. M4 verification used a clean recompilation; M5 compiler/test-analysis invalidation owns a regression proving ABI removal invalidates downstream generated tests.
+
+- [ ] **P23** (correctness, platform) POSIX bootstrap on macOS conservatively rejects a cache under /private/tmp because stat %Lp omits special mode bits during ancestor inspection. The owner-private project/home cache cold and offline bootstrap passes. M5 platform/cache adapters owns complete mode reporting and sticky-directory parity regressions.
+
+## M6 application service and surface codecs
+
+- [ ] **A1** (typed-errors) Calls/Daemon encode domain failures as code/text Message.Exit. M6 wire types owns closed nested reports/faults, not an effect that succeeds with failure text.
+- [ ] **A2** (typed-errors) Session/MCP still return string error/result channels. M6 MCP codec owns tagged schema-valid report/fault outputs and progress; the retired MCP-text decision is current debt, not the target.
+- [ ] **A3** (stringly, booleanly) Call carries raw names/platform/action strings and quick Boolean, reparsing CLI enums. M6 wire types owns typed selections/requests/test modes.
+- [ ] **A4** (typed-errors) Bad suite patterns are misclassified through CiError/GraphCompileError. M6 request decoding owns a suite-selection error.
+- [ ] **A5** (duplication) CLI/server duplicate compile-then-test continuation; ModuleTest.console is not the shared application service. M6 Build owns one orchestration entry.
+- [ ] **A6** (services) BSP still performs classpath/source/allow-list preparation in handlers. M4 lock/classifier correctness is partial repair. M6 thin BSP owns engine classpath use cases and exact artifact-source matching.
+- [ ] **A7** (stringly) BSP method/target/main-test strings and repeated URI parsing remain. ~~The ACP dispatcher remains~~ is invalid after A11 deletion. M6 owns BspMethod/TargetUri codecs.
+- [ ] **A8** (concurrency) Runs are keyed by task id and overwrite; serial MCP cannot cancel its own in-flight request. ~~The ACP loop needs multiplexing~~ is invalid after A11. M6 owns supervised request fibers and RunId cancellation.
+- [ ] **A9** (concurrency) A global run permit blocks unrelated Metals work. M6 owns output-scoped write locks and per-request scheduling.
+- [ ] **A10** (concurrency) BSP ignores cancellation and serializes requests behind in-flight work. M6 owns cancellation/writer boundaries and concurrency tests.
+- [ ] **A12** (typed-errors) Existing surface Either/String parsers and message flattening, including CLI assembly pin, survive typed M4 adapters. M6 wire/codec boundaries own nested errors and rendering only at the edge.
+- [ ] **A13** (typed-errors) BSP file IO can die and terminate a splice. M6 owns request failures as reports/faults, not defects.
+- [ ] **A14** (concurrency) BSP diagnostics use a callback queue. P17's compiler callback correction is not this surface concern. M6 owns typed event streaming and callback-boundary proof.
+- [x] **A15** (dead code) Unused ToolchainView was deleted in M4; its file/callers are absent. This records deletion, not the full app/Windows gate. M6 must not recreate an unused report abstraction to preserve it.
+- [ ] **A16** (duplication) Pin/path/exit/compile/test rendering helpers remain duplicated across CLI/Calls. M6 Build/codecs owns one report-to-exit/rendering boundary.
+- [ ] **A17** (correctness) Missing lock still exits 8 for compile and 5 for test/run, asserted in CliSpec. M6 owns consistent fault/exit policy.
+- [ ] **A18** (services) CLI/server/client package dependency cycle remains. M6 application types remove imports of surface helpers from service/wire code.
+- [ ] **A19** (booleanly) Dry-run/update-check/test/header flags remain Boolean APIs. M6 request modes and owning cache/header adapters replace ambiguous combinations.
+- [ ] **A20** (services, resources) Generation graph/live refs and wide daemon/BSP construction remain. Reloaded generations have retire/release leases, so ~~no generation is ever retired~~ is false; initial-load scope association and session construction still need review. M6 Build owns honest generation/session resources.
+- [ ] **A21** (stringly) Server product version labels remain repeated in BSP. M6 construction supplies one version value; B15 concerns actual compiler revision, not this label.
+- [ ] **A22** (tests) ~~ServerSpec has no reload/reboot/didChange/every-splice coverage~~ is obsolete: [ServerSpec](../app/test/ServerSpec.scala) now covers reboot termination and target notifications. NoServer, permit-on-interrupt, testOnly-through-server and remaining codec/concurrency gaps still need evidence. M6 owns these tests and misleading legacy names/fixture-error assertions.
+- [ ] **A23** (api-shape) Session.perform collects output, so agents do not get progress. M6 event stream/codec owns incremental delivery.
+- [ ] **A24** (api-shape) Selection reuses workflow CiError and reparses names/aggregate references. M6 application selection owns its own typed contract.
+- [ ] **A25** (correctness) Call.Task carries no PluginArgs, losing contributed-command arguments through server/MCP. M6 wire types owns argument-preserving requests and end-to-end tests.
+- [ ] **P19** (performance, resources) Earlier M3 exits promised cross-command server compiler reuse and repository no-op/edit timings without completion evidence. Batch incrementality/pooling under S8 remains delivered. M6 scoped session-resource construction and M9 benchmarks own the surviving promises.
+
+## M7 public API and plugin phases
+
+- [ ] **G1** (api-shape) TestMain/provider options still represent an invalid pair. Graph.linkModule rejects it during graph construction; “link time” never meant executable linking. M7 module shape owns TestRunner and compile-time exclusions.
+- [ ] **G2** (api-shape) Clang/Js/Native settings still live on general modules and fail runtime validation. Catalog/jsVersion is partial progress. M7 platform-owned settings owns the illegal-state redesign.
+- [ ] **G3** (api-shape) Module construction is wide with proliferating trusted/apply/builder overloads. Historical field/overload counts are not current API contracts. M7 module shape owns one small builder value and logical submodels.
+- [ ] **G4** (stringly) Module names and ProjectName/ShipName/PullRequestNumber/ProviderLibrary literal gaps remain. M7 literals owns compile-time names with typed runtime from.
+- [ ] **G5** (stringly) Dependency organizations/names/revisions, directories, plugin coordinates/output paths and duplicate resolver errors retain raw strings. M7 domain ownership/literals owns those contracts; L9 classifiers are only partial progress.
+- [ ] **G6** (typed-errors) EntryName registration failure is flattened as PluginDefect and contributes under a catch boundary. M7 registration owns the actual parser error and total data construction.
+- [ ] **G7** (typed-errors, duplication) Macro helpers retain string errors and copied literal validation. M7 literals owns one typed literal derivation seam without dependency additions disguised as compiler gates.
+- [ ] **G8** (api-shape) Interpolators still accept inline Any arguments. M7 literals owns typed rejection, not hidden conversions.
+- [ ] **G9** (totality) Clang's macro-spliced factory lacks publicInBinary. M7 literal factory visibility owns the correction and compile tests.
+- [ ] **G10** (typed-errors) Version session parsing drops ShipNameError and uses raw environment maps. M7 version API owns nested errors/config input.
+- [ ] **G11** (services) App root vocabulary/flag argv and loader concepts live on the API. ClassHome does not yet expose histos.step as the public plugin contract requires. M7 namespace/public phase design owns deliberate boundaries.
+- [ ] **G12** (api-shape) BuildError is a flat enum and graph validation returns only the first failure. M7 accumulation owns NonEmptyChunk errors and useful source positions, without a stale case count.
+- [ ] **G13** (api-shape) Fixed ScalacFlag cannot express ascent's needed flags. M7 early scalac literal owns compile-time flag validation and BSP warning rules.
+- [ ] **G14** (api-shape) Anonymous ModuleDef functions have no recorded owner/name/conflict. M7 module aspects owns those descriptions.
+- [ ] **G15** (stringly) One-line module notes require every plugin to parse strings. M7 typed NoteKey/codecs owns typed storage/access.
+- [ ] **G16** (api-shape) TaskDep still names only Compile/Same; public plugin Steps cannot depend on link/test/package. Core Steps and engine plugin orchestration are delivered, not a completed public phase API. M7 owns typed kinds/phase dependencies and boundary tests.
+- [ ] **G17** (tests) PluginFixture cannot supply compiled inputs. M7 fixtures owns value-based compiled request tests without engine dependency.
+- [ ] **G18** (duplication) Central artifact/digest/revision types duplicate API values. Sha256 remains in histos.jdk by coordinated M4 scope. M7 domain ownership unifies logical types without losing errors/literals.
+- [ ] **G19** (correctness) MissingProject positions point at the missing definition rather than referencing dependsOn/ship calls; name remains String. M7 edge/source-position model owns correct diagnostics.
+- [ ] **G20** (correctness) ShipLink manufactures catalog positions/errors and Catalog repeats validation. M7 catalog model owns honest errors and removal of redundant branches.
+- [ ] **G21** (api-shape) Edges/aggregates recover supplied children by name, permitting identity mismatches. M7 reference-based graph construction owns this invariant.
+- [ ] **T14** (tests) Missing API runner-through-PluginFixture, complete plugin lock-cell and combined dependency/path/strategy header examples remain. M7 contract tests owns each, with plugins.md linking actual fixtures rather than implying they exist.
+- [ ] **G22** (api-shape, totality) Sha256/HttpsUrl and runtime version/major textual APIs lack the required compile-time facade alongside typed from. FileUrl now has one. M7 literals owns the remaining factories and macro visibility; not an M4 security waiver.
+
+## M8 graph-derived CI
+
+- [ ] **C1** (booleanly, reproducibility, performance) Workflow setup still uses .github/ci-tools and hardcoded uncached Node/LLVM/Playwright/browser installs. M8 needs/caches owns ToolSetup derived from graph/catalog, exact revision/package-set cache restores and warm-job proof. The temporary manual Windows bootstrap workflow transfers only when generated CI preserves its verification.
+- [ ] **C2** (api-shape) Split axes render platform/Scala filters the CLI does not accept. M8 matrix owns matching typed filters, affected-module selection and render/CLI tests.
+
+## Closed historical baseline, M0-M3
+
+The following original ledger rows preserve their closure evidence and historical source citations. Sentences describing missing behavior belong to the baseline, not the current source. Subsequent changes and surviving subconcerns are owned above. B24/B47's system-tar fix was the historical implementation; M4 replaces engine decoding with Commons Compress/XZ. B42/B43 complete the remaining Unix descendant/pipe ownership work. No M4 acceptance can be inferred from a historical checkbox.
+
+### M0.1 Docs tell the truth
 
 - [x] **D1** (docs) `docs/design.md` "Proposed Design" and "Commits" describe commits 1 to 9 as unbuilt. The code has them: `api:Builder.scala:20`, `engine:select/Selection.scala`, `app:bsp/Bsp.scala:978`, `api:ProjectDef.scala:103`, `app:server/Daemon.scala:94`, commit `6dd46d3`. `docs/plan.md:57` is the accurate one.
 - [x] **D2** (docs) `design.md:27` says the repo has no GitHub Actions workflow. `.github/workflows/ci.yml` exists.
 - [x] **D3** (docs) `design.md:22-23,87` say an aggregate still fails as `NotModule` and that MCP loads its own graph. Both are stale.
-- [x] **D4** (docs) `design.md:191,215` say the server shares Zinc analysis and that the analysis file is the incrementality. Compile is never incremental (S8).
+- [x] **D4** (docs) `design.md:191,215` say the server shares Zinc analysis and that the analysis file is the incrementality. At that baseline compilation was not incremental; S8 subsequently implemented it.
 - [x] **D5** (docs) `design.md:207,484` say the test child sees `HISTOS_REPO` and `PATH` only. It also gets `HOME` and `XDG_CACHE_HOME` (`engine:testrun/ModuleTest.scala:1155-1157`).
 - [x] **D6** (docs) `design.md:207` says `compiledTests` passes `ScalacFlags.empty` and that four helpers are private. It passes `module.flags` (`ModuleTest.scala:1333`), and the helpers are `private[histos]`.
 - [x] **D7** (docs) `design.md:202` shows `.scalac(EncodingUtf8)`, which does not compile. The call is `ScalacFlag.EncodingUtf8`. The flag text is produced in `api:ScalacFlag.scala:21-23`, not in `JvmCompile`, which `plan.md:45` also gets wrong.
@@ -26,7 +157,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **D10** (docs) `design.md:213` and `plan.md:9` describe a configurable, read-only-until-opened remote cache. No configuration path exists.
 - [x] **D11** (docs) `design.md:329,374` say `BspSpec` covers the mixed compile status and `ServerSpec` covers reload and reboot. Neither test exists (A22).
 - [x] **D12** (docs) `design.md:420,621` say `ci.yml` is `test` plus `workflow` with an empty catalog. It has a `versions` job and tool steps, and `design.md:256` already says the catalog is non-empty.
-- [x] **D13** (docs) `design.md:69,482` say the launcher refuses a mismatched sha256. The snapshot path skips the check (`histos:80-84`). M0.1 states the current behavior, and L7 fixes the script.
+- [x] **D13** (docs) `design.md:69,482` say the launcher refuses a mismatched sha256. The snapshot path skips the check (`histos:80-84`). M0.1 recorded that baseline behavior; current launcher verification is tracked by L7/L19.
 - [x] **D14** (docs) `design.md:69` says the engine re-execs. It starts a child and waits (`engine:jdk/Toolchain.scala:206-210`).
 - [x] **D15** (docs) `design.md:217` says Node follows the JDK rules. Node selection was display only. B22 now launches that Node for Js test and run.
 - [x] **D16** (docs) `design.md:484` says publish takes no password. `engine:publish/PublishWhere.scala:37-41` reads `SONATYPE_PASSWORD`. `design.md:118` calls `central` a local Maven publisher, but it also uploads snapshots.
@@ -36,30 +167,30 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **D20** (docs) `plugins.md:448-453` lists the compile classpath without `zio-stacktracer` and `izumi-reflect` (`engine:load/Boundary.scala:39-47`).
 - [x] **D21** (docs) `design.md` narrates code line by line, with file names and "do not" warnings. That style rots: this audit found more than 20 stale claims. It is replaced by an as-built `architecture.md` and this roadmap.
 
-## M0.2 Tests assert typed values
+### M0.2 Tests assert typed values
 
 - [x] **T1** (tests) `api-test:GraphSpec.scala:12-13,205-484` and `VersionSpec.scala:189-279` match errors with `.message.contains`. 29 of the 30 graph `BuildError` cases are never matched as values. `AggregateChild`, `JsEnvWithoutJs`, `EmptyShipName`, and `BadShipName` have no test.
 - [x] **T2** (tests) Fixtures fail by comparing made-up strings: `GraphSpec.scala:349`, `Outside.scala:21`, `VersionSpec.scala:48`, `central-test:PublisherSpec.scala:53`.
 - [x] **T3** (typed-errors) Tests flatten typed errors with `IllegalStateException(e.message)` or `.left.map(_.message)`: `PublisherSpec`, `SnapshotSpec`, `ModuleTestSpec` (25 sites), `GraphCompileSpec` (18), `PublishSpec` (7), `LauncherSpec` (5), `QuickSpec`, `PluginRunSpec:380,465`, `ProgramSpec` (7), `ModuleTestSpec:200-203`.
-- [x] **T4** (tests) Shape-only assertions: `GraphSpec.scala:332` (`isRight`), `GraphCompileSpec.scala:248`, `PluginRunSpec.scala:505` (`isLeft`), `case _ => false` in `JdkSpec`, and 18-field positional `Module` patterns (`api-test:Outside.scala:15`).
+- [x] **T4** (tests) Shape-only assertions: `GraphSpec.scala:332` (`isRight`), `GraphCompileSpec.scala:248`, `PluginRunSpec.scala:505` (`isLeft`), `case _ => false` in `JdkSpec`, and positional `Module` patterns (`api-test:Outside.scala:15`).
 - [x] **T5** (totality) `engine-test:SelectionSpec.scala:27` uses `.head`.
 
-## M0.3 Test environment as aspects
+### M0.3 Test environment as aspects
 
 - [x] **T6** (tests) Tests that need the network, clang, Firefox, or npm run ungated: `NativeSpec.scala:143-188`, `ModuleTestSpec.scala:213-218`, `ProgramSpec.scala:120-124`.
 - [x] **T7** (tests) Tests read `sys.env`: `LoadSpec.scala:25`, `SpecularFixtureSpec.scala:326`, `ProgramSpec.scala:147`. The same reads in `NativeSpec`, `WorkflowSpec`, `TestProcessSpec`, `BspSpec`, and `AssemblySpec` now go through `zio.System` with `withLiveSystem`, and the two dead `rooted` helpers are deleted. `BootstrapSpec` moves to T13.
 - [x] **T8** (tests) `NativeSpec.scala:55` fallback is a tautology, `:144-154` passes on failure, and `:134-140` proves only the classpath.
 - [x] **T9** (hygiene) About 13 untracked `*.scala.semanticdb` files sit in `engine/src`, including `jdk/`. Find the writer. All 13 date from 2026-10-17, before scala-cli left the repo, and a full `./histos test` writes none, so the writer was that setup. They are deleted.
 
-## M0.4 Drop ACP
+### M0.4 Drop ACP
 
 - [x] **A11** (typed-errors) ACP returns both success and failure as `result.value`, invalid params succeed, a parse error is -32601, JSON is hand-built, and it is not the Agent Client Protocol (`session/new`, `session/prompt` are absent). Closed by deleting `app:acp/` (decision 4) in `histos/drop-acp`. `acp` stays in `CommandName.reserved`, and `histos acp` is `CliParseError.UnknownCommand` without loading the build.
 
-## M1.1 Publish one coordinate per platform
+### M1.1 Publish one coordinate per platform
 
 - [x] **B1** (correctness, *verified*) `engine:publish/LocalPublish.scala:137-145,300-308,432-440` compiles every platform, and `jobs` filters cells by module only. A Jvm+Js module gets two parallel writers on one `jvm.jar` under one `_3` coordinate.
 
-## M1.2 Server lifecycle
+### M1.2 Server lifecycle
 
 - [x] **B2** (correctness, *verified*) `app:cli/Cli.scala:425-441,642-657`: `compile` and `test` call `Loader.load` before `attach`. A live server still gets a client-side load, a broken `histos.scala` fails in the client, and `~ compile` loads every iteration.
 - [x] **B3** (concurrency) `app:server/Daemon.scala:368-383,400-451`: `run` is `forkScoped` and unobserved. A failure after bind leaves `listening` incomplete, so `histos server` hangs.
@@ -70,7 +201,7 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **B8** (concurrency) `Daemon.scala:421,883-885`: `Ref[Option[Bsp.Session]]` lets a second splice overwrite the first, and the first exit clears both.
 - [x] **B9** (dead code) `Decision.Stale`, `Drift`, `ServerError.Stale`, and `Message.Stale` are never produced and are still matched (`Cli.scala:995,1150,1164`).
 
-## M1.3 Plugin isolation
+### M1.3 Plugin isolation
 
 - [x] **B10** (concurrency, *miniature first*) `engine:load/PluginRuntime.scala:130-134,253-261` and `Loader.scala:243-250` set the thread context class loader on the current thread and then run plugin code that may move the fiber to another thread. Parallel plugin nodes overwrite each other. A blocking step in `run` landed on a default blocking thread whose context loader was the app loader, so `loadClass("dev.example.Echo$")` failed with `ClassNotFoundException`, and `graph` and `run` now execute on `PluginThreads`, whose threads carry `BuildLoader`.
 - [x] **B11** (correctness) `engine:load/BuildLoader.scala:28-31`: `takeRefused` never clears, so one refused `histos.*` lookup fails every later run on that loader with `EngineLeak`. An unrelated task run after a refused lookup failed with `EngineLeak("histos.schedule.Sendable")`, and `takeRefused` now clears.
@@ -81,29 +212,29 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **B39** (correctness, *miniature first*) `izumi.reflect.*` is not a boundary name, and the izumi jar is dropped from plugin classpaths, so plugin code that materializes a `Tag` may fail with `PluginRunError.Linkage`. Found while correcting `plugins.md`. A `LoadSpec` plugin that summons `Tag[Greeting]` died with `NoClassDefFoundError: izumi/reflect/Tag$` (`izumi.reflect.Tag$`), a die rather than `Linkage` because `run` threw while building its effect, before `catchSomeDefect` applies, and `izumi.reflect.` is now a boundary name.
 - [x] **B41** (typed-errors) `engine:load/PluginRuntime.scala` `invoke`: a plugin whose `run` throws before it returns an effect escaped `catchSomeDefect` and the run died with the raw throwable (`java.lang.IllegalStateException`), and `ZIO.suspendSucceed(plugin.run(request))` now turns that throw into `PluginRunError.Defect`. Found while proving B39.
 
-## M1.4 Child processes
+### M1.4 Child processes
 
 - [x] **B16** (resources) `engine:testrun/TestProcess.scala:126-127,144-145`: `start` then `addFinalizer` is not atomic, so an interrupt between them leaks the child. The gap is a race no deterministic test can hit, and `start` is now the acquire of `ZIO.acquireRelease`, which is uninterruptible.
 - [x] **B17** (resources) `TestProcess.scala:266-279,316-320`: non-JVM children (node, native binaries) never get their own process group, and `stop` skips the group kill once the leader exited. The `sleep` started by `sh -c` and the `sleep` a JVM test left behind after its main returned both survived. This branch kills every descendant of a live child, taken with `ProcessHandle.descendants()` before anything dies, and a JVM child's whole group even after its leader exited (`process/ProcessTree.scala`). B42 holds the rest: a descendant that outlives a node or native child.
 - [x] **B18** (concurrency) `TestProcess.scala:180-199` starts a new `Thread` per line read, outside ZIO supervision. Each pipe is now `ZStream.fromInputStream` read by one fiber, in a scope that closes after the tree is killed, because a blocked pipe read ignores interrupt.
 - [x] **B19** (performance) `ModuleTest.scala:69-70,1070` and `TestProcess.scala:164` build output with `s"$have$line\n"` (quadratic), and `TestStatus` keeps a second copy of streamed output. 200,000 lines took 13.1 s through `TestProcess.run` and now take about 0.4 s. `TestStatus` carries no output, and `Transcript` (one `Chunk` per stream) is the one accumulator, for `TestProcess.run` and `ModuleTest.run`.
-- [x] **B20** (resources) `engine:jdk/Toolchain.scala:206-210`: the JDK hand-off is a raw `ProcessBuilder` plus `waitFor`, and the child survives an interrupt. An interrupted hand-off left the child and the `sleep` it started running, and the child is now an `acquireRelease` resource whose release kills its tree.
+- [x] **B20** (resources) Superseded. There is no JDK hand-off. The running JVM is the JVM.
 - [x] **B21** (resources) `engine:pack/Assembly.scala:268-270` opens a `URLClassLoader` over every jar and never closes it. The loader still served `demo/Lib.class` after its scope closed, and it is now closed by `acquireRelease`.
-- [x] **B44** (resources) `engine:jdk/Toolchain.scala` `replace`: an interrupted hand-off force-killed the child before its TERM handler could run (a child that traps TERM never exited 130), and the release now sends SIGTERM to the tree, waits up to 2 seconds, then force-kills what is left.
+- [x] **B44** (resources) Superseded with B20. There is no JDK hand-off to interrupt.
 - [x] **B45** (resources) `engine:testrun/TestProcess.scala` `bootstrap`: an interrupt waited out the `javac` compile and left `javac` running (it did not finish within 3 seconds against a `javac` that sleeps), and `javac` is now an `acquireRelease` child whose release kills its tree.
 
-## M1.5 Toolchain decisions reach execution
+### M1.5 Toolchain decisions reach execution
 
-- [x] **B22** (correctness, *verified*) `ModuleTest.scala:461`, `js/JsSuite.scala:106`, and `js/JsRun.scala:128` run `node` from `PATH`. The Node lock only feeds `histos toolchain` (`toolchain/Survey.scala:34`). A named Js main ran the parent's `node` and never launched the `node.local` choice, and Js test and run now launch the Node the selection chooses, once per command, or fail with `NoNode`.
+- [x] **B22** (correctness, *verified*) Js test and run launch the Node that selection chooses, once per command. A missing or too-old Node fails. `node.local`, when present, is that selection.
 - [x] **B23** (correctness) `native/NativeCompile.scala:21` ignores `HISTOS_NATIVE` at compile, `ModuleTest.scala:1154-1158` drops it for test links, and `native/NativeLink.scala:191` builds the linker env from `sys.env`. With `HISTOS_NATIVE` naming an empty local repository, compile, the test compile, and the link all fetched from Central, and the origin is now read once from `Machine` and passed to compile, the test compile, link, and runner, and the run link, with the linker env built from the machine's.
-- [x] **B24** (correctness, *verified*) `jdk/JdkStage.scala:126-136,143-166` stages zip only. Temurin ships tar.gz on Linux and macOS, and unzip loses exec bits. `JdkSpec:301-316` checks only `isRegularFile`. A tar.gz JDK was refused as `NotZip`, and the system `tar` now unpacks it as a scoped child, so `bin/java` keeps its exec bit and runs.
-- [x] **B25** (correctness) `jdk/Jdk.scala:163` and `Toolchain.scala:112,118` count Coursier as installed when its cache directory exists. Histos's own `FileCache()` creates that directory. A cache without a JDK and no `cs` on `PATH` turned provisioning into a `cs java-home` hint, and that cache now counts only when it holds a JDK.
-- [x] **B26** (resources) `JdkStage.scala:79-85,138-166` and `node/NodeStage.scala:91-98,154-181` use one fixed `archive.partial` name and unpack in place, so concurrent or interrupted stages corrupt the cache. A failed unpack left a partial `unpack` beside `archive`, and both stagers now copy to a per-attempt scratch file and unpack into a scratch directory under a scope, then move into place atomically and keep a complete unpack another stager placed first.
+- [x] **B24** (correctness, *verified*) Superseded. Histos does not install a JDK. If JDK 21 is not already there, it explains what it found and fails.
+- [x] **B25** (correctness) Superseded. Histos does not install a JDK and does not consult a JDK manager.
+- [x] **B26** (resources) Superseded. Histos does not install a JDK or Node, so there is no unpack cache to corrupt.
 - [x] **B27** (correctness) `node/NodeProbe.scala:194-196`: the read-only probe runs `setExecutable(true)` on user binaries. Probing made an `rw-r--r--` node executable and chose it, and the probe now leaves modes alone and rejects that node as `NotExecutable`.
-- [x] **B47** (correctness) `node/NodeStage.scala` stages zip only, but nodejs.org ships tar.gz and tar.xz for Linux and macOS. Found in M1.5. A tar.gz node was refused as `NotZip`, and tar.gz and tar.xz now unpack through the same scoped system `tar` as B24, with `bin/node` executable.
+- [x] **B47** (correctness) Superseded. Histos does not install Node. If Node 25 is not already there, it explains what it found and fails.
 - [x] **B48** (resources) `node/NodeProbe.scala` `versionOf` starts `node --version` with a raw `ProcessBuilder` and a `destroy` in `finally`. Found in M1.5. Interrupting a probe of a node whose `sleep` held stdout did not finish within 5 seconds, and the probe is now a scoped child whose release, and any interrupt, kills its tree.
 
-## M1.6 Snapshot publisher
+### M1.6 Snapshot publisher
 
 - [x] **B28** (resources) `central:central/Snapshots.scala:97,230-232` creates an `HttpClient` in a constructor and never closes it. The layer is `ZLayer.succeed`. The publisher now takes heddle's `Client` from `Client.layer`, which is scoped and closes its pool. Heddle tests that lifetime. Histos does not.
 - [x] **B29** (concurrency) `Snapshots.scala:208-210` sends with `attemptBlocking`, so a cancel waits out each PUT. Uploads go through `Client.batched`. Heddle's socket reads are interruptible, and Histos does not retest the client.
@@ -114,17 +245,17 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **B34** (typed-errors) `Snapshots.scala:210` and `Publisher.scala:48-50`: `Transport(getMessage)`, `Status(detail)`, and `Metadata(detail: String)` carry raw text. `TransportFault` names the target, `Status` keeps the code, and `MetadataFault` names why the build number could not advance. A trust failure and an HTTP 500 both drop the body text.
 - [x] **B40** (typed-errors) `ArtifactId.from`, `DependencyVersion.from`, and `SnapshotMetadata.base` fail with the whole `PublishError`, so parse errors share an enum with HTTP failures, and a malformed base URL is `PublishError.Transport`. `SnapshotMetadata.render` takes 7 positional parameters. Found in M0.2. The parsers return `ArtifactIdError`, `DependencyVersionError`, and `SnapshotRevisionError`. A bad repository url is `SnapshotRepository.Error`. `render` takes a `SnapshotDocument`.
 
-## M1.7 Cache hygiene
+### M1.7 Cache hygiene
 
 - [x] **B35** (resources) `engine:cache/ContentStore.scala:46-51` leaks the temp file on failure or interrupt, and `clean` never sweeps `tmp/`. `put` releases the temp on failure and interrupt. `clean` deletes temp files older than the retention and leaves a fresh one.
 - [x] **B36** (correctness) `ContentStore.scala:67-81`: the keep file only grows, is global across projects, and is read-modify-write with no lock. Each project has its own file, a load replaces that file, and the write holds a lock. A legacy `keep` file is still honored.
 - [x] **B37** (correctness) `cache clean` does not cover JDKs or launchers. Either clean them or change the documented contract (D9). The contract is that `clean` does not remove them.
 
-## M1.8 Exit codes
+### M1.8 Exit codes
 
 - [x] **B46** (correctness) `histos compile` exits 0 when a cell fails to compile: `Cli.compileLocal` fails only on a stream error, and a failed cell is a `CompileFeed.Failed` event. `GraphCompile.strict` fails the compile command's stream after its last event, locally and through the server. Test runs keep the lenient stream so passing cells still test.
 
-## M2 Steps, executor, and aspects
+### M2 Steps, executor, and aspects
 
 - [x] **K1** (services) Compile, test, publish, run, and plugin cells execute as `Step` graphs through `Histos`. Test cells, publish jobs, and run cells declare their resource needs and preserve their typed domain errors.
 - [x] **K2** (api-shape) The closed `TaskKind` action dispatch is gone. Scheduler dependents receive the combined upstream value, while compile, test, publish, run, and plugin orchestration use typed `Step` values and typed continuations.
@@ -145,10 +276,10 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **K17** (api-shape) `GraphCompileError.Cells` carries one `NonEmptyChunk[GraphCompileError]`.
 - [x] **K18** (correctness) `PluginRuntime.bind` converts every plugin task id with `ZIO.fromEither` and returns `TaskError` when binding fails.
 
-## M3 Services that own resources
+### M3 Services that own resources
 
-- [x] **S1** (services) `Machine.load` reads the fiber's `zio.System` once. `HISTOS_NATIVE` and `HISTOS_JDK_SETTLED` are `zio.Config` over that map. Action stamps and `cache clean` use the fiber clock. Plugin env inputs use the captured map. `ApiJar` reads `HISTOS_REPO` through `zio.System`. `ModuleTest.suiteEnv` and `NativeLink.linkerEnv` already took a map. Generated bridge sources still call `sys.env` inside the child (P1). `BootstrapSpec` still reads `sys.env` (T13).
-- [x] **S2** (typed-errors) A filesystem failure names the path (`could not read …`) and runs on the blocking pool. That is the dependency lock read and write, compile, load, `ContentStore`, a Coursier cache session and artifact digest, a child file check, and JDK and Node staging filesystem work, all as `IoFailure`. Archive extraction preserves malformed-archive and extraction failures, and a Node version failure preserves its version error. A local publish is `PublishError.Io(path, fault)` with the same message, because central does not depend on the engine. A child with no program, a failed start, a system-property failure, a missing status, or an unreadable pipe is `NoProgram`, `Start`, `Property`, `Status`, or `Console`. A repository fetch stays `ResolveError.Repository`.
+- [x] **S1** (services) `Machine.load` reads the fiber's `zio.System` once. `HISTOS_NATIVE` is `zio.Config` over that map. Action stamps and `cache clean` use the fiber clock. Plugin env inputs use the captured map. `ApiJar` reads `HISTOS_REPO` through `zio.System`. `ModuleTest.suiteEnv` and `NativeLink.linkerEnv` already took a map. Generated bridge sources still call `sys.env` inside the child (P1).
+- [x] **S2** (typed-errors) A filesystem failure names the path (`could not read …`) and runs on the blocking pool. That is the dependency lock read and write, compile, load, `ContentStore`, a Coursier cache session and artifact digest, a child file check, the JDK release read, and the Node probe, all as `IoFailure`. A Node version failure preserves its version error. A local publish is `PublishError.Io(path, fault)` with the same message, because central does not depend on the engine. A child with no program, a failed start, a system-property failure, a missing status, or an unreadable pipe is `NoProgram`, `Start`, `Property`, `Status`, or `Console`. A repository fetch stays `ResolveError.Repository`.
 - [x] **S3** (duplication) The dependency lock has one reader, `Resolve.readLock`, and one tree delete, `Workspace.delete`. `Dotty.process` owns the build-file and plugin compiler driver, `ReservedPackage` owns the plugin boundary names, and `Workspace.writeString` and `Workspace.recreate` own the repeated filesystem operations. Platform paths use `Platform.token`, native cells use `NativeToolchain.revision`, and test scopes use `Workspace.work`.
 - [x] **S4** (concurrency) Blocking filesystem work and compiler construction in `Loader`, `BuildFile`, `PluginCompile`, `PluginInputs`, `PluginRuntime`, `PluginManifest`, `Jdk`, `Toolchain`, `NodeProbe`, `NodeToolchain`, and `CompilerPool` run on `attemptBlocking`. The shared `Dotty.process` also runs compiler invocation on the blocking pool.
 - [x] **S5** (services) `Loader` stays a trait because a reload test supplies another implementation. The live value is a class that takes `Resolve` and `ContentStore`. `Scheduler` is a case class of the executor and the two caches. A loaded plugin runtime builds `Histos` once, on the load scope, and each task builds its `Scheduler` from that executor. `Daemon` and `Session` extend the caller's scope instead of providing one as a layer.
@@ -156,102 +287,12 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **S7** (services) `PluginRequest` lives in `histos.resolve`. `requirePlugins` returns `ResolveError`. `resolve` does not import `load`.
 - [x] **S8** (performance, *verified*) Zinc analysis is `inc.zip` under `.histos/analysis`. The next compile passes that previous result. An unchanged class keeps its timestamp, a changed neighbor is rebuilt, and a removed source deletes its class. A compiler is opened once per toolchain and reused. Stale class files from a deleted source used to survive a clean checkout's opposite: a dirty `.histos/classes` could still hold them, and this compile now removes the ones Zinc recorded.
 - [x] **S9** (performance) The provider runner source does not change with the suite pattern. One install is shared by the cells that compile against the same classpath, and one cell writes it. The child receives the framework, the class directory, and the patterns in its own environment.
-- [x] **S10** (services) `ChildProcess` in `histos.process` is the scoped child. Test, link, run, and the JDK hand-off use it.
+- [x] **S10** (services) `ChildProcess` in `histos.process` is the scoped child. Test, link, run, and the Node probe use it.
 - [x] **S11** (resources) `ApiJar.locate` packs into `Workspace.work`, removed with the caller's scope. The loader's class directory and blanked build file register their finalizer on the load scope.
 - [x] **S12** (api-shape) Wide calls take a request: `LinkJob`, `CellRun`, `JsLinkRequest`, `JsRunRequest`, `JsSuiteRequest`, `NativeLinkRequest`, `NativeSuiteRequest`, and `TestRun`. `Scheduler.publish` left with the executor. `PluginInputs.hash` takes `HashRequest`.
 - [x] **S13** (typed-errors) `EntryPoints.mains` fails with `IoFailure` for the directory it walked. `SourceWatch.take` reports the root whose walk failed.
 - [x] **S14** (services) A plugin run reads `Machine.native` before it builds steps and passes that origin into `PluginCells.compile` and the test compile. Unset is Central. A refusal still fails only a Native fetch.
-- [x] **S15** (typed-errors) Workflow, jar packing and assembly, plugin loading, and server IO errors carry the relevant path with their operation. Archive extraction and staged Node version failures retain their domain errors. Found while closing S2.
-- [x] **T12** (duplication) The ten specs call `GraphCompile.jdkHere`. There is no `21.0.2` fallback for the running JDK. `JdkSpec` still builds version fixtures with `JdkVersion.trusted` for lock cases. `AssemblySpec` still reads `java.home` for a java binary. Found in M0.3.
+- [x] **S15** (typed-errors) Workflow, jar packing and assembly, plugin loading, and server IO errors carry the relevant path with their operation. A Node version failure retains its domain error. Found while closing S2.
+- [x] **T12** (duplication) The specs call `GraphCompile.jdkHere`. There is no second JDK search. `JdkSpec` builds floor fixtures with `JdkVersion.trusted`. `AssemblySpec` still reads `java.home` for a java binary. Found in M0.3.
 - [x] **B42** (resources) `ChildProcess.command` starts `subprocess.Exec`, which calls `setpgid(0, 0)` and then `execvp`. The grandchild's group id is its parent's pid, so a kill of that group reaches it after the parent has exited. Found in M1.4.
 - [x] **B43** (resources) `stop` kills that group before it closes the pipes. The writer that used to sit outside the tree is in the group, so its end of the pipe closes and a blocked read returns. Found in M1.4.
-
-## M4 The lock covers every jar
-
-- [ ] **L1** (reproducibility, security, *verified*) A raw `coursier.Fetch(FileCache())` bypasses the build's resolvers, the lock, and checksums: `zinc/Scala3.scala:65-74`, `zinc/Scala213.scala:92-101`, `JvmCompile.scala:192-207` (semanticdb), `assembly/Assemble.scala:111-127`, `js/JsRun.scala:65`, `js/JsSuite.scala:283-304`, `js/JsLink.scala:123-142`, `js/ScalaJs.scala:35-67`, `native/NativeSuite.scala:182-201`, `native/NativeLibs.scala:81-149`.
-- [ ] **B15** (reproducibility) `"3.10.0"` is hardcoded three times (`PluginCompile.scala:23,83`, `Loader.scala:198`, `resolve/Resolve.scala:494`) and never read from the running compiler.
-- [ ] **L2** (reproducibility) Tool versions are literals in engine code: Scala.js 1.22.0, JS envs 1.6.0 and 1.1.1, chekhov 0.1.3 (twice), bridge Scala 2.13.18, semanticdb 4.17.3 (`JvmCompile.scala:186,234`), Native pinned to `JvmCompile.Scala390` (`NativeCompile.scala:17`), and `testrun/SuiteNames.scala:104`.
-- [ ] **L3** (duplication) A second artifact-suffix scheme is hand-written in `JsSuite.scala:82-96`, `JsLink.scala:125`, `ScalaJs.scala:37-42`, and `NativeSuite.scala:184`. `resolve/ArtifactName.scala:13-20` duplicates its own binary branch.
-- [ ] **L4** (duplication) `jdk/JdkLock.scala` and `node/NodeLock.scala` are the same parser, and the launcher's awk at `histos:118` is a third.
-- [ ] **L5** (duplication) `JdkStage` and `NodeStage` are about 180 identical lines each, and `JdkStage.unpackEntries` and `hash` use `var`, `null` checks, `while` loops, and `try`/`catch`.
-- [ ] **L6** (duplication) `Jdk` and `Node` repeat the resolution fold, the location scans, and the override and lock reads.
-- [ ] **L7** (security) `histos:80-84` skips the pin on the snapshot path, `:128-140` downloads and unpacks non-atomically, and `histos.bat` has no snapshot path, uses fixed `%TEMP%` names, and re-untars every time.
-- [ ] **L8** (correctness) `Toolchain.scala:187-188`: the engine refuses https locks that the script itself fetches.
-- [ ] **T13** (tests) `BootstrapSpec` builds and runs the launcher with plain-Scala file and process side effects outside ZIO, and reads `sys.env`. The launcher rewrite converts it. Found in M0.3.
-
-## M5 Platforms as backends
-
-- [ ] **P1** (stringly) About 450 lines of Scala live as strings filled in with `replace("__ENV__")`: `JsSuite.scala:111-279`, `JsLink.scala:68-121`, `JsRun.scala:87-131`, `NativeSuite.scala:67-180`, `native/NativeBridge.scala:9-49`. They pass positional `true, false` to Chekhov and use `Await.result`, the global execution context, `System.exit`, `null`, `var`, and `sys.env("JS_OUT")`. The build never typechecks them.
-- [ ] **P2** (performance) `fresh(linkDir)` wipes the bridge classes, their analysis, and the Scala Native link cache on every run (`Program.scala:104,116`, `ModuleTest.scala:450,493,648`, `NativeLink.scala:183`).
-- [ ] **P3** (duplication) `ModuleTest.scala:413-992` has six near-copies (`runJs`, `runJsProvider`, `runNative`, `runNativeProvider`, `execute`, `provide`) with 10 or 11 parameters. The platform dispatch is repeated in `GraphCompile.scala:635-647` and `ModuleTest.scala:1348-1365`.
-- [ ] **P4** (correctness) `ModuleTest.scala:235,250`: `foreachPar(prepare)` fails fast and `concatAll` drops later cells. The test half of design commit 4 is missing.
-- [ ] **P5** (correctness) `ModuleTest.scala:1319`: none of the seven callers passes `hear`, so test-compile warnings are dropped, and a failed test compile prints its messages with no file or line.
-- [ ] **P6** (correctness) `testrun/SuiteStamp.scala:19-28` and `ModuleTest.scala:790,1293`: the `testQuick` stamp omits upstream locked jars, the JDK, and flags. It does blocking IO outside an effect, swallows `NonFatal`, and uses `Map.apply` (`SuiteStamp.scala:26`).
-- [ ] **P7** (typed-errors) Errors become strings: `LinkFailed(detail: String)` (`ModuleTest.scala:116-121,453,506,604,660,672,733`), `Program` `Link`, `Process`, and `Library` (`Program.scala:106-220`), `NativeCompile.scala:21-22`, `NativeLink.scala:184,192`, `JsLink.scala:62`. `JvmCompile.scala:94,384-388` turns a `Throwable` message plus 8 frames into a diagnostic. `jdk/Toolchain` `Startup.Refuse(report: String)` and `CompileError.NativeLibrary(text: String)` carry text.
-- [ ] **P8** (api-shape) `assembly/Assemble.scala:35,40-44,53` hardcodes `app`, `api`, `histos.cli.Main`, and `versions.first`, ignores `graph.assembly`, flattens `NoModule(error.message)`, and has no test.
-- [ ] **P9** (dead code) `NativeLink.link` and `NativeKey` have test callers only. `NodeStage` has had a production caller, `NodeToolchain.choose`, since M1.5. `LinkError.Interrupted` and `Unexpected` and `NativeClasspath.entries` are unused.
-- [ ] **P10** (stringly, booleanly) `framework: String` (`JsSuite.scala:30`, `NativeSuite.scala:24`), `Map[String, String]` child env, `Machine.userHome: String`, `hasJavac` and `hasBinary`, `slot(stop: Boolean)` (`Jdk.scala:199`, `Node.scala:114`), `Node.required: Boolean`, the module name `"hello"` (`NativeLink.scala:174`), and `HISTOS_JDK_SETTLED` written twice (`Toolchain.scala:26,209`).
-- [ ] **P11** (cast, totality) `pack/LazyVals.scala:197-198` uses `asInstanceOf` after a guard, and `:109,114,160` index lists with `window(n)` and `window.head`.
-- [ ] **P12** (correctness) Windows gaps: `native/Clang.scala` never looks for `clang.exe`, `ChildProcess` looks for `bin/java` beside `java`, and the entry point exits 3 when `setpgid` is missing.
-- [ ] **P13** (correctness) `ScalaJs.scala:63-65` matches file names with `startsWith`. `native/ClassShapes.scala:22-30` appends with `:+` (quadratic) and holds every class's bytes.
-- [ ] **P14** (concurrency) Effects run eagerly outside ZIO: `native/Clang.scala:121,127`, `NodeProbe.scala:163-169`.
-- [ ] **P15** (typed-errors) `testrun/QuickRecord`: `save` and `clear` `.ignore` IO failures, `read` uses `try`/`catch NonFatal`, `write` checks `parent != null`, and `suite` and `digest` are `String`s. Found in M0.2.
-- [ ] **T10** (tests) Value assertions written as `x match { case ... => ...; case _ => false }` inside `assertTrue` hide the failing value: about 9 in `ModuleTestSpec`, 3 in `ProgramSpec`, 8 in `GraphCompileSpec`, 2 in `PluginRunSpec`, 1 in `PublishSpec`, and 3 in `LauncherSpec`. Each spec converts to `is(...)` lenses when its step rewrites it. Found in M0.2.
-- [ ] **T11** (duplication) `temp`, `write`, `entries`, and the `jdk` fixture are copied across `ModuleTestSpec`, `ProgramSpec`, and `QuickSpec`, and `jsProvider` takes `installJsdom: Boolean`. Found in M0.2.
-
-## M6 One application service, four codecs
-
-- [ ] **A1** (typed-errors) `app:server/Calls.scala:68-655` and `Daemon.scala:103-109` turn every domain error into `Message.Exit(code: Int, err: String)`, and the effect succeeds.
-- [ ] **A2** (typed-errors) `app:client/Session.scala:55-59,98,129,252` and `mcp/HistosMcp.scala:76-105` are `ZIO[..., String, String]`. This is design decision 12 written as code.
-- [ ] **A3** (stringly, booleanly) `Call` carries `List[String]`, `Run(id: String, platform: Option[String])`, `Resolve(action: String)`, `Workflow(action: String)`, and `quick: Boolean`. The CLI's enums are rendered to strings (`Cli.scala:821,904`) and parsed again on the server.
-- [ ] **A4** (typed-errors) `Calls.scala:384-398` reports a bad suite pattern as `GraphCompileError.Target(CiError.BadName(...))`.
-- [ ] **A5** (duplication) Compile-then-test continuation is written twice (`Cli.scala:659-744`, `Calls.scala:352-451`), and the engine's `ModuleTest.console` goes unused.
-- [ ] **A6** (services) `bsp/Bsp.scala:504-572,586-676,978-1002` builds classpaths, parses the lock, matches source jars by file-name prefix, and parses the allow-list inside the handler.
-- [ ] **A7** (stringly) `Bsp.scala:234-274,369,1144-1177` and `acp/Acp.scala:48-58` dispatch on method strings. Target URIs are parsed by hand in two places, and `"main"`/`"test"` are strings. The ACP half goes away with A11.
-- [ ] **A8** (concurrency) `Calls.scala:453-494` keys the run registry by task id, so two runs of one id overwrite each other, and `Tasks.cancel` is bypassed. MCP's `Stdio.run` and the ACP loop serve one request at a time, so an agent cannot cancel its own run.
-- [ ] **A9** (concurrency) `Daemon.scala:796-803` holds one global permit for a whole run or suite, so a Metals save waits behind `histos test`.
-- [ ] **A10** (concurrency) BSP ignores `$/cancelRequest`, and one in-flight compile blocks every other request (`Daemon.scala:863-882`, `Bsp.scala:271`).
-- [ ] **A12** (typed-errors) `Either[String, _]` and `LoadError.message` flattening: `Bsp.scala:994`, `Calls.scala:518,575`, `Cli.scala:529` (`pin: IO[String, Unit]`), `Daemon.scala:696,718,736`.
-- [ ] **A13** (typed-errors) `Bsp.scala:792,842,936` use `.orDie` on file IO, so a defect kills the splice.
-- [ ] **A14** (concurrency) `Bsp.scala:388-416` feeds a `ConcurrentLinkedQueue` from a `CompileProblem => Unit` callback.
-- [ ] **A15** (dead code) `mcp/ToolchainView.scala` (174 lines) is unused.
-- [ ] **A16** (duplication) `pin`, `placed` (twice in `Calls`), `relative` (also in `Lines`), the program exit mapping, the compile renderer (four copies), and `Cli.failedCell` and `Calls.failedSuite` are repeated between `Cli.scala` and `Calls.scala`.
-- [ ] **A17** (correctness) A missing lock exits 8 from `compile` and 5 from `test` and `run` (`Cli.scala:448-459,749-758`), and `CliSpec.scala:201-219` asserts the split.
-- [ ] **A18** (services) `server` and `client` import `CliExit`, `Lines`, and `Cli.testFailure`, and `cli` imports `server`. That is a package cycle.
-- [ ] **A19** (booleanly) `dryRun`, `update`/`check`, and `test: Boolean` (`Cli.scala:68`, `Grammar.scala:24-25`, `Bsp.scala:599`), `ContentStore.clean(dryRun: Boolean)`, and `HeaderScan.scala:56` (`dependency: Boolean`).
-- [ ] **A20** (services) `Daemon.scala:414-417,754-755` keeps `graphs` and `live` separately. `Bsp.open` takes the graph by value and by ref, and the first build classloader is never retired. `Daemon.handle` takes 13 parameters, `Bsp.open` 8.
-- [ ] **A21** (stringly) The version string is hardcoded twice (`Bsp.scala:44-45`).
-- [ ] **A22** (tests) `ServerSpec` has no reload, `NoServer`, reboot, `didChange`, concurrent-splice, permit-on-interrupt, or `testOnly`-through-server case. The test name at `:26` contradicts its assertion at `:55-57`. `ProtocolSpec` tests only the local path. `CliSpec.scala:61-67` reports fixture IO as `LoadError.Io`.
-- [ ] **A23** (api-shape) `Session.perform` collects all output with `runCollect`, so an agent sees no progress.
-- [ ] **A24** (api-shape) `GraphCompile.scala:16` and `ModuleTest.scala:15` reuse `CiError` from `workflow` as the selection error. `Selection` parses each name twice and reports a nested aggregate as `Unknown`.
-- [ ] **A25** (correctness) A plugin command run through the server or MCP loses its arguments, because `Call.Task` carries only the task id. Found while correcting `plugins.md`.
-
-## M7 The api grows up
-
-- [ ] **G1** (api-shape) `api:ProjectDef.scala:31,33`: `test` and `provider` are both optional, and `MixedTest` is caught only at link time (`Graph.scala:258-259`).
-- [ ] **G2** (api-shape) `ProjectDef.scala:30,34-37`: `clang`, `nativeVersion`, `jsEnv`, and `jsModule` sit on every module, backed by six runtime "X without Y" errors (`Graph.scala:290-316`).
-- [ ] **G3** (api-shape) `Graph.scala:19-38,89-115,129-151,164-172,528-550`: `Module` has 18 fields, with 5 `trusted` overloads, 16 `apply` overloads, and a 7-parameter `build`.
-- [ ] **G4** (stringly) The module name is a `String` checked at load. `ProjectName`, `ShipName`, `PullRequestNumber`, and `ProviderLibrary` have no compile-time literal.
-- [ ] **G5** (stringly) `BuildError.DuplicateResolver(token: String)`, `DuplicateDirectory(directory: String)`, `baseDirectory: String`, `Dep` organization, name, and revision as `String` (an `Organization` type exists), `TestProvider.apply(String, ...)` returning `Either`, `PluginLoadError` coordinates as `String`, `ExtraOutput(path: String)`, `ModuleView.baseDirectory: String`, and raw-string coordinates in `engine:resolve/DependencyLock.scala:8-17`.
-- [ ] **G6** (typed-errors) `Graph.scala:404-411` reports an `EntryNameError` as `PluginDefect`, with a `try`/`catch` in main code.
-- [ ] **G7** (typed-errors, duplication) `api:Macros.scala:162` and `plugin/Macros.scala:91-92` use `Either[String, _]` in macro helpers, and the core keeps 12 hand-copied literal macros.
-- [ ] **G8** (api-shape) `Literals.scala:5-12`: every interpolator takes `inline args: Any*`.
-- [ ] **G9** (house rule) `api:Clang.scala:15`: the factory the macro splices lacks `@publicInBinary`.
-- [ ] **G10** (typed-errors) `version/Session.scala:162-163` drops the `ShipNameError`, and `Session.scala:55-61` parses the session from a raw `Map[String, String]`.
-- [ ] **G11** (services) `plugin/Names.scala:35-55` hardcodes the app's CLI words in the api, `ScalacFlag.scala:21-23` produces argv there, and loader types live in `plugin/Contribution.scala:62-72`.
-- [ ] **G12** (api-shape) `BuildError` is a flat 47-case enum, and load reports the first error only.
-- [ ] **G13** (api-shape) `ScalacFlag` has one case, so every new flag is an api change. Ascent is blocked on this.
-- [ ] **G14** (api-shape) Settings are anonymous `ModuleDef => ModuleDef` functions with no owner, name, or conflict check.
-- [ ] **G15** (stringly) Module notes are one-line strings that every plugin parses itself.
-- [ ] **G16** (api-shape) `TaskDep` is closed to `Compile` and `Same`, so a plugin task cannot depend on link, test, or package.
-- [ ] **G17** (tests) `PluginFixture` cannot set `RunRequest.compiled`.
-- [ ] **G18** (duplication) `central`: `ArtifactId` duplicates `ArtifactBase` with no literal, `Digest` duplicates `ContentHash`, and `central.Revision` shadows `version.Revision`.
-- [ ] **G19** (correctness) `BuildError.MissingProject.referencedFrom` holds the position of the missing module's own `module(...)` call, where it should point at the `dependsOn` or `ship` call that references it, and its `name` is a `String`. Found in M0.2.
-- [ ] **G20** (correctness) `ShipLink.asBuild` maps `CatalogError.DuplicateName` to `BadShipName` with a made-up `SourcePos("<catalog>", 1, 1)`, and `Catalog.from` repeats checks `ShipLink` already made, so those branches look unreachable. Found in M0.2.
-- [ ] **G21** (api-shape) Aggregates and edges find their children by name, not by the definition passed in, which is the only reason `BuildError.AggregateChild` can happen. Found in M0.2.
-- [ ] **T14** (tests) `plugins.md` describes three things no test shows: a plugin `run` through `PluginFixture` (only a request is built today), one complete plugin lock cell with its `plugin`, `direct`, `artifact`, and `source` lines, and one header that combines a dependency, a path, and a link strategy. The doc links the nearest specs until these exist. Found when the doc moved to links.
-
-## M8 CI from what the graph needs
-
-- [ ] **C1** (booleanly) `engine:workflow/Workflow.scala:107,112,219-223,290-304`: `setup: Boolean` comes from the presence of `.github/ci-tools` and emits hardcoded Node 22, LLVM 21.1.8, Playwright 1.62.1, and Firefox steps, including Chekhov's private cache path. No test passes `true`. The steps run uncached on every job, so on 2026-10-22 the `test` job took 12 to 31 minutes, depending on the Ubuntu mirror serving the Firefox packages. Closing this row deletes the marker and restores each install the graph still needs from a cache keyed by tool revision and package set. Seeding that cache once is expected. Repeating `install-deps` or the browser download on a later job is not.
-- [ ] **C2** (api-shape) Split axes render `--platform` and `--scala`, which the CLI rejects.

@@ -1,5 +1,6 @@
 package histos.native
 
+import histos.jdk.JdkRuntime
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
 import histos.testrun.SuitePattern
@@ -9,10 +10,11 @@ import histos.zinc.{
   CompileRequest,
   CompileToolchain,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags
 }
 import histos.Platform
+import histos.resolve.{LockedTools, ResolveError}
 
 import java.nio.file.Path
 
@@ -26,7 +28,7 @@ final case class NativeSuiteRequest(
     binary: Path,
     classpath: List[Path],
     work: Path,
-    jdk: ResolvedJdk,
+    jdk: JdkRuntime,
     processEnv: Map[String, String],
     patterns: List[SuitePattern] = Nil
 )
@@ -38,7 +40,9 @@ final case class NativeSuiteRequest(
 object NativeSuite:
   private val SuiteMain: String = "subprocess.NativeSuite"
 
-  def run(request: NativeSuiteRequest): IO[NativeSuiteError, ChildRequest] =
+  def run(
+      request: NativeSuiteRequest
+  ): ZIO[LockedTools, NativeSuiteError, ChildRequest] =
     val NativeSuiteRequest(
       toolchain,
       framework,
@@ -59,17 +63,21 @@ object NativeSuite:
     val child = work.resolve("runner-child")
     for
       found <- ClassShapes.read(classpath).mapError(NativeSuiteError.Shapes(_))
-      tools <- ZIO
-        .attemptBlockingInterrupt(fetch(toolchain))
-        .mapError(_ => NativeSuiteError.Unavailable)
-        .flatMap(ZIO.fromEither)
+      view <- ZIO.service[LockedTools]
+      tools <- view
+        .materialize(
+          histos.native.NativeRequests
+            .suite(toolchain, view.catalog, view.repositories)
+        )
+        .mapError(NativeSuiteError.Resolved(_))
+        .map(_.artifacts.map(_.path))
       _ <- write(shapes, encode(found))
       _ <- write(source, suite(patterns))
       _ <- JvmCompile
         .compile(
           CompileRequest(
             CompileToolchain(
-              JvmCompile.Scala390,
+              view.catalog.native.bridgeScala,
               Platform.Jvm,
               jdk,
               ScalacFlags.empty
@@ -218,44 +226,6 @@ object NativeSuite:
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
       |""".stripMargin.replace("__SUITES__", SuitePattern.embed(patterns))
 
-  /** The runner comes from the toolchain's origin. Its Scala and sbt
-    * dependencies come from Central.
-    */
-  private def fetch(
-      toolchain: NativeToolchain
-  ): Either[NativeSuiteError, List[Path]] =
-    val dependency = coursier.Dependency(
-      coursier.Module(
-        coursier.Organization("org.scala-native"),
-        coursier.ModuleName(s"test-runner_3")
-      ),
-      coursier.version.VersionConstraint(toolchain.revision.value)
-    )
-    val got = coursier
-      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
-      .noMirrors
-      .withGradleModuleSupport(false)
-      .withRepositories(
-        List(
-          NativeClasspath.repository(toolchain.source),
-          coursier.Repositories.central
-        ).distinct
-      )
-      .addDependencies(dependency)
-      .eitherResult()
-    got match
-      case Left(_)       => Left(NativeSuiteError.Unavailable)
-      case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap:
-          (_, publication, _, file) =>
-            val classified = publication match
-              case Right(published) => published.classifier.nonEmpty
-              case Left(variant)    => variant.classifier.nonEmpty
-            if file.getName.endsWith(".jar") && !classified then
-              List(file.toPath)
-            else Nil
-        if jars.isEmpty then Left(NativeSuiteError.Unavailable) else Right(jars)
-
   private def write(path: Path, text: String): IO[NativeSuiteError, Unit] =
     Workspace
       .writeString(path, text)
@@ -265,13 +235,15 @@ object NativeSuite:
     Workspace.recreate(path).mapError(_ => NativeSuiteError.Write(path)).unit
 
 enum NativeSuiteError:
+  case Resolved(error: ResolveError)
   case Unavailable
   case Shapes(error: ClassShapeError)
   case Compile(error: CompileError)
   case Write(path: Path)
 
   def message: String = this match
-    case Unavailable    => "the Scala Native test runner could not be fetched"
-    case Shapes(error)  => error.message
-    case Compile(error) => error.message
-    case Write(path)    => s"could not write $path"
+    case Resolved(error) => error.message
+    case Unavailable     => "the Scala Native test runner could not be fetched"
+    case Shapes(error)   => error.message
+    case Compile(error)  => error.message
+    case Write(path)     => s"could not write $path"

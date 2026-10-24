@@ -8,21 +8,50 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. */
+/** `histos` and `histos.bat`, rendered from the manual ship the way a workflow
+  * file is. Each script finds `java` and runs the pinned launcher jar. Histos
+  * does not install a JDK.
+  */
 object LauncherScript:
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
-    ZIO.fromEither(ship(graph)).flatMap:
-      case None => ZIO.unit
-      case Some(version) =>
-        agree(repo.resolve("histos"), posix(version)) *>
-          agree(repo.resolve("histos.bat"), windows(version))
+    ZIO
+      .fromEither(ship(graph))
+      .flatMap:
+        case None          => ZIO.unit
+        case Some(version) =>
+          LauncherPin
+            .read(repo)
+            .mapError(ScriptError.Pin(_))
+            .flatMap: pin =>
+              if pin.version != version then
+                ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
+              else
+                agree(repo.resolve("histos"), posix(version)) *>
+                  agree(repo.resolve("histos.bat"), windows(version))
 
   def update(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
-    ZIO.fromEither(ship(graph)).flatMap:
-      case None => ZIO.unit
-      case Some(version) =>
-        write(repo.resolve("histos"), posix(version), executable = true) *>
-          write(repo.resolve("histos.bat"), windows(version), executable = false)
+    ZIO
+      .fromEither(ship(graph))
+      .flatMap:
+        case None          => ZIO.unit
+        case Some(version) =>
+          LauncherPin
+            .read(repo)
+            .mapError(ScriptError.Pin(_))
+            .flatMap: pin =>
+              if pin.version != version then
+                ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
+              else
+                write(
+                  repo.resolve("histos"),
+                  posix(version),
+                  executable = true
+                ) *>
+                  write(
+                    repo.resolve("histos.bat"),
+                    windows(version),
+                    executable = false
+                  )
 
   def posix(version: String): String =
     Posix.replace("__VERSION__", version)
@@ -32,7 +61,7 @@ object LauncherScript:
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     graph.assembly match
-      case None => Right(None)
+      case None    => Right(None)
       case Some(_) =>
         graph.catalog match
           case Catalog.Manual(rows) =>
@@ -42,272 +71,267 @@ object LauncherScript:
           case _ => Left(ScriptError.Revision)
 
   private def agree(path: Path, body: String): IO[ScriptError, Unit] =
-    ZIO.attemptBlocking {
-      if !Files.isRegularFile(path) then Left(ScriptError.Missing(path))
-      else if Files.readString(path) == body then Right(())
-      else Left(ScriptError.Drift(path))
-    }.mapError(_ => ScriptError.Io(IoFailure(path, IoFault.Read))).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlocking {
+        if !Files.isRegularFile(path) then Left(ScriptError.Missing(path))
+        else if Files.readString(path) == body then Right(())
+        else Left(ScriptError.Drift(path))
+      }
+      .mapError(_ => ScriptError.Io(IoFailure(path, IoFault.Read)))
+      .flatMap(ZIO.fromEither)
 
-  private def write(path: Path, body: String, executable: Boolean): IO[ScriptError, Unit] =
-    ZIO.attemptBlocking {
-      val same = Files.isRegularFile(path) && Files.readString(path) == body
-      if !same then Files.writeString(path, body)
-      if executable then path.toFile.setExecutable(true)
-    }.mapError(_ => ScriptError.Io(IoFailure(path, IoFault.Write)))
+  private def write(
+      path: Path,
+      body: String,
+      executable: Boolean
+  ): IO[ScriptError, Unit] =
+    ZIO
+      .attemptBlocking {
+        val same = Files.isRegularFile(path) && Files.readString(path) == body
+        if !same then Files.writeString(path, body)
+        if executable then path.toFile.setExecutable(true)
+      }
+      .mapError(_ => ScriptError.Io(IoFailure(path, IoFault.Write)))
 
   private val Posix: String = """#!/bin/sh
 # Generated from the manual ship. `histos workflow --update` rewrites this file.
-# Verifies the pinned JVM assembly and execs it.
-# When java is not on PATH, the locked JDK is fetched, checked, and unpacked first.
-# HISTOS_ASSEMBLY overrides the assembly path so a fixture can be used before a release exists.
-# When dist/histos.jar is absent and the version is a snapshot, the script downloads
-# rocks.earlyeffect:histos from Central snapshots. HISTOS_SNAPSHOTS overrides that repository.
+# Source assemblies and remote launchers have independent committed digests.
 set -eu
-
-dir=$(dirname "$0") || exit 1
-root=$(CDPATH= cd -- "$dir" && pwd) || exit 1
+umask 077
+root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 version=__VERSION__
-shafile=$root/.histos/assembly.sha256
-cache=${XDG_CACHE_HOME:-$HOME/.cache}
-
+cache=${XDG_CACHE_HOME:-${HOME:?HOME is unset}/.cache}/histos
+work=
+cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+fail() { echo "histos $version: $*" >&2; exit 1; }
 hash_of() {
-  file=$1
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$file" | awk '{print $1}'
-  else
-    shasum -a 256 "$file" | awk '{print $1}'
-  fi
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
-
-fetch_snapshot() {
-  snapshots=${HISTOS_SNAPSHOTS:-https://central.sonatype.com/repository/maven-snapshots}
-  snapshots=${snapshots%/}
-  meta_url=$snapshots/rocks/earlyeffect/histos/$version/maven-metadata.xml
-  meta=$(curl -fsSL "$meta_url" 2>/dev/null) || {
-    echo "histos $version: no snapshot at $meta_url" >&2
-    return 1
-  }
-  timestamp=$(printf '%s\n' "$meta" | awk -F '[<>]' '/<timestamp>/ { print $3; exit }')
-  build=$(printf '%s\n' "$meta" | awk -F '[<>]' '/<buildNumber>/ { print $3; exit }')
-  if [ -z "$timestamp" ] || [ -z "$build" ]; then
-    echo "histos $version: snapshot metadata has no timestamp" >&2
-    return 1
-  fi
-  base=${version%-SNAPSHOT}
-  unique=$base-$timestamp-$build
-  dest=$cache/histos/launchers/$version/$unique/histos.jar
-  jar_url=$snapshots/rocks/earlyeffect/histos/$version/histos-$unique.jar
-  sha_url=$jar_url.sha256
-  expected=$(curl -fsSL "$sha_url" 2>/dev/null | awk 'NR == 1 { print $1 }') || true
-  if [ -z "${expected:-}" ]; then
-    echo "histos $version: no checksum at $sha_url" >&2
-    return 1
-  fi
-  if [ -f "$dest" ]; then
-    actual=$(hash_of "$dest")
-    if [ "$actual" = "$expected" ]; then
-      printf '%s\n' "$dest"
-      return 0
-    fi
-    rm -f "$dest"
-  fi
-  mkdir -p "$(dirname "$dest")"
-  part=$dest.partial
-  curl -fsSL "$jar_url" -o "$part" 2>/dev/null || {
-    rm -f "$part"
-    echo "histos $version: could not download $jar_url" >&2
-    return 1
-  }
-  actual=$(hash_of "$part")
-  if [ "$expected" != "$actual" ]; then
-    rm -f "$part"
-    echo "histos $version: checksum mismatch" >&2
-    return 1
-  fi
-  mv "$part" "$dest"
-  printf '%s\n' "$dest"
+valid_sha() { printf '%s\n' "$1" | awk 'length($0)==64 && $0 !~ /[^0-9a-fA-F]/ {ok=1} END {exit !ok}'; }
+file_mode() {
+  if stat -c '%u %a' "$1" >/dev/null 2>&1; then stat -c '%u %a' "$1"; else stat -f '%u %Lp' "$1"; fi
 }
-
-if [ -n "${HISTOS_ASSEMBLY:-}" ]; then
-  jar=$HISTOS_ASSEMBLY
-  check_sha=yes
-elif [ -f "$root/dist/histos.jar" ]; then
-  jar=$root/dist/histos.jar
-  check_sha=yes
+private_dir() {
+  [ ! -L "$1" ] || fail "unsafe cache link: $1"
+  mkdir -p "$1"
+  file_mode "$1" | awk -v uid="$(id -u)" '{g=substr($2,length($2)-1,1)+0; o=substr($2,length($2),1)+0; if($1!=uid || int(g/2)%2 || int(o/2)%2) exit 1}' || fail "cache is not owner-private: $1"
+  chmod 700 "$1"
+  ancestor=$(CDPATH= cd -P -- "$(dirname "$1")" && pwd) || fail "invalid cache ancestor"
+  while :; do
+    if stat -Lc '%u %a' "$ancestor" >/dev/null 2>&1; then info=$(stat -Lc '%u %a' "$ancestor"); else info=$(stat -Lf '%u %Lp' "$ancestor"); fi
+    printf '%s\n' "$info" | awk -v uid="$(id -u)" '{m=$2; g=substr(m,length(m)-1,1)+0; o=substr(m,length(m),1)+0; special=length(m)>3 ? substr(m,length(m)-3,1)+0 : 0; if(($1!=uid && $1!=0) || ((int(g/2)%2 || int(o/2)%2) && special%2!=1)) exit 1}' || fail "unsafe cache ancestor: $ancestor"
+    [ "$ancestor" != / ] || break
+    ancestor=$(dirname "$ancestor")
+  done
+}
+present() { [ -e "$1" ] || [ -L "$1" ]; }
+regular() { [ -f "$1" ] && [ -r "$1" ] || fail "invalid file path: $1"; }
+valid_url() {
+  printf '%s\n' "$1" | LC_ALL=C awk -v kind="$2" '
+    function ipv4(s, p,n,i) {n=split(s,p,"."); if(n!=4) return 0; for(i=1;i<=4;i++) if(p[i]!~/^[0-9]+$/ || p[i]+0>255) return 0; return 1}
+    function hostok(s,p,n,i,c,compressed) {
+      if(substr(s,1,1)=="[") {
+        if(substr(s,length(s),1)!="]") return 0
+        s=substr(s,2,length(s)-2); compressed=index(s,"::"); if(compressed && index(substr(s,compressed+2),"::")) return 0
+        n=split(s,p,":"); c=0
+        for(i=1;i<=n;i++) if(p[i]!="") {if(index(p[i],".")) {if(i!=n || !ipv4(p[i])) return 0; c+=2} else {if(length(p[i])>4 || p[i]!~/^[0-9a-fA-F]+$/) return 0; c++}}
+        return compressed ? c<8 : c==8 && substr(s,1,1)!=":" && substr(s,length(s),1)!=":"
+      }
+      if(s~/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return ipv4(s)
+      sub(/\.$/,"",s); n=split(s,p,"."); for(i=1;i<=n;i++) if(p[i]!~/^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) return 0
+      return n>0
+    }
+    {
+      if($0 ~ /[^!-~]/ || $0 ~ /["<>\\^`{|}#]/) exit 1
+      raw=$0
+      for(i=1;i<=length(raw);i++) if(substr(raw,i,1)=="%") {if(substr(raw,i+1,2)!~/^[0-9a-fA-F][0-9a-fA-F]$/) exit 1; i+=2}
+      scheme=raw; sub(/:.*/,"",scheme)
+      if(scheme!="https" && !(scheme=="http" && kind=="repository")) exit 1
+      rest=raw; if(rest!~/^[a-z]+:\/\//) exit 1; sub(/^[a-z]+:\/\//,"",rest)
+      authority=rest; sub(/[\/?].*$/,"",authority); suffix=substr(rest,length(authority)+1)
+      if(authority ~ /[@%]/ || suffix~/[\[\]]/) exit 1
+      host=authority; port=""
+      if(substr(host,1,1)=="[") {bracket=index(host,"]"); if(!bracket) exit 1; port=substr(host,bracket+1); host=substr(host,1,bracket)}
+      else if(index(host,":")) {port=substr(host,index(host,":")); host=substr(host,1,index(host,":")-1)}
+      if(port!="" && (port!~/^:[0-9]+$/ || substr(port,2)+0<1 || substr(port,2)+0>65535)) exit 1
+      if(!hostok(host)) exit 1
+      if(scheme=="http" && host!="localhost" && host!="127.0.0.1" && host!="[::1]") exit 1
+      if(kind=="repository" && (suffix~/[?%]/ || suffix~/(^|\/)\.\.(\/|$)/)) exit 1
+      ok=1
+    }
+    END {exit !ok}'
+}
+parse_lock() {
+  LC_ALL=C awk '
+    function bad() {failed=1; exit 1}
+    function integer(s) {return s ~ /^[+]?[0-9]+$/ && s+0>0 && s+0<=2147483647}
+    function stamp(s, y,m,d,h,n,t,days) {
+      if(length(s)!=15 || substr(s,9,1)!="." || substr(s,1,8) !~ /^[0-9]+$/ || substr(s,10,6) !~ /^[0-9]+$/) return 0
+      y=substr(s,1,4)+0; m=substr(s,5,2)+0; d=substr(s,7,2)+0
+      h=substr(s,10,2)+0; n=substr(s,12,2)+0; t=substr(s,14,2)+0
+      days=(m==2 ? 28+(y%4==0 && (y%100!=0 || y%400==0)) : (m==4 || m==6 || m==9 || m==11 ? 30 : 31))
+      return y>=1 && m>=1 && m<=12 && d>=1 && d<=days && h<24 && n<60 && t<60
+    }
+    {sub(/^[ \t\r]+/,""); sub(/[ \t\r]+$/,"")}
+    /^$/ || /^#/ {next}
+    {
+      if($0 !~ /^[a-z0-9]+[ \t]+[^ \t].*$/) bad()
+      name=$1; value=$0; sub(/^[^ \t]+[ \t]+/,"",value)
+      if(name!="repository" && name!="version" && name!="revision" && name!="sha256") bad()
+      if(seen[name]++) bad()
+      fields[name]=value
+    }
+    END {
+      if(failed) exit 1
+      if(length(fields["sha256"])!=64 || fields["sha256"] ~ /[^0-9a-fA-F]/) exit 1
+      if(fields["repository"]=="" || fields["version"] !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$/) exit 1
+      base=fields["version"]; sub(/-SNAPSHOT$/,"",base); prefix=base "-"
+      if(substr(fields["revision"],1,length(prefix))!=prefix) exit 1
+      tail=substr(fields["revision"],length(prefix)+1); build=substr(tail,17)
+      if(substr(tail,16,1)!="-" || build !~ /^[1-9][0-9]*$/ || !integer(build) || !stamp(substr(tail,1,15))) exit 1
+      print fields["repository"]; print fields["version"]; print fields["revision"]; print tolower(fields["sha256"])
+    }' "$1" > "$work/fields" || fail "invalid launcher lock"
+}
+private_dir "$cache"
+work=$(mktemp -d "$cache/.bootstrap.XXXXXX")
+fetch() {
+  valid_url "$1" repository || fail "invalid download url"
+  curl -fsSL --proto '=https,http' --proto-redir '=https' "$1" -o "$2"
+}
+if present "$root/.histos"; then
+  [ -d "$root/.histos" ] && [ -r "$root/.histos" ] && [ -x "$root/.histos" ] || fail "invalid configuration directory"
+fi
+if [ -n "${HISTOS_ASSEMBLY:-}" ]; then jar=$HISTOS_ASSEMBLY
+elif [ -f "$root/dist/histos.jar" ]; then jar=$root/dist/histos.jar
+else jar=; fi
+if [ -n "$jar" ]; then
+  [ -f "$root/.histos/assembly.sha256" ] || fail "missing assembly.sha256"
+  expected=$(tr -d '[:space:]' < "$root/.histos/assembly.sha256")
+  valid_sha "$expected" || fail "invalid assembly checksum"
+  expected=$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')
+  [ -f "$jar" ] || fail "no assembly at $jar"
+  [ "$(hash_of "$jar")" = "$expected" ] || fail "checksum mismatch"
 else
-  case $version in
-    *-SNAPSHOT)
-      jar=$(fetch_snapshot) || exit 1
-      check_sha=no
-      ;;
-    *)
-      jar=$cache/histos/launchers/$version/histos.jar
-      check_sha=yes
-      ;;
-  esac
+  regular "$root/.histos/launcher.lock"
+  [ -f "$root/.histos/launcher.lock" ] || fail "missing launcher.lock; restore the committed pin or use a source assembly"
+  parse_lock "$root/.histos/launcher.lock"
+  { IFS= read -r repository; IFS= read -r locked_version; IFS= read -r revision; IFS= read -r expected; } < "$work/fields"
+  [ "$version" = "$locked_version" ] || fail "launcher lock version does not match script"
+  valid_url "$repository" repository || fail "invalid launcher repository"
+  local_jar=$root/.histos/launcher-cache/$expected/histos.jar
+  dest=$cache/launchers/$revision/$expected
+  private_dir "$dest"
+  jar=$dest/histos.jar
+  if [ -f "$local_jar" ] && [ "$(hash_of "$local_jar")" = "$expected" ]; then jar=$local_jar
+  elif [ ! -f "$jar" ] || [ "$(hash_of "$jar")" != "$expected" ]; then
+    fetch "${repository%/}/rocks/earlyeffect/histos/$locked_version/histos-$revision.jar" "$work/launcher.jar" || fail "launcher download failed"
+    [ "$(hash_of "$work/launcher.jar")" = "$expected" ] || fail "launcher checksum mismatch"
+    mv -f "$work/launcher.jar" "$jar"
+  fi
+  [ "$(hash_of "$jar")" = "$expected" ] || fail "launcher checksum mismatch"
 fi
-
-if [ ! -f "$jar" ]; then
-  echo "histos $version: no assembly at $jar" >&2
-  exit 1
-fi
-
-if [ "$check_sha" = yes ]; then
-  if [ ! -f "$shafile" ]; then
-    echo "histos $version: missing $shafile" >&2
-    exit 1
-  fi
-
-  expected=$(tr -d '[:space:]' < "$shafile")
-  actual=$(hash_of "$jar")
-
-  if [ "$expected" != "$actual" ]; then
-    echo "histos $version: checksum mismatch" >&2
-    exit 1
-  fi
-fi
-
-provision_jdk() {
-  lock=$root/.histos/jdk.lock
-  if [ ! -f "$lock" ]; then
-    echo "histos $version: java is not on PATH and $lock is missing" >&2
-    return 1
-  fi
-  url=$(awk '$1 == "url" { print $2 }' "$lock")
-  sha=$(awk '$1 == "sha256" { print $2 }' "$lock" | tr '[:upper:]' '[:lower:]')
-  if [ -z "${url:-}" ] || [ -z "${sha:-}" ]; then
-    echo "histos $version: $lock needs url and sha256" >&2
-    return 1
-  fi
-  dest=$cache/histos/jdks/$sha
-  archive=$dest/archive
-  unpack=$dest/unpack
-  mkdir -p "$dest"
-  if [ ! -f "$archive" ]; then
-    curl -fsSL "$url" -o "$archive"
-  fi
-  actual=$(hash_of "$archive" | tr '[:upper:]' '[:lower:]')
-  if [ "$actual" != "$sha" ]; then
-    rm -f "$archive"
-    echo "histos $version: jdk checksum mismatch" >&2
-    return 1
-  fi
-  if [ ! -d "$unpack" ]; then
-    mkdir -p "$unpack"
-    tar -xf "$archive" -C "$unpack"
-  fi
-  java_bin=$(find "$unpack" -type f -name java | awk '/\/bin\/java$/ { print; exit }')
-  if [ -z "${java_bin:-}" ]; then
-    echo "histos $version: locked jdk has no bin/java" >&2
-    return 1
-  fi
-  chmod +x "$java_bin"
-  printf '%s\n' "$java_bin"
-}
-
-if command -v java >/dev/null 2>&1; then
-  java_bin=$(command -v java)
-else
-  java_bin=$(provision_jdk) || exit 1
-fi
-
+java_bin=$(command -v java) || fail "java is not on PATH"
+cleanup
+trap - EXIT HUP INT TERM
 exec "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"
 """
 
   private val Windows: String = """@echo off
 setlocal EnableExtensions
-rem Generated from the manual ship. histos workflow --update rewrites this file.
-rem Not executed by the POSIX test.
-set "ROOT=%~dp0"
-set "VERSION=__VERSION__"
-if defined HISTOS_ASSEMBLY (
-  set "JAR=%HISTOS_ASSEMBLY%"
-) else if exist "%ROOT%dist\histos.jar" (
-  set "JAR=%ROOT%dist\histos.jar"
-) else (
-  if defined XDG_CACHE_HOME (
-    set "JAR=%XDG_CACHE_HOME%\histos\launchers\%VERSION%\histos.jar"
-  ) else (
-    set "JAR=%USERPROFILE%\.cache\histos\launchers\%VERSION%\histos.jar"
-  )
-)
-if not exist "%JAR%" (
-  echo histos %VERSION%: no assembly at %JAR% 1>&2
-  exit /b 1
-)
-if not exist "%ROOT%.histos\assembly.sha256" (
-  echo histos %VERSION%: missing assembly.sha256 1>&2
-  exit /b 1
-)
-set /p EXPECTED=<"%ROOT%.histos\assembly.sha256"
-certutil -hashfile "%JAR%" SHA256 | findstr /v "hash" | findstr /v "CertUtil" > "%TEMP%\histos-sha.txt"
-set /p ACTUAL=<"%TEMP%\histos-sha.txt"
-if /I not "%EXPECTED%"=="%ACTUAL%" (
-  echo histos %VERSION%: checksum mismatch 1>&2
-  exit /b 1
-)
-if defined XDG_CACHE_HOME (
-  set "CACHE=%XDG_CACHE_HOME%"
-) else (
-  set "CACHE=%USERPROFILE%\.cache"
-)
-where java >nul 2>&1
+rem Generated from the manual ship. Finds java.exe and runs the pinned launcher jar.
+set "HISTOS_BOOT_ROOT=%~dp0"
+set "HISTOS_BOOT_VERSION=__VERSION__"
+for /f "delims=" %%T in ('powershell.exe -NoLogo -NoProfile -Command "[IO.Path]::Combine([IO.Path]::GetTempPath(), 'histos-' + [Guid]::NewGuid().ToString('N'))"') do set "HISTOS_BOOT_TEMP=%%T"
+if not defined HISTOS_BOOT_TEMP exit /b 1
+mkdir "%HISTOS_BOOT_TEMP%"
+powershell.exe -NoLogo -NoProfile -Command "$ErrorActionPreference='Stop'; $text=[IO.File]::ReadAllText($env:HISTOS_BOOT_ROOT+'histos.bat').Replace([string][char]13,''); $marker=[char]10+'# HISTOS_POWERSHELL'+[char]10; $body=$text.Substring($text.LastIndexOf($marker)+$marker.Length); [IO.File]::WriteAllText($env:HISTOS_BOOT_TEMP+'\bootstrap.ps1',$body)"
 if errorlevel 1 (
-  call :provision
-  if errorlevel 1 exit /b 1
-) else (
-  set "JAVA_BIN=java"
-)
-"%JAVA_BIN%" --enable-native-access=ALL-UNNAMED -jar "%JAR%" %*
-exit /b %ERRORLEVEL%
-
-:provision
-set "LOCK=%ROOT%.histos\jdk.lock"
-if not exist "%LOCK%" (
-  echo histos %VERSION%: java is not on PATH and %LOCK% is missing 1>&2
+  if exist "%HISTOS_BOOT_TEMP%" rmdir /s /q "%HISTOS_BOOT_TEMP%"
   exit /b 1
 )
-set "JDK_URL="
-set "JDK_SHA="
-for /f "usebackq tokens=1,2" %%A in ("%LOCK%") do (
-  if "%%A"=="url" set "JDK_URL=%%B"
-  if "%%A"=="sha256" set "JDK_SHA=%%B"
-)
-if "%JDK_URL%"=="" (
-  echo histos %VERSION%: jdk.lock needs url and sha256 1>&2
-  exit /b 1
-)
-if "%JDK_SHA%"=="" (
-  echo histos %VERSION%: jdk.lock needs url and sha256 1>&2
-  exit /b 1
-)
-set "DEST=%CACHE%\histos\jdks\%JDK_SHA%"
-if not exist "%DEST%" mkdir "%DEST%"
-set "ARCHIVE=%DEST%\archive"
-if not exist "%ARCHIVE%" (
-  curl -fsSL "%JDK_URL%" -o "%ARCHIVE%"
-  if errorlevel 1 exit /b 1
-)
-certutil -hashfile "%ARCHIVE%" SHA256 | findstr /v "hash" | findstr /v "CertUtil" > "%TEMP%\histos-jdk-sha.txt"
-set /p ACTUAL=<"%TEMP%\histos-jdk-sha.txt"
-set "ACTUAL=%ACTUAL: =%"
-if /I not "%JDK_SHA%"=="%ACTUAL%" (
-  echo histos %VERSION%: jdk checksum mismatch 1>&2
-  exit /b 1
-)
-set "UNPACK=%DEST%\unpack"
-if not exist "%UNPACK%" mkdir "%UNPACK%"
-tar -xf "%ARCHIVE%" -C "%UNPACK%"
-if errorlevel 1 exit /b 1
-set "JAVA_BIN="
-for /f "delims=" %%J in ('dir /s /b "%UNPACK%\java.exe"') do (
-  if not defined JAVA_BIN set "JAVA_BIN=%%J"
-)
-if not defined JAVA_BIN (
-  echo histos %VERSION%: locked jdk has no bin\java.exe 1>&2
-  exit /b 1
-)
-exit /b 0
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%HISTOS_BOOT_TEMP%\bootstrap.ps1" %*
+set "HISTOS_EXIT=%ERRORLEVEL%"
+if exist "%HISTOS_BOOT_TEMP%" rmdir /s /q "%HISTOS_BOOT_TEMP%"
+exit /b %HISTOS_EXIT%
+# HISTOS_POWERSHELL
+$ErrorActionPreference = 'Stop'
+$launchArgs = $args
+$root = $env:HISTOS_BOOT_ROOT
+$version = $env:HISTOS_BOOT_VERSION
+function Fail([string] $message) {
+  [Console]::Error.WriteLine('histos ' + $version + ': ' + $message)
+  exit 1
+}
+function Hash([string] $path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+$java = $null
+if ($env:JAVA_HOME) {
+  $candidate = Join-Path $env:JAVA_HOME 'bin\java.exe'
+  if (Test-Path -LiteralPath $candidate -PathType Leaf) { $java = $candidate }
+}
+if (-not $java) {
+  $found = Get-Command java.exe -ErrorAction SilentlyContinue
+  if ($found) { $java = $found.Source }
+}
+if (-not $java) { Fail 'java is not on PATH' }
+$jar = $null
+if ($env:HISTOS_ASSEMBLY) { $jar = $env:HISTOS_ASSEMBLY }
+elseif (Test-Path -LiteralPath (Join-Path $root 'dist\histos.jar') -PathType Leaf) {
+  $jar = Join-Path $root 'dist\histos.jar'
+}
+if ($jar) {
+  $sumPath = Join-Path $root '.histos\assembly.sha256'
+  if (-not (Test-Path -LiteralPath $sumPath -PathType Leaf)) { Fail 'missing assembly.sha256' }
+  $expected = ([IO.File]::ReadAllText($sumPath) -replace '\s','').ToLowerInvariant()
+  if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid assembly checksum' }
+  if ((Hash $jar) -ne $expected) { Fail 'checksum mismatch' }
+} else {
+  $lockPath = Join-Path $root '.histos\launcher.lock'
+  if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+    Fail 'missing launcher.lock; restore the committed pin or use a source assembly'
+  }
+  $fields = @{}
+  foreach ($line in [IO.File]::ReadAllLines($lockPath)) {
+    $trim = $line.Trim()
+    if ($trim -eq '' -or $trim.StartsWith('#')) { continue }
+    $parts = $trim -split '\s+', 2
+    if ($parts.Count -ne 2 -or $fields.ContainsKey($parts[0])) { Fail 'invalid launcher lock' }
+    $fields[$parts[0]] = $parts[1]
+  }
+  foreach ($name in @('repository','version','revision','sha256')) {
+    if (-not $fields.ContainsKey($name)) { Fail 'invalid launcher lock' }
+  }
+  if ($fields['version'] -ne $version) { Fail 'launcher lock version does not match script' }
+  $expected = $fields['sha256'].ToLowerInvariant()
+  if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid launcher lock' }
+  $repository = $fields['repository']
+  if ($repository -notmatch '^https://' -and $repository -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])([:/]|$)') {
+    Fail 'invalid launcher repository'
+  }
+  $cacheRoot = if ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME } else { Join-Path $env:USERPROFILE '.cache' }
+  $dest = Join-Path (Join-Path (Join-Path $cacheRoot 'histos\launchers') $fields['revision']) $expected
+  $cached = Join-Path $dest 'histos.jar'
+  $staged = Join-Path (Join-Path (Join-Path $root '.histos\launcher-cache') $expected) 'histos.jar'
+  if ((Test-Path -LiteralPath $staged -PathType Leaf) -and (Hash $staged) -eq $expected) { $jar = $staged }
+  elseif ((Test-Path -LiteralPath $cached -PathType Leaf) -and (Hash $cached) -eq $expected) { $jar = $cached }
+  else {
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    $part = Join-Path $dest 'histos.jar.partial'
+    $address = $repository.TrimEnd('/') + '/rocks/earlyeffect/histos/' + $fields['version'] + '/histos-' + $fields['revision'] + '.jar'
+    Invoke-WebRequest -Uri $address -OutFile $part
+    if ((Hash $part) -ne $expected) {
+      Remove-Item -LiteralPath $part -Force
+      Fail 'launcher checksum mismatch'
+    }
+    Move-Item -LiteralPath $part -Destination $cached -Force
+    $jar = $cached
+  }
+  if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
+}
+& $java --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
+exit $LASTEXITCODE
 """
 
 enum ScriptError:
@@ -315,9 +339,11 @@ enum ScriptError:
   case Missing(path: Path)
   case Io(failure: IoFailure)
   case Revision
+  case Pin(error: LauncherError)
 
   def message: String = this match
-    case Drift(path)    => s"launcher script does not match the ship: $path"
-    case Missing(path)  => s"no launcher script at $path"
-    case Io(failure)    => failure.message
-    case Revision       => "the launcher script needs one manual ship version"
+    case Drift(path)   => s"launcher script does not match the ship: $path"
+    case Missing(path) => s"no launcher script at $path"
+    case Io(failure)   => failure.message
+    case Pin(error)    => error.message
+    case Revision      => "the launcher script needs one manual ship version"

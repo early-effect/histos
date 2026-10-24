@@ -1,8 +1,8 @@
 package histos
 
-import histos.jdk.{ArchiveSource, Machine, Os, Settled, Sha256}
+import histos.jdk.{Machine, Os, Sha256}
 import histos.native.NativeOrigin
-import histos.node.{NodeLock, NodeVersion}
+import histos.node.NodeVersion
 import histos.process.{ChildEvent, ChildProcess}
 import histos.toolchain.Runtimes
 
@@ -13,7 +13,7 @@ import java.nio.file.attribute.PosixFilePermissions
 
 import _root_.scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, System, Task, UIO, ZIO}
+import zio.{System, Task, UIO, ZIO}
 
 /** This machine as a command sees it, with a temp directory as the repository,
   * the home, and the cache.
@@ -24,11 +24,11 @@ object TestMachine:
       env,
       root.toString,
       Os.Other,
+      histos.toolchain.Architecture.Unsupported("fixture"),
       root.resolve("cache"),
       root,
       None,
-      Settled.No,
-      NativeOrigin.read(env),
+      NativeOrigin.read(env)
     )
 
   /** Needs `TestAspect.withLiveSystem`. */
@@ -37,9 +37,7 @@ object TestMachine:
       .orElseSucceed(Map.empty[String, String])
       .flatMap(env => Runtimes.read(at(root, env)))
 
-  /** Pins the `node` on `PATH` through `.histos/node.local`, behind a wrapper
-    * that appends each launch's arguments to the returned log and then runs
-    * that `node`. The lock names its version. Needs
+  /** Explicitly selects the PATH Node through a logging local override. Needs
     * `TestAspect.withLiveSystem`.
     */
   def chosenNode(root: Path): Task[Path] =
@@ -60,7 +58,7 @@ object TestMachine:
       text = said
         .collectFirst { case ChildEvent.Out(line) => line.trim }
         .getOrElse("")
-      version <- ZIO
+      _ <- ZIO
         .fromEither(NodeVersion.from(text))
         .mapError(error => new IllegalStateException(error.message))
       log = root.resolve("chosen-node.log")
@@ -75,18 +73,7 @@ object TestMachine:
           root.resolve(".histos").resolve("node.local"),
           home.toString + "\n"
         )
-        val sha =
-          Sha256.of(Chunk.fromArray("unused".getBytes(StandardCharsets.UTF_8)))
-        val lock = NodeLock(
-          version.major,
-          version,
-          ArchiveSource.Local(root.resolve("node.zip")),
-          sha
-        )
-        Files.writeString(
-          root.resolve(".histos").resolve("node.lock"),
-          NodeLock.render(lock)
-        )
+
       }
     yield log
 
