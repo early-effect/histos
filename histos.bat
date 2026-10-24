@@ -5,7 +5,7 @@ set "HISTOS_BOOT_ROOT=%~dp0"
 set "HISTOS_BOOT_VERSION=0.0.1-SNAPSHOT"
 for /f "delims=" %%T in ('powershell.exe -NoLogo -NoProfile -Command "[IO.Path]::Combine([IO.Path]::GetTempPath(), 'histos-' + [Guid]::NewGuid().ToString('N'))"') do set "HISTOS_BOOT_TEMP=%%T"
 if not defined HISTOS_BOOT_TEMP exit /b 1
-powershell.exe -NoLogo -NoProfile -Command "$ErrorActionPreference='Stop'; $text=[IO.File]::ReadAllText($env:HISTOS_BOOT_ROOT+'histos.bat').Replace([string][char]13,''); $marker=[char]10+'# HISTOS_POWERSHELL'+[char]10; $body=$text.Substring($text.LastIndexOf($marker)+$marker.Length); [IO.Directory]::CreateDirectory($env:HISTOS_BOOT_TEMP) | Out-Null; [IO.File]::WriteAllText($env:HISTOS_BOOT_TEMP+'\bootstrap.ps1',$body)"
+powershell.exe -NoLogo -NoProfile -Command "$ErrorActionPreference='Stop'; $text=[IO.File]::ReadAllText($env:HISTOS_BOOT_ROOT+'histos.bat').Replace([string][char]13,''); $marker=[char]10+'# HISTOS_POWERSHELL'+[char]10; $body=$text.Substring($text.LastIndexOf($marker)+$marker.Length); $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User; $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetOwner($owner); $acl.SetAccessRuleProtection($true,$false); $rule=New-Object Security.AccessControl.FileSystemAccessRule($owner,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule); [IO.Directory]::CreateDirectory($env:HISTOS_BOOT_TEMP,$acl) | Out-Null; [IO.File]::WriteAllText($env:HISTOS_BOOT_TEMP+'\bootstrap.ps1',$body)"
 if errorlevel 1 (
   if exist "%HISTOS_BOOT_TEMP%" rmdir /s /q "%HISTOS_BOOT_TEMP%"
   exit /b 1
@@ -49,7 +49,7 @@ function Regular([string] $path) {
 function Private([string] $path) {
   if ([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) { Fail 'unsafe cache link' }
   $acl = Get-Acl -LiteralPath $path
-  if ($acl.GetOwner([Security.Principal.SecurityIdentifier]) -ne $owner) { Fail 'cache is not owned by current user' }
+  if ($acl.GetOwner([Security.Principal.SecurityIdentifier]) -ne $owner) { Fail ('cache is not owned by current user: '+$path) }
   $write = [Security.AccessControl.FileSystemRights]::Write -bor [Security.AccessControl.FileSystemRights]::Delete -bor [Security.AccessControl.FileSystemRights]::ChangePermissions -bor [Security.AccessControl.FileSystemRights]::TakeOwnership
   foreach ($rule in $acl.Access) {
     $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
