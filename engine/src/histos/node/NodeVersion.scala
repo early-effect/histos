@@ -12,7 +12,9 @@ object NodeMajor:
 
   extension (major: NodeMajor) def value: Int = major
 
-/** A full Node version, such as `22.14.0`. The leading `v` from `node --version` is not part of it. */
+/** A full Node version, such as `22.14.0`. The leading `v` from
+  * `node --version` is not part of it.
+  */
 final case class NodeVersion private (value: String, major: NodeMajor)
 
 object NodeVersion:
@@ -21,7 +23,8 @@ object NodeVersion:
   private val Full = """(\d+)\.(\d+)\.(\d+)""".r
 
   def from(raw: String): Either[NodeVersionError, NodeVersion] =
-    val body = if raw.startsWith("v") || raw.startsWith("V") then raw.drop(1) else raw
+    val body =
+      if raw.startsWith("v") || raw.startsWith("V") then raw.drop(1) else raw
     body match
       case Full(majorText, _, _) =>
         majorText.toIntOption match
@@ -32,16 +35,21 @@ object NodeVersion:
           case None => Left(NodeVersionError.Bad(raw))
       case _ => Left(NodeVersionError.Bad(raw))
 
-  private[histos] def trusted(text: String, major: NodeMajor): NodeVersion = NodeVersion(text, major)
+  private[histos] def trusted(text: String, major: NodeMajor): NodeVersion =
+    NodeVersion(text, major)
 
 enum NodeVersionError:
   case Bad(raw: String)
   case Status(code: Int)
   case Missing
+  case MissingStatus
+  case Process(error: histos.process.ChildError)
   case NotExecutable(binary: java.nio.file.Path)
 
   def message: String = this match
     case Bad(raw)              => s"not a Node version: $raw"
     case Status(code)          => s"node --version exited $code"
+    case MissingStatus         => "node --version did not report a status"
+    case Process(error)        => error.message
     case Missing               => "node binary is missing"
     case NotExecutable(binary) => s"$binary is not executable"

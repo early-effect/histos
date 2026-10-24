@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.jdk.JdkRuntime
 import histos.central.{
   Artifact,
   ArtifactId,
@@ -23,7 +24,7 @@ import histos.version.{
 }
 import histos.select.Selection
 import histos.workflow.CiError
-import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
+import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.{
   Dep,
   Module,
@@ -133,7 +134,7 @@ object LocalPublish:
       repo: Path,
       graph: ProjectGraph,
       names: List[String],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       env: Map[String, String],
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit
   ): ZIO[histos.resolve.Resolve & Publisher, LocalPublishError, PublishOutput] =

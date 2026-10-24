@@ -7,17 +7,50 @@ enum BuildError:
   case EmptyName(position: SourcePos)
   case BadName(raw: String, position: SourcePos)
   case DuplicateName(name: ProjectName, first: SourcePos, second: SourcePos)
-  case DuplicatePlatform(name: ProjectName, platform: Platform, position: SourcePos)
-  case DuplicateScalaVersion(name: ProjectName, version: ScalaVersion, position: SourcePos)
-  case DuplicateChild(name: ProjectName, child: ProjectName, position: SourcePos)
+  case DuplicatePlatform(
+      name: ProjectName,
+      platform: Platform,
+      position: SourcePos
+  )
+  case DuplicateScalaVersion(
+      name: ProjectName,
+      version: ScalaVersion,
+      position: SourcePos
+  )
+  case DuplicateChild(
+      name: ProjectName,
+      child: ProjectName,
+      position: SourcePos
+  )
   case AggregateIncludesItself(name: ProjectName, position: SourcePos)
-  case AggregateChild(aggregate: ProjectName, child: ProjectName, position: SourcePos)
+  case AggregateChild(
+      aggregate: ProjectName,
+      child: ProjectName,
+      position: SourcePos
+  )
   case MissingProject(name: String, referencedFrom: SourcePos)
-  case DependsOnAggregate(module: ProjectName, aggregate: ProjectName, position: SourcePos)
+  case DependsOnAggregate(
+      module: ProjectName,
+      aggregate: ProjectName,
+      position: SourcePos
+  )
   case SelfDependency(name: ProjectName, position: SourcePos)
-  case DuplicateDependency(module: ProjectName, dependency: ProjectName, position: SourcePos)
-  case EdgeWithoutPlatform(module: ProjectName, platform: Platform, position: SourcePos)
-  case UpstreamMissingPlatform(module: ProjectName, dependency: ProjectName, platform: Platform, position: SourcePos)
+  case DuplicateDependency(
+      module: ProjectName,
+      dependency: ProjectName,
+      position: SourcePos
+  )
+  case EdgeWithoutPlatform(
+      module: ProjectName,
+      platform: Platform,
+      position: SourcePos
+  )
+  case UpstreamMissingPlatform(
+      module: ProjectName,
+      dependency: ProjectName,
+      platform: Platform,
+      position: SourcePos
+  )
   case Cycle(platform: Platform, path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
   case ClangWithoutNative(name: ProjectName, position: SourcePos)
@@ -25,13 +58,31 @@ enum BuildError:
   case EmptyShipName(position: SourcePos)
   case BadShipName(raw: String, position: SourcePos)
   case DuplicateShip(name: ShipName, first: SourcePos, second: SourcePos)
-  case RepeatedShipMember(ship: ShipName, member: ProjectName, position: SourcePos)
-  case AggregateShipMember(ship: ShipName, aggregate: ProjectName, position: SourcePos)
-  case MemberInTwoShips(member: ProjectName, first: ShipName, second: ShipName, position: SourcePos)
+  case RepeatedShipMember(
+      ship: ShipName,
+      member: ProjectName,
+      position: SourcePos
+  )
+  case AggregateShipMember(
+      ship: ShipName,
+      aggregate: ProjectName,
+      position: SourcePos
+  )
+  case MemberInTwoShips(
+      member: ProjectName,
+      first: ShipName,
+      second: ShipName,
+      position: SourcePos
+  )
   case MixedScheme(position: SourcePos)
   case DuplicateResolver(token: String)
   case MixedTest(name: ProjectName, position: SourcePos)
-  case DuplicateDirectory(name: ProjectName, other: ProjectName, directory: String)
+  case DuplicateDirectory(
+      name: ProjectName,
+      other: ProjectName,
+      directory: String
+  )
+  case JsVersionWithoutJs(name: ProjectName, position: SourcePos)
   case JsEnvWithoutJs(name: ProjectName, position: SourcePos)
   case JsModuleWithoutJs(name: ProjectName, position: SourcePos)
   case DuplicatePlugin(id: PluginId)
@@ -46,32 +97,34 @@ enum BuildError:
       plugin: PluginId,
       module: ProjectName,
       version: Option[ScalaVersion],
-      platform: Option[Platform],
+      platform: Option[Platform]
   )
   case UnknownPluginTask(plugin: PluginId, name: TaskName)
   case CommandShadow(name: CommandName)
   case PluginDefect(plugin: PluginId, binary: String)
 
   def message: String = this match
-    case EmptyName(position)                 => s"a project name is not empty (${position.line}:${position.column})"
-    case BadName(raw, position)              =>
+    case EmptyName(position) =>
+      s"a project name is not empty (${position.line}:${position.column})"
+    case BadName(raw, position) =>
       s"'$raw' is not a project name (${position.line}:${position.column})"
-    case DuplicateName(name, _, second)      =>
+    case DuplicateName(name, _, second) =>
       s"project '${name.value}' is declared twice (${second.line}:${second.column})"
     case DuplicatePlatform(name, platform, _) =>
       s"project '${name.value}' lists ${platform.toString.toLowerCase} twice"
     case DuplicateScalaVersion(name, version, _) =>
       s"project '${name.value}' lists Scala ${version.value} twice"
-    case DuplicateChild(name, child, _)      =>
+    case DuplicateChild(name, child, _) =>
       s"aggregate '${name.value}' lists '${child.value}' twice"
-    case AggregateIncludesItself(name, _)    => s"aggregate '${name.value}' includes itself"
+    case AggregateIncludesItself(name, _) =>
+      s"aggregate '${name.value}' includes itself"
     case AggregateChild(aggregate, child, _) =>
       s"aggregate '${aggregate.value}' lists '${child.value}', which is not a module"
-    case MissingProject(name, at)            =>
+    case MissingProject(name, at) =>
       s"'$name' is referenced but not passed to Projects (${at.line}:${at.column})"
     case DependsOnAggregate(module, aggregate, _) =>
       s"'${module.value}' depends on aggregate '${aggregate.value}'"
-    case SelfDependency(name, _)             => s"'${name.value}' depends on itself"
+    case SelfDependency(name, _) => s"'${name.value}' depends on itself"
     case DuplicateDependency(module, dependency, _) =>
       s"'${module.value}' depends on '${dependency.value}' twice"
     case EdgeWithoutPlatform(module, platform, _) =>
@@ -80,9 +133,9 @@ enum BuildError:
       s"'${module.value}' depends on '${dependency.value}' on ${platform.toString.toLowerCase}, and '${dependency.value}' does not build it"
     case Cycle(platform, path) =>
       s"dependency cycle on ${platform.toString.toLowerCase} ${path.map(_.value).mkString(" -> ")}"
-    case MissingClang(name, position)        =>
+    case MissingClang(name, position) =>
       s"project '${name.value}' targets Native and does not name a clang major (${position.line}:${position.column})"
-    case ClangWithoutNative(name, position)  =>
+    case ClangWithoutNative(name, position) =>
       s"project '${name.value}' names a clang major and does not target Native (${position.line}:${position.column})"
     case NativeVersionWithoutNative(name, position) =>
       s"project '${name.value}' names a Scala Native version and does not target Native (${position.line}:${position.column})"
@@ -100,11 +153,13 @@ enum BuildError:
       s"'${member.value}' is in ship '${first.value}' and ship '${second.value}' (${position.line}:${position.column})"
     case MixedScheme(position) =>
       s"a catalog is either early-effect ships or manual versions, and this one is both (${position.line}:${position.column})"
-    case DuplicateResolver(token) => s"repository $token is listed twice"
+    case DuplicateResolver(token)  => s"repository $token is listed twice"
     case MixedTest(name, position) =>
       s"'${name.value}' names a test main and a test provider (${position.line}:${position.column})"
     case DuplicateDirectory(name, other, directory) =>
       s"'${name.value}' and '${other.value}' both use directory $directory"
+    case JsVersionWithoutJs(name, _) =>
+      s"project '${name.value}' names a Scala.js revision and does not target js"
     case JsEnvWithoutJs(name, position) =>
       s"project '${name.value}' names a js environment and does not target js (${position.line}:${position.column})"
     case JsModuleWithoutJs(name, position) =>
@@ -123,13 +178,14 @@ enum BuildError:
       s"plugin ${plugin.value} names '${name.value}', which is not a module"
     case PluginMissingCell(plugin, module, version, platform) =>
       val named = (version, platform) match
-        case (Some(found), Some(target)) => s"Scala ${found.value} on ${target.toString.toLowerCase}"
-        case (Some(found), None)         => s"Scala ${found.value}"
-        case (None, Some(target))        => target.toString.toLowerCase
-        case (None, None)                => "a cell"
+        case (Some(found), Some(target)) =>
+          s"Scala ${found.value} on ${target.toString.toLowerCase}"
+        case (Some(found), None)  => s"Scala ${found.value}"
+        case (None, Some(target)) => target.toString.toLowerCase
+        case (None, None)         => "a cell"
       s"plugin ${plugin.value} names $named of '${module.value}', and '${module.value}' does not build it"
     case UnknownPluginTask(plugin, name) =>
       s"plugin ${plugin.value} does not declare task ${name.value}"
-    case CommandShadow(name) => s"command ${name.value} is a built-in"
+    case CommandShadow(name)          => s"command ${name.value} is a built-in"
     case PluginDefect(plugin, binary) =>
       s"plugin ${plugin.value} failed while contributing ($binary)"

@@ -1,5 +1,6 @@
 package histos.load
 
+import histos.jdk.JdkRuntime
 import histos.plugin.{
   CellClasspath,
   DeclaredTask,
@@ -7,6 +8,7 @@ import histos.plugin.{
   PluginRunError,
   TaskDep
 }
+import histos.resolve.LockedTools
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -71,29 +73,29 @@ private[load] object PluginCells:
   def classpath(
       repo: Path,
       graph: ProjectGraph,
-      task: DeclaredTask
+      task: DeclaredTask,
+      lock: IO[PluginFault, DependencyLock]
   ): ZIO[Resolve, PluginFault, List[CellClasspath]] =
     ZIO
       .fromEither(selected(graph, task).left.map(PluginFault.Task(_)))
       .flatMap: found =>
-        ZIO.foreach(found.distinct)(paths(repo, graph, _))
+        if found.isEmpty then ZIO.succeed(Nil)
+        else
+          lock.flatMap(captured =>
+            ZIO.foreach(found.distinct)(paths(repo, graph, _, captured))
+          )
 
   private[load] def compile(
-      repo: Path,
-      graph: ProjectGraph,
-      cell: Cell,
-      jdk: histos.zinc.ResolvedJdk,
-      origin: NativeOrigin
+      session: histos.zinc.CompileSession,
+      cell: Cell
   ): ZIO[Resolve, PluginFault, Unit] =
+    val histos.zinc.CompileSession(repo, graph, jdk, origin, lock) = session
     for
       _ <- GraphCompile
         .cellFeed(
-          repo,
-          graph,
+          session,
           List(cell.module.name -> cell.version),
-          cell.platform,
-          jdk,
-          origin
+          cell.platform
         )
         .runCollect
         .mapError(error => PluginFault.Compiled(error))
@@ -103,7 +105,7 @@ private[load] object PluginCells:
             case error :: _ => ZIO.fail(PluginFault.Compiled(error))
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
       _ <- ZIO.unless(sources.isEmpty)(
-        compileTests(repo, graph, cell, sources, jdk, origin).mapError(
+        compileTests(repo, graph, cell, sources, jdk, origin, lock).mapError(
           PluginFault.Tested(_)
         )
       )
@@ -114,8 +116,9 @@ private[load] object PluginCells:
       graph: ProjectGraph,
       cell: Cell,
       sources: List[Path],
-      jdk: histos.zinc.ResolvedJdk,
-      origin: NativeOrigin
+      jdk: JdkRuntime,
+      origin: NativeOrigin,
+      lock: DependencyLock
   ): ZIO[Resolve, ModuleTestError, Unit] =
     val modules = modulesOf(graph)
     val compiled = CompiledCell(
@@ -125,14 +128,7 @@ private[load] object PluginCells:
       classes(repo, cell),
       0
     )
-    for
-      lock <- Resolve
-        .readLock(repo)
-        .mapError:
-          case ResolveError.Io(failure) =>
-            ModuleTestError.LockRead(failure.path)
-          case other => ModuleTestError.Lock(other)
-      _ <- TestCompile
+    for _ <- TestCompile
         .compiledTests(
           repo,
           modules,
@@ -144,18 +140,24 @@ private[load] object PluginCells:
           lock,
           BuildResolvers(graph.resolvers)
         )
+        .provideSome[Resolve](
+          zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+        )
     yield ()
 
   private def paths(
       repo: Path,
       graph: ProjectGraph,
-      cell: Cell
+      cell: Cell,
+      lock: DependencyLock
   ): ZIO[Resolve, PluginFault, CellClasspath] =
     val modules = modulesOf(graph)
     val repositories = BuildResolvers(graph.resolvers)
     for
-      lock <- readLock(repo)
       compile <- compileClasspath(repo, cell, modules, lock, repositories)
+        .provideSome[Resolve](
+          zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+        )
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
       test <-
         if sources.isEmpty then ZIO.succeed(compile)
@@ -176,7 +178,7 @@ private[load] object PluginCells:
       modules: List[Module],
       lock: DependencyLock,
       repositories: Repositories
-  ): ZIO[Resolve, PluginFault, List[Path]] =
+  ): ZIO[Resolve & LockedTools, PluginFault, List[Path]] =
     val upstream = Module
       .chain(cell.module, modules, cell.platform)
       .map(dependency => classes(repo, dependency.name, cell))
@@ -253,7 +255,9 @@ private[load] object PluginCells:
         cell.platform
       )
 
-  private def standardLibrary(cell: Cell): IO[ModuleTestError, List[Path]] =
+  private def standardLibrary(
+      cell: Cell
+  ): ZIO[LockedTools, ModuleTestError, List[Path]] =
     cell.platform match
       case Platform.Jvm =>
         JvmCompile
@@ -277,9 +281,6 @@ private[load] object PluginCells:
     versions
       .flatMap(item => platforms.map(target => Cell(module, item, target)))
       .sortBy(cell => (cell.version.value, cell.platform.token))
-
-  private def readLock(repo: Path): IO[PluginFault, DependencyLock] =
-    Resolve.readLock(repo).mapError(PluginFault.Resolved(_))
 
   private def classes(repo: Path, cell: Cell): Path =
     classes(repo, cell.module.name, cell)

@@ -1,0 +1,5 @@
+major 21
+version 21.0.2
+archive macos-aarch64 file:///fixtures/mac%20jdk.tar.gz aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+archive linux-x86_64 https://example.test/jdk.tar.gz?revision=locked bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+archive windows-x86_64 https://example.test/jdk.zip cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc

@@ -3,6 +3,7 @@ package histos.node
 import histos.{Aggregate, Module, Platform, ProjectGraph}
 
 import java.nio.file.Path
+import histos.toolchain.ToolSelection
 
 enum NodeOrigin:
   case Override, Path, Nvm, Fnm, Volta, Cache
@@ -49,7 +50,11 @@ enum NodeResolution:
   case Install(hint: NodeInstall, trace: List[NodeCandidate])
   case Provision(major: NodeMajor, trace: List[NodeCandidate])
 
-final case class NodeHome(path: Path, hasBinary: Boolean, version: Either[NodeVersionError, NodeVersion])
+final case class NodeHome(
+    path: Path,
+    hasBinary: Boolean,
+    version: Either[NodeVersionError, NodeVersion]
+)
 
 enum NodeLocated:
   case Unset
@@ -70,40 +75,43 @@ final case class NodeView(
     nvm: NodeManagerSlot,
     fnm: NodeManagerSlot,
     volta: NodeManagerSlot,
-    cached: List[NodeHome],
+    cached: List[NodeHome]
 )
 
 object Node:
   /** A JVM-only graph does not name Node. An aggregate does not either. */
   def required(graph: ProjectGraph): Boolean =
     graph.projects.exists:
-      case Module(_, platforms, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _) => platforms.all.contains(Platform.Js)
-      case Aggregate(_, _, _)               => false
+      case module: Module => module.platforms.all.contains(Platform.Js)
+      case _: Aggregate   => false
 
   def resolve(major: NodeMajor, view: NodeView): NodeResolution =
-    slot(NodeOrigin.Override, view.explicit, major, Nil, stop = true) match
-      case Left(done) => done
-      case Right(afterOverride) =>
-        val continued =
-          for
-            afterPath  <- slot(NodeOrigin.Path, view.onPath, major, afterOverride, stop = false)
-            afterNvm   <- manager(NodeOrigin.Nvm, view.nvm, major, afterPath)
-            afterFnm   <- manager(NodeOrigin.Fnm, view.fnm, major, afterNvm)
-            afterVolta <- manager(NodeOrigin.Volta, view.volta, major, afterFnm)
-          yield afterVolta
-        continued match
-          case Left(done) => done
-          case Right(seen) =>
-            if managerPresent(view) then hint(view, major, seen)
-            else
-              homes(NodeOrigin.Cache, view.cached, major, seen) match
-                case Left(done)  => done
-                case Right(done) => NodeResolution.Provision(major, done)
+    val trace =
+      located(NodeOrigin.Override, view.explicit, major) ++
+        located(NodeOrigin.Path, view.onPath, major) ++
+        manager(NodeOrigin.Nvm, view.nvm, major) ++
+        manager(NodeOrigin.Fnm, view.fnm, major) ++
+        manager(NodeOrigin.Volta, view.volta, major) ++
+        homes(NodeOrigin.Cache, view.cached, major)
+    ToolSelection.fold(trace):
+      case chosen @ NodeCandidate.Match(NodeOrigin.Override, _, _) =>
+        ToolSelection.Selected(chosen)
+      case NodeCandidate.Rejected(NodeOrigin.Override, reason) =>
+        ToolSelection.Rejected(reason)
+      case _ => ToolSelection.Locked
+    match
+      case ToolSelection.Selected(chosen) =>
+        NodeResolution.Selected(chosen, trace)
+      case ToolSelection.Rejected(reason) =>
+        NodeResolution.OverrideRejected(reason, trace)
+      case ToolSelection.Locked => NodeResolution.Provision(major, trace)
 
   def report(resolution: NodeResolution): String =
     val lines = resolution match
       case NodeResolution.Selected(chosen, trace) =>
-        trace.map(show) :+ s"chosen ${chosen.origin.label} ${chosen.version.value} ${chosen.home}"
+        trace.map(
+          show
+        ) :+ s"chosen ${chosen.origin.label} ${chosen.version.value} ${chosen.home}"
       case NodeResolution.OverrideRejected(reason, trace) =>
         trace.map(show) :+ s"override rejected ${showReason(reason)}"
       case NodeResolution.Install(hint, trace) =>
@@ -112,81 +120,57 @@ object Node:
         trace.map(show) :+ s"provision node ${major.value}"
     lines.mkString("\n")
 
-  private def slot(
+  private def located(
       origin: NodeOrigin,
-      located: NodeLocated,
-      wanted: NodeMajor,
-      trace: List[NodeCandidate],
-      stop: Boolean,
-  ): Either[NodeResolution, List[NodeCandidate]] =
-    located match
-      case NodeLocated.Unset => Right(trace :+ NodeCandidate.NotPresent(origin))
+      location: NodeLocated,
+      wanted: NodeMajor
+  ): List[NodeCandidate] =
+    location match
+      case NodeLocated.Unset      => List(NodeCandidate.NotPresent(origin))
       case NodeLocated.Missing(_) =>
-        val next = trace :+ NodeCandidate.Rejected(origin, NodeReject.Absent)
-        if stop then Left(NodeResolution.OverrideRejected(NodeReject.Absent, next)) else Right(next)
-      case NodeLocated.Found(home) =>
-        judge(origin, wanted, home) match
-          case chosen @ NodeCandidate.Match(_, _, _) => Left(NodeResolution.Selected(chosen, trace :+ chosen))
-          case NodeCandidate.Rejected(_, reason) if stop =>
-            Left(NodeResolution.OverrideRejected(reason, trace :+ NodeCandidate.Rejected(origin, reason)))
-          case other => Right(trace :+ other)
+        List(NodeCandidate.Rejected(origin, NodeReject.Absent))
+      case NodeLocated.Found(home) => List(judge(origin, wanted, home))
 
   private def manager(
       origin: NodeOrigin,
       slot: NodeManagerSlot,
-      wanted: NodeMajor,
-      trace: List[NodeCandidate],
-  ): Either[NodeResolution, List[NodeCandidate]] =
+      wanted: NodeMajor
+  ): List[NodeCandidate] =
     slot match
-      case NodeManagerSlot.Absent       => Right(trace :+ NodeCandidate.NotPresent(origin))
-      case NodeManagerSlot.Present(Nil) => Right(trace :+ NodeCandidate.Empty(origin))
-      case NodeManagerSlot.Present(found) => homes(origin, found, wanted, trace)
+      case NodeManagerSlot.Absent => List(NodeCandidate.NotPresent(origin))
+      case NodeManagerSlot.Present(Nil)   => List(NodeCandidate.Empty(origin))
+      case NodeManagerSlot.Present(found) => homes(origin, found, wanted)
 
   private def homes(
       origin: NodeOrigin,
       installed: List[NodeHome],
+      wanted: NodeMajor
+  ): List[NodeCandidate] =
+    if installed.isEmpty then List(NodeCandidate.NotPresent(origin))
+    else installed.map(judge(origin, wanted, _))
+
+  private def judge(
+      origin: NodeOrigin,
       wanted: NodeMajor,
-      trace: List[NodeCandidate],
-  ): Either[NodeResolution, List[NodeCandidate]] =
-    if installed.isEmpty then Right(trace :+ NodeCandidate.NotPresent(origin))
-    else
-      val judged = installed.map(home => judge(origin, wanted, home))
-      judged.collectFirst { case chosen @ NodeCandidate.Match(_, _, _) => chosen } match
-        case Some(chosen) => Left(NodeResolution.Selected(chosen, trace ++ judged))
-        case None         => Right(trace ++ judged)
-
-  private def managerPresent(view: NodeView): Boolean =
-    present(view.nvm) || present(view.fnm) || present(view.volta)
-
-  private def present(slot: NodeManagerSlot): Boolean =
-    slot match
-      case NodeManagerSlot.Present(_) => true
-      case NodeManagerSlot.Absent     => false
-
-  private def hint(view: NodeView, major: NodeMajor, trace: List[NodeCandidate]): NodeResolution =
-    view.nvm match
-      case NodeManagerSlot.Present(_) => NodeResolution.Install(NodeInstall.Nvm(major), trace)
-      case NodeManagerSlot.Absent =>
-        view.fnm match
-          case NodeManagerSlot.Present(_) => NodeResolution.Install(NodeInstall.Fnm(major), trace)
-          case NodeManagerSlot.Absent =>
-            view.volta match
-              case NodeManagerSlot.Present(_) => NodeResolution.Install(NodeInstall.Volta(major), trace)
-              case NodeManagerSlot.Absent     => NodeResolution.Provision(major, trace)
-
-  private def judge(origin: NodeOrigin, wanted: NodeMajor, home: NodeHome): NodeCandidate =
+      home: NodeHome
+  ): NodeCandidate =
     if !home.hasBinary then NodeCandidate.Rejected(origin, NodeReject.NoBinary)
     else
       home.version match
-        case Left(error)                               => NodeCandidate.Rejected(origin, NodeReject.UnreadableVersion(error))
-        case Right(version) if version.major == wanted => NodeCandidate.Match(origin, home.path, version)
-        case Right(version)                            => NodeCandidate.Rejected(origin, NodeReject.WrongMajor(version.major))
+        case Left(error) =>
+          NodeCandidate.Rejected(origin, NodeReject.UnreadableVersion(error))
+        case Right(version) if version.major == wanted =>
+          NodeCandidate.Match(origin, home.path, version)
+        case Right(version) =>
+          NodeCandidate.Rejected(origin, NodeReject.WrongMajor(version.major))
 
   private def show(candidate: NodeCandidate): String =
     candidate match
-      case NodeCandidate.Match(origin, home, version) => s"match ${origin.label} ${version.value} $home"
-      case NodeCandidate.Rejected(origin, reason)     => s"reject ${origin.label} ${showReason(reason)}"
-      case NodeCandidate.NotPresent(origin)           => s"absent ${origin.label}"
-      case NodeCandidate.Empty(origin)                => s"empty ${origin.label}"
+      case NodeCandidate.Match(origin, home, version) =>
+        s"match ${origin.label} ${version.value} $home"
+      case NodeCandidate.Rejected(origin, reason) =>
+        s"reject ${origin.label} ${showReason(reason)}"
+      case NodeCandidate.NotPresent(origin) => s"absent ${origin.label}"
+      case NodeCandidate.Empty(origin)      => s"empty ${origin.label}"
 
   private def showReason(reason: NodeReject): String = reason.message

@@ -1,6 +1,7 @@
 package histos.publish
 
-import histos.zinc.{CompileFeed, ResolvedJdk}
+import histos.jdk.JdkRuntime
+import histos.zinc.{CompileFeed}
 import histos.ProjectGraph
 
 import java.nio.file.Path
@@ -20,7 +21,7 @@ object PublishRun:
       repo: Path,
       graph: ProjectGraph,
       names: List[String],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       env: Map[String, String],
       repository: String,
       report: CompileFeed => UIO[Unit] = _ => ZIO.unit
@@ -34,4 +35,6 @@ object PublishRun:
             written <- LocalPublish.run(repo, graph, names, jdk, env, report)
             done <- LauncherPublish.upload(repo, graph, written)
           yield Report(where, done)
-        body.provideSome[histos.resolve.Resolve](where.layer.mapError(LocalPublishError.Publish(_)))
+        body.provideSome[histos.resolve.Resolve](
+          where.layer.mapError(LocalPublishError.Publish(_))
+        )

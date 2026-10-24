@@ -1,5 +1,6 @@
 package histos.js
 
+import histos.jdk.JdkRuntime
 import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
@@ -9,10 +10,12 @@ import histos.zinc.{
   CompileRequest,
   CompileToolchain,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags
 }
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
+
+import histos.resolve.{LockedTools, ResolveError}
 
 import java.nio.file.Path
 
@@ -24,7 +27,7 @@ final case class JsRunRequest(
     kind: JsModuleKind,
     script: Path,
     work: Path,
-    jdk: ResolvedJdk,
+    jdk: JdkRuntime,
     processEnv: Map[String, String],
     node: NodeBinary
 )
@@ -33,11 +36,9 @@ final case class JsRunRequest(
   * does not load a `JSEnv`.
   */
 object JsRun:
-  private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
-  private val FirefoxScala: ScalaVersion = ScalaVersion.trusted("3.9.0")
   private val SuiteMain: String = "subprocess.JsRun"
 
-  def start(request: JsRunRequest): IO[JsRunError, ChildRequest] =
+  def start(request: JsRunRequest): ZIO[LockedTools, JsRunError, ChildRequest] =
     val JsRunRequest(env, kind, script, work, jdk, processEnv, node) = request
     val bridgeRoot = work.resolve("js-run")
     val classes = bridgeRoot.resolve("classes")
@@ -45,16 +46,19 @@ object JsRun:
       bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")
     val child = work.resolve("js-run-child")
     for
-      tools <- ZIO
-        .attemptBlockingInterrupt(fetch(env))
-        .mapError(_ => JsRunError.Unavailable)
-        .flatMap(ZIO.fromEither)
+      view <- ZIO.service[LockedTools]
+      tools <- view
+        .materialize(
+          histos.js.JsRequests.environment(env, view.catalog, view.repositories)
+        )
+        .mapError(JsRunError.Resolved(_))
+        .map(_.artifacts.map(_.path))
       _ <- write(source, runner(env))
       _ <- JvmCompile
         .compile(
           CompileRequest(
             CompileToolchain(
-              compiler(env),
+              histos.js.JsRequests.compiler(env, view.catalog),
               histos.Platform.Jvm,
               jdk,
               ScalacFlags.empty
@@ -97,46 +101,6 @@ object JsRun:
     case JsEnv.Firefox =>
       "new chekhov.jsenv.ChekhovJSEnv(chekhov.ChekhovBrowser.Firefox, true, false, scala.collection.immutable.Map.empty[String, String])"
 
-  private def compiler(env: JsEnv): ScalaVersion = env match
-    case JsEnv.Firefox            => FirefoxScala
-    case JsEnv.Node | JsEnv.Jsdom => BridgeScala
-
-  private def fetch(env: JsEnv): Either[JsRunError, List[Path]] =
-    val wanted = env match
-      case JsEnv.Node =>
-        List(Artifact("org.scala-js", "scalajs-env-nodejs_2.13", "1.6.0"))
-      case JsEnv.Jsdom =>
-        List(Artifact("org.scala-js", "scalajs-env-jsdom-nodejs_2.13", "1.1.1"))
-      case JsEnv.Firefox =>
-        List(Artifact("rocks.earlyeffect", "chekhov-jsenv_3", "0.1.3"))
-    val dependencies = wanted.map: item =>
-      coursier.Dependency(
-        coursier.Module(
-          coursier.Organization(item.organization),
-          coursier.ModuleName(item.name)
-        ),
-        coursier.version.VersionConstraint(item.revision)
-      )
-    val got = coursier
-      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
-      .noMirrors
-      .withGradleModuleSupport(false)
-      .withRepositories(Seq(coursier.Repositories.central))
-      .addDependencies(dependencies*)
-      .eitherResult()
-    got match
-      case Left(_)       => Left(JsRunError.Unavailable)
-      case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap:
-          (_, publication, _, file) =>
-            val classified = publication match
-              case Right(published) => published.classifier.nonEmpty
-              case Left(variant)    => variant.classifier.nonEmpty
-            if file.getName.endsWith(".jar") && !classified then
-              List(file.toPath)
-            else Nil
-        if jars.isEmpty then Left(JsRunError.Unavailable) else Right(jars)
-
   private def runner(env: JsEnv): String =
     """package subprocess
       |
@@ -177,12 +141,6 @@ object JsRun:
       |}
       |""".stripMargin.replace("__ENV__", envExpr(env))
 
-  private final case class Artifact(
-      organization: String,
-      name: String,
-      revision: String
-  )
-
   private def write(path: Path, text: String): IO[JsRunError, Unit] =
     Workspace.writeString(path, text).mapError(_ => JsRunError.Write(path))
 
@@ -190,11 +148,13 @@ object JsRun:
     Workspace.recreate(path).mapError(_ => JsRunError.Write(path)).unit
 
 enum JsRunError:
+  case Resolved(error: ResolveError)
   case Unavailable
   case Compile(error: CompileError)
   case Write(path: Path)
 
   def message: String = this match
-    case Unavailable    => "the JavaScript environment could not be fetched"
-    case Compile(error) => error.message
-    case Write(path)    => s"could not write $path"
+    case Resolved(error) => error.message
+    case Unavailable     => "the JavaScript environment could not be fetched"
+    case Compile(error)  => error.message
+    case Write(path)     => s"could not write $path"

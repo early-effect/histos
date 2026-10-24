@@ -7,12 +7,23 @@ import histos.workflow.WorkflowAction
 import histos.{Platform, ProjectName}
 
 import zio.{IO, ZIO}
-import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Options, ValidationError, ValidationErrorType}
+import zio.cli.{
+  Args,
+  CliConfig,
+  Command as CliCommand,
+  CommandDirective,
+  Options,
+  ValidationError,
+  ValidationErrorType
+}
 
-/** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that name into a [[TaskId]] and, for a module, a platform. */
+/** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that
+  * name into a [[TaskId]] and, for a module, a platform.
+  */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Bsp, Server, CachePath, CacheList, Toolchain, Reload, Reboot
+    case Version, Graph, Mcp, Bsp, Server, CachePath, CacheList, Toolchain,
+      Reload, Reboot
     case Run(name: String, platform: Option[String])
     case Test(projects: List[String])
     case TestOnly(args: List[String])
@@ -22,76 +33,104 @@ object Grammar:
     case Publish(repository: String, projects: List[String])
     case CacheClean(dryRun: Boolean)
     case Resolve(update: Boolean, check: Boolean)
+    case Launcher(update: Boolean)
     case Workflow(check: Boolean, update: Boolean)
 
-  private val version   = CliCommand("version").map(_ => Wire.Version)
-  private val graph     = CliCommand("graph").map(_ => Wire.Graph)
-  private val run       =
-    CliCommand("run", Args.text("name") ++ Args.text("platform").atMost(1)).map { case (name, platform) =>
-      Wire.Run(name, platform.headOption)
-    }
-  private val test      = CliCommand("test", Args.text("project").*).map(names => Wire.Test(names.toList))
-  private val testOnly  = CliCommand("testOnly", Args.text("pattern").*).map(args => Wire.TestOnly(args.toList))
-  private val testQuick = CliCommand("testQuick", Args.text("pattern").*).map(args => Wire.TestQuick(args.toList))
-  private val compile   = CliCommand("compile", Args.text("project").*).map(names => Wire.Compile(names.toList))
-  private val assembly  =
-    CliCommand("assembly", Args.text("destination").atMost(1)).map(paths => Wire.Assembly(paths.headOption))
-  private val publish  =
-    CliCommand("publish", Args.text("repository") ++ Args.text("project").*).map { case (repository, projects) =>
-      Wire.Publish(repository, projects.toList)
-    }
-  private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
-  private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
-  private val server    = CliCommand("server").map(_ => Wire.Server)
+  private val version = CliCommand("version").map(_ => Wire.Version)
+  private val graph = CliCommand("graph").map(_ => Wire.Graph)
+  private val run =
+    CliCommand("run", Args.text("name") ++ Args.text("platform").atMost(1))
+      .map { case (name, platform) =>
+        Wire.Run(name, platform.headOption)
+      }
+  private val test = CliCommand("test", Args.text("project").*).map(names =>
+    Wire.Test(names.toList)
+  )
+  private val testOnly = CliCommand("testOnly", Args.text("pattern").*).map(
+    args => Wire.TestOnly(args.toList)
+  )
+  private val testQuick = CliCommand("testQuick", Args.text("pattern").*).map(
+    args => Wire.TestQuick(args.toList)
+  )
+  private val compile = CliCommand("compile", Args.text("project").*).map(
+    names => Wire.Compile(names.toList)
+  )
+  private val assembly =
+    CliCommand("assembly", Args.text("destination").atMost(1)).map(paths =>
+      Wire.Assembly(paths.headOption)
+    )
+  private val publish =
+    CliCommand("publish", Args.text("repository") ++ Args.text("project").*)
+      .map { case (repository, projects) =>
+        Wire.Publish(repository, projects.toList)
+      }
+  private val mcp = CliCommand("mcp").map(_ => Wire.Mcp)
+  private val bsp = CliCommand("bsp").map(_ => Wire.Bsp)
+  private val server = CliCommand("server").map(_ => Wire.Server)
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
-  private val reload    = CliCommand("reload").map(_ => Wire.Reload)
-  private val reboot    = CliCommand("reboot").map(_ => Wire.Reboot)
-  private val path      = CliCommand("path").map(_ => Wire.CachePath)
-  private val list      = CliCommand("list").map(_ => Wire.CacheList)
-  private val clean     = CliCommand("clean", Options.boolean("dry-run")).map(Wire.CacheClean(_))
-  private val cache     = CliCommand("cache").subcommands(path | list | clean)
-  private val resolve   =
-    CliCommand("resolve", Options.boolean("update") ++ Options.boolean("check")).map { case (update, check) =>
-      Wire.Resolve(update, check)
-    }
-  private val workflow  =
-    CliCommand("workflow", Options.boolean("check") ++ Options.boolean("update")).map { case (check, update) =>
+  private val reload = CliCommand("reload").map(_ => Wire.Reload)
+  private val reboot = CliCommand("reboot").map(_ => Wire.Reboot)
+  private val path = CliCommand("path").map(_ => Wire.CachePath)
+  private val list = CliCommand("list").map(_ => Wire.CacheList)
+  private val clean =
+    CliCommand("clean", Options.boolean("dry-run")).map(Wire.CacheClean(_))
+  private val cache = CliCommand("cache").subcommands(path | list | clean)
+  private val resolve =
+    CliCommand("resolve", Options.boolean("update") ++ Options.boolean("check"))
+      .map { case (update, check) =>
+        Wire.Resolve(update, check)
+      }
+  private val workflow =
+    CliCommand(
+      "workflow",
+      Options.boolean("check") ++ Options.boolean("update")
+    ).map { case (check, update) =>
       Wire.Workflow(check, update)
     }
-  private val root      =
+  private val launcher =
+    CliCommand("launcher", Options.boolean("update")).map(Wire.Launcher(_))
+  private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | reload | reboot,
+      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot
     )
 
-  /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface. */
+  /** Reserved root words never fall through to plugin dispatch, including a
+    * word held for a later surface.
+    */
   private val roots: Set[String] = CommandName.reserved.map(_.value)
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     args match
-      case "~" :: Nil     => ZIO.fail(CliParseError.WatchCommand("watch needs a command"))
-      case "~" :: "~" :: _ => ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
-      case "~" :: rest    => parseRoot(rest).map(Command.Watch(_))
-      case _              => parseRoot(args)
+      case "~" :: Nil =>
+        ZIO.fail(CliParseError.WatchCommand("watch needs a command"))
+      case "~" :: "~" :: _ =>
+        ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
+      case "~" :: rest => parseRoot(rest).map(Command.Watch(_))
+      case _           => parseRoot(args)
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
-    root.parse("histos" :: args, CliConfig.default).mapError(error => reject(error, args)).flatMap:
-      case CommandDirective.UserDefined(Nil, wire) => command(wire)
-      case CommandDirective.UserDefined(_, _)      => ZIO.fail(CliParseError.UnexpectedArguments)
-      case CommandDirective.BuiltIn(_)             => ZIO.fail(CliParseError.Help)
+    root
+      .parse("histos" :: args, CliConfig.default)
+      .mapError(error => reject(error, args))
+      .flatMap:
+        case CommandDirective.UserDefined(Nil, wire) => command(wire)
+        case CommandDirective.UserDefined(_, _)      =>
+          ZIO.fail(CliParseError.UnexpectedArguments)
+        case CommandDirective.BuiltIn(_) => ZIO.fail(CliParseError.Help)
 
   private def command(wire: Wire): IO[CliParseError, Command] =
     wire match
-      case Wire.Version            => ZIO.succeed(Command.Version)
-      case Wire.Graph              => ZIO.succeed(Command.Graph)
-      case Wire.Mcp                => ZIO.succeed(Command.Mcp)
-      case Wire.Bsp                => ZIO.succeed(Command.Bsp)
-      case Wire.Server            => ZIO.succeed(Command.Server)
-      case Wire.CachePath          => ZIO.succeed(Command.CachePath)
-      case Wire.CacheList          => ZIO.succeed(Command.CacheList)
-      case Wire.Toolchain          => ZIO.succeed(Command.Toolchain)
-      case Wire.Reload            => ZIO.succeed(Command.Reload)
-      case Wire.Reboot            => ZIO.succeed(Command.Reboot)
-      case Wire.CacheClean(dryRun) => ZIO.succeed(Command.CacheClean(dryRun))
+      case Wire.Version             => ZIO.succeed(Command.Version)
+      case Wire.Graph               => ZIO.succeed(Command.Graph)
+      case Wire.Mcp                 => ZIO.succeed(Command.Mcp)
+      case Wire.Bsp                 => ZIO.succeed(Command.Bsp)
+      case Wire.Server              => ZIO.succeed(Command.Server)
+      case Wire.CachePath           => ZIO.succeed(Command.CachePath)
+      case Wire.CacheList           => ZIO.succeed(Command.CacheList)
+      case Wire.Toolchain           => ZIO.succeed(Command.Toolchain)
+      case Wire.Reload              => ZIO.succeed(Command.Reload)
+      case Wire.Reboot              => ZIO.succeed(Command.Reboot)
+      case Wire.CacheClean(dryRun)  => ZIO.succeed(Command.CacheClean(dryRun))
       case Wire.Resolve(true, true) => ZIO.fail(CliParseError.Rejected)
       case Wire.Resolve(update, check) =>
         val action =
@@ -99,40 +138,56 @@ object Grammar:
           else if check then ResolveAction.Check
           else ResolveAction.Verify
         ZIO.succeed(Command.Resolve(action))
+      case Wire.Launcher(true)       => ZIO.succeed(Command.LauncherUpdate)
+      case Wire.Launcher(false)      => ZIO.fail(CliParseError.Rejected)
       case Wire.Workflow(true, true) => ZIO.fail(CliParseError.Rejected)
-      case Wire.Workflow(_, update) =>
-        ZIO.succeed(Command.Workflow(if update then WorkflowAction.Update else WorkflowAction.Check))
+      case Wire.Workflow(_, update)  =>
+        ZIO.succeed(Command.Workflow(if update then WorkflowAction.Update
+        else WorkflowAction.Check))
       case Wire.Test(projects) =>
         projects.find(_.startsWith("-")) match
-          case Some(flag) => ZIO.fail(CliParseError.Pattern(s"test does not take $flag"))
-          case None       => ZIO.succeed(Command.Test(projects))
-      case Wire.TestOnly(args) => ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map {
-        case (modules, patterns) => Command.TestOnly(modules, patterns)
-      }
-      case Wire.TestQuick(args) => ZIO.fromEither(selection("testQuick", args, requirePattern = false)).map {
-        case (modules, patterns) => Command.TestQuick(modules, patterns)
-      }
-      case Wire.Compile(projects) => ZIO.succeed(Command.Compile(projects))
-      case Wire.Assembly(destination) => ZIO.succeed(Command.Assembly(destination))
-      case Wire.Publish(repository, projects) => ZIO.succeed(Command.Publish(repository, projects))
+          case Some(flag) =>
+            ZIO.fail(CliParseError.Pattern(s"test does not take $flag"))
+          case None => ZIO.succeed(Command.Test(projects))
+      case Wire.TestOnly(args) =>
+        ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map {
+          case (modules, patterns) => Command.TestOnly(modules, patterns)
+        }
+      case Wire.TestQuick(args) =>
+        ZIO
+          .fromEither(selection("testQuick", args, requirePattern = false))
+          .map { case (modules, patterns) =>
+            Command.TestQuick(modules, patterns)
+          }
+      case Wire.Compile(projects)     => ZIO.succeed(Command.Compile(projects))
+      case Wire.Assembly(destination) =>
+        ZIO.succeed(Command.Assembly(destination))
+      case Wire.Publish(repository, projects) =>
+        ZIO.succeed(Command.Publish(repository, projects))
       case Wire.Run(raw, token) =>
         if raw.contains('/') then pluginTask(raw, token)
         else
-          ZIO.fromEither(TaskId.from(raw)).mapError(_ => CliParseError.BadTaskId).flatMap: id =>
-            val task = id == TaskId.Inspect || id == TaskId.Versions
-            token match
-              case Some(_) if task => ZIO.fail(CliParseError.TaskPlatform(id.value))
-              case None            => ZIO.succeed(Command.Run(id, None))
-              case Some(text) =>
-                ZIO.fromEither(Platform.from(text)).mapBoth(
-                  error => CliParseError.BadPlatform(error.message),
-                  platform => Command.Run(id, Some(platform)),
-                )
+          ZIO
+            .fromEither(TaskId.from(raw))
+            .mapError(_ => CliParseError.BadTaskId)
+            .flatMap: id =>
+              val task = id == TaskId.Inspect || id == TaskId.Versions
+              token match
+                case Some(_) if task =>
+                  ZIO.fail(CliParseError.TaskPlatform(id.value))
+                case None       => ZIO.succeed(Command.Run(id, None))
+                case Some(text) =>
+                  ZIO
+                    .fromEither(Platform.from(text))
+                    .mapBoth(
+                      error => CliParseError.BadPlatform(error.message),
+                      platform => Command.Run(id, Some(platform))
+                    )
 
   private def selection(
       command: String,
       args: List[String],
-      requirePattern: Boolean,
+      requirePattern: Boolean
   ): Either[CliParseError, (List[String], List[SuitePattern])] =
     walk(command, requirePattern, args, Nil, Nil)
 
@@ -141,41 +196,58 @@ object Grammar:
       requirePattern: Boolean,
       args: List[String],
       modules: List[String],
-      patterns: List[SuitePattern],
+      patterns: List[SuitePattern]
   ): Either[CliParseError, (List[String], List[SuitePattern])] =
     args match
       case Nil =>
-        if requirePattern && patterns.isEmpty then Left(CliParseError.MissingPattern)
+        if requirePattern && patterns.isEmpty then
+          Left(CliParseError.MissingPattern)
         else Right((modules.reverse, patterns.reverse))
       case "--module" :: Nil =>
         Left(CliParseError.Pattern(s"$command --module needs a project"))
       case "--module" :: name :: rest =>
         ProjectName.from(name) match
-          case Left(error) => Left(CliParseError.Pattern(error.message))
-          case Right(found) => walk(command, requirePattern, rest, found.value :: modules, patterns)
+          case Left(error)  => Left(CliParseError.Pattern(error.message))
+          case Right(found) =>
+            walk(
+              command,
+              requirePattern,
+              rest,
+              found.value :: modules,
+              patterns
+            )
       case flag :: _ if flag.startsWith("-") =>
         Left(CliParseError.Pattern(s"$command does not take $flag"))
       case token :: rest =>
         SuitePattern.from(token) match
-          case Left(error) => Left(CliParseError.Pattern(error.message))
-          case Right(pattern) => walk(command, requirePattern, rest, modules, pattern :: patterns)
+          case Left(error)    => Left(CliParseError.Pattern(error.message))
+          case Right(pattern) =>
+            walk(command, requirePattern, rest, modules, pattern :: patterns)
 
-  private def pluginTask(raw: String, token: Option[String]): IO[CliParseError, Command] =
+  private def pluginTask(
+      raw: String,
+      token: Option[String]
+  ): IO[CliParseError, Command] =
     token match
       case Some(_) => ZIO.fail(CliParseError.TaskPlatform(raw))
-      case None =>
-        ZIO.fromEither(PluginTaskId.parse(raw)).mapBoth(
-          error => CliParseError.BadPluginTask(error.message),
-          id => Command.Plugin(id, PluginArgs.empty),
-        )
+      case None    =>
+        ZIO
+          .fromEither(PluginTaskId.parse(raw))
+          .mapBoth(
+            error => CliParseError.BadPluginTask(error.message),
+            id => Command.Plugin(id, PluginArgs.empty)
+          )
 
-  private def reject(error: ValidationError, args: List[String]): CliParseError =
+  private def reject(
+      error: ValidationError,
+      args: List[String]
+  ): CliParseError =
     error.validationErrorType match
       case ValidationErrorType.CommandMismatch =>
         args match
           case head :: _ if roots.contains(head) => CliParseError.UnknownCommand
           case _                                 => CliParseError.UnknownRoot
-      case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>
+      case ValidationErrorType.InvalidArgument |
+          ValidationErrorType.MissingValue =>
         CliParseError.MissingArgument
       case _ => CliParseError.Rejected
-

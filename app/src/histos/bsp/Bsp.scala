@@ -1,6 +1,11 @@
 package histos.bsp
 
+import histos.jdk.JdkRuntime
+import zio.stream.ZStream
+
 import histos.load.{BuildNotes, LoadError}
+import histos.resolve.LockedTools
+import histos.toolchain.BuildCompiler
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -25,7 +30,7 @@ import histos.zinc.{
   GraphCompileError,
   JvmCompile,
   PositionBase,
-  ResolvedJdk,
+
   ScalaSeries,
   SemanticDb
 }
@@ -45,7 +50,6 @@ object Bsp:
   val BspVersion: String = "2.2.0"
   val ServerName: String = "histos"
   val ServerVersion: String = "0.0.1-SNAPSHOT"
-  private val BuildScala: ScalaVersion = ScalaVersion.trusted("3.10.0")
 
   enum Answer:
     case Reply(line: String)
@@ -63,6 +67,7 @@ object Bsp:
       case Rejected => "bsp params were rejected"
 
   private enum BspError:
+    case Machine(error: histos.jdk.ToolchainError)
     case Parse
     case NotRequest
     case NoMethod
@@ -90,11 +95,12 @@ object Bsp:
       case UnknownMethod(_)                              => -32601
       case Params(_) | UnknownTarget | NotTest | NotMain => -32602
       case NotInitialized                                => -32002
-      case Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) |
-          Tests(_) | Run(_) | Build(_) | Platforms(_) | Mains(_) =>
+      case Machine(_) | Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) |
+          Sources(_) | Tests(_) | Run(_) | Build(_) | Platforms(_) | Mains(_) =>
         -32603
 
     def message: String = this match
+      case Machine(error)        => error.message
       case Parse                 => "parse error"
       case NotRequest            => "bsp requires a json-rpc object"
       case NoMethod              => "bsp requires a method"
@@ -119,7 +125,7 @@ object Bsp:
   def open(
       repo: Path,
       graph: ProjectGraph,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       buildClasspath: List[Path] = Nil,
       notify: String => UIO[Unit] = _ => ZIO.unit,
@@ -127,14 +133,17 @@ object Bsp:
       gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int] = effect =>
         effect,
       shared: Option[Ref[ProjectGraph]] = None
-  ): UIO[Session] =
+  ): IO[ResolveError, Session] =
     for
+      buildScala <- BuildCompiler.version
       phase <- Ref.make[Phase](Phase.New)
       current <- shared match
         case Some(ref) => ZIO.succeed(ref)
         case None      => Ref.make(graph)
       request <- Ref.make(graph)
+      captured <- Ref.make(Option.empty[DependencyLock])
     yield Session.start(
+      buildScala,
       repo,
       jdk,
       runtimes,
@@ -144,13 +153,15 @@ object Bsp:
       phase,
       gate,
       current,
-      request
+      request,
+      captured
     )
 
   object Session:
     private[Bsp] def start(
+        buildScala: ScalaVersion,
         repo: Path,
-        jdk: ResolvedJdk,
+        jdk: JdkRuntime,
         runtimes: Runtimes,
         buildClasspath: List[Path],
         notify: String => UIO[Unit],
@@ -158,9 +169,11 @@ object Bsp:
         phase: Ref[Phase],
         gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
         current: Ref[ProjectGraph],
-        request: Ref[ProjectGraph]
+        request: Ref[ProjectGraph],
+        captured: Ref[Option[DependencyLock]]
     ): Session =
       new Session(
+        buildScala,
         repo,
         jdk,
         runtimes,
@@ -170,12 +183,14 @@ object Bsp:
         phase,
         gate,
         current,
-        request
+        request,
+        captured
       )
 
   final class Session private (
+      BuildScala: ScalaVersion,
       repo: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       runtimes: Runtimes,
       buildClasspath: List[Path],
       notify: String => UIO[Unit],
@@ -183,7 +198,8 @@ object Bsp:
       phase: Ref[Phase],
       gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
       current: Ref[ProjectGraph],
-      request: Ref[ProjectGraph]
+      request: Ref[ProjectGraph],
+      captured: Ref[Option[DependencyLock]]
   ):
     /** One request sees the graph it started with. A later swap does not
       * rewrite it.
@@ -195,7 +211,36 @@ object Bsp:
         seen: ProjectGraph,
         payload: String
     ): ZIO[Resolve, Nothing, Answer] =
-      request.set(seen) *> read(payload)
+      val id = payload
+        .fromJson[zio.json.ast.Json]
+        .toOption
+        .flatMap(_.as[Rpc.Incoming].toOption)
+        .map(Rpc.idOf)
+        .getOrElse(Rpc.RpcId.Absent)
+      (for
+        machine <- histos.jdk.Machine.load(repo).mapError(BspError.Machine(_))
+        selected <- GraphCompile.jdk(machine).mapError(BspError.Sources(_))
+        runtimes <- Runtimes.read(machine)
+        requested <- Ref.make(seen)
+        lock <- Ref.make(Option.empty[DependencyLock])
+        session = Session.start(
+          BuildScala,
+          repo,
+          selected,
+          runtimes,
+          buildClasspath,
+          notify,
+          build,
+          phase,
+          gate,
+          current,
+          requested,
+          lock
+        )
+        answer <- session.read(payload)
+      yield answer).catchAll(error =>
+        ZIO.succeed(Answer.Reply(failure(id, error)))
+      )
 
     /** Kinds are BSP's created (1), changed (2), and deleted (3). */
     def changed(
@@ -364,9 +409,26 @@ object Bsp:
         Ref.make(false).flatMap { failed =>
           val ran =
             ZIO.foreachDiscard(group)(id => clear(targetUri(id))) *>
-              GraphCompile
-                .cellFeed(repo, graph, cells, platform, jdk, runtimes.native)
-                .mapError(BspError.Sources(_))
+              ZStream
+                .unwrap(
+                  readLock.map(lock =>
+                    GraphCompile.cellFeed(
+                      histos.zinc.CompileSession(
+                        repo,
+                        graph,
+                        jdk,
+                        runtimes.native,
+                        lock
+                      ),
+                      cells,
+                      platform
+                    )
+                  )
+                )
+                .mapError {
+                  case error: GraphCompileError => BspError.Sources(error)
+                  case error: BspError          => error
+                }
                 .foreach {
                   case histos.zinc.CompileFeed.Diagnostic(
                         module,
@@ -426,7 +488,7 @@ object Bsp:
                 )
                 .mapError(BspError.Tests(_))
             yield ())
-        ran.either.flatMap { result =>
+        withTools(ran).either.flatMap { result =>
           ZIO.foreachDiscard(heard.asScala.toList)(problem =>
             publish(uri, problem)
           ) *> statusOf(result)
@@ -511,6 +573,17 @@ object Bsp:
             )
 
       }
+    private def withTools[A](
+        effect: ZIO[Resolve & LockedTools, BspError, A]
+    ): ZIO[Resolve, BspError, A] =
+      request.get.flatMap(graph =>
+        readLock.flatMap(lock =>
+          effect.provideSome[Resolve](
+            zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+          )
+        )
+      )
+
     private def classpath(
         module: Module,
         version: ScalaVersion,
@@ -535,7 +608,9 @@ object Bsp:
           jars <- Resolve
             .materialize(cell, lock)
             .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-          library <- JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
+          library <- withTools(
+            JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
+          )
         yield (library ++ dropStdlib(jars) ++ upstream).distinct
       }
 
@@ -575,9 +650,9 @@ object Bsp:
           jars <- Resolve
             .materialize(cell, lock)
             .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-          library <- JvmCompile
-            .runtime(id.version)
-            .mapError(BspError.Toolchain(_))
+          library <- withTools(
+            JvmCompile.runtime(id.version).mapError(BspError.Toolchain(_))
+          )
         yield main :: (upstream ++ library ++ dropStdlib(jars))
       }
 
@@ -610,7 +685,9 @@ object Bsp:
     ): ZIO[Resolve, BspError, List[SourceAsk]] =
       for
         lock <- readLock
-        library <- JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
+        library <- withTools(
+          JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
+        )
       yield
         val scope =
           if test && Dep.select(module.testDependencies, platform).nonEmpty then
@@ -669,9 +746,16 @@ object Bsp:
           case Left(_)         => None
 
     private def readLock: IO[BspError, DependencyLock] =
-      Resolve.readLock(repo).mapError:
-        case ResolveError.Io(failure) => BspError.LockRead(failure.path)
-        case other                    => BspError.Lock(other)
+      captured.get.flatMap:
+        case Some(lock) => ZIO.succeed(lock)
+        case None       =>
+          Resolve
+            .readLock(repo)
+            .mapError {
+              case ResolveError.Io(failure) => BspError.LockRead(failure.path)
+              case other                    => BspError.Lock(other)
+            }
+            .tap(lock => captured.set(Some(lock)))
 
     private def mainClasses(
         id: Rpc.RpcId,
@@ -778,16 +862,18 @@ object Bsp:
             lock <- readLock
             modules <- graphModules
             seen <- request.get
-            paths <- Program
-              .classpath(
-                repo,
-                modules,
-                id.module,
-                cell,
-                lock,
-                BuildResolvers(seen.resolvers)
-              )
-              .mapError(BspError.Run(_))
+            paths <- withTools(
+              Program
+                .classpath(
+                  repo,
+                  modules,
+                  id.module,
+                  cell,
+                  lock,
+                  BuildResolvers(seen.resolvers)
+                )
+                .mapError(BspError.Run(_))
+            )
             _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
           yield Rpc.JvmEnvironmentItem(
             Rpc.TargetId(uri),
@@ -828,16 +914,18 @@ object Bsp:
             lock <- readLock
             modules <- graphModules
             seen <- request.get
-            linked <- TestCompile
-              .runtimeClasspath(
-                repo,
-                modules,
-                id.module,
-                cell,
-                lock,
-                BuildResolvers(seen.resolvers)
-              )
-              .mapError(BspError.Tests(_))
+            linked <- withTools(
+              TestCompile
+                .runtimeClasspath(
+                  repo,
+                  modules,
+                  id.module,
+                  cell,
+                  lock,
+                  BuildResolvers(seen.resolvers)
+                )
+                .mapError(BspError.Tests(_))
+            )
             _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
           yield Rpc.JvmEnvironmentItem(
             Rpc.TargetId(uri),
@@ -879,18 +967,20 @@ object Bsp:
               readLock.flatMap { lock =>
                 graphModules.flatMap { modules =>
                   request.get.flatMap { seen =>
-                    TestCompile
-                      .runtimeClasspath(
-                        repo,
-                        modules,
-                        id.module,
-                        cell,
-                        lock,
-                        BuildResolvers(seen.resolvers)
-                      )
-                      .either
+                    withTools(
+                      TestCompile
+                        .runtimeClasspath(
+                          repo,
+                          modules,
+                          id.module,
+                          cell,
+                          lock,
+                          BuildResolvers(seen.resolvers)
+                        )
+                        .mapError(BspError.Tests(_))
+                    ).either
                       .flatMap {
-                        case Left(_)       => ZIO.succeed(Suites(Nil, None))
+                        case Left(error)   => ZIO.fail(error)
                         case Right(linked) =>
                           SuiteNames
                             .discover(
@@ -1008,10 +1098,12 @@ object Bsp:
       for
         jars <- ZIO
           .foreach(versions)(version =>
-            JvmCompile.scalaJars(version).map(version.value -> _)
+            withTools(
+              JvmCompile.scalaJars(version).mapError(BspError.Toolchain(_))
+            ).map(version.value -> _)
           )
           .mapBoth(
-            BspError.Toolchain(_),
+            identity,
             _.toMap
           )
         tests <- ZIO.foreach(cells)(cell =>

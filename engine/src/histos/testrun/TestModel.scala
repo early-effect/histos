@@ -1,5 +1,6 @@
 package histos.testrun
 
+import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
 import histos.js.{
   JsLink,
@@ -47,7 +48,7 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags,
   SemanticDb,
   Sources
@@ -113,6 +114,11 @@ enum TestFeed:
   )
 
 enum ModuleTestError:
+  case Tool(
+      module: ProjectName,
+      version: ScalaVersion,
+      error: histos.toolchain.PlatformToolError
+  )
   case Target(error: CiError)
   case Compile(error: GraphCompileError)
   case Lock(error: ResolveError)
@@ -144,6 +150,7 @@ enum ModuleTestError:
   case NoNode(module: ProjectName, version: ScalaVersion, miss: NodeMiss)
 
   def message: String = this match
+    case Tool(_, _, error)               => error.message
     case Target(error)                   => error.message
     case Compile(error)                  => error.message
     case Lock(error)                     => error.message
@@ -184,7 +191,7 @@ final case class TestRun(
     repo: Path,
     graph: ProjectGraph,
     names: List[String],
-    jdk: ResolvedJdk,
+    jdk: JdkRuntime,
     runtimes: Runtimes,
     patterns: List[SuitePattern] = Nil,
     quick: Boolean = false,

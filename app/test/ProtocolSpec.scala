@@ -32,6 +32,9 @@ import zio.test.*
 
 object ProtocolSpec extends ZIOSpecDefault:
   private object IdleResolve extends Resolve:
+    def resolveTool(
+        request: histos.resolve.ToolRequest
+    ): IO[ResolveError, Classpath] = ZIO.fail(ResolveError.NoTool(request.id))
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -56,7 +59,7 @@ object ProtocolSpec extends ZIOSpecDefault:
     ZLayer.make[Loader & histos.resolve.Resolve & histos.cache.ContentStore](
       Loader.live,
       ZLayer.succeed(IdleResolve),
-      ZLayer.succeed(ContentStore.in(dir.resolve("cache"))),
+      ZLayer.succeed(ContentStore.in(dir.resolve("cache")))
     )
   private val source =
     """import histos.*
@@ -114,11 +117,12 @@ object ProtocolSpec extends ZIOSpecDefault:
       env,
       dir.toString,
       Os.Linux,
+      histos.toolchain.Architecture.X86_64,
       dir.resolve("cache"),
       dir,
       None,
       Settled.No,
-      NativeOrigin.read(env),
+      NativeOrigin.read(env)
     )
 
   private def writeJdk(dir: Path): Unit =
@@ -128,11 +132,14 @@ object ProtocolSpec extends ZIOSpecDefault:
     Files.writeString(jdk.resolve("bin").resolve("javac"), "")
     Files.writeString(jdk.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
     Files.writeString(
+      dir.resolve(".histos/toolchain.local"),
+      jdk.toString + "\n"
+    )
+    Files.writeString(
       dir.resolve(".histos").resolve("jdk.lock"),
       """major 21
         |version 21.0.2
-        |url https://example.test/jdk.zip
-        |sha256 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        |archive linux-x86_64 https://example.test/jdk.zip aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         |""".stripMargin
     )
 

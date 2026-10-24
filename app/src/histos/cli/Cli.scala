@@ -57,6 +57,7 @@ enum Command:
   case CacheClean(dryRun: Boolean)
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
+  case LauncherUpdate
   case Reload
   case Reboot
 
@@ -132,7 +133,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update)"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -184,8 +185,20 @@ object Cli:
       case Command.CacheClean(dry)  => cacheClean(dry)
       case Command.Resolve(action)  => resolve(repo, apiJar, action)
       case Command.Workflow(action) => workflow(repo, apiJar, action)
-      case Command.Reload           => reload(repo)
-      case Command.Reboot           => reboot(repo, apiJar)
+      case Command.LauncherUpdate   =>
+        histos.publish.LauncherPin
+          .update(repo)
+          .fold(
+            error => Completed(CliExit.ResolveFailed, "", error.message),
+            pin =>
+              Completed(
+                CliExit.Success,
+                s"${pin.revision} ${pin.sha256.value}",
+                ""
+              )
+          )
+      case Command.Reload => reload(repo)
+      case Command.Reboot => reboot(repo, apiJar)
 
   /** Run `inner`, then again after a source save. A save during a run waits
     * until that run finishes. Interrupt while a run is in flight exits 130.
@@ -373,9 +386,11 @@ object Cli:
         .flatMap: status =>
           val ran =
             for
-              jdk <- GraphCompile.jdkHere.mapError(
-                histos.program.ProgramError.Compile(_)
-              )
+              jdk <- ZIO
+                .serviceWithZIO[Machine](GraphCompile.jdk)
+                .mapError(
+                  histos.program.ProgramError.Compile(_)
+                )
               runtimes <- Runtimes.read(machine)
               _ <- histos.program.Program
                 .console(repo, loaded.graph, name, jdk, runtimes, platform)
@@ -440,29 +455,32 @@ object Cli:
       loaded: histos.load.LoadedBuild,
       projects: List[String]
   ): URIO[Machine & Resolve, Completed] =
-    GraphCompile.jdkHere.foldZIO(
-      error => ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
-      jdk =>
-        ZIO.serviceWithZIO[Machine]: machine =>
-          GraphCompile
-            .strict(
-              GraphCompile.console(
-                repo,
-                loaded.graph,
-                projects,
-                jdk,
-                NativeOrigin.read(machine.env)
+    ZIO
+      .serviceWithZIO[Machine](GraphCompile.jdk)
+      .foldZIO(
+        error =>
+          ZIO.succeed(Completed(CliExit.CompileFailed, "", error.message)),
+        jdk =>
+          ZIO.serviceWithZIO[Machine]: machine =>
+            GraphCompile
+              .strict(
+                GraphCompile.console(
+                  repo,
+                  loaded.graph,
+                  projects,
+                  jdk,
+                  NativeOrigin.read(machine.env)
+                )
               )
-            )
-            .foreach(showCompile(repo, _))
-            .foldZIO(
-              error =>
-                ZIO.succeed(
-                  Completed(CliExit.CompileFailed, "", compileReport(error))
-                ),
-              _ => ZIO.succeed(Completed(CliExit.Success, "", ""))
-            )
-    )
+              .foreach(showCompile(repo, _))
+              .foldZIO(
+                error =>
+                  ZIO.succeed(
+                    Completed(CliExit.CompileFailed, "", compileReport(error))
+                  ),
+                _ => ZIO.succeed(Completed(CliExit.Success, "", ""))
+              )
+      )
 
   private def assembly(
       repo: Path,
@@ -497,43 +515,46 @@ object Cli:
                 )
               )
             case Some(path) =>
-              GraphCompile.jdkHere.either.flatMap:
-                case Left(error) =>
-                  ZIO.succeed(
-                    Completed(CliExit.CompileFailed, "", error.message)
-                  )
-                case Right(jdk) =>
-                  ZIO
-                    .serviceWithZIO[Machine](machine =>
-                      Assemble.run(
-                        repo,
-                        loaded.graph,
-                        jdk,
-                        NativeOrigin.read(machine.env),
-                        path
-                      )
+              ZIO
+                .serviceWithZIO[Machine](GraphCompile.jdk)
+                .either
+                .flatMap:
+                  case Left(error) =>
+                    ZIO.succeed(
+                      Completed(CliExit.CompileFailed, "", error.message)
                     )
-                    .either
-                    .flatMap:
-                      case Left(error) =>
-                        ZIO.succeed(
-                          Completed(CliExit.CompileFailed, "", error.message)
+                  case Right(jdk) =>
+                    ZIO
+                      .serviceWithZIO[Machine](machine =>
+                        Assemble.run(
+                          repo,
+                          loaded.graph,
+                          jdk,
+                          NativeOrigin.read(machine.env),
+                          path
                         )
-                      case Right(assembled) =>
-                        pin(repo, assembled.path).foldZIO(
-                          message =>
-                            ZIO.succeed(
-                              Completed(CliExit.CompileFailed, "", message)
-                            ),
-                          _ =>
-                            ZIO.succeed(
-                              Completed(
-                                CliExit.Success,
-                                relative(repo, assembled.path),
-                                ""
+                      )
+                      .either
+                      .flatMap:
+                        case Left(error) =>
+                          ZIO.succeed(
+                            Completed(CliExit.CompileFailed, "", error.message)
+                          )
+                        case Right(assembled) =>
+                          pin(repo, assembled.path).foldZIO(
+                            message =>
+                              ZIO.succeed(
+                                Completed(CliExit.CompileFailed, "", message)
+                              ),
+                            _ =>
+                              ZIO.succeed(
+                                Completed(
+                                  CliExit.Success,
+                                  relative(repo, assembled.path),
+                                  ""
+                                )
                               )
-                            )
-                        )
+                          )
 
   /** The launcher verifies this checksum of `dist/histos.jar`. Another
     * destination is not that jar.
@@ -625,32 +646,35 @@ object Cli:
         case Left(error) =>
           ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
         case Right(loaded) =>
-          GraphCompile.jdkHere.either.flatMap:
-            case Left(error) =>
-              ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message))
-            case Right(jdk) =>
-              ZIO.serviceWithZIO[Machine]: machine =>
-                PublishRun
-                  .run(
-                    repo,
-                    loaded.graph,
-                    projects,
-                    jdk,
-                    machine.env,
-                    directory,
-                    showCompile(repo, _)
-                  )
-                  .mapBoth(
-                    failure =>
-                      Completed(CliExit.PublishFailed, "", failure.message),
-                    report =>
-                      Completed(
-                        CliExit.Success,
-                        report.lines.mkString("\n"),
-                        ""
-                      )
-                  )
-                  .merge
+          ZIO
+            .serviceWithZIO[Machine](GraphCompile.jdk)
+            .either
+            .flatMap:
+              case Left(error) =>
+                ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message))
+              case Right(jdk) =>
+                ZIO.serviceWithZIO[Machine]: machine =>
+                  PublishRun
+                    .run(
+                      repo,
+                      loaded.graph,
+                      projects,
+                      jdk,
+                      machine.env,
+                      directory,
+                      showCompile(repo, _)
+                    )
+                    .mapBoth(
+                      failure =>
+                        Completed(CliExit.PublishFailed, "", failure.message),
+                      report =>
+                        Completed(
+                          CliExit.Success,
+                          report.lines.mkString("\n"),
+                          ""
+                        )
+                    )
+                    .merge
 
   /** Compile, then one subprocess per Scala version. `no tests` is success and
     * is not a passing suite.
@@ -679,10 +703,30 @@ object Cli:
       Ref.make(List.empty[GraphCompileError]).flatMap { failedCompile =>
         val ran =
           for
-            jdk <- GraphCompile.jdkHere.mapError(ModuleTestError.Compile(_))
+            jdk <- ZIO
+              .serviceWithZIO[Machine](GraphCompile.jdk)
+              .mapError(ModuleTestError.Compile(_))
             runtimes <- ZIO.serviceWithZIO[Machine](Runtimes.read)
+            _ <- ZIO
+              .fromEither(
+                histos.select.Selection.select(loaded.graph, projects)
+              )
+              .mapError(error =>
+                ModuleTestError.Compile(GraphCompileError.Target(error))
+              )
+            lock <- Resolve.readLock(repo).mapError(ModuleTestError.Lock(_))
             cells <- GraphCompile
-              .console(repo, loaded.graph, projects, jdk, runtimes.native)
+              .console(
+                histos.zinc.CompileSession(
+                  repo,
+                  loaded.graph,
+                  jdk,
+                  runtimes.native,
+                  lock
+                ),
+                projects,
+                None
+              )
               .mapError(ModuleTestError.Compile(_))
               .mapZIO { feed =>
                 showCompile(repo, feed) *>
@@ -697,7 +741,7 @@ object Cli:
               .collectSome
               .runCollect
             _ <- ModuleTest
-              .suites(
+              .suitesLocked(
                 TestRun(
                   repo,
                   loaded.graph,
@@ -709,7 +753,8 @@ object Cli:
                   (module, version, platform) =>
                     say(Lines.compilingTests(module, version, platform))
                 ),
-                cells.toList
+                cells.toList,
+                lock
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>
@@ -839,7 +884,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       action: ResolveAction
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
     val name = action match
       case ResolveAction.Verify => "verify"
       case ResolveAction.Update => "update"
@@ -850,64 +895,75 @@ object Cli:
       repo: Path,
       apiJar: Path,
       action: ResolveAction
-  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
-    ZIO
-      .serviceWithZIO[Loader](_.scan(repo))
-      .either
-      .flatMap:
-        case Left(error) =>
-          ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
-        case Right(scanned) =>
-          val followed: ZIO[
-            Loader & Scope & ContentStore & Resolve,
-            LoadError | ResolveError,
-            String
-          ] = action match
-            case ResolveAction.Update =>
-              Resolve.updatePlugins(
-                repo,
-                scanned.requests,
-                Repositories.central
-              ) *>
-                afterLoad(repo, apiJar)(loaded =>
-                  Resolve.update(
+  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
+    ZIO.serviceWithZIO[Machine]: machine =>
+      ZIO
+        .serviceWithZIO[Loader](_.scan(repo))
+        .either
+        .flatMap:
+          case Left(error) =>
+            ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+          case Right(scanned) =>
+            val followed: ZIO[
+              Loader & Scope & ContentStore & Resolve & Machine,
+              LoadError | ResolveError,
+              String
+            ] = action match
+              case ResolveAction.Update =>
+                for
+                  plugins <- Resolve.planPlugins(
+                    scanned.requests,
+                    Repositories.central
+                  )
+                  prior <- Resolve.readLock(repo).catchSome {
+                    case ResolveError.NoLock(_) =>
+                      ZIO.succeed(histos.resolve.DependencyLock(Nil))
+                  }
+                  loaded <- ZIO.serviceWithZIO[Loader](
+                    _.loadLocked(repo, apiJar, prior.copy(plugins = plugins))
+                  )
+                  updated <- Resolve.update(
                     repo,
                     loaded.graph,
-                    BuildResolvers(loaded.graph.resolvers)
+                    BuildResolvers(loaded.graph.resolvers),
+                    machine.native,
+                    histos.resolve.PluginUpdate.Replace(plugins)
                   )
-                )
-            case ResolveAction.Check =>
-              Resolve.requirePlugins(repo, scanned.requests) *>
-                Resolve.checkPlugins(
-                  repo,
-                  scanned.requests,
-                  Repositories.central
-                ) *>
-                afterLoad(repo, apiJar)(loaded =>
-                  Resolve.check(
+                yield updated
+              case ResolveAction.Check =>
+                Resolve.requirePlugins(repo, scanned.requests) *>
+                  Resolve.checkPlugins(
                     repo,
-                    loaded.graph,
-                    BuildResolvers(loaded.graph.resolvers)
+                    scanned.requests,
+                    Repositories.central
+                  ) *>
+                  afterLoad(repo, apiJar)(loaded =>
+                    Resolve.check(
+                      repo,
+                      loaded.graph,
+                      BuildResolvers(loaded.graph.resolvers),
+                      machine.native
+                    )
                   )
-                )
-            case ResolveAction.Verify =>
-              Resolve.requirePlugins(repo, scanned.requests) *>
-                afterLoad(repo, apiJar)(loaded =>
-                  Resolve.verify(
-                    repo,
-                    loaded.graph,
-                    BuildResolvers(loaded.graph.resolvers)
+              case ResolveAction.Verify =>
+                Resolve.requirePlugins(repo, scanned.requests) *>
+                  afterLoad(repo, apiJar)(loaded =>
+                    Resolve.verify(
+                      repo,
+                      loaded.graph,
+                      BuildResolvers(loaded.graph.resolvers),
+                      machine.native
+                    )
                   )
-                )
-          followed.fold(
-            {
-              case error: LoadError =>
-                Completed(CliExit.LoadFailed, "", error.message)
-              case error: ResolveError =>
-                Completed(CliExit.ResolveFailed, "", error.message)
-            },
-            text => Completed(CliExit.Success, text, "")
-          )
+            followed.fold(
+              {
+                case error: LoadError =>
+                  Completed(CliExit.LoadFailed, "", error.message)
+                case error: ResolveError =>
+                  Completed(CliExit.ResolveFailed, "", error.message)
+              },
+              text => Completed(CliExit.Success, text, "")
+            )
 
   private def afterLoad(repo: Path, apiJar: Path)(
       continue: LoadedBuild => ZIO[Resolve, ResolveError, String]
@@ -1109,55 +1165,60 @@ object Cli:
             error =>
               ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
             loaded =>
-              GraphCompile.jdkHere.foldZIO(
-                error =>
-                  ZIO
-                    .succeed(
-                      Completed(CliExit.CompileFailed, "", error.message)
-                    ),
-                jdk =>
-                  loader
-                    .buildClasspath(apiJar)
-                    .foldZIO(
-                      error =>
-                        ZIO.succeed(
-                          Completed(CliExit.LoadFailed, "", error.message)
-                        ),
-                      classpath =>
-                        Daemon
-                          .open(
-                            repo,
-                            loaded.graph,
-                            jdk,
-                            VersionText,
-                            apiJar,
-                            classpath,
-                            loader
-                              .reportBuild(repo, apiJar)
-                              .provideEnvironment(env),
-                            loaded.plugins,
-                            machine
-                          )
-                          .flatMap { running =>
-                            say(running.record.socket.toString) *> running.done
-                          }
-                          .foldCauseZIO(
-                            cause =>
-                              cause.failureOrCause match
-                                case Left(error) =>
-                                  ZIO.succeed(
-                                    Completed(
-                                      CliExit.LoadFailed,
-                                      "",
-                                      error.message
+              ZIO
+                .serviceWithZIO[Machine](GraphCompile.jdk)
+                .foldZIO(
+                  error =>
+                    ZIO
+                      .succeed(
+                        Completed(CliExit.CompileFailed, "", error.message)
+                      ),
+                  jdk =>
+                    loader
+                      .buildClasspath(apiJar)
+                      .foldZIO(
+                        error =>
+                          ZIO.succeed(
+                            Completed(CliExit.LoadFailed, "", error.message)
+                          ),
+                        classpath =>
+                          Daemon
+                            .open(
+                              repo,
+                              loaded.graph,
+                              jdk,
+                              VersionText,
+                              apiJar,
+                              classpath,
+                              loader
+                                .reportBuild(repo, apiJar)
+                                .provideEnvironment(env),
+                              loaded.plugins,
+                              machine
+                            )
+                            .flatMap { running =>
+                              say(
+                                running.record.socket.toString
+                              ) *> running.done
+                            }
+                            .foldCauseZIO(
+                              cause =>
+                                cause.failureOrCause match
+                                  case Left(error) =>
+                                    ZIO.succeed(
+                                      Completed(
+                                        CliExit.LoadFailed,
+                                        "",
+                                        error.message
+                                      )
                                     )
-                                  )
-                                case Right(rest) => ZIO.failCause(rest)
-                            ,
-                            _ => ZIO.succeed(Completed(CliExit.Success, "", ""))
-                          )
-                    )
-              )
+                                  case Right(rest) => ZIO.failCause(rest)
+                              ,
+                              _ =>
+                                ZIO.succeed(Completed(CliExit.Success, "", ""))
+                            )
+                      )
+                )
           )
       }
     }
@@ -1217,59 +1278,73 @@ object Cli:
           error =>
             ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
           loaded =>
-            GraphCompile.jdkHere.foldZIO(
-              error =>
-                ZIO
-                  .succeed(Completed(CliExit.CompileFailed, "", error.message)),
-              jdk =>
-                loader
-                  .buildClasspath(apiJar)
-                  .foldZIO(
-                    error =>
-                      ZIO.succeed(
-                        Completed(CliExit.LoadFailed, "", error.message)
-                      ),
-                    classpath =>
-                      val output = java.lang.System.out
-                      val notify = (line: String) =>
-                        histos.bsp.Frame.write(output, line).ignore
-                      Runtimes
-                        .read(env.get[Machine])
-                        .flatMap: runtimes =>
-                          Bsp
-                            .open(
-                              repo,
-                              loaded.graph,
-                              jdk,
-                              runtimes,
-                              classpath,
-                              notify,
-                              loader
-                                .reportBuild(repo, apiJar)
-                                .provideEnvironment(env)
-                            )
-                            .flatMap: session =>
-                              speak(session).foldZIO(
-                                error =>
+            ZIO
+              .serviceWithZIO[Machine](GraphCompile.jdk)
+              .foldZIO(
+                error =>
+                  ZIO
+                    .succeed(
+                      Completed(CliExit.CompileFailed, "", error.message)
+                    ),
+                jdk =>
+                  loader
+                    .buildClasspath(apiJar)
+                    .foldZIO(
+                      error =>
+                        ZIO.succeed(
+                          Completed(CliExit.LoadFailed, "", error.message)
+                        ),
+                      classpath =>
+                        val output = java.lang.System.out
+                        val notify = (line: String) =>
+                          histos.bsp.Frame.write(output, line).ignore
+                        Runtimes
+                          .read(env.get[Machine])
+                          .flatMap: runtimes =>
+                            Bsp
+                              .open(
+                                repo,
+                                loaded.graph,
+                                jdk,
+                                runtimes,
+                                classpath,
+                                notify,
+                                loader
+                                  .reportBuild(repo, apiJar)
+                                  .provideEnvironment(env)
+                              )
+                              .either
+                              .flatMap:
+                                case Left(error) =>
                                   ZIO.succeed(
                                     Completed(
-                                      CliExit.LoadFailed,
+                                      CliExit.ResolveFailed,
                                       "",
                                       error.message
                                     )
-                                  ),
-                                code =>
-                                  ZIO.succeed(
-                                    Completed(
-                                      if code == 0 then CliExit.Success
-                                      else CliExit.TaskFailed,
-                                      "",
-                                      ""
-                                    )
                                   )
-                              )
-                  )
-            )
+                                case Right(session) =>
+                                  speak(session).foldZIO(
+                                    error =>
+                                      ZIO.succeed(
+                                        Completed(
+                                          CliExit.LoadFailed,
+                                          "",
+                                          error.message
+                                        )
+                                      ),
+                                    code =>
+                                      ZIO.succeed(
+                                        Completed(
+                                          if code == 0 then CliExit.Success
+                                          else CliExit.TaskFailed,
+                                          "",
+                                          ""
+                                        )
+                                      )
+                                  )
+                    )
+              )
         )
 
   private def speak(session: Bsp.Session): ZIO[Resolve, Frame.FrameError, Int] =

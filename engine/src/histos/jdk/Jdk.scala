@@ -2,7 +2,7 @@ package histos.jdk
 
 import java.nio.file.{Files, Path}
 
-import scala.jdk.CollectionConverters.*
+import histos.toolchain.{RuntimeFiles, RuntimeLocationError, ToolSelection}
 
 import zio.{IO, ZIO}
 
@@ -54,9 +54,7 @@ object JdkVersion:
     digits.toIntOption.flatMap(n => JdkMajor.from(n).toOption)
 
   private def charset(raw: String): Boolean =
-    raw.nonEmpty && raw.forall(c =>
-      c.isLetterOrDigit || c == '.' || c == '+' || c == '-' || c == '_'
-    )
+    raw.matches("[0-9][A-Za-z0-9.+_-]*")
 
 enum VersionError:
   case Bad(raw: String)
@@ -155,46 +153,38 @@ enum JdkError:
   case BadMajor(raw: Int)
   case Unreadable(path: Path)
   case PathScan
+  case Locations(error: RuntimeLocationError)
+  case Io(failure: histos.workspace.IoFailure)
 
   def message: String = this match
     case BadMajor(raw)    => s"$raw is not a JDK major"
     case Unreadable(path) => s"could not read $path"
     case PathScan         => "could not read PATH"
+    case Locations(error) => error.message
+    case Io(failure)      => failure.message
 
 object Jdk:
   private val MaxDepth: Int = 12
 
   def resolve(major: JdkMajor, view: ProbeView): Resolution =
-    slot(Origin.Override, view.explicit, major, Nil, stop = true) match
-      case Left(done)           => done
-      case Right(afterOverride) =>
-        val continued =
-          for
-            afterHome <- slot(
-              Origin.JavaHome,
-              view.javaHome,
-              major,
-              afterOverride,
-              stop = false
-            )
-            afterPath <- slot(
-              Origin.Path,
-              view.onPath,
-              major,
-              afterHome,
-              stop = false
-            )
-            afterCs <- manager(Origin.Coursier, view.coursier, major, afterPath)
-            afterSdk <- manager(Origin.Sdkman, view.sdkman, major, afterCs)
-          yield afterSdk
-        continued match
-          case Left(done)  => done
-          case Right(seen) =>
-            if managerPresent(view) then hint(view, major, seen)
-            else
-              homes(Origin.Cache, view.cached, major, seen) match
-                case Left(done)  => done
-                case Right(done) => Resolution.Provision(major, done)
+    val trace =
+      located(Origin.Override, view.explicit, major) ++
+        located(Origin.JavaHome, view.javaHome, major) ++
+        located(Origin.Path, view.onPath, major) ++
+        manager(Origin.Coursier, view.coursier, major) ++
+        manager(Origin.Sdkman, view.sdkman, major) ++
+        homes(Origin.Cache, view.cached, major)
+    ToolSelection.fold(trace):
+      case chosen @ Candidate.Match(Origin.Override, _, _) =>
+        ToolSelection.Selected(chosen)
+      case Candidate.Rejected(Origin.Override, reason) =>
+        ToolSelection.Rejected(reason)
+      case _ => ToolSelection.Locked
+    match
+      case ToolSelection.Selected(chosen) => Resolution.Selected(chosen, trace)
+      case ToolSelection.Rejected(reason) =>
+        Resolution.OverrideRejected(reason, trace)
+      case ToolSelection.Locked => Resolution.Provision(major, trace)
 
   def scan(input: ScanInput): IO[JdkError, ProbeView] =
     for
@@ -222,77 +212,33 @@ object Jdk:
         trace.map(show) :+ s"provision temurin ${major.value}"
     lines.mkString("\n")
 
-  /** `Left` is a finished resolution. `Right` is the trace so far. */
-  private def slot(
+  private def located(
       origin: Origin,
-      located: Located,
-      wanted: JdkMajor,
-      trace: List[Candidate],
-      stop: Boolean
-  ): Either[Resolution, List[Candidate]] =
-    located match
-      case Located.Unset      => Right(trace :+ Candidate.NotPresent(origin))
-      case Located.Missing(_) =>
-        val next = trace :+ Candidate.Rejected(origin, Reject.Absent)
-        if stop then Left(Resolution.OverrideRejected(Reject.Absent, next))
-        else Right(next)
-      case Located.Found(home) =>
-        judge(origin, wanted, home) match
-          case chosen @ Candidate.Match(_, _, _) =>
-            Left(Resolution.Selected(chosen, trace :+ chosen))
-          case Candidate.Rejected(_, reason) if stop =>
-            Left(
-              Resolution.OverrideRejected(
-                reason,
-                trace :+ Candidate.Rejected(origin, reason)
-              )
-            )
-          case other => Right(trace :+ other)
+      location: Located,
+      wanted: JdkMajor
+  ): List[Candidate] =
+    location match
+      case Located.Unset      => List(Candidate.NotPresent(origin))
+      case Located.Missing(_) => List(Candidate.Rejected(origin, Reject.Absent))
+      case Located.Found(home) => List(judge(origin, wanted, home))
 
   private def manager(
       origin: Origin,
       slot: ManagerSlot,
-      wanted: JdkMajor,
-      trace: List[Candidate]
-  ): Either[Resolution, List[Candidate]] =
+      wanted: JdkMajor
+  ): List[Candidate] =
     slot match
-      case ManagerSlot.Absent => Right(trace :+ Candidate.NotPresent(origin))
-      case ManagerSlot.Present(Nil)   => Right(trace :+ Candidate.Empty(origin))
-      case ManagerSlot.Present(found) => homes(origin, found, wanted, trace)
+      case ManagerSlot.Absent         => List(Candidate.NotPresent(origin))
+      case ManagerSlot.Present(Nil)   => List(Candidate.Empty(origin))
+      case ManagerSlot.Present(found) => homes(origin, found, wanted)
 
   private def homes(
       origin: Origin,
       installed: List[JdkHome],
-      wanted: JdkMajor,
-      trace: List[Candidate]
-  ): Either[Resolution, List[Candidate]] =
-    if installed.isEmpty then Right(trace :+ Candidate.NotPresent(origin))
-    else
-      val judged = installed.map(home => judge(origin, wanted, home))
-      judged.collectFirst { case chosen @ Candidate.Match(_, _, _) =>
-        chosen
-      } match
-        case Some(chosen) => Left(Resolution.Selected(chosen, trace ++ judged))
-        case None         => Right(trace ++ judged)
-
-  private def managerPresent(view: ProbeView): Boolean =
-    view.coursier match
-      case ManagerSlot.Present(_) => true
-      case ManagerSlot.Absent     =>
-        view.sdkman match
-          case ManagerSlot.Present(_) => true
-          case ManagerSlot.Absent     => false
-
-  private def hint(
-      view: ProbeView,
-      major: JdkMajor,
-      trace: List[Candidate]
-  ): Resolution =
-    view.coursier match
-      case ManagerSlot.Present(_) =>
-        Resolution.Install(InstallHint.Coursier(major), trace)
-      case ManagerSlot.Absent =>
-        Resolution.Install(InstallHint.Sdkman(major), trace)
+      wanted: JdkMajor
+  ): List[Candidate] =
+    if installed.isEmpty then List(Candidate.NotPresent(origin))
+    else installed.map(judge(origin, wanted, _))
 
   private def judge(
       origin: Origin,
@@ -325,16 +271,20 @@ object Jdk:
       case Reject.WrongMajor(found)        => s"major ${found.value}"
       case Reject.UnreadableVersion(error) => error.message
 
-  private def locate(path: Option[Path]): IO[JdkError, Located] =
+  def locate(path: Option[Path]): IO[JdkError, Located] =
     path match
       case None      => ZIO.succeed(Located.Unset)
       case Some(dir) =>
         ZIO
           .attemptBlocking(Files.isDirectory(dir))
-          .mapError(_ => JdkError.Unreadable(dir))
+          .mapError(_ =>
+            JdkError.Io(
+              histos.workspace.IoFailure(dir, histos.workspace.IoFault.Stat)
+            )
+          )
           .flatMap:
             case false => ZIO.succeed(Located.Missing(dir))
-            case true  => readHome(dir).map(Located.Found(_))
+            case true  => home(dir).map(Located.Found(_))
 
   private def managers(probe: ManagerProbe): IO[JdkError, ManagerSlot] =
     probe match
@@ -348,52 +298,36 @@ object Jdk:
           case found => ManagerSlot.Present(found)
 
   private def listHomes(root: Path): IO[JdkError, List[JdkHome]] =
-    ZIO
-      .attemptBlocking {
-        if !Files.isDirectory(root) then Nil
-        else
-          val walk = Files.walk(root, MaxDepth)
-          try
-            val found = walk.iterator.asScala
-              .filter(dir => Files.isDirectory(dir) && isHome(dir))
-              .toList
-            shallow(distinct(found))
-          finally walk.close()
-      }
-      .mapError(_ => JdkError.Unreadable(root))
-      .flatMap(dirs => ZIO.foreach(dirs)(readHome))
+    RuntimeFiles
+      .homes(root, MaxDepth)(dir =>
+        Files.isRegularFile(dir.resolve("bin/javac")) || Files.isRegularFile(
+          dir.resolve("bin/javac.exe")
+        )
+      )
+      .mapError(JdkError.Io(_))
+      .flatMap(dirs => ZIO.foreach(dirs)(home))
 
-  private def isHome(dir: Path): Boolean =
-    Files.isRegularFile(dir.resolve("bin").resolve("javac"))
-
-  private def distinct(dirs: List[Path]): List[Path] =
-    dirs
-      .foldLeft((List.empty[Path], Set.empty[String])):
-        case ((kept, seen), dir) =>
-          val key =
-            try dir.toRealPath().normalize.toString
-            catch case _: java.io.IOException => dir.normalize.toString
-          if seen.contains(key) then (kept, seen) else (kept :+ dir, seen + key)
-      ._1
-
-  private def shallow(dirs: List[Path]): List[Path] =
-    dirs
-      .sortBy(path => (path.getNameCount, path.toString))
-      .foldLeft(List.empty[Path]): (kept, dir) =>
-        val normal = dir.normalize
-        if kept.exists(parent => normal.startsWith(parent.normalize)) then kept
-        else kept :+ dir
-
-  private def readHome(dir: Path): IO[JdkError, JdkHome] =
-    ZIO
-      .attemptBlocking {
-        val javac = Files.isRegularFile(dir.resolve("bin").resolve("javac"))
-        val release = dir.resolve("release")
-        val version =
-          if Files.isRegularFile(release) then
-            JdkVersion.fromRelease(Files.readString(release))
-          else Left(ReleaseError.NoFile)
-        JdkHome(dir, javac, version)
-      }
-      .mapError(_ => JdkError.Unreadable(dir))
+  def home(dir: Path): IO[JdkError, JdkHome] =
+    for
+      javac <- ZIO
+        .attemptBlocking(
+          Files.isRegularFile(dir.resolve("bin/javac")) || Files.isRegularFile(
+            dir.resolve("bin/javac.exe")
+          )
+        )
+        .mapError(_ =>
+          JdkError.Io(
+            histos.workspace.IoFailure(dir, histos.workspace.IoFault.Stat)
+          )
+        )
+      text <- RuntimeFiles
+        .readIfPresent(dir.resolve("release"))
+        .mapError(JdkError.Io(_))
+    yield JdkHome(
+      dir,
+      javac,
+      text.fold[Either[ReleaseError, JdkVersion]](Left(ReleaseError.NoFile))(
+        JdkVersion.fromRelease
+      )
+    )
 end Jdk

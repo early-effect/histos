@@ -1,11 +1,11 @@
 package histos.node
 
 import histos.jdk.{Machine, Os}
-import histos.process.{Child, Ended}
+import histos.process.{ChildEvent, ChildProcess}
 
 import java.nio.file.{Files, Path}
 
-import scala.jdk.CollectionConverters.*
+import histos.toolchain.RuntimeFiles
 
 import zio.{IO, ZIO}
 
@@ -82,48 +82,30 @@ object NodeLocations:
   private def isDir(path: Path): IO[NodeError, Boolean] =
     ZIO
       .attemptBlocking(Files.isDirectory(path))
-      .mapError(_ => NodeError.Unreadable(path))
+      .mapError(_ =>
+        NodeError.Io(
+          histos.workspace.IoFailure(path, histos.workspace.IoFault.Stat)
+        )
+      )
 
   private def toolOnPath(
       pathEnv: Option[String],
       name: String
   ): IO[NodeError, Boolean] =
-    ZIO
-      .attemptBlocking {
-        entries(pathEnv).exists: dir =>
-          Files.isRegularFile(dir.resolve(name)) || Files.isRegularFile(
-            dir.resolve(name + ".exe")
-          )
-      }
-      .mapError(_ => NodeError.PathScan)
+    RuntimeFiles
+      .firstOnPath(pathEnv, List(name, name + ".exe", name + ".bat"))
+      .mapError(NodeError.Locations(_))
+      .map(_.nonEmpty)
 
   private def firstNode(
       pathEnv: Option[String],
       os: Os
   ): IO[NodeError, Option[Path]] =
-    val names = os match
-      case Os.Windows => List("node.exe")
-      case _          => List("node")
-    ZIO
-      .attemptBlocking {
-        entries(pathEnv).flatMap { dir =>
-          names.flatMap { name =>
-            val bin = dir.resolve(name)
-            if Files.isRegularFile(bin) then nodeHome(bin).toList else Nil
-          }
-        }.headOption
-      }
-      .mapError(_ => NodeError.PathScan)
-
-  private def entries(pathEnv: Option[String]): List[Path] =
-    pathEnv
-      .filter(_.nonEmpty)
-      .toList
-      .flatMap(_.split(java.io.File.pathSeparator).toList.filter(_.nonEmpty))
-      .map(Path.of(_))
-
-  private def nodeHome(binary: Path): Option[Path] =
-    Option(binary.getParent).flatMap(parent => Option(parent.getParent))
+    val name = if os == Os.Windows then "node.exe" else "node"
+    RuntimeFiles
+      .firstOnPath(pathEnv, List(name))
+      .mapError(NodeError.Locations(_))
+      .map(_.flatMap(RuntimeFiles.homeOf))
 
 object NodeProbe:
   private val MaxDepth: Int = 8
@@ -140,16 +122,20 @@ object NodeProbe:
 
   def homes(root: Path): IO[NodeError, List[NodeHome]] = listHomes(root)
 
-  private def locate(path: Option[Path]): IO[NodeError, NodeLocated] =
+  def locate(path: Option[Path]): IO[NodeError, NodeLocated] =
     path match
       case None      => ZIO.succeed(NodeLocated.Unset)
       case Some(dir) =>
         ZIO
           .attemptBlocking(Files.isDirectory(dir))
-          .mapError(_ => NodeError.Unreadable(dir))
+          .mapError(_ =>
+            NodeError.Io(
+              histos.workspace.IoFailure(dir, histos.workspace.IoFault.Stat)
+            )
+          )
           .flatMap:
             case false => ZIO.succeed(NodeLocated.Missing(dir))
-            case true  => readHome(dir).map(NodeLocated.Found(_))
+            case true  => home(dir).map(NodeLocated.Found(_))
 
   private def managers(
       probe: NodeManagerProbe
@@ -162,48 +148,24 @@ object NodeProbe:
         listHomes(dir).map(NodeManagerSlot.Present(_))
 
   private def listHomes(root: Path): IO[NodeError, List[NodeHome]] =
-    ZIO
-      .attemptBlocking {
-        if !Files.isDirectory(root) then Nil
-        else
-          val walk = Files.walk(root, MaxDepth)
-          try
-            val found = walk.iterator.asScala
-              .filter(dir => Files.isDirectory(dir) && isHome(dir))
-              .toList
-            shallow(distinct(found))
-          finally walk.close()
-      }
-      .mapError(_ => NodeError.Unreadable(root))
-      .flatMap(dirs => ZIO.foreach(dirs)(readHome))
-
-  private def isHome(dir: Path): Boolean =
-    Files.isRegularFile(dir.resolve("bin").resolve("node")) ||
-      Files.isRegularFile(dir.resolve("bin").resolve("node.exe"))
-
-  private def distinct(dirs: List[Path]): List[Path] =
-    dirs
-      .foldLeft((List.empty[Path], Set.empty[String])):
-        case ((kept, seen), dir) =>
-          val key =
-            try dir.toRealPath().normalize.toString
-            catch case _: java.io.IOException => dir.normalize.toString
-          if seen.contains(key) then (kept, seen) else (kept :+ dir, seen + key)
-      ._1
-
-  private def shallow(dirs: List[Path]): List[Path] =
-    dirs
-      .sortBy(path => (path.getNameCount, path.toString))
-      .foldLeft(List.empty[Path]): (kept, dir) =>
-        val normal = dir.normalize
-        if kept.exists(parent => normal.startsWith(parent.normalize)) then kept
-        else kept :+ dir
+    RuntimeFiles
+      .homes(root, MaxDepth)(dir =>
+        Files.isRegularFile(dir.resolve("bin/node")) || Files.isRegularFile(
+          dir.resolve("bin/node.exe")
+        )
+      )
+      .mapError(NodeError.Io(_))
+      .flatMap(dirs => ZIO.foreach(dirs)(home))
 
   /** The executable a home launches. A probed home that matched has one. */
   def binary(home: Path): IO[NodeError, NodeBinary] =
     ZIO
       .attemptBlocking(launcher(home))
-      .mapError(_ => NodeError.Unreadable(home))
+      .mapError(_ =>
+        NodeError.Io(
+          histos.workspace.IoFailure(home, histos.workspace.IoFault.Stat)
+        )
+      )
       .flatMap:
         case Some(file) => ZIO.succeed(NodeBinary(file))
         case None       =>
@@ -221,58 +183,81 @@ object NodeProbe:
     else if Files.isRegularFile(windows) then Some(windows)
     else None
 
-  private def readHome(dir: Path): IO[NodeError, NodeHome] =
-    launcher(dir) match
-      case None =>
-        ZIO.succeed(
-          NodeHome(
-            dir,
-            hasBinary = false,
-            version = Left(NodeVersionError.Missing)
-          )
+  def home(dir: Path): IO[NodeError, NodeHome] =
+    ZIO
+      .attemptBlocking(launcher(dir))
+      .mapError(_ =>
+        NodeError.Io(
+          histos.workspace.IoFailure(dir, histos.workspace.IoFault.Stat)
         )
-      case Some(file) =>
-        ZIO
-          .attemptBlocking(Files.isExecutable(file))
-          .mapError(_ => NodeError.Unreadable(file))
-          .flatMap:
-            case false =>
-              ZIO.succeed(
-                NodeHome(
-                  dir,
-                  hasBinary = true,
-                  version = Left(NodeVersionError.NotExecutable(file))
-                )
-              )
-            case true =>
-              versionOf(file).foldZIO(
-                {
-                  case NodeError.Version(_, error) =>
-                    ZIO.succeed(
-                      NodeHome(dir, hasBinary = true, version = Left(error))
-                    )
-                  case other => ZIO.fail(other)
-                },
-                version =>
-                  ZIO.succeed(
-                    NodeHome(dir, hasBinary = true, version = Right(version))
-                  )
-              )
-
-  private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
-    val start = ZIO
-      .attemptBlocking(
-        new ProcessBuilder(binary.toString, "--version")
-          .redirectErrorStream(true)
-          .start()
       )
-      .orElseFail(NodeError.Unreadable(binary))
-    Child
-      .run(start, NodeError.Unreadable(binary))
       .flatMap:
-        case Ended(0, text) =>
+        case None =>
+          ZIO.succeed(
+            NodeHome(
+              dir,
+              hasBinary = false,
+              version = Left(NodeVersionError.Missing)
+            )
+          )
+        case Some(file) =>
           ZIO
-            .fromEither(NodeVersion.from(text.trim))
-            .mapError(error => NodeError.Version(binary, error))
-        case Ended(code, _) =>
-          ZIO.fail(NodeError.Version(binary, NodeVersionError.Status(code)))
+            .attemptBlocking(Files.isExecutable(file))
+            .mapError(_ =>
+              NodeError.Io(
+                histos.workspace.IoFailure(file, histos.workspace.IoFault.Stat)
+              )
+            )
+            .flatMap:
+              case false =>
+                ZIO.succeed(
+                  NodeHome(
+                    dir,
+                    hasBinary = true,
+                    version = Left(NodeVersionError.NotExecutable(file))
+                  )
+                )
+              case true =>
+                versionOf(file).foldZIO(
+                  {
+                    case NodeError.Version(_, error) =>
+                      ZIO.succeed(
+                        NodeHome(dir, hasBinary = true, version = Left(error))
+                      )
+                    case other => ZIO.fail(other)
+                  },
+                  version =>
+                    ZIO.succeed(
+                      NodeHome(dir, hasBinary = true, version = Right(version))
+                    )
+                )
+  private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
+    ZIO.scoped:
+      for
+        work <- histos.workspace.Workspace
+          .work("histos-node-version")
+          .mapError(NodeError.Io(_))
+        events <- ChildProcess
+          .command(List(binary.toString, "--version"), work, Map.empty)
+          .runCollect
+          .mapError(error =>
+            NodeError.Version(binary, NodeVersionError.Process(error))
+          )
+        code <- ZIO
+          .fromOption(events.collect { case ChildEvent.Exited(code) =>
+            code
+          }.lastOption)
+          .orElseFail(NodeError.Version(binary, NodeVersionError.MissingStatus))
+        lines = events.collect:
+          case ChildEvent.Out(line) => line
+        text = lines.mkString("\n").trim
+        version <-
+          if code.value == 0 then
+            ZIO
+              .fromEither(NodeVersion.from(text))
+              .mapError(error => NodeError.Version(binary, error))
+          else
+            ZIO.fail(
+              NodeError.Version(binary, NodeVersionError.Status(code.value))
+            )
+      yield version

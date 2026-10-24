@@ -77,10 +77,18 @@ object NativeSpec extends ZIOSpecDefault:
       for
         arm64 <- ZIO.fromEither(ClangTarget.from("arm64-apple-darwin27.0.0"))
         x64 <- ZIO.fromEither(ClangTarget.from("x86_64-apple-darwin27.0.0"))
-        base = NativeKey.of(JvmCompile.Scala390, v21, arm64, sources, Nil)
+        base = NativeKey
+          .of(histos.ScalaVersion("3.9.0"), v21, arm64, sources, Nil)
       yield assertTrue(
-        base != NativeKey.of(JvmCompile.Scala390, v17, arm64, sources, Nil),
-        base != NativeKey.of(JvmCompile.Scala390, v21, x64, sources, Nil)
+        base != NativeKey
+          .of(histos.ScalaVersion("3.9.0"), v17, arm64, sources, Nil),
+        base != NativeKey.of(
+          histos.ScalaVersion("3.9.0"),
+          v21,
+          x64,
+          sources,
+          Nil
+        )
       )
   )
 
@@ -211,9 +219,12 @@ object NativeSpec extends ZIOSpecDefault:
   private val link = suite("link")(
     test("an ivy-local override fetches the snapshot jars"):
       for
-        libs <- NativeClasspath.fetch(
-          NativeToolchain(NativeSource.IvyLocal, ivySnapshot)
-        )
+        toolchain = NativeToolchain(NativeSource.IvyLocal, ivySnapshot)
+        libs <- NativeClasspath
+          .fetch(toolchain)
+          .provideSomeLayer[histos.resolve.LockedTools](
+            histos.ToolFixture.nativeLayer(toolchain)
+          )
         paths = (libs.plugin :: libs.libraries).map(_.toString)
       yield assertTrue(
         paths.exists(_.contains(ivySnapshot.value)),
@@ -263,7 +274,8 @@ object NativeSpec extends ZIOSpecDefault:
               env,
               root.resolve("work"),
               jdk,
-              main
+              main,
+              histos.ScalaVersion("3.9.0")
             ),
             root
           )
@@ -314,8 +326,18 @@ object NativeSpec extends ZIOSpecDefault:
             )
           }
           chosen <- ZIO.fromEither(NativeToolchain.parse(empty.toUri.toString))
-          missing = CompileError.NativeLibrary(
-            NativeFetch.Unavailable(chosen).message
+          missing = CompileError.NativeFetch(
+            NativeFetch.Resolved(
+              histos.resolve.ResolveError.ToolDrift(
+                histos.resolve.ToolId(
+                  histos.resolve.ToolRole.NativeLibraries,
+                  histos.ScalaVersion("3.9.0"),
+                  histos.resolve.ToolVariant.Native(
+                    NativeToolchain.ReleaseRevision
+                  )
+                )
+              )
+            )
           )
           here <- Runtimes.read(
             TestMachine.at(
@@ -324,16 +346,17 @@ object NativeSpec extends ZIOSpecDefault:
             )
           )
           app <- ZIO.fromEither(ProjectName.from("app"))
-          check <- ZIO.fromEither(ProjectName.from("check"))
           built <- ZIO.fromEither(
             Projects(
-              module("app", Native)(JvmCompile.Scala390).clang(major21),
-              module("check", Native)(JvmCompile.Scala390)
+              module("app", Native)(histos.ScalaVersion("3.9.0"))
+                .clang(major21),
+              module("check", Native)(histos.ScalaVersion("3.9.0"))
                 .clang(major21)
                 .test(TestMain("demo.Check"))
             )
           )
           jdk <- GraphCompile.jdkHere
+          _ <- histos.ToolFixture.seed(root, built)
           compiled <- GraphCompile
             .run(root, built, List("app"), jdk, here.native)
             .provide(Resolve.live(root.resolve("coursier")))
@@ -354,7 +377,8 @@ object NativeSpec extends ZIOSpecDefault:
                 Map.empty,
                 root.resolve("link"),
                 jdk,
-                main
+                main,
+                histos.ScalaVersion("3.9.0")
               ),
               Nil
             )
@@ -364,14 +388,42 @@ object NativeSpec extends ZIOSpecDefault:
             GraphCompileError.Cells(
               zio.NonEmptyChunk(
                 GraphCompileError
-                  .Failed(app, JvmCompile.Scala390, Platform.Native, missing)
+                  .Failed(
+                    app,
+                    histos.ScalaVersion("3.9.0"),
+                    Platform.Native,
+                    missing
+                  )
               )
             )
           ),
           tested == Left(
-            ModuleTestError.Sources(check, JvmCompile.Scala390, missing)
+            ModuleTestError.Lock(
+              histos.resolve.ResolveError.ToolDrift(
+                histos.resolve.ToolId(
+                  histos.resolve.ToolRole.NativeLibraries,
+                  histos.ScalaVersion("3.9.0"),
+                  histos.resolve.ToolVariant
+                    .Native(NativeToolchain.ReleaseRevision)
+                )
+              )
+            )
           ),
-          linked == Left(NativeError.Fetch(NativeFetch.Unavailable(chosen)))
+          linked == Left(
+            NativeError.Fetch(
+              NativeFetch.Resolved(
+                histos.resolve.ResolveError.ToolDrift(
+                  histos.resolve.ToolId(
+                    histos.resolve.ToolRole.NativeLibraries,
+                    histos.ScalaVersion("3.9.0"),
+                    histos.resolve.ToolVariant.Native(
+                      NativeToolchain.ReleaseRevision
+                    )
+                  )
+                )
+              )
+            )
+          )
         )
   )
 
@@ -423,6 +475,15 @@ object NativeSpec extends ZIOSpecDefault:
         }.ignore
 
   def spec =
-    suite("scala native")(versions, probe, declare, toolchain, origin, link) @@
+    suite("scala native")(versions, probe, declare, toolchain, origin, link)
+      .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+        histos.ToolFixture.layer(
+          histos.Projects(
+            histos
+              .module("native", histos.Native)(histos.ScalaVersion("3.9.0"))
+              .clang(histos.ClangMajor(21))
+          )
+        )
+      ) @@
       TestAspect.withLiveSystem @@
       TestAspect.timeout(5.minutes)

@@ -30,9 +30,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          cells <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           found <- ZIO.attempt(
             cells.map(cell =>
               (
@@ -73,9 +78,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("2.13.16"))))
-          cells <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           found <- ZIO.attempt(cells.flatMap(cell => entries(cell.classes)))
         yield assertTrue(
           found.exists(_.endsWith("Hello.scala.semanticdb")),
@@ -122,9 +132,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               Projects(core, app, extra)
             }
             .flatMap(ZIO.fromEither(_))
-          cells <- GraphCompile
-            .run(root, built, List("app"), jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, List("app"), jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           found <- ZIO.attempt(
             cells.map(cell => (cell.module.value, entries(cell.classes)))
           )
@@ -180,15 +195,20 @@ object GraphCompileSpec extends ZIOSpecDefault:
               Projects(core, app)
             }
             .flatMap(ZIO.fromEither(_))
-          names <- GraphCompile
-            .console(root, built, List("app"), jdk, NativeOrigin.Central)
+          names <- histos.ToolFixture
+            .streamAt(root, built)(
+              GraphCompile
+                .console(root, built, List("app"), jdk, NativeOrigin.Central)
+            )
             .collect {
               case CompileFeed.Began(module, _, _) =>
                 s"compiling ${module.value}"
               case CompileFeed.Done(cell) => cell.module.value
             }
             .runCollect
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue(
           names.toList == List("compiling core", "core", "compiling app", "app")
         )
@@ -243,7 +263,9 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 begun.succeed(()).unit
               case _ => ZIO.unit
             .runDrain
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .forkScoped
           started <- Live.live(begun.await.timeout(90.seconds))
           _ <- release.succeed(())
@@ -267,12 +289,17 @@ object GraphCompileSpec extends ZIOSpecDefault:
             }
             .flatMap(ZIO.fromEither(_))
           seen <- Ref.make(Chunk.empty[CompileFeed])
-          result <- GraphCompile
-            .console(root, built, Nil, jdk, NativeOrigin.Central)
+          result <- histos.ToolFixture
+            .streamAt(root, built)(
+              GraphCompile
+                .console(root, built, Nil, jdk, NativeOrigin.Central)
+            )
             .tap(feed => seen.update(_ :+ feed))
             .runDrain
             .either
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
           feeds <- seen.get
         yield
           val missingAt = feeds.indexWhere:
@@ -316,9 +343,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               Projects(core, app)
             }
             .flatMap(ZIO.fromEither(_))
-          out <- GraphCompile
-            .run(root, built, List("app"), jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, List("app"), jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -371,9 +403,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               Projects(types, facade, core)
             }
             .flatMap(ZIO.fromEither(_))
-          cells <- GraphCompile
-            .run(root, built, List("core"), jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, List("core"), jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield
           val names = cells.map(cell => (cell.module.value, cell.platform))
           val useFacade = cells.collect:
@@ -407,9 +444,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
                   .in(ProjectPath("example/todo"))
               )
             )
-          cells <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          cells <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield assertTrue:
           cells match
             case cell :: Nil =>
@@ -443,9 +485,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("ui", Js)(ScalaVersion("3.9.0"))))
-          out <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
         yield
           val files = out match
             case cell :: Nil => entries(cell.classes)
@@ -502,9 +549,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           root <- temp
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          out <- GraphCompile
-            .run(root, built, List("missing"), jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, List("missing"), jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -521,7 +573,9 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
             .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -539,9 +593,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           )
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          out <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           built.projects.collectFirst { case module: Module =>
@@ -586,12 +645,22 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 module("probe", Jvm)(ScalaVersion("3.9.0"))
               )
             )
-          compiled <- GraphCompile
-            .run(root, built, List("e2e"), jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
-          refused <- GraphCompile
-            .run(root, built, List("probe"), jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          compiled <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, List("e2e"), jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          refused <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, List("probe"), jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
           files <- ZIO.attempt(
             entries(root.resolve(".histos/classes/e2e/3.9.0/jvm"))
@@ -623,9 +692,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          out <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
-            .provide(Resolve.live(root.resolve("coursier")))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile
+                .run(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
             .either
         yield assertTrue:
           out match
@@ -693,4 +767,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
     compile,
     roots,
     refused
+  ).provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+    histos.ToolFixture.layer(
+      histos.Projects(
+        histos.module("jvm", histos.Jvm)(
+          histos.ScalaVersion("3.9.0"),
+          histos.ScalaVersion("2.13.16")
+        ),
+        histos.module("js", histos.Js)(histos.ScalaVersion("3.9.0"))
+      )
+    )
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

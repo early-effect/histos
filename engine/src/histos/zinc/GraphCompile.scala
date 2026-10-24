@@ -1,8 +1,10 @@
 package histos.zinc
 
+import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
 import histos.js.ScalaJs
 import histos.native.{NativeCompile, NativeOrigin, NativeToolchain}
+import histos.resolve.LockedTools
 import histos.resolve.{
   BuildResolvers,
   Classpath,
@@ -48,6 +50,7 @@ enum CompileFeed:
   case Failed(error: GraphCompileError)
 
 enum GraphCompileError:
+  case Runtime(error: histos.jdk.ToolchainError)
   case Target(error: CiError)
   case UnknownCell(module: ProjectName, version: ScalaVersion)
   case NoRoot(module: ProjectName)
@@ -73,6 +76,7 @@ enum GraphCompileError:
   case Jdk(home: Path)
 
   def message: String = this match
+    case Runtime(error)               => error.message
     case Target(error)                => error.message
     case UnknownCell(module, version) =>
       s"'${module.value}' ${version.value} is not a cell on the requested platform"
@@ -92,7 +96,60 @@ enum GraphCompileError:
     case Cells(errors) => errors.map(_.message).mkString("\n")
     case Jdk(home)     => s"could not read the JDK release file under $home"
 
+final case class CompileSession(
+    repo: Path,
+    graph: ProjectGraph,
+    jdk: JdkRuntime,
+    native: NativeOrigin,
+    lock: histos.resolve.DependencyLock
+)
+
 object GraphCompile:
+  def run(
+      session: CompileSession,
+      names: List[String]
+  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
+    console(session, names, None)
+  )
+  def run(
+      session: CompileSession,
+      names: List[String],
+      platform: Option[Platform]
+  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
+    console(session, names, platform)
+  )
+  def console(
+      session: CompileSession,
+      names: List[String],
+      platform: Option[Platform]
+  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+    watch(
+      session.repo,
+      session.graph,
+      choose(session.graph, names),
+      None,
+      platform,
+      session.jdk,
+      session.native,
+      captured = Some(session.lock)
+    )
+  def cellFeed(
+      session: CompileSession,
+      cells: List[(ProjectName, ScalaVersion)],
+      platform: Platform
+  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+    val names = cells.map(_._1.value)
+    watch(
+      session.repo,
+      session.graph,
+      choose(session.graph, names),
+      Some(cells.map(_._2.value).toSet),
+      Some(platform),
+      session.jdk,
+      session.native,
+      captured = Some(session.lock)
+    )
+
   /** Compile every platform a module names, or only `platform` when that is
     * set. Names pull in `dependsOn` upstreams and not dependents. A cell starts
     * when its own upstream cells finish.
@@ -101,7 +158,7 @@ object GraphCompile:
       repo: Path,
       graph: ProjectGraph,
       names: List[String],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform] = None,
       report: CompileFeed => UIO[Unit] = _ => ZIO.unit
@@ -115,7 +172,7 @@ object GraphCompile:
       repo: Path,
       graph: ProjectGraph,
       names: List[String],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform] = None
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
@@ -151,7 +208,7 @@ object GraphCompile:
       graph: ProjectGraph,
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       native: NativeOrigin
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     watch(
@@ -183,7 +240,19 @@ object GraphCompile:
   /** The JDK this fiber's `zio.System` is running. The release file is the
     * version.
     */
-  def jdkHere: IO[GraphCompileError, ResolvedJdk] =
+  def jdk(machine: histos.jdk.Machine): IO[GraphCompileError, JdkRuntime] =
+    histos.jdk.Toolchain
+      .resolve(machine)
+      .catchSome { case histos.jdk.ToolchainError.NoLock(_) =>
+        jdkHere
+      }
+      .mapError {
+        case error: histos.jdk.ToolchainError =>
+          GraphCompileError.Runtime(error)
+        case error: GraphCompileError => error
+      }
+
+  def jdkHere: IO[GraphCompileError, JdkRuntime] =
     System
       .property("java.home")
       .mapError(_ => GraphCompileError.Jdk(Path.of(".")))
@@ -191,14 +260,20 @@ object GraphCompile:
         case Some(raw) if raw.nonEmpty => fromHome(Path.of(raw))
         case _ => ZIO.fail(GraphCompileError.Jdk(Path.of(".")))
 
-  private def fromHome(home: Path): IO[GraphCompileError, ResolvedJdk] =
+  private def fromHome(home: Path): IO[GraphCompileError, JdkRuntime] =
     ZIO
       .attemptBlocking(releaseText(home))
       .mapError(_ => GraphCompileError.Jdk(home))
       .flatMap: text =>
         histos.jdk.JdkVersion.fromRelease(text) match
-          case Right(version) => ZIO.succeed(ResolvedJdk(home, version))
-          case Left(_)        => ZIO.fail(GraphCompileError.Jdk(home))
+          case Right(version) =>
+            histos.toolchain.RuntimeFiles
+              .identity(home)
+              .map(identity => JdkRuntime(home, version, identity))
+              .mapError(failure =>
+                GraphCompileError.Runtime(histos.jdk.ToolchainError.Io(failure))
+              )
+          case Left(_) => ZIO.fail(GraphCompileError.Jdk(home))
 
   private def releaseText(home: Path): String =
     val file = home.resolve("release")
@@ -297,7 +372,7 @@ object GraphCompile:
       repo: Path,
       graph: ProjectGraph,
       names: List[String],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit]
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
@@ -319,10 +394,11 @@ object GraphCompile:
       picked: Either[GraphCompileError, List[Module]],
       only: Option[Set[String]],
       platform: Option[Platform],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
-      parallelism: Parallelism = Parallelism.default
+      parallelism: Parallelism = Parallelism.default,
+      captured: Option[DependencyLock] = None
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     ZStream.asyncScoped[Resolve, GraphCompileError, CompileFeed](
       emit =>
@@ -331,33 +407,37 @@ object GraphCompile:
           for
             selected <- ZIO.fromEither(picked)
             _ <- ZIO.fromEither(layersOf(selected))
-            lock <- readLock(repo)
+            lock <- captured.fold(readLock(repo))(ZIO.succeed(_))
+            tools <- LockedTools.make(lock, graph)
             outcome <- ZIO.scoped {
-              CompilerPool.make.flatMap: pool =>
-                val plan = CompilePlan(
-                  repo,
-                  modulesOf(graph),
-                  lock,
-                  jdk,
-                  native,
-                  BuildResolvers(graph.resolvers),
-                  pool
-                )
-                val goal = ScheduleCells.goal(
-                  plan,
-                  selected,
-                  only,
-                  platform,
-                  hold,
-                  offer
-                )
-                ZIO
-                  .serviceWithZIO[Histos](_.start(goal))
-                  .provideSome[Resolve & zio.Scope](
-                    ZLayer.succeed(parallelism),
-                    Histos.live
+              CompilerPool.make
+                .provideSome[zio.Scope](ZLayer.succeed(tools))
+                .flatMap: pool =>
+                  val plan = CompilePlan(
+                    repo,
+                    modulesOf(graph),
+                    lock,
+                    jdk,
+                    native,
+                    BuildResolvers(graph.resolvers),
+                    pool,
+                    tools
                   )
-                  .flatMap(_.outcome)
+                  val goal = ScheduleCells.goal(
+                    plan,
+                    selected,
+                    only,
+                    platform,
+                    hold,
+                    offer
+                  )
+                  ZIO
+                    .serviceWithZIO[Histos](_.start(goal))
+                    .provideSome[Resolve & zio.Scope](
+                      ZLayer.succeed(parallelism),
+                      Histos.live
+                    )
+                    .flatMap(_.outcome)
             }
             _ <- outcome match
               case Outcome.Done(_)          => end(emit, None)
@@ -511,10 +591,8 @@ object GraphCompile:
               libraries.hashes
             )
             compiled <- compile(
-              module,
+              work,
               request,
-              plan.native,
-              plan.pool,
               SemanticDb.argv(plan.repo, version),
               hear
             ).mapError(failed)
@@ -551,20 +629,26 @@ object GraphCompile:
       .mapError(_ => GraphCompileError.Output(classes))
 
   private def compile(
-      module: Module,
+      work: CellWork,
       request: CompileRequest,
-      native: NativeOrigin,
-      pool: CompilerPool,
       extra: List[String],
       hear: CompileProblem => Unit
   ): IO[CompileError, CompileOutput] =
-    request.toolchain.platform match
-      case Platform.Jvm => JvmCompile.compilePooled(pool, request, extra, hear)
-      case Platform.Js  => ScalaJs.compile(request, extra, hear)
+    val compiled = request.toolchain.platform match
+      case Platform.Jvm =>
+        JvmCompile.compilePooled(work.plan.pool, request, extra, hear)
+      case Platform.Js =>
+        ScalaJs.compile(request, extra, hear, work.module.jsVersion)
       case Platform.Native =>
-        val revision =
-          NativeToolchain.revision(module.nativeVersion)
-        NativeCompile.compile(request, revision, native, extra, hear)
+        NativeCompile.compile(
+          request,
+          work.module.nativeVersion
+            .getOrElse(work.plan.tools.catalog.native.revision),
+          work.plan.native,
+          extra,
+          hear
+        )
+    compiled.provide(ZLayer.succeed(work.plan.tools))
 
   private def upstreamClasses(
       module: Module,

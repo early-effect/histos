@@ -1,0 +1,20 @@
+accept	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+accept	version 21.0.2{LF}# comment{LF}major +21{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+accept	major 21{LF}version 21.0.2{LF}archive linux-aarch64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+accept	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB{LF}
+reject	{LF}
+reject	major 21{LF}version 21.0.2{LF}
+reject	version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}major 21{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}archive linux-amd64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}archive plan9-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}url https://example.test/jdk.zip{LF}sha256 abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip{LF}
+reject	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab extra{LF}
+reject	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip bad{LF}
+reject	major 0{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 2147483648{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 17.0.9{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{LF}
+reject	major 21{LF}version 21.0.2{LF}archive linux-x86_64 https://example.test/jdk.zip abababababababababababababababababababababababababababababababab{NUL}{LF}

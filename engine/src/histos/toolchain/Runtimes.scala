@@ -2,7 +2,10 @@ package histos.toolchain
 
 import histos.jdk.Machine
 import histos.native.NativeOrigin
-import histos.node.{NodeBinary, NodeMiss, NodeToolchain}
+import histos.node.{NodeBinary, NodeMiss, NodeToolchain, NodeRuntime}
+import histos.{Platform}
+import histos.step.{Input, InputName, InputValue}
+import zio.{Chunk, ZIO}
 
 import zio.{IO, UIO}
 
@@ -14,14 +17,29 @@ import zio.{IO, UIO}
 final class Runtimes private (
     val env: Map[String, String],
     val native: NativeOrigin,
-    val node: IO[NodeMiss, NodeBinary]
-)
+    val nodeRuntime: IO[NodeMiss, NodeRuntime]
+):
+  def node: IO[NodeMiss, NodeBinary] = nodeRuntime.map(_.binary)
+  def inputs(platform: Platform): IO[NodeMiss, Chunk[Input]] = platform match
+    case Platform.Js =>
+      nodeRuntime.map(runtime =>
+        Chunk(
+          Input(
+            InputName("node"),
+            InputValue.Text(Runtimes.identityToken(runtime.identity))
+          )
+        )
+      )
+    case Platform.Jvm | Platform.Native => ZIO.succeed(Chunk.empty)
 
 object Runtimes:
+  def identityToken(identity: RuntimeIdentity): String = identity match
+    case RuntimeIdentity.Locked(hash)         => s"locked:${hash.value}"
+    case RuntimeIdentity.Local(home, content) =>
+      s"local:${home.toString}:${content.value}"
+
   def read(machine: Machine): UIO[Runtimes] =
     NodeToolchain
-      .choose(machine)
+      .resolve(machine)
       .memoize
-      .map(node =>
-        new Runtimes(machine.env, NativeOrigin.read(machine.env), node)
-      )
+      .map(node => new Runtimes(machine.env, machine.native, node))

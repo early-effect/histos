@@ -1,5 +1,6 @@
 package histos.client
 
+import histos.jdk.JdkRuntime
 import histos.cli.{Cli, CliExit}
 import histos.jdk.Machine
 import histos.load.{LoadedBuild, Loader}
@@ -15,7 +16,7 @@ import histos.server.{
 }
 import histos.task.TaskId
 import histos.testrun.ModuleTestError
-import histos.zinc.{GraphCompile, GraphCompileError, ResolvedJdk}
+import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.Platform
 
 import java.nio.file.Path
@@ -149,59 +150,65 @@ object Session:
       case Call.Cancel(id) =>
         histos.server.Calls.cancel(desk.runs, id, say)
       case Call.Compile(projects) =>
-        withJdk(say, CliExit.CompileFailed)(jdk =>
+        withJdk(machine, say, CliExit.CompileFailed)(jdk =>
           histos.server.Calls.compile(repo, graph, projects, jdk, machine, say)
         )
       case Call.Test(projects, patterns, quick) =>
-        GraphCompile.jdkHere.foldZIO(
-          error =>
-            val (code, message) =
-              Cli.testFailure(ModuleTestError.Compile(error))
-            say(histos.server.Message.Exit(code, message))
-          ,
-          jdk =>
-            histos.server.Calls
-              .test(repo, graph, projects, patterns, quick, jdk, machine, say)
-        )
+        GraphCompile
+          .jdk(machine)
+          .foldZIO(
+            error =>
+              val (code, message) =
+                Cli.testFailure(ModuleTestError.Compile(error))
+              say(histos.server.Message.Exit(code, message))
+            ,
+            jdk =>
+              histos.server.Calls
+                .test(repo, graph, projects, patterns, quick, jdk, machine, say)
+          )
       case Call.Publish(repository, projects) =>
-        withJdk(say, CliExit.PublishFailed)(jdk =>
+        withJdk(machine, say, CliExit.PublishFailed)(jdk =>
           histos.server.Calls
             .publish(repo, graph, machine, jdk, repository, projects, say)
         )
       case Call.Assembly(destination) =>
-        withJdk(say, CliExit.CompileFailed)(jdk =>
+        withJdk(machine, say, CliExit.CompileFailed)(jdk =>
           histos.server.Calls
             .assembly(repo, graph, jdk, machine, destination, say)
         )
       case Call.Run(id, platform) =>
-        GraphCompile.jdkHere.foldZIO(
-          error =>
-            say(histos.server.Message.Exit(jdkCode(error), error.message)),
-          jdk =>
-            histos.server.Calls.tracked(desk.runs, id, say)(
-              histos.server.Calls
-                .run(repo, graph, jdk, machine, id, platform, say)
-            )
-        )
+        GraphCompile
+          .jdk(machine)
+          .foldZIO(
+            error =>
+              say(histos.server.Message.Exit(jdkCode(error), error.message)),
+            jdk =>
+              histos.server.Calls.tracked(desk.runs, id, say)(
+                histos.server.Calls
+                  .run(repo, graph, jdk, machine, id, platform, say)
+              )
+          )
       case Call.Task(id) =>
         histos.server.Calls.tracked(desk.runs, id, say)(
           histos.server.Calls
             .task(repo, graph, loaded.plugins, machine, id, say)
         )
       case Call.Resolve(action) =>
-        histos.server.Calls.resolve(repo, graph, action, say)
+        histos.server.Calls.resolve(repo, graph, action, say, machine.native)
       case Call.Workflow(action) =>
         histos.server.Calls.workflow(repo, graph, action, say)
       case Call.Reload | Call.Reboot | Call.Bsp =>
         say(histos.server.Message.Exit(CliExit.Usage.code, "not a tool"))
 
-  private def withJdk(say: Say, exit: CliExit)(
-      use: ResolvedJdk => ZIO[histos.resolve.Resolve, ServerError, Unit]
+  private def withJdk(machine: Machine, say: Say, exit: CliExit)(
+      use: JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
-    GraphCompile.jdkHere.foldZIO(
-      error => say(histos.server.Message.Exit(exit.code, error.message)),
-      use
-    )
+    GraphCompile
+      .jdk(machine)
+      .foldZIO(
+        error => say(histos.server.Message.Exit(exit.code, error.message)),
+        use
+      )
 
   private def jdkCode(error: GraphCompileError): Int =
     error match

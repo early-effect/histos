@@ -1,5 +1,7 @@
 package histos.testrun
 
+import histos.jdk.JdkRuntime
+import histos.resolve.LockedTools
 import histos.jdk.Sha256
 import histos.js.{
   JsLink,
@@ -47,7 +49,7 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-  ResolvedJdk,
+
   ScalacFlags,
   SemanticDb,
   Sources
@@ -198,7 +200,7 @@ private[histos] object TestCompile:
       cell: CompiledCell,
       lock: DependencyLock,
       repositories: Repositories
-  ): ZIO[Resolve, ModuleTestError, Linked] =
+  ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
     for
       fetched <- classpath(
         module,
@@ -241,7 +243,7 @@ private[histos] object TestCompile:
     */
   private[testrun] def standardLibrary(
       cell: CompiledCell
-  ): ZIO[Any, ModuleTestError, List[Path]] =
+  ): ZIO[LockedTools, ModuleTestError, List[Path]] =
     cell.platform match
       case Platform.Jvm =>
         JvmCompile
@@ -257,12 +259,12 @@ private[histos] object TestCompile:
       module: Module,
       cell: CompiledCell,
       sources: List[Path],
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       native: NativeOrigin,
       lock: DependencyLock,
       repositories: Repositories,
       hear: CompileProblem => Unit = _ => ()
-  ): ZIO[Resolve, ModuleTestError, Linked] =
+  ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
     val classes = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
     for
@@ -297,19 +299,21 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit
-  ): IO[ModuleTestError, Unit] =
-    val compiled = request.toolchain.platform match
-      case Platform.Jvm    => JvmCompile.compile(request, extra, hear)
-      case Platform.Js     => ScalaJs.compile(request, extra, hear)
-      case Platform.Native =>
-        val revision =
-          NativeToolchain.revision(module.nativeVersion)
-        NativeCompile.compile(request, revision, native, extra, hear)
-    compiled
-      .mapError(error =>
-        ModuleTestError.Sources(module.name, request.toolchain.version, error)
-      )
-      .unit
+  ): ZIO[LockedTools, ModuleTestError, Unit] =
+    ZIO.serviceWithZIO[LockedTools]: tools =>
+      val compiled = request.toolchain.platform match
+        case Platform.Jvm => JvmCompile.compile(request, extra, hear)
+        case Platform.Js  =>
+          ScalaJs.compile(request, extra, hear, module.jsVersion)
+        case Platform.Native =>
+          val revision =
+            module.nativeVersion.getOrElse(tools.catalog.native.revision)
+          NativeCompile.compile(request, revision, native, extra, hear)
+      compiled
+        .mapError(error =>
+          ModuleTestError.Sources(module.name, request.toolchain.version, error)
+        )
+        .unit
 
   /** Compile jars of `dependsOn`, not their tests. The child runs those
     * classes.

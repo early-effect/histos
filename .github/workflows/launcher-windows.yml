@@ -1,0 +1,20 @@
+# Hand-written bootstrap fixture until the CI milestone owns Windows jobs.
+name: launcher-windows
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Execute stock Windows bootstrap fixtures
+        shell: powershell
+        run: .\engine\test\fixtures\launcher-windows.ps1

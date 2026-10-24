@@ -1,7 +1,6 @@
 package histos.load
 
 import histos.jdk.{Machine, Sha256}
-import histos.native.NativeOrigin
 import histos.plugin.{
   ApiDigest,
   DeclaredTask,
@@ -39,25 +38,14 @@ import histos.schedule.{
 }
 import histos.step.{Need, Step, StepId, StepInfo}
 import histos.task.{TaskError, TaskId, TaskResult}
-import histos.resolve.Resolve
+import histos.resolve.{Resolve, DependencyLock}
 import histos.zinc.GraphCompile
 import histos.{Module, ProjectGraph}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path}
 
-import zio.{
-  Chunk,
-  ConfigProvider,
-  IO,
-  NonEmptyChunk,
-  Ref,
-  Runtime,
-  Scope,
-  System,
-  ZIO,
-  ZLayer
-}
+import zio.{Chunk, IO, NonEmptyChunk, Ref, Scope, ZIO, ZLayer}
 
 final case class PluginLink(
     id: PluginId,
@@ -124,22 +112,40 @@ object PluginRuntime:
             made <- Ref.make(Map.empty[String, PluginOutput])
             kept <- ZIO.service[ActionCache]
             remote <- ZIO.service[RemoteCache]
-            env <- System.envs.mapError(_ =>
-              PluginFault.Task(PluginRunError.Defect("System"))
-            )
-            origin <- ZIO
-              .config(Machine.native)
-              .provideLayer(
-                Runtime.setConfigProvider(ConfigProvider.fromMap(env))
+            machine <- Machine
+              .load(repo)
+              .mapError(error =>
+                PluginFault.Compiled(
+                  histos.zinc.GraphCompileError.Runtime(error)
+                )
               )
-              .mapError(_ => PluginFault.Task(PluginRunError.Defect("Config")))
+            env = machine.env
+            lock <- Resolve
+              .readLock(repo)
+              .mapError(PluginFault.Resolved(_))
+              .memoize
+            jdk <- GraphCompile
+              .jdk(machine)
+              .mapError(PluginFault.Compiled(_))
+              .memoize
+            session = jdk
+              .zip(lock)
+              .map((runtime, captured) =>
+                histos.zinc.CompileSession(
+                  repo,
+                  graph,
+                  runtime,
+                  machine.native,
+                  captured
+                )
+              )
             scheduler = Scheduler(runner, kept, remote)
             step <- ZIO.fromEither(
               PluginSteps.goal(
                 id,
                 taskOf,
                 task => PluginCells.selected(graph, task),
-                cell => compileCell(cell, origin),
+                cell => session.flatMap(PluginCells.compile(_, cell)),
                 (taskId, task, upstream) =>
                   remembered(
                     id,
@@ -149,7 +155,8 @@ object PluginRuntime:
                     made,
                     upstream,
                     env,
-                    scheduler
+                    scheduler,
+                    lock
                   )
               )
             )
@@ -192,18 +199,6 @@ object PluginRuntime:
           yield key -> runner
       yield bound.toMap
 
-    /** The JDK is read when a compile step runs, on the same fiber `System` the
-      * command started with.
-      */
-    private def compileCell(
-        cell: PluginCells.Cell,
-        origin: NativeOrigin
-    ): ZIO[Resolve, PluginFault, Unit] =
-      GraphCompile.jdkHere
-        .mapError(error => PluginFault.Compiled(error))
-        .flatMap: jdk =>
-          PluginCells.compile(repo, graph, cell, jdk, origin)
-
     private def remembered(
         root: PluginTaskId,
         id: PluginTaskId,
@@ -212,7 +207,8 @@ object PluginRuntime:
         made: Ref[Map[String, PluginOutput]],
         upstream: String,
         env: Map[String, String],
-        scheduler: Scheduler
+        scheduler: Scheduler,
+        lock: IO[PluginFault, DependencyLock]
     ): ZIO[Resolve, PluginFault, String] =
       val passed = if id == root then args else PluginArgs.empty
       instance(id.plugin) match
@@ -223,7 +219,7 @@ object PluginRuntime:
               .hash(hashRequest(id, task, env))
               .mapError(error => PluginFault.Task(error))
             inputs <- withUpstream(hashed.inputs, upstream)
-            compiled <- PluginCells.classpath(repo, graph, task)
+            compiled <- PluginCells.classpath(repo, graph, task, lock)
             action <- ZIO.fromEither(
               actionOf(id, task, inputs).left.map(error =>
                 PluginFault.Task(error)

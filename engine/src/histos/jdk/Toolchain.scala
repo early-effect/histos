@@ -1,7 +1,18 @@
 package histos.jdk
 
+import histos.archive.ArchivePin
 import histos.native.{NativeOrigin, NativeToolchain}
 import histos.process.ChildProcess
+import histos.toolchain.{
+  Architecture,
+  HostPlatform,
+  ToolArchiveError,
+  LocalOverride,
+  LocalOverrideError,
+  RuntimeFiles,
+  RuntimeIdentity
+}
+import histos.workspace.IoFailure
 
 import java.nio.file.{Files, Path}
 
@@ -13,7 +24,7 @@ enum Os:
 object Os:
   def from(name: String): Os =
     val lower = name.toLowerCase(java.util.Locale.ROOT)
-    if lower.contains("mac") then Os.Mac
+    if lower.contains("mac") || lower == "darwin" then Os.Mac
     else if lower.contains("win") then Os.Windows
     else if lower.contains("linux") || lower.contains("nix") then Os.Linux
     else Os.Other
@@ -32,12 +43,14 @@ final case class Machine(
     env: Map[String, String],
     userHome: String,
     os: Os,
+    architecture: Architecture,
     cache: Path,
     repo: Path,
     running: Option[Path],
     settled: Settled,
     native: NativeOrigin
-)
+):
+  def host: HostPlatform = HostPlatform.of(os, architecture)
 
 object Machine:
   /** `HISTOS_NATIVE` and `HISTOS_JDK_SETTLED` from one environment map. */
@@ -86,6 +99,13 @@ object Machine:
           .map:
             case Some(name) if name.nonEmpty => Os.from(name)
             case _                           => Os.Other
+        architecture <- system
+          .property("os.arch")
+          .mapError(_ => ToolchainError.Denied)
+          .flatMap:
+            case Some(raw) if raw.strip().nonEmpty =>
+              ZIO.succeed(Architecture.fromMachine(raw))
+            case _ => ZIO.fail(ToolchainError.NoArchitecture)
         running <- system
           .property("java.home")
           .mapError(_ => ToolchainError.Denied)
@@ -101,6 +121,7 @@ object Machine:
         env,
         home,
         os,
+        architecture,
         histos.cache.ContentStore.home(env.get("XDG_CACHE_HOME"), home),
         repo,
         running,
@@ -120,13 +141,20 @@ object Launch:
   def decide(
       running: Option[Path],
       home: Path,
-      resolution: Resolution
+      resolution: Resolution,
+      os: Os
   ): Launch =
     resolution match
       case Resolution.Selected(chosen, _) =>
         if running.exists(_.normalize == home.normalize) then
           Launch.Stay(chosen)
-        else Launch.Reexec(home.resolve("bin").resolve("java"), chosen)
+        else
+          Launch.Reexec(
+            home
+              .resolve("bin")
+              .resolve(if os == Os.Windows then "java.exe" else "java"),
+            chosen
+          )
       case other => Launch.Halt(other)
 
 enum Startup:
@@ -153,22 +181,32 @@ enum ToolchainError:
   case Override(error: OverrideError)
   case Unreadable(path: Path)
   case NoLock(path: Path)
+  case NoRuntime
   case NoUserHome
+  case NoArchitecture
+  case Archive(error: ToolArchiveError)
   case Denied
   case Config(error: zio.Config.Error)
   case Reexec
+  case Io(failure: IoFailure)
+  case Rejected(path: Path, reason: Reject)
 
   def message: String = this match
-    case Probe(error)     => error.message
-    case Lock(error)      => error.message
-    case Stage(error)     => error.message
-    case Override(error)  => error.message
-    case Unreadable(path) => s"could not read $path"
-    case NoLock(path)     => s"no jdk lock at $path"
-    case NoUserHome       => "user.home is not set"
-    case Denied           => "the process environment could not be read"
-    case Config(error)    => s"configuration: ${configText(error)}"
-    case Reexec           => "could not re-exec onto the chosen jdk"
+    case Probe(error)           => error.message
+    case Lock(error)            => error.message
+    case Stage(error)           => error.message
+    case Override(error)        => error.message
+    case Unreadable(path)       => s"could not read $path"
+    case NoLock(path)           => s"no jdk lock at $path"
+    case NoRuntime              => "no running JDK is available without a lock"
+    case NoArchitecture         => "os.arch is not set"
+    case Archive(error)         => error.message
+    case NoUserHome             => "user.home is not set"
+    case Denied                 => "the process environment could not be read"
+    case Config(error)          => s"configuration: ${configText(error)}"
+    case Reexec                 => "could not re-exec onto the chosen jdk"
+    case Io(failure)            => failure.message
+    case Rejected(path, reason) => s"JDK override $path was rejected: $reason"
 
   private def configText(error: zio.Config.Error): String =
     error.fold(
@@ -231,56 +269,57 @@ object JdkLocations:
   private def isDir(path: Path): IO[JdkError, Boolean] =
     ZIO
       .attemptBlocking(Files.isDirectory(path))
-      .mapError(_ => JdkError.Unreadable(path))
+      .mapError(_ =>
+        JdkError.Io(IoFailure(path, histos.workspace.IoFault.Stat))
+      )
 
   private def toolOnPath(
       pathEnv: Option[String],
       name: String
   ): IO[JdkError, Boolean] =
-    ZIO
-      .attemptBlocking {
-        entries(pathEnv).exists: dir =>
-          Files.isRegularFile(dir.resolve(name)) ||
-            Files.isRegularFile(dir.resolve(name + ".exe")) ||
-            Files.isRegularFile(dir.resolve(name + ".bat"))
-      }
-      .mapError(_ => JdkError.PathScan)
+    RuntimeFiles
+      .firstOnPath(pathEnv, List(name, name + ".exe", name + ".bat"))
+      .mapError(JdkError.Locations(_))
+      .map(_.nonEmpty)
 
   private def firstJdk(
       pathEnv: Option[String],
       os: Os
   ): IO[JdkError, Option[Path]] =
-    val names = os match
-      case Os.Windows => List("java.exe")
-      case _          => List("java")
-    ZIO
-      .attemptBlocking {
-        entries(pathEnv).flatMap { dir =>
-          names.flatMap { name =>
-            val bin = dir.resolve(name)
-            if Files.isRegularFile(bin) then jdkHome(bin).toList else Nil
-          }
-        }.headOption
-      }
-      .mapError(_ => JdkError.PathScan)
+    val name = if os == Os.Windows then "java.exe" else "java"
+    RuntimeFiles
+      .firstOnPath(pathEnv, List(name))
+      .mapError(JdkError.Locations(_))
+      .map(_.flatMap(RuntimeFiles.homeOf))
 
-  private def entries(pathEnv: Option[String]): List[Path] =
-    pathEnv
-      .filter(_.nonEmpty)
-      .toList
-      .flatMap(_.split(java.io.File.pathSeparator).toList.filter(_.nonEmpty))
-      .map(Path.of(_))
-
-  private def jdkHome(javaBin: Path): Option[Path] =
-    Option(javaBin.getParent).flatMap(parent => Option(parent.getParent))
 end JdkLocations
 
 /** The lock that was read and the decision it produced. Printing is
   * [[Toolchain.text]].
   */
-final case class JdkSurvey(lock: JdkLock, resolution: Resolution)
+final case class JdkSurvey(
+    lock: JdkLock,
+    resolution: Resolution,
+    identity: Option[RuntimeIdentity],
+    archive: Option[ArchivePin]
+)
+
+final case class JdkRuntime(
+    home: Path,
+    version: JdkVersion,
+    identity: RuntimeIdentity
+)
+
+final case class Toolchain(stager: JdkStage):
+  def prepare(machine: Machine): IO[ToolchainError, Startup] =
+    Toolchain.prepareWith(machine, stager.stage)
+  def resolve(machine: Machine): IO[ToolchainError, JdkRuntime] =
+    Toolchain.resolveWith(machine, stager.stage)
 
 object Toolchain:
+  val layer: ZLayer[JdkStage, Nothing, Toolchain] =
+    ZLayer.fromFunction(Toolchain.apply)
+
   /** JDK 25 refuses unnamed native access without this flag. The manifest
     * attribute is the jar form.
     */
@@ -291,45 +330,185 @@ object Toolchain:
     readLock(machine.repo).flatMap:
       case None       => ZIO.fail(ToolchainError.NoLock(lockPath(machine.repo)))
       case Some(lock) =>
-        resolution(machine, lock).map(found => JdkSurvey(lock, found))
+        survey(machine, lock)
+
+  private def survey(
+      machine: Machine,
+      lock: JdkLock
+  ): IO[ToolchainError, JdkSurvey] =
+    for
+      explicit <- readOverride(machine.repo)
+      archive <-
+        if explicit.isEmpty then
+          ZIO
+            .fromEither(lock.archive(machine.host))
+            .mapError(ToolchainError.Archive(_))
+            .map(Some(_))
+        else ZIO.none
+      found <- resolution(lock, explicit)
+      identity <- found match
+        case Resolution.Selected(chosen, _) =>
+          RuntimeFiles
+            .identity(chosen.home)
+            .mapError(ToolchainError.Io(_))
+            .map(Some(_))
+        case Resolution.OverrideRejected(_, _) => ZIO.none
+        case _                                 =>
+          ZIO.succeed(archive.map(pin => RuntimeIdentity.Locked(pin.sha256)))
+    yield JdkSurvey(lock, found, identity, archive)
 
   def text(survey: JdkSurvey): String =
-    render(survey.lock, survey.resolution)
+    render(survey.lock, survey.resolution, survey.archive)
+
+  def resolve(machine: Machine): IO[ToolchainError, JdkRuntime] =
+    resolveWith(machine, JdkStage.stage)
+
+  private def resolveWith(
+      machine: Machine,
+      stage: (JdkLock, Machine) => IO[StageError, JdkHome]
+  ): IO[ToolchainError, JdkRuntime] =
+    readLock(machine.repo).flatMap:
+      case None       => bootstrap(machine)
+      case Some(lock) =>
+        for
+          survey <- Toolchain.survey(machine, lock)
+          runtime <- survey.resolution match
+            case Resolution.Selected(chosen, _) =>
+              survey.identity
+                .fold[IO[ToolchainError, RuntimeIdentity]](
+                  RuntimeFiles
+                    .identity(chosen.home)
+                    .mapError(ToolchainError.Io(_))
+                )(ZIO.succeed(_))
+                .map(identity =>
+                  JdkRuntime(chosen.home, chosen.version, identity)
+                )
+            case Resolution.OverrideRejected(reason, _) =>
+              ZIO.fail(
+                ToolchainError.Rejected(
+                  machine.repo.resolve(".histos/toolchain.local"),
+                  reason
+                )
+              )
+            case _ =>
+              ZIO
+                .fromOption(survey.archive)
+                .orElseFail(
+                  ToolchainError.Archive(
+                    ToolArchiveError.NoArchive(machine.host)
+                  )
+                )
+                .flatMap(archive =>
+                  stage(survey.lock, machine)
+                    .mapError(ToolchainError.Stage(_))
+                    .flatMap: home =>
+                      ZIO
+                        .fromEither(home.version)
+                        .mapError(error =>
+                          ToolchainError.Stage(
+                            StageError
+                              .Version(home.path.resolve("release"), error)
+                          )
+                        )
+                        .map(version =>
+                          JdkRuntime(
+                            home.path,
+                            version,
+                            RuntimeIdentity.Locked(archive.sha256)
+                          )
+                        )
+                )
+        yield runtime
 
   def prepare(machine: Machine): IO[ToolchainError, Startup] =
+    prepareWith(machine, JdkStage.stage)
+
+  private def prepareWith(
+      machine: Machine,
+      stage: (JdkLock, Machine) => IO[StageError, JdkHome]
+  ): IO[ToolchainError, Startup] =
     if machine.settled == Settled.Yes then ZIO.succeed(Startup.Continue)
     else
       readLock(machine.repo).flatMap:
-        case None       => ZIO.succeed(Startup.Continue)
+        case None =>
+          readOverride(machine.repo).flatMap:
+            case None    => ZIO.succeed(Startup.Continue)
+            case Some(_) =>
+              bootstrap(machine).flatMap(runtime =>
+                align(machine.running, runtime.home).map((running, home) =>
+                  if running.contains(home) then Startup.Continue
+                  else
+                    Startup.Replace(
+                      home
+                        .resolve("bin")
+                        .resolve(if machine.os == Os.Windows then "java.exe"
+                        else "java")
+                    )
+                )
+              )
         case Some(lock) =>
-          resolution(machine, lock).flatMap:
-            case found @ Resolution.Provision(_, trace) =>
-              lock.source match
-                case ArchiveSource.Remote(_) =>
-                  ZIO.succeed(Startup.Refuse(render(lock, found)))
-                case ArchiveSource.Local(_) =>
-                  JdkStage
-                    .stage(lock, machine)
-                    .mapError(ToolchainError.Stage(_))
-                    .flatMap: home =>
-                      home.version match
-                        case Left(_) =>
-                          ZIO.succeed(Startup.Refuse(render(lock, found)))
-                        case Right(version) =>
-                          align(machine.running, home.path).map:
-                            (running, canonicalHome) =>
-                              val matched: Candidate.Match = Candidate.Match(
-                                Origin.Cache,
-                                canonicalHome,
-                                version
-                              )
-                              val selected =
-                                Resolution.Selected(matched, trace :+ matched)
-                              startup(lock, running, canonicalHome, selected)
-            case found @ Resolution.Selected(chosen, _) =>
-              align(machine.running, chosen.home).map: (running, home) =>
-                startup(lock, running, home, found)
-            case found => ZIO.succeed(Startup.Refuse(render(lock, found)))
+          readOverride(machine.repo)
+            .flatMap(explicit => resolution(lock, explicit))
+            .flatMap:
+              case Resolution.Provision(_, trace) =>
+                stage(lock, machine)
+                  .mapError(ToolchainError.Stage(_))
+                  .flatMap: home =>
+                    ZIO
+                      .fromEither(home.version)
+                      .mapError(error =>
+                        ToolchainError.Stage(
+                          StageError
+                            .Version(home.path.resolve("release"), error)
+                        )
+                      )
+                      .flatMap: version =>
+                        align(machine.running, home.path).map:
+                          (running, canonicalHome) =>
+                            val matched = new Candidate.Match(
+                              Origin.Cache,
+                              canonicalHome,
+                              version
+                            )
+                            startup(
+                              lock,
+                              running,
+                              canonicalHome,
+                              Resolution.Selected(matched, trace :+ matched),
+                              machine.os
+                            )
+              case found @ Resolution.Selected(chosen, _) =>
+                align(machine.running, chosen.home)
+                  .map((running, home) =>
+                    startup(lock, running, home, found, machine.os)
+                  )
+              case Resolution.OverrideRejected(reason, _) =>
+                ZIO.fail(
+                  ToolchainError.Rejected(
+                    machine.repo.resolve(".histos/toolchain.local"),
+                    reason
+                  )
+                )
+              case found =>
+                ZIO.succeed(Startup.Refuse(render(lock, found, None)))
+
+  private def bootstrap(machine: Machine): IO[ToolchainError, JdkRuntime] =
+    for
+      explicit <- readOverride(machine.repo)
+      path <- ZIO
+        .fromOption(explicit.orElse(machine.running))
+        .orElseFail(ToolchainError.NoRuntime)
+      home <- Jdk.home(path).mapError(ToolchainError.Probe(_))
+      _ <- ZIO
+        .fail(ToolchainError.Rejected(path, Reject.NoJavac))
+        .unless(home.hasJavac)
+      version <- ZIO
+        .fromEither(home.version)
+        .mapError(error =>
+          ToolchainError.Rejected(path, Reject.UnreadableVersion(error))
+        )
+      identity <- RuntimeFiles.identity(path).mapError(ToolchainError.Io(_))
+    yield JdkRuntime(path, version, identity)
 
   def command(javaBin: Path, jar: Path, args: List[String]): List[String] =
     javaBin.toString :: NativeAccess :: "-jar" :: jar.toString :: args
@@ -359,91 +538,87 @@ object Toolchain:
       lock: JdkLock,
       running: Option[Path],
       home: Path,
-      resolution: Resolution
+      resolution: Resolution,
+      os: Os
   ): Startup =
-    Launch.decide(running, home, resolution) match
+    Launch.decide(running, home, resolution, os) match
       case Launch.Stay(_)            => Startup.Continue
       case Launch.Reexec(javaBin, _) => Startup.Replace(javaBin)
-      case Launch.Halt(_)            => Startup.Refuse(render(lock, resolution))
+      case Launch.Halt(_) => Startup.Refuse(render(lock, resolution, None))
 
   private def align(
       running: Option[Path],
       home: Path
-  ): IO[Nothing, (Option[Path], Path)] =
+  ): IO[ToolchainError, (Option[Path], Path)] =
     for
       canonicalHome <- canonical(home)
       canonicalRun <- ZIO.foreach(running)(canonical)
     yield (canonicalRun, canonicalHome)
 
-  private def canonical(path: Path): IO[Nothing, Path] =
+  private def canonical(path: Path): IO[ToolchainError, Path] =
     ZIO
       .attemptBlocking(path.toRealPath().normalize)
-      .orElseSucceed(path.normalize)
+      .mapError(_ =>
+        ToolchainError.Io(IoFailure(path, histos.workspace.IoFault.Stat))
+      )
 
   private def resolution(
-      machine: Machine,
-      lock: JdkLock
+      lock: JdkLock,
+      explicit: Option[Path]
   ): IO[ToolchainError, Resolution] =
-    for
-      explicit <- readOverride(machine.repo)
-      input <- JdkLocations
-        .probe(machine, explicit)
-        .mapError(ToolchainError.Probe(_))
-      view <- Jdk.scan(input).mapError(ToolchainError.Probe(_))
-    yield Jdk.resolve(lock.major, view)
+    explicit match
+      case None       => ZIO.succeed(Resolution.Provision(lock.major, Nil))
+      case Some(path) =>
+        Jdk
+          .locate(Some(path))
+          .mapError(ToolchainError.Probe(_))
+          .map(location =>
+            Jdk.resolve(
+              lock.major,
+              ProbeView(
+                location,
+                Located.Unset,
+                Located.Unset,
+                ManagerSlot.Absent,
+                ManagerSlot.Absent,
+                Nil
+              )
+            )
+          )
 
-  def render(lock: JdkLock, resolution: Resolution): String =
+  def render(
+      lock: JdkLock,
+      resolution: Resolution,
+      archive: Option[ArchivePin]
+  ): String =
     val tail = resolution match
-      case Resolution.Provision(_, _) => s"archive ${JdkLock.url(lock.source)}"
-      case _                          => s"lock ${lock.version.value}"
+      case Resolution.Provision(_, _) =>
+        archive.fold("explicit local runtime")(pin =>
+          s"archive ${pin.source.render}"
+        )
+      case _ => s"lock ${lock.version.value}"
     Jdk.report(resolution) + "\n" + tail
 
   private def readLock(repo: Path): IO[ToolchainError, Option[JdkLock]] =
-    val file = lockPath(repo)
-    ZIO
-      .attemptBlocking(Files.isRegularFile(file))
-      .mapError(_ => ToolchainError.Unreadable(file))
-      .flatMap:
-        case false => ZIO.none
-        case true  =>
-          ZIO
-            .attemptBlocking(Files.readString(file))
-            .mapError(_ => ToolchainError.Unreadable(file))
-            .flatMap: text =>
-              ZIO
-                .fromEither(JdkLock.parse(text))
-                .mapBoth(ToolchainError.Lock(_), Some(_))
+    RuntimeFiles
+      .readLock(lockPath(repo))(JdkLock.parse)
+      .mapError:
+        case failure: IoFailure => ToolchainError.Io(failure)
+        case error: LockError   => ToolchainError.Lock(error)
 
   private def readOverride(repo: Path): IO[ToolchainError, Option[Path]] =
-    val file = repo.resolve(".histos").resolve("toolchain.local")
-    ZIO
-      .attemptBlocking(Files.isRegularFile(file))
-      .mapError(_ => ToolchainError.Unreadable(file))
-      .flatMap:
-        case false => ZIO.none
-        case true  =>
-          ZIO
-            .attemptBlocking(Files.readString(file))
-            .mapError(_ => ToolchainError.Unreadable(file))
-            .flatMap: text =>
-              ZIO
-                .fromEither(parseOverride(text))
-                .mapBoth(ToolchainError.Override(_), Some(_))
+    LocalOverride
+      .read(repo.resolve(".histos/toolchain.local"))
+      .mapError:
+        case failure: IoFailure       => ToolchainError.Io(failure)
+        case LocalOverrideError.Empty =>
+          ToolchainError.Override(OverrideError.Empty)
+        case LocalOverrideError.Multiple =>
+          ToolchainError.Override(OverrideError.Multiple)
+        case LocalOverrideError.Relative(raw) =>
+          ToolchainError.Override(OverrideError.Relative(raw))
+        case LocalOverrideError.Invalid(raw) =>
+          ToolchainError.Override(OverrideError.Invalid(raw))
 
-  private def parseOverride(text: String): Either[OverrideError, Path] =
-    val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-    lines match
-      case Nil        => Left(OverrideError.Empty)
-      case raw :: Nil =>
-        try
-          val path = Path.of(raw)
-          if path.isAbsolute then Right(path)
-          else Left(OverrideError.Relative(raw))
-        catch
-          case _: java.nio.file.InvalidPathException =>
-            Left(OverrideError.Invalid(raw))
-      case _ => Left(OverrideError.Multiple)
-
-  private def lockPath(repo: Path): Path =
-    repo.resolve(".histos").resolve("jdk.lock")
+  private def lockPath(repo: Path): Path = repo.resolve(".histos/jdk.lock")
 end Toolchain

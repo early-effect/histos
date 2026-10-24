@@ -1,10 +1,10 @@
 package histos.server
 
+import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame}
 import histos.jdk.Sha256
 import histos.load.HeaderScan
 import histos.toolchain.Runtimes
-import histos.zinc.ResolvedJdk
 import histos.ProjectGraph
 
 import java.io.{InputStream, OutputStream}
@@ -38,6 +38,9 @@ enum Decision:
   case Open(socket: Path)
 
 enum ServerError:
+  case Toolchain(error: histos.jdk.ToolchainError)
+  case Compiled(error: histos.zinc.GraphCompileError)
+  case Resolve(error: histos.resolve.ResolveError)
   case Unreachable(path: Path)
   case DifferentVersion
   case NoServer
@@ -46,6 +49,9 @@ enum ServerError:
   case Io(op: ServerIo)
 
   def message: String = this match
+    case Toolchain(error)  => error.message
+    case Compiled(error)   => error.message
+    case Resolve(error)    => error.message
     case Unreachable(path) => s"histos server at $path is not listening"
     case DifferentVersion  =>
       "histos server is a different version. Run histos reboot"
@@ -270,7 +276,9 @@ object Client:
         )
         input = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
-        _ <- Frame.write(output, Call.encode(Call.Bsp)).mapError(written(socket))
+        _ <- Frame
+          .write(output, Call.encode(Call.Bsp))
+          .mapError(written(socket))
         first <- Frame.read(input).mapError(read(socket))
         _ <- ZIO.fromEither(ready(first))
         _ <- copyStdin(output, channel, socket).forkScoped
@@ -288,7 +296,10 @@ object Client:
       case Some(Message.Ready) => Right(())
       case _                   => Left(ServerError.Protocol)
 
-  private def frames(input: InputStream, socket: Path): ZStream[Any, ServerError, Feed] =
+  private def frames(
+      input: InputStream,
+      socket: Path
+  ): ZStream[Any, ServerError, Feed] =
     ZStream
       .fromZIO(Frame.read(input).mapError(read(socket)))
       .flatMap:
@@ -306,7 +317,7 @@ object Client:
   private def copyStdin(
       output: OutputStream,
       channel: SocketChannel,
-      socket: Path,
+      socket: Path
   ): IO[ServerError, Unit] =
     def loop: IO[ServerError, Unit] =
       Frame
@@ -322,7 +333,10 @@ object Client:
             Frame.write(output, payload).mapError(written(socket)) *> loop
     loop
 
-  private def copyToStdout(input: InputStream, socket: Path): IO[ServerError, Int] =
+  private def copyToStdout(
+      input: InputStream,
+      socket: Path
+  ): IO[ServerError, Int] =
     def loop: IO[ServerError, Int] =
       Frame
         .read(input)
@@ -347,7 +361,7 @@ object Daemon:
   def open(
       repo: Path,
       graph: ProjectGraph,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       version: String,
       apiJar: Path,
       buildClasspath: List[Path],
@@ -382,7 +396,9 @@ object Daemon:
   /** A listening server. `done` completes when it stops. */
   final case class Running(record: Record.Written, done: IO[ServerError, Unit])
 
-  /** `stopping` lets the accept loop end cleanly when a reboot closes the channel. */
+  /** `stopping` lets the accept loop end cleanly when a reboot closes the
+    * channel.
+    */
   private final case class Lifecycle(
       armed: Ref[Boolean],
       stopping: Promise[Nothing, Unit],
@@ -404,7 +420,7 @@ object Daemon:
   private def run(
       repo: Path,
       graph: ProjectGraph,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       version: String,
       apiJar: Path,
       buildClasspath: List[Path],
@@ -421,53 +437,53 @@ object Daemon:
     val socket = Record.socket(repo)
     bind(socket).flatMap: channel =>
       ZIO.scoped {
-          for
-            _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
-            armed <- Ref.make(true)
-            _ <- ZIO.addFinalizer(
-              ZIO.whenZIO(armed.get)(remove(repo, socket)).unit
-            )
-            stopping <- Promise.make[Nothing, Unit]
-            life = Lifecycle(armed, stopping, relaunch)
-            fingerprint <- Fingerprint.read(repo)
-            _ <- Record.write(repo, version, fingerprint, socket)
-            held <- Scope.make
-            uses <- Ref.make[Uses](Uses.Live(0))
-            graphs <- Ref.make(graph)
-            live <- Ref.make(
-              Generation(graph, plugins, fingerprint, held, uses)
-            )
-            reloading <- Semaphore.make(1)
-            spliced <- Ref.make(Set.empty[Bsp.Session])
-            warm = Warm(live, graphs, reloading, spliced)
-            permit <- Semaphore.make(1)
-            runs <- Ref.make(Map.empty[String, Fiber[ServerError, Unit]])
-            _ <- listening
-              .succeed(
-                Record.Written(
-                  version,
-                  fingerprint,
-                  socket.toAbsolutePath.normalize
-                )
+        for
+          _ <- ZIO.addFinalizer(ZIO.attempt(channel.close()).ignore)
+          armed <- Ref.make(true)
+          _ <- ZIO.addFinalizer(
+            ZIO.whenZIO(armed.get)(remove(repo, socket)).unit
+          )
+          stopping <- Promise.make[Nothing, Unit]
+          life = Lifecycle(armed, stopping, relaunch)
+          fingerprint <- Fingerprint.read(repo)
+          _ <- Record.write(repo, version, fingerprint, socket)
+          held <- Scope.make
+          uses <- Ref.make[Uses](Uses.Live(0))
+          graphs <- Ref.make(graph)
+          live <- Ref.make(
+            Generation(graph, plugins, fingerprint, held, uses)
+          )
+          reloading <- Semaphore.make(1)
+          spliced <- Ref.make(Set.empty[Bsp.Session])
+          warm = Warm(live, graphs, reloading, spliced)
+          permit <- Semaphore.make(1)
+          runs <- Ref.make(Map.empty[String, Fiber[ServerError, Unit]])
+          _ <- listening
+            .succeed(
+              Record.Written(
+                version,
+                fingerprint,
+                socket.toAbsolutePath.normalize
               )
-              .unit
-            _ <- accept(
-              channel,
-              repo,
-              jdk,
-              version,
-              apiJar,
-              socket,
-              life,
-              warm,
-              permit,
-              runs,
-              machine,
-              buildClasspath,
-              build
             )
-          yield ()
-        }
+            .unit
+          _ <- accept(
+            channel,
+            repo,
+            jdk,
+            version,
+            apiJar,
+            socket,
+            life,
+            warm,
+            permit,
+            runs,
+            machine,
+            buildClasspath,
+            build
+          )
+        yield ()
+      }
 
   private def bind(socket: Path): IO[ServerError, ServerSocketChannel] =
     for
@@ -514,7 +530,7 @@ object Daemon:
   private def accept(
       server: ServerSocketChannel,
       repo: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       version: String,
       apiJar: Path,
       bound: Path,
@@ -570,7 +586,7 @@ object Daemon:
   private def handle(
       socket: SocketChannel,
       repo: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       version: String,
       apiJar: Path,
       bound: Path,
@@ -609,107 +625,133 @@ object Daemon:
                     wire(
                       Message.Exit(histos.cli.CliExit.LoadFailed.code, message)
                     ),
-                    bound,
+                    bound
                   )
                 case Right(held) =>
                   val say = Say.frames(output, bound)
-                  val ran =
-                    asked match
-                      case Call.Compile(projects) =>
-                        Calls.compile(repo, held.graph, projects, jdk, machine, say)
-                      case Call.Test(projects, patterns, quick) =>
-                        Calls.test(
-                          repo,
-                          held.graph,
-                          projects,
-                          patterns,
-                          quick,
-                          jdk,
-                          machine,
-                          say
-                        )
-                      case Call.Publish(repository, projects) =>
-                        Calls.publish(
-                          repo,
-                          held.graph,
-                          machine,
-                          jdk,
-                          repository,
-                          projects,
-                          say
-                        )
-                      case Call.Graph =>
-                        Calls.graph(held.graph, held.plugins, say)
-                      case Call.Run(id, platform) =>
-                        Calls.tracked(runs, id, say)(
-                          Calls.run(
-                            repo,
-                            held.graph,
-                            jdk,
-                            machine,
-                            id,
-                            platform,
-                            say
-                          )
-                        )
-                      case Call.Task(id) =>
-                        Calls.tracked(runs, id, say)(
-                          Calls.task(
-                            repo,
-                            held.graph,
-                            held.plugins,
-                            machine,
-                            id,
-                            say
-                          )
-                        )
-                      case Call.Cancel(id) =>
-                        Calls.cancel(runs, id, say)
-                      case Call.Toolchain =>
-                        Calls.toolchain(machine, held.graph, say)
-                      case Call.Resolve(action) =>
-                        Calls.resolve(repo, held.graph, action, say)
-                      case Call.Workflow(action) =>
-                        Calls.workflow(repo, held.graph, action, say)
-                      case Call.Assembly(destination) =>
-                        Calls.assembly(
-                          repo,
-                          held.graph,
-                          jdk,
-                          machine,
-                          destination,
-                          say
-                        )
-                      case Call.Reload =>
-                        write(
-                          output,
-                          wire(
-                            Message.Exit(histos.cli.CliExit.Success.code, "")
-                          ),
-                          bound,
-                        )
-                      case Call.Reboot =>
-                        reboot(repo, bound, server, life, output)
-                      case Call.Bsp =>
-                        bsp(
-                          repo,
-                          apiJar,
-                          version,
-                          bound,
-                          jdk,
-                          machine,
-                          warm,
-                          permit,
-                          buildClasspath,
-                          build,
-                          input,
-                          output
-                        )
+                  val ran = histos.jdk.Machine
+                    .load(repo)
+                    .mapError(ServerError.Toolchain(_))
+                    .flatMap: commandMachine =>
+                      histos.zinc.GraphCompile
+                        .jdk(commandMachine)
+                        .mapError(ServerError.Compiled(_))
+                        .flatMap: selectedJdk =>
+                          val machine = commandMachine
+                          val jdk = selectedJdk
+                          asked match
+                            case Call.Compile(projects) =>
+                              Calls.compile(
+                                repo,
+                                held.graph,
+                                projects,
+                                jdk,
+                                machine,
+                                say
+                              )
+                            case Call.Test(projects, patterns, quick) =>
+                              Calls.test(
+                                repo,
+                                held.graph,
+                                projects,
+                                patterns,
+                                quick,
+                                jdk,
+                                machine,
+                                say
+                              )
+                            case Call.Publish(repository, projects) =>
+                              Calls.publish(
+                                repo,
+                                held.graph,
+                                machine,
+                                jdk,
+                                repository,
+                                projects,
+                                say
+                              )
+                            case Call.Graph =>
+                              Calls.graph(held.graph, held.plugins, say)
+                            case Call.Run(id, platform) =>
+                              Calls.tracked(runs, id, say)(
+                                Calls.run(
+                                  repo,
+                                  held.graph,
+                                  jdk,
+                                  machine,
+                                  id,
+                                  platform,
+                                  say
+                                )
+                              )
+                            case Call.Task(id) =>
+                              Calls.tracked(runs, id, say)(
+                                Calls.task(
+                                  repo,
+                                  held.graph,
+                                  held.plugins,
+                                  machine,
+                                  id,
+                                  say
+                                )
+                              )
+                            case Call.Cancel(id) =>
+                              Calls.cancel(runs, id, say)
+                            case Call.Toolchain =>
+                              Calls.toolchain(machine, held.graph, say)
+                            case Call.Resolve(action) =>
+                              Calls.resolve(
+                                repo,
+                                held.graph,
+                                action,
+                                say,
+                                machine.native
+                              )
+                            case Call.Workflow(action) =>
+                              Calls.workflow(repo, held.graph, action, say)
+                            case Call.Assembly(destination) =>
+                              Calls.assembly(
+                                repo,
+                                held.graph,
+                                jdk,
+                                machine,
+                                destination,
+                                say
+                              )
+                            case Call.Reload =>
+                              write(
+                                output,
+                                wire(
+                                  Message
+                                    .Exit(histos.cli.CliExit.Success.code, "")
+                                ),
+                                bound
+                              )
+                            case Call.Reboot =>
+                              reboot(repo, bound, server, life, output)
+                            case Call.Bsp =>
+                              bsp(
+                                repo,
+                                apiJar,
+                                version,
+                                bound,
+                                jdk,
+                                machine,
+                                warm,
+                                permit,
+                                buildClasspath,
+                                build,
+                                input,
+                                output
+                              )
                   val leased =
                     asked match
                       case Call.Bsp => release(held) *> ran
                       case _        => ran.ensuring(release(held))
-                  write(output, wire(Message.Ready), bound) *> occupy(permit, asked)(
+                  write(output, wire(Message.Ready), bound) *> occupy(
+                    permit,
+                    asked
+                  )(
                     leased
                   )
 
@@ -842,7 +884,7 @@ object Daemon:
       _ <- write(
         output,
         wire(Message.Exit(histos.cli.CliExit.Success.code, "")),
-        bound,
+        bound
       )
       _ <- life.stopping.succeed(())
       _ <- ZIO.attemptBlocking(server.close()).ignore
@@ -853,7 +895,7 @@ object Daemon:
       apiJar: Path,
       version: String,
       bound: Path,
-      jdk: ResolvedJdk,
+      jdk: JdkRuntime,
       machine: histos.jdk.Machine,
       warm: Warm,
       permit: Semaphore,
@@ -874,54 +916,56 @@ object Daemon:
             .mapError(_ => ServerError.Io(ServerIo.Write(bound)))
         )
       val notify = (line: String) => send(line).ignore
-      warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
-        Bsp
-          .open(
-            repo,
-            generation.graph,
-            jdk,
-            runtimes,
-            buildClasspath,
-            notify,
-            build,
-            effect => permit.withPermit(effect),
-            Some(warm.graphs)
-          )
-          .flatMap { session =>
-            def loop: ZIO[
-              histos.resolve.Resolve & histos.load.Loader &
-                histos.cache.ContentStore,
-              ServerError,
-              Int
-            ] =
-              Frame
-                .read(input)
-                .mapError(_ => ServerError.Io(ServerIo.Read(bound)))
-                .flatMap:
-                  case None          => ZIO.succeed(1)
-                  case Some(payload) =>
-                    adopt(repo, apiJar, version, bound, warm)
-                      .flatMap {
-                        case Right(gen) => ZIO.succeed(gen)
-                        case Left(_)    =>
-                          warm.reloading.withPermit(
-                            warm.live.get.flatMap(gen => acquire(gen).as(gen))
-                          )
-                      }
-                      .flatMap { gen =>
-                        session
-                          .answer(gen.graph, payload)
-                          .ensuring(release(gen))
-                      }
-                      .flatMap:
-                        case Bsp.Answer.Reply(text) => send(text) *> loop
-                        case Bsp.Answer.Quiet       => loop
-                        case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
-            warm.spliced.update(_ + session) *>
-              loop
-                .ensuring(warm.spliced.update(_ - session))
-                .flatMap(code => send(wire(Message.Marker(code))))
-          }
+      warm.live.get.zip(Runtimes.read(machine)).flatMap {
+        (generation, runtimes) =>
+          Bsp
+            .open(
+              repo,
+              generation.graph,
+              jdk,
+              runtimes,
+              buildClasspath,
+              notify,
+              build,
+              effect => permit.withPermit(effect),
+              Some(warm.graphs)
+            )
+            .mapError(ServerError.Resolve(_))
+            .flatMap { session =>
+              def loop: ZIO[
+                histos.resolve.Resolve & histos.load.Loader &
+                  histos.cache.ContentStore,
+                ServerError,
+                Int
+              ] =
+                Frame
+                  .read(input)
+                  .mapError(_ => ServerError.Io(ServerIo.Read(bound)))
+                  .flatMap:
+                    case None          => ZIO.succeed(1)
+                    case Some(payload) =>
+                      adopt(repo, apiJar, version, bound, warm)
+                        .flatMap {
+                          case Right(gen) => ZIO.succeed(gen)
+                          case Left(_)    =>
+                            warm.reloading.withPermit(
+                              warm.live.get.flatMap(gen => acquire(gen).as(gen))
+                            )
+                        }
+                        .flatMap { gen =>
+                          session
+                            .answer(gen.graph, payload)
+                            .ensuring(release(gen))
+                        }
+                        .flatMap:
+                          case Bsp.Answer.Reply(text) => send(text) *> loop
+                          case Bsp.Answer.Quiet       => loop
+                          case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
+              warm.spliced.update(_ + session) *>
+                loop
+                  .ensuring(warm.spliced.update(_ - session))
+                  .flatMap(code => send(wire(Message.Marker(code))))
+            }
       }
     }
 
@@ -931,9 +975,11 @@ object Daemon:
   private def write(
       output: OutputStream,
       payload: String,
-      socket: Path,
+      socket: Path
   ): IO[ServerError, Unit] =
-    Frame.write(output, payload).mapError(_ => ServerError.Io(ServerIo.Write(socket)))
+    Frame
+      .write(output, payload)
+      .mapError(_ => ServerError.Io(ServerIo.Write(socket)))
 
   private def remove(repo: Path, socket: Path): UIO[Unit] =
     ZIO.attemptBlocking(Files.deleteIfExists(Record.file(repo))).ignore *>
