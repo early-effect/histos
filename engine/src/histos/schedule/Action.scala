@@ -2,8 +2,6 @@ package histos.schedule
 
 import histos.jdk.Sha256
 import histos.plugin.{Need, RepoPath, Seal}
-import histos.task.TaskKind
-
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 import java.security.MessageDigest
@@ -27,7 +25,9 @@ object InputName:
 enum InputNameError:
   case Empty
 
-/** What an input contributes to the key. Text stays text. A hash is not a stringly digest. */
+/** What an input contributes to the key. Text stays text. A hash is not a
+  * stringly digest.
+  */
 enum InputValue:
   case Text(text: String)
   case Hash(sha: Sha256)
@@ -55,25 +55,32 @@ object ActionId:
 enum ActionIdError:
   case Empty
 
-/**
- * Whether the scheduler may send the action.
- * A plugin hit also names the repo and the declared output files. Those two are not part of the digest.
- * An empty output list stores the task text and does not check a file.
- */
+/** Whether the scheduler may send the action. A plugin hit also names the repo
+  * and the declared output files. Those two are not part of the digest. An
+  * empty output list stores the task text and does not check a file.
+  */
 enum Policy:
   case Core
-  case Plugin(seal: Seal, needs: Set[Need], root: Option[Path] = None, outputs: List[RepoPath] = Nil)
+  case Plugin(
+      seal: Seal,
+      needs: Set[Need],
+      root: Option[Path] = None,
+      outputs: List[RepoPath] = Nil
+  )
 
-/** A task node the scheduler can run. The effect is not stored here. `Core` keeps compile keys stable. */
+/** A task node the scheduler can run. The effect is not stored here. `Core`
+  * keeps compile keys stable.
+  */
 final case class Action(
     id: ActionId,
-    kind: TaskKind,
     inputs: List[Input],
     dependencies: List[ActionId],
-    policy: Policy = Policy.Core,
+    policy: Policy = Policy.Core
 )
 
-/** Identity of an action and of the actions it depends on. The cache layer stores bytes under this key. */
+/** Identity of an action and of the actions it depends on. The cache layer
+  * stores bytes under this key.
+  */
 opaque type Digest = String
 
 object Digest:
@@ -86,19 +93,26 @@ object Digest:
     Sha256.of(bytes).value
 
   def of(action: Action, dependencyDigests: Map[ActionId, Digest]): Digest =
-    val inputs = action.inputs.sortBy(_.name.value).map(input => s"${input.name.value}=${input.value.canonical}").mkString("\n")
+    val inputs = action.inputs
+      .sortBy(_.name.value)
+      .map(input => s"${input.name.value}=${input.value.canonical}")
+      .mkString("\n")
     val deps = action.dependencies
-      .map(id => s"${id.value}=${dependencyDigests.getOrElse(id, "")}")
+      .map(id =>
+        s"${id.value}=${dependencyDigests.get(id).fold("<missing>")(_.value)}"
+      )
       .sorted
       .mkString("\n")
-    val body = s"${action.kind}\n${action.id.value}\n$inputs\n$deps"
+    val body = s"${action.id.value}\n$inputs\n$deps"
     val text = action.policy match
-      case Policy.Core => body
+      case Policy.Core                      => body
       case Policy.Plugin(seal, needs, _, _) =>
         val listed = needs.toList.map(_.toString).sorted.mkString(",")
         val need = if listed.isEmpty then "" else s" $listed"
         s"$body\nplugin $seal$need"
-    val bytes = MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8))
+    val bytes = MessageDigest
+      .getInstance("SHA-256")
+      .digest(text.getBytes(StandardCharsets.UTF_8))
     bytes.map(b => f"${b & 0xff}%02x").mkString
 
   extension (digest: Digest) def value: String = digest
@@ -106,11 +120,15 @@ object Digest:
   private def isHex(c: Char): Boolean =
     c.isDigit || (c >= 'a' && c <= 'f')
 
-/** Lookup and store. A miss is `None`, and the scheduler runs the action locally, then `put`s the text. */
+/** Lookup and store. A miss is `None`, and the scheduler runs the action
+  * locally, then `put`s the text.
+  */
 trait ActionCache:
   def get(digest: Digest): IO[CacheError, Option[String]]
-  def put(digest: Digest, value: String): IO[CacheError, Unit] = ZIO.unit
+  def put(digest: Digest, value: String): IO[CacheError, Unit]
 
 object ActionCache:
-  val miss: ActionCache = _ => ZIO.none
+  val miss: ActionCache = new ActionCache:
+    def get(digest: Digest): IO[CacheError, Option[String]] = ZIO.none
+    def put(digest: Digest, value: String): IO[CacheError, Unit] = ZIO.unit
 end ActionCache

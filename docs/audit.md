@@ -1,6 +1,6 @@
 # Histos audit ledger
 
-**Snapshot:** `main` at `7eeacb3`, 2026-10-22
+**Snapshot:** `main` at `bf32e16`, 2026-10-24
 **Scope:** `api`, `central`, `engine`, `app`, the launcher scripts, and `docs/`
 **Owner of each row:** a step in [roadmap.md](roadmap.md)
 
@@ -126,10 +126,10 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 
 ## M2 Steps, executor, and aspects
 
-- [ ] **K1** (services) Compile cells and plugin tasks run on `Histos`. Test (`testrun/ModuleTest`), publish (`publish/LocalPublish`), and run (`program/Program`) are still hand-wired pipelines.
-- [ ] **K2** (api-shape) Scheduler outputs are `String`, dependents never receive upstream values, and dispatch is `if action.kind == ...` (`PluginRuntime.scala:104`).
+- [x] **K1** (services) Compile, test, publish, run, and plugin cells execute as `Step` graphs through `Histos`. Test cells, publish jobs, and run cells declare their resource needs and preserve their typed domain errors.
+- [x] **K2** (api-shape) The closed `TaskKind` action dispatch is gone. Scheduler dependents receive the combined upstream value, while compile, test, publish, run, and plugin orchestration use typed `Step` values and typed continuations.
 - [x] **K3** (concurrency) `schedule/Scheduler.scala:128,144`: parallelism is unbounded, and `foreachParDiscard` fails fast, which contradicts design Key Decision 9. `Histos` takes one permit per resource class, and a failed side of a zip does not cancel the other side. `HistosSpec` holds a cpu limit of one and a dependent that does not run.
-- [ ] **K4** (services) `Scheduler.scala:146-214` hardcodes four aspects inline: local cache, manifest check, remote lookup, and upload by verdict.
+- [x] **K4** (services) Local cache lookup, declared-output validation, remote lookup, and remote upload are separate `ScheduleAspects` used by the scheduler. Plugin steps also use the typed `StepAspect` decoration seam.
 - [x] **K5** (concurrency, *verified*) `GraphCompile.scala:459-486`: compile folded over topological layers, so a cell waited for its whole previous layer. A cell is now a step whose upstreams are the cells it depends on. `GraphCompileSpec` holds one cell and sees an unrelated cell start.
 - [x] **K6** (concurrency, *verified*) `GraphCompile.scala:330-334,404-446`: a `LinkedBlockingQueue` and `AtomicBoolean` side channel, side effects inside `ZIO.succeed`, `attemptBlockingInterrupt(take).orDie`, and `closeAll` twice. Feeds go through the stream the compile is already producing.
 - [x] **K7** (api-shape) `GraphCompile.scala:448,488,552` took 9, 10, and 12 parameters. `CompilePlan` and `CellRun` carry them.
@@ -137,13 +137,13 @@ Category tags: `correctness`, `resources`, `concurrency`, `typed-errors`, `strin
 - [x] **K9** (performance) `JvmCompile.scala:256,288-294,338`: `hashSources(..) *> invoke` read every source into one `Chunk` and discarded the digest. The digest is `CompileOutput.key`, and a compiled cell keeps it.
 - [x] **K10** (correctness) `PluginRuntime.scala:104,196-205`: compile dependencies were stub actions that returned `"compiled"` with no inputs. A `TaskDep.Compile` is now a compile step, and a plugin failure from that step is `PluginFault.Compiled`.
 - [x] **K11** (performance) `PluginRuntime.scala:123,169-177` planned and hashed every task of every plugin on each run. The step graph is only the task being run and the tasks it depends on.
-- [ ] **K12** (api-shape) `task/Task.scala:53,56,70`: `TaskResult.text` is a `String`, the doc says a cancelled run dies (it is interrupted), and the registry finalizer does nothing.
-- [ ] **K13** (api-shape) `TaskKind` is closed, and nothing in main code uses `ZIOAspect` or `@@`. There is no decoration seam.
-- [ ] **K14** (minor) `Scheduler.scala:180,185` computes the verdict twice, `:25` `Failed.message` drops the inner error, `Action.scala:91` has `getOrElse(id, "")`, `:112` has a no-op `put` default, and `RemoteCache.scala:48-75` keeps test helpers in main code.
-- [ ] **K15** (tests) `SchedulerSpec` lacks: a failure stops only its dependents, `DuplicateAction`, `MissingDependency`, `DuplicateInput`, the context loader under parallel plugins, the sticky refusal, and temp cleanup on interrupt.
-- [ ] **K16** (typed-errors) A plugin compile failure is `PluginFault.Compiled`. `load/PluginCells.scala` still flattens `ResolveError`, `LockError`, and `ModuleTestError` into `PluginRunError.Failed(PluginDetail(text))`.
-- [ ] **K17** (api-shape) `GraphCompileError.Cells(first, rest)` is a hand-rolled non-empty list where `NonEmptyChunk` fits. Found in M0.2.
-- [ ] **K18** (correctness) `PluginRuntime.bind` drops a task whose `TaskId.from` fails (`.toOption.toList`) without reporting it. Found in M0.2.
+- [x] **K12** (api-shape) `TaskResult` is a typed inspect, version, or plugin report with rendering at the surface. Cancellation is interruption, and the registry finalizer interrupts every registered fiber.
+- [x] **K13** (api-shape) `TaskKind` is gone. `StepAspect.cached`, `StepAspect.remote`, `StepAspect.lift`, plugin aspects, and `@@` provide the typed decoration seam.
+- [x] **K14** (minor) Verdicts are computed once, scheduler failures retain the inner value in their rendering, missing dependency digests are explicit, cache writes are required, and the in-memory remote cache is test-only.
+- [x] **K15** (tests) `SchedulerSpec` covers dependent-only failure propagation, duplicate actions, missing dependencies, duplicate inputs, upstream values, and interruption. Existing load and plugin specs cover parallel context loaders, sticky refusals, and scoped cleanup.
+- [x] **K16** (typed-errors) Plugin resolution and lock failures are `PluginFault.Resolved`, test source and test compile failures are `PluginFault.Tested`, compile failures are `PluginFault.Compiled`, and executor failures remain `PluginFault.Scheduled`.
+- [x] **K17** (api-shape) `GraphCompileError.Cells` carries one `NonEmptyChunk[GraphCompileError]`.
+- [x] **K18** (correctness) `PluginRuntime.bind` converts every plugin task id with `ZIO.fromEither` and returns `TaskError` when binding fails.
 
 ## M3 Services that own resources
 

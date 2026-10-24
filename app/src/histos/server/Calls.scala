@@ -66,7 +66,7 @@ object Calls:
       Path.of("."),
       None,
       Settled.No,
-      NativeOrigin.Central,
+      NativeOrigin.Central
     )
 
   def graph(
@@ -175,7 +175,7 @@ object Calls:
           .foldZIO(
             error => done(say, CliExit.TaskFailed.code, error.message),
             result =>
-              told(say, result.text) *> done(
+              told(say, result.render) *> done(
                 say,
                 CliExit.Success.code,
                 ""
@@ -334,7 +334,10 @@ object Calls:
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     GraphCompile
-      .strict(GraphCompile.console(repo, graph, projects, jdk, NativeOrigin.read(machine.env)))
+      .strict(
+        GraphCompile
+          .console(repo, graph, projects, jdk, NativeOrigin.read(machine.env))
+      )
       .mapZIO {
         case CompileFeed.Began(module, version, platform) =>
           say(Message.Out(Lines.compiling(module, version, platform)))
@@ -416,9 +419,12 @@ object Calls:
                   parsed,
                   quick,
                   (module, version, platform) =>
-                    say(Message.Out(Lines.compilingTests(module, version, platform))).ignore,
+                    say(
+                      Message
+                        .Out(Lines.compilingTests(module, version, platform))
+                    ).ignore
                 ),
-                cells.toList,
+                cells.toList
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>
@@ -622,7 +628,7 @@ object Calls:
 
   private def failedSuite(status: TestStatus): Boolean =
     status match
-      case TestStatus.Failed(_) => true
+      case TestStatus.Failed(_)                                          => true
       case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed =>
         false
 
@@ -655,7 +661,7 @@ object Calls:
 
     def bind: ZIO[
       histos.schedule.ActionCache & RemoteCache & Resolve,
-      Nothing,
+      TaskError,
       Map[TaskId, IO[TaskError, TaskResult]]
     ] =
       ZIO.succeed(Map.empty)

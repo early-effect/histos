@@ -377,9 +377,9 @@ After `graph` returns, the loader loads each registered entry class from `BuildL
 
 ### The action
 
-`Action` in [`Action.scala`](../engine/src/histos/schedule/Action.scala) carries a `Policy`. Core tasks use `Policy.Core`, the default. Each plugin task is an `Action` with `TaskKind.Plugin` (from [`Task.scala`](../engine/src/histos/task/Task.scala)) and `Policy.Plugin(seal, needs, Some(repo), outputs)`. `root` and `outputs` drive the file check on a cache hit and stay out of the digest. `Digest.of`, in the same file, appends a `plugin <seal> <needs>` line only for `Policy.Plugin`, so a seal change invalidates the key and `Policy.Core` keys keep their text.
+`Action` in [`Action.scala`](../engine/src/histos/schedule/Action.scala) carries a `Policy`. Core work uses `Policy.Core`, the default. A plugin cache action uses `Policy.Plugin(seal, needs, Some(repo), outputs)`. `root` and `outputs` drive the file check on a cache hit and stay out of the digest. `Digest.of`, in the same file, appends a `plugin <seal> <needs>` line only for `Policy.Plugin`, so a seal change invalidates the key and `Policy.Core` keys keep their text.
 
-`Sendable.ofAction` in [`Sendable.scala`](../engine/src/histos/schedule/Sendable.scala) maps `Policy.Plugin` to `decide(Runner.Plugin(seal), needs)`. Under `Policy.Core`, a `TaskKind.Plugin` counts as `Seal.Open` and stays local. `decide` returns `Send` for `Hermetic` with no needs. Any `Need`, or `Open`, is `Stay`. [`SchedulerSpec.scala`](../engine/test/SchedulerSpec.scala) checks the digest line, that an open plugin is never stored, and that a hermetic task with no outputs stores its text.
+`Sendable.ofAction` in [`Sendable.scala`](../engine/src/histos/schedule/Sendable.scala) maps `Policy.Plugin` to `decide(Runner.Plugin(seal), needs)`. Core actions are sendable. `decide` returns `Send` for `Hermetic` with no needs. Any `Need`, or `Open`, is `Stay`. [`SchedulerSpec.scala`](../engine/test/SchedulerSpec.scala) checks the digest line, that an open plugin is never stored, and that a hermetic task with no outputs stores its text.
 
 ### The digest
 

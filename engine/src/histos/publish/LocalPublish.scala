@@ -36,6 +36,9 @@ import histos.{
 
 import java.nio.file.{Files, Path}
 
+import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
+import histos.step.{Need, Phase, Step, StepId, StepInfo}
+
 import zio.{Chunk, ZIO}
 
 final case class PublishedModule(
@@ -45,7 +48,9 @@ final case class PublishedModule(
     jar: Option[Path],
     unique: Option[String] = None
 ):
-  /** A snapshot prints its unique version. A directory publish prints the jar under `root`. */
+  /** A snapshot prints its unique version. A directory publish prints the jar
+    * under `root`.
+    */
   def rendered(root: Option[Path]): String =
     val place = unique match
       case Some(id) => id
@@ -58,7 +63,8 @@ final case class PublishedModule(
               case Some(base) =>
                 val from = base.toAbsolutePath.normalize
                 val full = path.toAbsolutePath.normalize
-                val shown = if full.startsWith(from) then from.relativize(full) else full
+                val shown =
+                  if full.startsWith(from) then from.relativize(full) else full
                 shown.toString.replace('\\', '/')
     s"${group.value} $artifact $revision $place"
 
@@ -72,7 +78,12 @@ enum LocalPublishError:
   case Version(error: VersionError)
   case Target(error: CiError)
   case Compile(error: GraphCompileError)
-  case Jar(module: ProjectName, version: ScalaVersion, platform: Platform, error: JarError)
+  case Jar(
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+      error: JarError
+  )
   case Publish(error: PublishError)
   case Read(path: Path)
   case NoOrganization
@@ -89,9 +100,9 @@ enum LocalPublishError:
   case LauncherRevision
 
   def message: String = this match
-    case Version(error)              => error.message
-    case Target(error)               => error.message
-    case Compile(error)              => error.message
+    case Version(error)                        => error.message
+    case Target(error)                         => error.message
+    case Compile(error)                        => error.message
     case Jar(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to jar\n${error.message}"
     case Publish(error) => error.message
@@ -109,7 +120,7 @@ enum LocalPublishError:
       s"$organization:$name:$revision is not a publishable dependency"
     case Credentials   => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
     case NotAPath(raw) => s"'$raw' is not a path"
-    case NoAssembly(path)              => s"no assembly at $path"
+    case NoAssembly(path)                 => s"no assembly at $path"
     case VersionMismatch(expected, found) =>
       s"the ship is $expected and this publish wrote $found"
     case LauncherRevision => "the launcher publishes one manual version"
@@ -144,13 +155,62 @@ object LocalPublish:
           report = report
         )
         .mapError(LocalPublishError.Compile(_))
-      written <- ZIO.foreachPar(jobs(plans, picked.modules, cells))(job =>
-        write(repo, graph, group, job)
+      written <- publishJobs(
+        repo,
+        graph,
+        group,
+        jobs(plans, picked.modules, cells)
       )
     yield PublishOutput(
       picked.skipped.map(name => LocalPublishError.NotPublished(name).message),
       written.sortBy(line => (line.group.value, line.artifact, line.revision))
     )
+
+  private def publishJobs(
+      repo: Path,
+      graph: ProjectGraph,
+      group: Organization,
+      jobs: List[Job]
+  ): ZIO[Publisher, LocalPublishError, List[PublishedModule]] =
+    execute(combine(jobs.map: job =>
+      val cell = job.cell
+      val info = StepInfo(
+        StepId.Cell(cell.module, cell.version, cell.platform, Phase.Publish),
+        Chunk.empty,
+        Set(Need.Io)
+      )
+      Step.local[PublishedModule](info)(write(repo, graph, group, job))))
+
+  private def combine(
+      steps: List[Step[Publisher, LocalPublishError, PublishedModule]]
+  ): Step[Publisher, LocalPublishError, List[PublishedModule]] =
+    steps match
+      case Nil =>
+        Step.local[List[PublishedModule]](
+          StepInfo(StepId.Work("publish"), Chunk.empty, Set(Need.Io))
+        )(ZIO.succeed(Nil))
+      case head :: tail =>
+        tail
+          .foldLeft[Step[Publisher, LocalPublishError, List[PublishedModule]]](
+            head.map(List(_))
+          ): (acc, step) =>
+            acc.zip(step).map((all, next) => all :+ next)
+
+  private def execute[A](
+      goal: Step[Publisher, LocalPublishError, A]
+  ): ZIO[Publisher, LocalPublishError, A] =
+    ZIO.scoped:
+      ZIO
+        .serviceWithZIO[Histos](_.start(goal))
+        .flatMap(_.outcome)
+        .provideSome[Publisher & zio.Scope](Parallelism.live >>> Histos.live)
+        .flatMap:
+          case Outcome.Done(value)      => ZIO.succeed(value)
+          case Outcome.Failed(failures) =>
+            failures.head match
+              case StepFailure.Failed(_, cause) => ZIO.failCause(cause)
+              case StepFailure.Skipped(_, _)    =>
+                ZIO.dieMessage("publish step was skipped")
 
   private final case class Planned(
       revision: Revision,
@@ -261,8 +321,9 @@ object LocalPublish:
       else
         val next = more.flatMap: name =>
           graph.get(name) match
-            case Some(module: Module) => upstream(module).filter(members.contains).toSet
-            case _                    => Set.empty
+            case Some(module: Module) =>
+              upstream(module).filter(members.contains).toSet
+            case _ => Set.empty
         step(seen ++ more, next -- seen)
     step(Set.empty, asked)
 
@@ -280,7 +341,9 @@ object LocalPublish:
     modules.foldLeft[Either[LocalPublishError, Unit]](Right(())):
       (acc, module) =>
         acc.flatMap: _ =>
-          upstream(module).find(dependency => !chosen.contains(dependency)) match
+          upstream(module).find(dependency =>
+            !chosen.contains(dependency)
+          ) match
             case Some(dependency) =>
               Left(
                 LocalPublishError.UnpublishedDependency(module.name, dependency)
@@ -341,8 +404,8 @@ object LocalPublish:
 
   private def placed(published: Published): (Option[Path], Option[String]) =
     published match
-      case Published.Local(jar, _, _)        => (Some(jar), None)
-      case Published.Snapshot(unique, _)     => (None, Some(unique.value))
+      case Published.Local(jar, _, _)    => (Some(jar), None)
+      case Published.Snapshot(unique, _) => (None, Some(unique.value))
 
   private def dependencies(
       graph: ProjectGraph,

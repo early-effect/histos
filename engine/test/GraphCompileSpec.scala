@@ -204,14 +204,27 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .attempt {
               val slow = module("slow", Jvm)(ScalaVersion("3.9.0"))
               val fast = module("fast", Jvm)(ScalaVersion("3.9.0"))
-              val after = module("after", Jvm)(ScalaVersion("3.9.0")).dependsOn(fast)
-              write(root, "slow/src/main/scala/Slow.scala", "object Slow:\n  def n: Int = 1\n")
-              write(root, "fast/src/main/scala/Fast.scala", "object Fast:\n  def n: Int = 1\n")
-              write(root, "after/src/main/scala/After.scala", "object After:\n  def n: Int = Fast.n\n")
+              val after =
+                module("after", Jvm)(ScalaVersion("3.9.0")).dependsOn(fast)
+              write(
+                root,
+                "slow/src/main/scala/Slow.scala",
+                "object Slow:\n  def n: Int = 1\n"
+              )
+              write(
+                root,
+                "fast/src/main/scala/Fast.scala",
+                "object Fast:\n  def n: Int = 1\n"
+              )
+              write(
+                root,
+                "after/src/main/scala/After.scala",
+                "object After:\n  def n: Int = Fast.n\n"
+              )
               write(
                 root,
                 ".histos/dependencies.lock",
-                "cell slow 3.9.0 jvm\ncell fast 3.9.0 jvm\ncell after 3.9.0 jvm\n",
+                "cell slow 3.9.0 jvm\ncell fast 3.9.0 jvm\ncell after 3.9.0 jvm\n"
               )
               Projects(slow, fast, after)
             }
@@ -223,11 +236,12 @@ object GraphCompileSpec extends ZIOSpecDefault:
               Nil,
               jdk,
               NativeOrigin.Central,
-              name => if name.value == "slow" then release.await else ZIO.unit,
+              name => if name.value == "slow" then release.await else ZIO.unit
             )
             .tap:
-              case CompileFeed.Began(module, _, _) if module.value == "after" => begun.succeed(()).unit
-              case _                                                          => ZIO.unit
+              case CompileFeed.Began(module, _, _) if module.value == "after" =>
+                begun.succeed(()).unit
+              case _ => ZIO.unit
             .runDrain
             .provide(Resolve.live(root.resolve("coursier")))
             .forkScoped
@@ -308,14 +322,12 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .either
         yield assertTrue:
           out match
-            case Left(
-                  GraphCompileError.Cells(
-                    GraphCompileError
-                      .MissingUpstream(module, dependency, version, platform),
-                    _
-                  )
-                ) =>
-              module.value == "app" && dependency.value == "core" && version.value == "3.9.0" && platform == Jvm
+            case Left(GraphCompileError.Cells(errors)) =>
+              errors.head match
+                case GraphCompileError
+                      .MissingUpstream(module, dependency, version, platform) =>
+                  module.value == "app" && dependency.value == "core" && version.value == "3.9.0" && platform == Jvm
+                case _ => false
             case _ => false
     ,
     test("a js-only upstream is on the js classpath and not the jvm one"):
@@ -537,7 +549,9 @@ object GraphCompileSpec extends ZIOSpecDefault:
           } match
             case Some(name) =>
               out == Left(
-                GraphCompileError.Cells(GraphCompileError.NoRoot(name), Nil)
+                GraphCompileError.Cells(
+                  zio.NonEmptyChunk(GraphCompileError.NoRoot(name))
+                )
               )
             case None => false
     ,
@@ -590,11 +604,11 @@ object GraphCompileSpec extends ZIOSpecDefault:
           ,
           files.isEmpty,
           refused match
-            case Left(
-                  GraphCompileError
-                    .Cells(GraphCompileError.NoSources(module, _), _)
-                ) =>
-              module.value == "probe"
+            case Left(GraphCompileError.Cells(errors)) =>
+              errors.head match
+                case GraphCompileError.NoSources(module, _) =>
+                  module.value == "probe"
+                case _ => false
             case _ => false
         )
     ,
@@ -615,11 +629,11 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .either
         yield assertTrue:
           out match
-            case Left(
-                  GraphCompileError
-                    .Cells(GraphCompileError.NoSources(module, base), _)
-                ) =>
-              module.value == "core" && base == root.resolve("src")
+            case Left(GraphCompileError.Cells(errors)) =>
+              errors.head match
+                case GraphCompileError.NoSources(module, base) =>
+                  module.value == "core" && base == root.resolve("src")
+                case _ => false
             case _ => false
   )
 
