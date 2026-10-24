@@ -3,17 +3,23 @@ package histos.native
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
 import histos.testrun.SuitePattern
-import histos.zinc.{CompileError, CompileRequest, CompileToolchain, JvmCompile, ResolvedJdk, ScalacFlags}
+import histos.workspace.Workspace
+import histos.zinc.{
+  CompileError,
+  CompileRequest,
+  CompileToolchain,
+  JvmCompile,
+  ResolvedJdk,
+  ScalacFlags
+}
 import histos.Platform
 
-import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
-
-import scala.jdk.CollectionConverters.*
+import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** One native test-adapter run. The engine does not load `scala.scalanative`. */
+/** One native test-adapter run. The engine does not load `scala.scalanative`.
+  */
 final case class NativeSuiteRequest(
     toolchain: NativeToolchain,
     framework: String,
@@ -22,36 +28,60 @@ final case class NativeSuiteRequest(
     work: Path,
     jdk: ResolvedJdk,
     processEnv: Map[String, String],
-    patterns: List[SuitePattern] = Nil,
+    patterns: List[SuitePattern] = Nil
 )
 
-/**
- * Run a linked native test binary through `scala.scalanative.testinterface.adapter.TestAdapter`.
- * The engine does not load `scala.scalanative`.
- */
+/** Run a linked native test binary through
+  * `scala.scalanative.testinterface.adapter.TestAdapter`. The engine does not
+  * load `scala.scalanative`.
+  */
 object NativeSuite:
   private val SuiteMain: String = "subprocess.NativeSuite"
 
   def run(request: NativeSuiteRequest): IO[NativeSuiteError, ChildRequest] =
-    val NativeSuiteRequest(toolchain, framework, binary, classpath, work, jdk, processEnv, patterns) = request
+    val NativeSuiteRequest(
+      toolchain,
+      framework,
+      binary,
+      classpath,
+      work,
+      jdk,
+      processEnv,
+      patterns
+    ) = request
     val bridgeRoot = work.resolve("runner")
     val classes = bridgeRoot.resolve("classes")
-    val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("NativeSuite.scala")
+    val source = bridgeRoot
+      .resolve("src")
+      .resolve("subprocess")
+      .resolve("NativeSuite.scala")
     val shapes = work.resolve("shapes.txt")
     val child = work.resolve("runner-child")
     for
       found <- ClassShapes.read(classpath).mapError(NativeSuiteError.Shapes(_))
-      tools <- ZIO.attemptBlockingInterrupt(fetch(toolchain)).mapError(_ => NativeSuiteError.Unavailable).flatMap(ZIO.fromEither)
+      tools <- ZIO
+        .attemptBlockingInterrupt(fetch(toolchain))
+        .mapError(_ => NativeSuiteError.Unavailable)
+        .flatMap(ZIO.fromEither)
       _ <- write(shapes, encode(found))
       _ <- write(source, suite(patterns))
-      _ <- JvmCompile.compile(CompileRequest(
-             CompileToolchain(JvmCompile.Scala390, Platform.Jvm, jdk, ScalacFlags.empty),
-             List(source),
-             tools,
-             classes,
-             bridgeRoot.resolve("analysis"),
-             Nil,
-           )).mapError(NativeSuiteError.Compile(_))
+      _ <- JvmCompile
+        .compile(
+          CompileRequest(
+            CompileToolchain(
+              JvmCompile.Scala390,
+              Platform.Jvm,
+              jdk,
+              ScalacFlags.empty
+            ),
+            List(source),
+            tools,
+            classes,
+            bridgeRoot.resolve("analysis"),
+            Nil
+          )
+        )
+        .mapError(NativeSuiteError.Compile(_))
       _ <- empty(child)
     yield ChildRequest(
       Platform.Jvm,
@@ -62,12 +92,16 @@ object NativeSuite:
       processEnv ++ Map(
         "NATIVE_BINARY" -> binary.toAbsolutePath.toString,
         "NATIVE_FRAMEWORK" -> framework,
-        "NATIVE_SHAPES" -> shapes.toAbsolutePath.toString,
-      ),
+        "NATIVE_SHAPES" -> shapes.toAbsolutePath.toString
+      )
     )
 
   private def encode(shapes: List[ClassShapes.Shape]): String =
-    shapes.map(shape => s"${shape.name}\t${if shape.module then "1" else "0"}\t${shape.parents.mkString(",")}").mkString("\n")
+    shapes
+      .map(shape =>
+        s"${shape.name}\t${if shape.module then "1" else "0"}\t${shape.parents.mkString(",")}"
+      )
+      .mkString("\n")
 
   private def suite(patterns: List[SuitePattern]): String =
     """package subprocess
@@ -184,46 +218,51 @@ object NativeSuite:
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
       |""".stripMargin.replace("__SUITES__", SuitePattern.embed(patterns))
 
-  /** The runner comes from the toolchain's origin. Its Scala and sbt dependencies come from Central. */
-  private def fetch(toolchain: NativeToolchain): Either[NativeSuiteError, List[Path]] =
+  /** The runner comes from the toolchain's origin. Its Scala and sbt
+    * dependencies come from Central.
+    */
+  private def fetch(
+      toolchain: NativeToolchain
+  ): Either[NativeSuiteError, List[Path]] =
     val dependency = coursier.Dependency(
-      coursier.Module(coursier.Organization("org.scala-native"), coursier.ModuleName(s"test-runner_3")),
-      coursier.version.VersionConstraint(toolchain.revision.value),
+      coursier.Module(
+        coursier.Organization("org.scala-native"),
+        coursier.ModuleName(s"test-runner_3")
+      ),
+      coursier.version.VersionConstraint(toolchain.revision.value)
     )
-    val got = coursier.Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
+    val got = coursier
+      .Fetch(coursier.cache.FileCache())(using coursier.util.Task.sync)
       .noMirrors
       .withGradleModuleSupport(false)
-      .withRepositories(List(NativeClasspath.repository(toolchain.source), coursier.Repositories.central).distinct)
+      .withRepositories(
+        List(
+          NativeClasspath.repository(toolchain.source),
+          coursier.Repositories.central
+        ).distinct
+      )
       .addDependencies(dependency)
       .eitherResult()
     got match
-      case Left(_) => Left(NativeSuiteError.Unavailable)
+      case Left(_)       => Left(NativeSuiteError.Unavailable)
       case Right(result) =>
-        val jars = result.detailedArtifacts0.toList.flatMap: (_, publication, _, file) =>
-          val classified = publication match
-            case Right(published) => published.classifier.nonEmpty
-            case Left(variant)    => variant.classifier.nonEmpty
-          if file.getName.endsWith(".jar") && !classified then List(file.toPath) else Nil
+        val jars = result.detailedArtifacts0.toList.flatMap:
+          (_, publication, _, file) =>
+            val classified = publication match
+              case Right(published) => published.classifier.nonEmpty
+              case Left(variant)    => variant.classifier.nonEmpty
+            if file.getName.endsWith(".jar") && !classified then
+              List(file.toPath)
+            else Nil
         if jars.isEmpty then Left(NativeSuiteError.Unavailable) else Right(jars)
 
   private def write(path: Path, text: String): IO[NativeSuiteError, Unit] =
-    ZIO.attemptBlocking {
-      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-      Files.writeString(path, text, StandardCharsets.UTF_8)
-      ()
-    }.mapError(_ => NativeSuiteError.Write(path))
+    Workspace
+      .writeString(path, text)
+      .mapError(_ => NativeSuiteError.Write(path))
 
   private def empty(path: Path): IO[NativeSuiteError, Unit] =
-    ZIO.attemptBlocking {
-      if Files.exists(path) then
-        val walk = Files.walk(path)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(file => Files.deleteIfExists(file))
-      Files.createDirectories(path)
-      ()
-    }.mapError(_ => NativeSuiteError.Write(path))
+    Workspace.recreate(path).mapError(_ => NativeSuiteError.Write(path)).unit
 
 enum NativeSuiteError:
   case Unavailable

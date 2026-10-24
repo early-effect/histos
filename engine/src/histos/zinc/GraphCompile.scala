@@ -24,9 +24,6 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, IO, NonEmptyChunk, System, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
 
-private def platformToken(platform: Platform): String =
-  platform.token
-
 final case class CompiledCell(
     module: ProjectName,
     version: ScalaVersion,
@@ -84,14 +81,14 @@ enum GraphCompileError:
     case NoSources(module, root) =>
       s"'${module.value}' has no main or test sources under $root"
     case MissingUpstream(module, dependency, version, platform) =>
-      s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} ${platformToken(platform)} classes"
+      s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} ${platform.token} classes"
     case Cycle(module)  => s"'${module.value}' is in a compile cycle"
     case Lock(error)    => error.message
     case LockRead(path) => s"could not read $path"
     case RootRead(path) => s"could not read source roots under $path"
     case Output(path)   => s"could not write $path"
     case Failed(module, version, platform, error) =>
-      s"'${module.value}' ${version.value} ${platformToken(platform)} failed to compile\n${error.message}"
+      s"'${module.value}' ${version.value} ${platform.token} failed to compile\n${error.message}"
     case Cells(errors) => errors.map(_.message).mkString("\n")
     case Jdk(home)     => s"could not read the JDK release file under $home"
 
@@ -176,7 +173,7 @@ object GraphCompile:
         .collect { case CompileFeed.Done(cell) => cell }
         .toList
         .sortBy(cell =>
-          (cell.module.value, cell.version.value, platformToken(cell.platform))
+          (cell.module.value, cell.version.value, cell.platform.token)
         )
       failed.toList match
         case Nil          => ZIO.succeed(cells)
@@ -566,7 +563,7 @@ object GraphCompile:
       case Platform.Js  => ScalaJs.compile(request, extra, hear)
       case Platform.Native =>
         val revision =
-          module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
+          NativeToolchain.revision(module.nativeVersion)
         NativeCompile.compile(request, revision, native, extra, hear)
 
   private def upstreamClasses(
@@ -661,7 +658,7 @@ object GraphCompile:
       .resolve("classes")
       .resolve(module.value)
       .resolve(version.value)
-      .resolve(platformToken(platform))
+      .resolve(platform.token)
 
   private def analysis(
       repo: Path,
@@ -674,7 +671,7 @@ object GraphCompile:
       .resolve("analysis")
       .resolve(module.value)
       .resolve(version.value)
-      .resolve(platformToken(platform))
+      .resolve(platform.token)
 
   private def modulesOf(graph: ProjectGraph): List[Module] =
     graph.projects.collect { case module: Module => module }

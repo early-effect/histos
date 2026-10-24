@@ -1,12 +1,11 @@
 package histos.load
 
-import dotty.tools.dotc.Driver
-import dotty.tools.dotc.reporting.StoreReporter
 import histos.cache.ContentStore
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.jdk.Sha256
 import histos.plugin.{ApiDigest, PluginIo, PluginLoadError}
 import histos.schedule.Digest
+import histos.zinc.Dotty
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
@@ -16,10 +15,10 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, Clock, IO, UIO, ZIO}
 
-/**
- * Compiles a plugin before the build file. The class directory lives under `plugins/<digest>`
- * and outlives the load `Scope`. A directory is reused only after `.complete` is in place.
- */
+/** Compiles a plugin before the build file. The class directory lives under
+  * `plugins/<digest>` and outlives the load `Scope`. A directory is reused only
+  * after `.complete` is in place.
+  */
 private[load] object PluginCompile:
   private val Compiler = "3.10.0"
 
@@ -28,66 +27,104 @@ private[load] object PluginCompile:
       launcher: ApiDigest,
       jar: Path,
       checksums: List[String],
-      classpath: List[Path],
+      classpath: List[Path]
   ): IO[LoadError, Path] =
-    fileSha(jar).flatMap(sources => cached(store, launcher, sources, checksums, fillJar(jar, classpath)))
+    fileSha(jar).flatMap(sources =>
+      cached(store, launcher, sources, checksums, fillJar(jar, classpath))
+    )
 
-  def fromTree(store: ContentStore, launcher: ApiDigest, tree: Path, classpath: List[Path]): IO[LoadError, Path] =
-    treeSha(tree).flatMap(sources => cached(store, launcher, sources, Nil, fillTree(tree, classpath)))
+  def fromTree(
+      store: ContentStore,
+      launcher: ApiDigest,
+      tree: Path,
+      classpath: List[Path]
+  ): IO[LoadError, Path] =
+    treeSha(tree).flatMap(sources =>
+      cached(store, launcher, sources, Nil, fillTree(tree, classpath))
+    )
 
-  /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin tree. */
-  def engineClass(root: Path): Option[String] =
-    if !Files.isDirectory(root) then None
-    else
-      val walk = Files.walk(root)
-      try
-        walk.iterator.asScala.collectFirst:
-          case path if classFile(path) && reserved(rel(root, path)) =>
-            rel(root, path).stripSuffix(".class").replace('/', '.')
-      finally walk.close()
+  /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin
+    * tree.
+    */
+  def engineClass(root: Path): IO[LoadError, Option[String]] =
+    ZIO
+      .attemptBlocking:
+        if !Files.isDirectory(root) then None
+        else
+          val walk = Files.walk(root)
+          try
+            walk.iterator.asScala.collectFirst:
+              case path
+                  if classFile(path) && ReservedPackage.path(rel(root, path)) =>
+                rel(root, path).stripSuffix(".class").replace('/', '.')
+          finally walk.close()
+      .mapError(_ => LoadError.Io(IoFailure(root, IoFault.Walk)))
 
   private def cached(
       store: ContentStore,
       launcher: ApiDigest,
       sources: String,
       checksums: List[String],
-      fill: Path => IO[LoadError, Unit],
+      fill: Path => IO[LoadError, Unit]
   ): IO[LoadError, Path] =
     val hex = key(launcher, sources, checksums)
     val plugins = store.root.resolve("plugins")
     val dest = plugins.resolve(hex)
-    ZIO.attemptBlocking(ready(dest)).mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat))).flatMap:
-      case true => touch(dest, hex)
-      case false =>
-        ZIO.attemptBlocking(Files.createDirectories(plugins)).mapError(_ => LoadError.Io(IoFailure(plugins, IoFault.Create))) *>
-          ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
-            fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
+    ZIO
+      .attemptBlocking(ready(dest))
+      .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat)))
+      .flatMap:
+        case true  => touch(dest, hex)
+        case false =>
+          ZIO
+            .attemptBlocking(Files.createDirectories(plugins))
+            .mapError(_ => LoadError.Io(IoFailure(plugins, IoFault.Create))) *>
+            ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
+              fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
 
-  private def fillJar(jar: Path, classpath: List[Path])(classes: Path): IO[LoadError, Unit] =
+  private def fillJar(jar: Path, classpath: List[Path])(
+      classes: Path
+  ): IO[LoadError, Unit] =
     parentOf(classes).flatMap: plugins =>
-      ZIO.acquireReleaseWith(partial(plugins, ".partial-src-"))(deleteTree): src =>
-        for
-          _       <- extract(jar, src)
-          sources <- scalaSources(src)
-          _       <- scalac(sources, classpath, classes)
-          _       <- copyResources(src, classes)
-        yield ()
+      ZIO.acquireReleaseWith(partial(plugins, ".partial-src-"))(deleteTree):
+        src =>
+          for
+            _ <- extract(jar, src)
+            sources <- scalaSources(src)
+            _ <- scalac(sources, classpath, classes)
+            _ <- copyResources(src, classes)
+          yield ()
 
-  private def fillTree(tree: Path, classpath: List[Path])(classes: Path): IO[LoadError, Unit] =
+  private def fillTree(tree: Path, classpath: List[Path])(
+      classes: Path
+  ): IO[LoadError, Unit] =
     for
       sources <- scalaSources(tree)
-      _       <- scalac(sources, classpath, classes)
-      _       <- copyResources(tree, classes)
+      _ <- scalac(sources, classpath, classes)
+      _ <- copyResources(tree, classes)
     yield ()
 
-  private def key(launcher: ApiDigest, sources: String, checksums: List[String]): String =
+  private def key(
+      launcher: ApiDigest,
+      sources: String,
+      checksums: List[String]
+  ): String =
     val lines =
       List(s"api ${launcher.value}", s"scala $Compiler", s"sources $sources") ++
         checksums.sorted.map(sha => s"artifact $sha")
-    Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))).value
+    Sha256
+      .of(
+        Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))
+      )
+      .value
 
-  private def partial(parent: Path, prefix: String = ".partial-"): IO[LoadError, Path] =
-    ZIO.attemptBlocking(Files.createTempDirectory(parent, prefix)).mapError(_ => LoadError.Io(IoFailure(parent, IoFault.Temp)))
+  private def partial(
+      parent: Path,
+      prefix: String = ".partial-"
+  ): IO[LoadError, Path] =
+    ZIO
+      .attemptBlocking(Files.createTempDirectory(parent, prefix))
+      .mapError(_ => LoadError.Io(IoFailure(parent, IoFault.Temp)))
 
   private def parentOf(path: Path): IO[LoadError, Path] =
     Option(path.getParent) match
@@ -95,26 +132,36 @@ private[load] object PluginCompile:
       case None         => ZIO.fail(LoadError.Io(IoFailure(path, IoFault.Temp)))
 
   private def extract(jar: Path, dest: Path): IO[LoadError, Unit] =
-    ZIO.attempt {
-      val zip = new ZipFile(jar.toFile)
-      try
-        zip.entries.asScala.toList.foldLeft[Either[LoadError, Unit]](Right(())):
-          case (Left(error), _) => Left(error)
-          case (Right(_), entry) =>
-            val name = entry.getName
-            safe(dest, name) match
-              case Left(error) => Left(error)
-              case Right(target) if entry.isDirectory =>
-                Files.createDirectories(target)
-                Right(())
-              case Right(target) =>
-                Option(target.getParent).foreach(Files.createDirectories(_))
-                val stream = zip.getInputStream(entry)
-                try Files.copy(stream, target, StandardCopyOption.REPLACE_EXISTING)
-                finally stream.close()
-                Right(())
-      finally zip.close()
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(jar)))).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlocking {
+        val zip = new ZipFile(jar.toFile)
+        try
+          zip.entries.asScala.toList.foldLeft[Either[LoadError, Unit]](
+            Right(())
+          ):
+            case (Left(error), _)  => Left(error)
+            case (Right(_), entry) =>
+              val name = entry.getName
+              safe(dest, name) match
+                case Left(error)                        => Left(error)
+                case Right(target) if entry.isDirectory =>
+                  Files.createDirectories(target)
+                  Right(())
+                case Right(target) =>
+                  Option(target.getParent).foreach(Files.createDirectories(_))
+                  val stream = zip.getInputStream(entry)
+                  try
+                    Files.copy(
+                      stream,
+                      target,
+                      StandardCopyOption.REPLACE_EXISTING
+                    )
+                  finally stream.close()
+                  Right(())
+        finally zip.close()
+      }
+      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(jar))))
+      .flatMap(ZIO.fromEither)
 
   private def safe(root: Path, name: String): Either[LoadError, Path] =
     if name.isEmpty || name.startsWith("/") || name.contains('\\') then
@@ -126,93 +173,142 @@ private[load] object PluginCompile:
       else Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
 
   private def scalaSources(root: Path): IO[LoadError, List[Path]] =
-    ZIO.attempt {
-      if !Files.isDirectory(root) then Nil
-      else
-        val walk = Files.walk(root)
-        try
-          walk.iterator.asScala
-            .filter(path => Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && isScala(path))
-            .toList
-            .sortBy(_.toString)
-        finally walk.close()
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
-
-  private def scalac(sources: List[Path], classpath: List[Path], out: Path): IO[LoadError, Unit] =
-    sources match
-      case Nil => ZIO.fail(LoadError.CompileFailed(List(CompilerMessage.fromCompiler("plugin sources are empty"))))
-      case _ =>
-        ZIO.attemptBlocking {
-          val reporter = new StoreReporter(null)
-          val args = List(
-            "-classpath",
-            classpath.map(_.toString).mkString(java.io.File.pathSeparator),
-            "-d",
-            out.toString,
-            "-color:never",
-          ) ++ sources.map(_.toString)
-          new Driver().process(args.toArray, reporter)
-          if reporter.hasErrors then
-            Left(LoadError.CompileFailed(reporter.allErrors.map(error => CompilerMessage.fromCompiler(error.message))))
-          else Right(())
-        }.mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write))).flatMap(ZIO.fromEither)
-
-  private def copyResources(from: Path, to: Path): IO[LoadError, Unit] =
-    ZIO.attempt {
-      if Files.isDirectory(from) then
-        val walk = Files.walk(from)
-        try
-          walk.iterator.asScala.foreach: path =>
-            if Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && keep(path) then
-              val dest = to.resolve(from.relativize(path))
-              Option(dest.getParent).foreach(Files.createDirectories(_))
-              Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING)
-        finally walk.close()
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(from))))
-
-  private def fileSha(path: Path): IO[LoadError, String] =
-    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value)
-      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(path))))
-
-  private def treeSha(root: Path): IO[LoadError, String] =
-    ZIO.attempt {
-      val files =
+    ZIO
+      .attemptBlocking {
         if !Files.isDirectory(root) then Nil
         else
           val walk = Files.walk(root)
           try
             walk.iterator.asScala
-              .filter(path => Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+              .filter(path =>
+                Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && isScala(
+                  path
+                )
+              )
               .toList
-              .sortBy(path => rel(root, path))
+              .sortBy(_.toString)
           finally walk.close()
-      val lines = files.map: path =>
-        val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
-        s"${rel(root, path)} $sha"
-      Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))).value
-    }.mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
+      }
+      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
+
+  private def scalac(
+      sources: List[Path],
+      classpath: List[Path],
+      out: Path
+  ): IO[LoadError, Unit] =
+    sources match
+      case Nil =>
+        ZIO.fail(
+          LoadError.CompileFailed(
+            List(CompilerMessage.fromCompiler("plugin sources are empty"))
+          )
+        )
+      case _ =>
+        Dotty
+          .process(
+            List(
+              "-classpath",
+              classpath.map(_.toString).mkString(java.io.File.pathSeparator),
+              "-d",
+              out.toString,
+              "-color:never"
+            ) ++ sources.map(_.toString)
+          )
+          .mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write)))
+          .flatMap: reporter =>
+            if reporter.hasErrors then
+              ZIO.fail(
+                LoadError.CompileFailed(
+                  reporter.allErrors
+                    .map(error => CompilerMessage.fromCompiler(error.message))
+                )
+              )
+            else ZIO.unit
+
+  private def copyResources(from: Path, to: Path): IO[LoadError, Unit] =
+    ZIO
+      .attemptBlocking {
+        if Files.isDirectory(from) then
+          val walk = Files.walk(from)
+          try
+            walk.iterator.asScala.foreach: path =>
+              if Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) && keep(
+                  path
+                )
+              then
+                val dest = to.resolve(from.relativize(path))
+                Option(dest.getParent).foreach(Files.createDirectories(_))
+                Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING)
+          finally walk.close()
+      }
+      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(from))))
+
+  private def fileSha(path: Path): IO[LoadError, String] =
+    ZIO
+      .attemptBlocking(
+        Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
+      )
+      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(path))))
+
+  private def treeSha(root: Path): IO[LoadError, String] =
+    ZIO
+      .attemptBlocking {
+        val files =
+          if !Files.isDirectory(root) then Nil
+          else
+            val walk = Files.walk(root)
+            try
+              walk.iterator.asScala
+                .filter(path =>
+                  Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+                )
+                .toList
+                .sortBy(path => rel(root, path))
+            finally walk.close()
+        val lines = files.map: path =>
+          val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
+          s"${rel(root, path)} $sha"
+        Sha256
+          .of(
+            Chunk
+              .fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))
+          )
+          .value
+      }
+      .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
 
   private def mark(dir: Path): IO[LoadError, Unit] =
-    ZIO.attemptBlocking(Files.writeString(dir.resolve(".complete"), "ok\n")).mapError(_ => LoadError.Io(IoFailure(dir, IoFault.Write))).unit
+    ZIO
+      .attemptBlocking(Files.writeString(dir.resolve(".complete"), "ok\n"))
+      .mapError(_ => LoadError.Io(IoFailure(dir, IoFault.Write)))
+      .unit
 
   private def publish(tmp: Path, dest: Path): IO[LoadError, Unit] =
-    ZIO.attemptBlocking {
-      if ready(dest) then Workspace.deleteSync(tmp)
-      else
-        if Files.exists(dest) then Workspace.deleteSync(dest)
-        try Files.move(tmp, dest, StandardCopyOption.ATOMIC_MOVE)
-        catch
-          case _: java.nio.file.AtomicMoveNotSupportedException =>
-            Files.move(tmp, dest)
-      ()
-    }.mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Write)))
+    ZIO
+      .attemptBlocking {
+        if ready(dest) then Workspace.deleteSync(tmp)
+        else
+          if Files.exists(dest) then Workspace.deleteSync(dest)
+          try Files.move(tmp, dest, StandardCopyOption.ATOMIC_MOVE)
+          catch
+            case _: java.nio.file.AtomicMoveNotSupportedException =>
+              Files.move(tmp, dest)
+        ()
+      }
+      .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Write)))
 
   private def touch(dest: Path, hex: String): IO[LoadError, Path] =
     Digest.from(hex) match
-      case None => ZIO.fail(LoadError.Io(IoFailure(dest, IoFault.Write)))
+      case None    => ZIO.fail(LoadError.Io(IoFailure(dest, IoFault.Write)))
       case Some(_) =>
         Clock.instant.flatMap: now =>
-          ZIO.attemptBlocking(Files.setLastModifiedTime(dest, java.nio.file.attribute.FileTime.from(now)))
+          ZIO
+            .attemptBlocking(
+              Files.setLastModifiedTime(
+                dest,
+                java.nio.file.attribute.FileTime.from(now)
+              )
+            )
             .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Write)))
             .as(dest)
 
@@ -236,6 +332,3 @@ private[load] object PluginCompile:
   private def classFile(path: Path): Boolean =
     Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
       Option(path.getFileName).exists(_.toString.endsWith(".class"))
-
-  private def reserved(name: String): Boolean =
-    name.startsWith("histos/") || name.startsWith("zio/") || name.startsWith("scala/")

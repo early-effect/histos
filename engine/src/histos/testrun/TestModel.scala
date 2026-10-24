@@ -1,8 +1,23 @@
 package histos.testrun
 
 import histos.jdk.Sha256
-import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
-import histos.native.{NativeCompile, NativeLink, NativeLinkRequest, NativeOrigin, NativeSuite, NativeSuiteRequest, NativeToolchain}
+import histos.js.{
+  JsLink,
+  JsLinkError,
+  JsLinkRequest,
+  JsSuite,
+  JsSuiteRequest,
+  ScalaJs
+}
+import histos.native.{
+  NativeCompile,
+  NativeLink,
+  NativeLinkRequest,
+  NativeOrigin,
+  NativeSuite,
+  NativeSuiteRequest,
+  NativeToolchain
+}
 import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
 import histos.resolve.{
@@ -15,7 +30,13 @@ import histos.resolve.{
   ResolveError
 }
 import histos.workflow.CiError
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
+import histos.process.{
+  ChildClasspath,
+  ChildError,
+  ChildEvent,
+  ChildProcess,
+  ChildRequest
+}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -50,12 +71,6 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, IO, Ref, UIO, ZIO}
 import zio.stream.ZStream
-
-private[testrun] def platformToken(platform: Platform): String =
-  platform match
-    case Platform.Jvm    => "jvm"
-    case Platform.Js     => "js"
-    case Platform.Native => "native"
 
 final case class TestedCell(
     module: ProjectName,
@@ -159,11 +174,12 @@ enum ModuleTestError:
     case Root(path)   => s"could not read test roots under $path"
     case Runner(path) => s"could not write the test provider runner at $path"
     case LinkFailed(module, version, platform, detail) =>
-      s"'${module.value}' ${version.value} ${platformToken(platform)} failed to link\n$detail"
+      s"'${module.value}' ${version.value} ${platform.token} failed to link\n$detail"
     case NoNode(module, version, miss) =>
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
 
-/** One test invocation. The callback runs when a cell's tests start compiling. */
+/** One test invocation. The callback runs when a cell's tests start compiling.
+  */
 final case class TestRun(
     repo: Path,
     graph: ProjectGraph,
@@ -172,6 +188,6 @@ final case class TestRun(
     runtimes: Runtimes,
     patterns: List[SuitePattern] = Nil,
     quick: Boolean = false,
-    onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,
+    onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit] =
+      (_, _, _) => ZIO.unit
 )
-

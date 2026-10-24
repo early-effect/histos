@@ -1,8 +1,23 @@
 package histos.testrun
 
 import histos.jdk.Sha256
-import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
-import histos.native.{NativeCompile, NativeLink, NativeLinkRequest, NativeOrigin, NativeSuite, NativeSuiteRequest, NativeToolchain}
+import histos.js.{
+  JsLink,
+  JsLinkError,
+  JsLinkRequest,
+  JsSuite,
+  JsSuiteRequest,
+  ScalaJs
+}
+import histos.native.{
+  NativeCompile,
+  NativeLink,
+  NativeLinkRequest,
+  NativeOrigin,
+  NativeSuite,
+  NativeSuiteRequest,
+  NativeToolchain
+}
 import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
 import histos.resolve.{
@@ -15,7 +30,13 @@ import histos.resolve.{
   ResolveError
 }
 import histos.workflow.CiError
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
+import histos.process.{
+  ChildClasspath,
+  ChildError,
+  ChildEvent,
+  ChildProcess,
+  ChildRequest
+}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -65,8 +86,13 @@ private[histos] object TestCompile:
         if SuiteLaunch.satisfied(module, provider) then Right(Some(provider))
         else Left(ModuleTestError.ProviderDependency(module.name, provider))
 
-  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH` finds clang. `HOME` finds the Playwright cache. `env` is the machine's. */
-  private[histos] def suiteEnv(repo: Path, env: Map[String, String]): Map[String, String] =
+  /** The work directory stays empty. `HISTOS_REPO` finds project files. `PATH`
+    * finds clang. `HOME` finds the Playwright cache. `env` is the machine's.
+    */
+  private[histos] def suiteEnv(
+      repo: Path,
+      env: Map[String, String]
+  ): Map[String, String] =
     val root = Map("HISTOS_REPO" -> repo.toAbsolutePath.normalize.toString)
     val kept = List("PATH", "HOME", "XDG_CACHE_HOME").flatMap: key =>
       env.get(key).filter(_.nonEmpty).map(key -> _)
@@ -152,7 +178,10 @@ private[histos] object TestCompile:
                 .MissingUpstream(module.name, dependency.name, version)
             )
 
-  private[testrun] final case class Fetched(paths: List[Path], hashes: List[Sha256])
+  private[testrun] final case class Fetched(
+      paths: List[Path],
+      hashes: List[Sha256]
+  )
 
   /** Compiler library first, then locked jars. The first jar on the classpath
     * defines `scala.*`.
@@ -274,7 +303,7 @@ private[histos] object TestCompile:
       case Platform.Js     => ScalaJs.compile(request, extra, hear)
       case Platform.Native =>
         val revision =
-          module.nativeVersion.getOrElse(NativeToolchain.ReleaseRevision)
+          NativeToolchain.revision(module.nativeVersion)
         NativeCompile.compile(request, revision, native, extra, hear)
     compiled
       .mapError(error =>
@@ -345,14 +374,17 @@ private[histos] object TestCompile:
         Fetched(fetched.artifacts.map(_.path), fetched.artifacts.map(_.sha256))
       )
 
-  private[testrun] def readLock(repo: Path): IO[ModuleTestError, DependencyLock] =
-    Resolve.readLock(repo).mapError:
-      case ResolveError.Io(failure) => ModuleTestError.LockRead(failure.path)
-      case other                    => ModuleTestError.Lock(other)
+  private[testrun] def readLock(
+      repo: Path
+  ): IO[ModuleTestError, DependencyLock] =
+    Resolve
+      .readLock(repo)
+      .mapError:
+        case ResolveError.Io(failure) => ModuleTestError.LockRead(failure.path)
+        case other                    => ModuleTestError.Lock(other)
 
   private[testrun] def fresh(work: Path): IO[ModuleTestError, Path] =
-    Workspace.delete(work).mapError(_ => ModuleTestError.Work(work)) *>
-      Workspace.createDirectories(work).mapError(_ => ModuleTestError.Work(work))
+    Workspace.recreate(work).mapError(_ => ModuleTestError.Work(work))
 
   private[histos] def testClasses(
       repo: Path,
@@ -365,7 +397,7 @@ private[histos] object TestCompile:
       .resolve("test-classes")
       .resolve(module.value)
       .resolve(version.value)
-      .resolve(platformToken(platform))
+      .resolve(platform.token)
 
   private[testrun] def testAnalysis(
       repo: Path,
@@ -378,7 +410,7 @@ private[histos] object TestCompile:
       .resolve("test-analysis")
       .resolve(module.value)
       .resolve(version.value)
-      .resolve(platformToken(platform))
+      .resolve(platform.token)
 
   private[histos] def testWork(
       repo: Path,
@@ -391,7 +423,7 @@ private[histos] object TestCompile:
       .resolve("test-work")
       .resolve(module.value)
       .resolve(version.value)
-      .resolve(platformToken(platform))
+      .resolve(platform.token)
 
   private[testrun] def linkWork(
       repo: Path,
@@ -404,6 +436,6 @@ private[histos] object TestCompile:
       .resolve("link")
       .resolve(module.value)
       .resolve(version.value)
-      .resolve(platformToken(platform))
+      .resolve(platform.token)
 
 end TestCompile

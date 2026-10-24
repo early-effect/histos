@@ -40,7 +40,7 @@ About 35,700 lines of Scala across `api`, `central`, `engine`, and `app`. The ho
 | Typed graph, literals, `BuildError` | Works | Reports the first error only. `Module` has 18 fields and many overloads (G1 to G3). |
 | Build file load, plugin header, `ApiBoundary` | Works | `graph` and `run` execute on threads that carry the build loader. A refusal lasts one run. |
 | Dependency resolution and lock | Works for module dependencies | Compilers, linkers, semanticdb, and bridges bypass the lock (L1). |
-| JVM compile, Scala 3 and 2.13, via Zinc | Works, never incremental | Fresh compiler and empty previous result on every compile (S8). A cell starts when its own upstreams finish. |
+| JVM compile, Scala 3 and 2.13, via Zinc | Works, incremental | Persisted analysis and a scoped compiler pool preserve unchanged outputs. A cell starts when its own upstreams finish. |
 | Failed cell does not cancel siblings | Compile yes, test no | P4. |
 | Test subprocess, providers, `testOnly`, `testQuick`, watch | Works | A stop kills every descendant of a live child and a JVM child's whole group, and one fiber reads each pipe. A descendant that outlives a node or native child (B42), a blocked Linux pipe read (B43), and the quick stamp (P6) need work. |
 | Scala.js link, run, test | Works on a prepared machine | Bridges are Scala source in strings, recompiled per run (P1, P2). Js runs on the Node that the lock and the selection choose. |
