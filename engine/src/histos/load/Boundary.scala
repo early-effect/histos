@@ -1,5 +1,7 @@
 package histos.load
 
+import histos.workspace.{IoFailure, IoFault}
+
 import java.nio.file.Path
 
 import zio.{IO, ZIO}
@@ -38,7 +40,7 @@ private[load] object Boundary:
    * Neither class is in the zio jar. A compile that sees `Tag` without izumi-reflect aborts in the compiler.
    */
   def jars(apiJar: Path): IO[LoadError, List[Path]] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       val libs = List(
         classOf[scala.collection.immutable.Nil.type],
         classOf[scala.quoted.Quotes],
@@ -47,7 +49,7 @@ private[load] object Boundary:
         classOf[izumi.reflect.Tag[Any]],
       ).flatMap(codeSource)
       (apiJar :: libs).distinct
-    }.mapError(_ => LoadError.Io(LoadIo.Classpath))
+    }.mapError(_ => LoadError.Io(IoFailure(apiJar, IoFault.Read)))
 
   def codeSource(cls: Class[?]): Option[Path] =
     Option(cls.getProtectionDomain).flatMap(domain => Option(domain.getCodeSource)).flatMap: source =>

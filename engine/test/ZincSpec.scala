@@ -1,6 +1,7 @@
 package histos.zinc
 
 import histos.jdk.{JdkMajor, JdkVersion, Sha256}
+import histos.workspace.{IoFailure, IoFault}
 import histos.schedule.{ActionCache, ActionId, CacheError, Digest, RemoteCache, Scheduler}
 import histos.{Platform, ScalaVersion}
 
@@ -279,7 +280,7 @@ object ZincSpec extends ZIOSpecDefault:
 
   private def located(cls: Class[?]): ZIO[Any, CompileError, Path] =
     val path = Option(cls.getProtectionDomain).flatMap(domain => Option(domain.getCodeSource)).flatMap(source => Option(source.getLocation)).map(url => Path.of(url.toURI))
-    ZIO.fromOption(path).orElseFail(CompileError.Io(CompileIo.Read))
+    ZIO.fromOption(path).orElseFail(CompileError.Io(IoFailure(Path.of(cls.getName), IoFault.Stat)))
 
   private def memory: ZIO[Any, Nothing, ActionCache] =
     Ref.make(Map.empty[Digest, String]).map: ref =>

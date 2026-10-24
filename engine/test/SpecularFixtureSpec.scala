@@ -7,7 +7,7 @@ import histos.jdk.Sha256
 import histos.plugin.*
 import histos.resolve.{PluginRequest, *}
 import histos.schedule.{ActionCache, Hold, RemoteCache, Runner, Sendable, Verdict}
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.workflow.Workflow
 import histos.{Dep, Module}
 
@@ -100,7 +100,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
           for
             api <- apiJar
             hex <- apiHex(api)
-            work <- ZIO.attempt(Files.createTempDirectory("histos-specular")).mapError(_ => LoadError.Io(LoadIo.Temp))
+            work <- ZIO.attempt(Files.createTempDirectory("histos-specular")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
             _ <- ZIO.addFinalizer(deleteTree(work))
             maven <- publish(work, api, hex)
             project <- ZIO.attempt {
@@ -112,7 +112,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                          Files.writeString(dir.resolve("histos.scala"), buildFile)
                          Files.writeString(dir.resolve("docs").resolve("index.html"), "placeholder\n")
                          dir
-                       }.mapError(_ => LoadError.Io(LoadIo.Temp))
+                       }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
             _ <- Resolve.updatePlugins(
                    project,
                    List(PluginRequest.Dep(coordinate, LinkStrategy.BinaryOrSource)),
@@ -125,7 +125,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                       )
             id = PluginTaskId(PluginId("dev.earlyeffect.specular"), TaskName("site"))
             ran <- loaded.plugins.run(id, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, IdleResolve.layer)
-            lockText <- ZIO.attempt(Files.readString(Resolve.lockPath(project))).mapError(_ => LoadError.Io(LoadIo.Stat))
+            lockText <- ZIO.attempt(Files.readString(Resolve.lockPath(project))).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Stat)))
           yield
             val linked = loaded.plugins.links match
               case PluginLink(pluginId, PluginLinked.FromBinary(digest), artifacts) :: Nil =>
@@ -196,7 +196,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
              Files.writeString(work.resolve("SiteText.scala"), siteText)
              Files.writeString(work.resolve("Specular.scala"), pluginSource)
              ()
-           }.mapError(_ => LoadError.Io(LoadIo.Temp))
+           }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _ <- compile(List(work.resolve("SiteText.scala")), boundary, textClasses)
       textPacked <- pack(work.resolve("specular-text.jar"), Nil, Some(textClasses))
       _ <- compile(List(work.resolve("Specular.scala")), textPacked :: boundary, pluginClasses)
@@ -233,7 +233,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
              Files.write(dir.resolve(sourcesName), sources)
              Files.writeString(dir.resolve(s"$sourcesName.sha1"), sha1(sources) + "\n")
              ()
-           }.mapError(_ => LoadError.Io(LoadIo.Temp))
+           }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
     yield maven
 
   private def compile(sources: List[Path], classpath: List[Path], out: Path): IO[LoadError, Unit] =
@@ -248,7 +248,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
       ) ++ sources.map(_.toString)
       new Driver().process(args, reporter)
       if reporter.hasErrors then Some(reporter.allErrors.map(_.message).mkString("\n")) else None
-    }.mapError(_ => LoadError.Io(LoadIo.Compile)).flatMap:
+    }.mapError(_ => LoadError.Io(IoFailure(Path.of("histos.scala"), IoFault.Write))).flatMap:
       case Some(text) => ZIO.fail(LoadError.CompileFailed(List(CompilerMessage.fromCompiler(text))))
       case None       => ZIO.unit
 
@@ -263,7 +263,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
           output.closeEntry()
       finally output.close()
       path
-    }.mapError(_ => LoadError.Io(LoadIo.Temp))
+    }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
 
   private def writeTree(output: JarOutputStream, root: Path): Unit =
     val walk = Files.walk(root)
@@ -325,7 +325,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
     ApiJar.locate
 
   private def apiHex(jar: Path): IO[LoadError, String] =
-    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(LoadIo.Stat))
+    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Stat)))
 
   private def deleteTree(root: Path): UIO[Unit] =
     Workspace.delete(root).ignore

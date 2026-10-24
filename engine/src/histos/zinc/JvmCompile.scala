@@ -1,6 +1,7 @@
 package histos.zinc
 
 import histos.jdk.{JdkVersion, Sha256}
+import histos.workspace.{IoFailure, IoFault}
 import histos.schedule.{Action, ActionId, Input, InputName, InputValue}
 import histos.task.TaskKind
 import histos.{Platform, ScalaVersion}
@@ -33,15 +34,6 @@ enum ClasspathBan:
     case Scala3Compiler => "the Scala 3 compiler"
     case Scala2Compiler => "the Scala 2 compiler"
     case Histos         => "histos"
-
-enum CompileIo:
-  case Read, Write, Compile, Bridge
-
-  def label: String = this match
-    case Read    => "read"
-    case Write   => "write"
-    case Compile => "compile"
-    case Bridge  => "bridge"
 
 /** A line the compiler produced. It is text because the compiler speaks text. */
 opaque type CompileDiagnostic = String
@@ -89,7 +81,7 @@ enum CompileError:
   case Banned(path: Path, ban: ClasspathBan)
   case Failed(diagnostics: List[CompileDiagnostic])
   case Toolchain(miss: ToolchainMiss)
-  case Io(op: CompileIo)
+  case Io(failure: histos.workspace.IoFailure)
   case JsLibrary(miss: JsLibraryMiss)
   case NativeLibrary(text: String)
 
@@ -101,7 +93,7 @@ enum CompileError:
     case Banned(path, ban)             => s"$path is ${ban.label} and is not a user dependency"
     case Failed(diagnostics)           => diagnostics.map(_.text).mkString("\n")
     case Toolchain(miss)               => miss.message
-    case Io(op)                        => s"compile failed while ${op.label}"
+    case Io(failure)                   => failure.message
     case JsLibrary(miss)               => miss.message
     case NativeLibrary(text)           => text
 
@@ -284,11 +276,11 @@ object JvmCompile:
       case None         => ZIO.unit
 
   private def ban(path: Path): IO[CompileError, Option[ClasspathBan]] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       if Files.isDirectory(path) then directoryBan(path)
       else if Files.isRegularFile(path) then jarBan(path)
       else None
-    }.mapError(_ => CompileError.Io(CompileIo.Read))
+    }.mapError(_ => CompileError.Io(IoFailure(path, IoFault.Stat)))
 
   /** A classes directory is a `dependsOn` output. It may contain the build trait. A compiler jar is a declared library. */
   private def directoryBan(path: Path): Option[ClasspathBan] =
@@ -306,10 +298,10 @@ object JvmCompile:
 
   private def hashSources(sources: List[Path]): IO[CompileError, Sha256] =
     ZIO.foreach(sources.sortBy(_.toString)): path =>
-      ZIO.attempt {
+      ZIO.attemptBlocking {
         val body = Files.readAllBytes(path)
         Chunk.fromArray(path.toString.getBytes(StandardCharsets.UTF_8)) ++ Chunk.single(0.toByte) ++ Chunk.fromArray(body)
-      }.mapError(_ => CompileError.Io(CompileIo.Read))
+      }.mapError(_ => CompileError.Io(IoFailure(path, IoFault.Read)))
     .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
 
   /** Compiler jars plus the library they linked against. BSP names this Scala version with these jars. */

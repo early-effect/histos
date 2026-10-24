@@ -1,5 +1,6 @@
 package histos.zinc
 
+import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -72,7 +73,9 @@ object Sources:
     collect(root, version, platform, Tree.Test)
 
   private def collect(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): IO[CompileError, List[Path]] =
-    ZIO.attempt(list(root, version, platform, tree)).mapError(_ => CompileError.Io(CompileIo.Read))
+    ZIO.attemptBlocking(list(root, version, platform, tree)).mapError(_ =>
+      CompileError.Io(IoFailure(root, IoFault.Walk))
+    )
 
   private def list(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): List[Path] =
     if !Files.isDirectory(root) then Nil

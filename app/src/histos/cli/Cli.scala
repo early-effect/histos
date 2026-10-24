@@ -1,7 +1,7 @@
 package histos.cli
 
 import heddle.LinePipe
-import histos.bsp.{Bsp, Frame}
+import histos.bsp.{Bsp, Connection, Frame}
 import histos.server.{Attach, Call, Client, Daemon, Decision, ServerError}
 import histos.assembly.Assemble
 import histos.load.BuildClasspath
@@ -142,7 +142,8 @@ object Cli:
       repo: Path,
       apiJar: Path
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
-    parse(args).foldZIO(
+    Connection.ensure(repo).ignore *>
+      parse(args).foldZIO(
       {
         case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
         case detail => ZIO.succeed(Completed(CliExit.Usage, "", detail.message))
@@ -1442,16 +1443,16 @@ object Main extends ZIOAppDefault:
       case Some(url) =>
         ZIO
           .attempt(Path.of(url.toURI))
-          .orElseFail(LoadError.Io(histos.load.LoadIo.Classpath))
+          .orElseFail(LoadError.Io(histos.workspace.IoFailure(Path.of(url.toString), histos.workspace.IoFault.Read)))
 
   private def cacheHome: IO[LoadError, Path] =
     for
       xdg <- System
         .env("XDG_CACHE_HOME")
-        .orElseFail(LoadError.Io(histos.load.LoadIo.Classpath))
+        .orElseFail(LoadError.Io(histos.workspace.IoFailure(Path.of("XDG_CACHE_HOME"), histos.workspace.IoFault.Read)))
       home <- System
         .property("user.home")
-        .orElseFail(LoadError.Io(histos.load.LoadIo.Classpath))
+        .orElseFail(LoadError.Io(histos.workspace.IoFailure(Path.of("user.home"), histos.workspace.IoFault.Read)))
       root <- (xdg.filter(_.nonEmpty), home.filter(_.nonEmpty)) match
         case (Some(dir), _) => ZIO.succeed(Path.of(dir, "histos"))
         case (_, Some(dir)) => ZIO.succeed(Path.of(dir, ".cache", "histos"))

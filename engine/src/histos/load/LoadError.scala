@@ -3,12 +3,9 @@ package histos.load
 import histos.BuildError
 import histos.plugin.PluginLoadError
 import histos.resolve.ResolveError
+import histos.workspace.IoFailure
 
 import java.nio.file.Path
-
-/** Which load step threw. The exception text is not the error. */
-enum LoadIo:
-  case Stat, Temp, Write, Compile, Classpath, OpenLoader, Walk, LoadClass
 
 /** A line the Scala 3 compiler produced. It is text because the compiler speaks text. */
 opaque type CompilerMessage = String
@@ -34,7 +31,7 @@ enum LoadError:
   case Resolve(error: ResolveError)
   case MissingApi(path: Path)
   case NoHome
-  case Io(op: LoadIo)
+  case Io(failure: IoFailure)
 
   def message: String = this match
     case MissingFile(path)          => s"no build file at $path"
@@ -47,4 +44,4 @@ enum LoadError:
     case Resolve(error)             => error.message
     case MissingApi(path)           => s"$path has no bootstrap api jar"
     case NoHome                     => "no user home, so the api jar cannot be cached"
-    case Io(op)                     => s"load failed while ${op.toString.toLowerCase}"
+    case Io(failure)                => failure.message

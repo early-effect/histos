@@ -166,7 +166,7 @@ A command that attaches never loads the build in the client. `histos server` exi
 
 ## BSP
 
-`.bsp/histos.json` names `./histos bsp`. Metals spawns it and speaks BSP 2.2 over stdio. When a server is running, the BSP process splices its stdio onto the server socket.
+Running Histos in a project writes `.bsp/histos.json` when that file is missing or out of date. Metals reads it and spawns the command it names: `./histos bsp` when the project has that wrapper, otherwise `histos bsp`. This repository commits the file so a fresh clone is discoverable before the first run. Metals speaks BSP 2.2 over stdio. When a server is running, the BSP process splices its stdio onto the server socket.
 
 | Method | Behavior |
 | --- | --- |

@@ -7,7 +7,7 @@ import histos.jdk.Sha256
 import histos.plugin.*
 import histos.resolve.{PluginRequest, *}
 import histos.schedule.{ActionCache, RemoteCache}
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.{BuildError, Dep, ProjectPath}
 
 import java.nio.file.{Files, Path}
@@ -24,9 +24,9 @@ object LoadSpec extends ZIOSpecDefault:
 
   private def withRepo(source: String): ZIO[Scope, LoadError, Path] =
     for
-      dir <- ZIO.attempt(Files.createTempDirectory("histos-repo")).mapError(t => LoadError.Io(LoadIo.Temp))
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-repo")).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _   <- ZIO.addFinalizer(deleteTree(dir))
-      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Io(LoadIo.Temp))
+      _   <- ZIO.attempt(Files.writeString(dir.resolve("histos.scala"), source)).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
     yield dir
 
   private def deleteTree(root: Path): UIO[Unit] =
@@ -101,7 +101,7 @@ object LoadSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           jar <- apiJar
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-empty")).mapError(t => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-empty")).mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _   <- ZIO.addFinalizer(deleteTree(dir))
           out <- ZIO.serviceWithZIO[Loader](_.load(dir, jar)).either
         yield assertTrue:
@@ -261,7 +261,7 @@ object LoadSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           hex <- apiHex(jar)
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-mismatch")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-mismatch")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           wrong = "ab" * 32
           packed <- textJar(dir.resolve("echo.jar"), List(
@@ -288,7 +288,7 @@ object LoadSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           hex <- apiHex(jar)
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-leak")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-leak")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           packed <- textJar(dir.resolve("echo.jar"), List(
                        HistosPlugin.entryResource -> "dev.example.Echo$\n",
@@ -357,7 +357,7 @@ object LoadSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           boundary <- Boundary.jars(jar)
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-boundary")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-boundary")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           vendor <- textJar(dir.resolve("vendor.jar"), List(
                        "histos/schedule/Sendable.class" -> "not a class",
@@ -393,7 +393,7 @@ object LoadSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           hex <- apiHex(jar)
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-fallback")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-fallback")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           wrong = "ab" * 32
           packed <- textJar(dir.resolve("echo.jar"), List(
@@ -421,7 +421,7 @@ object LoadSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           jar <- apiJar
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-exact")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-exact")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           wrong = "ab" * 32
           packed <- textJar(dir.resolve("echo.jar"), List(
@@ -444,7 +444,7 @@ object LoadSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           jar <- apiJar
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-nosource")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-nosource")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           wrong = "cd" * 32
           packed <- textJar(dir.resolve("echo.jar"), List(
@@ -468,7 +468,7 @@ object LoadSpec extends ZIOSpecDefault:
           jar <- apiJar
           hex <- apiHex(jar)
           packed <- compilePlugin(jar, hex)
-          dir <- ZIO.attempt(Files.createTempDirectory("histos-source-link")).mapError(_ => LoadError.Io(LoadIo.Temp))
+          dir <- ZIO.attempt(Files.createTempDirectory("histos-source-link")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           _ <- ZIO.addFinalizer(deleteTree(dir))
           sources <- textJar(dir.resolve("echo-sources.jar"), List("Echo.scala" -> echoSource))
           repo <- withRepo(usingEcho)
@@ -592,7 +592,7 @@ object LoadSpec extends ZIOSpecDefault:
       Files.writeString(root.resolve("Plugin.scala"), source)
       Files.writeString(root.resolve("META-INF").resolve("histos").resolve("plugin"), s"$entry\n")
       ()
-    }.mapError(_ => LoadError.Io(LoadIo.Temp))
+    }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
 
   private def runOf(loaded: LoadedBuild, task: PluginTaskId): IO[PluginFault, PluginOutput] =
     loaded.plugins.run(task, PluginArgs.empty).provide(ZLayer.succeed(ActionCache.miss), RemoteCache.off, ZLayer.succeed(IdleResolve))
@@ -857,10 +857,10 @@ object LoadSpec extends ZIOSpecDefault:
     )
 
   private def apiHex(jar: Path): IO[LoadError, String] =
-    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(LoadIo.Stat))
+    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Stat)))
 
   private def fileSha(path: Path): IO[LoadError, Sha256] =
-    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(path)))).mapError(_ => LoadError.Io(LoadIo.Stat))
+    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(path)))).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Stat)))
 
   private def writeLock(repo: Path, sha: Sha256): IO[LoadError, Unit] =
     writeCell(repo, "exact-binary", sha, None)
@@ -878,7 +878,7 @@ object LoadSpec extends ZIOSpecDefault:
       Files.createDirectories(repo.resolve(".histos"))
       Files.writeString(Resolve.lockPath(repo), text)
       ()
-    }.mapError(_ => LoadError.Io(LoadIo.Write))
+    }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Write)))
 
   private def underPlugins(path: String): Boolean =
     Option(Path.of(path).getParent).flatMap(parent => Option(parent.getFileName)).exists(_.toString == "plugins")
@@ -886,14 +886,14 @@ object LoadSpec extends ZIOSpecDefault:
   private def compilePlugin(api: Path, hex: String): ZIO[Scope, LoadError, Path] =
     for
       boundary <- Boundary.jars(api)
-      dir <- ZIO.attempt(Files.createTempDirectory("histos-echo")).mapError(_ => LoadError.Io(LoadIo.Temp))
+      dir <- ZIO.attempt(Files.createTempDirectory("histos-echo")).mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _ <- ZIO.addFinalizer(deleteTree(dir))
       source = dir.resolve("Echo.scala")
       classes = dir.resolve("classes")
       _ <- ZIO.attempt {
              Files.writeString(source, echoSource)
              Files.createDirectories(classes)
-           }.mapError(_ => LoadError.Io(LoadIo.Temp))
+           }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _ <- compileSource(source, boundary, classes)
       packed <- textJar(dir.resolve("echo.jar"), List(
                    HistosPlugin.entryResource -> "dev.example.Echo$\n",
@@ -917,7 +917,7 @@ object LoadSpec extends ZIOSpecDefault:
       )
       if reporter.hasErrors then Left(reporter.allErrors.map(_.message).mkString("\n"))
       else Right(())
-    }.mapError(_ => LoadError.Io(LoadIo.Compile)).flatMap:
+    }.mapError(_ => LoadError.Io(IoFailure(Path.of("histos.scala"), IoFault.Write))).flatMap:
       case Left(text) => ZIO.fail(LoadError.CompileFailed(List(CompilerMessage.fromCompiler(text))))
       case Right(_)   => ZIO.unit
 
@@ -932,7 +932,7 @@ object LoadSpec extends ZIOSpecDefault:
           output.closeEntry()
       finally output.close()
       path
-    }.mapError(_ => LoadError.Io(LoadIo.Temp))
+    }.mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
 
   private def writeTree(output: JarOutputStream, root: Path, dir: Path): Unit =
     val walk = Files.walk(dir)
