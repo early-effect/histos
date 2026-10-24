@@ -122,7 +122,7 @@ The version scheme is the zipx scheme, implemented in `histos.version`: everyday
 
 `histos assembly [path]` writes one runnable jar of `app` and its dependencies, rewrites lazy-val bytecode that would call `sun.misc.Unsafe`, and records its SHA-256 in `.histos/assembly.sha256`. The assembly spec is hardcoded for this repository (P8).
 
-`./histos` and `histos.bat` are frozen scripts. With `dist/histos.jar` present, the script verifies it against `.histos/assembly.sha256` and execs it. Otherwise it downloads the launcher for `.histos-version`. A release launcher is checked against its pin. The snapshot path does not check one (L7). The script fetches the locked Temurin only when no `java` is on `PATH`.
+`./histos` and `histos.bat` are generated from the manual ship, the same way `histos workflow --update` writes the workflow files. The ship version is the script's version. `--check` fails when the scripts drift. With `dist/histos.jar` present, the script verifies it against `.histos/assembly.sha256` and execs it. Otherwise it downloads that version of the launcher. A release launcher is checked against its pin. The snapshot path does not check one (L7). The script fetches the locked Temurin only when no `java` is on `PATH`.
 
 ## CI render
 

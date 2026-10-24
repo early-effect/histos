@@ -27,6 +27,16 @@ object LauncherSpec extends ZIOSpecDefault:
     Array[Byte](0x50.toByte, 0x4b.toByte, 0x03.toByte, 0x04.toByte)
 
   private val checks = suite("launcher publish")(
+    test("the committed scripts are the manual ship"):
+      val repo = sys.env.get("HISTOS_REPO").filter(_.nonEmpty).map(Path.of(_))
+      repo match
+        case Some(root) =>
+          assertTrue(
+            Files.readString(root.resolve("histos")) == LauncherScript.posix(version),
+            Files.readString(root.resolve("histos.bat")) == LauncherScript.windows(version),
+          )
+        case None => assertTrue(false)
+    ,
     test("the api name keeps the binary suffix and the assembly name does not"):
       ZIO
         .fromEither(opened)
@@ -70,9 +80,6 @@ object LauncherSpec extends ZIOSpecDefault:
         for
           root <- temp
           graph <- ZIO.fromEither(opened)
-          _ <- ZIO.attempt(
-            Files.writeString(root.resolve(".histos-version"), s"$version\n")
-          )
           ready = LauncherPublish.ready(root, graph)
           missingJar = ready match
             case Left(LocalPublishError.NoAssembly(path)) =>
@@ -80,20 +87,19 @@ object LauncherSpec extends ZIOSpecDefault:
             case _ => false
         yield assertTrue(missingJar)
     ,
-    test("the version file has to match the manual ship"):
+    test("a module revision other than the ship is refused"):
       ZIO.scoped:
         for
           root <- temp
+          repo <- temp
           graph <- ZIO.fromEither(opened)
-          _ <- ZIO.attempt {
-            Files.writeString(root.resolve(".histos-version"), "9.9.9\n")
-            Files.createDirectories(root.resolve("dist"))
-            Files.write(root.resolve("dist").resolve("histos.jar"), jarBytes)
-          }
-          ready = LauncherPublish.ready(root, graph)
-        yield assertTrue(
-          ready == Left(LocalPublishError.VersionMismatch("9.9.9", version))
-        )
+          group <- ZIO.fromEither(Organization.from("rocks.earlyeffect"))
+          written = PublishOutput(
+            Nil,
+            List(PublishedModule(group, "histos-api_3", "9.9.9", Some(root.resolve("api.jar"))))
+          )
+          refused <- LauncherPublish.upload(root, graph, written).provide(Publisher.local(repo)).either
+        yield assertTrue(refused == Left(LocalPublishError.VersionMismatch(version, "9.9.9")))
     ,
     test("the assembly is a jar with an empty pom"):
       ZIO.scoped:
@@ -102,7 +108,6 @@ object LauncherSpec extends ZIOSpecDefault:
           repo <- temp
           graph <- ZIO.fromEither(opened)
           _ <- ZIO.attempt {
-            Files.writeString(root.resolve(".histos-version"), s"$version\n")
             Files.createDirectories(root.resolve("dist"))
             Files.write(root.resolve("dist").resolve("histos.jar"), jarBytes)
           }

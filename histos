@@ -1,5 +1,6 @@
 #!/bin/sh
-# Frozen entry point. Verifies the pinned JVM assembly and execs it.
+# Generated from the manual ship. `histos workflow --update` rewrites this file.
+# Verifies the pinned JVM assembly and execs it.
 # When java is not on PATH, the locked JDK is fetched, checked, and unpacked first.
 # HISTOS_ASSEMBLY overrides the assembly path so a fixture can be used before a release exists.
 # When dist/histos.jar is absent and the version is a snapshot, the script downloads
@@ -8,7 +9,7 @@ set -eu
 
 dir=$(dirname "$0") || exit 1
 root=$(CDPATH= cd -- "$dir" && pwd) || exit 1
-version=$(tr -d '[:space:]' < "$root/.histos-version")
+version=0.0.1-SNAPSHOT
 shafile=$root/.histos/assembly.sha256
 cache=${XDG_CACHE_HOME:-$HOME/.cache}
 

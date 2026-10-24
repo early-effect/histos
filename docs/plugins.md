@@ -140,7 +140,7 @@ Text, commands, and cron:
 
 `LinkStrategy.Api` is a real case with no success path. A header `.link(Api)` fails the scan with `PluginLoadError.ApiLink`, even when the digests would match. Nothing rewrites bytecode and nothing runs MiMa.
 
-`ApiDigest` in [`ApiDigest.scala`](../api/src/histos/plugin/ApiDigest.scala) is the sha256 of the `histos-api` jar bytes, and `ApiDigest.resource` is `META-INF/histos/version`, the jar resource that carries it. When the launcher runs from an assembly, `BuildClasspath` extracts that jar to `api/<sha>/histos-api.jar` under the cache. A binary plugin's `META-INF/histos/version` resource is one line holding that hex, and the loader compares it to the sha256 of the api jar it loads. The product label `0.0.1-SNAPSHOT` (`Cli.VersionText`, `Bsp.ServerVersion`, `.histos-version`) stays put when `histos.api` breaks, so every 0.x binary would match it. The label and the digest are independent, and neither derives from the other.
+`ApiDigest` in [`ApiDigest.scala`](../api/src/histos/plugin/ApiDigest.scala) is the sha256 of the `histos-api` jar bytes, and `ApiDigest.resource` is `META-INF/histos/version`, the jar resource that carries it. When the launcher runs from an assembly, `BuildClasspath` extracts that jar to `api/<sha>/histos-api.jar` under the cache. A binary plugin's `META-INF/histos/version` resource is one line holding that hex, and the loader compares it to the sha256 of the api jar it loads. The product label `0.0.1-SNAPSHOT` (the `histos` ship, `Cli.VersionText`, and `Bsp.ServerVersion`) stays put when `histos.api` breaks, so every 0.x binary would match it. The label and the digest are independent, and neither derives from the other.
 
 ### Errors
 

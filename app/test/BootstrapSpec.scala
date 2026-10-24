@@ -29,7 +29,6 @@ object BootstrapSpec extends ZIOSpecDefault:
   private def layout(jarBytes: Array[Byte], sha: String): Path =
     val root = Files.createTempDirectory("histos-boot")
     Files.copy(script, root.resolve("histos"), StandardCopyOption.REPLACE_EXISTING)
-    Files.writeString(root.resolve(".histos-version"), "0.0.1-SNAPSHOT\n")
     Files.createDirectories(root.resolve(".histos"))
     Files.writeString(root.resolve(".histos/assembly.sha256"), sha + "\n")
     val jar = root.resolve("app.jar")

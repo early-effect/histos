@@ -16,9 +16,7 @@ object LauncherPublish:
       case Some(_) =>
         for
           _ <- organization(graph)
-          version <- manual(graph)
-          file <- readVersion(repo)
-          _ <- matched(file, version)
+          _ <- manual(graph)
           _ <- present(jar(repo))
         yield ()
 
@@ -32,7 +30,7 @@ object LauncherPublish:
       case Some(name) =>
         val path = jar(repo)
         for
-          version <- ZIO.fromEither(readVersion(repo))
+          version <- ZIO.fromEither(manual(graph))
           _ <- ZIO.fromEither(revisions(written, version))
           group <- ZIO.fromEither(organization(graph))
           id <- ZIO.fromEither(artifact(group, name.value, version))
@@ -58,16 +56,6 @@ object LauncherPublish:
           case List(version) => Right(version)
           case _             => Left(LocalPublishError.LauncherRevision)
       case _ => Left(LocalPublishError.LauncherRevision)
-
-  private def readVersion(repo: Path): Either[LocalPublishError, String] =
-    val path = repo.resolve(".histos-version")
-    try
-      val text = Files.readString(path).trim
-      if text.isEmpty then Left(LocalPublishError.VersionFile(path)) else Right(text)
-    catch case _: java.io.IOException => Left(LocalPublishError.VersionFile(path))
-
-  private def matched(file: String, version: String): Either[LocalPublishError, Unit] =
-    if file == version then Right(()) else Left(LocalPublishError.VersionMismatch(file, version))
 
   private def present(path: Path): Either[LocalPublishError, Unit] =
     if Files.isRegularFile(path) then Right(()) else Left(LocalPublishError.NoAssembly(path))

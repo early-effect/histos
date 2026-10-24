@@ -85,8 +85,7 @@ enum LocalPublishError:
   case Credentials
   case NotAPath(raw: String)
   case NoAssembly(path: Path)
-  case VersionFile(path: Path)
-  case VersionMismatch(file: String, published: String)
+  case VersionMismatch(expected: String, found: String)
   case LauncherRevision
 
   def message: String = this match
@@ -110,10 +109,9 @@ enum LocalPublishError:
       s"$organization:$name:$revision is not a publishable dependency"
     case Credentials   => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
     case NotAPath(raw) => s"'$raw' is not a path"
-    case NoAssembly(path)                 => s"no assembly at $path"
-    case VersionFile(path)                => s"could not read $path"
-    case VersionMismatch(file, published) =>
-      s".histos-version is $file and this publish wrote $published"
+    case NoAssembly(path)              => s"no assembly at $path"
+    case VersionMismatch(expected, found) =>
+      s"the ship is $expected and this publish wrote $found"
     case LauncherRevision => "the launcher publishes one manual version"
 
 object LocalPublish:
