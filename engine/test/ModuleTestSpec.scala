@@ -34,8 +34,8 @@ private[testrun] object ModuleTestSupport:
                      Projects(core, module("extra", Jvm)(scala3), app)
                    }.flatMap(graph => ZIO.fromEither(graph))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
-          named <- ModuleTest.run(root, built, List("app"), jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
+          named <- ModuleTest.run(TestRun(root, built, List("app"), jdk, here)).provide(Resolve.live(root.resolve("coursier")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/app/3.10.0/jvm")))
           testEntries <- ZIO.attempt(entries(root.resolve(".histos/test-classes/app/3.10.0/jvm")))
         yield assertTrue(
@@ -60,7 +60,7 @@ private[testrun] object ModuleTestSupport:
                }
           built <- ZIO.fromEither(Projects(module("e2e", Jvm)(scala3).test(TestMain("demo.Check"))))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
           mainEntries <- ZIO.attempt(entries(root.resolve(".histos/classes/e2e/3.10.0/jvm")))
           testEntries <- ZIO.attempt(entries(root.resolve(".histos/test-classes/e2e/3.10.0/jvm")))
         yield assertTrue(
@@ -86,7 +86,7 @@ private[testrun] object ModuleTestSupport:
           env <- System.envs
           path = (root.resolve("elsewhere").resolve("bin").toString :: env.get("PATH").toList).mkString(java.io.File.pathSeparator)
           here <- Runtimes.read(TestMachine.at(root, env + ("PATH" -> path)))
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
           ran <- TestMachine.launches(chosen)
           skipped <- TestMachine.launches(other)
           compiled <- ZIO.attempt(entries(root.resolve(".histos/test-classes/probe/3.10.0/js")))
@@ -113,7 +113,7 @@ private[testrun] object ModuleTestSupport:
                  write(root, ".histos/dependencies.lock", "cell probe 3.10.0 js\n")
                }
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier"))).either
+          out <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier"))).either
           name <- ZIO.fromEither(ProjectName.from("probe"))
           linked <- ZIO.attempt(Files.exists(root.resolve(".histos/link")))
         yield assertTrue(
@@ -133,7 +133,7 @@ private[testrun] object ModuleTestSupport:
                  write(root, ".histos/dependencies.lock", "cell probe 3.9.0 native\n")
                }
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
           compiled <- ZIO.attempt(entries(root.resolve(".histos/test-classes/probe/3.9.0/native")))
         yield assertTrue(
           placed(cells) == List(("probe", ScalaVersion("3.9.0"), Native, TestStatus.Passed)),
@@ -154,7 +154,7 @@ private[testrun] object ModuleTestSupport:
                }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue:
           cells.map(report => (report.cell.module.value, report.cell.version.value, report.cell.status.label)) == List(("core", "3.10.0", "passed"))
     ,
@@ -170,7 +170,7 @@ private[testrun] object ModuleTestSupport:
                }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           cells.map(report => (report.cell.version.value, report.cell.status)) == List(("3.10.0", TestStatus.Failed(1))),
           cells.exists(_.transcript.outText.text.contains("nope")),
@@ -196,7 +196,7 @@ private[testrun] object ModuleTestSupport:
                }
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           cells.map(report => (report.cell.module.value, report.cell.status)) == List(("bad", TestStatus.Failed(1)), ("core", TestStatus.Passed)),
           cells.headOption.map(text).exists(_.contains("nope")),
@@ -219,7 +219,7 @@ private[testrun] object ModuleTestSupport:
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           pattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here, List(pattern)).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here, List(pattern))).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           cells.map(_.cell.status) == List(TestStatus.Passed),
           cells.map(text).exists(_.contains("alpha")),
@@ -239,7 +239,7 @@ private[testrun] object ModuleTestSupport:
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           chosen <- TestMachine.chosenNode(root)
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
           ran <- TestMachine.launches(chosen)
         yield assertTrue(
           placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
@@ -268,7 +268,7 @@ private[testrun] object ModuleTestSupport:
           _ <- ZIO.attempt(write(root, "probe/src/test/scala/demo/ProbeFramework.scala", nativeProbe))
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
           here <- TestMachine.runtimes(root)
-          cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+          cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
         yield assertTrue(
           placed(cells) == List(("probe", ScalaVersion("3.9.0"), Native, TestStatus.Passed)),
           cells.map(text).exists(_.contains("hi")),
@@ -289,7 +289,7 @@ private[testrun] object ModuleTestSupport:
                }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier"))).either
+          out <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
             case Left(ModuleTestError.ProviderDependency(module, provider)) =>
@@ -312,8 +312,8 @@ private[testrun] object ModuleTestSupport:
           bothPattern <- ZIO.fromEither(SuitePattern.from("demo.Foo*"))
           onePattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
           here <- TestMachine.runtimes(root)
-          both <- ModuleTest.run(root, built, Nil, jdk, here, List(bothPattern)).provide(Resolve.live(root.resolve("coursier")))
-          one <- ModuleTest.run(root, built, Nil, jdk, here, List(onePattern)).provide(Resolve.live(root.resolve("coursier")))
+          both <- ModuleTest.run(TestRun(root, built, Nil, jdk, here, List(bothPattern))).provide(Resolve.live(root.resolve("coursier")))
+          one <- ModuleTest.run(TestRun(root, built, Nil, jdk, here, List(onePattern))).provide(Resolve.live(root.resolve("coursier")))
           said = (reports: List[TestReport]) =>
             reports.map(report => s"${report.cell.module.value}:${report.cell.status.label}:${text(report)}").mkString(" ")
         yield assertTrue(
@@ -334,7 +334,7 @@ private[testrun] object ModuleTestSupport:
                }
           pattern <- ZIO.fromEither(SuitePattern.from("demo.Missing"))
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest.run(root, built, Nil, jdk, here, List(pattern)).provide(Resolve.live(root.resolve("coursier"))).either
+          out <- ModuleTest.run(TestRun(root, built, Nil, jdk, here, List(pattern))).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
             case Left(ModuleTestError.NoneMatched(patterns)) => patterns.map(_.value) == List("demo.Missing")
@@ -351,7 +351,7 @@ private[testrun] object ModuleTestSupport:
                }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check"))))
           here <- TestMachine.runtimes(root)
-          out <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier"))).either
+          out <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier"))).either
         yield assertTrue:
           out match
             case Left(ModuleTestError.MissingSources(module, main)) =>
@@ -373,7 +373,7 @@ private[testrun] object ModuleTestSupport:
       _ <- Resolve.update(root, built, BuildResolvers(built.resolvers)).provide(Resolve.live(root.resolve("coursier")))
       chosen <- TestMachine.chosenNode(root)
       here <- TestMachine.runtimes(root)
-      cells <- ModuleTest.run(root, built, Nil, jdk, here).provide(Resolve.live(root.resolve("coursier")))
+      cells <- ModuleTest.run(TestRun(root, built, Nil, jdk, here)).provide(Resolve.live(root.resolve("coursier")))
       ran <- TestMachine.launches(chosen)
     yield assertTrue(
       placed(cells) == List(("probe", scala3, Js, TestStatus.Passed)),
@@ -664,7 +664,7 @@ private[testrun] object ModuleTestSupport:
     GraphCompile.jdkHere.flatMap: jdk =>
       TestMachine
         .runtimes(root)
-        .flatMap(here => ModuleTest.console(root, built, Nil, jdk, here, Nil, quick = true).runCollect)
+        .flatMap(here => ModuleTest.console(TestRun(root, built, Nil, jdk, here, Nil, quick = true)).runCollect)
         .provide(Resolve.live(root.resolve("coursier")))
 
   private def out(feeds: zio.Chunk[TestFeed]): String =

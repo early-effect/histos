@@ -23,6 +23,7 @@ import histos.testrun.{
   ModuleTestError,
   SuitePattern,
   TestFeed,
+  TestRun,
   TestStatus,
   TestedCell
 }
@@ -680,16 +681,17 @@ object Cli:
               .runCollect
             _ <- ModuleTest
               .suites(
-                repo,
-                loaded.graph,
-                projects,
-                jdk,
-                runtimes,
+                TestRun(
+                  repo,
+                  loaded.graph,
+                  projects,
+                  jdk,
+                  runtimes,
+                  patterns,
+                  quick,
+                  (module, version, platform) => say(Lines.compilingTests(module, version, platform)),
+                ),
                 cells.toList,
-                patterns,
-                quick,
-                (module, version, platform) =>
-                  say(Lines.compilingTests(module, version, platform))
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>

@@ -30,14 +30,17 @@ enum ScheduleError[+E]:
     case Cache(error)                   => error.message
     case Remote(error)                  => error.message
 
-trait Scheduler:
+/** One executor and the caches for this run. The caches are the caller's, so a test passes its own. */
+final case class Scheduler(runner: Histos, cache: ActionCache, remote: RemoteCache):
   /** Run `root` after its dependencies. A remote hit is the stored output. A miss runs `local`. A write cache uploads only a sendable action. */
   def execute[E](
       root: ActionId,
       actions: List[Action],
       local: Action => IO[E, String],
       verdict: Action => Verdict = Sendable.ofAction,
-  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String]
+  ): IO[ScheduleError[E], String] =
+    ZIO.fromEither(prepare(root, actions)).flatMap: ready =>
+      run(root, ready, local, verdict)
 
   /** Cache policy for one action. The caller already ordered its upstream steps. */
   def cached[E](
@@ -45,31 +48,8 @@ trait Scheduler:
       digest: Digest,
       local: IO[E, String],
       verdict: Action => Verdict = Sendable.ofAction,
-  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String]
-
-object Scheduler:
-  val live: ULayer[Scheduler] =
-    Parallelism.live >>> Histos.live >>> ZLayer.fromFunction(SchedulerLive.apply)
-
-private final class SchedulerLive(runner: Histos) extends Scheduler:
-  def cached[E](
-      action: Action,
-      digest: Digest,
-      local: IO[E, String],
-      verdict: Action => Verdict,
-  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
+  ): IO[ScheduleError[E], String] =
     perform(action, digest, _ => local, verdict)
-
-  def execute[E](
-      root: ActionId,
-      actions: List[Action],
-      local: Action => IO[E, String],
-      verdict: Action => Verdict,
-  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
-    ZIO.serviceWithZIO[ActionCache]: cache =>
-      ZIO.serviceWithZIO[RemoteCache]: remote =>
-        ZIO.fromEither(prepare(root, actions)).flatMap: ready =>
-          run(root, ready, cache, remote, local, verdict)
 
   private final case class Ready(byId: Map[ActionId, Action], order: List[ActionId], digests: Map[ActionId, Digest])
 
@@ -139,11 +119,9 @@ private final class SchedulerLive(runner: Histos) extends Scheduler:
   private def run[E](
       root: ActionId,
       ready: Ready,
-      cache: ActionCache,
-      remote: RemoteCache,
       local: Action => IO[E, String],
       verdict: Action => Verdict,
-  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
+  ): IO[ScheduleError[E], String] =
     for
       step    <- build(root, ready, local, verdict)
       outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
@@ -166,7 +144,7 @@ private final class SchedulerLive(runner: Histos) extends Scheduler:
       ready: Ready,
       local: Action => IO[E, String],
       verdict: Action => Verdict,
-  ): IO[ScheduleError[E], histos.step.HermeticStep[ActionCache & RemoteCache, ScheduleError[E], String]] =
+  ): IO[ScheduleError[E], histos.step.HermeticStep[Any, ScheduleError[E], String]] =
     for
       action <- ZIO.fromEither(ready.byId.get(id).toRight(ScheduleError.UnknownAction(id)))
       digest <- ZIO.fromEither(ready.digests.get(id).toRight(ScheduleError.UnknownAction(id)))
@@ -180,7 +158,7 @@ private final class SchedulerLive(runner: Histos) extends Scheduler:
                       val upstream = ups match
                         case only :: Nil  => only.map(_ => "")
                         case first :: rest =>
-                          rest.foldLeft[histos.step.Step[ActionCache & RemoteCache, ScheduleError[E], String]](first.map(_ => ""))(
+                          rest.foldLeft[histos.step.Step[Any, ScheduleError[E], String]](first.map(_ => ""))(
                             (acc, next) => acc.zip(next).map(_ => "")
                           )
                         case Nil => step.map(_ => "")
@@ -199,10 +177,8 @@ private final class SchedulerLive(runner: Histos) extends Scheduler:
       digest: Digest,
       local: Action => IO[E, String],
       verdict: Action => Verdict,
-  ): ZIO[ActionCache & RemoteCache, ScheduleError[E], String] =
+  ): IO[ScheduleError[E], String] =
     for
-      cache     <- ZIO.service[ActionCache]
-      remote    <- ZIO.service[RemoteCache]
       remoteHit <- lookup(remote, action, digest)
       out <- remoteHit match
                case Some(value) => ZIO.succeed(value)
@@ -275,4 +251,9 @@ private final class SchedulerLive(runner: Histos) extends Scheduler:
       .onMalformedInput(CodingErrorAction.REPORT)
       .onUnmappableCharacter(CodingErrorAction.REPORT)
 
-end SchedulerLive
+end Scheduler
+
+object Scheduler:
+  val live: ZLayer[ActionCache & RemoteCache, Nothing, Scheduler] =
+    val histos = Parallelism.live >>> Histos.live
+    (histos ++ ZLayer.service[ActionCache] ++ ZLayer.service[RemoteCache]) >>> ZLayer.fromFunction(Scheduler.apply)

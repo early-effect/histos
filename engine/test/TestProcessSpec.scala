@@ -34,7 +34,7 @@ object ChildProcessSpec extends ZIOSpecDefault:
         path    <- System.env("PATH")
         home    <- System.env("HOME")
         machine <- System.envs
-        env = ModuleTest.suiteEnv(Path.of("/repo"), machine + ("USER" -> "someone"))
+        env = TestCompile.suiteEnv(Path.of("/repo"), machine + ("USER" -> "someone"))
       yield assertTrue(
         env.get("HISTOS_REPO").contains(Path.of("/repo").toAbsolutePath.normalize.toString),
         env.get("PATH") == path.filter(_.nonEmpty),

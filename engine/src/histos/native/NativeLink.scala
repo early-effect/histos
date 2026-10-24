@@ -88,17 +88,20 @@ object NativeProject:
           case (NativeDeclaration.Major(_), (missing, None)) => NativeDeclaration.Missing(missing)
           case (done, _) => done
 
+/** Clang, the toolchain, and where the link runs. The sources or the classpath are the other argument. */
+final case class NativeLinkRequest(
+    major: histos.ClangMajor,
+    toolchain: NativeToolchain,
+    env: Map[String, String],
+    work: Path,
+    jdk: ResolvedJdk,
+    main: MainClass,
+)
+
 object NativeLink:
   /** `env` is the machine's: clang is found on its `PATH`, and the linker child gets that `PATH`. */
-  def link(
-      major: histos.ClangMajor,
-      toolchain: NativeToolchain,
-      env: Map[String, String],
-      sourcesRoot: Path,
-      work: Path,
-      jdk: ResolvedJdk,
-      main: MainClass,
-  ): IO[NativeError, Linked] =
+  def link(request: NativeLinkRequest, sourcesRoot: Path): IO[NativeError, Linked] =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main) = request
     for
       libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
       clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
@@ -110,15 +113,8 @@ object NativeLink:
     yield Linked(binary, NativeKey.of(JvmCompile.Scala390, clang.version, clang.target, digest, hashes))
 
   /** Link `.nir` that is already compiled. The native libraries are added after `classpath`. */
-  def linkClasspath(
-      major: histos.ClangMajor,
-      toolchain: NativeToolchain,
-      env: Map[String, String],
-      classpath: List[Path],
-      work: Path,
-      jdk: ResolvedJdk,
-      main: MainClass,
-  ): IO[NativeError, Path] =
+  def linkClasspath(request: NativeLinkRequest, classpath: List[Path]): IO[NativeError, Path] =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main) = request
     for
       libs <- NativeClasspath.fetch(toolchain).mapError(NativeError.Fetch(_))
       clang <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))

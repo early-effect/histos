@@ -14,6 +14,20 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
+/** One Scala.js test-adapter run. The engine does not load the linker or a `JSEnv`. */
+final case class JsSuiteRequest(
+    version: ScalaVersion,
+    env: JsEnv,
+    kind: JsModuleKind,
+    framework: String,
+    classpath: List[Path],
+    work: Path,
+    jdk: ResolvedJdk,
+    processEnv: Map[String, String],
+    node: NodeBinary,
+    patterns: List[SuitePattern] = Nil,
+)
+
 /**
  * Link the Scala.js test bridge and run `org.scalajs.testing.adapter.TestAdapter` in a child JVM.
  * The engine does not load `org.scalajs.linker` or a `JSEnv`.
@@ -25,18 +39,8 @@ object JsSuite:
   private val SuiteMain: String = "subprocess.JsSuite"
   private val BridgeJar: String = "scalajs-test-bridge_2.13"
 
-  def run(
-      version: ScalaVersion,
-      env: JsEnv,
-      kind: JsModuleKind,
-      framework: String,
-      classpath: List[Path],
-      work: Path,
-      jdk: ResolvedJdk,
-      processEnv: Map[String, String],
-      node: NodeBinary,
-      patterns: List[SuitePattern] = Nil,
-  ): IO[JsSuiteError, ChildRequest] =
+  def run(request: JsSuiteRequest): IO[JsSuiteError, ChildRequest] =
+    val JsSuiteRequest(version, env, kind, framework, classpath, work, jdk, processEnv, node, patterns) = request
     val output = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
     val classes = bridgeRoot.resolve("classes")

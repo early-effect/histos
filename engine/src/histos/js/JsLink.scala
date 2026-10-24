@@ -12,20 +12,24 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
+/** One link of `.sjsir` into a script. The engine does not load `org.scalajs.linker`. */
+final case class JsLinkRequest(
+    version: ScalaVersion,
+    main: MainClass,
+    classpath: List[Path],
+    work: Path,
+    jdk: ResolvedJdk,
+    kind: histos.JsModuleKind = histos.JsModuleKind.NoModule,
+)
+
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`. */
 object JsLink:
   private val BridgeScala: ScalaVersion = ScalaVersion.trusted("2.13.18")
   private val Linker: String = "1.22.0"
   private val BridgeMain: String = "subprocess.JsBridge"
 
-  def link(
-      version: ScalaVersion,
-      main: MainClass,
-      classpath: List[Path],
-      work: Path,
-      jdk: ResolvedJdk,
-      kind: histos.JsModuleKind = histos.JsModuleKind.NoModule,
-  ): IO[JsLinkError, Path] =
+  def link(request: JsLinkRequest): IO[JsLinkError, Path] =
+    val JsLinkRequest(version, main, classpath, work, jdk, kind) = request
     val output = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
     val classes = bridgeRoot.resolve("classes")

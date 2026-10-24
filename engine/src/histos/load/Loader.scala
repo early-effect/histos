@@ -39,12 +39,13 @@ final case class BuildNotes(failed: Boolean, problems: List[CompileProblem])
 
 trait Loader:
   def scan(repo: Path): IO[LoadError, ScannedBuild]
-  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild]
+  def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild]
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]]
-  def reportBuild(repo: Path, apiJar: Path): ZIO[Resolve & ContentStore, LoadError, BuildNotes]
+  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes]
 
 object Loader:
-  val live: zio.ULayer[Loader] = zio.ZLayer.succeed(LoaderLive)
+  val live: zio.ZLayer[Resolve & ContentStore, Nothing, Loader] =
+    zio.ZLayer.fromFunction(LoaderLive(_, _))
 
 private final case class Matched(
     classpath: List[Path],
@@ -54,56 +55,54 @@ private final case class Matched(
     linked: PluginLinked,
 )
 
-private final case class Opened(build: BuildLoader)
+private[load] final case class Opened(build: BuildLoader)
 
 /** The blanked build file and its class directory live as long as the `Scope`. */
 private final case class Prepared(launcher: ApiDigest, boundary: List[Path], matched: List[Matched], source: Path, out: Path)
 
-private object LoaderLive extends Loader:
+private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Loader:
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
     Boundary.jars(apiJar)
 
-  def reportBuild(repo: Path, apiJar: Path): ZIO[Resolve & ContentStore, LoadError, BuildNotes] =
+  def reportBuild(repo: Path, apiJar: Path): IO[LoadError, BuildNotes] =
     ZIO.scoped:
       for
         prepared <- prepare(repo, apiJar)
-        reporter <- drive(prepared.source, prepared.boundary ++ pluginJars(prepared.matched), prepared.out)
-      yield notesOf(reporter, repo.resolve("histos.scala"), prepared.source)
+        reporter <- BuildFile.drive(prepared.source, prepared.boundary ++ pluginJars(prepared.matched), prepared.out)
+      yield BuildFile.notesOf(reporter, repo.resolve("histos.scala"), prepared.source)
 
   def scan(repo: Path): IO[LoadError, ScannedBuild] =
     val source = repo.resolve("histos.scala")
     for
       _    <- ZIO.unlessZIO(exists(source))(ZIO.fail(LoadError.MissingFile(source)))
-      text <- ZIO.attempt(Files.readString(source)).mapError(failed(LoadIo.Stat))
+      text <- ZIO.attempt(Files.readString(source)).mapError(BuildFile.failed(LoadIo.Stat))
       out  <- ZIO.fromEither(HeaderScan.scan(text)).mapError(LoadError.Plugin(_))
     yield out
 
-  def load(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, LoadedBuild] =
+  def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
     for
       prepared <- prepare(repo, apiJar)
       matched   = prepared.matched
       jars      = pluginJars(matched)
-      _        <- compile(prepared.source, prepared.boundary ++ jars, prepared.out)
-      opened   <- ZIO.acquireRelease(open(prepared.out, jars))(close)
+      _        <- BuildFile.compile(prepared.source, prepared.boundary ++ jars, prepared.out)
+      opened   <- ZIO.acquireRelease(BuildFile.open(prepared.out, jars))(BuildFile.close)
       threads  <- PluginThreads.make(opened.build)
       live     <- ZIO.foreach(matched)(row => define(opened.build, matched, row))
-      builds   <- entries(prepared.out, opened.build)
-      build    <- select(builds)
+      builds   <- BuildFile.entries(prepared.out, opened.build)
+      build    <- BuildFile.select(builds)
       graph    <- graphOf(opened.build, threads, build, matched)
       _        <- checkUses(opened.build, matched, graph.plugins)
-    yield LoadedBuild(
-      graph,
-      PluginRuntime.loaded(repo, graph, opened.build, threads, live, links(matched, live), prepared.launcher),
-    )
+      runtime  <- PluginRuntime.loaded(repo, graph, opened.build, threads, live, links(matched, live), prepared.launcher)
+    yield LoadedBuild(graph, runtime)
 
-  private def prepare(repo: Path, apiJar: Path): ZIO[Scope & Resolve & ContentStore, LoadError, Prepared] =
+  private def prepare(repo: Path, apiJar: Path): ZIO[Scope, LoadError, Prepared] =
     for
       scanned  <- scan(repo)
       launcher <- digestOf(apiJar)
       boundary <- Boundary.jars(apiJar)
       matched  <- materialize(repo, scanned.requests, launcher, boundary)
-      out      <- tempDir("histos-classes")
-      source   <- writeTemp(scanned.source)
+      out      <- BuildFile.tempDir("histos-classes")
+      source   <- BuildFile.writeTemp(scanned.source)
     yield Prepared(launcher, boundary, matched, source, out)
 
   private def materialize(
@@ -111,7 +110,7 @@ private object LoaderLive extends Loader:
       requests: List[PluginRequest],
       launcher: ApiDigest,
       boundary: List[Path],
-  ): ZIO[Resolve & ContentStore, LoadError, List[Matched]] =
+  ): IO[LoadError, List[Matched]] =
     val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) => dependency }
     val locked =
       if dependencies.isEmpty then ZIO.succeed(DependencyLock(Nil))
@@ -122,22 +121,22 @@ private object LoaderLive extends Loader:
         case PluginRequest.Dep(dependency, _) => one(lock, dependency, launcher, boundary)
       .flatMap: matched =>
         val pins = matched.flatMap(row => digestName(row.origin)).toSet
-        ZIO.serviceWithZIO[ContentStore](_.replace(CacheProject.of(repo), pins)).mapError(_ => LoadError.Io(LoadIo.Write)).as(matched)
+        store.replace(CacheProject.of(repo), pins).mapError(_ => LoadError.Io(LoadIo.Write)).as(matched)
 
   private def one(
       lock: DependencyLock,
       dependency: Dep,
       launcher: ApiDigest,
       boundary: List[Path],
-  ): ZIO[Resolve & ContentStore, LoadError, Matched] =
+  ): IO[LoadError, Matched] =
     ZIO.fromEither(PluginCells.locate(lock, dependency)).mapError(LoadError.Plugin(_)).flatMap: locked =>
       for
         artifacts <- ZIO.foreach(locked.artifacts): artifact =>
-          ZIO.serviceWithZIO[Resolve](_.fetch(artifact)).mapError(LoadError.Resolve(_))
+          resolve.fetch(artifact).mapError(LoadError.Resolve(_))
         direct <- ZIO.fromEither(directJar(dependency, artifacts)).mapError(LoadError.Plugin(_))
         read   <- PluginJar.read(dependency, direct.path)
         linked <- ZIO.fromEither(decide(dependency, locked, read, launcher)).mapError(LoadError.Plugin(_))
-        row    <- link(dependency, locked, read, launcher, boundary, artifacts, direct.path, linked)
+        row    <- link(LinkJob(dependency, locked, read, launcher, boundary, artifacts, direct.path, linked))
       yield row
 
   /** The lock strategy wins. A header change without `--update` does not retarget this cell. */
@@ -161,7 +160,7 @@ private object LoaderLive extends Loader:
         else if locked.source.isEmpty then Left(PluginLoadError.NoSource(coordinate))
         else Right(PluginLinked.FromSource(read.published, launcher))
 
-  private def link(
+  private final case class LinkJob(
       dependency: Dep,
       locked: LockedPlugin,
       read: ReadPlugin,
@@ -170,7 +169,10 @@ private object LoaderLive extends Loader:
       artifacts: List[ResolvedArtifact],
       direct: Path,
       linked: PluginLinked,
-  ): ZIO[Resolve & ContentStore, LoadError, Matched] =
+  )
+
+  private def link(job: LinkJob): IO[LoadError, Matched] =
+    val LinkJob(dependency, locked, read, launcher, boundary, artifacts, direct, linked) = job
     val coordinate = PluginCoordinate.Published(dependency)
     linked match
       case PluginLinked.FromBinary(_) =>
@@ -185,12 +187,12 @@ private object LoaderLive extends Loader:
           case Some(source) =>
             val libraries = artifacts.filter(artifact => !same(artifact.path, direct) && !Boundary.supplied(artifact.name)).map(_.path)
             for
-              fetched <- ZIO.serviceWithZIO[Resolve](_.sources(source.organization, source.name, source.revision, source.repository))
+              fetched <- resolve.sources(source.organization, source.name, source.revision, source.repository)
                 .mapError(LoadError.Resolve(_))
               _ <-
                 if fetched.sha256 == source.sha256 then ZIO.unit
                 else ZIO.fail(LoadError.Resolve(ResolveError.Checksum(fetched.path, source.sha256, fetched.sha256)))
-              classes <- PluginCompile.fromJar(launcher, fetched.path, locked.artifacts.map(_.sha256.value), boundary ++ libraries)
+              classes <- PluginCompile.fromJar(store, launcher, fetched.path, locked.artifacts.map(_.sha256.value), boundary ++ libraries)
               _       <- refuseLeak(classes, coordinate)
             yield Matched(classes :: libraries, classes, read.entry, coordinate, linked)
 
@@ -199,13 +201,13 @@ private object LoaderLive extends Loader:
       path: ProjectPath,
       launcher: ApiDigest,
       boundary: List[Path],
-  ): ZIO[ContentStore, LoadError, Matched] =
+  ): IO[LoadError, Matched] =
     val root = repo.resolve(path.value)
     val coordinate = PluginCoordinate.Path(path)
     for
-      present <- ZIO.attempt(Files.isDirectory(root)).mapError(failed(LoadIo.Stat))
+      present <- ZIO.attempt(Files.isDirectory(root)).mapError(BuildFile.failed(LoadIo.Stat))
       _       <- ZIO.unless(present)(ZIO.fail(LoadError.Plugin(PluginLoadError.NoEntry(coordinate.render))))
-      classes <- PluginCompile.fromTree(launcher, root, boundary)
+      classes <- PluginCompile.fromTree(store, launcher, root, boundary)
       entry   <- PluginJar.readTree(coordinate, classes)
       _       <- refuseLeak(classes, coordinate)
     yield Matched(List(classes), classes, entry, coordinate, PluginLinked.FromSource(launcher, launcher))
@@ -214,7 +216,7 @@ private object LoaderLive extends Loader:
     Option(path.getFileName).map(_.toString).flatMap(histos.schedule.Digest.from)
 
   private def refuseLeak(classes: Path, coordinate: PluginCoordinate): IO[LoadError, Unit] =
-    ZIO.attempt(PluginCompile.engineClass(classes)).mapError(failed(LoadIo.Walk)).flatMap:
+    ZIO.attempt(PluginCompile.engineClass(classes)).mapError(BuildFile.failed(LoadIo.Walk)).flatMap:
       case Some(binary) => ZIO.fail(LoadError.Plugin(PluginLoadError.EngineLeak(coordinate, binary)))
       case None         => ZIO.unit
 
@@ -325,124 +327,11 @@ private object LoaderLive extends Loader:
     catch case scala.util.control.NonFatal(_) => left.toAbsolutePath.normalize == right.toAbsolutePath.normalize
 
   private def digestOf(apiJar: Path): IO[LoadError, ApiDigest] =
-    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(apiJar)))).mapError(failed(LoadIo.Stat)).flatMap: sha =>
+    ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(apiJar)))).mapError(BuildFile.failed(LoadIo.Stat)).flatMap: sha =>
       ApiDigest.from(sha.value) match
         case Right(digest) => ZIO.succeed(digest)
         case Left(_)       => ZIO.fail(LoadError.Io(LoadIo.Stat))
 
   private def exists(path: Path): IO[LoadError, Boolean] =
-    ZIO.attempt(Files.isRegularFile(path)).mapError(failed(LoadIo.Stat))
+    ZIO.attempt(Files.isRegularFile(path)).mapError(BuildFile.failed(LoadIo.Stat))
 
-  private def tempDir(prefix: String): ZIO[Scope, LoadError, Path] =
-    Workspace.work(prefix).mapError(_ => LoadError.Io(LoadIo.Temp))
-
-  private def writeTemp(text: String): ZIO[Scope, LoadError, Path] =
-    ZIO.acquireRelease(
-      ZIO.attemptBlocking {
-        val path = Files.createTempFile("histos-build", ".scala")
-        Files.writeString(path, text)
-        path
-      }.mapError(_ => LoadError.Io(LoadIo.Temp))
-    )(path => ZIO.attemptBlocking(Files.deleteIfExists(path)).ignore)
-
-  private def compile(source: Path, classpath: List[Path], out: Path): IO[LoadError, Unit] =
-    drive(source, classpath, out).flatMap: reporter =>
-      if reporter.hasErrors then
-        ZIO.fail(LoadError.CompileFailed(reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source)))))
-      else ZIO.unit
-
-  private def drive(source: Path, classpath: List[Path], out: Path): IO[LoadError, StoreReporter] =
-    ZIO.attemptBlocking {
-      val reporter = new StoreReporter(null)
-      new Driver().process(
-        Array(
-          "-classpath",
-          classpath.map(_.toString).mkString(java.io.File.pathSeparator),
-          "-d",
-          out.toString,
-          "-color:never",
-          source.toString,
-        ),
-        reporter,
-      )
-      reporter
-    }.mapError(failed(LoadIo.Compile))
-
-  private def notesOf(reporter: StoreReporter, display: Path, temp: Path): BuildNotes =
-    val problems = reporter.allErrors.map(error => noted(error, display, temp))
-    BuildNotes(reporter.hasErrors, problems)
-
-  private def noted(diagnostic: dotty.tools.dotc.reporting.Diagnostic, display: Path, temp: Path): CompileProblem =
-    val pos = diagnostic.pos
-    val severity = diagnostic.level match
-      case 2 => CompileSeverity.Error
-      case 1 => CompileSeverity.Warn
-      case _ => CompileSeverity.Info
-    val placed = pos.exists
-    CompileProblem(
-      rewrite(diagnostic.message, temp),
-      if placed then Some(display) else None,
-      severity,
-      if placed then Some(pos.startLine) else None,
-      if placed then Some(pos.startColumn) else None,
-      if placed then Some(pos.endLine) else None,
-      if placed then Some(pos.endColumn) else None,
-      PositionBase.Dotty,
-    )
-
-  private def rewrite(message: String, temp: Path): String =
-    List(temp.toString, temp.toAbsolutePath.toString).distinct.foldLeft(message)((text, from) => text.replace(from, "histos.scala"))
-
-  private def open(classes: Path, jars: List[Path]): IO[LoadError, Opened] =
-    ZIO.attempt {
-      val host = Option(classOf[HistosBuild].getClassLoader).getOrElse(ClassLoader.getPlatformClassLoader)
-      val parent = new ApiBoundary(host)
-      val build = new BuildLoader((classes :: jars).map(_.toUri.toURL).toArray, parent)
-      Opened(build)
-    }.mapError(failed(LoadIo.OpenLoader))
-
-  private def close(opened: Opened): UIO[Unit] =
-    ZIO.attempt(opened.build.close()).ignore
-
-  private def entries(out: Path, loader: ClassLoader): IO[LoadError, List[HistosBuild]] =
-    classFiles(out).flatMap: files =>
-      ZIO.foreach(files)(loadOne(loader, out, _)).map(_.flatten)
-
-  private def classFiles(out: Path): IO[LoadError, List[Path]] =
-    ZIO.attempt {
-      val walk = Files.walk(out)
-      try walk.iterator.asScala.filter(isClass).toList
-      finally walk.close()
-    }.mapError(failed(LoadIo.Walk))
-
-  private def isClass(path: Path): Boolean =
-    Option(path.getFileName).map(_.toString) match
-      case Some(name) => name.endsWith(".class") && !name.contains("$anon")
-      case None       => false
-
-  private def loadOne(loader: ClassLoader, out: Path, file: Path): IO[LoadError, Option[HistosBuild]] =
-    ZIO.attempt(module(loader.loadClass(className(out, file)))).mapError(failed(LoadIo.LoadClass))
-
-  private def className(out: Path, file: Path): String =
-    val relative = out.relativize(file).toString
-    relative.stripSuffix(".class").replace(java.io.File.separatorChar, '.')
-
-  private def module(cls: Class[?]): Option[HistosBuild] =
-    cls.getDeclaredFields.find(_.getName == "MODULE$") match
-      case None        => None
-      case Some(field) =>
-        try
-          field.setAccessible(true)
-          field.get(null) match
-            case build: HistosBuild => Some(build)
-            case _                  => None
-        catch case _: IllegalAccessException | _: java.lang.reflect.InaccessibleObjectException => None
-
-  private def select(builds: List[HistosBuild]): IO[LoadError, HistosBuild] =
-    builds match
-      case build :: Nil => ZIO.succeed(build)
-      case Nil          => ZIO.fail(LoadError.NoEntry)
-      case many         => ZIO.fail(LoadError.AmbiguousEntry(many.map(build => BinaryName.fromClass(build.getClass))))
-
-  private def failed(op: LoadIo): Throwable => LoadError =
-    _ => LoadError.Io(op)

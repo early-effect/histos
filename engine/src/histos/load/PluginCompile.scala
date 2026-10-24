@@ -24,15 +24,16 @@ private[load] object PluginCompile:
   private val Compiler = "3.10.0"
 
   def fromJar(
+      store: ContentStore,
       launcher: ApiDigest,
       jar: Path,
       checksums: List[String],
       classpath: List[Path],
-  ): ZIO[ContentStore, LoadError, Path] =
-    fileSha(jar).flatMap(sources => cached(launcher, sources, checksums, fillJar(jar, classpath)))
+  ): IO[LoadError, Path] =
+    fileSha(jar).flatMap(sources => cached(store, launcher, sources, checksums, fillJar(jar, classpath)))
 
-  def fromTree(launcher: ApiDigest, tree: Path, classpath: List[Path]): ZIO[ContentStore, LoadError, Path] =
-    treeSha(tree).flatMap(sources => cached(launcher, sources, Nil, fillTree(tree, classpath)))
+  def fromTree(store: ContentStore, launcher: ApiDigest, tree: Path, classpath: List[Path]): IO[LoadError, Path] =
+    treeSha(tree).flatMap(sources => cached(store, launcher, sources, Nil, fillTree(tree, classpath)))
 
   /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin tree. */
   def engineClass(root: Path): Option[String] =
@@ -46,21 +47,21 @@ private[load] object PluginCompile:
       finally walk.close()
 
   private def cached(
+      store: ContentStore,
       launcher: ApiDigest,
       sources: String,
       checksums: List[String],
       fill: Path => IO[LoadError, Unit],
-  ): ZIO[ContentStore, LoadError, Path] =
-    ZIO.serviceWithZIO[ContentStore]: store =>
-      val hex = key(launcher, sources, checksums)
-      val plugins = store.root.resolve("plugins")
-      val dest = plugins.resolve(hex)
-      ZIO.attempt(ready(dest)).mapError(_ => LoadError.Io(LoadIo.Stat)).flatMap:
-        case true => touch(dest, hex)
-        case false =>
-          ZIO.attempt(Files.createDirectories(plugins)).mapError(_ => LoadError.Io(LoadIo.Temp)) *>
-            ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
-              fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
+  ): IO[LoadError, Path] =
+    val hex = key(launcher, sources, checksums)
+    val plugins = store.root.resolve("plugins")
+    val dest = plugins.resolve(hex)
+    ZIO.attempt(ready(dest)).mapError(_ => LoadError.Io(LoadIo.Stat)).flatMap:
+      case true => touch(dest, hex)
+      case false =>
+        ZIO.attempt(Files.createDirectories(plugins)).mapError(_ => LoadError.Io(LoadIo.Temp)) *>
+          ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
+            fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(dest, hex)
 
   private def fillJar(jar: Path, classpath: List[Path])(classes: Path): IO[LoadError, Unit] =
     parentOf(classes).flatMap: plugins =>

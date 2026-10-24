@@ -363,8 +363,8 @@ Each milestone is one GitHub stack. Each PR closes named ledger rows and checks 
 - `histos/machine-config`: `Machine.layer` from `zio.System`, with `HISTOS_*` as ZIO Config, and the test JDK fixtures read the same source. Closes S1, T12, S14.
 - `histos/workspace`: a `Workspace` service with one lock reader, one tree delete, and scoped work directories. IO errors carry the path and an `IoFault`. Blocking moves to `attemptBlocking`. Closes S2 to S4, S11, S13.
 - `histos/process-runner`: `TestProcess` becomes `histos.process.ChildProcess`, used by test, link, run, and the JDK hand-off. Closes S10, B42, B43.
-- `histos/incremental-zinc`: a persisted analysis store, a previous result, and a `CompilerPool` (`ZKeyedPool` keyed by the locked toolchain), scoped to the server or to one batch run. A precompiled provider runner removes the second compile. Closes S8, S9.
-- `histos/service-shape`: case-class implementations with constructor injection, no 1:1 traits without a seam, `Resolve.scala` and `Loader.scala` split by concern, the `resolve` to `load` cycle removed, and context types where methods take more than five parameters. Closes S5 to S7, S12.
+- `histos/incremental-zinc`: a persisted analysis store, a previous result, and a `CompilerPool` keyed by the locked toolchain, scoped to one batch. The pool is a semaphore per key. `ZKeyedPool` sleeps on the test clock. A precompiled provider runner removes the second compile. Closes S8, S9.
+- `histos/service-shape`: case-class implementations with constructor injection, no 1:1 traits without a seam, `Resolve.scala` and `Loader.scala` split by concern, the `resolve` to `load` cycle removed, and context types where methods take more than five parameters. Closes S5 to S7, S12. The rendered workflow runs on `ubuntu-26.04` and checks out with `actions/checkout@v7`.
 
 **Exit:** editing one file in this repository recompiles that file and its dependents, and `.histos/analysis` is populated. Two compiles in one server share a compiler instance. Record no-op and one-file-edit times for this repository before and after.
 

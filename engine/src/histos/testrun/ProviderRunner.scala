@@ -4,8 +4,23 @@ import histos.pack.MainClass
 
 import java.nio.file.Path
 
+/** What one child runs. It stays a value until spawn copies it into that process. */
+final case class ProviderNote(framework: String, classes: Path, patterns: List[SuitePattern]):
+  def environment: Map[String, String] =
+    val indexed = patterns.zipWithIndex.map: (pattern, index) =>
+      s"${ProviderRunner.PatternPrefix}$index" -> pattern.value
+    Map(
+      ProviderRunner.Framework -> framework,
+      ProviderRunner.Classes -> classes.toAbsolutePath.toString,
+      ProviderRunner.PatternCount -> patterns.length.toString,
+    ) ++ indexed
+
 /** The child that loads an sbt `Framework`. The engine does not. */
 object ProviderRunner:
+  private[testrun] val Framework: String = "HISTOS_FRAMEWORK"
+  private[testrun] val Classes: String = "HISTOS_CLASSES"
+  private[testrun] val PatternCount: String = "HISTOS_PATTERN_COUNT"
+  private[testrun] val PatternPrefix: String = "HISTOS_PATTERN_"
   val Main: MainClass = MainClass.trusted("subprocess.Provider")
 
   /** The child uses this status when the framework discovers nothing. It is not `no tests`. */
@@ -14,7 +29,7 @@ object ProviderRunner:
   /** Suites were discovered, and none of them matched the pattern. */
   val NoneMatched: Int = 3
 
-  /** Stable source. The framework, the class directory, and the patterns are `provider.txt` in the work directory. */
+  /** Stable source. The framework, the class directory, and the patterns arrive in this process's environment. */
   def source: String =
     s"""package subprocess
        |
@@ -24,9 +39,8 @@ object ProviderRunner:
        |
        |object Provider {
        |  def main(args: Array[String]): Unit = {
-       |    val lines = java.nio.file.Files.readString(java.nio.file.Path.of(System.getenv("HISTOS_PROVIDER"))).split("\\n", -1)
-       |    val frameworkName = if (lines.length > 0) lines(0) else ""
-       |    val classes = java.nio.file.Path.of(if (lines.length > 1) lines(1) else "")
+       |    val frameworkName = getenv("${Framework}")
+       |    val classes = java.nio.file.Path.of(getenv("${Classes}"))
        |    val loader = getClass.getClassLoader
        |    val raw = Class.forName(frameworkName, true, loader).getDeclaredConstructor().newInstance()
        |    val framework = classOf[Framework].cast(raw)
@@ -66,10 +80,21 @@ object ProviderRunner:
        |    def trace(thrown: Throwable): Unit = thrown.printStackTrace(System.err)
        |  }
        |
+       |  private def getenv(name: String): String = {
+       |    val value = System.getenv(name)
+       |    if (value == null) "" else value
+       |  }
+       |
        |  private val suitePatterns: Array[String] = {
-       |    val lines = java.nio.file.Files.readString(java.nio.file.Path.of(System.getenv("HISTOS_PROVIDER"))).split("\\n", -1)
-       |    if (lines.length <= 2) Array.empty[String]
-       |    else lines.drop(2).filter(_.nonEmpty).map(compiled)
+       |    val countText = getenv("${PatternCount}")
+       |    val count = if (countText.isEmpty) 0 else Integer.parseInt(countText)
+       |    val found = new Array[String](count)
+       |    var i = 0
+       |    while (i < count) {
+       |      found(i) = getenv("${PatternPrefix}" + i)
+       |      i += 1
+       |    }
+       |    found.map(pattern => compiled(pattern))
        |  }
        |
        |  private def compiled(pattern: String): String = {

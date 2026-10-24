@@ -260,11 +260,11 @@ object Workflow:
   private def jobLines(plugin: RegisteredPlugin, job: CiJob): List[String] =
     List(
       s"  ${job.name.value}:",
-      "    runs-on: ubuntu-latest",
+      s"    runs-on: $Runner",
       "    permissions:",
       s"      contents: ${access(job.permissions)}",
       "    steps:",
-      "      - uses: actions/checkout@v4",
+      s"      - uses: $Checkout",
       s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")}",
     )
 
@@ -312,23 +312,23 @@ object Workflow:
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
           "  test:",
-          "    runs-on: ubuntu-latest",
+          s"    runs-on: $Runner",
           "    steps:",
-          "      - uses: actions/checkout@v4",
+          s"      - uses: $Checkout",
         ) ++ prepare ++ List(
           s"      - run: ${quote(argv(aggregate).mkString(" "))}",
         )
       case _ =>
         List(
           "  test:",
-          "    runs-on: ubuntu-latest",
+          s"    runs-on: $Runner",
           "    strategy:",
           "      fail-fast: false",
           "      matrix:",
           "        include:",
         ) ++ jobs.flatMap(include) ++ List(
           "    steps:",
-          "      - uses: actions/checkout@v4",
+          s"      - uses: $Checkout",
         ) ++ prepare ++ List(
           "      - run: \"${{ matrix.command }}\"",
         )
@@ -361,18 +361,24 @@ object Workflow:
       case VersionRef.All           => None
       case VersionRef.One(selected) => Some(selected.value)
 
+  /** Pinned image. `ubuntu-latest` moves, and this render should not move with it. */
+  private val Runner = "ubuntu-26.04"
+
+  /** Current major. v4 still targets Node 20, which the runner rewrites to Node 24. */
+  private val Checkout = "actions/checkout@v7"
+
   private val versionsJob: String =
-    """  versions:
-      |    runs-on: ubuntu-latest
+    s"""  versions:
+      |    runs-on: $Runner
       |    steps:
-      |      - uses: actions/checkout@v4
+      |      - uses: $Checkout
       |      - run: "./histos run versions"""".stripMargin
 
   private val workflowJob: String =
-    """  workflow:
-      |    runs-on: ubuntu-latest
+    s"""  workflow:
+      |    runs-on: $Runner
       |    steps:
-      |      - uses: actions/checkout@v4
+      |      - uses: $Checkout
       |      - run: "./histos workflow --check"""".stripMargin
 
   private def quote(text: String): String =

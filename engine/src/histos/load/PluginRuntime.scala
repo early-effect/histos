@@ -46,7 +46,7 @@ import histos.{Module, ProjectGraph}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path}
 
-import zio.{Chunk, ConfigProvider, IO, NonEmptyChunk, Ref, Runtime, System, ZIO, ZLayer}
+import zio.{Chunk, ConfigProvider, IO, NonEmptyChunk, Ref, Runtime, Scope, System, ZIO, ZLayer}
 
 final case class PluginLink(id: PluginId, linked: PluginLinked, artifacts: List[String])
 
@@ -68,8 +68,9 @@ object PluginRuntime:
       instances: List[HistosPlugin],
       links: List[PluginLink],
       launcher: ApiDigest,
-  ): PluginRuntime =
-    Running(repo, graph, loader, threads, instances, links, launcher)
+  ): ZIO[Scope, Nothing, PluginRuntime] =
+    (Parallelism.live >>> Histos.live).build.map: environment =>
+      Running(repo, graph, loader, threads, instances, links, launcher, environment.get[Histos])
 
   private final class Running(
       repo: Path,
@@ -79,6 +80,7 @@ object PluginRuntime:
       instances: List[HistosPlugin],
       val links: List[PluginLink],
       launcher: ApiDigest,
+      runner: Histos,
   ) extends PluginRuntime:
     def run(id: PluginTaskId, args: PluginArgs): ZIO[ActionCache & RemoteCache & Resolve, PluginFault, PluginOutput] =
       taskOf(id) match
@@ -86,28 +88,22 @@ object PluginRuntime:
         case Some(_) =>
           for
             made <- Ref.make(Map.empty[String, PluginOutput])
+            kept <- ZIO.service[ActionCache]
+            remote <- ZIO.service[RemoteCache]
             env <- System.envs.mapError(_ => PluginFault.Task(PluginRunError.Defect("System")))
             origin <- ZIO
               .config(Machine.native)
               .provideLayer(Runtime.setConfigProvider(ConfigProvider.fromMap(env)))
               .mapError(_ => PluginFault.Task(PluginRunError.Defect("Config")))
+            scheduler = Scheduler(runner, kept, remote)
             step <- ZIO.fromEither(PluginSteps.goal(
               id,
               taskOf,
               task => PluginCells.selected(graph, task),
               cell => compileCell(cell, origin),
-              (taskId, task, upstream) => remembered(id, taskId, task, args, made, upstream, env),
+              (taskId, task, upstream) => remembered(id, taskId, task, args, made, upstream, env, scheduler),
             ))
-            outcome <- ZIO.scoped {
-              ZIO
-                .serviceWithZIO[Histos](_.start(step))
-                .provideSome[ActionCache & RemoteCache & Resolve & zio.Scope](
-                  Parallelism.live,
-                  Histos.live,
-                  Scheduler.live,
-                )
-                .flatMap(_.outcome)
-            }
+            outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
             output <- outcome match
               case Outcome.Done(text) =>
                 made.get.map(_.get(id.render)).map:
@@ -145,7 +141,8 @@ object PluginRuntime:
         made: Ref[Map[String, PluginOutput]],
         upstream: String,
         env: Map[String, String],
-    ): ZIO[ActionCache & RemoteCache & Resolve & Scheduler, PluginFault, String] =
+        scheduler: Scheduler,
+    ): ZIO[Resolve, PluginFault, String] =
       val passed = if id == root then args else PluginArgs.empty
       instance(id.plugin) match
         case None => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
@@ -162,8 +159,8 @@ object PluginRuntime:
                 produce(id, task, plugin, passed, made, compiled, held, env).mapError(error => PluginFault.Task(error))
               ) @@ PluginAspects.loader(threads) @@ PluginAspects.declaredOutputs(repo, task, held)
             )
-            text <- ZIO
-              .serviceWithZIO[Scheduler](_.cached(action, Digest.of(action, Map.empty), local, Sendable.ofAction))
+            text <- scheduler
+              .cached(action, Digest.of(action, Map.empty), local, Sendable.ofAction)
               .mapError:
                 case ScheduleError.Failed(_, error) => error
                 case other                           => PluginFault.Scheduled(other)

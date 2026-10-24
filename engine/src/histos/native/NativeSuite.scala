@@ -13,6 +13,18 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
+/** One native test-adapter run. The engine does not load `scala.scalanative`. */
+final case class NativeSuiteRequest(
+    toolchain: NativeToolchain,
+    framework: String,
+    binary: Path,
+    classpath: List[Path],
+    work: Path,
+    jdk: ResolvedJdk,
+    processEnv: Map[String, String],
+    patterns: List[SuitePattern] = Nil,
+)
+
 /**
  * Run a linked native test binary through `scala.scalanative.testinterface.adapter.TestAdapter`.
  * The engine does not load `scala.scalanative`.
@@ -20,16 +32,8 @@ import zio.{IO, ZIO}
 object NativeSuite:
   private val SuiteMain: String = "subprocess.NativeSuite"
 
-  def run(
-      toolchain: NativeToolchain,
-      framework: String,
-      binary: Path,
-      classpath: List[Path],
-      work: Path,
-      jdk: ResolvedJdk,
-      processEnv: Map[String, String],
-      patterns: List[SuitePattern] = Nil,
-  ): IO[NativeSuiteError, ChildRequest] =
+  def run(request: NativeSuiteRequest): IO[NativeSuiteError, ChildRequest] =
+    val NativeSuiteRequest(toolchain, framework, binary, classpath, work, jdk, processEnv, patterns) = request
     val bridgeRoot = work.resolve("runner")
     val classes = bridgeRoot.resolve("classes")
     val source = bridgeRoot.resolve("src").resolve("subprocess").resolve("NativeSuite.scala")

@@ -8,6 +8,7 @@ import histos.testrun.{
   ModuleTestError,
   SuitePattern,
   TestFeed,
+  TestRun,
   TestStatus
 }
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, ResolvedJdk}
@@ -406,18 +407,18 @@ object Calls:
               )
             _ <- ModuleTest
               .suites(
-                repo,
-                graph,
-                projects,
-                jdk,
-                runtimes,
+                TestRun(
+                  repo,
+                  graph,
+                  projects,
+                  jdk,
+                  runtimes,
+                  parsed,
+                  quick,
+                  (module, version, platform) =>
+                    say(Message.Out(Lines.compilingTests(module, version, platform))).ignore,
+                ),
                 cells.toList,
-                parsed,
-                quick,
-                (module, version, platform) =>
-                  say(
-                    Message.Out(Lines.compilingTests(module, version, platform))
-                  ).ignore
               )
               .foreach {
                 case TestFeed.Begin(module, version, platform) =>

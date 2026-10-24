@@ -16,7 +16,7 @@ import histos.resolve.{
   ResolveCell
 }
 import histos.native.NativeOrigin
-import histos.testrun.ModuleTest
+import histos.testrun.{ModuleTest, TestCompile}
 import histos.zinc.{
   CompileFeed,
   CompiledCell,
@@ -124,7 +124,7 @@ private[load] object PluginCells:
     )
     for
       lock <- readLock(repo)
-      _ <- ModuleTest
+      _ <- TestCompile
         .compiledTests(
           repo,
           modules,
@@ -237,7 +237,7 @@ private[load] object PluginCells:
       graph: ProjectGraph,
       cell: Cell
   ): IO[PluginRunError, List[Path]] =
-    ModuleTest
+    TestCompile
       .testSources(
         repo,
         cell.module,
@@ -280,7 +280,7 @@ private[load] object PluginCells:
     GraphCompile.classesDir(repo, name, cell.version, cell.platform)
 
   private def testClasses(repo: Path, cell: Cell): Path =
-    ModuleTest.testClasses(repo, cell.module.name, cell.version, cell.platform)
+    TestCompile.testClasses(repo, cell.module.name, cell.version, cell.platform)
 
   private def modulesOf(graph: ProjectGraph): List[Module] =
     graph.projects.collect:

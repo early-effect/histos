@@ -32,7 +32,7 @@ object LoadSpec extends ZIOSpecDefault:
   private def deleteTree(root: Path): UIO[Unit] =
     Workspace.delete(root).ignore
 
-  private def load(source: String): ZIO[Loader & Scope & ContentStore & Resolve, LoadError, LoadedBuild] =
+  private def load(source: String): ZIO[Loader & Scope & ContentStore, LoadError, LoadedBuild] =
     for
       jar <- apiJar
       dir <- withRepo(source)
@@ -849,8 +849,12 @@ object LoadSpec extends ZIOSpecDefault:
       build.close()
       api.close()
 
-  private def loadWith(repo: Path, jar: Path, resolve: Resolve): ZIO[Loader & Scope & ContentStore, LoadError, Either[LoadError, LoadedBuild]] =
-    ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either.provideSome[Loader & Scope & ContentStore](ZLayer.succeed(resolve))
+  /** The resolver is the one this load was given, not the suite's idle resolver. */
+  private def loadWith(repo: Path, jar: Path, resolve: Resolve): ZIO[Scope & ContentStore, LoadError, Either[LoadError, LoadedBuild]] =
+    ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either.provideSome[Scope & ContentStore](
+      ZLayer.succeed(resolve),
+      Loader.live,
+    )
 
   private def apiHex(jar: Path): IO[LoadError, String] =
     ZIO.attempt(Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value).mapError(_ => LoadError.Io(LoadIo.Stat))

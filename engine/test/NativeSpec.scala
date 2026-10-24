@@ -2,7 +2,7 @@ package histos.native
 
 import histos.pack.MainClass
 import histos.resolve.Resolve
-import histos.testrun.{ModuleTest, ModuleTestError}
+import histos.testrun.{ModuleTest, ModuleTestError, TestRun}
 import histos.toolchain.Runtimes
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile}
 import histos.{ClangMajor, ClangPin, Module, Native, NativeVersion, Platform, Platforms, ProjectGraph, ProjectName, Projects, Requires, ScalaVersion, ScalaVersions, SourcePos, TestMachine, TestMain, Tool, module}
@@ -182,7 +182,7 @@ object NativeSpec extends ZIOSpecDefault:
           found <- ClangProbe.found(env)
           jdk <- GraphCompile.jdkHere
           main <- ZIO.fromEither(MainClass.from("Hello"))
-          linked <- NativeLink.link(found.version.major, NativeToolchain.Release, env, root, root.resolve("work"), jdk, main)
+          linked <- NativeLink.link(NativeLinkRequest(found.version.major, NativeToolchain.Release, env, root.resolve("work"), jdk, main), root)
           ran <- ZIO.attemptBlocking {
                    val process = new ProcessBuilder(linked.binary.toString).redirectErrorStream(true).start()
                    try
@@ -219,10 +219,10 @@ object NativeSpec extends ZIOSpecDefault:
                       ))
           jdk      <- GraphCompile.jdkHere
           compiled <- GraphCompile.run(root, built, List("app"), jdk, here.native).provide(Resolve.live(root.resolve("coursier"))).either
-          tested   <- ModuleTest.run(root, built, List("check"), jdk, here).provide(Resolve.live(root.resolve("coursier"))).either
+          tested   <- ModuleTest.run(TestRun(root, built, List("check"), jdk, here)).provide(Resolve.live(root.resolve("coursier"))).either
           main     <- ZIO.fromEither(MainClass.from("demo.Hello"))
           toolchain <- ZIO.fromEither(NativeToolchain.of(NativeToolchain.ReleaseRevision, here.native))
-          linked   <- NativeLink.linkClasspath(major21, toolchain, Map.empty, Nil, root.resolve("link"), jdk, main).either
+          linked   <- NativeLink.linkClasspath(NativeLinkRequest(major21, toolchain, Map.empty, root.resolve("link"), jdk, main), Nil).either
         yield assertTrue(
           compiled == Left(GraphCompileError.Cells(GraphCompileError.Failed(app, JvmCompile.Scala390, Platform.Native, missing), Nil)),
           tested == Left(ModuleTestError.Sources(check, JvmCompile.Scala390, missing)),

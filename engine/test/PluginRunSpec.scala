@@ -93,7 +93,7 @@ object PluginRunSpec extends ZIOSpecDefault:
     )
     PluginThreads
       .make(parent)
-      .map(PluginRuntime.loaded(repo, built, parent, _, List(plugin), links, launcher))
+      .flatMap(threads => PluginRuntime.loaded(repo, built, parent, threads, List(plugin), links, launcher))
 
   private def jarsAt(jars: List[Path]): List[PluginLink] =
     List(PluginLink(echoId, PluginLinked.FromBinary(launcher), jars.map(_.toString)))
