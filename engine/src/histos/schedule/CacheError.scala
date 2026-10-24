@@ -1,13 +1,11 @@
 package histos.schedule
 
-/** Which cache step failed. The exception text is not the error. */
-enum CacheOp:
-  case CreateTemp, Write, Read, Move, Stamp, Delete, List, Keep
+import histos.workspace.IoFailure
 
 enum CacheError:
-  case Io(op: CacheOp)
+  case Io(failure: IoFailure)
   case Corrupt(digest: Digest)
 
   def message: String = this match
-    case Io(op)          => s"cache failed while ${op.toString.toLowerCase}"
+    case Io(failure)     => failure.message
     case Corrupt(digest) => s"cache entry ${digest.value} failed verification"

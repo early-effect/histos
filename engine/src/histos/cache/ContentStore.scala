@@ -1,7 +1,8 @@
 package histos.cache
 
 import histos.jdk.Sha256
-import histos.schedule.{ActionCache, CacheError, CacheOp, Digest}
+import histos.schedule.{ActionCache, CacheError, Digest}
+import histos.workspace.{IoFailure, IoFault}
 
 import java.nio.channels.FileChannel
 import java.nio.charset.StandardCharsets
@@ -68,16 +69,16 @@ private final class DiskStore(val root: Path) extends ContentStore:
 
   def read(digest: Digest): IO[CacheError, Option[Chunk[Byte]]] =
     val dest = objectPath(digest)
-    ZIO.attempt(Files.isRegularFile(dest)).mapError(io(CacheOp.Read)).flatMap:
+    ZIO.attemptBlocking(Files.isRegularFile(dest)).mapError(io(dest, IoFault.Stat)).flatMap:
       case false => ZIO.none
       case true  =>
-        ZIO.attempt {
+        ZIO.attemptBlocking {
           val found = Chunk.fromArray(Files.readAllBytes(dest))
           found
-        }.mapError(io(CacheOp.Read)).map(Some(_))
+        }.mapError(io(dest, IoFault.Read)).map(Some(_))
 
   def list: IO[CacheError, List[CacheEntry]] =
-    ZIO.attempt(casEntries ++ pluginEntries).mapError(io(CacheOp.List))
+    ZIO.attemptBlocking(casEntries ++ pluginEntries).mapError(io(root, IoFault.Walk))
 
   def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit] =
     withKeep: dir =>
@@ -114,34 +115,34 @@ private final class DiskStore(val root: Path) extends ContentStore:
 
   private def tempFile: IO[CacheError, Path] =
     ZIO.randomWith(_.nextUUID).flatMap: id =>
-      ZIO.attempt {
+      ZIO.attemptBlocking {
         val dir = root.resolve("tmp")
         Files.createDirectories(dir)
         dir.resolve(id.toString)
-      }.mapError(io(CacheOp.CreateTemp))
+      }.mapError(io(root.resolve("tmp"), IoFault.Temp))
 
   private def write(path: Path, bytes: Chunk[Byte]): IO[CacheError, Unit] =
-    ZIO.attempt(Files.write(path, bytes.toArray)).mapError(io(CacheOp.Write)).unit
+    ZIO.attemptBlocking(Files.write(path, bytes.toArray)).mapError(io(path, IoFault.Write)).unit
 
   private def readBack(path: Path, bytes: Chunk[Byte], digest: Digest): IO[CacheError, Unit] =
-    ZIO.attempt(Chunk.fromArray(Files.readAllBytes(path))).mapError(io(CacheOp.Read)).flatMap: found =>
+    ZIO.attemptBlocking(Chunk.fromArray(Files.readAllBytes(path))).mapError(io(path, IoFault.Read)).flatMap: found =>
       if found == bytes then ZIO.unit
       else ZIO.fail(CacheError.Corrupt(digest))
 
   private def move(from: Path, to: Path): IO[CacheError, Unit] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       Files.createDirectories(to.getParent)
       try Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
       catch
         case _: java.nio.file.AtomicMoveNotSupportedException =>
           Files.move(from, to, StandardCopyOption.REPLACE_EXISTING)
-    }.mapError(io(CacheOp.Move)).unit
+    }.mapError(io(to, IoFault.Write)).unit
 
   private def stamp(path: Path, at: Instant): IO[CacheError, Unit] =
-    ZIO.attempt(Files.setLastModifiedTime(path, java.nio.file.attribute.FileTime.from(at))).mapError(io(CacheOp.Stamp)).unit
+    ZIO.attemptBlocking(Files.setLastModifiedTime(path, java.nio.file.attribute.FileTime.from(at))).mapError(io(path, IoFault.Write)).unit
 
   private def delete(path: Path): IO[CacheError, Unit] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       if Files.isDirectory(path) then
         val walk = Files.walk(path)
         val paths =
@@ -150,7 +151,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
         paths.sortBy(_.getNameCount).reverse.foreach(file => Files.deleteIfExists(file))
       else Files.deleteIfExists(path)
       ()
-    }.mapError(io(CacheOp.Delete))
+    }.mapError(io(path, IoFault.Delete))
 
   private def casEntries: List[CacheEntry] =
     val cas = root.resolve("cas")
@@ -192,7 +193,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
 
   /** Temps older than the cutoff are leftovers. A put that is still running stamped its file just now. */
   private def sweepTemps(cutoff: Instant): IO[CacheError, Unit] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       val dir = root.resolve("tmp")
       if Files.isDirectory(dir) then
         val listed = Files.list(dir)
@@ -204,7 +205,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
           finally listed.close()
         old.foreach(path => Files.deleteIfExists(path))
       ()
-    }.mapError(io(CacheOp.Delete))
+    }.mapError(io(root.resolve("tmp"), IoFault.Delete))
 
   private def withKeep[A](use: Path => A): IO[CacheError, A] =
     ZIO.attemptBlockingInterrupt {
@@ -222,7 +223,7 @@ private final class DiskStore(val root: Path) extends ContentStore:
           finally lock.close()
         finally channel.close()
       finally gate.unlock()
-    }.mapError(io(CacheOp.Keep))
+    }.mapError(io(root.resolve("keep"), IoFault.Write))
 
   /** `keep` used to be one file. A directory holds one file per project, and that old file becomes `legacy`. */
   private def keepDir(): Path =
@@ -240,5 +241,6 @@ private final class DiskStore(val root: Path) extends ContentStore:
   private def linesOf(path: Path): List[String] =
     Files.readString(path).split('\n').toList.map(_.trim).filter(_.nonEmpty)
 
-  private def io(op: CacheOp): Throwable => CacheError = _ => CacheError.Io(op)
+  private def io(path: Path, fault: IoFault): Throwable => CacheError =
+    _ => CacheError.Io(IoFailure(path, fault))
 end DiskStore

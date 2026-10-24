@@ -1,7 +1,7 @@
 package histos.jdk
 
 import histos.cache.{Placed, Scratch}
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.file.{Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -10,9 +10,6 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-enum StageOp:
-  case Read, Write, Move, Unpack, Delete
-
 enum StageError:
   case Remote(url: HttpsUrl)
   case UnknownArchive
@@ -20,7 +17,7 @@ enum StageError:
   case UnsafePath(entry: String)
   case NoHome
   case Extract(archive: Path, failure: ExtractFailure)
-  case Io(op: StageOp)
+  case Io(failure: IoFailure)
 
   def message: String = this match
     case Remote(url)                 => s"will not fetch ${url.value}"
@@ -29,7 +26,7 @@ enum StageError:
     case UnsafePath(entry)           => s"jdk archive entry escapes the cache: $entry"
     case NoHome                      => "jdk archive has no bin/javac of the locked major"
     case Extract(archive, failure)   => failure.message(archive)
-    case Io(op)                      => s"jdk stage failed while ${op.toString.toLowerCase}"
+    case Io(failure)                 => failure.message
 
 /**
  * Stage a locked archive into `cache/jdks/<sha256>`. `https` urls are refused. There is no network here.
@@ -46,7 +43,7 @@ object JdkStage:
         val unpack  = root.resolve("unpack")
         for
           _    <- place(source, archive, lock.sha256)
-          kind <- ArchiveKind.of(archive, StageError.Io(StageOp.Read)).someOrFail(StageError.UnknownArchive)
+          kind <- ArchiveKind.of(archive, StageError.Io(IoFailure(archive, IoFault.Read))).someOrFail(StageError.UnknownArchive)
           _    <- unpackIfNeeded(kind, archive, unpack, lock, machine)
           home <- homeOf(unpack, lock)
         yield home
@@ -58,11 +55,11 @@ object JdkStage:
       case None =>
         ZIO.scoped:
           for
-            tmp    <- Scratch.file(archive, StageError.Io(StageOp.Write))
+            tmp    <- Scratch.file(archive, StageError.Io(IoFailure(archive, IoFault.Write)))
             _      <- copy(source, tmp)
             actual <- hash(tmp)
             _      <- ZIO.unless(actual == expected)(ZIO.fail(StageError.Checksum(expected, actual)))
-            _      <- Scratch.place(tmp, archive, StageError.Io(StageOp.Move))
+            _      <- Scratch.place(tmp, archive, StageError.Io(IoFailure(archive, IoFault.Write)))
           yield ()
 
   private def unpackIfNeeded(kind: ArchiveKind, archive: Path, unpack: Path, lock: JdkLock, machine: Machine): IO[StageError, Unit] =
@@ -71,7 +68,7 @@ object JdkStage:
       case Left(_) =>
         ZIO.scoped:
           for
-            fresh <- Scratch.directory(unpack, StageError.Io(StageOp.Write))
+            fresh <- Scratch.directory(unpack, StageError.Io(IoFailure(unpack, IoFault.Create)))
             _     <- kind match
                        case ArchiveKind.Zip                     => unpackZip(archive, fresh)
                        case ArchiveKind.TarGz | ArchiveKind.TarXz =>
@@ -82,32 +79,33 @@ object JdkStage:
 
   /** A complete unpack already in place came from a stager that won the race, and it stays. An incomplete one predates atomic staging. */
   private def install(fresh: Path, unpack: Path, lock: JdkLock): IO[StageError, Unit] =
-    Scratch.place(fresh, unpack, StageError.Io(StageOp.Move)).flatMap:
+    Scratch.place(fresh, unpack, StageError.Io(IoFailure(unpack, IoFault.Write))).flatMap:
       case Placed.Moved => ZIO.unit
       case Placed.Occupied =>
         homeOf(unpack, lock).unit.orElse:
-          deleteTree(unpack) *> Scratch.place(fresh, unpack, StageError.Io(StageOp.Move)) *> homeOf(unpack, lock).unit
+          deleteTree(unpack) *> Scratch.place(fresh, unpack, StageError.Io(IoFailure(unpack, IoFault.Write))) *> homeOf(unpack, lock).unit
 
   private def homeOf(unpack: Path, lock: JdkLock): IO[StageError, JdkHome] =
-    Jdk.homes(unpack).mapError(stageProbe).flatMap: homes =>
+    Jdk.homes(unpack).mapError(stageProbe(unpack)).flatMap: homes =>
       homes.find(home => home.hasJavac && home.version.exists(_.major == lock.major)) match
         case Some(home) => ZIO.succeed(home)
         case None       => ZIO.fail(StageError.NoHome)
 
-  private def stageProbe(error: JdkError): StageError =
+  private def stageProbe(root: Path)(error: JdkError): StageError =
     error match
-      case JdkError.Unreadable(_) | JdkError.BadMajor(_) | JdkError.PathScan => StageError.Io(StageOp.Unpack)
+      case JdkError.Unreadable(path) => StageError.Io(IoFailure(path, IoFault.Read))
+      case JdkError.BadMajor(_) | JdkError.PathScan => StageError.Io(IoFailure(root, IoFault.Walk))
 
   private def hashIfPresent(archive: Path): IO[StageError, Option[Sha256]] =
-    ZIO.attempt(Files.isRegularFile(archive)).mapError(_ => StageError.Io(StageOp.Read)).flatMap:
+    ZIO.attemptBlocking(Files.isRegularFile(archive)).mapError(_ => StageError.Io(IoFailure(archive, IoFault.Stat))).flatMap:
       case false => ZIO.none
       case true  => hash(archive).map(Some(_))
 
   private def copy(from: Path, to: Path): IO[StageError, Unit] =
-    ZIO.attempt(Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING)).mapError(_ => StageError.Io(StageOp.Write)).unit
+    ZIO.attemptBlocking(Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING)).mapError(_ => StageError.Io(IoFailure(to, IoFault.Write))).unit
 
   private def hash(path: Path): IO[StageError, Sha256] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       val digest = MessageDigest.getInstance("SHA-256")
       val input  = Files.newInputStream(path)
       try
@@ -118,13 +116,13 @@ object JdkStage:
           read = input.read(buffer)
       finally input.close()
       Sha256.fromDigest(digest.digest)
-    }.mapError(_ => StageError.Io(StageOp.Read))
+    }.mapError(_ => StageError.Io(IoFailure(path, IoFault.Read)))
 
   private def deleteTree(root: Path): IO[StageError, Unit] =
-    Workspace.delete(root).mapError(_ => StageError.Io(StageOp.Delete))
+    Workspace.delete(root).mapError(StageError.Io(_))
 
   private def unpackZip(archive: Path, dest: Path): IO[StageError, Unit] =
-    ZIO.attempt(unpackEntries(archive, dest.normalize)).mapError(_ => StageError.Io(StageOp.Unpack)).flatMap:
+    ZIO.attemptBlocking(unpackEntries(archive, dest.normalize)).mapError(_ => StageError.Io(IoFailure(dest, IoFault.Write))).flatMap:
       case Left(error) => ZIO.fail(error)
       case Right(_)    => ZIO.unit
 
@@ -147,7 +145,7 @@ object JdkStage:
                   Option(path.getParent).foreach(Files.createDirectories(_))
                   Files.copy(input, path, StandardCopyOption.REPLACE_EXISTING)
                   None
-                catch case _: java.io.IOException => Some(StageError.Io(StageOp.Unpack))
+                catch case _: java.io.IOException => Some(StageError.Io(IoFailure(path, IoFault.Write)))
         if failed.isEmpty then
           input.closeEntry()
           entry = input.getNextEntry

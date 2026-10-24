@@ -4,6 +4,7 @@ import histos.Platform
 import histos.jdk.Toolchain
 import histos.pack.MainClass
 import histos.testrun.Transcript
+import histos.workspace.{IoFailure, IoFault}
 
 import java.io.InputStream
 import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
@@ -56,9 +57,6 @@ enum ChildEvent:
 enum GroupOp:
   case Lookup, Call, Set, Pid
 
-enum ChildIo:
-  case Work, Bootstrap, Spawn, Wait, Read
-
 enum ChildError:
   case UnsupportedPlatform(platform: Platform)
   case Java(path: Path)
@@ -67,7 +65,11 @@ enum ChildError:
   case Work(path: Path)
   case Group(op: GroupOp)
   case Bootstrap(output: ProcessOutput)
-  case Io(op: ChildIo)
+  case NoProgram
+  case Start(program: String)
+  case Status
+  case Console
+  case Io(failure: IoFailure)
 
   def message: String = this match
     case UnsupportedPlatform(platform) => s"a jvm child is required, not ${platform.token}"
@@ -77,7 +79,11 @@ enum ChildError:
     case Work(path)                    => s"work directory is not an empty directory: $path"
     case Group(op)                     => s"process group failed while ${op.toString.toLowerCase}"
     case Bootstrap(output)             => s"child bootstrap failed: ${output.text}"
-    case Io(op)                        => s"child failed while ${op.toString.toLowerCase}"
+    case NoProgram                     => "a child needs a program"
+    case Start(program)                => s"could not start $program"
+    case Status                        => "the child did not report a status"
+    case Console                       => "could not read the child's output"
+    case Io(failure)                   => failure.message
 
 object ChildProcess:
   private val EntryClass: MainClass = MainClass.trusted("subprocess.Entry")
@@ -140,7 +146,7 @@ object ChildProcess:
       environment: Map[String, String],
   ): ZStream[Any, ChildError, ChildEvent] =
     argv match
-      case Nil => ZStream.fail(ChildError.Io(ChildIo.Spawn))
+      case Nil => ZStream.fail(ChildError.NoProgram)
       case _ =>
         ZStream.unwrapScoped:
           for
@@ -156,13 +162,13 @@ object ChildProcess:
    */
   def attached(argv: List[String], extra: Map[String, String], grace: Duration): IO[ChildError, Int] =
     argv match
-      case Nil => ZIO.fail(ChildError.Io(ChildIo.Spawn))
+      case Nil => ZIO.fail(ChildError.NoProgram)
       case _ =>
         ZIO.scoped:
           ZIO.acquireRelease(startAttached(argv, extra))(process =>
             ProcessTree.of(process).flatMap(_.terminate(grace))
           ).flatMap: process =>
-            ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => ChildError.Io(ChildIo.Wait))
+            ZIO.attemptBlockingInterrupt(process.waitFor()).mapError(_ => ChildError.Status)
 
   /** Collect [[events]] for a caller that wants the text after the process ends. */
   def run(request: ChildRequest): IO[ChildError, ChildOutcome] =
@@ -177,7 +183,7 @@ object ChildProcess:
     events.runFold(Captured(Transcript.empty, None))(capture).flatMap: captured =>
       captured.exit match
         case Some(code) => ZIO.succeed(ChildOutcome(code, captured.heard.outText, captured.heard.errText))
-        case None       => ZIO.fail(ChildError.Io(ChildIo.Wait))
+        case None       => ZIO.fail(ChildError.Status)
 
   private final case class Captured(heard: Transcript, exit: Option[ProcessExit])
 
@@ -207,7 +213,7 @@ object ChildProcess:
     yield Child(process, ZStream.fromQueue(out).flattenTake.merge(ZStream.fromQueue(err).flattenTake))
 
   private def text(input: InputStream): ZStream[Any, ChildError, String] =
-    ZStream.fromInputStream(input).via(decode >>> ZPipeline.splitLines).mapError(_ => ChildError.Io(ChildIo.Read))
+    ZStream.fromInputStream(input).via(decode >>> ZPipeline.splitLines).mapError(_ => ChildError.Console)
 
   /** A malformed byte becomes U+FFFD, where `utf8Decode` would fail the whole console. */
   private def decode: ZPipeline[Any, CharacterCodingException, Byte, String] =
@@ -235,16 +241,22 @@ object ChildProcess:
 
   /** A classpath entry is a jar or a classes directory. Main classes are a directory. */
   private def present(path: Path, error: ChildError): IO[ChildError, Unit] =
-    ZIO.attemptBlocking(Files.isRegularFile(path) || Files.isDirectory(path)).mapError(_ => ChildError.Io(ChildIo.Read)).flatMap: found =>
-      if found then ZIO.unit else ZIO.fail(error)
+    ZIO.attemptBlocking(Files.isRegularFile(path) || Files.isDirectory(path))
+      .mapError(_ => ChildError.Io(IoFailure(path, IoFault.Stat)))
+      .flatMap: found =>
+        if found then ZIO.unit else ZIO.fail(error)
 
   private def file(path: Path, error: ChildError): IO[ChildError, Unit] =
-    ZIO.attemptBlocking(Files.isRegularFile(path)).mapError(_ => ChildError.Io(ChildIo.Read)).flatMap: present =>
-      if present then ZIO.unit else ZIO.fail(error)
+    ZIO.attemptBlocking(Files.isRegularFile(path))
+      .mapError(_ => ChildError.Io(IoFailure(path, IoFault.Stat)))
+      .flatMap: present =>
+        if present then ZIO.unit else ZIO.fail(error)
 
   private def directory(path: Path, error: ChildError): IO[ChildError, Unit] =
-    ZIO.attemptBlocking(Files.isDirectory(path)).mapError(_ => ChildError.Io(ChildIo.Read)).flatMap: present =>
-      if present then ZIO.unit else ZIO.fail(error)
+    ZIO.attemptBlocking(Files.isDirectory(path))
+      .mapError(_ => ChildError.Io(IoFailure(path, IoFault.Stat)))
+      .flatMap: present =>
+        if present then ZIO.unit else ZIO.fail(error)
 
   private def empty(work: Path): IO[ChildError, Unit] =
     ZIO.attemptBlocking {
@@ -253,7 +265,7 @@ object ChildProcess:
         val listed = Files.list(work)
         try !listed.iterator.hasNext
         finally listed.close()
-    }.mapError(_ => ChildError.Io(ChildIo.Work)).flatMap: vacant =>
+    }.mapError(_ => ChildError.Io(IoFailure(work, IoFault.Walk))).flatMap: vacant =>
       if vacant then ZIO.unit else ZIO.fail(ChildError.Work(work))
 
   private def javac(java: Path): Either[ChildError, Path] =
@@ -273,7 +285,7 @@ object ChildProcess:
         val classes = root.resolve("classes")
         Files.createDirectories(classes)
         (source, classes)
-      }.mapError(_ => ChildError.Io(ChildIo.Bootstrap))
+      }.mapError(_ => ChildError.Io(IoFailure(work.resolve("bootstrap"), IoFault.Write)))
       (source, classes) = written
       compiled <- collect(watched(startJavac(javac, source, classes), Group.Inherited))
       _ <- ZIO.unless(compiled.exit == ProcessExit(0))(ZIO.fail(ChildError.Bootstrap(compiled.out)))
@@ -285,7 +297,7 @@ object ChildProcess:
       new ProcessBuilder(javac.toString, "-d", classes.toString, source.toString)
         .redirectErrorStream(true)
         .start()
-    }.mapError(_ => ChildError.Io(ChildIo.Bootstrap))
+    }.mapError(_ => ChildError.Start(javac.toString))
 
   /**
    * `setpgid` then `execvp`. The JVM image is replaced, so the pid Java recorded is the program's pid
@@ -336,7 +348,7 @@ object ChildProcess:
       .take(16)
 
   private def runningJava: IO[ChildError, Path] =
-    System.property("java.home").mapError(_ => ChildError.Io(ChildIo.Spawn)).flatMap:
+    System.property("java.home").mapError(_ => ChildError.Io(IoFailure(Path.of("java.home"), IoFault.Read))).flatMap:
       case Some(home) if home.nonEmpty =>
         val bin = Path.of(home, "bin", "java")
         file(bin, ChildError.Java(bin)).as(bin)
@@ -345,7 +357,7 @@ object ChildProcess:
   /** Compiled once per machine. A later command reuses the class file. */
   private def launcher(java: Path): IO[ChildError, Path] =
     for
-      tmp <- System.property("java.io.tmpdir").mapError(_ => ChildError.Io(ChildIo.Bootstrap))
+      tmp <- System.property("java.io.tmpdir").mapError(_ => ChildError.Io(IoFailure(Path.of("java.io.tmpdir"), IoFault.Read)))
       root = Path.of(tmp.filter(_.nonEmpty).getOrElse("/tmp"), s"histos-exec-$launcherId")
       compiler <- ZIO.fromEither(javac(java))
       classes <- ensureLauncher(compiler, root)
@@ -373,7 +385,7 @@ object ChildProcess:
             Right(classes)
         else Right(classes)
       }
-    }.mapError(_ => ChildError.Io(ChildIo.Bootstrap)).flatMap:
+    }.mapError(_ => ChildError.Io(IoFailure(root, IoFault.Write))).flatMap:
       case Left(text)     => ZIO.fail(ChildError.Bootstrap(ProcessOutput.from(text)))
       case Right(classes) => ZIO.succeed(classes)
 
@@ -393,14 +405,17 @@ object ChildProcess:
       environment.foreach((key, value) => env.put(key, value))
       builder.redirectInput(ProcessBuilder.Redirect.PIPE)
       builder.start()
-    }.mapError(_ => ChildError.Io(ChildIo.Spawn))
+    }.mapError(_ => ChildError.Start(java.toString))
 
   private def startAttached(argv: List[String], extra: Map[String, String]): IO[ChildError, Process] =
-    ZIO.attemptBlocking {
-      val builder = new ProcessBuilder(argv.asJava).inheritIO()
-      extra.foreach((key, value) => builder.environment().put(key, value))
-      builder.start()
-    }.mapError(_ => ChildError.Io(ChildIo.Spawn))
+    argv match
+      case Nil => ZIO.fail(ChildError.NoProgram)
+      case program :: _ =>
+        ZIO.attemptBlocking {
+          val builder = new ProcessBuilder(argv.asJava).inheritIO()
+          extra.foreach((key, value) => builder.environment().put(key, value))
+          builder.start()
+        }.mapError(_ => ChildError.Start(program))
 
   private def start(request: ChildRequest, entry: Path): IO[ChildError, Process] =
     ZIO.attemptBlocking {
@@ -420,17 +435,17 @@ object ChildProcess:
       request.environment.foreach((key, value) => env.put(key, value))
       builder.redirectInput(ProcessBuilder.Redirect.PIPE)
       builder.start()
-    }.mapError(_ => ChildError.Io(ChildIo.Spawn))
+    }.mapError(_ => ChildError.Start(request.java.toString))
 
   private def grouped(work: Path): IO[ChildError, Unit] =
     read(work.resolve("group")).flatMap: status =>
       if status.text.trim.toIntOption.contains(0) then ZIO.unit else ZIO.fail(ChildError.Group(GroupOp.Set))
 
   private def wait(process: Process): IO[ChildError, ProcessExit] =
-    ZIO.attemptBlockingInterrupt(process.waitFor()).mapBoth(_ => ChildError.Io(ChildIo.Wait), ProcessExit(_))
+    ZIO.attemptBlockingInterrupt(process.waitFor()).mapBoth(_ => ChildError.Status, ProcessExit(_))
 
   private def read(path: Path): IO[ChildError, ProcessOutput] =
-    ZIO.attemptBlocking(ProcessOutput.from(Files.readString(path))).mapError(_ => ChildError.Io(ChildIo.Read))
+    ZIO.attemptBlocking(ProcessOutput.from(Files.readString(path))).mapError(_ => ChildError.Io(IoFailure(path, IoFault.Read)))
 
   /**
    * The tree is taken before anything dies. The group kill also reaches a descendant that was
