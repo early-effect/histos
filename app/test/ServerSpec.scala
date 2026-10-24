@@ -365,7 +365,7 @@ object ServerSpec extends ZIOSpecDefault:
               }
               opened <- ZIO.scoped(daemon(root, built).either).timeout(30.seconds)
               socket <- ZIO.attempt(Files.exists(Record.socket(root)))
-            yield assertTrue(opened == Some(Left(ServerError.Io(ServerIo.Save))), !socket)
+            yield assertTrue(opened == Some(Left(ServerError.Io(ServerIo.Save(Record.file(root))))), !socket)
           program.provideSome[Scope](liveLayers(root))
     ,
     test("reboot starts a successor, and the old server stops with an idle connection open"):

@@ -38,15 +38,20 @@ final case class Artifact(
     dependencies: List[MavenDependency] = Nil,
 )
 
-enum PublishIo:
-  case Directory, Write, Move
+/** Why a publish filesystem call failed. The path stays on `PublishError.Io`. */
+enum PublishFault:
+  case Stat, Write
+
+  def word: String = this match
+    case Stat  => "stat"
+    case Write => "write"
 
 enum PublishError:
   case EmptyJar
   case NotAJar
   case NotADirectory(path: Path)
   case Escaped(path: Path)
-  case Io(op: PublishIo)
+  case Io(path: Path, fault: PublishFault)
   case Unauthorized
   case NotSnapshot(error: SnapshotRevisionError)
   case Status(code: Int)
@@ -58,7 +63,7 @@ enum PublishError:
     case NotAJar             => "a published jar is a zip"
     case NotADirectory(path) => s"$path is not a directory"
     case Escaped(path)       => s"$path leaves the repository"
-    case Io(op)              => s"publish failed while ${op.toString.toLowerCase}"
+    case Io(path, fault)     => s"could not ${fault.word} $path"
     case Unauthorized        => "sonatype rejected the credentials"
     case NotSnapshot(error)  => error.message
     case Status(code)        => s"publish failed with HTTP $code"

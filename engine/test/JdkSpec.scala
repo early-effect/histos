@@ -202,6 +202,18 @@ object JdkSpec extends ZIOSpecDefault:
           !Files.exists(root.resolve("cache").resolve("jdks").resolve(other.value).resolve("archive")),
         )
     ,
+    test("a malformed zip reports an extraction failure"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zip  = zipOf("jdk/bin/javac" -> Array[Byte](1, 2, 3)).updated(43, 9.toByte)
+          file = root.resolve("malformed.zip")
+          _    <- ZIO.attempt(Files.write(file, zip))
+          sha  = Sha256.of(zio.Chunk.fromArray(zip))
+          out  <- JdkStage.stage(JdkLock(major21, v21, ArchiveSource.Local(file), sha), machine(root)).either
+          archive = root.resolve("cache").resolve("jdks").resolve(sha.value).resolve("archive")
+        yield assertTrue(out == Left(StageError.Extract(archive, ExtractFailure.Malformed)))
+    ,
     test("a zip entry that escapes the cache is rejected"):
       ZIO.scoped:
         for

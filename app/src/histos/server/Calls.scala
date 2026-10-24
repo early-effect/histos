@@ -38,11 +38,11 @@ final class Say(private val send: Message => IO[ServerError, Unit]):
   def apply(message: Message): IO[ServerError, Unit] = send(message)
 
 object Say:
-  def frames(stream: OutputStream): Say =
+  def frames(stream: OutputStream, socket: Path): Say =
     new Say(message =>
       histos.bsp.Frame
         .write(stream, message.toJson)
-        .mapError(_ => ServerError.Io(ServerIo.Write))
+        .mapError(_ => ServerError.Io(ServerIo.Write(socket)))
     )
 
   def record(feeds: Ref[Chunk[Feed]]): Say =

@@ -1,6 +1,7 @@
 package histos.resolve
 
 import histos.jdk.Sha256
+import histos.workspace.{IoFailure, IoFault}
 import histos.{Dep, Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -65,10 +66,10 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
     yield Classpath(hashed, evictions(result.resolution))
 
   private def session: IO[ResolveError, coursier.Fetch[coursier.util.Task]] =
-    ZIO.attempt {
+    ZIO.attemptBlocking {
       val files = coursier.cache.FileCache().withLocation(cache.toString).copy(allowCacheSubstitution = false)
       coursier.Fetch(files)(using coursier.util.Task.sync).noMirrors.withGradleModuleSupport(false)
-    }.mapError(_ => ResolveError.Repository(RepositoryIo.Fetch))
+    }.mapError(_ => ResolveError.Io(IoFailure(cache, IoFault.Create)))
 
   private def execute(fetch: coursier.Fetch[coursier.util.Task]): IO[ResolveError, coursier.Fetch.Result] =
     ZIO.attemptBlockingInterrupt(fetch.eitherResult()).mapError(_ => ResolveError.Repository(RepositoryIo.Fetch)).flatMap:
@@ -164,7 +165,7 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
 
   private def digest(path: Path): IO[ResolveError, Sha256] =
     ZIO.attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(path))))
-      .mapError(_ => ResolveError.Repository(RepositoryIo.Read))
+      .mapError(_ => ResolveError.Io(IoFailure(path, IoFault.Read)))
 
   private def lift(error: coursier.error.CoursierError): ResolveError =
     error match

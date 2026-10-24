@@ -56,14 +56,18 @@ enum ServerError:
     case Io(op)        => s"histos server failed while ${op.label}"
 
 enum ServerIo:
-  case Bind, Accept, Read, Write, Save
+  case Bind(path: Path)
+  case Accept(path: Path)
+  case Read(path: Path)
+  case Write(path: Path)
+  case Save(path: Path)
 
   def label: String = this match
-    case Bind   => "binding"
-    case Accept => "accepting"
-    case Read   => "reading"
-    case Write  => "writing"
-    case Save   => "writing the server record"
+    case Bind(_)   => "binding"
+    case Accept(_) => "accepting"
+    case Read(_)   => "reading"
+    case Write(_)  => "writing"
+    case Save(_)   => "writing the server record"
 
 /** One event from a command running in the daemon. */
 enum Feed:
@@ -123,7 +127,7 @@ object Fingerprint:
           Chunk.single(1.toByte) ++ Chunk.fromArray(Files.readAllBytes(path))
         else Chunk.single(0.toByte)
       }
-      .mapError(_ => ServerError.Io(ServerIo.Read))
+      .mapError(_ => ServerError.Io(ServerIo.Read(path)))
 
   /** Regular files under each header path, after the lock. No path plugin
     * leaves the old hash.
@@ -144,7 +148,7 @@ object Fingerprint:
                   0.toByte
                 )
       }
-      .mapError(_ => ServerError.Io(ServerIo.Read))
+      .mapError(_ => ServerError.Io(ServerIo.Read(build)))
 
   private def tree(repo: Path, project: histos.ProjectPath): List[Path] =
     val root = repo.resolve(project.value)
@@ -203,7 +207,7 @@ object Record:
         )
         ()
       }
-      .mapError(_ => ServerError.Io(ServerIo.Save))
+      .mapError(_ => ServerError.Io(ServerIo.Save(dest)))
 
   def read(repo: Path): UIO[Option[Written]] =
     ZIO
@@ -249,10 +253,10 @@ object Client:
         )
         input = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
-        _ <- Frame.write(output, call.toJson).mapError(written)
-        first <- Frame.read(input).mapError(read)
+        _ <- Frame.write(output, call.toJson).mapError(written(socket))
+        first <- Frame.read(input).mapError(read(socket))
         _ <- ZIO.fromEither(ready(first))
-      yield frames(input)
+      yield frames(input, socket)
     }
 
   /** Copy BSP frames to a daemon session. The daemon's exit marker is this
@@ -266,11 +270,11 @@ object Client:
         )
         input = Channels.newInputStream(channel)
         output = Channels.newOutputStream(channel)
-        _ <- Frame.write(output, Call.encode(Call.Bsp)).mapError(written)
-        first <- Frame.read(input).mapError(read)
+        _ <- Frame.write(output, Call.encode(Call.Bsp)).mapError(written(socket))
+        first <- Frame.read(input).mapError(read(socket))
         _ <- ZIO.fromEither(ready(first))
-        _ <- copyStdin(output, channel).forkScoped
-        code <- copyToStdout(input)
+        _ <- copyStdin(output, channel, socket).forkScoped
+        code <- copyToStdout(input, socket)
       yield code
     }
 
@@ -284,44 +288,45 @@ object Client:
       case Some(Message.Ready) => Right(())
       case _                   => Left(ServerError.Protocol)
 
-  private def frames(input: InputStream): ZStream[Any, ServerError, Feed] =
+  private def frames(input: InputStream, socket: Path): ZStream[Any, ServerError, Feed] =
     ZStream
-      .fromZIO(Frame.read(input).mapError(read))
+      .fromZIO(Frame.read(input).mapError(read(socket)))
       .flatMap:
         case None          => ZStream.fail(ServerError.Protocol)
         case Some(payload) =>
           payload.fromJson[Message] match
             case Right(Message.Out(text)) =>
-              ZStream.succeed(Feed.Out(text)) ++ frames(input)
+              ZStream.succeed(Feed.Out(text)) ++ frames(input, socket)
             case Right(Message.Err(text)) =>
-              ZStream.succeed(Feed.Err(text)) ++ frames(input)
+              ZStream.succeed(Feed.Err(text)) ++ frames(input, socket)
             case Right(Message.Exit(code, err)) =>
               ZStream.succeed(Feed.Exit(code, err))
             case _ => ZStream.fail(ServerError.Protocol)
 
   private def copyStdin(
       output: OutputStream,
-      channel: SocketChannel
+      channel: SocketChannel,
+      socket: Path,
   ): IO[ServerError, Unit] =
     def loop: IO[ServerError, Unit] =
       Frame
         .read(java.lang.System.in)
-        .mapError(read)
+        .mapError(read(socket))
         .flatMap:
           case None =>
             ZIO
               .attemptBlocking(channel.shutdownOutput())
-              .mapError(_ => ServerError.Io(ServerIo.Write))
+              .mapError(_ => ServerError.Io(ServerIo.Write(socket)))
               .unit
           case Some(payload) =>
-            Frame.write(output, payload).mapError(written) *> loop
+            Frame.write(output, payload).mapError(written(socket)) *> loop
     loop
 
-  private def copyToStdout(input: InputStream): IO[ServerError, Int] =
+  private def copyToStdout(input: InputStream, socket: Path): IO[ServerError, Int] =
     def loop: IO[ServerError, Int] =
       Frame
         .read(input)
-        .mapError(read)
+        .mapError(read(socket))
         .flatMap:
           case None          => ZIO.succeed(1)
           case Some(payload) =>
@@ -330,13 +335,13 @@ object Client:
               case _                           =>
                 Frame
                   .write(java.lang.System.out, payload)
-                  .mapError(written) *> loop
+                  .mapError(written(socket)) *> loop
     loop
 
-  private def written(error: Frame.FrameError): ServerError =
-    ServerError.Io(ServerIo.Write)
-  private def read(error: Frame.FrameError): ServerError =
-    ServerError.Io(ServerIo.Read)
+  private def written(socket: Path)(error: Frame.FrameError): ServerError =
+    ServerError.Io(ServerIo.Write(socket))
+  private def read(socket: Path)(error: Frame.FrameError): ServerError =
+    ServerError.Io(ServerIo.Read(socket))
 
 object Daemon:
   def open(
@@ -394,7 +399,7 @@ object Daemon:
           .start()
         ()
       }
-      .mapError(_ => ServerError.Io(ServerIo.Bind))
+      .mapError(_ => ServerError.Io(ServerIo.Bind(repo)))
 
   private def run(
       repo: Path,
@@ -468,10 +473,10 @@ object Daemon:
     for
       _ <- ZIO
         .attemptBlocking(Files.createDirectories(socket.getParent))
-        .mapError(_ => ServerError.Io(ServerIo.Bind))
+        .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
       _ <- ZIO
         .attemptBlocking(Files.deleteIfExists(socket))
-        .mapError(_ => ServerError.Io(ServerIo.Bind))
+        .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
       where <- ZIO
         .attempt(UnixDomainSocketAddress.of(socket.toAbsolutePath.normalize))
         .mapError(_ => ServerError.Address(socket))
@@ -481,7 +486,7 @@ object Daemon:
           server.bind(where)
           server
         }
-        .mapError(_ => ServerError.Io(ServerIo.Bind))
+        .mapError(_ => ServerError.Io(ServerIo.Bind(socket)))
     yield channel
 
   private enum Uses:
@@ -538,7 +543,7 @@ object Daemon:
           _ =>
             ZIO.ifZIO(life.stopping.isDone)(
               ZIO.unit,
-              ZIO.fail(ServerError.Io(ServerIo.Accept))
+              ZIO.fail(ServerError.Io(ServerIo.Accept(bound)))
             ),
           socket =>
             handle(
@@ -586,7 +591,7 @@ object Daemon:
     val output = Channels.newOutputStream(socket)
     Frame
       .read(input)
-      .mapError(_ => ServerError.Io(ServerIo.Read))
+      .mapError(_ => ServerError.Io(ServerIo.Read(bound)))
       .flatMap:
         case None          => ZIO.unit
         case Some(payload) =>
@@ -599,14 +604,15 @@ object Daemon:
                   case _           => adopt(repo, apiJar, version, bound, warm)
               loaded.flatMap:
                 case Left(message) =>
-                  write(output, wire(Message.Ready)) *> write(
+                  write(output, wire(Message.Ready), bound) *> write(
                     output,
                     wire(
                       Message.Exit(histos.cli.CliExit.LoadFailed.code, message)
-                    )
+                    ),
+                    bound,
                   )
                 case Right(held) =>
-                  val say = Say.frames(output)
+                  val say = Say.frames(output, bound)
                   val ran =
                     asked match
                       case Call.Compile(projects) =>
@@ -679,7 +685,8 @@ object Daemon:
                           output,
                           wire(
                             Message.Exit(histos.cli.CliExit.Success.code, "")
-                          )
+                          ),
+                          bound,
                         )
                       case Call.Reboot =>
                         reboot(repo, bound, server, life, output)
@@ -702,7 +709,7 @@ object Daemon:
                     asked match
                       case Call.Bsp => release(held) *> ran
                       case _        => ran.ensuring(release(held))
-                  write(output, wire(Message.Ready)) *> occupy(permit, asked)(
+                  write(output, wire(Message.Ready), bound) *> occupy(permit, asked)(
                     leased
                   )
 
@@ -834,7 +841,8 @@ object Daemon:
       _ <- life.relaunch
       _ <- write(
         output,
-        wire(Message.Exit(histos.cli.CliExit.Success.code, ""))
+        wire(Message.Exit(histos.cli.CliExit.Success.code, "")),
+        bound,
       )
       _ <- life.stopping.succeed(())
       _ <- ZIO.attemptBlocking(server.close()).ignore
@@ -863,7 +871,7 @@ object Daemon:
         writer.withPermit(
           Frame
             .write(output, payload)
-            .mapError(_ => ServerError.Io(ServerIo.Write))
+            .mapError(_ => ServerError.Io(ServerIo.Write(bound)))
         )
       val notify = (line: String) => send(line).ignore
       warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
@@ -888,7 +896,7 @@ object Daemon:
             ] =
               Frame
                 .read(input)
-                .mapError(_ => ServerError.Io(ServerIo.Read))
+                .mapError(_ => ServerError.Io(ServerIo.Read(bound)))
                 .flatMap:
                   case None          => ZIO.succeed(1)
                   case Some(payload) =>
@@ -922,9 +930,10 @@ object Daemon:
 
   private def write(
       output: OutputStream,
-      payload: String
+      payload: String,
+      socket: Path,
   ): IO[ServerError, Unit] =
-    Frame.write(output, payload).mapError(_ => ServerError.Io(ServerIo.Write))
+    Frame.write(output, payload).mapError(_ => ServerError.Io(ServerIo.Write(socket)))
 
   private def remove(repo: Path, socket: Path): UIO[Unit] =
     ZIO.attemptBlocking(Files.deleteIfExists(Record.file(repo))).ignore *>

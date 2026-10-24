@@ -2,6 +2,8 @@ package histos.plugin
 
 import histos.{Dep, ProjectName, ProjectPath}
 
+import java.nio.file.Path
+
 /** What fails while loading a plugin. The throwable is not a payload. `binary` is an exception class name. */
 enum PluginLoadError:
   case BadCoordinate(raw: String)
@@ -50,16 +52,25 @@ enum PluginLoadError:
     case IdMismatch(declared, found) => s"plugin ${declared.value} loaded as ${found.value}"
     case Undeclared(plugin) => s"plugin ${plugin.value} is used and is not in the header"
     case Defect(coordinate, binary) => s"plugin ${coordinate.render} failed while loading ($binary)"
-    case Io(op) => s"plugin ${op.word} failed"
+    case Io(op) => s"plugin ${op.word} failed at ${op.location}"
 
 enum PluginIo:
-  case Read, Resolve, Compile, Open
+  case Read(path: Path)
+  case Resolve(path: Path)
+  case Compile(path: Path)
+  case Open(path: Path)
 
   def word: String = this match
-    case Read     => "read"
-    case Resolve  => "resolve"
-    case Compile  => "compile"
-    case Open     => "open"
+    case Read(_)    => "read"
+    case Resolve(_) => "resolve"
+    case Compile(_) => "compile"
+    case Open(_)    => "open"
+
+  def location: Path = this match
+    case Read(path)    => path
+    case Resolve(path) => path
+    case Compile(path) => path
+    case Open(path)    => path
 
 /** What `run` fails with. Interruption is not one of these. */
 enum PluginRunError:

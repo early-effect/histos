@@ -16,13 +16,13 @@ private[load] final case class ReadPlugin(entry: EntryName, published: ApiDigest
 /** Reads `META-INF/histos/plugin` and `META-INF/histos/version` from the direct jar only. */
 private[load] object PluginJar:
   def read(dependency: histos.Dep, jar: Path): IO[LoadError, ReadPlugin] =
-    ZIO.attempt(open(dependency, jar)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Open))).flatMap:
+    ZIO.attempt(open(dependency, jar)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Open(jar)))).flatMap:
       case Left(error) => ZIO.fail(LoadError.Plugin(error))
       case Right(read) => ZIO.succeed(read)
 
   /** The entry resource copied into a path plugin's class directory. There is no version resource. */
   def readTree(coordinate: PluginCoordinate, classes: Path): IO[LoadError, EntryName] =
-    ZIO.attempt(tree(coordinate, classes)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read))).flatMap:
+    ZIO.attempt(tree(coordinate, classes)).mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(classes)))).flatMap:
       case Left(error) => ZIO.fail(LoadError.Plugin(error))
       case Right(name) => ZIO.succeed(name)
 

@@ -77,7 +77,7 @@ object Assembly:
       if resource.entry.isEmpty || escaped(resource.entry) then ZIO.fail(AssemblyError.Escaped(resource.entry))
       else if taken.contains(resource.entry) then ZIO.fail(AssemblyError.Duplicate(resource.entry))
       else
-        ZIO.attemptBlocking(Files.isRegularFile(resource.file)).mapError(_ => AssemblyError.Io(JarIo.Read)).flatMap: present =>
+        ZIO.attemptBlocking(Files.isRegularFile(resource.file)).mapError(_ => AssemblyError.Io(JarIo.Read(resource.file))).flatMap: present =>
           if present then ZIO.unit else ZIO.fail(AssemblyError.NotAFile(resource.file))
 
   private enum Classified:
@@ -184,7 +184,7 @@ object Assembly:
             else Right(seen :+ (name, file))
         .flatMap: named =>
           if named.isEmpty then Left(AssemblyError.Empty(classes)) else Right(named)
-    }.mapError(_ => AssemblyError.Io(JarIo.Read)).flatMap(ZIO.fromEither)
+    }.mapError(_ => AssemblyError.Io(JarIo.Read(classes))).flatMap(ZIO.fromEither)
 
   private def overlap(jars: List[Path], destination: Path): IO[AssemblyError, Unit] =
     ZIO.attemptBlocking {
@@ -193,7 +193,7 @@ object Assembly:
         acc.flatMap: _ =>
           val path = jar.toAbsolutePath.normalize
           if path == dest then Left(AssemblyError.Overlap(jar)) else Right(())
-    }.mapError(_ => AssemblyError.Io(JarIo.Read)).flatMap(ZIO.fromEither)
+    }.mapError(_ => AssemblyError.Io(JarIo.Read(destination))).flatMap(ZIO.fromEither)
 
   private def place(
       destination: Path,
@@ -214,7 +214,7 @@ object Assembly:
             case _: AtomicMoveNotSupportedException =>
               Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING)
           count
-        }.mapError(_ => AssemblyError.Io(JarIo.Move))
+        }.mapError(_ => AssemblyError.Io(JarIo.Move(destination)))
 
   private def written(
       temp: Path,
@@ -243,7 +243,7 @@ object Assembly:
                       if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
             packed
           finally stream.close()
-        }.mapError(_ => AssemblyError.Io(JarIo.Write)).flatMap(ZIO.fromEither)
+        }.mapError(_ => AssemblyError.Io(JarIo.Write(temp))).flatMap(ZIO.fromEither)
 
   private def ownBytes(files: List[(String, Path)]): List[(String, Array[Byte])] =
     files.collect:
@@ -272,7 +272,7 @@ object Assembly:
   private[pack] def hierarchy(classes: List[Path], jars: List[Path]): ZIO[Scope, AssemblyError, URLClassLoader] =
     ZIO.acquireRelease(
       ZIO.attempt(URLClassLoader((classes ++ jars).map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader))
-        .mapError(_ => AssemblyError.Io(JarIo.Read))
+        .mapError(_ => AssemblyError.Io(JarIo.Read(classes.headOption.getOrElse(Path.of(".")))))
     )(loader => ZIO.attemptBlocking(loader.close()).ignore)
 
   private def writeOwn(merge: Merge, files: List[(String, Path)]): Either[AssemblyError, Unit] =

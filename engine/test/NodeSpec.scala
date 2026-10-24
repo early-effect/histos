@@ -1,6 +1,6 @@
 package histos.node
 
-import histos.jdk.{ArchiveSource, HttpsUrl, Machine, Os, Settled, Sha256}
+import histos.jdk.{ArchiveSource, ExtractFailure, HttpsUrl, Machine, Os, Settled, Sha256}
 import histos.native.NativeOrigin
 import histos.process.{ChildEvent, ChildProcess, ProcessExit}
 import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
@@ -209,6 +209,18 @@ object NodeSpec extends ZIOSpecDefault:
             ),
           ),
         )
+    ,
+    test("a malformed zip reports an extraction failure"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zip  = zipOf("node/bin/node" -> Array[Byte](1, 2, 3)).updated(43, 9.toByte)
+          file = root.resolve("malformed.zip")
+          _    <- ZIO.attempt(Files.write(file, zip))
+          sha  = Sha256.of(Chunk.fromArray(zip))
+          out  <- NodeStage.stage(NodeLock(major22, v22, ArchiveSource.Local(file), sha), at(root)).either
+          archive = root.resolve("cache").resolve("nodes").resolve(sha.value).resolve("archive")
+        yield assertTrue(out == Left(NodeStageError.Extract(archive, ExtractFailure.Malformed)))
     ,
     test("a failed node unpack leaves no partial directory and no temp file"):
       ZIO.scoped:

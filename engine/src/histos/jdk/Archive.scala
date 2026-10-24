@@ -1,6 +1,7 @@
 package histos.jdk
 
 import histos.process.Child
+import histos.workspace.IoFailure
 
 import java.nio.file.{Files, Path}
 
@@ -32,12 +33,16 @@ enum ExtractFailure:
   case Start
   case Wait
   case Exit(code: Int)
+  case Malformed
+  case Io(failure: IoFailure)
 
   def message(archive: Path): String = this match
-    case NoTar      => s"no tar on PATH to unpack $archive"
-    case Start      => s"tar did not start for $archive"
-    case Wait       => s"tar did not finish unpacking $archive"
-    case Exit(code) => s"tar exited $code unpacking $archive"
+    case NoTar       => s"no tar on PATH to unpack $archive"
+    case Start       => s"tar did not start for $archive"
+    case Wait        => s"tar did not finish unpacking $archive"
+    case Exit(code)  => s"tar exited $code unpacking $archive"
+    case Malformed   => s"$archive is malformed"
+    case Io(failure) => failure.message
 
 /** The system `tar` keeps modes and symlinks, and `-xf` picks gzip or xz from
   * the archive itself.

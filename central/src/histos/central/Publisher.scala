@@ -43,7 +43,7 @@ private final class LocalPublisher(root: Path) extends Publisher:
     ZIO.attemptBlocking {
       if Files.exists(root) && !Files.isDirectory(root) then Left(PublishError.NotADirectory(root))
       else Right(())
-    }.mapError(_ => PublishError.Io(PublishIo.Directory)).flatMap(ZIO.fromEither)
+    }.mapError(_ => PublishError.Io(root, PublishFault.Stat)).flatMap(ZIO.fromEither)
 
   private def text(hex: String): Chunk[Byte] =
     Chunk.fromArray(s"$hex\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))
@@ -63,5 +63,5 @@ private final class LocalPublisher(root: Path) extends Publisher:
           case _: AtomicMoveNotSupportedException =>
             Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING)
         ()
-      }.mapError(_ => PublishError.Io(PublishIo.Write))
+      }.mapError(_ => PublishError.Io(path, PublishFault.Write))
     }
