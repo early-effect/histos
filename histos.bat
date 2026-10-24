@@ -337,7 +337,7 @@ try {
       $part = Join-Path $work 'launcher.jar'
       Fetch ($pin['repository'].TrimEnd('/') + '/rocks/earlyeffect/histos/' + $pin['version'] + '/histos-' + $pin['revision'] + '.jar') $part repository
       if ((Hash $part) -ne $expected) { Fail 'launcher checksum mismatch' }
-      if (Test-Path -LiteralPath $jar) { [IO.File]::Replace($part,$jar,$null) } else {
+      if (Test-Path -LiteralPath $jar) { [IO.File]::Replace($part,$jar,(Join-Path $work 'previous-launcher.jar')) } else {
         try { [IO.File]::Move($part,$jar) } catch [IO.IOException] {
           if (!(Test-Path -LiteralPath $jar) -or (Hash $jar) -ne $expected) { Write-Error $_ }
         }
@@ -368,7 +368,7 @@ try {
     if (!(Test-Path -LiteralPath $archive) -or (Hash $archive) -ne $sha) {
       $part = Join-Path $work 'jdk.archive'; Fetch $lock['url'] $part
       if ((Hash $part) -ne $sha) { Fail 'jdk checksum mismatch' }
-      if (Test-Path -LiteralPath $archive) { [IO.File]::Replace($part,$archive,$null) } else {
+      if (Test-Path -LiteralPath $archive) { [IO.File]::Replace($part,$archive,(Join-Path $work 'previous-jdk.archive')) } else {
         try { [IO.File]::Move($part,$archive) } catch [IO.IOException] {
           if (!(Test-Path -LiteralPath $archive) -or (Hash $archive) -ne $sha) { Write-Error $_ }
         }
