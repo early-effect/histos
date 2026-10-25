@@ -80,14 +80,14 @@ object ProductsSpec extends ZIOSpecDefault:
           engineGone <- exists(engineClass)
           appStays <- isFile(appClass)
           providerStays <- isFile(provider)
-          tallyStays <- isFile(tally)
+          tallyGone <- exists(tally)
         yield assertTrue(
           cleaned.map(_.value) == List("engine"),
           Products.line(cleaned) == "cleaned engine",
           !engineGone,
           appStays,
           providerStays,
-          tallyStays,
+          !tallyGone,
           tally == Products.observation(repo)
         )
     ,
@@ -96,6 +96,7 @@ object ProductsSpec extends ZIOSpecDefault:
         for
           repo <- Workspace.work("histos-clean-name")
           klass <- plant(repo, ".histos/classes/engine/Demo.class")
+          tally <- plant(repo, ".histos/observation.json")
           built <- graph
           unknown <- Products.named(repo, built, List("missing")).either
           duplicate <- Products
@@ -103,6 +104,7 @@ object ProductsSpec extends ZIOSpecDefault:
             .either
           bad <- Products.named(repo, built, List("a/b")).either
           still <- isFile(klass)
+          tallyStays <- isFile(tally)
           missing <- ZIO.fromEither(ProjectName.from("missing"))
           engine <- ZIO.fromEither(ProjectName.from("engine"))
         yield assertTrue(
@@ -118,7 +120,8 @@ object ProductsSpec extends ZIOSpecDefault:
             case Left(CiError.BadName(raw)) => raw == "a/b"
             case _                          => false
           ,
-          still
+          still,
+          tallyStays
         )
     ,
     test("an aggregate wipe does not delete an upstream module"):

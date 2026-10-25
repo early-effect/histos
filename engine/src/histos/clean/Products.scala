@@ -27,7 +27,7 @@ object Products:
 
   val sharedRoots: List[String] = List("provider", "provider-src")
 
-  /** The compile tally `observe` reads. A module wipe leaves it. */
+  /** The compile tally `observe` reads. A successful clean deletes it. */
   def observation(repo: Path): Path =
     dot(repo).resolve("observation.json")
 
@@ -37,13 +37,15 @@ object Products:
       Workspace.delete(dot(repo).resolve(name))
     ) *> Workspace.delete(observation(repo))
 
-  /** One module's subtree under each per-module root. Shared roots stay. */
+  /** One module's subtree under each per-module root. Shared roots stay. The
+    * stored tally goes too: it named products this wipe just removed.
+    */
   def wipe(repo: Path, modules: List[Module]): IO[IoFailure, Unit] =
     ZIO.foreachDiscard(modules)(module =>
       ZIO.foreachDiscard(moduleRoots)(name =>
         Workspace.delete(dot(repo).resolve(name).resolve(module.name.value))
       )
-    )
+    ) *> Workspace.delete(observation(repo))
 
   /** Empty names are the full wipe, including shared roots. A name selects
     * modules only: an aggregate expands to its modules, and upstream stays. A
