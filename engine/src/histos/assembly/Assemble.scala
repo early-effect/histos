@@ -68,7 +68,7 @@ object Assemble:
       jdk: JdkRuntime,
       native: NativeOrigin,
       destination: Path,
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit
+      report: CompileFeed => UIO[Unit]
   ): ZIO[Resolve, AssembleError, Assembled] =
     for
       app <- module(graph, "app")

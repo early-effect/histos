@@ -113,10 +113,14 @@ object CompileConsole:
         sources: Option[SourceCount],
         classesWritten: Option[Int]
     ): Counts =
+      val nextFiles = addFiles(files, sources)
       copy(
         modules = modules + 1,
-        files = addFiles(files, sources),
-        classes = addClasses(classes, classesWritten)
+        files = nextFiles,
+        classes = nextFiles match
+          case Files.Unknown                => Classes.Unknown
+          case Files.Empty | Files.Known(_) =>
+            addClasses(classes, classesWritten)
       )
 
     /** A failed cell has no honest file or class total. */

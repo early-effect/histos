@@ -454,7 +454,11 @@ object Bsp:
           id.platform,
           GraphCompile
             .classesDir(repo, id.module.name, id.version, id.platform),
-          0
+          0,
+          key = None,
+          changed = true,
+          sources = None,
+          classesWritten = None
         )
         val ran =
           clear(uri) *>
@@ -844,8 +848,17 @@ object Bsp:
             id.version,
             id.platform
           )
-          val cell =
-            CompiledCell(id.module.name, id.version, id.platform, classes, 0)
+          val cell = CompiledCell(
+            id.module.name,
+            id.version,
+            id.platform,
+            classes,
+            0,
+            key = None,
+            changed = true,
+            sources = None,
+            classesWritten = None
+          )
           val work =
             Program.workDir(repo, id.module.name, id.version, id.platform)
           for
@@ -895,7 +908,11 @@ object Bsp:
             id.platform,
             GraphCompile
               .classesDir(repo, id.module.name, id.version, id.platform),
-            0
+            0,
+            key = None,
+            changed = true,
+            sources = None,
+            classesWritten = None
           )
           for
             _ <- ZIO
@@ -952,7 +969,11 @@ object Bsp:
                 id.platform,
                 GraphCompile
                   .classesDir(repo, id.module.name, id.version, id.platform),
-                0
+                0,
+                key = None,
+                changed = true,
+                sources = None,
+                classesWritten = None
               )
               readLock.flatMap { lock =>
                 graphModules.flatMap { modules =>

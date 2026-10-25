@@ -35,11 +35,11 @@ final case class CompiledCell(
       * leftovers.
       */
     classFiles: Int,
-    key: Option[Sha256] = None,
-    changed: Boolean = true,
-    sources: Option[SourceCount] = None,
+    key: Option[Sha256],
+    changed: Boolean,
+    sources: Option[SourceCount],
     /** Class files this round wrote. Absent when that set is not known. */
-    classesWritten: Option[Int] = None
+    classesWritten: Option[Int]
 )
 
 /** One cell's console. Diagnostics stay with that cell. Parallel cells are not
@@ -296,7 +296,7 @@ object GraphCompile:
       .left
       .map(GraphCompileError.Target(_))
       .map: selected =>
-        upstream(modules, selected.modules.map(_.name).toSet)
+        Module.closure(modules, selected.modules.map(_.name).toSet)
 
   private def pickCells(
       graph: ProjectGraph,
@@ -317,19 +317,8 @@ object GraphCompile:
         GraphCompileError.UnknownCell(name, version)
     } match
       case Some(error) => Left(error)
-      case None        => Right(upstream(modules, cells.map(_._1).toSet))
-
-  private def upstream(
-      modules: List[Module],
-      roots: Set[ProjectName]
-  ): List[Module] =
-    val byName = modules.map(module => module.name -> module).toMap
-    def grow(have: Set[ProjectName]): Set[ProjectName] =
-      val extra =
-        have.flatMap(name => byName.get(name).toList.flatMap(_.upstreamNames))
-      if extra.subsetOf(have) then have else grow(have ++ extra)
-    val needed = grow(roots)
-    modules.filter(module => needed.contains(module.name))
+      case None        =>
+        Right(Module.closure(modules, cells.map(_._1).toSet))
 
   private def layersOf(
       modules: List[Module]
@@ -621,6 +610,7 @@ object GraphCompile:
           platform,
           classes,
           0,
+          key = None,
           changed = false,
           sources = Some(SourceCount(0, 0)),
           classesWritten = Some(0)

@@ -1,6 +1,7 @@
 package histos.preview
 
 import histos.select.Selection
+import histos.toolchain.VersionOrder
 import histos.workflow.CiError
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, Sources}
@@ -72,7 +73,7 @@ object Plan:
         .fromEither(Selection.select(graph, projects))
         .mapError(PreviewError.Target(_))
       roots = selected.modules.map(_.name).toSet
-      closure = close(modules, roots)
+      closure = Module.closure(modules, roots)
       _ <- ZIO.fromEither(acyclic(closure)).mapError(PreviewError.Cycle(_))
       bases <- ZIO.foreach(closure): module =>
         GraphCompile
@@ -87,21 +88,6 @@ object Plan:
       case chosen: PlanUnit.Chosen => renderChosen(repo, chosen)
       case PlanUnit.NotSelected(_) => Nil
     (stalenessLine(plan.staleness) :: body).mkString("\n")
-
-  /** Named modules plus every `upstreamNames` dependency, in graph order.
-    * Compile uses this closure, not the platform-filtered chain.
-    */
-  private def close(
-      modules: List[Module],
-      roots: Set[ProjectName]
-  ): List[Module] =
-    val byName = modules.map(module => module.name -> module).toMap
-    def grow(have: Set[ProjectName]): Set[ProjectName] =
-      val extra =
-        have.flatMap(name => byName.get(name).toList.flatMap(_.upstreamNames))
-      if extra.subsetOf(have) then have else grow(have ++ extra)
-    val needed = grow(roots)
-    modules.filter(module => needed.contains(module.name))
 
   private def acyclic(modules: List[Module]): Either[ProjectName, Unit] =
     val names = modules.map(_.name).toSet
@@ -133,7 +119,9 @@ object Plan:
       val reason =
         if selected.contains(module.name) then Reason.Selected
         else Reason.Upstream
-      val versions = module.versions.all.sortBy(_.value)
+      val versions =
+        module.versions.all.sortWith: (left, right) =>
+          VersionOrder.compare(left.value, right.value) < 0
       val platforms = List(Platform.Jvm, Platform.Js, Platform.Native).filter(
         module.platforms.all.contains
       )

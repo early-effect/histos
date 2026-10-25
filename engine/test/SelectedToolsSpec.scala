@@ -110,7 +110,17 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             .make(
               module,
               histos.zinc
-                .CompiledCell(name, version, Js, root.resolve("classes"), 0),
+                .CompiledCell(
+                  name,
+                  version,
+                  Js,
+                  root.resolve("classes"),
+                  0,
+                  key = None,
+                  changed = true,
+                  sources = None,
+                  classesWritten = None
+                ),
               jdk,
               runtimes
             )

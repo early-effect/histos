@@ -96,6 +96,18 @@ object Module:
               (next, below :+ dependency)
     walk(module.upstream(platform), Set(module.name), Nil)._2
 
+  /** Named modules plus every `upstreamNames` dependency, in `modules` order.
+    * Not the platform-filtered chain.
+    */
+  def closure(modules: List[Module], roots: Set[ProjectName]): List[Module] =
+    val byName = modules.map(module => module.name -> module).toMap
+    def grow(have: Set[ProjectName]): Set[ProjectName] =
+      val extra =
+        have.flatMap(name => byName.get(name).toList.flatMap(_.upstreamNames))
+      if extra.subsetOf(have) then have else grow(have ++ extra)
+    val needed = grow(roots)
+    modules.filter(module => needed.contains(module.name))
+
 final case class Aggregate(
     name: ProjectName,
     children: List[ProjectName],

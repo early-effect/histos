@@ -61,9 +61,9 @@ object Program:
       name: String,
       jdk: JdkRuntime,
       runtimes: Runtimes,
-      choice: Option[Platform] = None,
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
-      afterCompile: UIO[Unit] = ZIO.unit
+      choice: Option[Platform],
+      report: CompileFeed => UIO[Unit],
+      afterCompile: UIO[Unit]
   ): ZStream[Resolve, ProgramError, ProgramFeed] =
     ZStream.unwrap:
       for

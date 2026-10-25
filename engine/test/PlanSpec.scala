@@ -68,7 +68,7 @@ object PlanSpec extends ZIOSpecDefault:
       }
     ,
     test(
-      "cells follow version text and Jvm, Js, Native, with platform upstreams"
+      "cells follow numeric versions and Jvm, Js, Native, with platform upstreams"
     ):
       ZIO.scoped {
         for
@@ -83,12 +83,12 @@ object PlanSpec extends ZIOSpecDefault:
           plan.staleness == FileStaleness.Unknown,
           shapes(plan) == List(
             ("core", "3.10.0", "jvm", Reason.Upstream, Nil),
-            ("app", "3.10.0", "jvm", Reason.Selected, List("core")),
-            ("app", "3.10.0", "js", Reason.Selected, Nil),
-            ("app", "3.10.0", "native", Reason.Selected, Nil),
             ("app", "3.8.0", "jvm", Reason.Selected, List("core")),
             ("app", "3.8.0", "js", Reason.Selected, Nil),
-            ("app", "3.8.0", "native", Reason.Selected, Nil)
+            ("app", "3.8.0", "native", Reason.Selected, Nil),
+            ("app", "3.10.0", "jvm", Reason.Selected, List("core")),
+            ("app", "3.10.0", "js", Reason.Selected, Nil),
+            ("app", "3.10.0", "native", Reason.Selected, Nil)
           ),
           plan.units.forall:
             case chosen: PlanUnit.Chosen => chosen.sources.isEmpty

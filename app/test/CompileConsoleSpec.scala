@@ -99,7 +99,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
     ,
     test("unknown file counts are omitted and a census is not printed"):
       name("core").flatMap { core =>
-        val bare = cell(core, changed = true)
+        val bare = cell(core, changed = true, classesWritten = Some(9))
         for
           console <- CompileConsole.open(repo)
           lines <- play(
@@ -116,10 +116,11 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           ),
           tally.contains("modules: 1"),
           !tally.exists(_.contains("files")),
-          !tally.exists(_.contains("classes")),
+          !tally.exists(_.contains("classes:")),
           !lines.exists {
-            case CompileConsole.Line.Out(text) => text.contains("4")
-            case CompileConsole.Line.Err(_)    => false
+            case CompileConsole.Line.Out(text) =>
+              text.contains("classes:") || text.contains("4")
+            case CompileConsole.Line.Err(_) => false
           }
         )
       }
@@ -243,6 +244,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
       Platform.Jvm,
       repo.resolve(module.value),
       4,
+      key = None,
       changed = changed,
       sources = sources,
       classesWritten = classesWritten

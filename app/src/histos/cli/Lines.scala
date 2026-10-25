@@ -112,12 +112,15 @@ object Lines:
       sources: Option[SourceCount],
       classesWritten: Option[Int]
   ): Option[String] =
+    val written = sources match
+      case Some(_) => classesWritten
+      case None    => None
     val parts =
       sources
         .map(count =>
           s"files compiled: ${count.compiled} skipped: ${count.skipped}"
         )
-        .toList ++ classesWritten.map(count => s"classes: $count").toList
+        .toList ++ written.map(count => s"classes: $count").toList
     if parts.isEmpty then None else Some(parts.mkString(" "))
 
   private def place(value: Int, base: PositionBase): Int =

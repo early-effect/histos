@@ -147,7 +147,16 @@ object ProgramSpec extends ZIOSpecDefault:
                 repository: Repository
             ) = tools.resolve.sources(organization, name, revision, repository)
           running <- Program
-            .console(root, beforeGraph, "app", jdk, here)
+            .console(
+              root,
+              beforeGraph,
+              "app",
+              jdk,
+              here,
+              choice = None,
+              report = _ => ZIO.unit,
+              afterCompile = ZIO.unit
+            )
             .runCollect
             .provide(ZLayer.succeed(resolver))
             .forkScoped
@@ -159,7 +168,16 @@ object ProgramSpec extends ZIOSpecDefault:
           _ <- proceed.succeed(())
           inFlight <- running.join
           next <- Program
-            .console(root, afterGraph, "app", jdk, here)
+            .console(
+              root,
+              afterGraph,
+              "app",
+              jdk,
+              here,
+              choice = None,
+              report = _ => ZIO.unit,
+              afterCompile = ZIO.unit
+            )
             .runCollect
             .provide(ZLayer.succeed(resolver))
         yield assertTrue(
@@ -185,7 +203,16 @@ object ProgramSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "core", jdk, here)
+                .console(
+                  root,
+                  built,
+                  "core",
+                  jdk,
+                  here,
+                  choice = None,
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -212,7 +239,16 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "app", jdk, here)
+                .console(
+                  root,
+                  built,
+                  "app",
+                  jdk,
+                  here,
+                  choice = None,
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -248,7 +284,16 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "app", jdk, here)
+                .console(
+                  root,
+                  built,
+                  "app",
+                  jdk,
+                  here,
+                  choice = None,
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -277,7 +322,16 @@ object ProgramSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "app", jdk, here)
+                .console(
+                  root,
+                  built,
+                  "app",
+                  jdk,
+                  here,
+                  choice = None,
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -307,7 +361,16 @@ object ProgramSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "app", jdk, here, Some(Native))
+                .console(
+                  root,
+                  built,
+                  "app",
+                  jdk,
+                  here,
+                  choice = Some(Native),
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -340,7 +403,16 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "app", jdk, here, Some(Jvm))
+                .console(
+                  root,
+                  built,
+                  "app",
+                  jdk,
+                  here,
+                  choice = Some(Jvm),
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -377,7 +449,16 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
-                .console(root, built, "app", jdk, here)
+                .console(
+                  root,
+                  built,
+                  "app",
+                  jdk,
+                  here,
+                  choice = None,
+                  report = _ => ZIO.unit,
+                  afterCompile = ZIO.unit
+                )
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](

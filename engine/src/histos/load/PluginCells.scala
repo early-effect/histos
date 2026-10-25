@@ -126,7 +126,11 @@ private[load] object PluginCells:
       cell.version,
       cell.platform,
       classes(repo, cell),
-      0
+      0,
+      key = None,
+      changed = true,
+      sources = None,
+      classesWritten = None
     )
     for _ <- TestCompile
         .compiledTests(

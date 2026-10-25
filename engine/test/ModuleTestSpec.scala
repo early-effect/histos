@@ -1163,7 +1163,11 @@ private[testrun] object ModuleTestSupport:
                   scala3,
                   Jvm,
                   GraphCompile.classesDir(root, name, scala3),
-                  0
+                  0,
+                  key = None,
+                  changed = true,
+                  sources = None,
+                  classesWritten = None
                 )
               )
             )

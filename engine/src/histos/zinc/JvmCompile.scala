@@ -6,6 +6,7 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
 import histos.resolve.{LockedTools, ResolveError}
 
+import java.io.{IOException, UncheckedIOException}
 import java.net.URLClassLoader
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -167,8 +168,8 @@ final case class CompileOutput(
     classFiles: Int,
     key: Sha256,
     changed: Boolean,
-    sources: Option[SourceCount] = None,
-    classesWritten: Option[Int] = None
+    sources: Option[SourceCount],
+    classesWritten: Option[Int]
 ):
   def facts: CompileFacts =
     CompileFacts(changed, sources, classesWritten)
@@ -641,7 +642,7 @@ object JvmCompile:
             key,
             result.hasModified,
             files,
-            Some(writtenClasses(before, request.classes))
+            writtenClasses(before, request.classes)
           )
         )
     catch
@@ -717,32 +718,64 @@ object JvmCompile:
       bytes: Long
   )
 
-  /** A matching mark was already there. The directory census is not a write. */
-  private def writtenClasses(before: Map[Path, ClassMark], root: Path): Int =
-    classMarks(root).count: (path, mark) =>
-      before.get(path) match
-        case Some(old) => old != mark
-        case None      => true
+  /** A matching mark was already there. An unreadable snapshot is unknown, not
+    * a failed write. The directory census is not a write.
+    */
+  private def writtenClasses(
+      before: Option[Map[Path, ClassMark]],
+      root: Path
+  ): Option[Int] =
+    before.flatMap: prior =>
+      classMarks(root).map: now =>
+        now.count: (path, mark) =>
+          prior.get(path) match
+            case Some(old) => old != mark
+            case None      => true
 
-  private def classMarks(root: Path): Map[Path, ClassMark] =
-    if !Files.isDirectory(root) then Map.empty
-    else
-      val walk = Files.walk(root)
-      try walk.iterator.asScala.flatMap(classMark).toMap
-      finally walk.close()
+  private def classMarks(root: Path): Option[Map[Path, ClassMark]] =
+    listed(root).flatMap: paths =>
+      paths.foldLeft(Option(Map.empty[Path, ClassMark])):
+        case (None, _)          => None
+        case (Some(have), path) =>
+          stamp(path) match
+            case Stamp.Skip       => Some(have)
+            case Stamp.Failed     => None
+            case Stamp.Read(mark) => Some(have.updated(path, mark))
 
-  private def classMark(path: Path): Option[(Path, ClassMark)] =
-    Option(path.getFileName)
-      .map(_.toString)
-      .filter(producedName)
-      .map: _ =>
-        path -> ClassMark(Files.getLastModifiedTime(path), Files.size(path))
+  private enum Stamp:
+    case Skip
+    case Failed
+    case Read(mark: ClassMark)
+
+  private def stamp(path: Path): Stamp =
+    if produced(path) then
+      try
+        Stamp.Read(
+          ClassMark(Files.getLastModifiedTime(path), Files.size(path))
+        )
+      catch case _: IOException | _: UncheckedIOException => Stamp.Failed
+    else Stamp.Skip
+
+  private def produced(path: Path): Boolean =
+    Option(path.getFileName).exists(name => producedName(name.toString))
 
   private def producedName(name: String): Boolean =
     name.endsWith(".class") || name.endsWith(".sjsir") || name.endsWith(".nir")
 
+  /** Zero when the directory cannot be listed. That is not a write count. */
   private def countClasses(root: Path): Int =
-    classMarks(root).size
+    listed(root) match
+      case Some(paths) => paths.count(produced)
+      case None        => 0
+
+  private def listed(root: Path): Option[List[Path]] =
+    if !Files.isDirectory(root) then Some(Nil)
+    else
+      try
+        val walk = Files.walk(root)
+        try Some(walk.iterator.asScala.toList)
+        finally walk.close()
+      catch case _: IOException | _: UncheckedIOException => None
 
 private final class CollectingReporter(hear: CompileProblem => Unit)
     extends xsbti.Reporter:
