@@ -1,10 +1,8 @@
 package histos.testrun
 
-import java.nio.file.{Files, Path}
+import java.io.{IOException, UncheckedIOException}
+import java.nio.file.{AccessDeniedException, Files, NoSuchFileException, Path}
 import java.nio.file.attribute.BasicFileAttributes
-
-import scala.jdk.CollectionConverters.*
-import scala.util.control.NonFatal
 
 import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes, Type}
 
@@ -53,7 +51,7 @@ object SuiteStamp:
       suite: String,
       directories: List[Path],
       cover: Cover,
-  ): IO[StampError, Option[String]] =
+  ): IO[StampError, Option[Sha256]] =
     index(directories).flatMap(tree => ZIO.fromEither(digest(suite, tree, cover)))
 
   /** One walk of the class directories. `remember` stamps every suite from this.
@@ -71,7 +69,7 @@ object SuiteStamp:
       suite: String,
       indexed: Map[String, Print],
       cover: Cover,
-  ): Either[StampError, Option[String]] =
+  ): Either[StampError, Option[Sha256]] =
     val start = List(suite, s"$suite$$").filter(indexed.contains)
     if start.isEmpty then Right(None)
     else
@@ -80,39 +78,55 @@ object SuiteStamp:
         Some(hash((lines ++ covered(cover)).mkString("\n")))
 
   private def readDirectory(root: Path): IO[StampError, List[(String, Print)]] =
-    ZIO
-      .attemptBlocking(scan(root))
-      .mapError(_ => StampError.Io(IoFailure(root, IoFault.Walk)))
-      .flatMap(ZIO.fromEither)
-
-  private def scan(root: Path): Either[StampError, List[(String, Print)]] =
     attributes(root).flatMap: attrs =>
-      if !attrs.isDirectory then Right(Nil)
-      else
-        val opened =
-          try Right(Files.walk(root))
-          catch
-            case NonFatal(_) =>
-              Left(StampError.Io(IoFailure(root, IoFault.Walk)))
-        opened.flatMap: walk =>
-          try foldClasses(root, walk)
-          finally walk.close()
+      if !attrs.isDirectory then ZIO.succeed(Nil)
+      else scan(root)
 
-  private def attributes(root: Path): Either[StampError, BasicFileAttributes] =
-    try Right(Files.readAttributes(root, classOf[BasicFileAttributes]))
-    catch case NonFatal(_) => Left(StampError.Io(IoFailure(root, IoFault.Stat)))
+  private def attributes(root: Path): IO[StampError, BasicFileAttributes] =
+    ZIO
+      .attemptBlocking(Files.readAttributes(root, classOf[BasicFileAttributes]))
+      .foldZIO(failIo(root, IoFault.Stat), attrs => ZIO.succeed(attrs))
+
+  /** The directory stream closes when the fold fails or the fiber is interrupted. */
+  private def scan(root: Path): IO[StampError, List[(String, Print)]] =
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking(Files.walk(root))
+        .foldZIO(failIo(root, IoFault.Walk), walk => ZIO.succeed(walk))
+    )(walk => ZIO.attemptBlocking(walk.close()).ignore)(foldClasses(root, _))
 
   private def foldClasses(
       root: Path,
       walk: java.util.stream.Stream[Path],
-  ): Either[StampError, List[(String, Print)]] =
-    walk.iterator.asScala
-      .foldLeft[Either[StampError, List[(String, Print)]]](Right(Nil)):
-        case (Left(error), _)    => Left(error)
-        case (Right(rows), path) =>
-          readClass(root, path).map:
-            case Some(row) => rows :+ row
-            case None      => rows
+  ): IO[StampError, List[(String, Print)]] =
+    ZIO
+      .attemptBlocking(walk.iterator)
+      .foldZIO(failIo(root, IoFault.Walk), step(root, _, Nil))
+
+  private def step(
+      root: Path,
+      paths: java.util.Iterator[Path],
+      rows: List[(String, Print)],
+  ): IO[StampError, List[(String, Print)]] =
+    ZIO
+      .attemptBlocking(paths.hasNext)
+      .foldZIO(
+        failIo(root, IoFault.Walk),
+        next =>
+          if !next then ZIO.succeed(rows)
+          else
+            ZIO
+              .attemptBlocking(paths.next())
+              .foldZIO(
+                failIo(root, IoFault.Walk),
+                path =>
+                  ZIO
+                    .fromEither(readClass(root, path))
+                    .flatMap:
+                      case Some(row) => step(root, paths, rows :+ row)
+                      case None      => step(root, paths, rows),
+              ),
+      )
 
   private def readClass(
       root: Path,
@@ -134,7 +148,25 @@ object SuiteStamp:
 
   private def readBytes(path: Path): Either[StampError, Array[Byte]] =
     try Right(Files.readAllBytes(path))
-    catch case NonFatal(_) => Left(StampError.Io(IoFailure(path, IoFault.Read)))
+    catch
+      case thrown: Exception if platformIo(thrown) =>
+        Left(StampError.Io(IoFailure(path, IoFault.Read)))
+
+  private def failIo(path: Path, fault: IoFault)(thrown: Throwable): IO[StampError, Nothing] =
+    if platformIo(thrown) then ZIO.fail(StampError.Io(IoFailure(path, fault)))
+    else ZIO.die(thrown)
+
+  /** Platform IO, including the unchecked wrapper a directory stream throws from `next`. */
+  private def platformIo(thrown: Throwable): Boolean =
+    thrown match
+      case _: NoSuchFileException          => true
+      case _: AccessDeniedException        => true
+      case _: IOException                  => true
+      case unchecked: UncheckedIOException =>
+        Option(unchecked.getCause) match
+          case Some(cause) => platformIo(cause)
+          case None        => false
+      case _ => false
 
   private def fingerprints(
       names: List[String],
@@ -153,12 +185,10 @@ object SuiteStamp:
       List(s"jdk ${cover.jdk}") ++
       cover.flags.map(flag => s"flag $flag")
 
-  private def hash(text: String): String =
-    Sha256
-      .of(
-        Chunk.fromArray(text.getBytes(java.nio.charset.StandardCharsets.UTF_8))
-      )
-      .value
+  private def hash(text: String): Sha256 =
+    Sha256.of(
+      Chunk.fromArray(text.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    )
 
   private def closure(
       start: List[String],
@@ -207,7 +237,7 @@ object SuiteStamp:
     def note(text: String): Unit =
       if text != null && text.nonEmpty then
         try collect(Type.getType(text))
-        catch case NonFatal(_) => fail(StampError.Class(path))
+        catch case _: IllegalArgumentException => fail(StampError.Class(path))
     try
       val reader = new ClassReader(bytes)
       reader.accept(
@@ -268,7 +298,10 @@ object SuiteStamp:
         ,
         ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES,
       )
-    catch case NonFatal(_) => fail(StampError.Class(path))
+    // ClassReader indexes off the end of a short class file.
+    catch
+      case _: IllegalArgumentException | _: IndexOutOfBoundsException | _: org.objectweb.asm.LimitExceededException =>
+        fail(StampError.Class(path))
     end try
     faults.headOption match
       case Some(error) => Left(error)

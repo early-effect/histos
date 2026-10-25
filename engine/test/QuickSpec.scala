@@ -1,11 +1,13 @@
 package histos.testrun
 
+import histos.jdk.{Sha256, Sha256Error}
 import histos.native.ClassShapes
 import histos.watch.SourceWatch
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.CompiledCell
 import histos.{Jvm, ProjectName, ScalaVersion}
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 
@@ -81,39 +83,39 @@ object QuickSpec extends ZIOSpecDefault:
             module,
             ScalaVersion("3.10.0"),
             Jvm,
-            "demo.Foo",
-            "aaa",
+            suiteName,
+            digestA,
           )
           hit <- QuickRecord.hit(
             root,
             module,
             ScalaVersion("3.10.0"),
             Jvm,
-            "demo.Foo",
-            "aaa",
+            suiteName,
+            digestA,
           )
           miss <- QuickRecord.hit(
             root,
             module,
             ScalaVersion("3.10.0"),
             Jvm,
-            "demo.Foo",
-            "bbb",
+            suiteName,
+            digestB,
           )
           _ <- QuickRecord.clear(
             root,
             module,
             ScalaVersion("3.10.0"),
             Jvm,
-            "demo.Foo",
+            suiteName,
           )
           gone <- QuickRecord.hit(
             root,
             module,
             ScalaVersion("3.10.0"),
             Jvm,
-            "demo.Foo",
-            "aaa",
+            suiteName,
+            digestA,
           )
         yield assertTrue(hit && !miss && !gone)
     ,
@@ -224,7 +226,7 @@ object QuickSpec extends ZIOSpecDefault:
               .ignore
           )
           saved <- QuickRecord
-            .save(root, module, scala3, Jvm, suiteName, "aaa")
+            .save(root, module, scala3, Jvm, suiteName, digestA)
             .either
           kept = root.resolve("clear-me")
           path = QuickRecord.file(kept, module, scala3, Jvm, suiteName)
@@ -238,7 +240,40 @@ object QuickSpec extends ZIOSpecDefault:
         yield assertTrue(
           saved == Left(QuickError.Save(IoFailure(record, IoFault.Write))),
           cleared == Left(QuickError.Clear(IoFailure(path, IoFault.Delete))),
-        ),
+        )
+    ,
+    test("an empty suite name is not a suite"):
+      assertTrue(SuiteName.from("") == Left(SuiteNameError.Empty))
+    ,
+    test("a quick record that is not a stored success is an error"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          module <- named
+          path = QuickRecord.file(root, module, scala3, Jvm, suiteName)
+          _ <- ZIO.attempt {
+            Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+            Files.writeString(path, "nope\n")
+          }
+          read <- QuickRecord
+            .hit(root, module, scala3, Jvm, suiteName, digestA)
+            .either
+        yield assertTrue(read == Left(QuickError.Shape(path)))
+    ,
+    test("a quick record whose digest is not a sha256 is an error"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          module <- named
+          path = QuickRecord.file(root, module, scala3, Jvm, suiteName)
+          _ <- ZIO.attempt {
+            Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+            Files.writeString(path, "success nope\n")
+          }
+          read <- QuickRecord
+            .hit(root, module, scala3, Jvm, suiteName, digestA)
+            .either
+        yield assertTrue(read == Left(QuickError.Hash(path, Sha256Error.Bad("nope")))),
   )
 
   private val runs = suite("testQuick run")(
@@ -275,7 +310,7 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            "not-this-digest",
+            digestB,
           )
           recorded <- QuickRecord.hit(
             root,
@@ -291,17 +326,17 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            "not-this-digest",
+            digestB,
           )
           feeds <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
-          digest != "not-this-digest",
+          digest != digestB,
           !recorded,
           stored,
           feeds == ran(module, TestStatus.Passed),
         )
     ,
-    test("an unreadable quick record runs the suite"):
+    test("an unreadable quick record fails the run"):
       ZIO.scoped:
         for
           root <- temp
@@ -325,22 +360,17 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digest,
           )
-          _ <- unreadable(
-            QuickRecord.file(root, module, scala3, Jvm, suiteName)
-          )
-          hidden <- QuickRecord.hit(
-            root,
-            module,
-            scala3,
-            Jvm,
-            suiteName,
-            digest,
-          )
-          feeds <- quick(root, module, classes, TestStatus.Passed, plain)
+          path = QuickRecord.file(root, module, scala3, Jvm, suiteName)
+          _      <- unreadable(path)
+          hidden <- QuickRecord
+            .hit(root, module, scala3, Jvm, suiteName, digest)
+            .either
+          failed <- quick(root, module, classes, TestStatus.Passed, plain).either
+          refused = QuickError.Read(IoFailure(path, IoFault.Read))
         yield assertTrue(
           readable,
-          !hidden,
-          feeds == ran(module, TestStatus.Passed),
+          hidden == Left(refused),
+          failed == Left(ModuleTestError.Record(refused)),
         )
     ,
     test("a suite with no digest runs"):
@@ -356,9 +386,9 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            "recorded",
+            digestA,
           )
-          missing <- SuiteStamp.digest(suiteName, List(classes), plain)
+          missing <- SuiteStamp.digest(suiteName.value, List(classes), plain)
           feeds   <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
           missing.isEmpty,
@@ -433,7 +463,7 @@ object QuickSpec extends ZIOSpecDefault:
           feeds <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
           feeds == Chunk(
-            TestFeed.Cached(module, scala3, Jvm, suiteName)
+            TestFeed.Cached(module, scala3, Jvm, suiteName.value)
           )
         )
     ,
@@ -492,7 +522,7 @@ object QuickSpec extends ZIOSpecDefault:
             plain.copy(flags = List("-encoding", "UTF-8")),
           )
         yield assertTrue(
-          same == Chunk(TestFeed.Cached(module, scala3, Jvm, suiteName)),
+          same == Chunk(TestFeed.Cached(module, scala3, Jvm, suiteName.value)),
           upstream == ran(module, TestStatus.Passed),
           jdk == ran(module, TestStatus.Passed),
           flags == ran(module, TestStatus.Passed),
@@ -561,22 +591,26 @@ object QuickSpec extends ZIOSpecDefault:
       .mapError(error => new java.io.IOException(error.message))
 
   private val scala3    = ScalaVersion("3.10.0")
-  private val suiteName = "demo.Foo"
+  private val suiteName = SuiteName("demo.Foo")
+  private val digestA   =
+    Sha256.of(Chunk.fromArray("a".getBytes(StandardCharsets.UTF_8)))
+  private val digestB =
+    Sha256.of(Chunk.fromArray("b".getBytes(StandardCharsets.UTF_8)))
 
   private def named: ZIO[Any, histos.ProjectNameError, ProjectName] =
     ZIO.fromEither(ProjectName.from("app"))
 
-  private def requireDigest(classes: Path): ZIO[Any, StampError, String] =
+  private def requireDigest(classes: Path): ZIO[Any, StampError, Sha256] =
     SuiteStamp
-      .digest(suiteName, List(classes), plain)
+      .digest(suiteName.value, List(classes), plain)
       .flatMap:
         case Some(value) => ZIO.succeed(value)
-        case None        => ZIO.fail(StampError.Missing(suiteName))
+        case None        => ZIO.fail(StampError.Missing(suiteName.value))
 
   private def ran(module: ProjectName, status: TestStatus): Chunk[TestFeed] =
     Chunk(
       TestFeed.Begin(module, scala3, Jvm),
-      TestFeed.Out(suiteName),
+      TestFeed.Out(suiteName.value),
       TestFeed.Done(TestedCell(module, scala3, Jvm, status)),
     )
 
@@ -601,7 +635,7 @@ object QuickSpec extends ZIOSpecDefault:
           sources = None,
           classesWritten = None,
         ),
-        List(suiteName),
+        List(suiteName.value),
         List(classes),
         cover,
         quick = true,
