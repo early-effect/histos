@@ -10,7 +10,8 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** Build products under `.histos/`. Locks, the assembly, and the server stay. */
+/** Build products under `.histos/`. Locks, the assembly, and the server stay.
+  */
 object Products:
   val moduleRoots: List[String] = List(
     "classes",
@@ -26,11 +27,15 @@ object Products:
 
   val sharedRoots: List[String] = List("provider", "provider-src")
 
-  /** Every product root. Does not read the build. */
+  /** The compile tally `observe` reads. A module wipe leaves it. */
+  def observation(repo: Path): Path =
+    dot(repo).resolve("observation.json")
+
+  /** Every product root, and the stored tally. Does not read the build. */
   def wipe(repo: Path): IO[IoFailure, Unit] =
     ZIO.foreachDiscard(moduleRoots ++ sharedRoots)(name =>
       Workspace.delete(dot(repo).resolve(name))
-    )
+    ) *> Workspace.delete(observation(repo))
 
   /** One module's subtree under each per-module root. Shared roots stay. */
   def wipe(repo: Path, modules: List[Module]): IO[IoFailure, Unit] =
@@ -41,8 +46,8 @@ object Products:
     )
 
   /** Empty names are the full wipe, including shared roots. A name selects
-    * modules only: an aggregate expands to its modules, and upstream stays.
-    * A bad name deletes nothing.
+    * modules only: an aggregate expands to its modules, and upstream stays. A
+    * bad name deletes nothing.
     */
   def named(
       repo: Path,

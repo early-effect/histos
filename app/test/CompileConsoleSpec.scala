@@ -1,6 +1,8 @@
 package histos.cli
 
+import histos.report.{ModuleTally, Observation}
 import histos.zinc.{
+  CompileError,
   CompileFacts,
   CompileFeed,
   CompileProblem,
@@ -15,6 +17,7 @@ import histos.{Platform, ProjectName, ProjectNameError, ScalaVersion}
 import java.nio.file.Path
 
 import zio.*
+import zio.json.*
 import zio.test.*
 
 object CompileConsoleSpec extends ZIOSpecDefault:
@@ -108,6 +111,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             CompileFeed.Done(bare)
           )
           tally <- console.tally
+          found <- console.observation
         yield assertTrue(
           lines == Chunk(
             CompileConsole.Line.Out(
@@ -117,6 +121,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           tally.contains("modules: 1"),
           !tally.exists(_.contains("files")),
           !tally.exists(_.contains("classes:")),
+          found.exists(unknownOmitsClasses),
           !lines.exists {
             case CompileConsole.Line.Out(text) =>
               text.contains("classes:") || text.contains("4")
@@ -170,6 +175,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             CompileFeed.Failed(error)
           )
           tally <- console.tally
+          found <- console.observation
         yield assertTrue(
           lines.exists {
             case CompileConsole.Line.Out(text) =>
@@ -183,7 +189,61 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           tally.contains("modules: 2 failed: 1"),
           !tally.exists(line =>
             line.contains("files") || line.contains("classes")
+          ),
+          found == Some(
+            Observation(
+              Chunk(
+                ModuleTally(
+                  core.value,
+                  version.value,
+                  Platform.Jvm.token,
+                  Some(1),
+                  Some(0),
+                  Some(1)
+                )
+              ),
+              None,
+              None,
+              None,
+              2
+            )
           )
+        )
+      }
+    ,
+    test("a failed cell with a module records no counts"):
+      named("core", "app").flatMap { (core, app) =>
+        val failed = GraphCompileError.Failed(
+          core,
+          version,
+          Platform.Jvm,
+          CompileError.NoSources
+        )
+        val missing = GraphCompileError.MissingUpstream(
+          app,
+          core,
+          version,
+          Platform.Jvm
+        )
+        for
+          console <- CompileConsole.open(repo)
+          _ <- play(
+            console,
+            CompileFeed.Failed(failed),
+            CompileFeed.Failed(missing)
+          )
+          found <- console.observation
+        yield assertTrue(
+          found.exists { observation =>
+            observation.moduleCount == 2 &&
+            observation.compiled.isEmpty &&
+            observation.skipped.isEmpty &&
+            observation.classes.isEmpty &&
+            observation.modules == Chunk(
+              ModuleTally("core", "3.10.0", "jvm", None, None, None),
+              ModuleTally("app", "3.10.0", "jvm", None, None, None)
+            )
+          }
         )
       }
     ,
@@ -258,9 +318,22 @@ object CompileConsoleSpec extends ZIOSpecDefault:
     ,
     test("an empty run spells nothing"):
       CompileConsole.open(repo).flatMap { console =>
-        console.tally.map(tally => assertTrue(tally.isEmpty))
+        console.tally.zip(console.observation).map { (tally, found) =>
+          assertTrue(tally.isEmpty, found.isEmpty)
+        }
       }
   )
+
+  private def unknownOmitsClasses(observation: Observation): Boolean =
+    observation.compiled.isEmpty && observation.skipped.isEmpty &&
+      observation.classes.isEmpty && observation.moduleCount == 1 &&
+      (observation.modules match
+        case Chunk(tally) =>
+          tally.module == "core" && tally.version == "3.10.0" &&
+          tally.platform == "jvm" && tally.compiled.isEmpty &&
+          tally.skipped.isEmpty && tally.classes.isEmpty
+        case _ => false) && !observation.toJson.contains(""""classes":4""") &&
+      !observation.toJson.contains(""""classes":9""")
 
   private def play(
       console: CompileConsole.Session,

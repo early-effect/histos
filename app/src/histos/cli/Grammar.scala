@@ -7,10 +7,18 @@ import histos.workflow.WorkflowAction
 import histos.{Platform, ProjectName}
 
 import zio.{IO, ZIO}
-import zio.cli.{Args, CliConfig, Command as CliCommand, CommandDirective, Options, ValidationError, ValidationErrorType}
+import zio.cli.{
+  Args,
+  CliConfig,
+  Command as CliCommand,
+  CommandDirective,
+  Options,
+  ValidationError,
+  ValidationErrorType
+}
 
-/** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that name into a [[TaskId]] and, for a
-  * module, a platform.
+/** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that
+  * name into a [[TaskId]] and, for a module, a platform.
   */
 object Grammar:
   private enum Wire:
@@ -36,6 +44,7 @@ object Grammar:
     case PreviewClean(projects: List[String])
     case PreviewCleanFull(projects: List[String])
     case PreviewRun(name: String, platform: Option[String])
+    case Observe
 
   private val version = CliCommand("version").map(_ => Wire.Version)
   private val graph = CliCommand("graph").map(_ => Wire.Graph)
@@ -44,14 +53,28 @@ object Grammar:
       .map { case (name, platform) =>
         Wire.Run(name, platform.headOption)
       }
-  private val test = CliCommand("test", Args.text("project").*).map(names => Wire.Test(names.toList))
-  private val testOnly = CliCommand("testOnly", Args.text("pattern").*).map(args => Wire.TestOnly(args.toList))
-  private val testQuick = CliCommand("testQuick", Args.text("pattern").*).map(args => Wire.TestQuick(args.toList))
-  private val compile = CliCommand("compile", Args.text("project").*).map(names => Wire.Compile(names.toList))
-  private val cleanBuild = CliCommand("clean", Args.text("project").*).map(names => Wire.Clean(names.toList))
-  private val cleanFull = CliCommand("cleanFull", Args.text("project").*).map(names => Wire.CleanFull(names.toList))
+  private val test = CliCommand("test", Args.text("project").*).map(names =>
+    Wire.Test(names.toList)
+  )
+  private val testOnly = CliCommand("testOnly", Args.text("pattern").*).map(
+    args => Wire.TestOnly(args.toList)
+  )
+  private val testQuick = CliCommand("testQuick", Args.text("pattern").*).map(
+    args => Wire.TestQuick(args.toList)
+  )
+  private val compile = CliCommand("compile", Args.text("project").*).map(
+    names => Wire.Compile(names.toList)
+  )
+  private val cleanBuild = CliCommand("clean", Args.text("project").*).map(
+    names => Wire.Clean(names.toList)
+  )
+  private val cleanFull = CliCommand("cleanFull", Args.text("project").*).map(
+    names => Wire.CleanFull(names.toList)
+  )
   private val assembly =
-    CliCommand("assembly", Args.text("destination").atMost(1)).map(paths => Wire.Assembly(paths.headOption))
+    CliCommand("assembly", Args.text("destination").atMost(1)).map(paths =>
+      Wire.Assembly(paths.headOption)
+    )
   private val publish =
     CliCommand("publish", Args.text("repository") ++ Args.text("project").*)
       .map { case (repository, projects) =>
@@ -85,29 +108,41 @@ object Grammar:
   private val launcher =
     CliCommand("launcher", Options.boolean("update")).map(Wire.Launcher(_))
   private val previewCompile =
-    CliCommand("compile", Args.text("project").*).map(names => Wire.PreviewCompile(names.toList))
+    CliCommand("compile", Args.text("project").*).map(names =>
+      Wire.PreviewCompile(names.toList)
+    )
   private val previewTest =
-    CliCommand("test", Args.text("project").*).map(names => Wire.PreviewTest(names.toList))
+    CliCommand("test", Args.text("project").*).map(names =>
+      Wire.PreviewTest(names.toList)
+    )
   private val previewPublish =
-    CliCommand("publish", Args.text("project").*).map(names => Wire.PreviewPublish(names.toList))
+    CliCommand("publish", Args.text("project").*).map(names =>
+      Wire.PreviewPublish(names.toList)
+    )
   private val previewClean =
-    CliCommand("clean", Args.text("project").*).map(names => Wire.PreviewClean(names.toList))
+    CliCommand("clean", Args.text("project").*).map(names =>
+      Wire.PreviewClean(names.toList)
+    )
   private val previewCleanFull =
-    CliCommand("cleanFull", Args.text("project").*).map(names => Wire.PreviewCleanFull(names.toList))
+    CliCommand("cleanFull", Args.text("project").*).map(names =>
+      Wire.PreviewCleanFull(names.toList)
+    )
   private val previewRun =
     CliCommand("run", Args.text("name") ++ Args.text("platform").atMost(1))
       .map { case (name, platform) =>
         Wire.PreviewRun(name, platform.headOption)
       }
+  private val observe = CliCommand("observe").map(_ => Wire.Observe)
   private val preview = CliCommand("preview").subcommands(
     previewCompile | previewTest | previewPublish | previewClean | previewCleanFull | previewRun
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | preview
+      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
     )
 
-  /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
+  /** Reserved root words never fall through to plugin dispatch, including a
+    * word held for a later surface.
     */
   private val roots: Set[String] = CommandName.reserved.map(_.value)
 
@@ -133,19 +168,19 @@ object Grammar:
 
   private def command(wire: Wire): IO[CliParseError, Command] =
     wire match
-      case Wire.Version                => ZIO.succeed(Command.Version)
-      case Wire.Graph                  => ZIO.succeed(Command.Graph)
-      case Wire.Mcp                    => ZIO.succeed(Command.Mcp)
-      case Wire.Bsp                    => ZIO.succeed(Command.Bsp)
-      case Wire.Server                 => ZIO.succeed(Command.Server)
-      case Wire.CachePath              => ZIO.succeed(Command.CachePath)
-      case Wire.CacheList              => ZIO.succeed(Command.CacheList)
-      case Wire.Toolchain              => ZIO.succeed(Command.Toolchain)
-      case Wire.Reload                 => ZIO.succeed(Command.Reload)
-      case Wire.Reboot                 => ZIO.succeed(Command.Reboot)
-      case Wire.Cancel(id)             => ZIO.succeed(Command.Cancel(id))
-      case Wire.CacheClean(dryRun)     => ZIO.succeed(Command.CacheClean(dryRun))
-      case Wire.Resolve(true, true)    => ZIO.fail(CliParseError.Rejected)
+      case Wire.Version             => ZIO.succeed(Command.Version)
+      case Wire.Graph               => ZIO.succeed(Command.Graph)
+      case Wire.Mcp                 => ZIO.succeed(Command.Mcp)
+      case Wire.Bsp                 => ZIO.succeed(Command.Bsp)
+      case Wire.Server              => ZIO.succeed(Command.Server)
+      case Wire.CachePath           => ZIO.succeed(Command.CachePath)
+      case Wire.CacheList           => ZIO.succeed(Command.CacheList)
+      case Wire.Toolchain           => ZIO.succeed(Command.Toolchain)
+      case Wire.Reload              => ZIO.succeed(Command.Reload)
+      case Wire.Reboot              => ZIO.succeed(Command.Reboot)
+      case Wire.Cancel(id)          => ZIO.succeed(Command.Cancel(id))
+      case Wire.CacheClean(dryRun)  => ZIO.succeed(Command.CacheClean(dryRun))
+      case Wire.Resolve(true, true) => ZIO.fail(CliParseError.Rejected)
       case Wire.Resolve(update, check) =>
         val action =
           if update then ResolveAction.Update
@@ -164,8 +199,9 @@ object Grammar:
             ZIO.fail(CliParseError.Pattern(s"test does not take $flag"))
           case None => ZIO.succeed(Command.Test(projects))
       case Wire.TestOnly(args) =>
-        ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map { case (modules, patterns) =>
-          Command.TestOnly(modules, patterns)
+        ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map {
+          case (modules, patterns) =>
+            Command.TestOnly(modules, patterns)
         }
       case Wire.TestQuick(args) =>
         ZIO
@@ -173,6 +209,7 @@ object Grammar:
           .map { case (modules, patterns) =>
             Command.TestQuick(modules, patterns)
           }
+      case Wire.Observe           => ZIO.succeed(Command.Observe)
       case Wire.Compile(projects) => ZIO.succeed(Command.Compile(projects))
       case Wire.Clean(projects)   =>
         projects.find(_.startsWith("-")) match
@@ -226,7 +263,8 @@ object Grammar:
   ): Either[CliParseError, (List[String], List[SuitePattern])] =
     args match
       case Nil =>
-        if requirePattern && patterns.isEmpty then Left(CliParseError.MissingPattern)
+        if requirePattern && patterns.isEmpty then
+          Left(CliParseError.MissingPattern)
         else Right((modules.reverse, patterns.reverse))
       case "--module" :: Nil =>
         Left(CliParseError.Pattern(s"$command --module needs a project"))
@@ -262,7 +300,9 @@ object Grammar:
         ZIO.fail(CliParseError.Pattern(s"$command does not take $flag"))
       case None => ZIO.unit
 
-  /** The same id `run` accepts: a module, `inspect`, `versions`, or a plugin task. */
+  /** The same id `run` accepts: a module, `inspect`, `versions`, or a plugin
+    * task.
+    */
   private def namedRun(
       raw: String,
       token: Option[String]
@@ -304,6 +344,7 @@ object Grammar:
         args match
           case head :: _ if roots.contains(head) => CliParseError.UnknownCommand
           case _                                 => CliParseError.UnknownRoot
-      case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>
+      case ValidationErrorType.InvalidArgument |
+          ValidationErrorType.MissingValue =>
         CliParseError.MissingArgument
       case _ => CliParseError.Rejected

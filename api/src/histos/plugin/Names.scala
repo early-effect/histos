@@ -66,7 +66,8 @@ object CommandName:
     trusted("reload"),
     trusted("reboot"),
     trusted("cancel"),
-    trusted("preview")
+    trusted("preview"),
+    trusted("observe")
   )
 
   inline def apply(inline raw: String): CommandName = ${

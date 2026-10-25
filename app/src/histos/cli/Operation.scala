@@ -5,7 +5,7 @@ import histos.server.Call
 import histos.task.TaskId
 import histos.workflow.WorkflowAction
 
-/** The call a command sends. `mcp`, `bsp`, and `server` are entry points, not
+/** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not
   * operations.
   */
 object Operation:
@@ -27,7 +27,7 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Mcp | Command.Bsp | Command.Server =>
+      case Command.Mcp | Command.Bsp | Command.Server | Command.Observe =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)
