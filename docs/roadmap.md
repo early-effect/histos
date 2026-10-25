@@ -92,7 +92,7 @@ Tool request namespace/component duplication remains current integration work (L
 
 **Goal:** A human and an agent request the same operation, see the same decisions, and can read what the operation will do before it runs. Reports, progress, and cancellation are that operation, not a separate channel per surface.
 
-Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service. Parking this work after M9 would make the agent an afterthought. Honest testQuick preview still waits on P6 and P15. A compile preview does not.
+Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service. Parking this work after M9 would make the agent an afterthought. P6 and P15 are delivered. The preview still does not say which suites testQuick would skip. A compile preview does not.
 
 - **Wire types:** Typed selections, test modes, targets, events, reports, faults and run ids; preserve plugin command arguments. Owns A1/A3/A4/A12/A19/A21/A25.
 - **Build local/remote/attached:** Delete duplicated continuations/renderers and package cycles; centralize exit mapping, generation leasing and resource construction. Owns A5/A16-A18/A20/A24 and P19's session reuse/measurements.
