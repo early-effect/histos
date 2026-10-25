@@ -56,6 +56,9 @@ enum Decision:
 final case class ManualLine(ship: ShipName, version: ManualVersion)
 
 object Decision:
+  /** The versions line for one ship, including a hold and its reason. */
+  def rendered(line: PublishLine): String = publishText(line)
+
   def text(decision: Decision): String = decision match
     case Decision.NoCatalog => "no catalog"
     case Decision.Develop(drift, lines) =>

@@ -368,15 +368,52 @@ object PluginRunSpec extends ZIOSpecDefault:
         yield
           val blobs = stored.values.toList
           assertTrue(
-            first.text == "page" && second.text == "page" && third.text == "page",
+            first.text == "page" &&
+              second.text == PluginRuntime.cacheHit("page") &&
+              third.text == "page",
             once == 1 && still == 1 && again == 2,
             blobs match
               case only :: Nil =>
                 only.startsWith(PluginManifest.Header) && only.contains(
                   "out.txt"
-                )
+                ) && !only.startsWith(PluginRuntime.CacheHit)
               case _ => false
           )
+    ,
+    test("a cache hit marks the stored text and a miss prints it"):
+      ZIO.scoped:
+        for
+          calls <- Ref.make(0)
+          seen <- Ref.make(List.empty[ModuleView])
+          argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
+          body = "recorded hit stays cached in the task text"
+          page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
+          live = script(
+            echoId,
+            List(page),
+            calls,
+            seen,
+            argsSeen,
+            _ => ZIO.succeed(PluginOutput(body, Nil))
+          )
+          built <- graph(live, core)
+          dir <- directory
+          (_, cache) <- recording
+          id = PluginTaskId(echoId, TaskName("echo"))
+          first <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
+          once <- calls.get
+          second <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
+          still <- calls.get
+        yield assertTrue(
+          first.text == body,
+          second.text == PluginRuntime.cacheHit(body),
+          second.text.split("\n", 2).toList == List(
+            PluginRuntime.CacheHit,
+            body
+          ),
+          once == 1 && still == 1,
+          !body.startsWith(PluginRuntime.CacheHit)
+        )
     ,
     test("the same plugin jar at another path keeps the digest"):
       ZIO.scoped:

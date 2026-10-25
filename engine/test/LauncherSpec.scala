@@ -113,7 +113,8 @@ object LauncherSpec extends ZIOSpecDefault:
                 "9.9.9",
                 Some(root.resolve("api.jar"))
               )
-            )
+            ),
+            Nil
           )
           refused <- LauncherPublish
             .upload(root, graph, written)
@@ -145,7 +146,8 @@ object LauncherSpec extends ZIOSpecDefault:
                 version,
                 Some(root.resolve("api.jar"))
               )
-            )
+            ),
+            Nil
           )
           published <- LauncherPublish
             .upload(root, graph, written)
