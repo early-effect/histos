@@ -23,7 +23,7 @@ import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.toolchain.{Runtimes, Survey}
 import histos.mcp.HistosMcp
 import histos.resolve.{Resolve, ResolveError}
-import histos.task.TaskId
+import histos.task.{RunId, TaskId}
 import histos.workflow.WorkflowAction
 import histos.testrun.{ModuleTestError, SuitePattern}
 import histos.preview.Plan
@@ -341,7 +341,7 @@ object Cli:
         Calls.launcherUpdate(repo, say)
       case Call.Cancel(id) =>
         Ref
-          .make(Map.empty[String, Fiber[ServerError, Unit]])
+          .make(Map.empty[RunId, Fiber[ServerError, Unit]])
           .flatMap(runs => Calls.cancel(runs, id, say))
       case Call.Reload =>
         Calls.finish(say, CliExit.LoadFailed.code, ServerError.NoServer.message)
@@ -1015,13 +1015,13 @@ object Cli:
           )
       )
 
-  /** The id is the key the server already stores. No server has no runs. */
+  /** The id is the run id the server minted. No server has no runs. */
   private def cancel(repo: Path, id: String): UIO[Completed] =
     attach(
       repo,
       Call.Cancel(id),
       Ref
-        .make(Map.empty[String, Fiber[ServerError, Unit]])
+        .make(Map.empty[RunId, Fiber[ServerError, Unit]])
         .flatMap(runs => recorded(Calls.cancel(runs, id, _)))
     )
 

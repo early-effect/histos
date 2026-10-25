@@ -28,7 +28,7 @@ object RunId:
     if raw.isEmpty then Left(TaskError.EmptyId) else Right(raw)
 
   /** Built from `Random.nextUUID`. Not a parser. */
-  private[task] def trusted(raw: String): RunId = raw
+  private[histos] def trusted(raw: String): RunId = raw
 
   extension (id: RunId) def value: String = id
 

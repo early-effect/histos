@@ -18,7 +18,7 @@ import histos.server.{
   ServerError,
   Watching
 }
-import histos.task.TaskId
+import histos.task.{RunId, TaskId}
 import histos.testrun.ModuleTestError
 import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.Platform
@@ -39,13 +39,13 @@ object Session:
 
   final case class Desk(
       held: Ref[Option[Held]],
-      runs: Ref[Map[String, Fiber[ServerError, Unit]]]
+      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]]
   )
 
   def desk: UIO[Desk] =
     for
       held <- Ref.make(Option.empty[Held])
-      runs <- Ref.make(Map.empty[String, Fiber[ServerError, Unit]])
+      runs <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
     yield Desk(held, runs)
 
   def perform(
@@ -245,46 +245,63 @@ object Session:
       case Call.Cancel(id) =>
         histos.server.Calls.cancel(desk.runs, id, say)
       case Call.Compile(projects) =>
-        withJdk(machine, say, CliExit.CompileFailed)(jdk =>
-          histos.server.Calls.compile(repo, graph, projects, jdk, machine, say)
+        Calls.tracked(desk.runs, say)(
+          withJdk(machine, say, CliExit.CompileFailed)(jdk =>
+            histos.server.Calls
+              .compile(repo, graph, projects, jdk, machine, say)
+          )
         )
       case Call.Test(projects, patterns, quick) =>
-        GraphCompile
-          .jdk(machine)
-          .foldZIO(
-            error =>
-              val (code, message) =
-                Cli.testFailure(ModuleTestError.Compile(error))
-              say(histos.server.Message.Exit(code, message))
-            ,
-            jdk =>
-              histos.server.Calls
-                .test(repo, graph, projects, patterns, quick, jdk, machine, say)
-          )
+        Calls.tracked(desk.runs, say)(
+          GraphCompile
+            .jdk(machine)
+            .foldZIO(
+              error =>
+                val (code, message) =
+                  Cli.testFailure(ModuleTestError.Compile(error))
+                say(histos.server.Message.Exit(code, message))
+              ,
+              jdk =>
+                histos.server.Calls.test(
+                  repo,
+                  graph,
+                  projects,
+                  patterns,
+                  quick,
+                  jdk,
+                  machine,
+                  say
+                )
+            )
+        )
       case Call.Publish(repository, projects) =>
-        withJdk(machine, say, CliExit.PublishFailed)(jdk =>
-          histos.server.Calls
-            .publish(repo, graph, machine, jdk, repository, projects, say)
+        Calls.tracked(desk.runs, say)(
+          withJdk(machine, say, CliExit.PublishFailed)(jdk =>
+            histos.server.Calls
+              .publish(repo, graph, machine, jdk, repository, projects, say)
+          )
         )
       case Call.Assembly(destination) =>
-        withJdk(machine, say, CliExit.CompileFailed)(jdk =>
-          histos.server.Calls
-            .assembly(repo, graph, jdk, machine, destination, say)
+        Calls.tracked(desk.runs, say)(
+          withJdk(machine, say, CliExit.CompileFailed)(jdk =>
+            histos.server.Calls
+              .assembly(repo, graph, jdk, machine, destination, say)
+          )
         )
       case Call.Run(id, platform) =>
-        GraphCompile
-          .jdk(machine)
-          .foldZIO(
-            error =>
-              say(histos.server.Message.Exit(jdkCode(error), error.message)),
-            jdk =>
-              histos.server.Calls.tracked(desk.runs, id, say)(
+        Calls.tracked(desk.runs, say)(
+          GraphCompile
+            .jdk(machine)
+            .foldZIO(
+              error =>
+                say(histos.server.Message.Exit(jdkCode(error), error.message)),
+              jdk =>
                 histos.server.Calls
                   .run(repo, graph, jdk, machine, id, platform, say)
-              )
-          )
+            )
+        )
       case Call.Task(id, args) =>
-        Calls.tracked(desk.runs, id, say)(
+        Calls.tracked(desk.runs, say)(
           Calls.task(repo, graph, loaded.plugins, machine, id, args, say)
         )
       case Call.Resolve(action) =>
