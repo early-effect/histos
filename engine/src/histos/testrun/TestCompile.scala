@@ -29,7 +29,8 @@ import histos.resolve.{
   Repositories,
   Resolve,
   ResolveCell,
-  ResolveError
+  ResolveError,
+  ResolvedArtifact
 }
 import histos.workflow.CiError
 import histos.process.{
@@ -189,9 +190,13 @@ private[histos] object TestCompile:
   /** Compiler library first, then locked jars. The first jar on the classpath
     * defines `scala.*`.
     */
+  /** `hashes` are this module's locked jars. `upstream` are compile jars of
+    * upstream modules, without the hashes already in `hashes`.
+    */
   private[histos] final case class Linked(
       paths: List[Path],
-      hashes: List[Sha256]
+      hashes: List[Sha256],
+      upstream: List[Sha256]
   )
 
   private[histos] def runtimeClasspath(
@@ -233,11 +238,19 @@ private[histos] object TestCompile:
             .zip(fetched.hashes)
             .filterNot((path, _) => JvmCompile.isStandardLibrary(path))
         else fetched.paths.zip(fetched.hashes)
+      libraryPaths = libraries.map(_.path)
       tail =
-        if jvm then libraries.filterNot(JvmCompile.isStandardLibrary)
-        else libraries
+        if jvm then libraryPaths.filterNot(JvmCompile.isStandardLibrary)
+        else libraryPaths
       jars = (kept.map(_._1) ++ tail).distinct
-    yield Linked(cell.classes :: (upstream ++ library ++ jars), kept.map(_._2))
+      own = kept.map(_._2).toSet
+      upstreamHashes =
+        libraries.map(_.sha256).distinct.filterNot(own.contains)
+    yield Linked(
+      cell.classes :: (upstream ++ library ++ jars),
+      kept.map(_._2),
+      upstreamHashes
+    )
 
   /** The JVM suite needs `scala-library` on the child classpath. Js and Native
     * put their own library on the compiler classpath.
@@ -330,7 +343,7 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories
-  ): ZIO[Resolve, ModuleTestError, List[Path]] =
+  ): ZIO[Resolve, ModuleTestError, List[ResolvedArtifact]] =
     val found = Module.chain(module, modules, platform)
     ZIO
       .foreach(found)(
@@ -344,7 +357,7 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories
-  ): ZIO[Resolve, ModuleTestError, List[Path]] =
+  ): ZIO[Resolve, ModuleTestError, List[ResolvedArtifact]] =
     val cell = ResolveCell(
       module.name,
       Dep.select(module.dependencies, platform),
@@ -355,7 +368,7 @@ private[histos] object TestCompile:
     )
     Resolve
       .materialize(cell, lock)
-      .mapBoth(ModuleTestError.Lock(_), _.artifacts.map(_.path))
+      .mapBoth(ModuleTestError.Lock(_), _.artifacts)
 
   private[testrun] def classpath(
       module: Module,
