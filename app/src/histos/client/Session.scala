@@ -327,6 +327,8 @@ object Session:
         say(Message.Exit(CliExit.Usage.code, "not a tool"))
       case Call.Watch(args) =>
         watch(repo, apiJar, machine, desk, args, say)
+      case Call.PreviewCompile(projects) =>
+        histos.server.Calls.previewCompile(repo, graph, projects, say)
 
   private def withJdk(machine: Machine, say: Say, exit: CliExit)(
       use: JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]

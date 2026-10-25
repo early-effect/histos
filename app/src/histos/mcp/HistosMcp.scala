@@ -60,6 +60,9 @@ object HistosMcp:
       derives Schema,
         JsonCodec
   final case class WatchArgs(args: List[String] = Nil) derives Schema, JsonCodec
+  final case class PreviewArgs(operation: String, projects: List[String] = Nil)
+      derives Schema,
+        JsonCodec
 
   enum ServeError:
     case Build(errors: NonEmptyChunk[McpBuildError])
@@ -186,7 +189,15 @@ object HistosMcp:
         "watch",
         "Run a command again after a source save. args are the histos command, without the tilde."
       )(args => ask(Call.Watch(args.args)))
-    yield ready
+      previewed <- ready.tool[PreviewArgs](
+        "preview",
+        "Say what a compile will do. operation is compile. An empty project list is every module. Writes nothing."
+      )(args =>
+        args.operation match
+          case "compile" => ask(Call.PreviewCompile(args.projects))
+          case other     => ZIO.fail(s"preview does not run $other")
+      )
+    yield previewed
 
   private def arguments(
       texts: List[NamedArg],

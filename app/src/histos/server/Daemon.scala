@@ -120,6 +120,7 @@ enum Call derives JsonCodec:
   case LauncherUpdate
   case Watch(args: List[String])
   case Bsp
+  case PreviewCompile(projects: List[String])
 
 object Call:
   /** The codec is on [[Call]]. A case value does not carry it. */
@@ -881,6 +882,13 @@ object Daemon:
                                   Calls.launcherUpdate(repo, out)
                                 case Call.Watch(nested) =>
                                   watched(nested, out)
+                                case Call.PreviewCompile(projects) =>
+                                  Calls.previewCompile(
+                                    repo,
+                                    held.graph,
+                                    projects,
+                                    out
+                                  )
                             val leased =
                               target match
                                 case Call.Bsp => release(held) *> ran

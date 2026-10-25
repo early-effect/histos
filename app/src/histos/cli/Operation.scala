@@ -52,7 +52,9 @@ object Operation:
       case Command.LauncherUpdate     => Right(Call.LauncherUpdate)
       case Command.Reload             => Right(Call.Reload)
       case Command.Reboot             => Right(Call.Reboot)
-      case Command.Cancel(id)         => Right(Call.Cancel(id))
+      case Command.Cancel(id) => Right(Call.Cancel(id))
+      case Command.PreviewCompile(projects) =>
+        Right(Call.PreviewCompile(projects))
 
   def resolve(action: ResolveAction): String =
     action match

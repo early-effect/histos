@@ -129,7 +129,8 @@ object PluginSpec extends ZIOSpecDefault:
           "resolve",
           "workflow",
           "launcher",
-          "cancel"
+          "cancel",
+          "preview"
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,

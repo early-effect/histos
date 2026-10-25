@@ -39,6 +39,7 @@ import histos.testrun.{
   TestStatus,
   TestedCell
 }
+import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.Platform
 
@@ -73,6 +74,7 @@ enum Command:
   case Reload
   case Reboot
   case Cancel(id: String)
+  case PreviewCompile(projects: List[String])
 
 enum ResolveAction:
   case Verify, Update, Check
@@ -146,7 +148,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update)"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -207,9 +209,11 @@ object Cli:
       case Command.Workflow(action) => workflow(repo, apiJar, action)
       case Command.LauncherUpdate   =>
         attach(repo, Call.LauncherUpdate, launcherLocal(repo))
-      case Command.Reload     => reload(repo)
-      case Command.Reboot     => reboot(repo, apiJar)
-      case Command.Cancel(id) => cancel(repo, id)
+      case Command.Reload                   => reload(repo)
+      case Command.Reboot                   => reboot(repo, apiJar)
+      case Command.Cancel(id)               => cancel(repo, id)
+      case Command.PreviewCompile(projects) =>
+        preview(repo, apiJar, projects)
 
   /** One `Call.Watch`. The server, or this process when no server is up, runs
     * the inner command again after a source save.
@@ -442,6 +446,29 @@ object Cli:
                       .as(Completed(CliExit.Success, "", ""))
                 )
             }
+      )
+
+  private def preview(
+      repo: Path,
+      apiJar: Path,
+      projects: List[String]
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    attach(
+      repo,
+      Call.PreviewCompile(projects),
+      loaded(repo, apiJar)(build => previewLocal(repo, build, projects))
+    )
+
+  private def previewLocal(
+      repo: Path,
+      loaded: histos.load.LoadedBuild,
+      projects: List[String]
+  ): UIO[Completed] =
+    Plan
+      .show(repo, loaded.graph, projects)
+      .fold(
+        error => Completed(CliExit.CompileFailed, "", error.message),
+        text => Completed(CliExit.Success, text, "")
       )
 
   private def assembly(

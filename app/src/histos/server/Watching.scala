@@ -64,8 +64,9 @@ object Watching:
       case Command.Test(names)         => names
       case Command.TestOnly(names, _)  => names
       case Command.TestQuick(names, _) => names
-      case Command.Compile(names)      => names
-      case Command.Clean(names)        => names
+      case Command.Compile(names)         => names
+      case Command.PreviewCompile(names) => names
+      case Command.Clean(names)           => names
       case Command.Run(id, _)
           if id != histos.task.TaskId.Inspect && id != histos.task.TaskId.Versions =>
         List(id.value)
