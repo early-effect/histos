@@ -94,7 +94,7 @@ Tool request namespace/component duplication remains current integration work (L
 
 Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service. Parking this work after M9 would make the agent an afterthought. P6 and P15 are delivered. The preview still does not say which suites testQuick would skip. A compile preview does not.
 
-- **Wire types:** Typed selections, test modes, targets, events, reports, faults and run ids; preserve plugin command arguments. Owns A1/A3/A4/A12/A19/A21/A25.
+- **Wire types:** Typed selections, test modes, targets, events, reports, faults and run ids; preserve plugin command arguments. Owns A1/A3/A12/A19/A21/A25. A4 is checked: a bad suite pattern is `ModuleTestError.Pattern` and exits usage.
 - **Build local/remote/attached:** Delete duplicated continuations/renderers and package cycles; centralize exit mapping, generation leasing and resource construction. Owns A5/A16-A18/A20/A24 and P19's session reuse/measurements.
 - **Multiplex and cancel:** Per-request supervised fibers, one serialized writer, run-id cancellation and output-directory locks; propagate diagnostics/progress without IO defects. A8 and A23 are delivered: the session reads while a tool runs, each CLI line is a notification, and cancel of the minted id interrupts that fiber. A9, A10, A13, and A14 remain.
 - **Thin BSP/MCP:** Engine classpath service, typed BSP method/target URI, tagged MCP report/fault schemas and progress. Owns A2/A6/A7. A15's unused ToolchainView is now deleted, not a new reporting abstraction to preserve. BSP stays the editor protocol. Agent parity is not a longer BSP surface.
