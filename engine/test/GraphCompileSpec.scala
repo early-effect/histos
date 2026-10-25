@@ -2,7 +2,7 @@ package histos.zinc
 
 import histos.native.NativeOrigin
 import histos.resolve.{Resolve, ResolveError}
-import histos.workflow.CiError
+import histos.select.SelectError
 import histos.{Js, Jvm, Module, ProjectPath, Projects, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
@@ -669,7 +669,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .either
         yield assertTrue:
           out match
-            case Left(GraphCompileError.Target(CiError.Unknown(name))) =>
+            case Left(GraphCompileError.Target(SelectError.Unknown(name))) =>
               name.value == "missing"
             case _ => false
     ,

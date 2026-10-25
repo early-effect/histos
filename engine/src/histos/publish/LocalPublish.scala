@@ -15,8 +15,7 @@ import histos.native.NativeOrigin
 import histos.pack.{ClassJar, JarError}
 import histos.resolve.ArtifactName
 import histos.version.{CiVersion, Decision, PublishAction, ShipName, VersionError, VersionTask}
-import histos.select.Selection
-import histos.workflow.CiError
+import histos.select.{SelectError, Selection}
 import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.{Dep, Module, Organization, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -63,7 +62,7 @@ final case class PublishOutput(
 
 enum LocalPublishError:
   case Version(error: VersionError)
-  case Target(error: CiError)
+  case Target(error: SelectError)
   case Compile(error: GraphCompileError)
   case Jar(
       module: ProjectName,

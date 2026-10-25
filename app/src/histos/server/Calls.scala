@@ -834,7 +834,7 @@ object Calls:
                 parsed   <- ZIO.fromEither(suitePatterns(patterns))
                 _        <- ZIO
                   .fromEither(histos.select.Selection.select(graph, projects))
-                  .mapError(error => ModuleTestError.Compile(GraphCompileError.Target(error)))
+                  .mapError(ModuleTestError.Target(_))
                 lock  <- Resolve.readLock(repo).mapError(ModuleTestError.Lock(_))
                 cells <- GraphCompile
                   .console(

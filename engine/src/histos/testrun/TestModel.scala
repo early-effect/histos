@@ -15,7 +15,7 @@ import histos.native.{
 import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
-import histos.workflow.CiError
+import histos.select.SelectError
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{
@@ -89,7 +89,7 @@ enum ModuleTestError:
       version: ScalaVersion,
       error: histos.toolchain.PlatformToolError,
   )
-  case Target(error: CiError)
+  case Target(error: SelectError)
   case Compile(error: GraphCompileError)
   case Lock(error: ResolveError)
   case LockRead(path: Path)

@@ -25,7 +25,6 @@ import histos.resolve.{
   ResolveError,
   ResolvedArtifact,
 }
-import histos.workflow.CiError
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{

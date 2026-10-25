@@ -3,7 +3,7 @@ package histos.preview
 import histos.clean.Products
 import histos.publish.LocalPublishError
 import histos.version.{ManualVersion, Refusal, Session, ShipNumber, VersionError}
-import histos.workflow.CiError
+import histos.select.SelectError
 import histos.{
   ClangMajor,
   Jvm,
@@ -165,9 +165,9 @@ object PlanSpec extends ZIOSpecDefault:
           duplicate <- Plan.compile(repo, graph, List("core", "core")).either
           bad       <- Plan.compile(repo, graph, List("1core")).either
         yield assertTrue(
-          unknown == Left(PreviewError.Target(CiError.Unknown(missing))),
-          duplicate == Left(PreviewError.Target(CiError.Duplicate(coreName))),
-          bad == Left(PreviewError.Target(CiError.BadName("1core"))),
+          unknown == Left(PreviewError.Target(SelectError.Unknown(missing))),
+          duplicate == Left(PreviewError.Target(SelectError.Duplicate(coreName))),
+          bad == Left(PreviewError.Target(SelectError.BadName("1core"))),
         )
       }
     ,

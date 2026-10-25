@@ -15,7 +15,7 @@ import histos.resolve.{
   ResolveCell,
   ResolveError,
 }
-import histos.workflow.CiError
+import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -56,7 +56,7 @@ enum CompileFeed:
 
 enum GraphCompileError:
   case Runtime(error: histos.jdk.ToolchainError)
-  case Target(error: CiError)
+  case Target(error: SelectError)
   case UnknownCell(module: ProjectName, version: ScalaVersion)
   case NoRoot(module: ProjectName)
   case NoSources(module: ProjectName, root: Path)

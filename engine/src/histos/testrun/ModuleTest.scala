@@ -18,7 +18,7 @@ import histos.toolchain.Runtimes
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
 import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepId, StepInfo}
-import histos.workflow.CiError
+import histos.select.SelectError
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{
@@ -314,7 +314,7 @@ object ModuleTest:
   private def requested(
       graph: ProjectGraph,
       names: List[String],
-  ): Either[CiError, Set[ProjectName]] =
+  ): Either[SelectError, Set[ProjectName]] =
     histos.select.Selection
       .select(graph, names)
       .map(selected => selected.modules.map(_.name).toSet)

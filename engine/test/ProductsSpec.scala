@@ -1,6 +1,6 @@
 package histos.clean
 
-import histos.workflow.CiError
+import histos.select.SelectError
 import histos.workspace.Workspace
 import histos.{Jvm, ProjectName, Projects, ScalaVersion, aggregate, module}
 
@@ -103,16 +103,16 @@ object ProductsSpec extends ZIOSpecDefault:
           engine     <- ZIO.fromEither(ProjectName.from("engine"))
         yield assertTrue(
           unknown match
-            case Left(CiError.Unknown(name)) => name == missing
-            case _                           => false
+            case Left(SelectError.Unknown(name)) => name == missing
+            case _                               => false
           ,
           duplicate match
-            case Left(CiError.Duplicate(name)) => name == engine
-            case _                             => false
+            case Left(SelectError.Duplicate(name)) => name == engine
+            case _                                 => false
           ,
           bad match
-            case Left(CiError.BadName(raw)) => raw == "a/b"
-            case _                          => false
+            case Left(SelectError.BadName(raw)) => raw == "a/b"
+            case _                              => false
           ,
           still,
           tallyStays,

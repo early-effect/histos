@@ -3,12 +3,11 @@ package histos.preview
 import histos.clean.Products
 import histos.plugin.PluginTaskId
 import histos.publish.LocalPublishError
-import histos.select.Selection
+import histos.select.{SelectError, Selection}
 import histos.task.TaskId
 import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
 import histos.toolchain.VersionOrder
 import histos.version.{Decision, HoldReason, PublishAction, ShipName, VersionError, VersionTask}
-import histos.workflow.CiError
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, Sources}
 import histos.{Aggregate, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
@@ -114,7 +113,7 @@ enum RunMiss:
 end RunMiss
 
 enum PreviewError:
-  case Target(error: CiError)
+  case Target(error: SelectError)
   case Cycle(module: ProjectName)
   case Sources(failure: IoFailure)
   case Version(error: VersionError)

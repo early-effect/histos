@@ -1,6 +1,5 @@
 package histos.select
 
-import histos.workflow.CiError
 import histos.{Aggregate, Jvm, ProjectGraph, ProjectName, Projects, ScalaVersion, SourcePos, aggregate, module}
 
 import zio.ZIO
@@ -25,7 +24,7 @@ object SelectionSpec extends ZIOSpecDefault:
         whole.modules.map(_.name.value) == List("core", "app"),
         named.modules.map(_.name.value) == List("core", "app"),
         named.expanded == named.modules.map(_.name).toSet,
-        twice == Left(CiError.Duplicate(repeated)),
+        twice == Left(SelectError.Duplicate(repeated)),
       )
     ,
     test("a missing aggregate child is an unknown project"):
@@ -34,7 +33,7 @@ object SelectionSpec extends ZIOSpecDefault:
         name  <- ZIO.fromEither(ProjectName.from("root"))
         graph = ProjectGraph.trusted(List(Aggregate(name, List(child), at)))
         selected <- ZIO.succeed(Selection.select(graph, List("root")))
-      yield assertTrue(selected == Left(CiError.Unknown(child))),
+      yield assertTrue(selected == Left(SelectError.Unknown(child))),
   )
 
   def spec = selection

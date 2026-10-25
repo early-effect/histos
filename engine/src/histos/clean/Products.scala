@@ -1,8 +1,7 @@
 package histos.clean
 
 import histos.cache.CacheEntry
-import histos.select.Selection
-import histos.workflow.CiError
+import histos.select.{SelectError, Selection}
 import histos.workspace.{IoFailure, Workspace}
 import histos.{Module, ProjectGraph, ProjectName}
 
@@ -51,7 +50,7 @@ object Products:
       repo: Path,
       graph: ProjectGraph,
       names: List[String],
-  ): IO[CiError | IoFailure, List[ProjectName]] =
+  ): IO[SelectError | IoFailure, List[ProjectName]] =
     if names.isEmpty then wipe(repo).as(Nil)
     else
       ZIO.fromEither(Selection.select(graph, names)).flatMap { selected =>
@@ -72,10 +71,10 @@ object Products:
           .mkString("\n")
     s"cleaned\n$dropped"
 
-  def fault(error: CiError | IoFailure): String =
+  def fault(error: SelectError | IoFailure): String =
     error match
-      case found: CiError   => found.message
-      case found: IoFailure => found.message
+      case found: SelectError => found.message
+      case found: IoFailure   => found.message
 
   private def dot(repo: Path): Path = repo.resolve(".histos")
 end Products
