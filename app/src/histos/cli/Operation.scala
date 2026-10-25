@@ -11,10 +11,16 @@ import histos.workflow.WorkflowAction
 object Operation:
   def call(command: Command): Either[CliParseError, Call] =
     command match
-      case Command.Mcp | Command.Bsp | Command.Server =>
-        Left(CliParseError.Rejected)
-      case Command.Watch(_, args) => Right(Call.Watch(args))
-      case other                  => operation(other)
+      case Command.Watch(inner, _) => operation(inner).map(Call.Watch(_))
+      case other                   => operation(other)
+
+  /** A watch payload is already a call. A nested watch or `bsp` is usage. */
+  def underWatch(inner: Call): Either[CliParseError, Call] =
+    inner match
+      case Call.Watch(_) =>
+        Left(CliParseError.WatchCommand("watch does not nest"))
+      case Call.Bsp => Left(CliParseError.Rejected)
+      case other    => Right(other)
 
   /** The command under `~`. A nested watch is not an operation. */
   def operation(command: Command): Either[CliParseError, Call] =
@@ -52,7 +58,7 @@ object Operation:
       case Command.LauncherUpdate     => Right(Call.LauncherUpdate)
       case Command.Reload             => Right(Call.Reload)
       case Command.Reboot             => Right(Call.Reboot)
-      case Command.Cancel(id) => Right(Call.Cancel(id))
+      case Command.Cancel(id)         => Right(Call.Cancel(id))
       case Command.PreviewCompile(projects) =>
         Right(Call.PreviewCompile(projects))
 

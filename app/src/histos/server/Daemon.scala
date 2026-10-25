@@ -2,7 +2,7 @@ package histos.server
 
 import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame}
-import histos.cli.{CliExit, Command, Grammar, Operation}
+import histos.cli.{CliExit, Operation}
 import histos.jdk.Sha256
 import histos.load.HeaderScan
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
@@ -118,7 +118,7 @@ enum Call derives JsonCodec:
   case CacheList
   case CacheClean(dryRun: Boolean)
   case LauncherUpdate
-  case Watch(args: List[String])
+  case Watch(inner: Call)
   case Bsp
   case PreviewCompile(projects: List[String])
 
@@ -676,13 +676,13 @@ object Daemon:
                           out,
                           loaded.native
                         )
-                  case Call.Watch(args) =>
-                    watched(args, out)
+                  case Call.Watch(inner) =>
+                    watched(inner, out)
                   case other =>
                     withGraph(other, out)
 
               def watched(
-                  args: List[String],
+                  inner: Call,
                   out: Say
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader &
@@ -690,37 +690,18 @@ object Daemon:
                 ServerError,
                 Unit
               ] =
-                args match
-                  case Nil =>
-                    Calls.finish(
+                Operation.underWatch(inner) match
+                  case Left(error) =>
+                    Calls.finish(out, CliExit.Usage.code, error.message)
+                  case Right(call) =>
+                    Watching.session(
+                      repo,
                       out,
-                      CliExit.Usage.code,
-                      "watch needs a command"
+                      run(call, out.dropExit),
+                      watchRoots(call)
                     )
-                  case _ =>
-                    Grammar
-                      .parse(args)
-                      .either
-                      .flatMap:
-                        case Left(error) =>
-                          Calls.finish(out, CliExit.Usage.code, error.message)
-                        case Right(command) =>
-                          Operation.operation(command) match
-                            case Left(error) =>
-                              Calls.finish(
-                                out,
-                                CliExit.Usage.code,
-                                error.message
-                              )
-                            case Right(inner) =>
-                              Watching.session(
-                                repo,
-                                out,
-                                run(inner, out.dropExit),
-                                watchRoots(command)
-                              )
 
-              def watchRoots(command: Command): ZIO[
+              def watchRoots(call: Call): ZIO[
                 histos.resolve.Resolve & histos.load.Loader &
                   histos.cache.ContentStore,
                 ServerError,
@@ -731,7 +712,7 @@ object Daemon:
                     ZIO.succeed(List(repo.resolve("histos.scala")))
                   case Right(held) =>
                     ZIO
-                      .succeed(Watching.roots(repo, command, held.graph))
+                      .succeed(Watching.roots(repo, call, held.graph))
                       .ensuring(release(held))
 
               /** Early cases in `run` skip this load. The arms stay so the

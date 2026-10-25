@@ -12,6 +12,7 @@ import histos.load.{
   LoadError,
   LoadedBuild,
   Loader,
+  PluginRuntime,
   ScannedBuild
 }
 import histos.cache.ContentStore
@@ -29,7 +30,7 @@ import histos.zinc.GraphCompile
 import histos.Dep
 import histos.*
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, StandardOpenOption}
 
 import _root_.scala.jdk.CollectionConverters.*
 
@@ -79,6 +80,53 @@ object CliSpec extends ZIOSpecDefault:
 
     def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
       ZIO.succeed(PluginOutput("", Nil))
+
+  private final class Listing extends HistosPlugin:
+    val id: PluginId = PluginId("dev.example")
+
+    def contribute: Contribution =
+      Contribution(
+        List(
+          DeclaredTask(
+            TaskName("echo"),
+            Seal.Open,
+            Set(Need.Network),
+            Nil,
+            Nil,
+            Nil
+          )
+        ),
+        List(
+          CommandSpec(
+            CommandName("list"),
+            List(
+              CliParam.Text(ParamName("out")),
+              CliParam.Flag(FlagName("all"))
+            ),
+            TaskName("echo"),
+            PluginDetail("lists the site")
+          )
+        ),
+        Nil
+      )
+
+    def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+      ZIO.succeed(PluginOutput("", Nil))
+
+  private final class RecordingRuntime(seen: Ref[Option[PluginArgs]])
+      extends PluginRuntime:
+    def run(id: PluginTaskId, args: PluginArgs) =
+      seen.set(Some(args)).as(PluginOutput("ran docs", Nil))
+
+    def bind =
+      ZIO.succeed(
+        Map.empty[
+          histos.task.TaskId,
+          IO[histos.task.TaskError, histos.task.TaskResult]
+        ]
+      )
+
+    def links: List[PluginLink] = Nil
 
   private def bare: ZIO[Scope, LoadError, Path] =
     for
@@ -949,6 +997,174 @@ object CliSpec extends ZIOSpecDefault:
             local.err.contains("launcher pin is absent"),
             remote.err.contains("launcher pin is absent")
           )
+    ,
+    test("a watched contributed command runs on the server with its arguments"):
+      ZIO.scoped:
+        Projects(use(Listing()), module("core", Jvm)(scala"3.9.0")) match
+          case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
+          case Right(graph) =>
+            for
+              jar <- apiJar.mapError(_.message)
+              dir <- repo.mapError(_.message)
+              seen <- Ref.make(Option.empty[PluginArgs])
+              trace <- Ref.make(List.empty[String])
+              loader = Recording(trace, graph)
+              stack = ZLayer.succeed(loader) ++
+                ZLayer.succeed(FetchResolve) ++
+                ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
+                ZLayer.succeed(machine(dir, Map.empty))
+              jdk <- GraphCompile.jdkHere.mapError(_.message)
+              _ <- ZIO
+                .attempt {
+                  Files.createDirectories(dir.resolve(".histos"))
+                  Files.writeString(
+                    dir.resolve(".histos").resolve("toolchain.local"),
+                    jdk.home.toAbsolutePath.normalize.toString + "\n"
+                  )
+                }
+                .mapError(_.toString)
+              _ <- Daemon
+                .open(
+                  dir,
+                  graph,
+                  jdk,
+                  Cli.VersionText,
+                  jar,
+                  Nil,
+                  ZIO.succeed(BuildNotes(false, Nil)),
+                  RecordingRuntime(seen),
+                  machine(dir, Map.empty)
+                )
+                .provideSome[Scope](stack)
+                .mapError(_.message)
+              fiber <- Cli
+                .execute(List("~", "list", "docs", "--all"), dir, jar)
+                .provideSome[Scope](stack)
+                .forkScoped
+              _ <- printed(line => line == "ran docs")
+              args <- seen.get
+              lines <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
+              _ <- fiber.interrupt
+            yield assertTrue(
+              args == Some(
+                PluginArgs(
+                  List(NamedText(ParamName("out"), "docs")),
+                  Set(FlagName("all"))
+                )
+              ),
+              lines.contains("ran docs"),
+              !lines.exists(_.contains("usage:"))
+            )
+    @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
+    test("watch of mcp is usage with and without a server"):
+      ZIO.scoped:
+        Projects(module("core", Jvm)(scala"3.9.0")) match
+          case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
+          case Right(graph) =>
+            for
+              jar <- apiJar.mapError(_.message)
+              dir <- repo.mapError(_.message)
+              trace <- Ref.make(List.empty[String])
+              loader = Recording(trace, graph)
+              stack = ZLayer.succeed(loader) ++
+                ZLayer.succeed(FetchResolve) ++
+                ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
+                ZLayer.succeed(machine(dir, Map.empty))
+              localMcp <- Cli
+                .execute(List("~", "mcp"), dir, jar)
+                .provideSome[Scope](stack)
+              localBsp <- Cli
+                .execute(List("~", "bsp"), dir, jar)
+                .provideSome[Scope](stack)
+              localServer <- Cli
+                .execute(List("~", "server"), dir, jar)
+                .provideSome[Scope](stack)
+              localNested <- Cli
+                .execute(List("~", "~", "test"), dir, jar)
+                .provideSome[Scope](stack)
+              jdk <- GraphCompile.jdkHere.mapError(_.message)
+              _ <- ZIO
+                .attempt {
+                  Files.createDirectories(dir.resolve(".histos"))
+                  Files.writeString(
+                    dir.resolve(".histos").resolve("toolchain.local"),
+                    jdk.home.toAbsolutePath.normalize.toString + "\n"
+                  )
+                }
+                .mapError(_.toString)
+              _ <- Daemon
+                .open(
+                  dir,
+                  graph,
+                  jdk,
+                  Cli.VersionText,
+                  jar,
+                  Nil,
+                  ZIO.succeed(BuildNotes(false, Nil)),
+                  Calls.quiet,
+                  machine(dir, Map.empty)
+                )
+                .provideSome[Scope](stack)
+                .mapError(_.message)
+              remoteMcp <- Cli
+                .execute(List("~", "mcp"), dir, jar)
+                .provideSome[Scope](stack)
+              remoteBsp <- Cli
+                .execute(List("~", "bsp"), dir, jar)
+                .provideSome[Scope](stack)
+              remoteServer <- Cli
+                .execute(List("~", "server"), dir, jar)
+                .provideSome[Scope](stack)
+              remoteNested <- Cli
+                .execute(List("~", "~", "test"), dir, jar)
+                .provideSome[Scope](stack)
+            yield assertTrue(
+              refused(localMcp),
+              refused(localBsp),
+              refused(localServer),
+              refused(remoteMcp),
+              refused(remoteBsp),
+              refused(remoteServer),
+              localNested.exit == CliExit.Usage && localNested.err.contains(
+                "watch does not nest"
+              ),
+              remoteNested.exit == CliExit.Usage && remoteNested.err.contains(
+                "watch does not nest"
+              )
+            )
+    @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds),
+    test("watch of compile names the path that changed"):
+      ZIO.scoped:
+        for
+          jar <- apiJar.mapError(_.message)
+          dir <- repo.mapError(_.message)
+          fiber <- Cli
+            .execute(List("~", "compile"), dir, jar)
+            .provideSome[Scope](layers(dir))
+            .forkScoped
+          _ <- printed(line => line == "watching")
+          _ <- ZIO.sleep(1.second)
+          _ <- ZIO
+            .attempt(
+              Files.writeString(
+                dir.resolve("histos.scala"),
+                "\n",
+                StandardOpenOption.APPEND
+              )
+            )
+            .mapError(_.toString)
+          _ <- printed(line => line == "watching histos.scala")
+          lines <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
+          watched = lines.filter(_.startsWith("watching"))
+          _ <- fiber.interrupt
+        yield assertTrue(
+          watched.contains("watching"),
+          watched.contains("watching histos.scala"),
+          watched.forall(line =>
+            line == "watching" || line == "watching histos.scala"
+          )
+        )
+    @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds)
   )
 
   private val ship =
@@ -1027,5 +1243,14 @@ object CliSpec extends ZIOSpecDefault:
       None,
       NativeOrigin.read(env)
     )
+
+  private def refused(done: Completed): Boolean =
+    done.exit == CliExit.Usage && done.err.contains("usage:")
+
+  private def printed(pred: String => Boolean): UIO[Unit] =
+    TestConsole.output.flatMap { lines =>
+      if lines.exists(line => pred(line.stripSuffix("\n"))) then ZIO.unit
+      else ZIO.sleep(50.millis) *> printed(pred)
+    }
 
   def spec = cli @@ TestAspect.withLiveSystem

@@ -4,6 +4,7 @@ import heddle.LinePipe
 import heddle.endpoint.Schema
 import heddle.mcp.{Mcp, McpBuildError}
 import histos.cache.ContentStore
+import histos.cli.Cli
 import histos.client.Session
 import histos.jdk.Machine
 import histos.load.Loader
@@ -188,7 +189,7 @@ object HistosMcp:
       ready <- launcher.tool[WatchArgs](
         "watch",
         "Run a command again after a source save. args are the histos command, without the tilde."
-      )(args => ask(Call.Watch(args.args)))
+      )(args => Cli.watchCall(args.args, repo, apiJar).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
         "preview",
         "Say what a compile will do. operation is compile. An empty project list is every module. Writes nothing."

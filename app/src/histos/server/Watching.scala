@@ -1,6 +1,6 @@
 package histos.server
 
-import histos.cli.{CliExit, Command, Lines}
+import histos.cli.{CliExit, Lines}
 import histos.watch.SourceWatch
 import histos.{Module, ProjectGraph}
 
@@ -58,23 +58,19 @@ object Watching:
       )
     }
 
-  def roots(repo: Path, command: Command, graph: ProjectGraph): List[Path] =
+  def roots(repo: Path, call: Call, graph: ProjectGraph): List[Path] =
     val modules = graph.projects.collect { case module: Module => module }
-    val named = projects(command)
+    val named = projects(call)
     val chosen =
       if named.isEmpty then modules
       else modules.filter(module => named.contains(module.name.value))
     SourceWatch.roots(repo, chosen)
 
-  private def projects(command: Command): List[String] =
-    command match
-      case Command.Test(names)         => names
-      case Command.TestOnly(names, _)  => names
-      case Command.TestQuick(names, _) => names
-      case Command.Compile(names)         => names
-      case Command.PreviewCompile(names) => names
-      case Command.Clean(names)           => names
-      case Command.Run(id, _)
-          if id != histos.task.TaskId.Inspect && id != histos.task.TaskId.Versions =>
-        List(id.value)
-      case _ => Nil
+  private def projects(call: Call): List[String] =
+    call match
+      case Call.Test(names, _, _)     => names
+      case Call.Compile(names)        => names
+      case Call.PreviewCompile(names) => names
+      case Call.Clean(names)          => names
+      case Call.Run(id, _)            => List(id)
+      case _                          => Nil

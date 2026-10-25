@@ -1,7 +1,7 @@
 package histos.client
 
 import histos.jdk.JdkRuntime
-import histos.cli.{Cli, CliExit, Grammar, Operation}
+import histos.cli.{Cli, CliExit, Operation}
 import histos.jdk.Machine
 import histos.load.{LoadedBuild, Loader}
 import histos.plugin.PluginArgs
@@ -189,8 +189,8 @@ object Session:
           .flatMap(done => say(Message.Exit(done.exit.code, done.err)))
       case Call.Bsp =>
         say(Message.Exit(CliExit.Usage.code, "not a tool"))
-      case Call.Watch(args) =>
-        watch(repo, apiJar, machine, desk, args, say)
+      case Call.Watch(inner) =>
+        watch(repo, apiJar, machine, desk, inner, say)
       case other =>
         fresh(repo, apiJar, desk).either.flatMap:
           case Left(message) =>
@@ -203,37 +203,25 @@ object Session:
       apiJar: Path,
       machine: Machine,
       desk: Desk,
-      args: List[String],
+      inner: Call,
       say: Say
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     ServerError,
     Unit
   ] =
-    args match
-      case Nil =>
-        Calls.finish(say, CliExit.Usage.code, "watch needs a command")
-      case _ =>
-        Grammar
-          .parse(args)
-          .either
-          .flatMap:
-            case Left(error) =>
-              Calls.finish(say, CliExit.Usage.code, error.message)
-            case Right(command) =>
-              Operation.operation(command) match
-                case Left(error) =>
-                  Calls.finish(say, CliExit.Usage.code, error.message)
-                case Right(inner) =>
-                  Watching.session(
-                    repo,
-                    say,
-                    answer(repo, apiJar, machine, desk, inner, say.dropExit),
-                    fresh(repo, apiJar, desk).either.map:
-                      case Left(_)       => List(repo.resolve("histos.scala"))
-                      case Right(loaded) =>
-                        Watching.roots(repo, command, loaded.graph)
-                  )
+    Operation.underWatch(inner) match
+      case Left(error) =>
+        Calls.finish(say, CliExit.Usage.code, error.message)
+      case Right(call) =>
+        Watching.session(
+          repo,
+          say,
+          answer(repo, apiJar, machine, desk, call, say.dropExit),
+          fresh(repo, apiJar, desk).either.map:
+            case Left(_)       => List(repo.resolve("histos.scala"))
+            case Right(loaded) => Watching.roots(repo, call, loaded.graph)
+        )
 
   private def dispatch(
       repo: Path,
@@ -326,8 +314,8 @@ object Session:
           .flatMap(done => say(Message.Exit(done.exit.code, done.err)))
       case Call.Bsp =>
         say(Message.Exit(CliExit.Usage.code, "not a tool"))
-      case Call.Watch(args) =>
-        watch(repo, apiJar, machine, desk, args, say)
+      case Call.Watch(inner) =>
+        watch(repo, apiJar, machine, desk, inner, say)
       case Call.PreviewCompile(projects) =>
         histos.server.Calls.previewCompile(repo, graph, projects, say)
 
