@@ -220,6 +220,8 @@ object Session:
         histos.server.Calls.cleanFull(repo, say)
       case Call.Reload | Call.Reboot | Call.Bsp =>
         say(histos.server.Message.Exit(CliExit.Usage.code, "not a tool"))
+      case Call.PreviewCompile(projects) =>
+        histos.server.Calls.previewCompile(repo, graph, projects, say)
 
   private def withJdk(machine: Machine, say: Say, exit: CliExit)(
       use: JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]

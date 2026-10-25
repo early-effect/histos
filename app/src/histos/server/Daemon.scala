@@ -98,6 +98,7 @@ enum Call derives JsonCodec:
   case Reload
   case Reboot
   case Bsp
+  case PreviewCompile(projects: List[String])
 
 object Call:
   /** The codec is on [[Call]]. A case value does not carry it. */
@@ -619,14 +620,16 @@ object Daemon:
               def adopted =
                 val loaded =
                   asked match
-                    case Call.Reload => force(repo, apiJar, version, bound, warm)
-                    case _           => adopt(repo, apiJar, version, bound, warm)
+                    case Call.Reload =>
+                      force(repo, apiJar, version, bound, warm)
+                    case _ => adopt(repo, apiJar, version, bound, warm)
                 loaded.flatMap:
                   case Left(message) =>
                     write(output, wire(Message.Ready), bound) *> write(
                       output,
                       wire(
-                        Message.Exit(histos.cli.CliExit.LoadFailed.code, message)
+                        Message
+                          .Exit(histos.cli.CliExit.LoadFailed.code, message)
                       ),
                       bound
                     )
@@ -753,6 +756,13 @@ object Daemon:
                                   build,
                                   input,
                                   output
+                                )
+                              case Call.PreviewCompile(projects) =>
+                                Calls.previewCompile(
+                                  repo,
+                                  held.graph,
+                                  projects,
+                                  say
                                 )
                     val leased =
                       asked match

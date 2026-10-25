@@ -28,6 +28,7 @@ import histos.testrun.{
   TestedCell
 }
 import histos.watch.SourceWatch
+import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.{Module, Platform}
 
@@ -62,6 +63,7 @@ enum Command:
   case LauncherUpdate
   case Reload
   case Reboot
+  case PreviewCompile(projects: List[String])
 
 enum ResolveAction:
   case Verify, Update, Check
@@ -135,7 +137,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update)"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -201,8 +203,10 @@ object Cli:
                 ""
               )
           )
-      case Command.Reload => reload(repo)
-      case Command.Reboot => reboot(repo, apiJar)
+      case Command.Reload                   => reload(repo)
+      case Command.Reboot                   => reboot(repo, apiJar)
+      case Command.PreviewCompile(projects) =>
+        preview(repo, apiJar, projects)
 
   /** Run `inner`, then again after a source save. A save during a run waits
     * until that run finishes. Interrupt while a run is in flight exits 130.
@@ -297,11 +301,12 @@ object Cli:
 
   private def watchedProjects(command: Command): List[String] =
     command match
-      case Command.Test(projects)        => projects
-      case Command.TestOnly(modules, _)  => modules
-      case Command.TestQuick(modules, _) => modules
-      case Command.Compile(projects)     => projects
-      case Command.Clean(projects)       => projects
+      case Command.Test(projects)           => projects
+      case Command.TestOnly(modules, _)     => modules
+      case Command.TestQuick(modules, _)    => modules
+      case Command.Compile(projects)        => projects
+      case Command.PreviewCompile(projects) => projects
+      case Command.Clean(projects)          => projects
       case Command.Run(id, _)
           if id != histos.task.TaskId.Inspect && id != histos.task.TaskId.Versions =>
         List(id.value)
@@ -496,6 +501,29 @@ object Cli:
                       .as(Completed(CliExit.Success, "", ""))
                 )
             }
+      )
+
+  private def preview(
+      repo: Path,
+      apiJar: Path,
+      projects: List[String]
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    attach(
+      repo,
+      Call.PreviewCompile(projects),
+      loaded(repo, apiJar)(build => previewLocal(repo, build, projects))
+    )
+
+  private def previewLocal(
+      repo: Path,
+      loaded: histos.load.LoadedBuild,
+      projects: List[String]
+  ): UIO[Completed] =
+    Plan
+      .show(repo, loaded.graph, projects)
+      .fold(
+        error => Completed(CliExit.CompileFailed, "", error.message),
+        text => Completed(CliExit.Success, text, "")
       )
 
   private def assembly(

@@ -12,6 +12,7 @@ import histos.testrun.{
   TestRun,
   TestStatus
 }
+import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
 import histos.jdk.Sha256
@@ -363,6 +364,19 @@ object Calls:
               done(say, CliExit.Success.code, "")
         )
     }
+
+  def previewCompile(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      say: Say
+  ): IO[ServerError, Unit] =
+    Plan
+      .show(repo, graph, projects)
+      .foldZIO(
+        error => done(say, CliExit.CompileFailed.code, error.message),
+        text => told(say, text) *> done(say, CliExit.Success.code, "")
+      )
 
   /** No names wipe every product root and do not read `graph`. */
   def clean(

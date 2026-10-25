@@ -15,7 +15,9 @@ import java.nio.file.Path
 import zio.*
 import zio.json.JsonCodec
 
-/** MCP tools. Each call reads `.histos/server.json` and sends [[Call]] when it matches. */
+/** MCP tools. Each call reads `.histos/server.json` and sends [[Call]] when it
+  * matches.
+  */
 object HistosMcp:
   final case class NoArgs() derives Schema, JsonCodec
   final case class RunArgs(id: String, platform: Option[String] = None)
@@ -32,6 +34,9 @@ object HistosMcp:
   ) derives Schema,
         JsonCodec
   final case class PublishArgs(repository: String, projects: List[String] = Nil)
+      derives Schema,
+        JsonCodec
+  final case class PreviewArgs(operation: String, projects: List[String] = Nil)
       derives Schema,
         JsonCodec
 
@@ -103,6 +108,14 @@ object HistosMcp:
         "toolchain",
         "Show the JDK decision, and the Node or clang decision when the build needs them"
       )(_ => ask(Call.Toolchain))
-    yield ready
+      previewed <- ready.tool[PreviewArgs](
+        "preview",
+        "Say what a compile will do. operation is compile. An empty project list is every module. Writes nothing."
+      )(args =>
+        args.operation match
+          case "compile" => ask(Call.PreviewCompile(args.projects))
+          case other     => ZIO.fail(s"preview does not run $other")
+      )
+    yield previewed
 
 end HistosMcp

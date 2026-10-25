@@ -128,7 +128,8 @@ object PluginSpec extends ZIOSpecDefault:
           "cache",
           "resolve",
           "workflow",
-          "launcher"
+          "launcher",
+          "preview"
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,

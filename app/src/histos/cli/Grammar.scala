@@ -37,6 +37,7 @@ object Grammar:
     case Resolve(update: Boolean, check: Boolean)
     case Launcher(update: Boolean)
     case Workflow(check: Boolean, update: Boolean)
+    case PreviewCompile(projects: List[String])
 
   private val version = CliCommand("version").map(_ => Wire.Version)
   private val graph = CliCommand("graph").map(_ => Wire.Graph)
@@ -97,9 +98,14 @@ object Grammar:
     }
   private val launcher =
     CliCommand("launcher", Options.boolean("update")).map(Wire.Launcher(_))
+  private val previewCompile =
+    CliCommand("compile", Args.text("project").*).map(names =>
+      Wire.PreviewCompile(names.toList)
+    )
+  private val preview = CliCommand("preview").subcommands(previewCompile)
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot
+      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a
@@ -180,6 +186,8 @@ object Grammar:
         ZIO.succeed(Command.Assembly(destination))
       case Wire.Publish(repository, projects) =>
         ZIO.succeed(Command.Publish(repository, projects))
+      case Wire.PreviewCompile(projects) =>
+        ZIO.succeed(Command.PreviewCompile(projects))
       case Wire.Run(raw, token) =>
         if raw.contains('/') then pluginTask(raw, token)
         else
