@@ -4,6 +4,7 @@ import java.nio.file.{Files, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
 
 import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Label
 import org.objectweb.asm.Opcodes.*
 import org.objectweb.asm.Type
 import org.objectweb.asm.tree.{ClassNode, MethodInsnNode}
@@ -79,8 +80,23 @@ object LazyValsSpec extends ZIOSpecDefault:
       assertTrue(
         kept.exists(bytes => calls(bytes, "scala/runtime/LazyVals$", "getOffsetStatic")),
         keptModule.exists(_.sameElements(moduleBytes)),
-        refused == Left(LazyValError.Unhandled("demo/Stray.class", "run still calls Unsafe lazy vals")),
+        refused == Left(LazyValError.StillCalls("demo/Stray.class", "run")),
       )
+    ,
+    test("a short window or a non-string ldc does not throw"):
+      val empty   = Map.empty[(String, String), LazyVals.Handle]
+      val catalog = LazyVals.catalog(List("demo/Short.class" -> shortClass, "demo/Typed.class" -> nonStringLdc))
+      val short   = LazyVals.rewrite("demo/Short.class", shortClass, empty, getClass.getClassLoader)
+      val typed   = LazyVals.rewrite("demo/Typed.class", nonStringLdc, empty, getClass.getClassLoader)
+      assertTrue(
+        catalog == Right(empty),
+        short == Left(LazyValError.StillCalls("demo/Short.class", "<clinit>")),
+        typed == Left(LazyValError.StillCalls("demo/Typed.class", "<clinit>")),
+      )
+    ,
+    test("a rejected frame computation is a typed error"):
+      val written = LazyVals.rewrite("demo/Rejected.class", rejectedFrames, Map.empty, getClass.getClassLoader)
+      assertTrue(written == Left(LazyValError.Frames("demo/Rejected.class", LazyValFrame.Rejected)))
     ,
     test("a companion offset can publish a VarHandle for the module's private field"):
       val host   = splitHost
@@ -302,6 +318,70 @@ object LazyValsSpec extends ZIOSpecDefault:
     clinit.visitInsn(RETURN)
     clinit.visitMaxs(0, 0)
     clinit.visitEnd()
+    writer.visitEnd()
+    writer.toByteArray
+
+  private def shortClass: Array[Byte] =
+    val writer = new ClassWriter(0)
+    writer.visit(V1_8, ACC_PUBLIC, "demo/Short", null, "java/lang/Object", null)
+    val method = writer.visitMethod(ACC_STATIC, "<clinit>", "()V", null, null)
+    method.visitCode()
+    method.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "getOffsetStatic",
+      "(Ljava/lang/reflect/Field;)J",
+      false,
+    )
+    method.visitInsn(RETURN)
+    method.visitMaxs(1, 0)
+    method.visitEnd()
+    writer.visitEnd()
+    writer.toByteArray
+
+  private def nonStringLdc: Array[Byte] =
+    val writer = new ClassWriter(0)
+    writer.visit(V1_8, ACC_PUBLIC, "demo/Typed", null, "java/lang/Object", null)
+    val method = writer.visitMethod(ACC_STATIC, "<clinit>", "()V", null, null)
+    method.visitCode()
+    method.visitFieldInsn(GETSTATIC, "scala/runtime/LazyVals$", "MODULE$", "Lscala/runtime/LazyVals$;")
+    method.visitLdcInsn(Type.getObjectType("demo/Typed"))
+    method.visitLdcInsn(Integer.valueOf(1))
+    method.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "java/lang/Class",
+      "getDeclaredField",
+      "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+      false,
+    )
+    method.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "getOffsetStatic",
+      "(Ljava/lang/reflect/Field;)J",
+      false,
+    )
+    method.visitFieldInsn(PUTSTATIC, "demo/Typed", "OFFSET$0", "J")
+    method.visitInsn(RETURN)
+    method.visitMaxs(3, 0)
+    method.visitEnd()
+    writer.visitEnd()
+    writer.toByteArray
+
+  private def rejectedFrames: Array[Byte] =
+    val writer = new ClassWriter(0)
+    writer.visit(V1_8, ACC_PUBLIC, "demo/Rejected", null, "java/lang/Object", null)
+    writer.visitField(ACC_STATIC | ACC_FINAL, "mark", "Ljava/lang/String;", null, "getOffsetStatic").visitEnd()
+    val method = writer.visitMethod(ACC_STATIC, "run", "()V", null, null)
+    method.visitCode()
+    val sub = new Label()
+    method.visitJumpInsn(JSR, sub)
+    method.visitInsn(RETURN)
+    method.visitLabel(sub)
+    method.visitVarInsn(ASTORE, 0)
+    method.visitVarInsn(RET, 0)
+    method.visitMaxs(1, 1)
+    method.visitEnd()
     writer.visitEnd()
     writer.toByteArray
 
