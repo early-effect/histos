@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.report.{ModuleTally, Observation}
 import histos.zinc.{CompileFacts, CompileFeed, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
 
@@ -40,20 +41,32 @@ object CompileConsole:
         case CompileFeed.Diagnostic(_, _, _, problem) =>
           ZIO.succeed(Chunk(Line.Err(Lines.diagnostic(repo, problem))))
         case CompileFeed.Done(cell) =>
-          counts.update(_.finish(cell.sources, cell.classesWritten)).as {
-            Lines
-              .outcome(
+          counts
+            .update(
+              _.finish(
                 cell.module,
                 cell.version,
                 cell.platform,
-                cell.changed,
                 cell.sources,
                 cell.classesWritten
               )
-              .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
-          }
+            )
+            .as {
+              Lines
+                .outcome(
+                  cell.module,
+                  cell.version,
+                  cell.platform,
+                  cell.changed,
+                  cell.sources,
+                  cell.classesWritten
+                )
+                .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
+            }
         case CompileFeed.Failed(error) =>
-          counts.update(_.fail).as(Chunk(Line.Err(error.message)))
+          counts
+            .update(_.fail(Observation.failed(error)))
+            .as(Chunk(Line.Err(error.message)))
 
     /** The spelled tally. A later read is the same line. */
     def tally: UIO[Option[String]] =
@@ -64,6 +77,9 @@ object CompileConsole:
         case Some(line) => out(line)
         case None       => ZIO.unit
 
+    def observation: UIO[Option[Observation]] =
+      counts.get.map(_.observed)
+
   /** Test compiles. The same ref, read when the test run ends. */
   final class Notes private[CompileConsole] (counts: Ref[Counts]):
     def apply(
@@ -73,7 +89,15 @@ object CompileConsole:
         facts: CompileFacts
     ): UIO[String] =
       counts
-        .update(_.finish(facts.sources, facts.classesWritten))
+        .update(
+          _.finish(
+            module,
+            version,
+            platform,
+            facts.sources,
+            facts.classesWritten
+          )
+        )
         .as(
           Lines.testOutcome(
             module,
@@ -93,6 +117,9 @@ object CompileConsole:
         case Some(line) => out(line)
         case None       => ZIO.unit
 
+    def observation: UIO[Option[Observation]] =
+      counts.get.map(_.observed)
+
   private enum Files:
     case Empty
     case Known(count: SourceCount)
@@ -107,29 +134,42 @@ object CompileConsole:
       modules: Int,
       failed: Int,
       files: Files,
-      classes: Classes
+      classes: Classes,
+      entered: Chunk[ModuleTally]
   ):
     def finish(
+        module: ProjectName,
+        version: ScalaVersion,
+        platform: Platform,
         sources: Option[SourceCount],
         classesWritten: Option[Int]
     ): Counts =
       val nextFiles = addFiles(files, sources)
+      val record = Observation.recorded(
+        module,
+        version,
+        platform,
+        sources,
+        classesWritten
+      )
       copy(
         modules = modules + 1,
         files = nextFiles,
         classes = nextFiles match
           case Files.Unknown                => Classes.Unknown
           case Files.Empty | Files.Known(_) =>
-            addClasses(classes, classesWritten)
+            addClasses(classes, classesWritten),
+        entered = entered :+ record
       )
 
     /** A failed cell has no honest file or class total. */
-    def fail: Counts =
+    def fail(record: Option[ModuleTally]): Counts =
       copy(
         modules = modules + 1,
         failed = failed + 1,
         files = Files.Unknown,
-        classes = Classes.Unknown
+        classes = Classes.Unknown,
+        entered = record.fold(entered)(entered :+ _)
       )
 
     def line(
@@ -151,6 +191,19 @@ object CompileConsole:
       classes match
         case Classes.Known(written)          => Some(written)
         case Classes.Empty | Classes.Unknown => None
+
+    def observed: Option[Observation] =
+      if modules == 0 then None
+      else
+        Some(
+          Observation(
+            entered,
+            knownFiles.map(_.compiled),
+            knownFiles.map(_.skipped),
+            knownClasses,
+            modules
+          )
+        )
 
   private def addFiles(sum: Files, sources: Option[SourceCount]): Files =
     (sum, sources) match
@@ -174,5 +227,5 @@ object CompileConsole:
         Classes.Known(have + count)
 
   private object Counts:
-    val empty: Counts = Counts(0, 0, Files.Empty, Classes.Empty)
+    val empty: Counts = Counts(0, 0, Files.Empty, Classes.Empty, Chunk.empty)
 end CompileConsole

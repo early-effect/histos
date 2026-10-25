@@ -13,7 +13,9 @@ object ProductsSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
 
   private val products = suite("products")(
-    test("a full wipe deletes product roots and leaves locks, the jar, and the server"):
+    test(
+      "a full wipe deletes product roots and leaves locks, the jar, and the server"
+    ):
       ZIO.scoped:
         for
           repo <- Workspace.work("histos-clean")
@@ -39,15 +41,22 @@ object ProductsSpec extends ZIOSpecDefault:
             ".histos/jars/engine/app.jar",
             ".histos/run/engine/out",
             ".histos/provider/3.10.0/bridge.jar",
-            ".histos/provider-src/3.10.0/Bridge.scala"
+            ".histos/provider-src/3.10.0/Bridge.scala",
+            ".histos/observation.json"
           )
-          _ <- ZIO.foreachDiscard(kept ++ dropped)(relative => plant(repo, relative))
+          _ <- ZIO.foreachDiscard(kept ++ dropped)(relative =>
+            plant(repo, relative)
+          )
           outside <- plant(repo, "kept.txt")
           link = repo.resolve(".histos").resolve("classes").resolve("linked")
           _ <- ZIO.attempt(Files.createSymbolicLink(link, outside))
           _ <- Products.wipe(repo)
-          stayed <- ZIO.foreach(kept)(relative => isFile(repo.resolve(relative)))
-          gone <- ZIO.foreach(dropped)(relative => exists(repo.resolve(relative)))
+          stayed <- ZIO.foreach(kept)(relative =>
+            isFile(repo.resolve(relative))
+          )
+          gone <- ZIO.foreach(dropped)(relative =>
+            exists(repo.resolve(relative))
+          )
           outsideStays <- isFile(outside)
           classesGone <- exists(repo.resolve(".histos").resolve("classes"))
         yield assertTrue(
@@ -65,17 +74,21 @@ object ProductsSpec extends ZIOSpecDefault:
           engineClass <- plant(repo, ".histos/classes/engine/Demo.class")
           appClass <- plant(repo, ".histos/classes/app/Demo.class")
           provider <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
+          tally <- plant(repo, ".histos/observation.json")
           built <- graph
           cleaned <- Products.named(repo, built, List("engine"))
           engineGone <- exists(engineClass)
           appStays <- isFile(appClass)
           providerStays <- isFile(provider)
+          tallyStays <- isFile(tally)
         yield assertTrue(
           cleaned.map(_.value) == List("engine"),
           Products.line(cleaned) == "cleaned engine",
           !engineGone,
           appStays,
-          providerStays
+          providerStays,
+          tallyStays,
+          tally == Products.observation(repo)
         )
     ,
     test("an unknown, repeated, or bad name deletes nothing"):
@@ -85,7 +98,9 @@ object ProductsSpec extends ZIOSpecDefault:
           klass <- plant(repo, ".histos/classes/engine/Demo.class")
           built <- graph
           unknown <- Products.named(repo, built, List("missing")).either
-          duplicate <- Products.named(repo, built, List("engine", "engine")).either
+          duplicate <- Products
+            .named(repo, built, List("engine", "engine"))
+            .either
           bad <- Products.named(repo, built, List("a/b")).either
           still <- isFile(klass)
           missing <- ZIO.fromEither(ProjectName.from("missing"))

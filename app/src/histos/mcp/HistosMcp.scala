@@ -1,11 +1,13 @@
 package histos.mcp
 
 import heddle.LinePipe
-import heddle.endpoint.Schema
-import heddle.mcp.{Mcp, McpBuildError}
+import heddle.endpoint.{Schema, SchemaJson}
+import heddle.mcp.{Mcp, McpBuildError, ToolError}
+import heddle.mcp.protocol.Structured
 import histos.cache.ContentStore
 import histos.cli.Cli
 import histos.client.Session
+import histos.report.{Report, Stored}
 import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
@@ -21,6 +23,14 @@ import zio.json.JsonCodec
   * matches.
   */
 object HistosMcp:
+  /** A sentence stays text. Report JSON stays one structured body, not a quoted
+    * string.
+    */
+  given ToolError[String] with
+    val shape: Structured =
+      Structured.of(SchemaJson.render(summon[Schema[Report]].doc))
+    def json(text: String): String = text
+
   final case class NoArgs() derives Schema, JsonCodec
   final case class NamedArg(name: String, value: String)
       derives Schema,
@@ -105,7 +115,8 @@ object HistosMcp:
     NonEmptyChunk[McpBuildError],
     Mcp[Loader & Scope & Resolve & ContentStore]
   ] =
-    val ask = Session.perform(repo, apiJar, machine, desk, _)
+    val ask = (call: Call) =>
+      Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
     for
       base <- Mcp.from()
       listed <- base.tool[NoArgs]("graph", "Show the project graph")(_ =>
@@ -197,7 +208,11 @@ object HistosMcp:
         "preview",
         "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. File-level staleness is unknown."
       )(args => ZIO.fromEither(previewCall(args)).flatMap(ask))
-    yield previewed
+      observed <- previewed.tool[NoArgs](
+        "observe",
+        "Read the stored compile tally. Does not compile."
+      )(_ => Stored.read(repo))
+    yield observed
 
   def previewCall(args: PreviewArgs): Either[String, Call] =
     args.operation match

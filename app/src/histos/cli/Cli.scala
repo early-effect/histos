@@ -33,6 +33,7 @@ import histos.Platform
 import java.nio.file.{Files, Path}
 
 import zio.*
+import zio.json.*
 
 enum Command:
   case Version
@@ -68,6 +69,7 @@ enum Command:
   case PreviewCleanFull
   case PreviewRun(id: TaskId, platform: Option[Platform])
   case PreviewPlugin(id: PluginTaskId)
+  case Observe
 
 enum ResolveAction:
   case Verify, Update, Check
@@ -151,7 +153,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publish [project ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | observe | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publish [project ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -233,10 +235,32 @@ object Cli:
         previewRun(repo, apiJar, id.value, platform)
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
+      case Command.Observe => observe(repo)
+
+  /** Read the stored tally. Does not load the graph. */
+  private def observe(repo: Path): UIO[Completed] =
+    histos.report.Stored
+      .read(repo)
+      .foldZIO(
+        error =>
+          Console
+            .printLineError(error.message)
+            .ignore
+            .as(
+              Completed(CliExit.TaskFailed, "", error.message, Playback.Heard)
+            ),
+        found =>
+          Console
+            .printLine(found.toJson)
+            .ignore
+            .as(
+              Completed(CliExit.Success, found.toJson, "", Playback.Heard)
+            )
+      )
 
   /** One `Call.Watch`. The server, or this process when no server is up, runs
-    * that call again after a source save. `mcp`, `bsp`, `server`, and a nested
-    * watch are usage and do not start a transport.
+    * that call again after a source save. `mcp`, `bsp`, `server`, `observe`,
+    * and a nested watch are usage and do not start a transport.
     */
   private def watch(
       repo: Path,
@@ -669,7 +693,12 @@ object Cli:
         error =>
           Completed(CliExit.PublishFailed, "", error.message, Playback.Held),
         plan =>
-          Completed(CliExit.Success, Plan.renderPublish(plan), "", Playback.Held)
+          Completed(
+            CliExit.Success,
+            Plan.renderPublish(plan),
+            "",
+            Playback.Held
+          )
       )
 
   /** Empty names skip the graph. Nothing is deleted. */
@@ -688,7 +717,12 @@ object Cli:
   private def previewCleanAll(repo: Path): UIO[Completed] =
     val plan = Plan.cleanAll(repo)
     ZIO.succeed(
-      Completed(CliExit.Success, Plan.renderClean(repo, plan), "", Playback.Held)
+      Completed(
+        CliExit.Success,
+        Plan.renderClean(repo, plan),
+        "",
+        Playback.Held
+      )
     )
 
   private def previewCleanLocal(
@@ -718,7 +752,12 @@ object Cli:
   private def previewCleanFullLocal(repo: Path): UIO[Completed] =
     val plan = Plan.cleanFull(repo)
     ZIO.succeed(
-      Completed(CliExit.Success, Plan.renderClean(repo, plan), "", Playback.Held)
+      Completed(
+        CliExit.Success,
+        Plan.renderClean(repo, plan),
+        "",
+        Playback.Held
+      )
     )
 
   private def previewRun(
@@ -739,7 +778,7 @@ object Cli:
       platform: Option[String]
   ): UIO[Completed] =
     val parsed = platform match
-      case None => Right(None)
+      case None      => Right(None)
       case Some(raw) =>
         Platform.from(raw) match
           case Left(error)  => Left(error.message)
@@ -753,7 +792,12 @@ object Cli:
             case Left(error) =>
               Completed(CliExit.TaskFailed, "", error.message, Playback.Held)
             case Right(plan) =>
-              Completed(CliExit.Success, Plan.renderRun(plan), "", Playback.Held)
+              Completed(
+                CliExit.Success,
+                Plan.renderRun(plan),
+                "",
+                Playback.Held
+              )
 
   private def assembly(
       repo: Path,

@@ -2,6 +2,7 @@ package histos.client
 
 import histos.jdk.JdkRuntime
 import histos.cli.{Cli, CliExit, Operation}
+import histos.report.{Observation, Report}
 import histos.jdk.Machine
 import histos.load.{LoadedBuild, Loader}
 import histos.plugin.PluginArgs
@@ -9,7 +10,6 @@ import histos.server.{
   Attach,
   Call,
   Calls,
-  Client,
   Decision,
   Feed,
   Fingerprint,
@@ -25,12 +25,23 @@ import histos.Platform
 
 import java.nio.file.Path
 
+import zio.json.*
 import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO, ZLayer}
 
 /** One MCP process. It sends [[Call]] while the server matches, and keeps a
   * single graph otherwise.
   */
 object Session:
+  enum SessionError:
+    case DifferentVersion
+    case Remote(error: ServerError)
+    case DidNotFinish
+
+    def message: String = this match
+      case DifferentVersion => ServerError.DifferentVersion.message
+      case Remote(error)    => error.message
+      case DidNotFinish     => "the call did not finish"
+
   final case class Held(
       fingerprint: Fingerprint,
       loaded: LoadedBuild,
@@ -56,26 +67,35 @@ object Session:
       call: Call
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
-    String,
-    String
+    SessionError,
+    Report
   ] =
     Attach.decide(repo, Cli.VersionText).flatMap {
       case Decision.DifferentVersion =>
-        drop(desk) *> ZIO.fail(ServerError.DifferentVersion.message)
+        drop(desk) *> ZIO.fail(SessionError.DifferentVersion)
       case Decision.Open(socket) =>
-        drop(desk) *> Client
-          .talk(socket, call)
-          .runCollect
+        drop(desk) *> Remote
+          .hear(socket, call)
           .foldZIO(
             {
               case ServerError.Unreachable(_) =>
                 locally(repo, apiJar, machine, desk, call)
-              case other => ZIO.fail(other.message)
+              case other => ZIO.fail(SessionError.Remote(other))
             },
-            feeds => ZIO.fromEither(spoken(feeds.toList))
+            heard =>
+              ZIO.fromEither(
+                spoken(heard.feeds.toList, heard.run, heard.observation)
+              )
           )
       case Decision.Absent =>
         locally(repo, apiJar, machine, desk, call)
+    }
+
+  /** Exit 0 is the tool value. A non-zero exit is that report's JSON text. */
+  def deliver[R](call: ZIO[R, SessionError, Report]): ZIO[R, String, Report] =
+    call.mapError(_.message).flatMap { report =>
+      if report.exit == 0 then ZIO.succeed(report)
+      else ZIO.fail(report.toJson)
     }
 
   /** `inspect`, `versions`, and a plugin task reject a platform. A main may
@@ -104,21 +124,23 @@ object Session:
         case None if task => Right(Call.Task(id, args))
         case None         => Right(Call.Run(id, None))
 
-  def spoken(feeds: List[Feed]): Either[String, String] =
-    val out = feeds.collect { case Feed.Out(text) => text }
-    val err = feeds.collect { case Feed.Err(text) => text }
+  def spoken(
+      feeds: List[Feed],
+      run: Option[String],
+      observation: Option[Observation]
+  ): Either[SessionError, Report] =
+    val out = Chunk.fromIterable(feeds.collect { case Feed.Out(text) => text })
+    val errLines = feeds.collect { case Feed.Err(text) => text }
     feeds.reverse.collectFirst { case Feed.Exit(code, message) =>
       (code, message)
     } match
-      case None               => Left("the call did not finish")
-      case Some((0, _))       => Right(out.mkString("\n"))
-      case Some((_, message)) =>
-        val shown = (out ++ err).mkString("\n")
-        Left(
-          if shown.isEmpty then message
-          else if message.isEmpty || shown == message then shown
-          else s"$shown\n$message"
-        )
+      case None                  => Left(SessionError.DidNotFinish)
+      case Some((code, message)) =>
+        val err =
+          if message.isEmpty || errLines.contains(message) then
+            Chunk.fromIterable(errLines)
+          else Chunk.fromIterable(errLines) :+ message
+        Right(Report(code, out, err, run, observation))
 
   private def locally(
       repo: Path,
@@ -128,27 +150,34 @@ object Session:
       call: Call
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
-    String,
-    String
+    SessionError,
+    Report
   ] =
     call match
       case Call.Reboot =>
         Cli
           .reboot(repo, apiJar)
           .provideSomeLayer(ZLayer.succeed(machine))
-          .flatMap: done =>
-            if done.exit == CliExit.Success then ZIO.succeed(done.out)
-            else
-              val shown = if done.err.nonEmpty then done.err else done.out
-              ZIO.fail(shown)
+          .map: done =>
+            Report(done.exit.code, lines(done.out), lines(done.err), None, None)
       case other =>
         for
           feeds <- Ref.make(Chunk.empty[Feed])
-          _ <- answer(repo, apiJar, machine, desk, other, Say.record(feeds))
-            .mapError(_.message)
+          say = Say.record(feeds)
+          _ <- answer(repo, apiJar, machine, desk, other, say).mapError(
+            SessionError.Remote(_)
+          )
           spokenFeeds <- feeds.get
-          text <- ZIO.fromEither(spoken(spokenFeeds.toList))
-        yield text
+          run <- say.run
+          observation <- say.observation
+          report <- ZIO.fromEither(
+            spoken(spokenFeeds.toList, run, observation)
+          )
+        yield report
+
+  private def lines(text: String): Chunk[String] =
+    if text.isEmpty then Chunk.empty
+    else Chunk.fromArray(text.split("\n", -1))
 
   /** Commands that do not use the adopted graph. */
   private def answer(
