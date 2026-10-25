@@ -1,6 +1,6 @@
 package histos.report
 
-import heddle.endpoint.Schema
+import heddle.endpoint.{Schema, SchemaDoc}
 import histos.clean.Products
 import histos.workspace.Workspace
 import histos.zinc.{GraphCompileError, SourceCount}
@@ -33,6 +33,44 @@ final case class Observation(
 ) derives JsonCodec,
       Schema
 
+/** Wire token is `error`, `warn`, or `info`, not a derived object. */
+enum Severity:
+  case Error, Warn, Info
+
+  def token: String = this match
+    case Error => "error"
+    case Warn  => "warn"
+    case Info  => "info"
+end Severity
+
+object Severity:
+  given JsonCodec[Severity] =
+    JsonCodec.string.transformOrFail(
+      {
+        case "error" => Right(Severity.Error)
+        case "warn"  => Right(Severity.Warn)
+        case "info"  => Right(Severity.Info)
+        case other   => Left(s"unknown severity $other")
+      },
+      _.token,
+    )
+
+  given Schema[Severity] =
+    Schema.of(SchemaDoc.Enum(Some("Severity"), List("error", "warn", "info")))
+end Severity
+
+/** The compiler message the CLI line was rendered from. Positions are displayed and 1-based, or absent. */
+final case class Diagnostic(
+    path: Option[String],
+    line: Option[Int],
+    column: Option[Int],
+    endLine: Option[Int],
+    endColumn: Option[Int],
+    severity: Severity,
+    message: String,
+) derives JsonCodec,
+      Schema
+
 /** A finished call. Transport failures are not a report. */
 final case class Report(
     exit: Int,
@@ -40,6 +78,7 @@ final case class Report(
     err: Chunk[String],
     run: Option[String],
     observation: Option[Observation],
+    diagnostics: Chunk[Diagnostic],
 ) derives JsonCodec,
       Schema
 

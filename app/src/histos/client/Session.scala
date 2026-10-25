@@ -3,7 +3,7 @@ package histos.client
 import histos.jdk.JdkRuntime
 import histos.cli.{Cli, CliExit, Operation}
 import histos.mcp.Notice
-import histos.report.{Observation, Report}
+import histos.report.{Diagnostic, Observation, Report}
 import histos.jdk.Machine
 import histos.load.{LoadedBuild, Loader}
 import histos.plugin.PluginArgs
@@ -74,7 +74,12 @@ object Session:
             },
             heard =>
               ZIO.fromEither(
-                spoken(heard.feeds.toList, heard.run, heard.observation)
+                spoken(
+                  heard.feeds.toList,
+                  heard.run,
+                  heard.observation,
+                  heard.diagnostics,
+                )
               ),
           )
       case Decision.Absent =>
@@ -116,6 +121,7 @@ object Session:
       feeds: List[Feed],
       run: Option[String],
       observation: Option[Observation],
+      diagnostics: Chunk[Diagnostic],
   ): Either[SessionError, Report] =
     val out      = Chunk.fromIterable(feeds.collect { case Feed.Out(text) => text })
     val errLines = feeds.collect { case Feed.Err(text) => text }
@@ -127,7 +133,7 @@ object Session:
         val err =
           if message.isEmpty || errLines.contains(message) then Chunk.fromIterable(errLines)
           else Chunk.fromIterable(errLines) :+ message
-        Right(Report(code, out, err, run, observation))
+        Right(Report(code, out, err, run, observation, diagnostics))
 
   private def locally(
       repo: Path,
@@ -152,7 +158,7 @@ object Session:
               ZIO
                 .foreachDiscard(err)(Notice.err)
                 .as(
-                  Report(done.exit.code, out, err, None, None)
+                  Report(done.exit.code, out, err, None, None, Chunk.empty)
                 )
       case other =>
         for
@@ -164,8 +170,9 @@ object Session:
           spokenFeeds <- feeds.get
           run         <- say.run
           observation <- say.observation
+          diagnostics <- say.diagnostics
           report      <- ZIO.fromEither(
-            spoken(spokenFeeds.toList, run, observation)
+            spoken(spokenFeeds.toList, run, observation, diagnostics)
           )
         yield report
 

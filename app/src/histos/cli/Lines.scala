@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.report.{Diagnostic, Severity}
 import histos.testrun.TestedCell
 import histos.zinc.{CompileProblem, CompileSeverity, PositionBase, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
@@ -83,24 +84,39 @@ object Lines:
   ): Option[String] =
     tally(modules, failed, files, classesWritten).map(line => s"test $line")
 
+  /** The CLI line and the structured diagnostic. Callers use both so the two cannot drift. */
+  def heard(repo: Path, problem: CompileProblem): (Diagnostic, String) =
+    val found = Diagnostic(
+      problem.path.map(path => relative(repo, path)),
+      problem.startLine.map(line => place(line, problem.base)),
+      problem.startColumn.map(column => place(column, problem.base)),
+      problem.endLine.map(line => place(line, problem.base)),
+      problem.endColumn.map(column => place(column, problem.base)),
+      severity(problem.severity),
+      problem.message,
+    )
+    (found, render(found))
+
   def diagnostic(repo: Path, problem: CompileProblem): String =
-    val severity = problem.severity match
-      case CompileSeverity.Error => "error"
-      case CompileSeverity.Warn  => "warn"
-      case CompileSeverity.Info  => "info"
-    val where = problem.path.map: path =>
-      val shown = relative(repo, path)
-      (problem.startLine, problem.startColumn) match
-        case (Some(line), Some(column)) =>
-          s"$shown:${place(line, problem.base)}:${place(column, problem.base)}"
-        case (Some(line), None) =>
-          s"$shown:${place(line, problem.base)}"
-        case (None, Some(column)) =>
-          s"$shown column ${place(column, problem.base)}"
-        case (None, None) => shown
+    heard(repo, problem)._2
+
+  private def render(found: Diagnostic): String =
+    val token = found.severity.token
+    val where = found.path.map: shown =>
+      (found.line, found.column) match
+        case (Some(line), Some(column)) => s"$shown:$line:$column"
+        case (Some(line), None)         => s"$shown:$line"
+        case (None, Some(column))       => s"$shown column $column"
+        case (None, None)               => shown
     where match
-      case Some(at) => s"$at: $severity: ${problem.message}"
-      case None     => s"$severity: ${problem.message}"
+      case Some(at) => s"$at: $token: ${found.message}"
+      case None     => s"$token: ${found.message}"
+
+  private def severity(level: CompileSeverity): Severity =
+    level match
+      case CompileSeverity.Error => Severity.Error
+      case CompileSeverity.Warn  => Severity.Warn
+      case CompileSeverity.Info  => Severity.Info
 
   def watching(path: String): String =
     s"watching $path"
