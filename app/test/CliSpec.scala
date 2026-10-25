@@ -5,6 +5,7 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.native.NativeOrigin
 import histos.load.PluginLink
 import histos.plugin.*
+import histos.publish.{LauncherPin, LauncherScript}
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.load.{
   ApiJar,
@@ -30,6 +31,7 @@ import histos.zinc.GraphCompile
 import histos.Dep
 import histos.*
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardOpenOption}
 
 import _root_.scala.jdk.CollectionConverters.*
@@ -1031,6 +1033,104 @@ object CliSpec extends ZIOSpecDefault:
             remote.err.contains("launcher pin is absent")
           )
     ,
+    test(
+      "workflow --update rewrites launcher scripts with and without a server"
+    ):
+      ZIO.scoped:
+        for
+          jar <- apiJar.mapError(_.message)
+          dir <- bare.mapError(_.message)
+          _ <- ZIO
+            .attempt(Files.writeString(dir.resolve("histos.scala"), ship))
+            .mapError(_.toString)
+          jdk <- GraphCompile.jdkHere.mapError(_.message)
+          lockPath = dir.resolve(LauncherPin.file)
+          _ <- ZIO
+            .attempt {
+              Files.createDirectories(dir.resolve(".histos"))
+              Files.writeString(
+                dir.resolve(".histos").resolve("toolchain.local"),
+                jdk.home.toAbsolutePath.normalize.toString + "\n"
+              )
+              Files.writeString(lockPath, launcherLock)
+            }
+            .mapError(_.toString)
+          stack = layers(dir)
+          loaded <- ZIO
+            .serviceWithZIO[Loader](_.load(dir, jar))
+            .provideSome[Scope](stack)
+            .mapError(_.message)
+          pin <- LauncherPin.read(dir).mapError(_.message)
+          lockBytes <- fileBytes(lockPath)
+          rendered <- ZIO
+            .fromEither(Workflow.render(loaded.graph))
+            .mapError(_.message)
+          _ <- stageFile(dir.resolve("histos"), Some("stale\n"))
+          _ <- stageFile(dir.resolve("histos.bat"), None)
+          _ <- stageFile(Workflow.path(dir), Some("stale\n"))
+          local <- Cli
+            .execute(List("workflow", "--update"), dir, jar)
+            .provideSome[Scope](stack)
+          localPosix <- fileBytes(dir.resolve("histos"))
+          localWindows <- fileBytes(dir.resolve("histos.bat"))
+          localWorkflow <- fileBytes(Workflow.path(dir))
+          localLock <- fileBytes(lockPath)
+          localPin <- LauncherPin.read(dir).mapError(_.message)
+          _ <- Daemon
+            .open(
+              dir,
+              loaded.graph,
+              jdk,
+              Cli.VersionText,
+              jar,
+              Nil,
+              ZIO.succeed(BuildNotes(false, Nil)),
+              loaded.plugins
+            )
+            .provideSome[Scope](stack)
+            .mapError:
+              case error: histos.server.ServerError => error.message
+              case error: LoadError                 => error.message
+          _ <- stageFile(dir.resolve("histos"), None)
+          _ <- stageFile(dir.resolve("histos.bat"), Some("stale\n"))
+          _ <- stageFile(Workflow.path(dir), Some("stale\n"))
+          remote <- Cli
+            .execute(List("workflow", "--update"), dir, jar)
+            .provideSome[Scope](stack)
+          remotePosix <- fileBytes(dir.resolve("histos"))
+          remoteWindows <- fileBytes(dir.resolve("histos.bat"))
+          remoteWorkflow <- fileBytes(Workflow.path(dir))
+          remoteLock <- fileBytes(lockPath)
+          remotePin <- LauncherPin.read(dir).mapError(_.message)
+        yield
+          val posix = utf8(LauncherScript.posix(pin.version))
+          val windows = utf8(LauncherScript.windows(pin.version))
+          val workflow = utf8(rendered)
+          val assembled = loaded.graph.assembly match
+            case Some(_) => true
+            case None    => false
+          assertTrue(
+            assembled,
+            pin.version == "0.0.1-SNAPSHOT",
+            pin.revision == "0.0.1-20261024.203501-20",
+            local.exit == CliExit.Success,
+            local.err.isEmpty,
+            localPosix == posix,
+            localWindows == windows,
+            localWorkflow == workflow,
+            localLock == lockBytes,
+            localPin.revision == pin.revision,
+            localPin.version == pin.version,
+            remote.exit == CliExit.Success,
+            remote.err.isEmpty,
+            remotePosix == posix,
+            remoteWindows == windows,
+            remoteWorkflow == workflow,
+            remoteLock == lockBytes,
+            remotePin.revision == pin.revision,
+            remotePin.version == pin.version
+          )
+    @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
     test("a watched contributed command runs on the server with its arguments"):
       ZIO.scoped:
         Projects(use(Listing()), module("core", Jvm)(scala"3.9.0")) match
@@ -1199,6 +1299,37 @@ object CliSpec extends ZIOSpecDefault:
         )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds)
   )
+
+  private val launcherLock =
+    """repository https://central.sonatype.com/repository/maven-snapshots
+      |version 0.0.1-SNAPSHOT
+      |revision 0.0.1-20261024.203501-20
+      |sha256 73fa77d97aca68cab6aa0ba0ba0ac779193b400bbb1d3b297b81a06bbede827b
+      |""".stripMargin
+
+  private def stageFile(path: Path, text: Option[String]): IO[String, Unit] =
+    ZIO
+      .attempt {
+        text match
+          case Some(body) =>
+            Option(path.getParent) match
+              case Some(parent) => Files.createDirectories(parent)
+              case None         => ()
+            Files.writeString(path, body)
+            ()
+          case None =>
+            Files.deleteIfExists(path)
+            ()
+      }
+      .mapError(_.toString)
+
+  private def fileBytes(path: Path): IO[String, Chunk[Byte]] =
+    ZIO
+      .attempt(Chunk.fromArray(Files.readAllBytes(path)))
+      .mapError(_.toString)
+
+  private def utf8(text: String): Chunk[Byte] =
+    Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))
 
   private val ship =
     """import histos.*
