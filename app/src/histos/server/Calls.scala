@@ -4,7 +4,7 @@ import histos.jdk.JdkRuntime
 import histos.assembly.Assemble
 import histos.cache.ContentStore
 import histos.cli.{Cli, CliExit, CompileConsole, GraphText, Lines}
-import histos.report.{Observation, Stored}
+import histos.report.{Diagnostic, Observation, Stored}
 import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestRun, TestStatus}
 import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
@@ -37,12 +37,14 @@ final class Say private (
     private val send: Message => IO[ServerError, Unit],
     private val minted: AtomicReference[Option[String]],
     private val kept: AtomicReference[Option[Observation]],
+    private val noted: AtomicReference[Chunk[Diagnostic]],
 ):
   def this(send: Message => IO[ServerError, Unit]) =
     this(
       send,
       new AtomicReference[Option[String]](None),
       new AtomicReference[Option[Observation]](None),
+      new AtomicReference[Chunk[Diagnostic]](Chunk.empty),
     )
 
   def apply(message: Message): IO[ServerError, Unit] = send(message)
@@ -61,6 +63,12 @@ final class Say private (
 
   def observation: UIO[Option[Observation]] = ZIO.succeed(kept.get)
 
+  /** The chunk read once at the end of compile or test. Cells append on the console ref, not here. */
+  def note(found: Chunk[Diagnostic]): UIO[Unit] =
+    ZIO.succeed(noted.set(found)).unit
+
+  def diagnostics: UIO[Chunk[Diagnostic]] = ZIO.succeed(noted.get)
+
   /** Inner watch iterations keep their text and do not end the session. */
   def dropExit: Say =
     new Say(
@@ -71,6 +79,7 @@ final class Say private (
       },
       minted,
       kept,
+      noted,
     )
 end Say
 
@@ -78,13 +87,15 @@ object Say:
   def frames(stream: OutputStream, socket: Path): Say =
     val minted = new AtomicReference[Option[String]](None)
     val kept   = new AtomicReference[Option[Observation]](None)
+    val noted  = new AtomicReference[Chunk[Diagnostic]](Chunk.empty)
     new Say(
       message =>
         histos.bsp.Frame
-          .write(stream, wire(message, minted.get, kept.get))
+          .write(stream, wire(message, minted.get, kept.get, noted.get))
           .mapError(_ => ServerError.Io(ServerIo.Write(socket))),
       minted,
       kept,
+      noted,
     )
 
   def record(feeds: Ref[Chunk[Feed]]): Say =
@@ -103,19 +114,23 @@ object Say:
       message: Message,
       run: Option[String],
       observation: Option[Observation],
+      diagnostics: Chunk[Diagnostic],
   ): String =
     message match
-      case Message.Exit(code, err) if run.isDefined || observation.isDefined =>
+      case Message.Exit(code, err) if run.isDefined || observation.isDefined || diagnostics.nonEmpty =>
         val base = Chunk[(String, Json)](
           "code" -> Json.Num(code),
           "err"  -> Json.Str(err),
         )
         val withRun = run.fold(base)(id => base :+ ("run" -> Json.Str(id)))
-        val fields  = observation.fold(withRun) { found =>
+        val withObs = observation.fold(withRun) { found =>
           found.toJsonAST match
             case Right(json) => withRun :+ ("observation" -> json)
             case Left(_)     => withRun
         }
+        val fields = diagnostics.toJsonAST match
+          case Right(json) => withObs :+ ("diagnostics" -> json)
+          case Left(_)     => withObs
         Json.Obj(Chunk("Exit" -> Json.Obj(fields.toList*))).toJson
       case other => other.toJson
 end Say
@@ -613,9 +628,10 @@ object Calls:
           {
             case error: GraphCompileError =>
               console.announce(text => say(Message.Out(text))) *>
-                finishObserved(
+                finishNoted(
                   repo,
                   say,
+                  console,
                   List(console.observation),
                   CliExit.CompileFailed.code,
                   Cli.compileFailure(error),
@@ -624,9 +640,10 @@ object Calls:
           },
           _ =>
             console.announce(text => say(Message.Out(text))) *>
-              finishObserved(
+              finishNoted(
                 repo,
                 say,
+                console,
                 List(console.observation),
                 CliExit.Success.code,
                 "",
@@ -898,9 +915,10 @@ object Calls:
                             compileErrors.mkString("\n"),
                           )
                         case other => Cli.testFailure(other)
-                      finishObserved(
+                      finishNoted(
                         repo,
                         say,
+                        console,
                         List(console.observation, notes.observation),
                         code,
                         message,
@@ -909,9 +927,10 @@ object Calls:
               },
               outcome =>
                 notes.announce(text => say(Message.Out(text))) *>
-                  finishObserved(
+                  finishNoted(
                     repo,
                     say,
+                    console,
                     List(console.observation, notes.observation),
                     outcome._1,
                     outcome._2,
@@ -1109,6 +1128,18 @@ object Calls:
       err: String,
   ): IO[ServerError, Unit] =
     emit(say, Message.Exit(code, err))
+
+  /** Compile and test read the console once. The exit frame then carries that chunk. */
+  private def finishNoted(
+      repo: Path,
+      say: Say,
+      console: CompileConsole.Session,
+      parts: List[UIO[Option[Observation]]],
+      code: Int,
+      err: String,
+  ): IO[ServerError, Unit] =
+    console.diagnostics.flatMap(say.note) *>
+      finishObserved(repo, say, parts, code, err)
 
   /** Compile, test, run, assembly, and publish replace the stored tally. */
   private def finishObserved(

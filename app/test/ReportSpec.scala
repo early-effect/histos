@@ -1,5 +1,6 @@
 package histos.report
 
+import heddle.endpoint.{Schema, SchemaDoc, SchemaField}
 import histos.clean.Products
 import histos.cli.{Cli, CliExit, CliParseError, CompileConsole}
 import histos.client.{Remote, Session}
@@ -42,13 +43,20 @@ object ReportSpec extends ZIOSpecDefault:
         Chunk.empty,
         Some("run-1"),
         Some(sample),
+        Chunk(warned),
       )
-      val json = report.toJson
+      val json    = report.toJson
+      val missing =
+        """{"exit":0,"out":[],"err":[],"run":null,"observation":null}"""
       assertTrue(
         json.fromJson[Report] == Right(report),
         sample.toJson.fromJson[Observation] == Right(sample),
         json.contains(""""out":["compiled","done"]"""),
         json.contains(""""run":"run-1""""),
+        json.contains(""""severity":"warn""""),
+        !json.contains(""""Warn""""),
+        missing.fromJson[Report].isLeft,
+        severityTokens,
       )
     ,
     test("spoken keeps the minted id when the transcript names another"):
@@ -56,10 +64,18 @@ object ReportSpec extends ZIOSpecDefault:
         List(Feed.Out("run other"), Feed.Exit(0, "")),
         Some("minted"),
         None,
+        Chunk.empty,
       )
       assertTrue(
         found == Right(
-          Report(0, Chunk("run other"), Chunk.empty, Some("minted"), None)
+          Report(
+            0,
+            Chunk("run other"),
+            Chunk.empty,
+            Some("minted"),
+            None,
+            Chunk.empty,
+          )
         )
       )
     ,
@@ -69,6 +85,7 @@ object ReportSpec extends ZIOSpecDefault:
         List(Feed.Out("ok"), Feed.Err(warning), Feed.Exit(0, "")),
         None,
         None,
+        Chunk(warned),
       )
       for
         report    <- ZIO.fromEither(spoken)
@@ -77,11 +94,12 @@ object ReportSpec extends ZIOSpecDefault:
         delivered.exit == 0,
         delivered.out == Chunk("ok"),
         delivered.err == Chunk(warning),
+        delivered.diagnostics == Chunk(warned),
       )
     ,
     test("a failed report keeps stderr and the tool error is that json"):
       val line   = "core/src/Core.scala:4:1: error: missing"
-      val report = Report(8, Chunk("out"), Chunk(line), None, Some(sample))
+      val report = Report(8, Chunk("out"), Chunk(line), None, Some(sample), Chunk.empty)
       Session.deliver(ZIO.succeed(report)).either.map {
         case Left(text) =>
           assertTrue(
@@ -103,7 +121,7 @@ object ReportSpec extends ZIOSpecDefault:
         id    <- held.get
         run   <- say.run
         chunk <- feeds.get
-        found = Session.spoken(chunk.toList, run, None)
+        found = Session.spoken(chunk.toList, run, None, Chunk.empty)
       yield assertTrue(
         id == run,
         (id, found) match
@@ -114,6 +132,7 @@ object ReportSpec extends ZIOSpecDefault:
               Chunk.empty,
               Some(value),
               None,
+              Chunk.empty,
             )
           case _ => false,
       )
@@ -121,16 +140,22 @@ object ReportSpec extends ZIOSpecDefault:
     test(
       "an exit frame keeps the run id and the tally, and still decodes as Exit"
     ):
-      val json  = Say.wire(Message.Exit(0, ""), Some("minted"), Some(sample))
-      val plain = Say.wire(Message.Exit(7, "boom"), None, None)
-      val out   = Say.wire(Message.Out("hi"), None, None)
+      val json  = Say.wire(Message.Exit(0, ""), Some("minted"), Some(sample), Chunk(warned))
+      val plain = Say.wire(Message.Exit(7, "boom"), None, None, Chunk.empty)
+      val out   = Say.wire(Message.Out("hi"), None, None, Chunk.empty)
       assertTrue(
         json.fromJson[Message] == Right(Message.Exit(0, "")),
+        json.contains(""""severity":"warn""""),
         Remote.event(json) == Right(
-          Remote.Event.Stop(Feed.Exit(0, ""), Some("minted"), Some(sample))
+          Remote.Event.Stop(
+            Feed.Exit(0, ""),
+            Some("minted"),
+            Some(sample),
+            Chunk(warned),
+          )
         ),
         Remote.event(plain) == Right(
-          Remote.Event.Stop(Feed.Exit(7, "boom"), None, None)
+          Remote.Event.Stop(Feed.Exit(7, "boom"), None, None, Chunk.empty)
         ),
         Remote.event(out) == Right(Remote.Event.More(Feed.Out("hi"))),
       )
@@ -182,6 +207,7 @@ object ReportSpec extends ZIOSpecDefault:
           result.exit == 0,
           result.run.isEmpty,
           result.observation.isEmpty,
+          result.diagnostics == Chunk.empty,
           result.out == Chunk(Cli.VersionText),
           result.err.isEmpty,
           seen == 0,
@@ -344,6 +370,25 @@ object ReportSpec extends ZIOSpecDefault:
             )
           )
     yield saved
+
+  private def severityTokens: Boolean =
+    summon[Schema[Diagnostic]].doc match
+      case SchemaDoc.Object(_, fields, _) =>
+        fields.exists:
+          case SchemaField("severity", SchemaDoc.Enum(_, values), _) =>
+            values == List("error", "warn", "info")
+          case _ => false
+      case _ => false
+
+  private val warned = Diagnostic(
+    Some("core/src/Core.scala"),
+    Some(4),
+    Some(2),
+    None,
+    None,
+    Severity.Warn,
+    "unused",
+  )
 
   private val sample = Observation(
     Chunk(ModuleTally("core", "3.10.0", "jvm", Some(2), Some(1), Some(4))),

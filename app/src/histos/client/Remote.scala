@@ -2,7 +2,7 @@ package histos.client
 
 import histos.bsp.Frame
 import histos.mcp.Notice
-import histos.report.Observation
+import histos.report.{Diagnostic, Observation}
 import histos.server.{Call, Feed, Message, ServerError, ServerIo}
 
 import java.io.InputStream
@@ -14,13 +14,14 @@ import zio.json.*
 import zio.json.ast.Json
 import zio.{Chunk, IO, UIO, ZIO}
 
-/** The exit frame carries the minted run id and the observation. `Client.talk` drops both.
+/** The exit frame carries the minted run id, the observation, and any diagnostics.
   */
 object Remote:
   final case class Heard(
       feeds: Chunk[Feed],
       run: Option[String],
       observation: Option[Observation],
+      diagnostics: Chunk[Diagnostic],
   )
 
   enum Event:
@@ -29,6 +30,7 @@ object Remote:
         feed: Feed,
         run: Option[String],
         observation: Option[Observation],
+        diagnostics: Chunk[Diagnostic],
     )
 
   def hear(socket: Path, call: Call): IO[ServerError, Heard] =
@@ -60,7 +62,8 @@ object Remote:
           n           <- whole(code)
           run         <- text(body.get("run"))
           observation <- tally(body.get("observation"))
-        yield Event.Stop(Feed.Exit(n, err), run, observation)
+          diagnostics <- problems(body.get("diagnostics"))
+        yield Event.Stop(Feed.Exit(n, err), run, observation, diagnostics)
       case _ => Left(ServerError.Protocol)
 
   private def whole(json: Json): Either[ServerError, Int] =
@@ -87,12 +90,23 @@ object Remote:
           case Right(found) => Right(Some(found))
           case Left(_)      => Left(ServerError.Protocol)
 
+  /** Absent on a plain exit. The report field is still required, and empty. */
+  private def problems(
+      json: Option[Json]
+  ): Either[ServerError, Chunk[Diagnostic]] =
+    json match
+      case None        => Right(Chunk.empty)
+      case Some(value) =>
+        value.toJson.fromJson[Chunk[Diagnostic]] match
+          case Right(found) => Right(found)
+          case Left(_)      => Left(ServerError.Protocol)
+
   private def message(payload: String): Either[ServerError, Event] =
     payload.fromJson[Message] match
       case Right(Message.Out(text))       => Right(Event.More(Feed.Out(text)))
       case Right(Message.Err(text))       => Right(Event.More(Feed.Err(text)))
       case Right(Message.Exit(code, err)) =>
-        Right(Event.Stop(Feed.Exit(code, err), None, None))
+        Right(Event.Stop(Feed.Exit(code, err), None, None, Chunk.empty))
       case _ => Left(ServerError.Protocol)
 
   private def collect(
@@ -107,8 +121,8 @@ object Remote:
           case Left(error)             => ZIO.fail(error)
           case Right(Event.More(feed)) =>
             note(feed) *> collect(input, socket, acc :+ feed)
-          case Right(Event.Stop(feed, run, observation)) =>
-            ZIO.succeed(Heard(acc :+ feed, run, observation))
+          case Right(Event.Stop(feed, run, observation, diagnostics)) =>
+            ZIO.succeed(Heard(acc :+ feed, run, observation, diagnostics))
     }
 
   private def note(feed: Feed): UIO[Unit] =

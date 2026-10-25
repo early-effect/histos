@@ -1,6 +1,8 @@
 package histos.cli
 
-import histos.report.{ModuleTally, Observation}
+import histos.client.{Remote, Session}
+import histos.report.{Diagnostic, ModuleTally, Observation, Report, Severity}
+import histos.server.{Feed, Message, Say}
 import histos.zinc.{
   CompileError,
   CompileFacts,
@@ -72,6 +74,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           )
           tally <- console.tally
           again <- console.tally
+          found <- console.diagnostics
         yield assertTrue(
           lines == Chunk(
             CompileConsole.Line.Out(
@@ -83,14 +86,32 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             CompileConsole.Line.Out(
               "app 3.10.0 jvm skipped unchanged files compiled: 0 skipped: 3 classes: 0"
             ),
-            CompileConsole.Line.Err(
-              "core/src/Core.scala:4:2: warn: unused"
-            ),
-            CompileConsole.Line.Err(
-              "core/src/Core.scala:4:1: error: missing"
-            ),
+            CompileConsole.Line.Err(Lines.diagnostic(repo, warn)),
+            CompileConsole.Line.Err(Lines.diagnostic(repo, dotty)),
             CompileConsole.Line.Out(
               "core 3.10.0 jvm files compiled: 2 skipped: 1 classes: 4"
+            ),
+          ),
+          Lines.diagnostic(repo, warn) == "core/src/Core.scala:4:2: warn: unused",
+          Lines.diagnostic(repo, dotty) == "core/src/Core.scala:4:1: error: missing",
+          found == Chunk(
+            Diagnostic(
+              Some("core/src/Core.scala"),
+              Some(4),
+              Some(2),
+              None,
+              None,
+              Severity.Warn,
+              "unused",
+            ),
+            Diagnostic(
+              Some("core/src/Core.scala"),
+              Some(4),
+              Some(1),
+              None,
+              None,
+              Severity.Error,
+              "missing",
             ),
           ),
           tally.contains(
@@ -316,9 +337,126 @@ object CompileConsoleSpec extends ZIOSpecDefault:
     ,
     test("an empty run spells nothing"):
       CompileConsole.open(repo).flatMap { console =>
-        console.tally.zip(console.observation).map { (tally, found) =>
-          assertTrue(tally.isEmpty, found.isEmpty)
-        }
+        for
+          tally <- console.tally
+          found <- console.observation
+          noted <- console.diagnostics
+        yield assertTrue(tally == None, found == None, noted == Chunk.empty)
+      }
+    ,
+    test("a diagnostic is the stderr line and the report fact"):
+      name("core").flatMap { core =>
+        val warn = CompileProblem(
+          "unused",
+          Some(repo.resolve("core/src/Core.scala")),
+          CompileSeverity.Warn,
+          Some(4),
+          Some(2),
+          Some(4),
+          Some(8),
+          PositionBase.Zinc,
+        )
+        val dotty = CompileProblem(
+          "missing",
+          Some(repo.resolve("core/src/Core.scala")),
+          CompileSeverity.Error,
+          Some(3),
+          Some(0),
+          Some(3),
+          Some(5),
+          PositionBase.Dotty,
+        )
+        val bare = CompileProblem(
+          "no file",
+          None,
+          CompileSeverity.Info,
+          None,
+          None,
+          None,
+          None,
+          PositionBase.Zinc,
+        )
+        val expected = Chunk(
+          Diagnostic(
+            Some("core/src/Core.scala"),
+            Some(4),
+            Some(2),
+            Some(4),
+            Some(8),
+            Severity.Warn,
+            "unused",
+          ),
+          Diagnostic(
+            Some("core/src/Core.scala"),
+            Some(4),
+            Some(1),
+            Some(4),
+            Some(6),
+            Severity.Error,
+            "missing",
+          ),
+          Diagnostic(None, None, None, None, None, Severity.Info, "no file"),
+        )
+        val problems = List(warn, dotty, bare)
+        for
+          console <- CompileConsole.open(repo)
+          feeds   <- Ref.make(Chunk.empty[Feed])
+          say = Say.record(feeds)
+          lines <- ZIO.foldLeft(problems)(Chunk.empty[CompileConsole.Line]) { (acc, problem) =>
+            speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, problem)).map(acc ++ _)
+          }
+          found       <- console.diagnostics
+          _           <- say.note(found)
+          _           <- say(Message.Exit(0, ""))
+          chunk       <- feeds.get
+          run         <- say.run
+          observation <- say.observation
+          carried     <- say.diagnostics
+          local  = Session.spoken(chunk.toList, run, observation, carried)
+          wired  = Say.wire(Message.Exit(0, ""), run, observation, carried)
+          remote = Remote.event(wired) match
+            case Right(Remote.Event.Stop(exit, id, tally, diags)) =>
+              val errs = chunk.collect { case feed @ Feed.Err(_) => feed }
+              Session.spoken(errs.toList :+ exit, id, tally, diags)
+            case _ => Left(Session.SessionError.DidNotFinish)
+          parallel <- CompileConsole.open(repo)
+          _        <- ZIO.foreachParDiscard(problems) { problem =>
+            parallel.hear(CompileFeed.Diagnostic(core, version, Platform.Jvm, problem))
+          }
+          kept <- parallel.diagnostics
+        yield
+          val report = Report(
+            0,
+            Chunk.empty,
+            Chunk(
+              Lines.diagnostic(repo, warn),
+              Lines.diagnostic(repo, dotty),
+              Lines.diagnostic(repo, bare),
+            ),
+            None,
+            None,
+            expected,
+          )
+          assertTrue(
+            lines == Chunk(
+              CompileConsole.Line.Err(Lines.diagnostic(repo, warn)),
+              CompileConsole.Line.Err(Lines.diagnostic(repo, dotty)),
+              CompileConsole.Line.Err(Lines.diagnostic(repo, bare)),
+            ),
+            Lines.diagnostic(repo, warn) == "core/src/Core.scala:4:2: warn: unused",
+            Lines.diagnostic(repo, dotty) == "core/src/Core.scala:4:1: error: missing",
+            Lines.diagnostic(repo, bare) == "info: no file",
+            found == expected,
+            carried == expected,
+            local == Right(report),
+            remote == Right(report),
+            kept.length == 3,
+            kept.exists(_.message == "unused"),
+            kept.exists(_.message == "missing"),
+            kept.exists(diag =>
+              diag.message == "no file" && diag.path == None && diag.line == None && diag.column == None
+            ),
+          )
       },
   )
 
@@ -332,6 +470,21 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           tally.skipped.isEmpty && tally.classes.isEmpty
         case _ => false) && !observation.toJson.contains(""""classes":4""") &&
       !observation.toJson.contains(""""classes":9""")
+
+  private def speak(
+      console: CompileConsole.Session,
+      say: Say,
+      feed: CompileFeed,
+  ): IO[histos.server.ServerError, Chunk[CompileConsole.Line]] =
+    console.hear(feed).flatMap { lines =>
+      CompileConsole
+        .show(
+          lines,
+          text => say(Message.Out(text)),
+          text => say(Message.Err(text)),
+        )
+        .as(lines)
+    }
 
   private def play(
       console: CompileConsole.Session,

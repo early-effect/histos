@@ -1,6 +1,6 @@
 package histos.cli
 
-import histos.report.{ModuleTally, Observation}
+import histos.report.{Diagnostic, ModuleTally, Observation}
 import histos.zinc.{CompileFacts, CompileFeed, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
 
@@ -8,7 +8,7 @@ import java.nio.file.Path
 
 import zio.{Chunk, Ref, UIO, ZIO}
 
-/** One compile's console. Parallel cells share the ref. The tally stays after it is read.
+/** One compile's console. Parallel cells share the ref. The tally and the diagnostics stay after they are read.
   */
 object CompileConsole:
   enum Line:
@@ -38,7 +38,8 @@ object CompileConsole:
             Chunk(Line.Out(Lines.compiling(module, version, platform)))
           )
         case CompileFeed.Diagnostic(_, _, _, problem) =>
-          ZIO.succeed(Chunk(Line.Err(Lines.diagnostic(repo, problem))))
+          val (found, text) = Lines.heard(repo, problem)
+          counts.update(_.add(found)).as(Chunk(Line.Err(text)))
         case CompileFeed.Done(cell) =>
           counts
             .update(
@@ -78,6 +79,10 @@ object CompileConsole:
 
     def observation: UIO[Option[Observation]] =
       counts.get.map(_.observed)
+
+    /** Every diagnostic this console heard. A later read is the same chunk. */
+    def diagnostics: UIO[Chunk[Diagnostic]] =
+      counts.get.map(_.diagnostics)
   end Session
 
   /** Test compiles. The same ref, read when the test run ends. */
@@ -137,7 +142,10 @@ object CompileConsole:
       files: Files,
       classes: Classes,
       entered: Chunk[ModuleTally],
+      diagnostics: Chunk[Diagnostic],
   ):
+    def add(found: Diagnostic): Counts =
+      copy(diagnostics = diagnostics :+ found)
     def finish(
         module: ProjectName,
         version: ScalaVersion,
@@ -229,5 +237,6 @@ object CompileConsole:
         Classes.Known(have + count)
 
   private object Counts:
-    val empty: Counts = Counts(0, 0, Files.Empty, Classes.Empty, Chunk.empty)
+    val empty: Counts =
+      Counts(0, 0, Files.Empty, Classes.Empty, Chunk.empty, Chunk.empty)
 end CompileConsole
