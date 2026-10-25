@@ -58,6 +58,18 @@ final case class Scheduler(
       .flatMap: ready =>
         run(root, ready, local, verdict)
 
+  /** The step [[execute]] runs, so a caller can read [[Running.events]]. */
+  private[schedule] def planned[E](
+      root: ActionId,
+      actions: List[Action],
+      local: (Action, String) => IO[E, String]
+  ): IO[ScheduleError[E], histos.step.HermeticStep[Any, ScheduleError[
+    E
+  ], String]] =
+    ZIO
+      .fromEither(prepare(root, actions))
+      .flatMap(ready => build(root, ready, local, Sendable.ofAction))
+
   /** Cache policy for one action. The caller already ordered its upstream
     * steps.
     */
@@ -257,12 +269,12 @@ final case class Scheduler(
     for
       remoteHit <- ScheduleAspects.remote(remote, action, digest)
       out <- remoteHit match
-        case Some(value) => ZIO.succeed(value)
+        case Some(value) => runner.note(Source.RemoteHit).as(value)
         case None        =>
           ScheduleAspects
             .cached(cache, action, digest)
             .flatMap:
-              case Some(value) => ZIO.succeed(value)
+              case Some(value) => runner.note(Source.LocalHit).as(value)
               case None        =>
                 miss(action, digest, cache, remote, local, verdict, upstream)
     yield out

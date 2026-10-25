@@ -219,6 +219,43 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         )
       }
     ,
+    test("run and assembly speak the same compile lines"):
+      named("core", "app").flatMap { (core, app) =>
+        val unchanged = cell(
+          core,
+          changed = false,
+          sources = Some(SourceCount(0, 3)),
+          classesWritten = Some(0)
+        )
+        val written = cell(
+          app,
+          changed = true,
+          sources = Some(SourceCount(2, 1)),
+          classesWritten = Some(7)
+        )
+        for
+          console <- CompileConsole.open(repo)
+          lines <- play(
+            console,
+            CompileFeed.Began(core, version, Platform.Jvm),
+            CompileFeed.Done(unchanged),
+            CompileFeed.Began(app, version, Platform.Jvm),
+            CompileFeed.Done(written)
+          )
+        yield assertTrue(
+          lines == Chunk(
+            CompileConsole.Line.Out("compiling core 3.10.0 jvm"),
+            CompileConsole.Line.Out(
+              "core 3.10.0 jvm skipped unchanged files compiled: 0 skipped: 3 classes: 0"
+            ),
+            CompileConsole.Line.Out("compiling app 3.10.0 jvm"),
+            CompileConsole.Line.Out(
+              "app 3.10.0 jvm files compiled: 2 skipped: 1 classes: 7"
+            )
+          )
+        )
+      }
+    ,
     test("an empty run spells nothing"):
       CompileConsole.open(repo).flatMap { console =>
         console.tally.map(tally => assertTrue(tally.isEmpty))

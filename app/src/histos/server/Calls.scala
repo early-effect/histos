@@ -358,7 +358,11 @@ object Calls:
                 native
               )
             yield text
-      followed
+      followed.flatMap(text =>
+        Resolve
+          .readLock(repo)
+          .map(lock => DependencyLock.withEvictions(text, lock))
+      )
     }
 
   private def generation[A](

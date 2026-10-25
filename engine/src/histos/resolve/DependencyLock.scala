@@ -104,6 +104,16 @@ object DependencyLock:
     if parts.isEmpty then ""
     else parts.mkString("\n") + "\n"
 
+  /** Printable cell and tool evictions after `text`. None leaves `text`. */
+  def withEvictions(text: String, lock: DependencyLock): String =
+    val lines =
+      (lock.cells.flatMap(_.evictions) ++ lock.tools.flatMap(_.evictions))
+        .filter(Eviction.printable)
+        .map(renderEvict)
+    if lines.isEmpty then text
+    else if text.isEmpty then lines.mkString("\n")
+    else s"$text\n${lines.mkString("\n")}"
+
   def renderCell(cell: LockedCell): String =
     val header =
       s"${cell.scope.header} ${cell.module.value} ${cell.scalaVersion.value} ${PlatformToken.render(cell.platform)}"

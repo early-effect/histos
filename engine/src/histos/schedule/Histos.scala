@@ -16,6 +16,7 @@ import zio.{
   Chunk,
   Duration,
   Exit,
+  FiberRef,
   NonEmptyChunk,
   Promise,
   Queue,
@@ -53,9 +54,16 @@ final case class Running[+E, +A](
 trait Histos:
   def start[R, E, A](goal: Step[R, E, A]): URIO[R & Scope, Running[E, A]]
 
+  /** The fiber running a step records where its value came from. */
+  private[schedule] def note(source: Source): UIO[Unit]
+
 object Histos:
   val live: ZLayer[Parallelism, Nothing, Histos] =
-    ZLayer.fromFunction(HistosLive.apply)
+    ZLayer.scoped[Parallelism]:
+      for
+        parallelism <- ZIO.service[Parallelism]
+        source <- FiberRef.make(Source.Ran)
+      yield HistosLive(parallelism, source)
 
   /** Scheduler actions carry text. The codec is the cache's text form. */
   given Stored[String] with
@@ -67,7 +75,13 @@ object Histos:
 
     def outputs(value: String): Chunk[histos.step.OutputFile] = Chunk.empty
 
-private final class HistosLive(parallelism: Parallelism) extends Histos:
+private final class HistosLive(
+    parallelism: Parallelism,
+    source: FiberRef[Source]
+) extends Histos:
+  private[schedule] def note(origin: Source): UIO[Unit] =
+    source.set(origin)
+
   def start[R, E, A](goal: Step[R, E, A]): URIO[R & Scope, Running[E, A]] =
     for
       cpu <- Semaphore.make(parallelism.cpu.max(1))
@@ -77,6 +91,7 @@ private final class HistosLive(parallelism: Parallelism) extends Histos:
       gates <- Ref.make(Map.empty[StepId, Promise[StepFailure[E], Chunk[Byte]]])
       events <- Queue.unbounded[StepEvent[E]]
       done <- Promise.make[Nothing, Outcome[E, A]]
+      _ <- ZIO.addFinalizer(events.shutdown)
       _ <- eval(goal, limits, gates, events)
         .foldCauseZIO(
           cause =>
@@ -84,7 +99,6 @@ private final class HistosLive(parallelism: Parallelism) extends Histos:
             else fail(goal, cause, done),
           value => done.succeed(Outcome.Done(value))
         )
-        .ensuring(events.shutdown)
         .forkScoped
     yield Running(ZStream.fromQueue(events), done.await)
 
@@ -160,13 +174,29 @@ private final class HistosLive(parallelism: Parallelism) extends Histos:
         events.offer(StepEvent.Stopped(skipped)).ignore *> ZIO.failCause(cause)
       ,
       value =>
-        limited(step.info, limits)(
-          step
-            .next(value)
-            .mapError(error =>
-              StepFailure.Failed(step.info.id, Cause.fail(error))
-            )
-        )
+        val started = java.lang.System.nanoTime()
+        source.set(Source.Ran) *>
+          events.offer(StepEvent.Started(step.info.id)).ignore *>
+          limited(step.info, limits)(
+            step
+              .next(value)
+              .mapError(error =>
+                StepFailure.Failed(step.info.id, Cause.fail(error))
+              )
+          ).tapBoth(
+            failure => events.offer(StepEvent.Stopped(failure)).ignore,
+            _ =>
+              source.get.flatMap: origin =>
+                events
+                  .offer(
+                    StepEvent.Finished(
+                      step.info.id,
+                      origin,
+                      Duration.fromNanos(java.lang.System.nanoTime() - started)
+                    )
+                  )
+                  .ignore
+          )
     )
 
   private def runLeaf[R, E, A](
@@ -175,7 +205,8 @@ private final class HistosLive(parallelism: Parallelism) extends Histos:
       events: Queue[StepEvent[E]]
   ): ZIO[R, StepFailure[E], A] =
     val started = java.lang.System.nanoTime()
-    events.offer(StepEvent.Started(leaf.info.id)).ignore *>
+    source.set(Source.Ran) *>
+      events.offer(StepEvent.Started(leaf.info.id)).ignore *>
       limited(leaf.info, limits)(
         leaf.run.mapError(error =>
           StepFailure.Failed(leaf.info.id, Cause.fail(error))
@@ -183,15 +214,16 @@ private final class HistosLive(parallelism: Parallelism) extends Histos:
       ).tapBoth(
         failure => events.offer(StepEvent.Stopped(failure)).ignore,
         _ =>
-          events
-            .offer(
-              StepEvent.Finished(
-                leaf.info.id,
-                Source.Ran,
-                Duration.fromNanos(java.lang.System.nanoTime() - started)
+          source.get.flatMap: origin =>
+            events
+              .offer(
+                StepEvent.Finished(
+                  leaf.info.id,
+                  origin,
+                  Duration.fromNanos(java.lang.System.nanoTime() - started)
+                )
               )
-            )
-            .ignore
+              .ignore
       )
 
   private def shared[R, E, A](

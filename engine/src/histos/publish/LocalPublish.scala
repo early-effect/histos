@@ -69,10 +69,13 @@ final case class PublishedModule(
                 shown.toString.replace('\\', '/')
     s"${group.value} $artifact $revision $place"
 
-/** Skipped aggregate members are named. The modules are what was written. */
+/** Skipped aggregate members are named. Holds are the decision's hold lines.
+  * The modules are what was written.
+  */
 final case class PublishOutput(
     skipped: List[String],
-    modules: List[PublishedModule]
+    modules: List[PublishedModule],
+    held: List[String]
 )
 
 enum LocalPublishError:
@@ -127,8 +130,8 @@ enum LocalPublishError:
     case LauncherRevision => "the launcher publishes one manual version"
 
 object LocalPublish:
-  /** Compile the published modules and write them into a local Maven directory.
-    * `<ship>-ci` is not written.
+  /** Compile the modules a decision releases and write them into a local Maven
+    * directory. A hold is reported and not written. `<ship>-ci` is not written.
     */
   def run(
       repo: Path,
@@ -142,30 +145,43 @@ object LocalPublish:
       decision <- VersionTask
         .decide(graph, repo, env)
         .mapError(LocalPublishError.Version(_))
-      plans <- ZIO.fromEither(planned(decision, graph.catalog))
-      picked <- ZIO.fromEither(choose(graph, names, plans))
-      _ <- ZIO.fromEither(publishedDependencies(graph, picked.modules))
-      group <- ZIO.fromEither(organization(graph))
-      cells <- GraphCompile
-        .run(
-          repo,
-          graph,
-          picked.modules.toList.map(_.value),
-          jdk,
-          NativeOrigin.read(env),
-          report = report
-        )
-        .mapError(LocalPublishError.Compile(_))
-      written <- publishJobs(
-        repo,
-        graph,
-        group,
-        jobs(plans, picked.modules, cells)
-      )
-    yield PublishOutput(
-      picked.skipped.map(name => LocalPublishError.NotPublished(name).message),
-      written.sortBy(line => (line.group.value, line.artifact, line.revision))
-    )
+      chosen <- ZIO.fromEither(scheme(decision, graph.catalog))
+      written <- chosen.plans match
+        case Nil =>
+          chosen.held match
+            case Nil => ZIO.fail(LocalPublishError.NothingToPublish)
+            case _   => ZIO.succeed(PublishOutput(Nil, Nil, chosen.held))
+        case plans =>
+          for
+            picked <- ZIO.fromEither(choose(graph, names, plans))
+            _ <- ZIO.fromEither(publishedDependencies(graph, picked.modules))
+            group <- ZIO.fromEither(organization(graph))
+            cells <- GraphCompile
+              .run(
+                repo,
+                graph,
+                picked.modules.toList.map(_.value),
+                jdk,
+                NativeOrigin.read(env),
+                report = report
+              )
+              .mapError(LocalPublishError.Compile(_))
+            modules <- publishJobs(
+              repo,
+              graph,
+              group,
+              jobs(plans, picked.modules, cells)
+            )
+          yield PublishOutput(
+            picked.skipped.map(name =>
+              LocalPublishError.NotPublished(name).message
+            ),
+            modules.sortBy(line =>
+              (line.group.value, line.artifact, line.revision)
+            ),
+            chosen.held
+          )
+    yield written
 
   private def publishJobs(
       repo: Path,
@@ -218,15 +234,17 @@ object LocalPublish:
       members: List[ProjectName]
   )
 
+  private final case class Scheme(plans: List[Planned], held: List[String])
+
   private final case class Job(
       revision: Revision,
       cell: histos.zinc.CompiledCell
   )
 
-  private def planned(
+  private def scheme(
       decision: Decision,
       catalog: histos.version.Catalog
-  ): Either[LocalPublishError, List[Planned]] =
+  ): Either[LocalPublishError, Scheme] =
     decision match
       case Decision.NoCatalog => Left(LocalPublishError.NothingToPublish)
       case Decision.Develop(_, line :: _) =>
@@ -242,25 +260,34 @@ object LocalPublish:
                   seen :+ Planned(Revision.Manual(line.version), mods.toList)
                 )
           .flatMap(present)
+          .map(plans => Scheme(plans, Nil))
       case Decision.Publish(_, lines) =>
         lines.toList
-          .foldLeft[Either[LocalPublishError, List[Planned]]](Right(Nil)):
-            (acc, line) =>
-              acc.flatMap: seen =>
-                line.action match
-                  case PublishAction.Hold(_, _)          => Right(seen)
-                  case PublishAction.Release(version, _) =>
-                    members(catalog, line.ship).map(mods =>
-                      seen :+ Planned(Revision.Release(version), mods.toList)
+          .foldLeft[Either[LocalPublishError, (List[Planned], List[String])]](
+            Right((Nil, Nil))
+          ): (acc, line) =>
+            acc.flatMap: (seen, held) =>
+              line.action match
+                case PublishAction.Hold(_, _) =>
+                  Right((seen, held :+ Decision.rendered(line)))
+                case PublishAction.Release(version, _) =>
+                  members(catalog, line.ship).map(mods =>
+                    (
+                      seen :+ Planned(Revision.Release(version), mods.toList),
+                      held
                     )
-                  case PublishAction.Snapshot(_, stored, pointer) =>
-                    members(catalog, line.ship).map: mods =>
-                      val names = mods.toList
-                      val storedPlan = Planned(Revision.Snapshot(stored), names)
-                      val extra = pointer.toList
-                        .map(value => Planned(Revision.Pointer(value), names))
-                      seen ++ (storedPlan :: extra)
-          .flatMap(present)
+                  )
+                case PublishAction.Snapshot(_, stored, pointer) =>
+                  members(catalog, line.ship).map: mods =>
+                    val names = mods.toList
+                    val storedPlan = Planned(Revision.Snapshot(stored), names)
+                    val extra = pointer.toList
+                      .map(value => Planned(Revision.Pointer(value), names))
+                    (seen ++ (storedPlan :: extra), held)
+          .flatMap: (plans, held) =>
+            if plans.isEmpty && held.isEmpty then
+              Left(LocalPublishError.NothingToPublish)
+            else Right(Scheme(plans, held))
 
   private def present(
       plans: List[Planned]

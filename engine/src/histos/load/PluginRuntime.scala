@@ -70,6 +70,12 @@ trait PluginRuntime:
   def links: List[PluginLink]
 
 object PluginRuntime:
+  /** First line of a cache hit. The stored body is the rest of the text. */
+  val CacheHit: String = "histos-cache hit"
+
+  def cacheHit(body: String): String =
+    s"$CacheHit\n$body"
+
   private[histos] def loaded(
       repo: Path,
       graph: ProjectGraph,
@@ -402,10 +408,10 @@ object PluginRuntime:
       taskOf(id) match
         case Some(task) if task.outputs.nonEmpty =>
           PluginOutput(
-            PluginManifest.text(stored),
+            cacheHit(PluginManifest.text(stored)),
             task.outputs.map(output => WrittenFile(output.name, output.path))
           )
-        case _ => PluginOutput(stored, Nil)
+        case _ => PluginOutput(cacheHit(stored), Nil)
 
     private def tasks: List[(PluginTaskId, DeclaredTask)] =
       graph.plugins.flatMap: plugin =>

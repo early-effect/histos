@@ -15,7 +15,7 @@ object PublishRun:
       val root = where match
         case PublishWhere.Directory(path) => Some(path)
         case PublishWhere.Snapshots(_, _) => None
-      output.skipped ++ output.modules.map(_.rendered(root))
+      output.skipped ++ output.held ++ output.modules.map(_.rendered(root))
 
   def run(
       repo: Path,
