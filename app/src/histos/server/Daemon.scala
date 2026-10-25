@@ -6,6 +6,7 @@ import histos.cli.{CliExit, Operation}
 import histos.jdk.Sha256
 import histos.load.HeaderScan
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.task.RunId
 import histos.toolchain.Runtimes
 import histos.ProjectGraph
 
@@ -482,7 +483,7 @@ object Daemon:
           spliced <- Ref.make(Set.empty[Bsp.Session])
           warm = Warm(live, graphs, reloading, spliced)
           permit <- Semaphore.make(1)
-          runs <- Ref.make(Map.empty[String, Fiber[ServerError, Unit]])
+          runs <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
           _ <- listening
             .succeed(
               Record.Written(
@@ -562,7 +563,7 @@ object Daemon:
       life: Lifecycle,
       warm: Warm,
       permit: Semaphore,
-      runs: Ref[Map[String, Fiber[ServerError, Unit]]],
+      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
       machine: histos.jdk.Machine,
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes]
@@ -619,7 +620,7 @@ object Daemon:
       life: Lifecycle,
       warm: Warm,
       permit: Semaphore,
-      runs: Ref[Map[String, Fiber[ServerError, Unit]]],
+      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
       machine: histos.jdk.Machine,
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes]
@@ -755,51 +756,65 @@ object Daemon:
                                 case Call.CleanFull =>
                                   Calls.cleanFull(repo, out)
                                 case Call.Compile(projects) =>
-                                  Calls.compile(
-                                    repo,
-                                    held.graph,
-                                    projects,
-                                    jdk,
-                                    machine,
-                                    out
+                                  Calls.tracked(runs, out)(
+                                    permit.withPermit(
+                                      Calls.compile(
+                                        repo,
+                                        held.graph,
+                                        projects,
+                                        jdk,
+                                        machine,
+                                        out
+                                      )
+                                    )
                                   )
                                 case Call.Test(projects, patterns, quick) =>
-                                  Calls.test(
-                                    repo,
-                                    held.graph,
-                                    projects,
-                                    patterns,
-                                    quick,
-                                    jdk,
-                                    machine,
-                                    out
+                                  Calls.tracked(runs, out)(
+                                    permit.withPermit(
+                                      Calls.test(
+                                        repo,
+                                        held.graph,
+                                        projects,
+                                        patterns,
+                                        quick,
+                                        jdk,
+                                        machine,
+                                        out
+                                      )
+                                    )
                                   )
                                 case Call.Publish(repository, projects) =>
-                                  Calls.publish(
-                                    repo,
-                                    held.graph,
-                                    machine,
-                                    jdk,
-                                    repository,
-                                    projects,
-                                    out
+                                  Calls.tracked(runs, out)(
+                                    permit.withPermit(
+                                      Calls.publish(
+                                        repo,
+                                        held.graph,
+                                        machine,
+                                        jdk,
+                                        repository,
+                                        projects,
+                                        out
+                                      )
+                                    )
                                   )
                                 case Call.Graph =>
                                   Calls.graph(held.graph, held.plugins, out)
                                 case Call.Run(id, platform) =>
-                                  Calls.tracked(runs, id, out)(
-                                    Calls.run(
-                                      repo,
-                                      held.graph,
-                                      jdk,
-                                      machine,
-                                      id,
-                                      platform,
-                                      out
+                                  Calls.tracked(runs, out)(
+                                    permit.withPermit(
+                                      Calls.run(
+                                        repo,
+                                        held.graph,
+                                        jdk,
+                                        machine,
+                                        id,
+                                        platform,
+                                        out
+                                      )
                                     )
                                   )
                                 case Call.Task(id, taskArgs) =>
-                                  Calls.tracked(runs, id, out)(
+                                  Calls.tracked(runs, out)(
                                     Calls.task(
                                       repo,
                                       held.graph,
@@ -825,13 +840,17 @@ object Daemon:
                                 case Call.Workflow(action) =>
                                   Calls.workflow(repo, held.graph, action, out)
                                 case Call.Assembly(destination) =>
-                                  Calls.assembly(
-                                    repo,
-                                    held.graph,
-                                    jdk,
-                                    machine,
-                                    destination,
-                                    out
+                                  Calls.tracked(runs, out)(
+                                    permit.withPermit(
+                                      Calls.assembly(
+                                        repo,
+                                        held.graph,
+                                        jdk,
+                                        machine,
+                                        destination,
+                                        out
+                                      )
+                                    )
                                   )
                                 case Call.Reload =>
                                   out(Message.Exit(CliExit.Success.code, ""))
@@ -988,10 +1007,8 @@ object Daemon:
       body: ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.Publish(_, _) |
-          Call.Assembly(_) | Call.Run(_, _) | Call.Clean(_) | Call.CleanFull =>
-        permit.withPermit(body)
-      case _ => body
+      case Call.Clean(_) | Call.CleanFull => permit.withPermit(body)
+      case _                              => body
 
   private def reboot(
       repo: Path,

@@ -38,7 +38,7 @@ import histos.workflow.{Workflow, WorkflowAction}
 import histos.{Platform, ProjectGraph}
 
 import zio.json.*
-import zio.{Chunk, Exit, Fiber, IO, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, ZIO, ZLayer}
 
 import java.io.OutputStream
 import java.nio.file.{Files, Path}
@@ -730,48 +730,63 @@ object Calls:
     }
 
   def cancel(
-      runs: Ref[Map[String, Fiber[ServerError, Unit]]],
+      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
       id: String,
       say: Say
   ): IO[ServerError, Unit] =
     RunId.from(id) match
       case Left(error)  => done(say, CliExit.TaskFailed.code, error.message)
       case Right(runId) =>
-        runs.modify(map => (map.get(id), map - id)).flatMap {
-          case Some(fiber) =>
-            fiber.interrupt *> told(say, "cancelled") *> done(
-              say,
-              CliExit.Success.code,
-              ""
-            )
+        runs.modify(map => (map.get(runId), map - runId)).flatMap {
           case None =>
             done(
               say,
               CliExit.TaskFailed.code,
               TaskError.UnknownRun(runId).message
             )
+          case Some(fiber) =>
+            fiber.interrupt.flatMap { exit =>
+              if exit.isInterrupted then
+                told(say, "cancelled") *> done(say, CliExit.Success.code, "")
+              else
+                done(
+                  say,
+                  CliExit.TaskFailed.code,
+                  TaskError.UnknownRun(runId).message
+                )
+            }
         }
 
+  /** The fiber is in the map before `run <id>` is sent, and the body starts
+    * after that line. A second call gets its own id.
+    */
   def tracked[R](
-      runs: Ref[Map[String, Fiber[ServerError, Unit]]],
-      id: String,
+      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
       say: Say
   )(body: ZIO[R, ServerError, Unit]): ZIO[R, ServerError, Unit] =
-    body.fork.flatMap { fiber =>
-      runs.update(_ + (id -> fiber)) *>
-        fiber.join.foldCauseZIO(
-          cause =>
-            runs.update(_ - id) *>
-              (if cause.isInterruptedOnly then
-                 done(say, CliExit.Interrupted.code, "")
-               else
-                 cause.failureOrCause match
-                   case Left(error) => ZIO.fail(error)
-                   case Right(_)    =>
-                     done(say, CliExit.TaskFailed.code, "the run failed")),
-          _ => runs.update(_ - id)
-        )
-    }
+    for
+      uuid <- Random.nextUUID
+      runId = RunId.trusted(uuid.toString)
+      go <- Promise.make[Nothing, Unit]
+      fiber <- (go.await *> body).fork
+      _ <- runs.update(_ + (runId -> fiber))
+      _ <- told(say, s"run ${runId.value}").tapError(_ =>
+        runs.update(_ - runId) *> fiber.interrupt
+      )
+      _ <- go.succeed(())
+      _ <- fiber.join.foldCauseZIO(
+        cause =>
+          runs.update(_ - runId) *>
+            (if cause.isInterruptedOnly then
+               done(say, CliExit.Interrupted.code, "")
+             else
+               cause.failureOrCause match
+                 case Left(error) => ZIO.fail(error)
+                 case Right(_)    =>
+                   done(say, CliExit.TaskFailed.code, "the run failed")),
+        _ => runs.update(_ - runId)
+      )
+    yield ()
 
   private def plugin(
       plugins: PluginRuntime,
