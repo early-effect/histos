@@ -4,6 +4,7 @@ import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.Opcodes.*
 import org.objectweb.asm.Type
 import org.objectweb.asm.tree.*
+import org.objectweb.asm.{ClassTooLargeException, LimitExceededException, MethodTooLargeException}
 
 import scala.jdk.CollectionConverters.*
 
@@ -97,35 +98,29 @@ object LazyVals:
       handles: Map[(String, String), Handle],
   ): Either[LazyValError, Unit] =
     val real    = method.instructions.iterator.asScala.filter(_.getOpcode >= 0).toList
-    val matched = (real
-      .sliding(6, 1)
-      .toList
-      .filter(window => window.size == 6 && (offsetInit(window).nonEmpty || objCas(window))) ++
-      real.sliding(8, 1).toList.filter(window => window.size == 8 && waiting(window)))
+    val matched =
+      real.sliding(6, 1).toList.filter(window => offsetInit(window).nonEmpty || objCas(window)) ++
+        real.sliding(8, 1).toList.filter(waiting)
     val covered   = matched.flatten.toSet
     val uncovered = real.filter(insn => callsOld(insn) && !covered.contains(insn))
-    if uncovered.nonEmpty then Left(LazyValError.Unhandled(entry, s"${method.name} still calls Unsafe lazy vals"))
+    if uncovered.nonEmpty then Left(LazyValError.StillCalls(entry, method.name))
     else
       matched.foldLeft[Either[LazyValError, Unit]](Right(())): (acc, window) =>
         acc.flatMap: _ =>
           if offsetInit(window).nonEmpty then
             replaceInit(className, method, window)
             Right(())
-          else if window.size == 8 then replaceCas(entry, method, window, handles, invoke = 7)
-          else replaceCas(entry, method, window, handles, invoke = 5)
+          else replaceCas(entry, method, window, handles)
 
   private def replaceInit(className: String, method: MethodNode, window: List[AbstractInsnNode]): Unit =
-    window(2) match
-      case name: LdcInsnNode =>
-        val storage = name.cst match
-          case text: String => text
-          case _            => ""
-        window(5) match
-          case put: FieldInsnNode =>
+    window match
+      case List(module, classLiteral, fieldName, declared, offset, put) =>
+        (ldcString(fieldName), putStaticLong(put)) match
+          case (Some(storage), Some(field)) =>
             val handle = s"$storage$$lzyHandle"
             val list   = method.instructions
             list.set(
-              window(0),
+              module,
               new MethodInsnNode(
                 INVOKESTATIC,
                 "java/lang/invoke/MethodHandles",
@@ -134,7 +129,7 @@ object LazyVals:
                 false,
               ),
             )
-            declaredClass(window(1)) match
+            declaredClass(classLiteral) match
               case Some(owner) if owner != className =>
                 val swap     = new InsnNode(SWAP)
                 val lookupIn = new MethodInsnNode(
@@ -144,13 +139,13 @@ object LazyVals:
                   "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;",
                   false,
                 )
-                list.insert(window(1), swap)
+                list.insert(classLiteral, swap)
                 list.insert(swap, lookupIn)
                 list.insert(lookupIn, new LdcInsnNode(Type.getObjectType(owner)))
               case _ => ()
-            list.set(window(3), new LdcInsnNode(Type.getType("Ljava/lang/Object;")))
+            list.set(declared, new LdcInsnNode(Type.getType("Ljava/lang/Object;")))
             list.set(
-              window(4),
+              offset,
               new MethodInsnNode(
                 INVOKEVIRTUAL,
                 "java/lang/invoke/MethodHandles$Lookup",
@@ -159,7 +154,7 @@ object LazyVals:
                 false,
               ),
             )
-            list.set(window(5), new FieldInsnNode(PUTSTATIC, put.owner, handle, VarHandle))
+            list.set(put, new FieldInsnNode(PUTSTATIC, field.owner, handle, VarHandle))
           case _ => ()
       case _ => ()
 
@@ -176,22 +171,34 @@ object LazyVals:
       method: MethodNode,
       window: List[AbstractInsnNode],
       handles: Map[(String, String), Handle],
-      invoke: Int,
   ): Either[LazyValError, Unit] =
-    window(2) match
-      case offset: FieldInsnNode =>
-        handles.get((offset.owner, offset.name)) match
-          case None         => Left(LazyValError.Unhandled(entry, s"${offset.owner}.${offset.name} has no VarHandle"))
-          case Some(handle) =>
-            val list = method.instructions
-            list.set(window.head, new FieldInsnNode(GETSTATIC, handle.owner, handle.handle, VarHandle))
-            list.remove(offset)
-            list.set(
-              window(invoke),
-              new MethodInsnNode(INVOKEVIRTUAL, "java/lang/invoke/VarHandle", "compareAndSet", CompareAndSet, false),
-            )
-            Right(())
-      case _ => Left(LazyValError.Unhandled(entry, s"${method.name} has an unexpected offset load"))
+    val shaped = window match
+      case List(module, _, offset, _, _, call)       => Some((module, offset, call))
+      case List(module, _, offset, _, _, _, _, call) => Some((module, offset, call))
+      case _                                         => None
+    shaped match
+      case Some((module, offset, call)) =>
+        getStaticLong(offset) match
+          case None        => Left(LazyValError.OffsetShape(entry, method.name))
+          case Some(field) =>
+            handles.get((field.owner, field.name)) match
+              case None         => Left(LazyValError.MissingHandle(entry, field.owner, field.name))
+              case Some(handle) =>
+                val list = method.instructions
+                list.set(module, new FieldInsnNode(GETSTATIC, handle.owner, handle.handle, VarHandle))
+                list.remove(field)
+                list.set(
+                  call,
+                  new MethodInsnNode(
+                    INVOKEVIRTUAL,
+                    "java/lang/invoke/VarHandle",
+                    "compareAndSet",
+                    CompareAndSet,
+                    false,
+                  ),
+                )
+                Right(())
+      case None => Left(LazyValError.OffsetShape(entry, method.name))
 
   private def frames(
       entry: String,
@@ -205,7 +212,24 @@ object LazyVals:
           common(loader, type1, type2)
       node.accept(writer)
       Right(writer.toByteArray)
-    catch case error: Exception => Left(LazyValError.Unhandled(entry, error.getMessage))
+    catch
+      case tooBig: MethodTooLargeException =>
+        Left(
+          LazyValError.Frames(
+            entry,
+            LazyValFrame.MethodTooLarge(
+              tooBig.getClassName,
+              tooBig.getMethodName,
+              tooBig.getDescriptor,
+              tooBig.getCodeSize,
+            ),
+          )
+        )
+      case tooBig: ClassTooLargeException =>
+        Left(LazyValError.Frames(entry, LazyValFrame.ClassTooLarge(tooBig.getClassName, tooBig.getConstantPoolCount)))
+      case _: LimitExceededException    => Left(LazyValError.Frames(entry, LazyValFrame.Limit))
+      case _: IllegalArgumentException  => Left(LazyValError.Frames(entry, LazyValFrame.Rejected))
+      case _: IndexOutOfBoundsException => Left(LazyValError.Frames(entry, LazyValFrame.Bounds))
 
   private def common(loader: ClassLoader, type1: String, type2: String): String =
     try
@@ -224,28 +248,28 @@ object LazyVals:
       case List(module, classLiteral, fieldName, declared, offset, put)
           if staticModule(module) &&
             ldcType(classLiteral) &&
-            ldcString(fieldName) &&
             method(declared, "java/lang/Class", "getDeclaredField", DeclaredField) &&
-            method(offset, LazyValsClass, "getOffsetStatic", OffsetStatic) &&
-            putStaticLong(put) =>
-        val name  = fieldName.asInstanceOf[LdcInsnNode].cst.toString
-        val field = put.asInstanceOf[FieldInsnNode]
-        if name.contains("$lzy") then Some(Handle(field.owner, field.name, s"$name$$lzyHandle"))
-        else None
+            method(offset, LazyValsClass, "getOffsetStatic", OffsetStatic) =>
+        (ldcString(fieldName), putStaticLong(put)) match
+          case (Some(name), Some(field)) if name.contains("$lzy") =>
+            Some(Handle(field.owner, field.name, s"$name$$lzyHandle"))
+          case _ => None
       case _ => None
 
   private def waiting(window: List[AbstractInsnNode]): Boolean =
-    window.size == 8 &&
-      staticModule(window(0)) &&
-      getStaticLong(window(2)) &&
-      window(4).getOpcode == NEW &&
-      window(5).getOpcode == DUP &&
-      method(window(7), LazyValsClass, "objCAS", ObjCas)
+    window match
+      case List(module, _, offset, _, created, duplicated, _, call) =>
+        staticModule(module) &&
+        getStaticLong(offset).isDefined &&
+        created.getOpcode == NEW &&
+        duplicated.getOpcode == DUP &&
+        method(call, LazyValsClass, "objCAS", ObjCas)
+      case _ => false
 
   private def objCas(window: List[AbstractInsnNode]): Boolean =
     window match
       case List(module, _, offset, _, _, call) =>
-        staticModule(module) && getStaticLong(offset) && method(call, LazyValsClass, "objCAS", ObjCas)
+        staticModule(module) && getStaticLong(offset).isDefined && method(call, LazyValsClass, "objCAS", ObjCas)
       case _ => false
 
   private def callsOld(insn: AbstractInsnNode): Boolean =
@@ -257,25 +281,32 @@ object LazyVals:
   private def staticModule(insn: AbstractInsnNode): Boolean =
     field(insn, GETSTATIC, LazyValsClass, "MODULE$", LazyValsType)
 
-  private def getStaticLong(insn: AbstractInsnNode): Boolean =
+  private def getStaticLong(insn: AbstractInsnNode): Option[FieldInsnNode] =
     insn match
-      case field: FieldInsnNode => field.getOpcode == GETSTATIC && field.desc == "J" && field.name.startsWith("OFFSET$")
-      case _                    => false
+      case field: FieldInsnNode
+          if field.getOpcode == GETSTATIC && field.desc == "J" && field.name.startsWith("OFFSET$") =>
+        Some(field)
+      case _ => None
 
-  private def putStaticLong(insn: AbstractInsnNode): Boolean =
+  private def putStaticLong(insn: AbstractInsnNode): Option[FieldInsnNode] =
     insn match
-      case field: FieldInsnNode => field.getOpcode == PUTSTATIC && field.desc == "J" && field.name.startsWith("OFFSET$")
-      case _                    => false
+      case field: FieldInsnNode
+          if field.getOpcode == PUTSTATIC && field.desc == "J" && field.name.startsWith("OFFSET$") =>
+        Some(field)
+      case _ => None
 
   private def ldcType(insn: AbstractInsnNode): Boolean =
     insn match
       case ldc: LdcInsnNode => ldc.cst.isInstanceOf[Type]
       case _                => false
 
-  private def ldcString(insn: AbstractInsnNode): Boolean =
+  private def ldcString(insn: AbstractInsnNode): Option[String] =
     insn match
-      case ldc: LdcInsnNode => ldc.cst.isInstanceOf[String]
-      case _                => false
+      case ldc: LdcInsnNode =>
+        ldc.cst match
+          case text: String => Some(text)
+          case _            => None
+      case _ => None
 
   private def field(insn: AbstractInsnNode, opcode: Int, owner: String, name: String, desc: String): Boolean =
     insn match
@@ -289,9 +320,32 @@ object LazyVals:
       case _                    => false
 end LazyVals
 
-enum LazyValError:
-  case Unhandled(entry: String, detail: String)
+enum LazyValFrame:
+  case Rejected
+  case MethodTooLarge(owner: String, method: String, descriptor: String, codeSize: Int)
+  case ClassTooLarge(owner: String, pool: Int)
+  case Limit
+  case Bounds
 
   def message: String = this match
-    case Unhandled(entry, detail) => s"$entry still uses Unsafe lazy vals: $detail"
+    case Rejected                                            => "the bytecode was rejected"
+    case MethodTooLarge(owner, method, descriptor, codeSize) =>
+      s"$owner.$method $descriptor is $codeSize bytes"
+    case ClassTooLarge(owner, pool) => s"$owner has $pool constant pool entries"
+    case Limit                      => "an ASM limit was exceeded"
+    case Bounds                     => "the frame merge was out of bounds"
+end LazyValFrame
+
+enum LazyValError:
+  case StillCalls(entry: String, method: String)
+  case MissingHandle(entry: String, owner: String, offset: String)
+  case OffsetShape(entry: String, method: String)
+  case Frames(entry: String, failure: LazyValFrame)
+
+  def message: String = this match
+    case StillCalls(entry, method)           => s"$entry still calls Unsafe lazy vals from $method"
+    case MissingHandle(entry, owner, offset) =>
+      s"$entry has no VarHandle for $owner.$offset"
+    case OffsetShape(entry, method) => s"$entry cannot rewrite the offset load in $method"
+    case Frames(entry, failure)     => s"$entry could not compute stack map frames: ${failure.message}"
 end LazyValError
