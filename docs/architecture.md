@@ -98,7 +98,19 @@ One operation must use one lock generation through compile, test, classpath, lin
 
 Both resolve flags together and both workflow flags together are usage errors. Bare `launcher` is rejected. Launcher update errors exit 5. Header plugins are planned against Central before the loaded graph's custom resolvers exist. Low-level independent lock writers remain in Resolve; they do not define the CLI's staged transaction. See [Grammar](../app/src/histos/cli/Grammar.scala), [Cli](../app/src/histos/cli/Cli.scala), [Calls](../app/src/histos/server/Calls.scala), and [ToolCellsSpec](../engine/test/ToolCellsSpec.scala).
 
+That table is the no-server CLI. A matching server runs `Call.Resolve` and `Call.Workflow` instead. Update then solves against the adopted graph and does not load the staged plugin generation. Workflow then checks or rewrites workflow files and does not touch launcher scripts (A27). The M6 operation is the table's behavior on both paths.
+
 Exact fetches can need a network on a cold cache. “Offline generation” means rendering does not refresh metadata, not that a cold build load needs no bytes. Empty graphs still have mandatory build-compiler tools to verify.
+
+### Preview
+
+Compile, test, publish, clean, cleanFull, and run cannot be asked what they will do. [`graph`](../app/src/histos/cli/GraphText.scala) prints the static shape, not the effect of a command. `toolchain` prints the runtime that was accepted. Zinc staleness is known only after a compile writes class files and `inc.zip`. There is no stored duration. M6 owns a work plan that writes nothing and does not invent a clock time (A34).
+
+Three commands already look like previews and are not that plan:
+
+- `resolve --check` does not write `.histos/dependencies.lock`. It re-solves module and plugin cells, materializes locked tool bytes (that materialize can download), and prints one line per module cell.
+- `workflow --check`, with no server, compares rendered workflow files and launcher scripts to what is committed. It prints no job list and no diff. With a matching server it checks workflow files only (A27).
+- `cache clean --dry-run` lists content-store entries older than 30 days and outside every project's keep set, as `would remove <digest>` or `would remove nothing`. It does not delete them, does not sweep temps, and does not include launcher jars. It is not a preview of `clean` or `cleanFull`.
 
 ## Compile, link, test, and run
 
@@ -108,6 +120,8 @@ Compilation uses Zinc for Scala 3 and 2.13. Main outputs are `.histos/classes/<m
 
 A cell Zinc leaves unchanged prints `<module> <scala> <platform> skipped` and nothing else. A cell it compiles prints `compiling <module> <scala> <platform>` and then the class count. When those cells finish, one line spells the tally: `total: N skipped: N compiled: N`. Test compiles use the same words, with `test` on the unit line and `test` in front of the tally. A failed cell adds `failed: N` to that line.
 
+Those counts are cells: one per module, Scala version, and platform. `compiling` is printed from [`CompileFeed.Done`](../engine/src/histos/zinc/GraphCompile.scala), after Zinc returns, not from `Began`. The unlabeled number on the compiled line is [`CompiledCell.classFiles`](../engine/src/histos/zinc/GraphCompile.scala): every `.class`, `.sjsir`, and `.nir` currently in the classes directory, including files left from earlier rounds. [`JvmCompile`](../engine/src/histos/zinc/JvmCompile.scala) counts that directory after Zinc returns. That number is not the class files this round produced, and it is not part of the tally. [`CompileConsole`](../app/src/histos/cli/CompileConsole.scala) clears the tally when it is read, and nothing is kept to query. `test skipped` is an unchanged test compile; the suites still run. A testQuick hit is a different line, `<module> <scala> <platform> <suite> cached` (A32). `run` and assembly discard compile feeds, so the compile they perform is silent (A31). M6 observation replaces the cell tally with source files, class files produced this round, and modules. Until a class count is honest, it is omitted rather than filled with this census (A29).
+
 [`ToolInput`](../engine/src/histos/resolve/ToolInput.scala) fingerprints a selected request and its verified artifact identities/hashes. Compile keys, compiler pool keys, and Zinc setup fingerprints use different relevant subsets, not an undifferentiated whole-lock list. Selected platform revision and runtime identity must change the appropriate key; unrelated tools must not. Run steps retain their selected verified inputs; [SelectedToolsSpec](../engine/test/SelectedToolsSpec.scala) covers production relevance. Absolute source paths remain a separate portability problem (P16).
 
 Js runs through Node, Jsdom, or Firefox/Chekhov. Node is selected once within an operation and passed to child launches, including Playwright's Node path. Native application Scala version selects application libraries; `native.bridgeScala` selects the JVM linker bridge compiler. Native origin comes from the captured Machine and reaches compilation/linking. Clang is still an installed tool. Generated Scala bridge sources and forced link-cache recreation remain P1/P2, even though their jar dependencies are locked.
@@ -116,7 +130,7 @@ Tests run in child processes, not inside the engine. The default is ZIO Test; an
 
 `testOnly` uses fully qualified suite patterns and fails when none match. A passing suite stores its fingerprint whichever command ran it. `testQuick` skips a suite whose stored fingerprint still matches. `test` always runs. [`TestContext`](../engine/src/histos/testrun/TestContext.scala) verifies selected compilation/execution tools and runtime inputs before a cached success counts. Its regressions cover cached success and corrupt selected tools; upstream jars, flags, synchronous bytecode scanning and persistence errors remain P6/P15.
 
-`run <module> [jvm|js|native]` starts its named main. A multiplatform module requires a platform. `run inspect`, `run versions`, and `run <plugin>/<task>` use the task registry. Watch reruns a command after source changes. See [GraphCompileSpec](../engine/test/GraphCompileSpec.scala), [ZincSpec](../engine/test/ZincSpec.scala), [ModuleTestSpec](../engine/test/ModuleTestSpec.scala), and [ProgramSpec](../engine/test/ProgramSpec.scala).
+`run <module> [jvm|js|native]` starts its named main. A multiplatform module requires a platform. `run inspect`, `run versions`, and `run <plugin>/<task>` use the task registry. Watch reruns a command after source changes and does not print the paths that woke it (A33). See [GraphCompileSpec](../engine/test/GraphCompileSpec.scala), [ZincSpec](../engine/test/ZincSpec.scala), [ModuleTestSpec](../engine/test/ModuleTestSpec.scala), and [ProgramSpec](../engine/test/ProgramSpec.scala).
 
 ## JDK and Node floors
 
@@ -159,9 +173,9 @@ The CLI is one-shot; `server` opts into a warm process. A matching server receiv
 
 Runtime selection is distinct from graph reload. Plugin, attached and BSP request paths select fresh operation runtimes; regression tests verify override/home/content changes affect the next operation while its captured values remain stable (L13). This is not yet one Build service or proven session compiler pooling.
 
-Metals uses the `.bsp/histos.json` connection file and BSP 2.2 over stdio, spliced onto a live server when present. Main/test/build-file targets, sources/dependency sources, scalac options, compile diagnostics, discovered mains/suites and JVM environments are implemented. Js/Native targets require `.histos/bsp-platforms`. Changed targets notify every spliced session. Requests remain serial and BSP ignores cancellation (A10). Classpath/URI/allow-list work still belongs outside thin handlers (A6/A7).
+Metals uses the `.bsp/histos.json` connection file and BSP 2.2 over stdio, spliced onto a live server when present. Main/test/build-file targets, sources/dependency sources, scalac options, compile diagnostics, discovered mains/suites and JVM environments are implemented. Js/Native targets require `.histos/bsp-platforms`. Changed targets notify every spliced session. Requests remain serial and BSP ignores cancellation (A10). Classpath/URI/allow-list work still belongs outside thin handlers (A6/A7). BSP is the editor protocol. Agent parity does not add publish, clean, or cancel to it.
 
-MCP exposes graph, compile, test, publish, run, cancel and toolchain through heddle-mcp. It attaches to a matching server or holds a local graph. Results remain CLI text strings; typed report/fault schemas, multiplexed progress and cancellation by run id are M6 work. Plugin Call.Task arguments are still lost through server/MCP (A25).
+MCP registers seven tools on heddle-mcp: `graph`, `run`, `cancel`, `compile`, `test`, `publish`, and `toolchain` ([`HistosMcp`](../app/src/histos/mcp/HistosMcp.scala)). `test` is one tool. Patterns and `quick` cover `testOnly` and `testQuick`. Each tool returns one string after the call finishes. [`Session.spoken`](../app/src/histos/client/Session.scala) joins stdout and, on success, drops stderr. The daemon [`Call`](../app/src/histos/server/Daemon.scala) set is larger. Assembly, clean, cleanFull, resolve, and workflow already run on the local desk. Reload and reboot are calls the CLI sends and that desk refuses as not a tool. Version, cache path, cache list, cache clean, launcher update, and watch have no `Call`. Cancel exists on MCP and the server, has no CLI verb, and is keyed by task id (A8, A26). `Call.Task` carries the id only, so plugin arguments are dropped on the server and on MCP (A25). Typed reports, streamed events, run-id cancellation, file and class and module tallies, and a preview that writes nothing are the M6 target. They are not what these tools do today.
 
 ## Publish, cache, and CI
 

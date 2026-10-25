@@ -153,7 +153,7 @@ The grammar is closed before loading. Only an unknown root outside [`CommandName
 
 [`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch uses the same dispatch. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
 
-`run <plugin>/<task>` uses empty arguments and refuses a platform token. Contributed commands supply their parsed arguments in process. Call.Task currently carries only the id, so server/MCP runs receive empty arguments (A25). Cancellation through those surfaces still has task-id/serial-request limitations (A8/A23). No plugin-specific MCP tool or BSP task target exists.
+`run <plugin>/<task>` uses empty arguments and refuses a platform token. Contributed commands supply their parsed arguments in process, and only when no server is attached. `Call.Task` carries the id only, so an attached CLI, the server, and MCP all run `PluginArgs.empty` (A25). A contributed command is an operation in the M6 parity set, arguments included. Registering another MCP tool that sends today's `Call.Task` would not preserve them. Cancellation through those surfaces still has task-id and serial-request limitations (A8/A23). No plugin-specific MCP tool or BSP task target exists.
 
 Graph text shows plugin binary/source provenance, task seal/needs/declared paths, commands and jobs. Server fingerprints the build, dependency lock and path-plugin files and reloads changed generations. Resource leasing, typed surface reports and current request runtime/lock proof are separate A20/L11/L13 concerns, not plugin-cache guarantees.
 
