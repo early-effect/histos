@@ -220,7 +220,15 @@ object PublishSpec extends ZIOSpecDefault:
                   histos.ToolFixture.resolver
                 )
               cells <- GraphCompile
-                .run(work, graph, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  work,
+                  graph,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
                 .provideSomeLayer[histos.resolve.LockedTools](
                   histos.ToolFixture.resolver
                 )

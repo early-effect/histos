@@ -163,7 +163,8 @@ object LocalPublish:
                 picked.modules.toList.map(_.value),
                 jdk,
                 NativeOrigin.read(env),
-                report = report
+                None,
+                report
               )
               .mapError(LocalPublishError.Compile(_))
             modules <- publishJobs(

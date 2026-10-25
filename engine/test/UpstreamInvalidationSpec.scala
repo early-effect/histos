@@ -68,7 +68,15 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
             .flatMap(ZIO.fromEither(_))
           first <- histos.ToolFixture
             .at(root, built)(
-              GraphCompile.run(root, built, Nil, jdk, NativeOrigin.Central)
+              GraphCompile.run(
+                root,
+                built,
+                Nil,
+                jdk,
+                NativeOrigin.Central,
+                None,
+                _ => ZIO.unit
+              )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -91,7 +99,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
           second <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .console(root, built, Nil, jdk, NativeOrigin.Central)
+                .console(root, built, Nil, jdk, NativeOrigin.Central, None)
                 .runCollect
             )
             .either
