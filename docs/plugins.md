@@ -175,7 +175,7 @@ A plugin author can call run with ZIO Test and [`PluginFixture`](../api/src/hist
 | Compile/Same-only dependencies, separate declared kind, no public typed phase Steps | M7 G16 |
 | String notes/settings and registration/version error flattening | M7 G6/G10/G14/G15 |
 | Empty compiled fixture values and missing complete examples | M7 G17/T14 |
-| Serial cancel, no progress stream, and string reports | M6 A1/A2/A8/A23 |
+| No progress stream. Run, assembly, and publish print a diagnostic and leave the report chunk empty | M6 A1/A2 |
 | No live remote cache configuration, output bytes never transferred | D10 and future remote cache |
 | No binary compatibility promise before 1.0; Api linking refused | Deliberate prerelease contract |
 
