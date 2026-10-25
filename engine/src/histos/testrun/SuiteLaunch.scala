@@ -1,6 +1,6 @@
 package histos.testrun
 
-import histos.jdk.JdkRuntime
+import histos.jdk.{JdkRuntime, Sha256}
 import histos.js.{JsRun, JsRunRequest}
 
 import histos.resolve.LockedTools
@@ -541,6 +541,8 @@ private[testrun] object SuiteLaunch:
       )
     )
 
+  private final case class Stamped(name: String, suite: SuiteName, digest: Option[Sha256])
+
   /** A passing run stores each suite's fingerprint. `quick` skips a suite whose stored fingerprint still matches. `run`
     * receives the suites that still have to run. The class tree is read once and reused for every suite.
     */
@@ -570,9 +572,12 @@ private[testrun] object SuiteLaunch:
         .flatMap: tree =>
           ZIO
             .foreach(suites): name =>
-              ZIO
-                .fromEither(SuiteStamp.digest(name, tree, stampedFrom))
-                .mapBoth(ModuleTestError.Stamp(_), found => name -> found)
+              for
+                suite <- suiteOf(name)
+                found <- ZIO
+                  .fromEither(SuiteStamp.digest(name, tree, stampedFrom))
+                  .mapError(ModuleTestError.Stamp(_))
+              yield Stamped(name, suite, found)
             .flatMap: stamped =>
               if !quick then
                 run(suites)
@@ -580,23 +585,24 @@ private[testrun] object SuiteLaunch:
               else
                 ZIO
                   .foldLeft(stamped)(
-                    (List.empty[String], List.empty[(String, Option[String])])
+                    (List.empty[String], List.empty[Stamped])
                   ):
-                    case ((cached, dirty), (name, Some(digest))) =>
+                    case ((cached, dirty), row @ Stamped(name, suite, Some(digest))) =>
                       QuickRecord
                         .hit(
                           repo,
                           cell.module,
                           cell.version,
                           cell.platform,
-                          name,
+                          suite,
                           digest,
                         )
+                        .mapError(ModuleTestError.Record(_))
                         .map: hit =>
                           if hit then (name :: cached, dirty)
-                          else (cached, (name, Some(digest)) :: dirty)
-                    case ((cached, dirty), (name, None)) =>
-                      ZIO.succeed((cached, (name, None) :: dirty))
+                          else (cached, row :: dirty)
+                    case ((cached, dirty), row) =>
+                      ZIO.succeed((cached, row :: dirty))
                   .flatMap: (cached, dirty) =>
                     val shown = ZStream.fromIterable(
                       cached.sorted.map(name =>
@@ -610,7 +616,7 @@ private[testrun] object SuiteLaunch:
                     )
                     if dirty.isEmpty then ZIO.succeed(shown)
                     else
-                      run(dirty.map(_._1)).map: stream =>
+                      run(dirty.map(_.name)).map: stream =>
                         shown ++ stream.tap(keep(repo, cell, dirty, _))
 
   /** Locked jars, upstream compile jars, the accepted JDK, and scalac flags. [[TestContext]] hashes are appended inside
@@ -630,10 +636,15 @@ private[testrun] object SuiteLaunch:
 
   /** The fingerprint is the digest of the classes that ran. A pass stores it. A failure deletes it.
     */
+  private def suiteOf(raw: String): IO[ModuleTestError, SuiteName] =
+    ZIO
+      .fromEither(SuiteName.from(raw))
+      .mapError(error => ModuleTestError.Record(QuickError.Suite(error)))
+
   private def keep(
       repo: Path,
       cell: CompiledCell,
-      stamped: List[(String, Option[String])],
+      stamped: List[Stamped],
       event: TestFeed,
   ): IO[ModuleTestError, Unit] =
     event match
@@ -641,27 +652,27 @@ private[testrun] object SuiteLaunch:
         done.status match
           case TestStatus.Passed =>
             ZIO.foreachDiscard(stamped):
-              case (name, Some(digest)) =>
+              case Stamped(_, suite, Some(digest)) =>
                 QuickRecord
                   .save(
                     repo,
                     cell.module,
                     cell.version,
                     cell.platform,
-                    name,
+                    suite,
                     digest,
                   )
                   .mapError(ModuleTestError.Record(_))
               case _ => ZIO.unit
           case TestStatus.Failed(_) =>
-            ZIO.foreachDiscard(stamped): (name, _) =>
+            ZIO.foreachDiscard(stamped): row =>
               QuickRecord
                 .clear(
                   repo,
                   cell.module,
                   cell.version,
                   cell.platform,
-                  name,
+                  row.suite,
                 )
                 .mapError(ModuleTestError.Record(_))
           case _ => ZIO.unit
