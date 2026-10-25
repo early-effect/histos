@@ -3,7 +3,7 @@ package histos.mcp
 import heddle.LinePipe
 import heddle.endpoint.{Schema, SchemaJson}
 import heddle.mcp.{Mcp, McpBuildError, ToolError}
-import heddle.mcp.protocol.Structured
+import heddle.mcp.protocol.{Structured, ToolName}
 import histos.cache.ContentStore
 import histos.cli.Cli
 import histos.client.Session
@@ -89,6 +89,60 @@ object HistosMcp:
       _ <- mcp.stdio(pipe).mapError(_ => ServeError.Stdio)
     yield ()
 
+  /** Names passed to `tool`. `tools/list` must equal this set. */
+  val toolNames: Set[ToolName] = Names.all
+
+  private object Names:
+    inline val graph          = "graph"
+    inline val run            = "run"
+    inline val cancel         = "cancel"
+    inline val compile        = "compile"
+    inline val test           = "test"
+    inline val publish        = "publish"
+    inline val toolchain      = "toolchain"
+    inline val version        = "version"
+    inline val assembly       = "assembly"
+    inline val clean          = "clean"
+    inline val cleanFull      = "cleanFull"
+    inline val resolve        = "resolve"
+    inline val workflow       = "workflow"
+    inline val reload         = "reload"
+    inline val reboot         = "reboot"
+    inline val cachePath      = "cachePath"
+    inline val cacheList      = "cacheList"
+    inline val cacheClean     = "cacheClean"
+    inline val launcherUpdate = "launcherUpdate"
+    inline val watch          = "watch"
+    inline val preview        = "preview"
+    inline val observe        = "observe"
+
+    val all: Set[ToolName] =
+      Set(
+        ToolName(graph),
+        ToolName(run),
+        ToolName(cancel),
+        ToolName(compile),
+        ToolName(test),
+        ToolName(publish),
+        ToolName(toolchain),
+        ToolName(version),
+        ToolName(assembly),
+        ToolName(clean),
+        ToolName(cleanFull),
+        ToolName(resolve),
+        ToolName(workflow),
+        ToolName(reload),
+        ToolName(reboot),
+        ToolName(cachePath),
+        ToolName(cacheList),
+        ToolName(cacheClean),
+        ToolName(launcherUpdate),
+        ToolName(watch),
+        ToolName(preview),
+        ToolName(observe),
+      )
+  end Names
+
   def tools(
       repo: Path,
       apiJar: Path,
@@ -101,9 +155,9 @@ object HistosMcp:
     val ask = (call: Call) => Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
     for
       base    <- Mcp.from()
-      listed  <- base.tool[NoArgs]("graph", "Show the project graph")(_ => ask(Call.Graph))
+      listed  <- base.tool[NoArgs](Names.graph, "Show the project graph")(_ => ask(Call.Graph))
       running <- listed.tool[RunArgs](
-        "run",
+        Names.run,
         "Run a main, or inspect, versions, or a plugin task. platform is jvm, js, or native. texts and flags are the plugin arguments.",
       )(args =>
         ZIO
@@ -112,78 +166,78 @@ object HistosMcp:
           )
           .flatMap(ask)
       )
-      stopped   <- running.tool[CancelArgs]("cancel", "Cancel a run")(args => ask(Call.Cancel(args.id)))
+      stopped   <- running.tool[CancelArgs](Names.cancel, "Cancel a run")(args => ask(Call.Cancel(args.id)))
       compiling <- stopped.tool[CompileArgs](
-        "compile",
+        Names.compile,
         "Compile modules. An empty list compiles every module. An aggregate name compiles its modules, on every platform each module builds.",
       )(args => ask(Call.Compile(args.projects)))
       testing <- compiling.tool[TestArgs](
-        "test",
+        Names.test,
         "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs, the same as histos testOnly. Each module runs once per Scala version and platform it builds.",
       )(args => ask(Call.Test(args.projects, args.patterns, args.quick)))
       publishing <- testing.tool[PublishArgs](
-        "publish",
+        Names.publish,
         "Publish modules into a local Maven directory. An empty list publishes the ship members.",
       )(args => ask(Call.Publish(args.repository, args.projects)))
       toolchain <- publishing.tool[NoArgs](
-        "toolchain",
+        Names.toolchain,
         "Show the JDK decision, and the Node or clang decision when the build needs them",
       )(_ => ask(Call.Toolchain))
-      version  <- toolchain.tool[NoArgs]("version", "Show the histos version")(_ => ask(Call.Version))
+      version  <- toolchain.tool[NoArgs](Names.version, "Show the histos version")(_ => ask(Call.Version))
       assembly <- version.tool[AssemblyArgs](
-        "assembly",
+        Names.assembly,
         "Build the assembly jar. destination is optional.",
       )(args => ask(Call.Assembly(args.destination)))
       cleaning <- assembly.tool[CleanArgs](
-        "clean",
+        Names.clean,
         "Delete build products. An empty list wipes every product root and does not load the graph.",
       )(args => ask(Call.Clean(args.projects)))
       cleaned <- cleaning.tool[NoArgs](
-        "cleanFull",
+        Names.cleanFull,
         "Wipe build products, then forget this repo in the content store.",
       )(_ => ask(Call.CleanFull))
       resolving <- cleaned.tool[ResolveArgs](
-        "resolve",
+        Names.resolve,
         "verify, update, or check dependencies. update stages plugin cells, loads that generation, then commits once.",
       )(args => ask(Call.Resolve(args.action)))
       flowing <- resolving.tool[WorkflowArgs](
-        "workflow",
+        Names.workflow,
         "check or update workflow files and launcher scripts. The launcher pin is not advanced.",
       )(args => ask(Call.Workflow(args.action)))
       reloading <- flowing.tool[NoArgs](
-        "reload",
+        Names.reload,
         "Reload the build the running server holds.",
       )(_ => ask(Call.Reload))
       rebooting <- reloading.tool[NoArgs](
-        "reboot",
+        Names.reboot,
         "Replace a running server, or start one.",
       )(_ => ask(Call.Reboot))
       cachePath <- rebooting.tool[NoArgs](
-        "cachePath",
+        Names.cachePath,
         "Print the content store path.",
       )(_ => ask(Call.CachePath))
       cacheList <- cachePath.tool[NoArgs](
-        "cacheList",
+        Names.cacheList,
         "List content store digests and sizes.",
       )(_ => ask(Call.CacheList))
       cacheClean <- cacheList.tool[CacheCleanArgs](
-        "cacheClean",
+        Names.cacheClean,
         "Remove old content store entries. dryRun lists them and deletes nothing.",
       )(args => ask(Call.CacheClean(args.dryRun)))
       launcher <- cacheClean.tool[NoArgs](
-        "launcherUpdate",
+        Names.launcherUpdate,
         "Update the launcher pin. Does not load the graph.",
       )(_ => ask(Call.LauncherUpdate))
       ready <- launcher.tool[WatchArgs](
-        "watch",
+        Names.watch,
         "Run a command again after a source save. args are the histos command, without the tilde.",
       )(args => Cli.watchCall(args.args, repo, apiJar).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
-        "preview",
+        Names.preview,
         "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. File-level staleness is unknown.",
       )(args => ZIO.fromEither(previewCall(args)).flatMap(ask))
       observed <- previewed.tool[NoArgs](
-        "observe",
+        Names.observe,
         "Read the stored compile tally. Does not compile.",
       )(_ => Stored.read(repo))
     yield observed

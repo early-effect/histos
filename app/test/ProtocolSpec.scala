@@ -1,7 +1,7 @@
 package histos.mcp
 
 import heddle.LinePipe
-import heddle.mcp.protocol.{CallToolResult, ClientRequest, ContentBlock, Message, RequestId, ToolName}
+import heddle.mcp.protocol.{CallToolResult, ClientRequest, ContentBlock, ListToolsResult, Message, RequestId, ToolName}
 import histos.workspace.{IoFailure, IoFault}
 import histos.cli.{Cli, CliExit, CliParseError, Command}
 import histos.client.Session
@@ -149,6 +149,27 @@ object ProtocolSpec extends ZIOSpecDefault:
         mcp <- histos.cli.Cli.parse(List("mcp"))
         acp <- histos.cli.Cli.parse(List("acp")).flip
       yield assertTrue(mcp == Command.Mcp, acp == CliParseError.UnknownCommand)
+    ,
+    test("tools/list is the registered set, on one page"):
+      ZIO.scoped:
+        for
+          jar              <- apiJar
+          dir              <- repo
+          (client, server) <- LinePipe.connected
+          done             <- HistosMcp
+            .serve(dir, jar, server, machine(dir))
+            .provideSome[Scope](loading(dir))
+            .forkScoped
+          _      <- client.writeLine(discover(1))
+          _      <- client.writeLine(listTools(2))
+          _      <- client.close
+          _      <- done.join
+          heard  <- readUntil(client, Set(2))
+          listed <- ZIO.fromEither(resultAs[ListToolsResult](heard, 2))
+        yield assertTrue(
+          listed.tools.map(_.name).toSet == HistosMcp.toolNames,
+          listed.nextCursor.isEmpty,
+        )
     ,
     test("graph and run answer over an in-memory pipe"):
       ZIO.scoped:
@@ -388,6 +409,9 @@ object ProtocolSpec extends ZIOSpecDefault:
   private def discover(id: Long): String =
     Message.stateless(RequestId.Num(id), ClientRequest.Discover).json.toJson
 
+  private def listTools(id: Long): String =
+    Message.stateless(RequestId.Num(id), ClientRequest.ListTools(None)).json.toJson
+
   private def invoke[A: JsonEncoder](id: Long, name: ToolName, args: A): IO[WireFault, String] =
     ZIO
       .fromEither(arguments(args))
@@ -487,9 +511,12 @@ object ProtocolSpec extends ZIOSpecDefault:
     tool(messages, id).flatMap(result => ZIO.fromEither(reportOf(result)))
 
   private def callResult(messages: List[Message], id: Long): Either[WireFault, CallToolResult] =
+    resultAs(messages, id)
+
+  private def resultAs[A: JsonDecoder](messages: List[Message], id: Long): Either[WireFault, A] =
     messages.collectFirst { case Message.Result(RequestId.Num(n), body) if n == id => body } match
       case None       => Left(WireFault.Missing(id))
-      case Some(body) => body.as[CallToolResult].left.map(WireFault.BadResult(id, _))
+      case Some(body) => body.as[A].left.map(WireFault.BadResult(id, _))
 
   private def reportOf(result: CallToolResult): Either[WireFault, Report] =
     result.structuredContent match
