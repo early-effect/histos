@@ -12,7 +12,15 @@ import zio.{Chunk, IO, ZIO}
   * `eitherResult` is that library's runner. Callers see [[ResolveError]]. The
   * Scala 2.13 toolchain is fetched separately and is not a user dependency.
   */
-private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
+private[resolve] enum CacheMode:
+  case Revalidate
+  case Retain
+  case Offline
+
+private[resolve] final class CoursierResolve(
+    cache: Path,
+    mode: CacheMode = CacheMode.Revalidate
+) extends Resolve:
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
     Resolve.prepare(cell) *> {
       if cell.dependencies.isEmpty then ZIO.succeed(Classpath(Nil, Nil))
@@ -84,8 +92,10 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
     yield Classpath(artifacts, evictions(result.resolution))
 
   def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
+    val policy =
+      if mode == CacheMode.Offline then CacheUse.Offline else CacheUse.Locked
     for
-      base <- session(CacheUse.Locked)
+      base <- session(policy)
       single = dependency(
         artifact.organization,
         artifact.name,
@@ -186,10 +196,19 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
     yield Classpath(hashed, evictions(result.resolution))
 
   private enum CacheUse:
-    case Solve, Locked
+    case Solve, Locked, Offline
+
+  /** Retain uses a file already in the cache and fetches only a missing one.
+    * Offline never fetches. Revalidate is Coursier's default, which also
+    * rechecks changing artifacts.
+    */
+  private val opened: CacheUse = mode match
+    case CacheMode.Revalidate => CacheUse.Solve
+    case CacheMode.Retain     => CacheUse.Locked
+    case CacheMode.Offline    => CacheUse.Offline
 
   private def session(
-      use: CacheUse = CacheUse.Solve
+      use: CacheUse = opened
   ): IO[ResolveError, coursier.Fetch[coursier.util.Task]] =
     ZIO
       .attemptBlocking {
@@ -198,13 +217,17 @@ private[resolve] final class CoursierResolve(cache: Path) extends Resolve:
           .withLocation(cache.toString)
           .copy(allowCacheSubstitution = false)
         val files = use match
-          case CacheUse.Solve  => configured
-          case CacheUse.Locked =>
+          case CacheUse.Solve   => configured
+          case CacheUse.Locked  =>
             configured.copy(cachePolicies =
               Seq(
                 coursier.cache.CachePolicy.LocalOnly,
                 coursier.cache.CachePolicy.FetchMissing
               )
+            )
+          case CacheUse.Offline =>
+            configured.copy(cachePolicies =
+              Seq(coursier.cache.CachePolicy.LocalOnly)
             )
         coursier
           .Fetch(files)(using coursier.util.Task.sync)

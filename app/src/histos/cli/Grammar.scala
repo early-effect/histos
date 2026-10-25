@@ -29,6 +29,8 @@ object Grammar:
     case TestOnly(args: List[String])
     case TestQuick(args: List[String])
     case Compile(projects: List[String])
+    case Clean(projects: List[String])
+    case CleanFull(projects: List[String])
     case Assembly(destination: Option[String])
     case Publish(repository: String, projects: List[String])
     case CacheClean(dryRun: Boolean)
@@ -54,6 +56,12 @@ object Grammar:
   )
   private val compile = CliCommand("compile", Args.text("project").*).map(
     names => Wire.Compile(names.toList)
+  )
+  private val cleanBuild = CliCommand("clean", Args.text("project").*).map(
+    names => Wire.Clean(names.toList)
+  )
+  private val cleanFull = CliCommand("cleanFull", Args.text("project").*).map(
+    names => Wire.CleanFull(names.toList)
   )
   private val assembly =
     CliCommand("assembly", Args.text("destination").atMost(1)).map(paths =>
@@ -91,7 +99,7 @@ object Grammar:
     CliCommand("launcher", Options.boolean("update")).map(Wire.Launcher(_))
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot
+      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a
@@ -159,7 +167,15 @@ object Grammar:
           .map { case (modules, patterns) =>
             Command.TestQuick(modules, patterns)
           }
-      case Wire.Compile(projects)     => ZIO.succeed(Command.Compile(projects))
+      case Wire.Compile(projects) => ZIO.succeed(Command.Compile(projects))
+      case Wire.Clean(projects)   =>
+        projects.find(_.startsWith("-")) match
+          case Some(flag) =>
+            ZIO.fail(CliParseError.Pattern(s"clean does not take $flag"))
+          case None => ZIO.succeed(Command.Clean(projects))
+      case Wire.CleanFull(Nil) => ZIO.succeed(Command.CleanFull)
+      case Wire.CleanFull(_)   =>
+        ZIO.fail(CliParseError.Pattern("cleanFull does not take a project"))
       case Wire.Assembly(destination) =>
         ZIO.succeed(Command.Assembly(destination))
       case Wire.Publish(repository, projects) =>

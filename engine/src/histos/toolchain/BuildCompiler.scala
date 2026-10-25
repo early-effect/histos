@@ -59,19 +59,7 @@ object BuildCompiler:
       hash <-
         if regular then
           RuntimeFiles.sha256(location).mapError(ResolveError.Io(_))
-        else
-          RuntimeFiles
-            .identity(location)
-            .map(identity =>
-              Sha256.of(
-                Chunk.fromArray(
-                  Runtimes
-                    .identityToken(identity)
-                    .getBytes(StandardCharsets.UTF_8)
-                )
-              )
-            )
-            .mapError(ResolveError.Io(_))
+        else RuntimeFiles.fingerprint(location).mapError(ResolveError.Io(_))
     yield hash
 
 final case class CompilerIdentity(

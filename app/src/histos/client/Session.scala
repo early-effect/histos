@@ -120,11 +120,28 @@ object Session:
     String,
     String
   ] =
+    call match
+      case Call.Clean(Nil) =>
+        finishLocal(say => histos.server.Calls.wipe(repo, say))
+      case Call.CleanFull =>
+        finishLocal(say => histos.server.Calls.cleanFull(repo, say))
+      case _ =>
+        for
+          loaded <- fresh(repo, apiJar, desk)
+          feeds <- Ref.make(Chunk.empty[Feed])
+          _ <- dispatch(repo, loaded, machine, desk, call, Say.record(feeds))
+            .mapError(_.message)
+          spokenFeeds <- feeds.get
+          text <- ZIO.fromEither(spoken(spokenFeeds.toList))
+        yield text
+
+  /** No graph load. A broken `histos.scala` cannot block the wipe. */
+  private def finishLocal(
+      run: Say => ZIO[histos.cache.ContentStore, ServerError, Unit]
+  ): ZIO[histos.cache.ContentStore, String, String] =
     for
-      loaded <- fresh(repo, apiJar, desk)
       feeds <- Ref.make(Chunk.empty[Feed])
-      _ <- dispatch(repo, loaded, machine, desk, call, Say.record(feeds))
-        .mapError(_.message)
+      _ <- run(Say.record(feeds)).mapError(_.message)
       spokenFeeds <- feeds.get
       text <- ZIO.fromEither(spoken(spokenFeeds.toList))
     yield text
@@ -197,6 +214,10 @@ object Session:
         histos.server.Calls.resolve(repo, graph, action, say, machine.native)
       case Call.Workflow(action) =>
         histos.server.Calls.workflow(repo, graph, action, say)
+      case Call.Clean(projects) =>
+        histos.server.Calls.clean(repo, graph, projects, say)
+      case Call.CleanFull =>
+        histos.server.Calls.cleanFull(repo, say)
       case Call.Reload | Call.Reboot | Call.Bsp =>
         say(histos.server.Message.Exit(CliExit.Usage.code, "not a tool"))
 

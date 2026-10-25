@@ -93,6 +93,8 @@ enum Call derives JsonCodec:
   case Resolve(action: String)
   case Workflow(action: String)
   case Assembly(destination: Option[String])
+  case Clean(projects: List[String])
+  case CleanFull
   case Reload
   case Reboot
   case Bsp
@@ -614,146 +616,189 @@ object Daemon:
           payload.fromJson[Call].toOption match
             case None        => ZIO.unit
             case Some(asked) =>
-              val loaded =
-                asked match
-                  case Call.Reload => force(repo, apiJar, version, bound, warm)
-                  case _           => adopt(repo, apiJar, version, bound, warm)
-              loaded.flatMap:
-                case Left(message) =>
-                  write(output, wire(Message.Ready), bound) *> write(
-                    output,
-                    wire(
-                      Message.Exit(histos.cli.CliExit.LoadFailed.code, message)
-                    ),
-                    bound
-                  )
-                case Right(held) =>
-                  val say = Say.frames(output, bound)
-                  val ran = histos.jdk.Machine
-                    .load(repo)
-                    .mapError(ServerError.Toolchain(_))
-                    .flatMap: commandMachine =>
-                      histos.zinc.GraphCompile
-                        .jdk(commandMachine)
-                        .mapError(ServerError.Compiled(_))
-                        .flatMap: selectedJdk =>
-                          val machine = commandMachine
-                          val jdk = selectedJdk
-                          asked match
-                            case Call.Compile(projects) =>
-                              Calls.compile(
-                                repo,
-                                held.graph,
-                                projects,
-                                jdk,
-                                machine,
-                                say
-                              )
-                            case Call.Test(projects, patterns, quick) =>
-                              Calls.test(
-                                repo,
-                                held.graph,
-                                projects,
-                                patterns,
-                                quick,
-                                jdk,
-                                machine,
-                                say
-                              )
-                            case Call.Publish(repository, projects) =>
-                              Calls.publish(
-                                repo,
-                                held.graph,
-                                machine,
-                                jdk,
-                                repository,
-                                projects,
-                                say
-                              )
-                            case Call.Graph =>
-                              Calls.graph(held.graph, held.plugins, say)
-                            case Call.Run(id, platform) =>
-                              Calls.tracked(runs, id, say)(
-                                Calls.run(
+              def adopted =
+                val loaded =
+                  asked match
+                    case Call.Reload => force(repo, apiJar, version, bound, warm)
+                    case _           => adopt(repo, apiJar, version, bound, warm)
+                loaded.flatMap:
+                  case Left(message) =>
+                    write(output, wire(Message.Ready), bound) *> write(
+                      output,
+                      wire(
+                        Message.Exit(histos.cli.CliExit.LoadFailed.code, message)
+                      ),
+                      bound
+                    )
+                  case Right(held) =>
+                    val say = Say.frames(output, bound)
+                    val ran = histos.jdk.Machine
+                      .load(repo)
+                      .mapError(ServerError.Toolchain(_))
+                      .flatMap: commandMachine =>
+                        histos.zinc.GraphCompile
+                          .jdk(commandMachine)
+                          .mapError(ServerError.Compiled(_))
+                          .flatMap: selectedJdk =>
+                            val machine = commandMachine
+                            val jdk = selectedJdk
+                            asked match
+                              // Handled before `adopted`. Present so this match stays exhaustive.
+                              case Call.Clean(Nil) =>
+                                Calls.wipe(repo, say)
+                              case Call.Clean(projects) =>
+                                Calls.clean(repo, held.graph, projects, say)
+                              case Call.CleanFull =>
+                                Calls.cleanFull(repo, say)
+                              case Call.Compile(projects) =>
+                                Calls.compile(
+                                  repo,
+                                  held.graph,
+                                  projects,
+                                  jdk,
+                                  machine,
+                                  say
+                                )
+                              case Call.Test(projects, patterns, quick) =>
+                                Calls.test(
+                                  repo,
+                                  held.graph,
+                                  projects,
+                                  patterns,
+                                  quick,
+                                  jdk,
+                                  machine,
+                                  say
+                                )
+                              case Call.Publish(repository, projects) =>
+                                Calls.publish(
+                                  repo,
+                                  held.graph,
+                                  machine,
+                                  jdk,
+                                  repository,
+                                  projects,
+                                  say
+                                )
+                              case Call.Graph =>
+                                Calls.graph(held.graph, held.plugins, say)
+                              case Call.Run(id, platform) =>
+                                Calls.tracked(runs, id, say)(
+                                  Calls.run(
+                                    repo,
+                                    held.graph,
+                                    jdk,
+                                    machine,
+                                    id,
+                                    platform,
+                                    say
+                                  )
+                                )
+                              case Call.Task(id) =>
+                                Calls.tracked(runs, id, say)(
+                                  Calls.task(
+                                    repo,
+                                    held.graph,
+                                    held.plugins,
+                                    machine,
+                                    id,
+                                    say
+                                  )
+                                )
+                              case Call.Cancel(id) =>
+                                Calls.cancel(runs, id, say)
+                              case Call.Toolchain =>
+                                Calls.toolchain(machine, held.graph, say)
+                              case Call.Resolve(action) =>
+                                Calls.resolve(
+                                  repo,
+                                  held.graph,
+                                  action,
+                                  say,
+                                  machine.native
+                                )
+                              case Call.Workflow(action) =>
+                                Calls.workflow(repo, held.graph, action, say)
+                              case Call.Assembly(destination) =>
+                                Calls.assembly(
                                   repo,
                                   held.graph,
                                   jdk,
                                   machine,
-                                  id,
-                                  platform,
+                                  destination,
                                   say
                                 )
-                              )
-                            case Call.Task(id) =>
-                              Calls.tracked(runs, id, say)(
-                                Calls.task(
+                              case Call.Reload =>
+                                write(
+                                  output,
+                                  wire(
+                                    Message
+                                      .Exit(histos.cli.CliExit.Success.code, "")
+                                  ),
+                                  bound
+                                )
+                              case Call.Reboot =>
+                                reboot(repo, bound, server, life, output)
+                              case Call.Bsp =>
+                                bsp(
                                   repo,
-                                  held.graph,
-                                  held.plugins,
+                                  apiJar,
+                                  version,
+                                  bound,
+                                  jdk,
                                   machine,
-                                  id,
-                                  say
+                                  warm,
+                                  permit,
+                                  buildClasspath,
+                                  build,
+                                  input,
+                                  output
                                 )
-                              )
-                            case Call.Cancel(id) =>
-                              Calls.cancel(runs, id, say)
-                            case Call.Toolchain =>
-                              Calls.toolchain(machine, held.graph, say)
-                            case Call.Resolve(action) =>
-                              Calls.resolve(
-                                repo,
-                                held.graph,
-                                action,
-                                say,
-                                machine.native
-                              )
-                            case Call.Workflow(action) =>
-                              Calls.workflow(repo, held.graph, action, say)
-                            case Call.Assembly(destination) =>
-                              Calls.assembly(
-                                repo,
-                                held.graph,
-                                jdk,
-                                machine,
-                                destination,
-                                say
-                              )
-                            case Call.Reload =>
-                              write(
-                                output,
-                                wire(
-                                  Message
-                                    .Exit(histos.cli.CliExit.Success.code, "")
-                                ),
-                                bound
-                              )
-                            case Call.Reboot =>
-                              reboot(repo, bound, server, life, output)
-                            case Call.Bsp =>
-                              bsp(
-                                repo,
-                                apiJar,
-                                version,
-                                bound,
-                                jdk,
-                                machine,
-                                warm,
-                                permit,
-                                buildClasspath,
-                                build,
-                                input,
-                                output
-                              )
-                  val leased =
-                    asked match
-                      case Call.Bsp => release(held) *> ran
-                      case _        => ran.ensuring(release(held))
+                    val leased =
+                      asked match
+                        case Call.Bsp => release(held) *> ran
+                        case _        => ran.ensuring(release(held))
+                    write(output, wire(Message.Ready), bound) *> occupy(
+                      permit,
+                      asked
+                    )(
+                      leased
+                    )
+              val say = Say.frames(output, bound)
+              asked match
+                case Call.Clean(Nil) =>
                   write(output, wire(Message.Ready), bound) *> occupy(
                     permit,
                     asked
-                  )(
-                    leased
-                  )
+                  )(Calls.wipe(repo, say))
+                case Call.CleanFull =>
+                  write(output, wire(Message.Ready), bound) *> occupy(
+                    permit,
+                    asked
+                  )(Calls.cleanFull(repo, say))
+                case Call.Clean(projects) =>
+                  adopt(repo, apiJar, version, bound, warm).flatMap:
+                    case Left(message) =>
+                      write(output, wire(Message.Ready), bound) *> write(
+                        output,
+                        wire(
+                          Message.Exit(
+                            histos.cli.CliExit.LoadFailed.code,
+                            message
+                          )
+                        ),
+                        bound
+                      )
+                    case Right(held) =>
+                      write(output, wire(Message.Ready), bound) *> occupy(
+                        permit,
+                        asked
+                      )(
+                        Calls
+                          .clean(repo, held.graph, projects, say)
+                          .ensuring(release(held))
+                      )
+                case _ => adopted
 
   /** A fingerprint change loads the build. Failure keeps the previous graph and
     * is the call's error.
@@ -866,7 +911,7 @@ object Daemon:
   ): ZIO[R, E, Unit] =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.Publish(_, _) |
-          Call.Assembly(_) | Call.Run(_, _) =>
+          Call.Assembly(_) | Call.Run(_, _) | Call.Clean(_) | Call.CleanFull =>
         permit.withPermit(body)
       case _ => body
 

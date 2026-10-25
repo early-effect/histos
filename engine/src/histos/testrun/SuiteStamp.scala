@@ -12,22 +12,47 @@ import histos.jdk.Sha256
 import zio.Chunk
 
 /**
- * Digest of one suite's bytecode and the project classes it touches, plus the locked jars.
- * A class that this suite does not reference is not part of the digest.
+ * Digest of one suite and the classes it references, plus the locked jars.
+ * Each class is a fingerprint and the names it points at. The bytes are not kept.
+ * A class this suite does not reference is not part of the digest.
  */
 object SuiteStamp:
+  /** Fingerprint of one class file, and the binary names it mentions. */
+  private[testrun] final case class Print(fingerprint: String, refs: Set[String])
+
   def digest(suite: String, directories: List[Path], jars: List[String]): Option[String] =
-    try
-      val index = directories.flatMap(classes).toMap
-      val start = List(suite, s"$suite$$").filter(index.contains)
-      if start.isEmpty then None
-      else
-        val used = closure(start, index)
-        val lines = used.toList.sorted.map(name => s"$name ${sha(index(name))}") ++ jars.sorted.map(jar => s"jar $jar")
-        Some(Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))).value)
+    digest(suite, index(directories), jars)
+
+  /** One walk of the class directories. `remember` stamps every suite from this. */
+  private[testrun] def index(directories: List[Path]): Option[Map[String, Print]] =
+    try Some(directories.flatMap(classes).toMap)
     catch case NonFatal(_) => None
 
-  private def classes(root: Path): List[(String, Array[Byte])] =
+  private[testrun] def digest(
+      suite: String,
+      indexed: Option[Map[String, Print]],
+      jars: List[String]
+  ): Option[String] =
+    indexed.flatMap: tree =>
+      val start = List(suite, s"$suite$$").filter(tree.contains)
+      if start.isEmpty then None
+      else
+        val used = closure(start, tree)
+        val lines =
+          used.toList.sorted.flatMap(name =>
+            tree.get(name).map(print => s"$name ${print.fingerprint}")
+          ) ++ jars.sorted.map(jar => s"jar $jar")
+        Some(
+          Sha256
+            .of(
+              Chunk.fromArray(
+                lines.mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8)
+              )
+            )
+            .value
+        )
+
+  private def classes(root: Path): List[(String, Print)] =
     if !Files.isDirectory(root) then Nil
     else
       val walk = Files.walk(root)
@@ -39,11 +64,14 @@ object SuiteStamp:
             if !name.endsWith(".class") then None
             else
               val binary = name.stripSuffix(".class").replace('/', '.')
-              if binary.isEmpty then None else Some(binary -> Files.readAllBytes(path))
+              if binary.isEmpty then None
+              else
+                val bytes = Files.readAllBytes(path)
+                Some(binary -> Print(Sha256.of(Chunk.fromArray(bytes)).value, references(bytes)))
         }.toList
       finally walk.close()
 
-  private def closure(start: List[String], index: Map[String, Array[Byte]]): Set[String] =
+  private def closure(start: List[String], index: Map[String, Print]): Set[String] =
     def step(seen: Set[String], queue: List[String]): Set[String] =
       queue match
         case Nil => seen
@@ -51,8 +79,9 @@ object SuiteStamp:
         case name :: rest =>
           index.get(name) match
             case None => step(seen, rest)
-            case Some(bytes) =>
-              val next = references(bytes).flatMap(alias).filter(index.contains).filterNot(seen.contains)
+            case Some(print) =>
+              val next =
+                print.refs.flatMap(alias).filter(index.contains).filterNot(seen.contains)
               step(seen + name, rest ++ next)
     step(Set.empty, start.distinct)
 
@@ -106,6 +135,3 @@ object SuiteStamp:
       , ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES)
     catch case NonFatal(_) => ()
     found.toSet
-
-  private def sha(bytes: Array[Byte]): String =
-    Sha256.of(Chunk.fromArray(bytes)).value

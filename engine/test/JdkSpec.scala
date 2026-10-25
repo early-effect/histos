@@ -45,6 +45,26 @@ object JdkSpec extends ZIOSpecDefault:
           !fetched
         )
     ,
+    test("the published runtime build is the jdk salt"):
+      ZIO.scoped:
+        for
+          root <- Workspace.work("histos-jdk-build")
+          home <- jdk(root.resolve("home"), "21.0.4", Some("21.0.4+7-LTS"))
+          first <- Toolchain.resolve(machine(root, Some(home)))
+          _ <- Workspace.writeString(home.resolve("bin/javac"), "rewritten")
+          same <- Toolchain.resolve(machine(root, Some(home)))
+          _ <- Workspace.writeString(
+            home.resolve("release"),
+            "JAVA_VERSION=\"21.0.4\"\nJAVA_RUNTIME_VERSION=\"21.0.4+8-LTS\"\n"
+          )
+          next <- Toolchain.resolve(machine(root, Some(home)))
+        yield assertTrue(
+          first.version.value == "21.0.4",
+          next.version.value == "21.0.4",
+          first.identity == same.identity,
+          first.identity != next.identity
+        )
+    ,
     test("an older JVM fails with the floor and the found version"):
       ZIO.scoped:
         for
@@ -100,9 +120,18 @@ object JdkSpec extends ZIOSpecDefault:
       NativeOrigin.Central
     )
 
-  private def jdk(home: Path, version: String): IO[IoFailure, Path] =
+  private def jdk(
+      home: Path,
+      version: String,
+      build: Option[String] = None
+  ): IO[IoFailure, Path] =
+    val runtime =
+      build.fold("")(value => s"JAVA_RUNTIME_VERSION=\"$value\"\n")
     Workspace.createDirectories(home.resolve("bin")) *>
       Workspace.writeString(home.resolve("bin/javac"), "javac") *>
       Workspace
-        .writeString(home.resolve("release"), s"JAVA_VERSION=\"$version\"\n")
+        .writeString(
+          home.resolve("release"),
+          s"JAVA_VERSION=\"$version\"\n$runtime"
+        )
         .as(home)

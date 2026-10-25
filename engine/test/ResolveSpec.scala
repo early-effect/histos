@@ -477,7 +477,9 @@ object ResolveSpec extends ZIOSpecDefault:
               graph(open.cell.dependencies),
               open.repositories
             )
-            .provide(Resolve.live(open.cache))
+            .provideSome[histos.resolve.LockedTools](
+              histos.ToolFixture.beside(open.cache)
+            )
           file = Resolve.lockPath(open.root)
           text <- ZIO.attempt(Files.readString(file))
           parsed = DependencyLock.parse(text).map(lock => tamper(lock))
@@ -494,7 +496,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
-              Resolve.live(open.cache)
+              histos.ToolFixture.beside(open.cache)
             )
             .either
           wrote = parsed.isRight
@@ -543,14 +545,16 @@ object ResolveSpec extends ZIOSpecDefault:
           )
           _ <- Resolve
             .update(open.root, built, open.repositories)
-            .provide(Resolve.live(open.cache))
+            .provideSome[histos.resolve.LockedTools](
+              histos.ToolFixture.beside(open.cache)
+            )
           checked <- histos.ToolFixture
             .at(open.root, graph(open.cell.dependencies))(
               Resolve
                 .check(open.root, built, open.repositories)
             )
             .provideSomeLayer[histos.resolve.LockedTools](
-              Resolve.live(open.cache)
+              histos.ToolFixture.beside(open.cache)
             )
           text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
           parsed = DependencyLock.parse(text)
@@ -582,7 +586,9 @@ object ResolveSpec extends ZIOSpecDefault:
               graph(open.cell.dependencies),
               open.repositories
             )
-            .provide(Resolve.live(open.cache))
+            .provideSome[histos.resolve.LockedTools](
+              histos.ToolFixture.beside(open.cache)
+            )
           file = Resolve.lockPath(open.root)
           exists = Files.isRegularFile(file)
           text <- ZIO.attempt(if exists then Files.readString(file) else "")
@@ -600,7 +606,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
-              Resolve.live(open.cache)
+              histos.ToolFixture.beside(open.cache)
             )
           materialized <- parsed match
             case Right(lock) =>
@@ -683,7 +689,9 @@ object ResolveSpec extends ZIOSpecDefault:
               graph(open.cell.dependencies),
               open.repositories
             )
-            .provide(Resolve.live(open.cache))
+            .provideSome[histos.resolve.LockedTools](
+              histos.ToolFixture.beside(open.cache)
+            )
           text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
           parsed = DependencyLock.parse(text)
         yield assertTrue:

@@ -34,8 +34,8 @@ final class Runtimes private (
 
 object Runtimes:
   def identityToken(identity: RuntimeIdentity): String = identity match
-    case RuntimeIdentity.Local(home, content) =>
-      s"local:${home.toString}:${content.value}"
+    case RuntimeIdentity.Local(home, salt) =>
+      s"local:${home.toString}:${salt.value}"
 
   def read(machine: Machine): UIO[Runtimes] =
     NodeToolchain

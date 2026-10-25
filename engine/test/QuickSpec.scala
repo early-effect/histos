@@ -43,6 +43,26 @@ object QuickSpec extends ZIOSpecDefault:
           first.isDefined && first == other && first != lib && lib != jar
         )
     ,
+    test("one class index stamps a suite the same way"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _ <- ZIO.attempt {
+            writeClass(root, "demo/Foo", List("demo/Lib"))
+            writeClass(root, "demo/Lib", Nil)
+          }
+          direct <- ZIO.attempt(
+            SuiteStamp.digest("demo.Foo", List(root), List("jar-a"))
+          )
+          indexed <- ZIO.attempt(
+            SuiteStamp.digest(
+              "demo.Foo",
+              SuiteStamp.index(List(root)),
+              List("jar-a")
+            )
+          )
+        yield assertTrue(direct.isDefined && direct == indexed)
+    ,
     test("a stored success matches only that digest"):
       ZIO.scoped:
         for

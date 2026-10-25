@@ -75,7 +75,7 @@ object NodeToolchain:
         .unless(version.atLeast(Floor))
       binary <- NodeProbe.binary(path).mapError(NodeMiss.Unresolved(_))
       identity <- RuntimeFiles
-        .identity(path)
+        .identity(path, version.value)
         .mapError(failure => NodeMiss.Unresolved(NodeError.Io(failure)))
     yield NodeRuntime(binary, version, identity)
 

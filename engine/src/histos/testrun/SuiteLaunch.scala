@@ -88,7 +88,8 @@ private[testrun] object SuiteLaunch:
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
-      quick: Boolean
+      quick: Boolean,
+      noted: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -109,7 +110,8 @@ private[testrun] object SuiteLaunch:
         jdk,
         runtimes.native,
         lock,
-        repositories
+        repositories,
+        onCompiled = noted
       )
       classes = TestCompile.testClasses(
         repo,
@@ -182,7 +184,8 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
-      quick: Boolean
+      quick: Boolean,
+      noted: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -252,32 +255,31 @@ private[testrun] object SuiteLaunch:
         jdk,
         runtimes.native,
         lock,
-        repositories
+        repositories,
+        onCompiled = noted
       )
       stream <-
-        if !quick then launch(patterns, linked)
-        else
-          SuiteNames
-            .discover(classes, linked.paths, provider.framework.value)
-            .mapError(_ => ModuleTestError.Root(classes))
-            .flatMap:
-              case SuiteNames.Found.Unseen        => launch(patterns, linked)
-              case SuiteNames.Found.Suites(names) =>
-                val wanted =
-                  names.filter(name => SuitePattern.allows(patterns, name))
-                if patterns.nonEmpty && wanted.isEmpty then
-                  ZIO.succeed(ZStream.empty)
-                else if wanted.isEmpty then launch(patterns, linked)
-                else
-                  remember(
-                    repo,
-                    cell,
-                    wanted,
-                    classes :: linked.paths,
-                    linked.hashes,
-                    true,
-                    dirty => launch(exact(dirty), linked)
-                  )
+        SuiteNames
+          .discover(classes, linked.paths, provider.framework.value)
+          .mapError(_ => ModuleTestError.Root(classes))
+          .flatMap:
+            case SuiteNames.Found.Unseen        => launch(patterns, linked)
+            case SuiteNames.Found.Suites(names) =>
+              val wanted =
+                names.filter(name => SuitePattern.allows(patterns, name))
+              if patterns.nonEmpty && wanted.isEmpty then
+                ZIO.succeed(ZStream.empty)
+              else if wanted.isEmpty then launch(patterns, linked)
+              else
+                remember(
+                  repo,
+                  cell,
+                  wanted,
+                  classes :: linked.paths,
+                  linked.hashes,
+                  quick,
+                  dirty => launch(exact(dirty), linked)
+                )
     yield stream
 
   private[testrun] def runNative(
@@ -291,7 +293,8 @@ private[testrun] object SuiteLaunch:
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
-      quick: Boolean
+      quick: Boolean,
+      noted: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -313,7 +316,8 @@ private[testrun] object SuiteLaunch:
         jdk,
         runtimes.native,
         lock,
-        repositories
+        repositories,
+        onCompiled = noted
       )
       classes = TestCompile.testClasses(
         repo,
@@ -383,7 +387,8 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
-      quick: Boolean
+      quick: Boolean,
+      noted: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -474,32 +479,31 @@ private[testrun] object SuiteLaunch:
         jdk,
         runtimes.native,
         lock,
-        repositories
+        repositories,
+        onCompiled = noted
       )
       stream <-
-        if !quick then launch(patterns, linked, major)
-        else
-          SuiteNames
-            .discover(classes, linked.paths, provider.framework.value)
-            .mapError(_ => ModuleTestError.Root(classes))
-            .flatMap:
-              case SuiteNames.Found.Unseen => launch(patterns, linked, major)
-              case SuiteNames.Found.Suites(names) =>
-                val wanted =
-                  names.filter(name => SuitePattern.allows(patterns, name))
-                if patterns.nonEmpty && wanted.isEmpty then
-                  ZIO.succeed(ZStream.empty)
-                else if wanted.isEmpty then launch(patterns, linked, major)
-                else
-                  remember(
-                    repo,
-                    cell,
-                    wanted,
-                    classes :: linked.paths,
-                    linked.hashes,
-                    true,
-                    dirty => launch(exact(dirty), linked, major)
-                  )
+        SuiteNames
+          .discover(classes, linked.paths, provider.framework.value)
+          .mapError(_ => ModuleTestError.Root(classes))
+          .flatMap:
+            case SuiteNames.Found.Unseen => launch(patterns, linked, major)
+            case SuiteNames.Found.Suites(names) =>
+              val wanted =
+                names.filter(name => SuitePattern.allows(patterns, name))
+              if patterns.nonEmpty && wanted.isEmpty then
+                ZIO.succeed(ZStream.empty)
+              else if wanted.isEmpty then launch(patterns, linked, major)
+              else
+                remember(
+                  repo,
+                  cell,
+                  wanted,
+                  classes :: linked.paths,
+                  linked.hashes,
+                  quick,
+                  dirty => launch(exact(dirty), linked, major)
+                )
     yield stream
 
   private[testrun] def nativeMajor(
@@ -573,8 +577,9 @@ private[testrun] object SuiteLaunch:
       )
     )
 
-  /** When `quick` is set, a suite with a stored success for this digest does
-    * not start. `run` receives the suites that still have to run.
+  /** A passing run stores each suite's fingerprint. `quick` skips a suite whose
+    * stored fingerprint still matches. `run` receives the suites that still
+    * have to run. The class tree is read once and reused for every suite.
     */
   private[testrun] def remember(
       repo: Path,
@@ -594,70 +599,83 @@ private[testrun] object SuiteLaunch:
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
     ZIO.serviceWithZIO[TestContext]: context =>
-      if !quick then run(suites)
+      val jars = (hashes ++ context.hashes).map(_.value)
+      val tree = SuiteStamp.index(directories)
+      val stamped = suites.map: name =>
+        name -> SuiteStamp.digest(name, tree, jars)
+      if !quick then
+        run(suites).map(stream => stream.tap(keep(repo, cell, stamped, _)))
       else
-        val jars = (hashes ++ context.hashes).map(_.value)
         ZIO
-          .foldLeft(suites)(
+          .foldLeft(stamped)(
             (List.empty[String], List.empty[(String, Option[String])])
           ):
-            case ((cached, dirty), name) =>
-              SuiteStamp.digest(name, directories, jars) match
-                case Some(digest) =>
-                  QuickRecord
-                    .hit(
-                      repo,
-                      cell.module,
-                      cell.version,
-                      cell.platform,
-                      name,
-                      digest
-                    )
-                    .map { hit =>
-                      if hit then (name :: cached, dirty)
-                      else (cached, (name, Some(digest)) :: dirty)
-                    }
-                case None =>
-                  ZIO.succeed((cached, (name, None) :: dirty))
-          .flatMap { (cached, dirty) =>
+            case ((cached, dirty), (name, Some(digest))) =>
+              QuickRecord
+                .hit(
+                  repo,
+                  cell.module,
+                  cell.version,
+                  cell.platform,
+                  name,
+                  digest
+                )
+                .map: hit =>
+                  if hit then (name :: cached, dirty)
+                  else (cached, (name, Some(digest)) :: dirty)
+            case ((cached, dirty), (name, None)) =>
+              ZIO.succeed((cached, (name, None) :: dirty))
+          .flatMap: (cached, dirty) =>
             val shown = ZStream.fromIterable(
               cached.sorted.map(name =>
-                TestFeed.Cached(cell.module, cell.version, cell.platform, name)
+                TestFeed.Cached(
+                  cell.module,
+                  cell.version,
+                  cell.platform,
+                  name
+                )
               )
             )
             if dirty.isEmpty then ZIO.succeed(shown)
             else
-              run(dirty.map(_._1)).map { stream =>
-                shown ++ stream.tap {
-                  case TestFeed.Done(done) =>
-                    done.status match
-                      case TestStatus.Passed =>
-                        ZIO.foreachDiscard(dirty):
-                          case (name, Some(digest)) =>
-                            QuickRecord.save(
-                              repo,
-                              cell.module,
-                              cell.version,
-                              cell.platform,
-                              name,
-                              digest
-                            )
-                          case _ => ZIO.unit
-                      case TestStatus.Failed(_) =>
-                        ZIO.foreachDiscard(dirty)((name, _) =>
-                          QuickRecord.clear(
-                            repo,
-                            cell.module,
-                            cell.version,
-                            cell.platform,
-                            name
-                          )
-                        )
-                      case _ => ZIO.unit
-                  case _ => ZIO.unit
-                }
-              }
-          }
+              run(dirty.map(_._1)).map: stream =>
+                shown ++ stream.tap(keep(repo, cell, dirty, _))
+
+  /** The fingerprint is the digest of the classes that ran. A pass stores it. A
+    * failure deletes it.
+    */
+  private def keep(
+      repo: Path,
+      cell: CompiledCell,
+      stamped: List[(String, Option[String])],
+      event: TestFeed
+  ): UIO[Unit] =
+    event match
+      case TestFeed.Done(done) =>
+        done.status match
+          case TestStatus.Passed =>
+            ZIO.foreachDiscard(stamped):
+              case (name, Some(digest)) =>
+                QuickRecord.save(
+                  repo,
+                  cell.module,
+                  cell.version,
+                  cell.platform,
+                  name,
+                  digest
+                )
+              case _ => ZIO.unit
+          case TestStatus.Failed(_) =>
+            ZIO.foreachDiscard(stamped): (name, _) =>
+              QuickRecord.clear(
+                repo,
+                cell.module,
+                cell.version,
+                cell.platform,
+                name
+              )
+          case _ => ZIO.unit
+      case _ => ZIO.unit
 
   private[testrun] def exact(names: List[String]): List[SuitePattern] =
     names.flatMap(name => SuitePattern.from(name).toOption)
@@ -673,7 +691,8 @@ private[testrun] object SuiteLaunch:
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
-      quick: Boolean
+      quick: Boolean,
+      noted: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -692,7 +711,8 @@ private[testrun] object SuiteLaunch:
         jdk,
         runtimes.native,
         lock,
-        repositories
+        repositories,
+        onCompiled = noted
       )
       classes = TestCompile.testClasses(
         repo,
@@ -745,7 +765,8 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
-      quick: Boolean
+      quick: Boolean,
+      noted: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -754,24 +775,14 @@ private[testrun] object SuiteLaunch:
     val classes =
       TestCompile.testClasses(repo, module.name, cell.version, cell.platform)
     def launch(
-        selected: List[SuitePattern]
+        selected: List[SuitePattern],
+        linked: TestCompile.Linked
     ): ZIO[
       Resolve & ProviderInstall & LockedTools & TestContext,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed]
     ] =
       for
-        linked <- TestCompile.compiledTests(
-          repo,
-          modules,
-          module,
-          cell,
-          sources,
-          jdk,
-          runtimes.native,
-          lock,
-          repositories
-        )
         runnerClasses <- ZIO.serviceWithZIO[ProviderInstall](
           _.classes(repo, module.name, cell.version, jdk, linked.paths)
         )
@@ -810,42 +821,41 @@ private[testrun] object SuiteLaunch:
         ZIO.fail(ModuleTestError.ProviderDependency(module.name, provider))
       )
       stream <-
-        if !quick then launch(patterns)
-        else
-          for
-            linked <- TestCompile.compiledTests(
-              repo,
-              modules,
-              module,
-              cell,
-              sources,
-              jdk,
-              runtimes.native,
-              lock,
-              repositories
-            )
-            found <- SuiteNames
-              .discover(classes, linked.paths, provider.framework.value)
-              .mapError(_ => ModuleTestError.Root(classes))
-            ran <- found match
-              case SuiteNames.Found.Unseen        => launch(patterns)
-              case SuiteNames.Found.Suites(names) =>
-                val wanted =
-                  names.filter(name => SuitePattern.allows(patterns, name))
-                if patterns.nonEmpty && wanted.isEmpty then
-                  ZIO.succeed(ZStream.empty)
-                else if wanted.isEmpty then launch(patterns)
-                else
-                  remember(
-                    repo,
-                    cell,
-                    wanted,
-                    classes :: linked.paths,
-                    linked.hashes,
-                    true,
-                    dirty => launch(exact(dirty))
-                  )
-          yield ran
+        for
+          linked <- TestCompile.compiledTests(
+            repo,
+            modules,
+            module,
+            cell,
+            sources,
+            jdk,
+            runtimes.native,
+            lock,
+            repositories,
+            onCompiled = noted
+          )
+          found <- SuiteNames
+            .discover(classes, linked.paths, provider.framework.value)
+            .mapError(_ => ModuleTestError.Root(classes))
+          ran <- found match
+            case SuiteNames.Found.Unseen        => launch(patterns, linked)
+            case SuiteNames.Found.Suites(names) =>
+              val wanted =
+                names.filter(name => SuitePattern.allows(patterns, name))
+              if patterns.nonEmpty && wanted.isEmpty then
+                ZIO.succeed(ZStream.empty)
+              else if wanted.isEmpty then launch(patterns, linked)
+              else
+                remember(
+                  repo,
+                  cell,
+                  wanted,
+                  classes :: linked.paths,
+                  linked.hashes,
+                  quick,
+                  dirty => launch(exact(dirty), linked)
+                )
+        yield ran
     yield stream
 
   private[testrun] def request(

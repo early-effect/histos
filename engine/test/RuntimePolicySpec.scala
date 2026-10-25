@@ -8,32 +8,35 @@ import zio.ZIO
 import zio.test.*
 
 object RuntimePolicySpec extends ZIOSpecDefault:
-  def spec = suite("runtime content identity")(
-    test(
-      "manifest exclusions use the canonical home even through a path alias"
-    ):
+  private val build = "25.0.5+8-LTS"
+
+  def spec = suite("runtime identity")(
+    test("an alias shares the published build and another build does not"):
       ZIO.scoped:
         for
           root <- Workspace.work("histos-runtime-policy")
-          home = root.resolve("content")
+          home <- directory(root.resolve("local"))
           alias = root.resolve("alias")
-          _ <- Workspace.writeString(home.resolve("tool"), "content")
-          _ <- Workspace.writeString(home.resolve("manifest"), "excluded")
           _ <- ZIO
             .attemptBlocking(Files.createSymbolicLink(alias, home))
             .mapError(_ => IoFailure(alias, IoFault.Create))
-          direct <- RuntimeFiles.content(home, Set(home.resolve("manifest")))
-          indirect <- RuntimeFiles.content(
-            alias,
-            Set(alias.resolve("manifest"))
+          direct <- RuntimeFiles.identity(home, build)
+          indirect <- RuntimeFiles.identity(alias, build)
+          other <- RuntimeFiles.identity(home, "25.0.5+9-LTS")
+          canonical <- ZIO.attemptBlocking(home.toRealPath().normalize)
+        yield assertTrue(
+          direct == indirect,
+          direct != other,
+          (direct match
+            case RuntimeIdentity.Local(path, _) => path == canonical
           )
-        yield assertTrue(direct == indirect)
+        )
     ,
-    test("changing a linked local file changes the recorded content identity"):
+    test("replacing a file inside the home leaves the salt"):
       ZIO.scoped:
         for
           root <- Workspace.work("histos-runtime-policy")
-          home <- jdk(root.resolve("local"))
+          home <- directory(root.resolve("local"))
           linked = root.resolve("linked")
           _ <- Workspace.writeString(linked, "first")
           _ <- ZIO
@@ -41,24 +44,12 @@ object RuntimePolicySpec extends ZIOSpecDefault:
               Files.createSymbolicLink(home.resolve("library"), linked)
             )
             .mapError(_ => IoFailure(home.resolve("library"), IoFault.Create))
-          first <- RuntimeFiles.identity(home)
+          first <- RuntimeFiles.identity(home, build)
           _ <- Workspace.writeString(linked, "second")
-          second <- RuntimeFiles.identity(home)
-          canonical <- ZIO.attemptBlocking(home.toRealPath())
-        yield assertTrue(
-          (first match
-            case RuntimeIdentity.Local(path, _) => path == canonical
-          ),
-          (second match
-            case RuntimeIdentity.Local(path, _) => path == canonical
-          ),
-          first != second
-        )
+          second <- RuntimeFiles.identity(home, build)
+        yield assertTrue(first == second)
   )
 
-  private def jdk(home: Path): zio.IO[IoFailure, Path] =
+  private def directory(home: Path): zio.IO[IoFailure, Path] =
     Workspace.createDirectories(home.resolve("bin")) *>
-      Workspace.writeString(home.resolve("bin/javac"), "javac") *>
-      Workspace
-        .writeString(home.resolve("release"), "JAVA_VERSION=\"21.0.2\"\n")
-        .as(home)
+      Workspace.writeString(home.resolve("bin/javac"), "javac").as(home)

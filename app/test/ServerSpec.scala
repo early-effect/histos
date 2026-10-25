@@ -5,7 +5,6 @@ import histos.cli.{Cli, CliExit, Command}
 import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
-import histos.resolve.Resolve
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 import histos.{Jvm, ProjectGraph, Projects, ScalaVersion, module}
@@ -191,7 +190,7 @@ object ServerSpec extends ZIOSpecDefault:
                 case _                      => false
               }),
               secondIdentity.version == changedIdentity.version,
-              secondIdentity.identity != changedIdentity.identity,
+              secondIdentity.identity == changedIdentity.identity,
               secondIdentity.home == root.resolve("second-jdk")
             )
           program
@@ -661,7 +660,7 @@ object ServerSpec extends ZIOSpecDefault:
         ZIO.succeed(BuildNotes(false, Nil))
 
   private def deps(root: Path) =
-    Resolve.live(root.resolve("coursier")) ++
+    histos.AppToolFixture.resolve ++
       ZLayer.succeed(histos.cache.ContentStore.in(root.resolve("cache")))
 
   private def liveLayers(root: Path) =

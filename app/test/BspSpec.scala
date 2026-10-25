@@ -144,9 +144,7 @@ object BspSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           cache <- temp
-          result <- run.provideSomeLayer[histos.resolve.LockedTools](
-            histos.AppToolFixture.resolver
-          )
+          result <- run.provide(Resolve.live(cache))
         yield result
   )
 
@@ -941,8 +939,9 @@ object BspSpec extends ZIOSpecDefault:
               .foreach(path => Files.deleteIfExists(path))
         }.ignore
 
-  def spec = suite("bsp")(protocol, client)
-    .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+  def spec = suite("bsp")(
+    protocol,
+    client.provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.AppToolFixture.layer(
         histos.Projects(
           histos.module("jvm", histos.Jvm)(
@@ -952,4 +951,5 @@ object BspSpec extends ZIOSpecDefault:
           histos.module("js", histos.Js)(histos.ScalaVersion("3.10.0"))
         )
       )
-    ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)
+    )
+  ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)

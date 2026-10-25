@@ -165,6 +165,27 @@ object CliSpec extends ZIOSpecDefault:
         )
       )
     ,
+    test("clean wipes products and cleanFull takes no names"):
+      for
+        all <- Cli.parse(List("clean"))
+        named <- Cli.parse(List("clean", "engine"))
+        full <- Cli.parse(List("cleanFull"))
+        watched <- Cli.parse(List("~", "clean", "engine"))
+        flag <- Cli.parse(List("clean", "--dry-run")).either
+        extra <- Cli.parse(List("cleanFull", "engine")).either
+        cache <- Cli.parse(List("cache", "clean", "--dry-run"))
+      yield assertTrue(
+        all == Command.Clean(Nil),
+        named == Command.Clean(List("engine")),
+        full == Command.CleanFull,
+        watched == Command.Watch(Command.Clean(List("engine"))),
+        flag == Left(CliParseError.Pattern("clean does not take --dry-run")),
+        extra == Left(
+          CliParseError.Pattern("cleanFull does not take a project")
+        ),
+        cache == Command.CacheClean(true)
+      )
+    ,
     test("compile takes project names"):
       for
         entire <- Cli.parse(List("compile"))

@@ -58,6 +58,26 @@ object Resolve:
   def live(cache: Path): ULayer[Resolve] =
     ZLayer.succeed(CoursierResolve(cache))
 
+  /** A coordinate already in `cache` is not downloaded again. A missing one is.
+    */
+  def retained(cache: Path): ULayer[Resolve] =
+    ZLayer.succeed(CoursierResolve(cache, CacheMode.Retain))
+
+  /** A coordinate is read from `cache`. Nothing is downloaded. */
+  def offline(cache: Path): ULayer[Resolve] =
+    ZLayer.succeed(CoursierResolve(cache, CacheMode.Offline))
+
+  /** Coursier's cache. A file already there is used. A missing coordinate is
+    * fetched into that cache.
+    */
+  def coursier: ULayer[Resolve] =
+    ZLayer.succeed(
+      CoursierResolve(
+        _root_.coursier.cache.CacheDefaults.location.toPath,
+        CacheMode.Retain
+      )
+    )
+
   def lockPath(repo: Path): Path =
     repo.resolve(".histos").resolve("dependencies.lock")
 

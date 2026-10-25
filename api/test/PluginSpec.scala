@@ -114,6 +114,8 @@ object PluginSpec extends ZIOSpecDefault:
           "testOnly",
           "testQuick",
           "compile",
+          "clean",
+          "cleanFull",
           "assembly",
           "publish",
           "mcp",

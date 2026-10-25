@@ -263,7 +263,8 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       lock: DependencyLock,
       repositories: Repositories,
-      hear: CompileProblem => Unit = _ => ()
+      hear: CompileProblem => Unit = _ => (),
+      onCompiled: Boolean => UIO[Unit] = _ => ZIO.unit
   ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
     val classes = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
@@ -284,13 +285,14 @@ private[histos] object TestCompile:
         analysis,
         linked.hashes
       )
-      _ <- compileSuite(
+      changed <- compileSuite(
         module,
         request,
         native,
         SemanticDb.argv(repo, cell.version),
         hear
       )
+      _ <- onCompiled(changed)
     yield linked
 
   private[testrun] def compileSuite(
@@ -299,7 +301,7 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit
-  ): ZIO[LockedTools, ModuleTestError, Unit] =
+  ): ZIO[LockedTools, ModuleTestError, Boolean] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
       val compiled = request.toolchain.platform match
         case Platform.Jvm => JvmCompile.compile(request, extra, hear)
@@ -310,10 +312,12 @@ private[histos] object TestCompile:
             module.nativeVersion.getOrElse(tools.catalog.native.revision)
           NativeCompile.compile(request, revision, native, extra, hear)
       compiled
-        .mapError(error =>
-          ModuleTestError.Sources(module.name, request.toolchain.version, error)
+        .mapBoth(
+          error =>
+            ModuleTestError
+              .Sources(module.name, request.toolchain.version, error),
+          _.changed
         )
-        .unit
 
   /** Compile jars of `dependsOn`, not their tests. The child runs those
     * classes.
