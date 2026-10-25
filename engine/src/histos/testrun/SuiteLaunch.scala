@@ -581,7 +581,7 @@ private[testrun] object SuiteLaunch:
     * stored fingerprint still matches. `run` receives the suites that still
     * have to run. The class tree is read once and reused for every suite.
     */
-  private[testrun] def remember(
+  private[testrun] def remember[R](
       repo: Path,
       cell: CompiledCell,
       suites: List[String],
@@ -589,12 +589,12 @@ private[testrun] object SuiteLaunch:
       hashes: List[Sha256],
       quick: Boolean,
       run: List[String] => ZIO[
-        Resolve & ProviderInstall & LockedTools & TestContext,
+        R,
         ModuleTestError,
         ZStream[Any, ModuleTestError, TestFeed]
       ]
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    R & TestContext,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed]
   ] =

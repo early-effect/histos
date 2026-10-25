@@ -3,13 +3,16 @@ package histos.testrun
 import histos.native.ClassShapes
 import histos.watch.SourceWatch
 import histos.workspace.Workspace
+import histos.zinc.CompiledCell
 import histos.{Jvm, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.PosixFilePermissions
 
 import org.objectweb.asm.{ClassWriter, Opcodes}
 
-import zio.{Scope, ZIO}
+import zio.{Chunk, Scope, ZIO, ZLayer}
+import zio.stream.ZStream
 import zio.test.*
 
 object QuickSpec extends ZIOSpecDefault:
@@ -134,6 +137,203 @@ object QuickSpec extends ZIOSpecDefault:
       assertTrue(SuiteNames.choose(local, world, marks) == List("demo.FooA"))
   )
 
+  private val runs = suite("testQuick run")(
+    test("an absent quick record runs the suite"):
+      ZIO.scoped:
+        for
+          root <- temp
+          classes = root.resolve("classes")
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          module <- named
+          digest <- requireDigest(classes)
+          recorded <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          feeds <- quick(root, module, classes, TestStatus.Passed)
+        yield assertTrue(!recorded, feeds == ran(module, TestStatus.Passed))
+    ,
+    test("a digest mismatch runs the suite"):
+      ZIO.scoped:
+        for
+          root <- temp
+          classes = root.resolve("classes")
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          module <- named
+          digest <- requireDigest(classes)
+          _ <- QuickRecord.save(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            "not-this-digest"
+          )
+          recorded <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          stored <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            "not-this-digest"
+          )
+          feeds <- quick(root, module, classes, TestStatus.Passed)
+        yield assertTrue(
+          digest != "not-this-digest",
+          !recorded,
+          stored,
+          feeds == ran(module, TestStatus.Passed)
+        )
+    ,
+    test("an unreadable quick record runs the suite"):
+      ZIO.scoped:
+        for
+          root <- temp
+          classes = root.resolve("classes")
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          module <- named
+          digest <- requireDigest(classes)
+          _ <- QuickRecord.save(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          readable <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          _ <- unreadable(
+            QuickRecord.file(root, module, scala3, Jvm, suiteName)
+          )
+          hidden <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          feeds <- quick(root, module, classes, TestStatus.Passed)
+        yield assertTrue(
+          readable,
+          !hidden,
+          feeds == ran(module, TestStatus.Passed)
+        )
+    ,
+    test("a suite with no digest runs"):
+      ZIO.scoped:
+        for
+          root <- temp
+          classes = root.resolve("classes")
+          _ <- ZIO.attempt(Files.createDirectories(classes))
+          module <- named
+          _ <- QuickRecord.save(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            "recorded"
+          )
+          missing = SuiteStamp.digest(suiteName, List(classes), Nil)
+          feeds <- quick(root, module, classes, TestStatus.Passed)
+        yield assertTrue(
+          missing.isEmpty,
+          feeds == ran(module, TestStatus.Passed)
+        )
+    ,
+    test("a record cleared after a failure runs the suite"):
+      ZIO.scoped:
+        for
+          root <- temp
+          classes = root.resolve("classes")
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          module <- named
+          digest <- requireDigest(classes)
+          _ <- QuickRecord.save(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          _ <- ZIO.attempt(
+            writeClass(classes, "demo/Foo", List("demo/Other"))
+          )
+          changed <- requireDigest(classes)
+          failed <- quick(root, module, classes, TestStatus.Failed(1))
+          cleared <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          replaced <- QuickRecord.hit(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            changed
+          )
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          restored <- requireDigest(classes)
+          again <- quick(root, module, classes, TestStatus.Passed)
+        yield assertTrue(
+          digest != changed,
+          restored == digest,
+          failed == ran(module, TestStatus.Failed(1)),
+          !cleared,
+          !replaced,
+          again == ran(module, TestStatus.Passed)
+        )
+    ,
+    test("a quick hit is cached and the suite does not run"):
+      ZIO.scoped:
+        for
+          root <- temp
+          classes = root.resolve("classes")
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          module <- named
+          digest <- requireDigest(classes)
+          _ <- QuickRecord.save(
+            root,
+            module,
+            scala3,
+            Jvm,
+            suiteName,
+            digest
+          )
+          feeds <- quick(root, module, classes, TestStatus.Passed)
+        yield assertTrue(
+          feeds == Chunk(
+            TestFeed.Cached(module, scala3, Jvm, suiteName)
+          )
+        )
+  )
+
   private val sources = suite("source watch")(
     test("a saved file changes the snapshot and an untouched tree does not"):
       ZIO.scoped:
@@ -195,4 +395,81 @@ object QuickSpec extends ZIOSpecDefault:
       .work("histos-quick")
       .mapError(error => new java.io.IOException(error.message))
 
-  def spec = suite("quick")(stamps, sources)
+  private val scala3 = ScalaVersion("3.10.0")
+  private val suiteName = "demo.Foo"
+
+  private def named: ZIO[Any, histos.ProjectNameError, ProjectName] =
+    ZIO.fromEither(ProjectName.from("app"))
+
+  private def requireDigest(classes: Path): ZIO[Any, Throwable, String] =
+    ZIO
+      .fromOption(SuiteStamp.digest(suiteName, List(classes), Nil))
+      .orElseFail(new IllegalStateException("suite digest was empty"))
+
+  private def ran(module: ProjectName, status: TestStatus): Chunk[TestFeed] =
+    Chunk(
+      TestFeed.Begin(module, scala3, Jvm),
+      TestFeed.Out(suiteName),
+      TestFeed.Done(TestedCell(module, scala3, Jvm, status))
+    )
+
+  private def quick(
+      repo: Path,
+      module: ProjectName,
+      classes: Path,
+      status: TestStatus
+  ): ZIO[Any, ModuleTestError, Chunk[TestFeed]] =
+    SuiteLaunch
+      .remember(
+        repo,
+        CompiledCell(
+          module,
+          scala3,
+          Jvm,
+          classes,
+          1,
+          key = None,
+          changed = true,
+          sources = None,
+          classesWritten = None
+        ),
+        List(suiteName),
+        List(classes),
+        Nil,
+        quick = true,
+        names =>
+          ZIO.succeed(
+            ZStream.fromIterable(
+              List(
+                TestFeed.Begin(module, scala3, Jvm),
+                TestFeed.Out(names.mkString(" ")),
+                TestFeed.Done(TestedCell(module, scala3, Jvm, status))
+              )
+            )
+          )
+      )
+      .flatMap(_.runCollect)
+      .provide(ZLayer.succeed(TestContext.empty))
+
+  private def unreadable(path: Path): ZIO[Scope, Throwable, Unit] =
+    ZIO
+      .acquireRelease(
+        ZIO.attempt(
+          Files.setPosixFilePermissions(
+            path,
+            PosixFilePermissions.fromString("---------")
+          )
+        )
+      )(_ =>
+        ZIO
+          .attempt(
+            Files.setPosixFilePermissions(
+              path,
+              PosixFilePermissions.fromString("rw-------")
+            )
+          )
+          .ignore
+      )
+      .unit
+
+  def spec = suite("quick")(stamps, sources, runs)
