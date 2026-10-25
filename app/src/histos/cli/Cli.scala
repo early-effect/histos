@@ -241,6 +241,7 @@ object Cli:
       })
       Watching
         .session(
+          repo,
           printing,
           perform(repo, apiJar, inner).unit,
           ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
@@ -336,38 +337,56 @@ object Cli:
       platform: Option[Platform]
   ): URIO[Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
-      Ref
-        .make(0)
-        .flatMap: status =>
-          val ran =
-            for
-              jdk <- ZIO
-                .serviceWithZIO[Machine](GraphCompile.jdk)
-                .mapError(
-                  histos.program.ProgramError.Compile(_)
+      CompileConsole
+        .open(repo)
+        .flatMap: console =>
+          Ref
+            .make(0)
+            .flatMap: status =>
+              val ran =
+                for
+                  jdk <- ZIO
+                    .serviceWithZIO[Machine](GraphCompile.jdk)
+                    .mapError(
+                      histos.program.ProgramError.Compile(_)
+                    )
+                  runtimes <- Runtimes.read(machine)
+                  _ <- histos.program.Program
+                    .console(
+                      repo,
+                      loaded.graph,
+                      name,
+                      jdk,
+                      runtimes,
+                      platform,
+                      feed => heard(console, feed),
+                      console.announce(say)
+                    )
+                    .foreach:
+                      case histos.program.ProgramFeed
+                            .Begin(module, version, target) =>
+                        say(s"${module.value} ${version.value} ${target.token}")
+                      case histos.program.ProgramFeed.Out(text) => say(text)
+                      case histos.program.ProgramFeed.Err(text) =>
+                        sayError(text)
+                      case histos.program.ProgramFeed.Exited(_, _, _, code) =>
+                        ZIO.when(code != 0)(status.set(code))
+                  code <- status.get
+                yield Completed(
+                  if code == 0 then CliExit.Success else CliExit.Program(code),
+                  "",
+                  ""
                 )
-              runtimes <- Runtimes.read(machine)
-              _ <- histos.program.Program
-                .console(repo, loaded.graph, name, jdk, runtimes, platform)
-                .foreach:
-                  case histos.program.ProgramFeed
-                        .Begin(module, version, target) =>
-                    say(s"${module.value} ${version.value} ${target.token}")
-                  case histos.program.ProgramFeed.Out(text) => say(text)
-                  case histos.program.ProgramFeed.Err(text) => sayError(text)
-                  case histos.program.ProgramFeed.Exited(_, _, _, code) =>
-                    ZIO.when(code != 0)(status.set(code))
-              code <- status.get
-            yield Completed(
-              if code == 0 then CliExit.Success else CliExit.Program(code),
-              "",
-              ""
-            )
-          ran.foldZIO(
-            error =>
-              ZIO.succeed(Completed(programExit(error), "", error.message)),
-            done => ZIO.succeed(done)
-          )
+              ran.foldZIO(
+                error =>
+                  val told = error match
+                    case histos.program.ProgramError.Compile(_) =>
+                      console.announce(say)
+                    case _ => ZIO.unit
+                  told.as(Completed(programExit(error), "", error.message))
+                ,
+                done => ZIO.succeed(done)
+              )
 
   private def programExit(error: histos.program.ProgramError): CliExit =
     error match
@@ -513,37 +532,52 @@ object Cli:
                       Completed(CliExit.CompileFailed, "", error.message)
                     )
                   case Right(jdk) =>
-                    ZIO
-                      .serviceWithZIO[Machine](machine =>
-                        Assemble.run(
-                          repo,
-                          loaded.graph,
-                          jdk,
-                          NativeOrigin.read(machine.env),
-                          path
-                        )
-                      )
-                      .either
-                      .flatMap:
-                        case Left(error) =>
-                          ZIO.succeed(
-                            Completed(CliExit.CompileFailed, "", error.message)
+                    CompileConsole
+                      .open(repo)
+                      .flatMap: console =>
+                        ZIO
+                          .serviceWithZIO[Machine](machine =>
+                            Assemble.run(
+                              repo,
+                              loaded.graph,
+                              jdk,
+                              NativeOrigin.read(machine.env),
+                              path,
+                              feed => heard(console, feed)
+                            )
                           )
-                        case Right(assembled) =>
-                          pin(repo, assembled.path).foldZIO(
-                            message =>
-                              ZIO.succeed(
-                                Completed(CliExit.CompileFailed, "", message)
-                              ),
-                            _ =>
-                              ZIO.succeed(
-                                Completed(
-                                  CliExit.Success,
-                                  relative(repo, assembled.path),
-                                  ""
+                          .either
+                          .flatMap:
+                            case Left(error) =>
+                              console
+                                .announce(say)
+                                .as(
+                                  Completed(
+                                    CliExit.CompileFailed,
+                                    "",
+                                    error.message
+                                  )
                                 )
-                              )
-                          )
+                            case Right(assembled) =>
+                              console.announce(say) *>
+                                pin(repo, assembled.path).foldZIO(
+                                  message =>
+                                    ZIO.succeed(
+                                      Completed(
+                                        CliExit.CompileFailed,
+                                        "",
+                                        message
+                                      )
+                                    ),
+                                  _ =>
+                                    ZIO.succeed(
+                                      Completed(
+                                        CliExit.Success,
+                                        relative(repo, assembled.path),
+                                        ""
+                                      )
+                                    )
+                                )
 
   /** The launcher verifies this checksum of `dist/histos.jar`. Another
     * destination is not that jar.
@@ -753,8 +787,8 @@ object Cli:
                       runtimes,
                       patterns,
                       quick,
-                      (module, version, platform, changed) =>
-                        notes(module, version, platform, changed).flatMap(say)
+                      (module, version, platform, facts) =>
+                        notes(module, version, platform, facts).flatMap(say)
                     ),
                     cells.toList,
                     lock

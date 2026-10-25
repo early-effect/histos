@@ -185,9 +185,7 @@ enum ModuleTestError:
     case NoNode(module, version, miss) =>
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
 
-/** One test invocation. The callback runs after a cell's tests compile. The
-  * boolean is whether that compile wrote new classes.
-  */
+/** One test invocation. The callback runs after a cell's tests compile. */
 final case class TestRun(
     repo: Path,
     graph: ProjectGraph,
@@ -196,7 +194,10 @@ final case class TestRun(
     runtimes: Runtimes,
     patterns: List[SuitePattern] = Nil,
     quick: Boolean = false,
-    onTestCompile: (ProjectName, ScalaVersion, Platform, Boolean) => UIO[
-      Unit
-    ] = (_, _, _, _) => ZIO.unit
+    onTestCompile: (
+        ProjectName,
+        ScalaVersion,
+        Platform,
+        histos.zinc.CompileFacts
+    ) => UIO[Unit] = (_, _, _, _) => ZIO.unit
 )

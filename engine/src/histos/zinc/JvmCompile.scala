@@ -152,12 +152,26 @@ final case class CompileRequest(
     compilerPlugins: List[histos.resolve.ToolInput] = Nil
 )
 
+/** Source files Zinc compiled or left unchanged this round. */
+final case class SourceCount(compiled: Int, skipped: Int)
+
+/** What one compile decided. Absent counts are unknown, not zero. */
+final case class CompileFacts(
+    changed: Boolean,
+    sources: Option[SourceCount],
+    classesWritten: Option[Int]
+)
+
 final case class CompileOutput(
     classes: Path,
     classFiles: Int,
     key: Sha256,
-    changed: Boolean
-)
+    changed: Boolean,
+    sources: Option[SourceCount] = None,
+    classesWritten: Option[Int] = None
+):
+  def facts: CompileFacts =
+    CompileFacts(changed, sources, classesWritten)
 
 /** Zinc positions are 1-based. Dotty positions are already 0-based. */
 enum PositionBase:
@@ -571,6 +585,7 @@ object JvmCompile:
       def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
     Files.createDirectories(request.classes)
     Files.createDirectories(request.analysis)
+    val (previous, prior) = priorResult(zinc, request.analysis)
     val setup = zinc.setup(
       lookup,
       false,
@@ -603,11 +618,12 @@ object JvmCompile:
       CompileOrder.Mixed,
       prepared.compilers,
       setup,
-      remembered(zinc, request.analysis),
+      previous,
       Optional.empty,
       converter,
       Stamps.timeWrapBinaryStamps(converter)
     )
+    val before = classMarks(request.classes)
     try
       val result = zinc.compile(inputs, Logger.Null)
       FileAnalysisStore
@@ -615,37 +631,118 @@ object JvmCompile:
         .set(result)
       if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
       else
+        val files = result.analysis() match
+          case found: sbt.internal.inc.Analysis => sourceCount(prior, found)
+          case _                                => None
         Right(
           CompileOutput(
             request.classes,
             countClasses(request.classes),
             key,
-            result.hasModified
+            result.hasModified,
+            files,
+            Some(writtenClasses(before, request.classes))
           )
         )
     catch
       case _: xsbti.CompileFailed =>
         Left(CompileError.Failed(reporter.diagnostics))
 
-  private def remembered(
+  /** The previous analysis, when the store has one. An unreadable analysis is
+    * not "no previous compile": that would count every source as compiled.
+    */
+  private enum Prior:
+    case Absent
+    case Known(analysis: sbt.internal.inc.Analysis)
+    case Unreadable
+
+  private def priorResult(
       zinc: IncrementalCompilerImpl,
       dir: Path
-  ): PreviousResult =
+  ): (PreviousResult, Prior) =
     val got = FileAnalysisStore.binary(dir.resolve("inc.zip").toFile).get()
-    got.toScala.fold(zinc.emptyPreviousResult)(zinc.previousResult)
+    got.toScala match
+      case None           => (zinc.emptyPreviousResult, Prior.Absent)
+      case Some(contents) =>
+        val prior = contents.getAnalysis match
+          case analysis: sbt.internal.inc.Analysis => Prior.Known(analysis)
+          case _                                   => Prior.Unreadable
+        (zinc.previousResult(contents), prior)
 
-  private def countClasses(root: Path): Int =
-    if !Files.isDirectory(root) then 0
+  /** Sources attributed to compilations that were not in the previous analysis.
+    * None when a new cycle exists and no source can be named.
+    */
+  private def sourceCount(
+      prior: Prior,
+      current: sbt.internal.inc.Analysis
+  ): Option[SourceCount] =
+    prior match
+      case Prior.Unreadable      => None
+      case Prior.Absent          => counted(Set.empty, 0, current)
+      case Prior.Known(previous) =>
+        counted(
+          previous.compilations.allCompilations.map(_.getStartTime).toSet,
+          previous.compilations.allCompilations.size,
+          current
+        )
+
+  private def counted(
+      earlier: Set[Long],
+      earlierCount: Int,
+      current: sbt.internal.inc.Analysis
+  ): Option[SourceCount] =
+    val runs = current.compilations.allCompilations
+    val suffix =
+      if runs.size > earlierCount then runs.drop(earlierCount)
+      else Seq.empty
+    val fresh = runs
+      .map(_.getStartTime)
+      .filterNot(earlier.contains)
+      .toSet ++ suffix.map(_.getStartTime)
+    val tracked = current.relations.allSources
+    if fresh.isEmpty then Some(SourceCount(0, tracked.size))
+    else
+      val compiled = tracked.count: src =>
+        current.relations
+          .classNames(src)
+          .exists: name =>
+            fresh.contains(
+              current.apis.internalAPI(name).compilationTimestamp()
+            )
+      if compiled == 0 then None
+      else Some(SourceCount(compiled, tracked.size - compiled))
+
+  private final case class ClassMark(
+      modified: java.nio.file.attribute.FileTime,
+      bytes: Long
+  )
+
+  /** A matching mark was already there. The directory census is not a write. */
+  private def writtenClasses(before: Map[Path, ClassMark], root: Path): Int =
+    classMarks(root).count: (path, mark) =>
+      before.get(path) match
+        case Some(old) => old != mark
+        case None      => true
+
+  private def classMarks(root: Path): Map[Path, ClassMark] =
+    if !Files.isDirectory(root) then Map.empty
     else
       val walk = Files.walk(root)
-      try
-        walk.iterator.asScala.count: path =>
-          Option(path.getFileName).map(_.toString) match
-            case Some(name) =>
-              name.endsWith(".class") || name.endsWith(".sjsir") || name
-                .endsWith(".nir")
-            case None => false
+      try walk.iterator.asScala.flatMap(classMark).toMap
       finally walk.close()
+
+  private def classMark(path: Path): Option[(Path, ClassMark)] =
+    Option(path.getFileName)
+      .map(_.toString)
+      .filter(producedName)
+      .map: _ =>
+        path -> ClassMark(Files.getLastModifiedTime(path), Files.size(path))
+
+  private def producedName(name: String): Boolean =
+    name.endsWith(".class") || name.endsWith(".sjsir") || name.endsWith(".nir")
+
+  private def countClasses(root: Path): Int =
+    classMarks(root).size
 
 private final class CollectingReporter(hear: CompileProblem => Unit)
     extends xsbti.Reporter:

@@ -31,9 +31,15 @@ final case class CompiledCell(
     version: ScalaVersion,
     platform: Platform,
     classes: Path,
+    /** `.class`, `.sjsir`, and `.nir` currently in `classes`, including
+      * leftovers.
+      */
     classFiles: Int,
     key: Option[Sha256] = None,
-    changed: Boolean = true
+    changed: Boolean = true,
+    sources: Option[SourceCount] = None,
+    /** Class files this round wrote. Absent when that set is not known. */
+    classesWritten: Option[Int] = None
 )
 
 /** One cell's console. Diagnostics stay with that cell. Parallel cells are not
@@ -116,6 +122,18 @@ object GraphCompile:
       platform: Option[Platform]
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
     console(session, names, platform)
+  )
+
+  /** `report` is required. A default would overload the repo `run`, which
+    * already defaults its own callback.
+    */
+  def run(
+      session: CompileSession,
+      names: List[String],
+      platform: Option[Platform],
+      report: CompileFeed => UIO[Unit]
+  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
+    console(session, names, platform).tap(report)
   )
   def console(
       session: CompileSession,
@@ -573,7 +591,9 @@ object GraphCompile:
             compiled.classes,
             compiled.classFiles,
             Some(compiled.key),
-            compiled.changed
+            compiled.changed,
+            compiled.sources,
+            compiled.classesWritten
           )
     yield compiled
 
@@ -595,7 +615,16 @@ object GraphCompile:
           finally walk.close()
           paths.sortBy(path => -path.getNameCount).foreach(Files.deleteIfExists)
         Files.createDirectories(classes)
-        CompiledCell(module, version, platform, classes, 0, changed = false)
+        CompiledCell(
+          module,
+          version,
+          platform,
+          classes,
+          0,
+          changed = false,
+          sources = Some(SourceCount(0, 0)),
+          classesWritten = Some(0)
+        )
       }
       .mapError(_ => GraphCompileError.Output(classes))
 

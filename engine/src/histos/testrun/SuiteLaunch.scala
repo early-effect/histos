@@ -89,7 +89,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean,
-      noted: Boolean => UIO[Unit] = _ => ZIO.unit
+      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -185,7 +185,7 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean,
-      noted: Boolean => UIO[Unit] = _ => ZIO.unit
+      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -294,7 +294,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean,
-      noted: Boolean => UIO[Unit] = _ => ZIO.unit
+      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -388,7 +388,7 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean,
-      noted: Boolean => UIO[Unit] = _ => ZIO.unit
+      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -692,7 +692,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       quick: Boolean,
-      noted: Boolean => UIO[Unit] = _ => ZIO.unit
+      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,
@@ -766,7 +766,7 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       patterns: List[SuitePattern],
       quick: Boolean,
-      noted: Boolean => UIO[Unit] = _ => ZIO.unit
+      noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
     ModuleTestError,

@@ -152,37 +152,58 @@ object Calls:
     chosen(platform) match
       case Left(message) => done(say, CliExit.TaskFailed.code, message)
       case Right(choice) =>
-        Ref.make(0).zip(Runtimes.read(machine)).flatMap { (status, runtimes) =>
-          histos.program.Program
-            .console(repo, graph, id, jdk, runtimes, choice)
-            .foreach {
-              case histos.program.ProgramFeed.Begin(module, version, target) =>
-                told(
-                  say,
-                  s"${module.value} ${version.value} ${target.token}"
-                )
-              case histos.program.ProgramFeed.Out(text) => told(say, text)
-              case histos.program.ProgramFeed.Err(text) =>
-                emit(say, Message.Err(text))
-              case histos.program.ProgramFeed.Exited(_, _, _, code) =>
-                ZIO.when(code != 0)(status.set(code)).unit
-            }
-            .foldZIO(
-              {
-                case error: histos.program.ProgramError =>
-                  done(say, programCode(error), error.message)
-                case error: ServerError => ZIO.fail(error)
-              },
-              _ =>
-                status.get.flatMap(code =>
-                  done(
-                    say,
-                    if code == 0 then CliExit.Success.code else code,
-                    ""
+        CompileConsole
+          .open(repo)
+          .flatMap: console =>
+            Ref
+              .make(0)
+              .zip(Runtimes.read(machine))
+              .flatMap: (status, runtimes) =>
+                histos.program.Program
+                  .console(
+                    repo,
+                    graph,
+                    id,
+                    jdk,
+                    runtimes,
+                    choice,
+                    feed => speak(say, console, feed).ignore,
+                    console.announce(text => say(Message.Out(text)).ignore)
                   )
-                )
-            )
-        }
+                  .foreach:
+                    case histos.program.ProgramFeed
+                          .Begin(module, version, target) =>
+                      told(
+                        say,
+                        s"${module.value} ${version.value} ${target.token}"
+                      )
+                    case histos.program.ProgramFeed.Out(text) => told(say, text)
+                    case histos.program.ProgramFeed.Err(text) =>
+                      emit(say, Message.Err(text))
+                    case histos.program.ProgramFeed.Exited(_, _, _, code) =>
+                      ZIO.when(code != 0)(status.set(code)).unit
+                  .foldZIO(
+                    {
+                      case error: histos.program.ProgramError =>
+                        val announced = error match
+                          case histos.program.ProgramError.Compile(_) =>
+                            console.announce(text => say(Message.Out(text)))
+                          case _ => ZIO.unit
+                        announced *> done(
+                          say,
+                          programCode(error),
+                          error.message
+                        )
+                      case error: ServerError => ZIO.fail(error)
+                    },
+                    _ =>
+                      status.get.flatMap: code =>
+                        done(
+                          say,
+                          if code == 0 then CliExit.Success.code else code,
+                          ""
+                        )
+                  )
 
   def task(
       repo: Path,
@@ -457,21 +478,33 @@ object Calls:
       case None =>
         done(say, CliExit.CompileFailed.code, "assembly path is not a path")
       case Some(path) =>
-        Assemble
-          .run(repo, graph, jdk, NativeOrigin.read(machine.env), path)
-          .foldZIO(
-            error => done(say, CliExit.CompileFailed.code, error.message),
-            assembled =>
-              pin(repo, assembled.path).foldZIO(
-                message => done(say, CliExit.CompileFailed.code, message),
-                _ =>
-                  told(say, relative(repo, assembled.path)) *> done(
-                    say,
-                    CliExit.Success.code,
-                    ""
+        CompileConsole.open(repo).flatMap { console =>
+          Assemble
+            .run(
+              repo,
+              graph,
+              jdk,
+              NativeOrigin.read(machine.env),
+              path,
+              feed => speak(say, console, feed).ignore
+            )
+            .foldZIO(
+              error =>
+                console.announce(text => say(Message.Out(text))) *>
+                  done(say, CliExit.CompileFailed.code, error.message),
+              assembled =>
+                console.announce(text => say(Message.Out(text))) *>
+                  pin(repo, assembled.path).foldZIO(
+                    message => done(say, CliExit.CompileFailed.code, message),
+                    _ =>
+                      told(say, relative(repo, assembled.path)) *> done(
+                        say,
+                        CliExit.Success.code,
+                        ""
+                      )
                   )
-              )
-          )
+            )
+        }
 
   def compile(
       repo: Path,
@@ -640,8 +673,8 @@ object Calls:
                       runtimes,
                       parsed,
                       quick,
-                      (module, version, platform, changed) =>
-                        notes(module, version, platform, changed)
+                      (module, version, platform, facts) =>
+                        notes(module, version, platform, facts)
                           .flatMap(line => say(Message.Out(line)).ignore)
                     ),
                     cells.toList,

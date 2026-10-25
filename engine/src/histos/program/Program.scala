@@ -18,7 +18,7 @@ import histos.resolve.{
 import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
-import histos.zinc.{GraphCompile, GraphCompileError, JvmCompile}
+import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, JvmCompile}
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
 import histos.step.{
   Input,
@@ -46,7 +46,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, Ref, ZIO}
+import zio.{Chunk, IO, Ref, UIO, ZIO}
 import zio.stream.ZStream
 
 /** Run the class a module names, on one platform. The main classpath only. No
@@ -61,7 +61,9 @@ object Program:
       name: String,
       jdk: JdkRuntime,
       runtimes: Runtimes,
-      choice: Option[Platform] = None
+      choice: Option[Platform] = None,
+      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
+      afterCompile: UIO[Unit] = ZIO.unit
   ): ZStream[Resolve, ProgramError, ProgramFeed] =
     ZStream.unwrap:
       for
@@ -78,9 +80,11 @@ object Program:
           .run(
             histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
             List(module.name.value),
-            Some(platform)
+            Some(platform),
+            report
           )
           .mapError(ProgramError.Compile(_))
+        _ <- afterCompile
         cells = compiled
           .filter(cell =>
             cell.module == module.name && cell.platform == platform

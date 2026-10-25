@@ -1,6 +1,6 @@
 package histos.server
 
-import histos.cli.{CliExit, Command}
+import histos.cli.{CliExit, Command, Lines}
 import histos.watch.SourceWatch
 import histos.{Module, ProjectGraph}
 
@@ -13,6 +13,7 @@ import zio.{Ref, ZIO}
   */
 object Watching:
   def session[R](
+      repo: Path,
       say: Say,
       run: ZIO[R, ServerError, Unit],
       roots: ZIO[R, ServerError, List[Path]]
@@ -29,7 +30,13 @@ object Watching:
               .foldZIO(
                 error =>
                   Calls.finish(say, CliExit.TaskFailed.code, error.message),
-                _ => loop
+                woke =>
+                  ZIO.foreachDiscard(woke)(path =>
+                    Calls.tell(
+                      say,
+                      Lines.watching(Lines.relative(repo, path))
+                    )
+                  ) *> loop
               )
           }
       loop.foldCauseZIO(

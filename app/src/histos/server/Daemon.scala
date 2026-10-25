@@ -714,6 +714,7 @@ object Daemon:
                               )
                             case Right(inner) =>
                               Watching.session(
+                                repo,
                                 out,
                                 run(inner, out.dropExit),
                                 watchRoots(command)

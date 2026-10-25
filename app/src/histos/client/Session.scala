@@ -226,6 +226,7 @@ object Session:
                   Calls.finish(say, CliExit.Usage.code, error.message)
                 case Right(inner) =>
                   Watching.session(
+                    repo,
                     say,
                     answer(repo, apiJar, machine, desk, inner, say.dropExit),
                     fresh(repo, apiJar, desk).either.map:

@@ -42,6 +42,7 @@ import histos.process.{
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
+  CompileFacts,
   CompileProblem,
   CompileRequest,
   CompileToolchain,
@@ -264,7 +265,7 @@ private[histos] object TestCompile:
       lock: DependencyLock,
       repositories: Repositories,
       hear: CompileProblem => Unit = _ => (),
-      onCompiled: Boolean => UIO[Unit] = _ => ZIO.unit
+      onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit
   ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
     val classes = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
@@ -285,14 +286,14 @@ private[histos] object TestCompile:
         analysis,
         linked.hashes
       )
-      changed <- compileSuite(
+      facts <- compileSuite(
         module,
         request,
         native,
         SemanticDb.argv(repo, cell.version),
         hear
       )
-      _ <- onCompiled(changed)
+      _ <- onCompiled(facts)
     yield linked
 
   private[testrun] def compileSuite(
@@ -301,7 +302,7 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit
-  ): ZIO[LockedTools, ModuleTestError, Boolean] =
+  ): ZIO[LockedTools, ModuleTestError, CompileFacts] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
       val compiled = request.toolchain.platform match
         case Platform.Jvm => JvmCompile.compile(request, extra, hear)
@@ -316,7 +317,7 @@ private[histos] object TestCompile:
           error =>
             ModuleTestError
               .Sources(module.name, request.toolchain.version, error),
-          _.changed
+          _.facts
         )
 
   /** Compile jars of `dependsOn`, not their tests. The child runs those
