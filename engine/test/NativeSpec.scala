@@ -357,7 +357,15 @@ object NativeSpec extends ZIOSpecDefault:
           jdk <- GraphCompile.jdkHere
           _ <- histos.ToolFixture.seed(root, built)
           compiled <- GraphCompile
-            .run(root, built, List("app"), jdk, here.native)
+            .run(
+              root,
+              built,
+              List("app"),
+              jdk,
+              here.native,
+              None,
+              _ => ZIO.unit
+            )
             .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
           tested <- ModuleTest

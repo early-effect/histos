@@ -124,9 +124,6 @@ object GraphCompile:
     console(session, names, platform)
   )
 
-  /** `report` is required. A default would overload the repo `run`, which
-    * already defaults its own callback.
-    */
   def run(
       session: CompileSession,
       names: List[String],
@@ -177,8 +174,8 @@ object GraphCompile:
       names: List[String],
       jdk: JdkRuntime,
       native: NativeOrigin,
-      platform: Option[Platform] = None,
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit
+      platform: Option[Platform],
+      report: CompileFeed => UIO[Unit]
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
     collected(console(repo, graph, names, jdk, native, platform).tap(report))
 
@@ -191,7 +188,7 @@ object GraphCompile:
       names: List[String],
       jdk: JdkRuntime,
       native: NativeOrigin,
-      platform: Option[Platform] = None
+      platform: Option[Platform]
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     watch(repo, graph, choose(graph, names), None, platform, jdk, native)
 

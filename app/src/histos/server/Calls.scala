@@ -522,7 +522,14 @@ object Calls:
       GraphCompile
         .strict(
           GraphCompile
-            .console(repo, graph, projects, jdk, NativeOrigin.read(machine.env))
+            .console(
+              repo,
+              graph,
+              projects,
+              jdk,
+              NativeOrigin.read(machine.env),
+              None
+            )
         )
         .mapZIO(feed => speak(say, console, feed))
         .runDrain

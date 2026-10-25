@@ -33,7 +33,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           cells <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -81,7 +89,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           cells <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -135,7 +151,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           cells <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, List("app"), jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  List("app"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -198,7 +222,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
           names <- histos.ToolFixture
             .streamAt(root, built)(
               GraphCompile
-                .console(root, built, List("app"), jdk, NativeOrigin.Central)
+                .console(
+                  root,
+                  built,
+                  List("app"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None
+                )
             )
             .collect {
               case CompileFeed.Began(module, _, _) =>
@@ -233,7 +264,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           run = histos.ToolFixture
             .streamAt(root, built)(
               GraphCompile
-                .console(root, built, Nil, jdk, NativeOrigin.Central)
+                .console(root, built, Nil, jdk, NativeOrigin.Central, None)
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -330,7 +361,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           result <- histos.ToolFixture
             .streamAt(root, built)(
               GraphCompile
-                .console(root, built, Nil, jdk, NativeOrigin.Central)
+                .console(root, built, Nil, jdk, NativeOrigin.Central, None)
             )
             .tap(feed => seen.update(_ :+ feed))
             .runDrain
@@ -384,7 +415,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, List("app"), jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  List("app"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -444,7 +483,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           cells <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, List("core"), jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  List("core"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -485,7 +532,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           cells <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -526,7 +581,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -590,7 +653,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, List("missing"), jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  List("missing"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -610,7 +681,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
-            .run(root, built, Nil, jdk, NativeOrigin.Central)
+            .run(
+              root,
+              built,
+              Nil,
+              jdk,
+              NativeOrigin.Central,
+              None,
+              _ => ZIO.unit
+            )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
             )
@@ -634,7 +713,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -686,7 +773,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           compiled <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, List("e2e"), jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  List("e2e"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -694,7 +789,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           refused <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, List("probe"), jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  List("probe"),
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -733,7 +836,15 @@ object GraphCompileSpec extends ZIOSpecDefault:
           out <- histos.ToolFixture
             .at(root, built)(
               GraphCompile
-                .run(root, built, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  root,
+                  built,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit
+                )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
