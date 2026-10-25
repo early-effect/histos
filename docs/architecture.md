@@ -185,7 +185,7 @@ Generated [`ci.yml`](../.github/workflows/ci.yml) runs test, catalog versions, p
 
 ## Errors, exits, and migration
 
-Domain adapters use nested error ADTs with paths/coordinates/reasons. Socket and MCP edges still flatten them to text (A1/A2/A12); existing platform/startup failures remain P7. Errors are not typed all the way to every surface yet.
+Domain adapters use nested error ADTs with paths/coordinates/reasons. The MCP report and each CLI line are typed. Domain faults on the socket, and compiler diagnostics inside the report, are still text (A1/A2/A12). Existing platform/startup failures remain P7. Errors are not typed all the way to every surface yet.
 
 | Exit | Meaning |
 | --- | --- |

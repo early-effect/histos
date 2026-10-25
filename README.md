@@ -1,6 +1,6 @@
 # Histos
 
-A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI and MCP send one request per operation. The CLI renders a report and an exit. MCP returns that report as one string of CLI text. BSP is the editor protocol.
+A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI and MCP send one request per operation. The CLI renders a report and an exit. MCP publishes each CLI line while the tool runs and returns that report as JSON. BSP is the editor protocol.
 
 Pre-release. Histos does not install a JDK or Node. If JDK 21 or Node 25 is not already there, it explains what it found and fails. The roadmap and audit describe delivered work and remaining capabilities.
 

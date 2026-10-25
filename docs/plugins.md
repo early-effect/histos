@@ -153,7 +153,7 @@ The grammar is closed before loading. Only an unknown root outside [`CommandName
 
 [`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch uses that same parse. The call on the wire is `Call.Watch(Call.Task(id, pluginArgs))`, and the server runs that task. With no server, watch runs the same call. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
 
-`run <plugin>/<task>` uses empty arguments and refuses a platform token. A contributed command's parsed `PluginArgs` travel on `Call.Task`, including under watch, so an attached CLI, the server, and MCP run those arguments. Cancellation of a running plugin task uses the minted run id, not the task id. Serial MCP still cannot cancel the tool call it is waiting on (A8/A23). No plugin-specific MCP tool or BSP task target exists.
+`run <plugin>/<task>` uses empty arguments and refuses a platform token. A contributed command's parsed `PluginArgs` travel on `Call.Task`, including under watch, so an attached CLI, the server, and MCP run those arguments. Cancellation of a running plugin task uses the minted run id, not the task id. A second MCP call can cancel that id while the tool is still held (A8). No plugin-specific MCP tool or BSP task target exists.
 
 Graph text shows plugin binary/source provenance, task seal/needs/declared paths, commands and jobs. Server fingerprints the build, dependency lock and path-plugin files and reloads changed generations. Resource leasing, typed surface reports and current request runtime/lock proof are separate A20/L11/L13 concerns, not plugin-cache guarantees.
 
