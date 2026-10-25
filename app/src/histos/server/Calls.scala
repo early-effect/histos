@@ -548,6 +548,90 @@ object Calls:
         text => told(say, text) *> done(say, CliExit.Success.code, "")
       )
 
+  def previewTest(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      say: Say
+  ): IO[ServerError, Unit] =
+    Plan
+      .test(repo, graph, projects)
+      .foldZIO(
+        error => done(say, CliExit.TestFailed.code, error.message),
+        plan =>
+          told(say, Plan.renderTest(repo, plan)) *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
+      )
+
+  def previewPublish(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      env: Map[String, String],
+      say: Say
+  ): IO[ServerError, Unit] =
+    Plan
+      .publish(repo, graph, projects, env)
+      .foldZIO(
+        error => done(say, CliExit.PublishFailed.code, error.message),
+        plan =>
+          told(say, Plan.renderPublish(plan)) *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
+      )
+
+  /** Empty names do not read `graph`. */
+  def previewClean(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      say: Say
+  ): IO[ServerError, Unit] =
+    Plan
+      .clean(repo, graph, projects)
+      .foldZIO(
+        error => done(say, CliExit.TaskFailed.code, error.message),
+        plan =>
+          told(say, Plan.renderClean(repo, plan)) *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
+      )
+
+  def previewCleanAll(repo: Path, say: Say): IO[ServerError, Unit] =
+    val plan = Plan.cleanAll(repo)
+    told(say, Plan.renderClean(repo, plan)) *> done(say, CliExit.Success.code, "")
+
+  def previewCleanFull(repo: Path, say: Say): IO[ServerError, Unit] =
+    val plan = Plan.cleanFull(repo)
+    told(say, Plan.renderClean(repo, plan)) *> done(say, CliExit.Success.code, "")
+
+  def previewRun(
+      graph: ProjectGraph,
+      id: String,
+      platform: Option[String],
+      say: Say
+  ): IO[ServerError, Unit] =
+    val parsed = platform match
+      case None => Right(None)
+      case Some(raw) =>
+        Platform.from(raw) match
+          case Left(error)  => Left(error.message)
+          case Right(found) => Right(Some(found))
+    parsed match
+      case Left(message) => done(say, CliExit.TaskFailed.code, message)
+      case Right(choice) =>
+        Plan.run(graph, id, choice) match
+          case Left(error) => done(say, CliExit.TaskFailed.code, error.message)
+          case Right(plan) =>
+            told(say, Plan.renderRun(plan)) *> done(say, CliExit.Success.code, "")
+
   /** No names wipe every product root and do not read `graph`. */
   def clean(
       repo: Path,

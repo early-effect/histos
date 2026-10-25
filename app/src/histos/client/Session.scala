@@ -178,6 +178,10 @@ object Session:
         Calls.wipe(repo, say)
       case Call.CleanFull =>
         Calls.cleanFull(repo, say)
+      case Call.PreviewClean(Nil) =>
+        Calls.previewCleanAll(repo, say)
+      case Call.PreviewCleanFull =>
+        Calls.previewCleanFull(repo, say)
       case Call.Resolve(action) =>
         Calls.resolve(repo, apiJar, action, say, machine.native)
       case Call.Reload =>
@@ -318,6 +322,17 @@ object Session:
         watch(repo, apiJar, machine, desk, inner, say)
       case Call.PreviewCompile(projects) =>
         histos.server.Calls.previewCompile(repo, graph, projects, say)
+      case Call.PreviewTest(projects) =>
+        histos.server.Calls.previewTest(repo, graph, projects, say)
+      case Call.PreviewPublish(projects) =>
+        histos.server.Calls
+          .previewPublish(repo, graph, projects, machine.env, say)
+      case Call.PreviewClean(projects) =>
+        histos.server.Calls.previewClean(repo, graph, projects, say)
+      case Call.PreviewCleanFull =>
+        histos.server.Calls.previewCleanFull(repo, say)
+      case Call.PreviewRun(id, platform) =>
+        histos.server.Calls.previewRun(graph, id, platform, say)
 
   private def withJdk(machine: Machine, say: Say, exit: CliExit)(
       use: JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]

@@ -61,6 +61,18 @@ object Operation:
       case Command.Cancel(id)         => Right(Call.Cancel(id))
       case Command.PreviewCompile(projects) =>
         Right(Call.PreviewCompile(projects))
+      case Command.PreviewTest(projects) =>
+        Right(Call.PreviewTest(projects))
+      case Command.PreviewPublish(projects) =>
+        Right(Call.PreviewPublish(projects))
+      case Command.PreviewClean(projects) =>
+        Right(Call.PreviewClean(projects))
+      case Command.PreviewCleanFull =>
+        Right(Call.PreviewCleanFull)
+      case Command.PreviewRun(id, platform) =>
+        Right(Call.PreviewRun(id.value, platform.map(_.token)))
+      case Command.PreviewPlugin(id) =>
+        Right(Call.PreviewRun(id.render, None))
 
   def resolve(action: ResolveAction): String =
     action match

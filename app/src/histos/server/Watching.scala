@@ -71,6 +71,10 @@ object Watching:
       case Call.Test(names, _, _)     => names
       case Call.Compile(names)        => names
       case Call.PreviewCompile(names) => names
+      case Call.PreviewTest(names)    => names
+      case Call.PreviewPublish(names) => names
+      case Call.PreviewClean(names)   => names
+      case Call.PreviewRun(id, _)     => List(id)
       case Call.Clean(names)          => names
       case Call.Run(id, _)            => List(id)
       case _                          => Nil

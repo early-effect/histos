@@ -121,6 +121,11 @@ enum Call derives JsonCodec:
   case Watch(inner: Call)
   case Bsp
   case PreviewCompile(projects: List[String])
+  case PreviewTest(projects: List[String])
+  case PreviewPublish(projects: List[String])
+  case PreviewClean(projects: List[String])
+  case PreviewCleanFull
+  case PreviewRun(id: String, platform: Option[String])
 
 object Call:
   /** The codec is on [[Call]]. A case value does not carry it. */
@@ -664,6 +669,10 @@ object Daemon:
                     occupy(permit, target)(Calls.wipe(repo, out))
                   case Call.CleanFull =>
                     occupy(permit, target)(Calls.cleanFull(repo, out))
+                  case Call.PreviewClean(Nil) =>
+                    Calls.previewCleanAll(repo, out)
+                  case Call.PreviewCleanFull =>
+                    Calls.previewCleanFull(repo, out)
                   case Call.Resolve(action) =>
                     histos.jdk.Machine
                       .load(repo)
@@ -869,6 +878,39 @@ object Daemon:
                                     repo,
                                     held.graph,
                                     projects,
+                                    out
+                                  )
+                                case Call.PreviewTest(projects) =>
+                                  Calls.previewTest(
+                                    repo,
+                                    held.graph,
+                                    projects,
+                                    out
+                                  )
+                                case Call.PreviewPublish(projects) =>
+                                  Calls.previewPublish(
+                                    repo,
+                                    held.graph,
+                                    projects,
+                                    machine.env,
+                                    out
+                                  )
+                                case Call.PreviewClean(Nil) =>
+                                  Calls.previewCleanAll(repo, out)
+                                case Call.PreviewClean(projects) =>
+                                  Calls.previewClean(
+                                    repo,
+                                    held.graph,
+                                    projects,
+                                    out
+                                  )
+                                case Call.PreviewCleanFull =>
+                                  Calls.previewCleanFull(repo, out)
+                                case Call.PreviewRun(id, platform) =>
+                                  Calls.previewRun(
+                                    held.graph,
+                                    id,
+                                    platform,
                                     out
                                   )
                             val leased =

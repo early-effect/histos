@@ -61,8 +61,11 @@ object HistosMcp:
       derives Schema,
         JsonCodec
   final case class WatchArgs(args: List[String] = Nil) derives Schema, JsonCodec
-  final case class PreviewArgs(operation: String, projects: List[String] = Nil)
-      derives Schema,
+  final case class PreviewArgs(
+      operation: String,
+      id: String,
+      projects: List[String] = Nil
+  ) derives Schema,
         JsonCodec
 
   enum ServeError:
@@ -192,13 +195,23 @@ object HistosMcp:
       )(args => Cli.watchCall(args.args, repo, apiJar).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
         "preview",
-        "Say what a compile will do. operation is compile. An empty project list is every module. Writes nothing."
-      )(args =>
-        args.operation match
-          case "compile" => ask(Call.PreviewCompile(args.projects))
-          case other     => ZIO.fail(s"preview does not run $other")
-      )
+        "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. File-level staleness is unknown."
+      )(args => ZIO.fromEither(previewCall(args)).flatMap(ask))
     yield previewed
+
+  def previewCall(args: PreviewArgs): Either[String, Call] =
+    args.operation match
+      case "compile"   => Right(Call.PreviewCompile(args.projects))
+      case "test"      => Right(Call.PreviewTest(args.projects))
+      case "publish"   => Right(Call.PreviewPublish(args.projects))
+      case "clean"     => Right(Call.PreviewClean(args.projects))
+      case "cleanFull" =>
+        if args.projects.nonEmpty then Left("cleanFull does not take a project")
+        else Right(Call.PreviewCleanFull)
+      case "run" =>
+        if args.id.isEmpty then Left("run needs one name")
+        else Right(Call.PreviewRun(args.id, None))
+      case other => Left(s"preview does not run $other")
 
   private def arguments(
       texts: List[NamedArg],
