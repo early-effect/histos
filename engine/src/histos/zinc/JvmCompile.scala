@@ -26,6 +26,7 @@ import sbt.internal.inc.{
 }
 import sbt.util.Logger
 import xsbti.compile.{
+  CompileAnalysis,
   CompileOrder,
   IncOptions,
   PerClasspathEntryLookup,
@@ -581,8 +582,11 @@ object JvmCompile:
     val zinc = new IncrementalCompilerImpl
     val converter = MappedFileConverter.empty
     val reporter = CollectingReporter(hear)
+    val ownClasses = request.classes.toAbsolutePath.normalize
+    val ownAnalysis = request.analysis.toAbsolutePath.normalize
     val lookup = new PerClasspathEntryLookup:
-      def analysis(entry: xsbti.VirtualFile) = Optional.empty
+      def analysis(entry: xsbti.VirtualFile) =
+        classpathAnalysis(converter.toPath(entry), ownClasses, ownAnalysis)
       def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
     Files.createDirectories(request.classes)
     Files.createDirectories(request.analysis)
@@ -648,6 +652,34 @@ object JvmCompile:
     catch
       case _: xsbti.CompileFailed =>
         Left(CompileError.Failed(reporter.diagnostics))
+
+  /** Analysis of a `.histos/classes` classpath entry. A directory stamp does
+    * not change when a class file inside it does, so the analysis is how a
+    * public descriptor change invalidates this compile. This compile's own
+    * classes directory is its previous result.
+    */
+  private def classpathAnalysis(
+      entry: Path,
+      ownClasses: Path,
+      ownAnalysis: Path
+  ): Optional[CompileAnalysis] =
+    val path = entry.toAbsolutePath.normalize
+    if path == ownClasses || !Files.isDirectory(path) then Optional.empty
+    else
+      GraphCompile.analysisDirOf(path) match
+        case Some(dir) if dir.toAbsolutePath.normalize != ownAnalysis =>
+          val zip = dir.resolve("inc.zip")
+          if Files.isRegularFile(zip) then storedAnalysis(zip)
+          else Optional.empty
+        case _ => Optional.empty
+
+  private def storedAnalysis(zip: Path): Optional[CompileAnalysis] =
+    FileAnalysisStore.binary(zip.toFile).get().toScala match
+      case Some(contents) =>
+        contents.getAnalysis match
+          case analysis: sbt.internal.inc.Analysis => Optional.of(analysis)
+          case _                                   => Optional.empty
+      case None => Optional.empty
 
   /** The previous analysis, when the store has one. An unreadable analysis is
     * not "no previous compile": that would count every source as compiled.

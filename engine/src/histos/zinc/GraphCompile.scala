@@ -747,5 +747,28 @@ object GraphCompile:
       .resolve(version.value)
       .resolve(platform.token)
 
+  /** Inverse of `classesDir` / `analysis`. None for a path that is not a
+    * `.histos/classes/<module>/<scala>/<platform>` product.
+    */
+  private[histos] def analysisDirOf(classes: Path): Option[Path] =
+    val absolute = classes.toAbsolutePath.normalize
+    for
+      (platform, scalaDir) <- named(absolute)
+      (scala, moduleDir) <- named(scalaDir)
+      (module, kindDir) <- named(moduleDir)
+      (kind, histos) <- named(kindDir)
+      if kind == "classes"
+      (dot, repo) <- named(histos)
+      if dot == ".histos"
+    yield repo
+      .resolve(".histos")
+      .resolve("analysis")
+      .resolve(module)
+      .resolve(scala)
+      .resolve(platform)
+
+  private def named(path: Path): Option[(String, Path)] =
+    Option(path.getFileName).map(_.toString).zip(Option(path.getParent))
+
   private def modulesOf(graph: ProjectGraph): List[Module] =
     graph.projects.collect { case module: Module => module }
