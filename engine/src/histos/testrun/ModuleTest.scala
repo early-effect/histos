@@ -374,7 +374,12 @@ object ModuleTest:
       patterns: List[SuitePattern],
       matched: Ref[Boolean],
       quick: Boolean,
-      onTestCompile: (ProjectName, ScalaVersion, Platform, Boolean) => UIO[Unit]
+      onTestCompile: (
+          ProjectName,
+          ScalaVersion,
+          Platform,
+          histos.zinc.CompileFacts
+      ) => UIO[Unit]
   ): ZIO[
     Resolve & ProviderInstall & LockedTools,
     ModuleTestError,
@@ -401,12 +406,12 @@ object ModuleTest:
                 if !SuitePattern.allows(patterns, main.value) then
                   ZIO.succeed(ZStream.empty)
                 else
-                  val note = (changed: Boolean) =>
+                  val note = (facts: histos.zinc.CompileFacts) =>
                     onTestCompile(
                       cell.module,
                       cell.version,
                       cell.platform,
-                      changed
+                      facts
                     )
                   cell.platform match
                     case Platform.Jvm =>
@@ -456,12 +461,12 @@ object ModuleTest:
                       )
               case (_, None, provider) =>
                 val framework = provider.getOrElse(TestProvider.Zio)
-                val note = (changed: Boolean) =>
+                val note = (facts: histos.zinc.CompileFacts) =>
                   onTestCompile(
                     cell.module,
                     cell.version,
                     cell.platform,
-                    changed
+                    facts
                   )
                 cell.platform match
                   case Platform.Jvm =>

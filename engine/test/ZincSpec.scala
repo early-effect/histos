@@ -396,7 +396,7 @@ object ZincSpec extends ZIOSpecDefault:
             write(root, "Bar.scala", "object Bar:\n  def n: Int = 2\n")
           )
           both = liveRequest(root, foo, jdk).copy(sources = List(foo, bar))
-          _ <- JvmCompile.compile(both)
+          first <- JvmCompile.compile(both)
           stored = Files.isRegularFile(
             root.resolve("analysis").resolve("inc.zip")
           )
@@ -407,16 +407,30 @@ object ZincSpec extends ZIOSpecDefault:
               .from(java.time.Instant.now.minusSeconds(30))
             Files.setLastModifiedTime(fooClass, old)
             Files.getLastModifiedTime(fooClass)
+          second <- JvmCompile.compile(both)
           _ <- ZIO.attempt(
             Files.writeString(bar, "object Bar:\n  def n: Int = 3\n")
           )
-          _ <- JvmCompile.compile(both)
+          edited <- JvmCompile.compile(both)
           fooSame <- ZIO.attempt(Files.getLastModifiedTime(fooClass) == stamped)
           _ <- ZIO.attempt(Files.delete(bar))
           _ <- JvmCompile.compile(both.copy(sources = List(foo)))
           barGone <- ZIO.attempt(!Files.exists(barClass))
           fooKept <- ZIO.attempt(Files.isRegularFile(fooClass))
-        yield assertTrue(stored && fooSame && barGone && fooKept)
+        yield assertTrue(
+          stored && fooSame && barGone && fooKept,
+          first.sources == Some(SourceCount(2, 0)),
+          first.classesWritten == Some(first.classFiles),
+          first.classFiles > 0,
+          second.sources == Some(SourceCount(0, 2)),
+          second.classesWritten == Some(0),
+          !second.changed,
+          second.classFiles == first.classFiles,
+          edited.sources == Some(SourceCount(1, 1)),
+          edited.classesWritten.exists(written =>
+            written > 0 && written < edited.classFiles
+          )
+        )
     ,
     test("two compiles on one pool open the compiler once"):
       ZIO.scoped:

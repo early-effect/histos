@@ -25,14 +25,14 @@ import histos.resolve.{
   ResolveError
 }
 import histos.workspace.Workspace
-import histos.zinc.{CompiledCell, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, Scope, ZIO}
+import zio.{IO, Scope, UIO, ZIO}
 
 enum AssembleError:
   case Toolchain(error: histos.zinc.CompileError)
@@ -67,7 +67,8 @@ object Assemble:
       graph: ProjectGraph,
       jdk: JdkRuntime,
       native: NativeOrigin,
-      destination: Path
+      destination: Path,
+      report: CompileFeed => UIO[Unit] = _ => ZIO.unit
   ): ZIO[Resolve, AssembleError, Assembled] =
     for
       app <- module(graph, "app")
@@ -77,7 +78,9 @@ object Assemble:
       compiled <- GraphCompile
         .run(
           histos.zinc.CompileSession(repo, graph, jdk, native, lock),
-          List(app.name.value)
+          List(app.name.value),
+          None,
+          report
         )
         .mapError(AssembleError.Compile(_))
       classes <- ZIO.fromEither(
