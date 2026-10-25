@@ -4,7 +4,6 @@ import histos.jdk.JdkRuntime
 import histos.js.{JsRun, JsRunRequest}
 
 import histos.resolve.LockedTools
-import histos.jdk.Sha256
 import histos.js.{
   JsLink,
   JsLinkError,
@@ -124,7 +123,7 @@ private[testrun] object SuiteLaunch:
         cell,
         List(main.value),
         classes :: linked.paths,
-        linked.hashes,
+        cover(module, linked, jdk),
         quick,
         _ =>
           for
@@ -276,7 +275,7 @@ private[testrun] object SuiteLaunch:
                   cell,
                   wanted,
                   classes :: linked.paths,
-                  linked.hashes,
+                  cover(module, linked, jdk),
                   quick,
                   dirty => launch(exact(dirty), linked)
                 )
@@ -330,7 +329,7 @@ private[testrun] object SuiteLaunch:
         cell,
         List(main.value),
         classes :: linked.paths,
-        linked.hashes,
+        cover(module, linked, jdk),
         quick,
         _ =>
           for
@@ -500,7 +499,7 @@ private[testrun] object SuiteLaunch:
                   cell,
                   wanted,
                   classes :: linked.paths,
-                  linked.hashes,
+                  cover(module, linked, jdk),
                   quick,
                   dirty => launch(exact(dirty), linked, major)
                 )
@@ -586,7 +585,7 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       suites: List[String],
       directories: List[Path],
-      hashes: List[Sha256],
+      cover: SuiteStamp.Cover,
       quick: Boolean,
       run: List[String] => ZIO[
         R,
@@ -599,47 +598,71 @@ private[testrun] object SuiteLaunch:
     ZStream[Any, ModuleTestError, TestFeed]
   ] =
     ZIO.serviceWithZIO[TestContext]: context =>
-      val jars = (hashes ++ context.hashes).map(_.value)
-      val tree = SuiteStamp.index(directories)
-      val stamped = suites.map: name =>
-        name -> SuiteStamp.digest(name, tree, jars)
-      if !quick then
-        run(suites).map(stream => stream.tap(keep(repo, cell, stamped, _)))
-      else
-        ZIO
-          .foldLeft(stamped)(
-            (List.empty[String], List.empty[(String, Option[String])])
-          ):
-            case ((cached, dirty), (name, Some(digest))) =>
-              QuickRecord
-                .hit(
-                  repo,
-                  cell.module,
-                  cell.version,
-                  cell.platform,
-                  name,
-                  digest
-                )
-                .map: hit =>
-                  if hit then (name :: cached, dirty)
-                  else (cached, (name, Some(digest)) :: dirty)
-            case ((cached, dirty), (name, None)) =>
-              ZIO.succeed((cached, (name, None) :: dirty))
-          .flatMap: (cached, dirty) =>
-            val shown = ZStream.fromIterable(
-              cached.sorted.map(name =>
-                TestFeed.Cached(
-                  cell.module,
-                  cell.version,
-                  cell.platform,
-                  name
-                )
-              )
-            )
-            if dirty.isEmpty then ZIO.succeed(shown)
-            else
-              run(dirty.map(_._1)).map: stream =>
-                shown ++ stream.tap(keep(repo, cell, dirty, _))
+      val stampedFrom =
+        cover.copy(jars = cover.jars ++ context.hashes.map(_.value))
+      SuiteStamp
+        .index(directories)
+        .mapError(ModuleTestError.Stamp(_))
+        .flatMap: tree =>
+          ZIO
+            .foreach(suites): name =>
+              ZIO
+                .fromEither(SuiteStamp.digest(name, tree, stampedFrom))
+                .mapBoth(ModuleTestError.Stamp(_), found => name -> found)
+            .flatMap: stamped =>
+              if !quick then
+                run(suites)
+                  .map(stream => stream.tap(keep(repo, cell, stamped, _)))
+              else
+                ZIO
+                  .foldLeft(stamped)(
+                    (List.empty[String], List.empty[(String, Option[String])])
+                  ):
+                    case ((cached, dirty), (name, Some(digest))) =>
+                      QuickRecord
+                        .hit(
+                          repo,
+                          cell.module,
+                          cell.version,
+                          cell.platform,
+                          name,
+                          digest
+                        )
+                        .map: hit =>
+                          if hit then (name :: cached, dirty)
+                          else (cached, (name, Some(digest)) :: dirty)
+                    case ((cached, dirty), (name, None)) =>
+                      ZIO.succeed((cached, (name, None) :: dirty))
+                  .flatMap: (cached, dirty) =>
+                    val shown = ZStream.fromIterable(
+                      cached.sorted.map(name =>
+                        TestFeed.Cached(
+                          cell.module,
+                          cell.version,
+                          cell.platform,
+                          name
+                        )
+                      )
+                    )
+                    if dirty.isEmpty then ZIO.succeed(shown)
+                    else
+                      run(dirty.map(_._1)).map: stream =>
+                        shown ++ stream.tap(keep(repo, cell, dirty, _))
+
+  /** Locked jars, upstream compile jars, the accepted JDK, and scalac flags.
+    * [[TestContext]] hashes are appended inside [[remember]].
+    */
+  private def cover(
+      module: Module,
+      linked: TestCompile.Linked,
+      jdk: JdkRuntime
+  ): SuiteStamp.Cover =
+    SuiteStamp.Cover(
+      linked.hashes.map(_.value),
+      linked.upstream.map(_.value),
+      Runtimes.identityToken(jdk.identity),
+      module.flags.argv
+    )
 
   /** The fingerprint is the digest of the classes that ran. A pass stores it. A
     * failure deletes it.
@@ -649,31 +672,35 @@ private[testrun] object SuiteLaunch:
       cell: CompiledCell,
       stamped: List[(String, Option[String])],
       event: TestFeed
-  ): UIO[Unit] =
+  ): IO[ModuleTestError, Unit] =
     event match
       case TestFeed.Done(done) =>
         done.status match
           case TestStatus.Passed =>
             ZIO.foreachDiscard(stamped):
               case (name, Some(digest)) =>
-                QuickRecord.save(
+                QuickRecord
+                  .save(
+                    repo,
+                    cell.module,
+                    cell.version,
+                    cell.platform,
+                    name,
+                    digest
+                  )
+                  .mapError(ModuleTestError.Record(_))
+              case _ => ZIO.unit
+          case TestStatus.Failed(_) =>
+            ZIO.foreachDiscard(stamped): (name, _) =>
+              QuickRecord
+                .clear(
                   repo,
                   cell.module,
                   cell.version,
                   cell.platform,
-                  name,
-                  digest
+                  name
                 )
-              case _ => ZIO.unit
-          case TestStatus.Failed(_) =>
-            ZIO.foreachDiscard(stamped): (name, _) =>
-              QuickRecord.clear(
-                repo,
-                cell.module,
-                cell.version,
-                cell.platform,
-                name
-              )
+                .mapError(ModuleTestError.Record(_))
           case _ => ZIO.unit
       case _ => ZIO.unit
 
@@ -725,7 +752,7 @@ private[testrun] object SuiteLaunch:
         cell,
         List(main.value),
         classes :: linked.paths,
-        linked.hashes,
+        cover(module, linked, jdk),
         quick,
         _ =>
           TestCompile
@@ -851,7 +878,7 @@ private[testrun] object SuiteLaunch:
                   cell,
                   wanted,
                   classes :: linked.paths,
-                  linked.hashes,
+                  cover(module, linked, jdk),
                   quick,
                   dirty => launch(exact(dirty), linked)
                 )

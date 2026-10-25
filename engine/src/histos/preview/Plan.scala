@@ -661,5 +661,6 @@ object Plan:
           ModuleTestError.NoneDiscovered(_, _) | ModuleTestError.NoneMatched(_) | ModuleTestError.Mixed(_) |
           ModuleTestError.Process(_, _, _) | ModuleTestError.Main(_) | ModuleTestError.Absent(_) |
           ModuleTestError.MissingUpstream(_, _, _) | ModuleTestError.Work(_) | ModuleTestError.Runner(_) |
-          ModuleTestError.LinkFailed(_, _, _, _) | ModuleTestError.NoNode(_, _, _) =>
+          ModuleTestError.LinkFailed(_, _, _, _) | ModuleTestError.NoNode(_, _, _) |
+          ModuleTestError.Stamp(_) | ModuleTestError.Record(_) =>
         PreviewError.Sources(IoFailure(repo, IoFault.Stat))

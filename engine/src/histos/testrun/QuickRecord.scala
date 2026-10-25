@@ -5,12 +5,23 @@ import java.nio.file.{Files, Path}
 import scala.util.control.NonFatal
 
 import histos.{Platform, ProjectName, ScalaVersion}
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 
-import zio.UIO
-import zio.ZIO
+import zio.{IO, UIO, ZIO}
+
+/** A stored success could not be written or removed. A missing record is not
+  * one of these: [[QuickRecord.hit]] treats that as a miss.
+  */
+enum QuickError:
+  case Save(failure: IoFailure)
+  case Clear(failure: IoFailure)
+
+  def message: String = this match
+    case Save(failure)  => failure.message
+    case Clear(failure) => failure.message
 
 /** A stored success. A missing record, or a different digest, is not a success.
+  * An unreadable record is a miss. A failed save or clear is [[QuickError]].
   */
 object QuickRecord:
   def hit(
@@ -33,13 +44,17 @@ object QuickRecord:
       platform: Platform,
       suite: String,
       digest: String
-  ): UIO[Unit] =
-    Workspace
-      .writeString(
-        file(repo, module, version, platform, suite),
-        s"success $digest\n"
-      )
-      .ignore
+  ): IO[QuickError, Unit] =
+    val path = file(repo, module, version, platform, suite)
+    // Unlink first. A mode that forbids reading still lets the owner replace
+    // the record when the parent directory is writable, which is how a miss
+    // stores the next success.
+    ZIO
+      .attemptBlocking(Files.deleteIfExists(path))
+      .mapError(_ => QuickError.Save(IoFailure(path, IoFault.Delete))) *>
+      Workspace
+        .writeString(path, s"success $digest\n")
+        .mapError(QuickError.Save(_))
 
   def clear(
       repo: Path,
@@ -47,12 +62,12 @@ object QuickRecord:
       version: ScalaVersion,
       platform: Platform,
       suite: String
-  ): UIO[Unit] =
+  ): IO[QuickError, Unit] =
+    val path = file(repo, module, version, platform, suite)
     ZIO
-      .attemptBlocking(
-        Files.deleteIfExists(file(repo, module, version, platform, suite))
-      )
-      .ignore
+      .attemptBlocking(Files.deleteIfExists(path))
+      .mapError(_ => QuickError.Clear(IoFailure(path, IoFault.Delete)))
+      .unit
 
   private[testrun] def file(
       repo: Path,

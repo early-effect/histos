@@ -148,6 +148,8 @@ enum ModuleTestError:
       detail: String
   )
   case NoNode(module: ProjectName, version: ScalaVersion, miss: NodeMiss)
+  case Stamp(error: StampError)
+  case Record(error: QuickError)
 
   def message: String = this match
     case Tool(_, _, error)               => error.message
@@ -184,6 +186,8 @@ enum ModuleTestError:
       s"'${module.value}' ${version.value} ${platform.token} failed to link\n$detail"
     case NoNode(module, version, miss) =>
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
+    case Stamp(error)  => error.message
+    case Record(error) => error.message
 
 /** One test invocation. The callback runs after a cell's tests compile. */
 final case class TestRun(
