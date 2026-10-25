@@ -831,6 +831,7 @@ object Calls:
             val ran =
               for
                 runtimes <- Runtimes.read(machine)
+                parsed   <- ZIO.fromEither(suitePatterns(patterns))
                 _        <- ZIO
                   .fromEither(histos.select.Selection.select(graph, projects))
                   .mapError(error => ModuleTestError.Compile(GraphCompileError.Target(error)))
@@ -853,9 +854,8 @@ object Calls:
                   }
                   .collectSome
                   .runCollect
-                _      <- console.announce(text => say(Message.Out(text)))
-                parsed <- ZIO.fromEither(suitePatterns(patterns))
-                _      <- ModuleTest
+                _ <- console.announce(text => say(Message.Out(text)))
+                _ <- ModuleTest
                   .suitesLocked(
                     TestRun(
                       repo,
