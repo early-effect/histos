@@ -7,7 +7,7 @@ import histos.native.NativeOrigin
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
-import histos.{Jvm, ProjectGraph, Projects, ScalaVersion, module}
+import histos.{Dep, Jvm, ProjectGraph, Projects, ScalaVersion, module}
 
 import java.net.UnixDomainSocketAddress
 import java.nio.channels.{Channels, SocketChannel}
@@ -16,7 +16,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
-import zio.{Promise, Scope, ZIO, ZLayer, durationInt}
+import zio.{Promise, Ref, Scope, Semaphore, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object ServerSpec extends ZIOSpecDefault:
@@ -583,6 +583,104 @@ object ServerSpec extends ZIOSpecDefault:
             program.provideSome[Scope & histos.resolve.LockedTools](
               layers(root, ZLayer.succeed(reloading(grown)))
             )
+    ,
+    test("an interrupted clean releases the permit so the next clean runs"):
+      ZIO.scoped:
+        for
+          permit <- Semaphore.make(1)
+          entered <- Promise.make[Nothing, Unit]
+          ran <- Ref.make(false)
+          fiber <- Daemon
+            .occupy(permit, Call.Clean(Nil))(
+              entered.succeed(()) *> ZIO.never.as(())
+            )
+            .forkScoped
+          started <- entered.await.timeout(5.seconds)
+          during <- permit.available
+          _ <- fiber.interrupt
+          after <- permit.available
+          followed <- Daemon
+            .occupy(permit, Call.CleanFull)(ran.set(true))
+            .timeout(10.seconds)
+          did <- ran.get
+          free <- permit.available
+        yield assertTrue(
+          started == Some(()),
+          during == 0L,
+          after == 1L,
+          followed == Some(()),
+          did,
+          free == 1L
+        )
+    ,
+    test(
+      "Call.Test with a suite pattern runs that suite and not the unmatched one"
+    ):
+      ZIO.scoped:
+        temp.flatMap: root =>
+          val alpha = root.resolve("foo-a.ran")
+          val beta = root.resolve("foo-b.ran")
+          val program =
+            for
+              built <- ZIO.fromEither(
+                Projects(
+                  module("demo", Jvm)(ScalaVersion("3.10.0")).testDependencies(
+                    Dep("dev.zio::zio-test-sbt:2.1.27")
+                  )
+                )
+              )
+              _ <- ZIO.attempt {
+                write(root, "histos.scala", "object build\n")
+                write(
+                  root,
+                  "demo/src/Hello.scala",
+                  "object Hello {\n  def n: Int = 1\n}\n"
+                )
+                write(
+                  root,
+                  "demo/test/scala/demo/FooA.scala",
+                  markerSuite("FooA", "alpha", alpha)
+                )
+                write(
+                  root,
+                  "demo/test/scala/demo/FooB.scala",
+                  markerSuite("FooB", "beta", beta)
+                )
+              }
+              _ <- histos.resolve.Resolve.update(
+                root,
+                built,
+                histos.resolve.BuildResolvers(built.resolvers)
+              )
+              running <- daemon(root, built)
+              feeds <- Client
+                .talk(
+                  running.record.socket,
+                  Call.Test(Nil, List("demo.FooA"), false)
+                )
+                .runCollect
+              alphaRan <- ZIO.attempt(Files.isRegularFile(alpha))
+              betaRan <- ZIO.attempt(Files.isRegularFile(beta))
+              spoken = feeds
+                .collect { case Feed.Out(text) => text }
+                .mkString(
+                  "\n"
+                )
+            yield assertTrue(
+              alphaRan,
+              !betaRan,
+              spoken.contains("alpha"),
+              !spoken.contains("beta"),
+              spoken.contains("demo 3.10.0 jvm passed"),
+              feeds.exists {
+                case Feed.Exit(code, err) =>
+                  code == CliExit.Success.code && err.isEmpty
+                case _ => false
+              }
+            )
+          program.provideSome[Scope & histos.resolve.LockedTools](
+            liveLayers(root)
+          )
   ) @@ TestAspect.withLiveClock
 
   private val demo =
@@ -787,6 +885,24 @@ object ServerSpec extends ZIOSpecDefault:
       case None       => ZIO.fail(Fixture.Reply)
       case Some(text) =>
         ZIO.fromEither(text.fromJson[A]).mapError(_ => Fixture.Reply)
+
+  private def markerSuite(name: String, word: String, marker: Path): String =
+    val path = marker.toAbsolutePath.normalize.toString
+    s"""package demo
+       |
+       |import zio.test.*
+       |
+       |object $name extends ZIOSpecDefault:
+       |  def spec = suite("$word")(
+       |    test("ran") {
+       |      _root_.java.nio.file.Files.writeString(
+       |        _root_.java.nio.file.Path.of("$path"),
+       |        "$word"
+       |      )
+       |      assertTrue(true)
+       |    }
+       |  )
+       |""".stripMargin
 
   private def write(root: Path, name: String, text: String): Unit =
     val path = root.resolve(name)
