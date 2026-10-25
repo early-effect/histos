@@ -35,7 +35,7 @@ import histos.cli.ResolveAction
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.{Platform, ProjectGraph}
+import histos.{Platform, PlatformError, ProjectGraph}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, ZIO, ZLayer}
@@ -150,7 +150,7 @@ object Calls:
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
     chosen(platform) match
-      case Left(message) => done(say, CliExit.TaskFailed.code, message)
+      case Left(error) => done(say, CliExit.TaskFailed.code, error.message)
       case Right(choice) =>
         CompileConsole
           .open(repo)
@@ -622,14 +622,8 @@ object Calls:
       platform: Option[String],
       say: Say
   ): IO[ServerError, Unit] =
-    val parsed = platform match
-      case None => Right(None)
-      case Some(raw) =>
-        Platform.from(raw) match
-          case Left(error)  => Left(error.message)
-          case Right(found) => Right(Some(found))
-    parsed match
-      case Left(message) => done(say, CliExit.TaskFailed.code, message)
+    chosen(platform) match
+      case Left(error) => done(say, CliExit.TaskFailed.code, error.message)
       case Right(choice) =>
         Plan.run(graph, id, choice) match
           case Left(error) => done(say, CliExit.TaskFailed.code, error.message)
@@ -898,13 +892,10 @@ object Calls:
 
   private def chosen(
       platform: Option[String]
-  ): Either[String, Option[Platform]] =
+  ): Either[PlatformError, Option[Platform]] =
     platform match
       case None      => Right(None)
-      case Some(raw) =>
-        Platform.from(raw) match
-          case Left(error)  => Left(error.message)
-          case Right(found) => Right(Some(found))
+      case Some(raw) => Platform.from(raw).map(Some(_))
 
   private def resolveAction(raw: String): Option[histos.cli.ResolveAction] =
     raw match
