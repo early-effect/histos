@@ -825,6 +825,7 @@ private[testrun] object ModuleTestSupport:
       .attemptBlocking {
         val process =
           new ProcessBuilder("npm", "install", pkg, "--prefix", root.toString)
+            .directory(root.toFile)
             .redirectErrorStream(true)
             .start()
         val text = new String(
@@ -1222,6 +1223,91 @@ private[testrun] object ModuleTestSupport:
           out(fourth).contains("beta") && cached(fourth).isEmpty
         )
     ,
+    test("a full run stores the fingerprint the next quick run hits"):
+      ZIO.scoped:
+        for
+          root <- temp
+          app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
+          built <- ZIO.fromEither(Projects(app))
+          _ <- ZIO.attempt {
+            write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
+            write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
+            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          first <- feeds(root, built, quick = false)
+          second <- feeds(root, built)
+        yield assertTrue(
+          cached(first).isEmpty && out(first).contains("alpha"),
+          cached(second) == List("demo.Foo") && !out(second).contains("alpha")
+        )
+    ,
+    test("a testOnly success is a hit and the other suite still runs"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
+          app = module("app", Jvm)(scala3).testDependencies(zioDep)
+          built <- ZIO.fromEither(Projects(app))
+          _ <- ZIO.attempt {
+            write(
+              root,
+              "app/src/test/scala/demo/Foo.scala",
+              zioNamed("Foo", "alpha")
+            )
+            write(
+              root,
+              "app/src/test/scala/demo/Bar.scala",
+              zioNamed("Bar", "beta")
+            )
+          }
+          _ <- Resolve
+            .update(root, built, BuildResolvers(built.resolvers))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          pattern <- ZIO.fromEither(SuitePattern.from("demo.Foo"))
+          selected <- feeds(
+            root,
+            built,
+            patterns = List(pattern),
+            quick = false
+          )
+          again <- feeds(root, built)
+        yield assertTrue(
+          cached(selected).isEmpty && out(selected).contains("alpha") && !out(
+            selected
+          ).contains("beta"),
+          cached(again) == List("demo.Foo") && out(again).contains(
+            "beta"
+          ) && !out(again).contains("alpha")
+        )
+    ,
+    test("a passing ZIO suite is cached on the second quick run"):
+      ZIO.scoped:
+        for
+          root <- temp
+          zioDep = Dep("dev.zio::zio-test-sbt:2.1.27")
+          app = module("app", Jvm)(scala3).testDependencies(zioDep)
+          built <- ZIO.fromEither(Projects(app))
+          _ <- ZIO.attempt(
+            write(
+              root,
+              "app/src/test/scala/demo/Foo.scala",
+              zioNamed("Foo", "alpha")
+            )
+          )
+          _ <- Resolve
+            .update(root, built, BuildResolvers(built.resolvers))
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          first <- feeds(root, built)
+          second <- feeds(root, built)
+        yield assertTrue(
+          cached(first).isEmpty && out(first).contains("ran"),
+          cached(second) == List("demo.Foo") && !out(second).contains("ran")
+        )
+    ,
     test("a failed suite is not a quick success"):
       ZIO.scoped:
         for
@@ -1245,7 +1331,9 @@ private[testrun] object ModuleTestSupport:
   private def feeds(
       root: Path,
       built: histos.ProjectGraph,
-      selected: Option[histos.jdk.JdkRuntime] = None
+      selected: Option[histos.jdk.JdkRuntime] = None,
+      patterns: List[SuitePattern] = Nil,
+      quick: Boolean = true
   ) =
     GraphCompile.jdkHere.flatMap: actual =>
       val jdk = selected.getOrElse(actual)
@@ -1256,7 +1344,7 @@ private[testrun] object ModuleTestSupport:
             .streamAt(root, built)(
               ModuleTest
                 .console(
-                  TestRun(root, built, Nil, jdk, here, Nil, quick = true)
+                  TestRun(root, built, Nil, jdk, here, patterns, quick)
                 )
             )
             .runCollect

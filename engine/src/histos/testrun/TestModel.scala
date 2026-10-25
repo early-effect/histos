@@ -98,8 +98,8 @@ enum TestStatus:
 /** A finished cell and the lines its process wrote. */
 final case class TestReport(cell: TestedCell, transcript: Transcript)
 
-/** What the test console is doing. Suites are not merged: one tree finishes,
-  * then the next starts.
+/** What the test console is doing. Cells may run together. Lines come out one
+  * cell at a time, in module, Scala version, then platform order.
   */
 enum TestFeed:
   case Begin(module: ProjectName, version: ScalaVersion, platform: Platform)
@@ -185,7 +185,8 @@ enum ModuleTestError:
     case NoNode(module, version, miss) =>
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
 
-/** One test invocation. The callback runs when a cell's tests start compiling.
+/** One test invocation. The callback runs after a cell's tests compile. The
+  * boolean is whether that compile wrote new classes.
   */
 final case class TestRun(
     repo: Path,
@@ -195,6 +196,7 @@ final case class TestRun(
     runtimes: Runtimes,
     patterns: List[SuitePattern] = Nil,
     quick: Boolean = false,
-    onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit] =
-      (_, _, _) => ZIO.unit
+    onTestCompile: (ProjectName, ScalaVersion, Platform, Boolean) => UIO[
+      Unit
+    ] = (_, _, _, _) => ZIO.unit
 )

@@ -3,24 +3,20 @@ package histos.toolchain
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
-import java.nio.file.{
-  FileVisitOption,
-  Files,
-  LinkOption,
-  NoSuchFileException,
-  Path
-}
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, LinkOption, NoSuchFileException, Path}
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
 
-import zio.{IO, ZIO}
+import zio.{Chunk, IO, ZIO}
 import zio.stream.ZStream
 
 enum RuntimeIdentity:
-  case Local(home: Path, content: Sha256)
+  /** `salt` is the canonical home and the build the runtime already published. */
+  case Local(home: Path, salt: Sha256)
 
 enum RuntimeLocationError:
   case InvalidPath(raw: String)
@@ -108,83 +104,74 @@ object RuntimeFiles:
             .mapError(_ => IoFailure(path, IoFault.Read))
         )
 
-  /** Local overrides follow links, including linked file content. */
-  def identity(home: Path): IO[IoFailure, RuntimeIdentity] =
-    for
-      canonical <- ZIO
-        .attemptBlocking(home.toRealPath().normalize)
-        .mapError(_ => IoFailure(home, IoFault.Stat))
-      hash <- content(canonical)
-    yield RuntimeIdentity.Local(canonical, hash)
+  /** Canonical home and the build already read from it. A file replaced
+    * inside the home does not change the salt.
+    */
+  def identity(home: Path, build: String): IO[IoFailure, RuntimeIdentity] =
+    ZIO
+      .attemptBlocking(home.toRealPath().normalize)
+      .mapError(_ => IoFailure(home, IoFault.Stat))
+      .map: canonical =>
+        val salt = Sha256.of(
+          Chunk.fromArray(
+            s"$canonical\n$build".getBytes(StandardCharsets.UTF_8)
+          )
+        )
+        RuntimeIdentity.Local(canonical, salt)
 
-  def content(
-      home: Path,
-      excluded: Set[Path] = Set.empty
-  ): IO[IoFailure, Sha256] =
+  /** Regular files under a class directory, streamed into one digest. A JDK
+    * or Node home is [[identity]].
+    */
+  private[toolchain] def fingerprint(root: Path): IO[IoFailure, Sha256] =
     ZIO.scoped:
       for
         canonical <- ZIO
-          .attemptBlocking(home.toRealPath().normalize)
-          .mapError(_ => IoFailure(home, IoFault.Stat))
-        omitted <- ZIO.foreach(excluded)(path =>
-          ZIO
-            .attemptBlocking(path.toRealPath().normalize)
-            .mapError(_ => IoFailure(path, IoFault.Stat))
-        )
+          .attemptBlocking(root.toRealPath().normalize)
+          .mapError(_ => IoFailure(root, IoFault.Stat))
         stream <- ZIO.acquireRelease(
           ZIO
-            .attemptBlocking(
-              Files.walk(canonical, FileVisitOption.FOLLOW_LINKS)
-            )
-            .mapError(_ => IoFailure(home, IoFault.Walk))
-        )(stream => ZIO.attemptBlocking(stream.close()).ignore)
+            .attemptBlocking(Files.walk(canonical))
+            .mapError(_ => IoFailure(root, IoFault.Walk))
+        )(open => ZIO.attemptBlocking(open.close()).ignore)
         files <- ZIO
           .attemptBlocking(
             stream.iterator.asScala
-              .filterNot(omitted.contains)
-              .toList
-              .sortBy(path => canonical.relativize(path).toString)
-          )
-          .mapError(_ => IoFailure(home, IoFault.Walk))
-        digest <- newDigest(home)
-        _ <- ZIO.foreachDiscard(files): file =>
-          for
-            tag <- ZIO
-              .attemptBlocking:
+              .filter(path => Files.isRegularFile(path))
+              .map: path =>
                 val name = canonical
-                  .relativize(file)
+                  .relativize(path)
                   .iterator
                   .asScala
                   .map(_.toString)
                   .mkString("/")
-                val kind =
-                  if Files.isDirectory(file) then "directory" else "file"
-                val link = if Files.isSymbolicLink(file) then
-                  Files.readSymbolicLink(file).toString
-                else ""
-                s"$name\u0000$kind\u0000$link\u0000${Files.isExecutable(file)}\u0000"
-                  .getBytes(java.nio.charset.StandardCharsets.UTF_8)
-              .mapError(_ => IoFailure(file, IoFault.Stat))
-            _ <- ZIO
-              .attemptBlocking(digest.update(tag))
+                name -> path
+              .toList
+              .sortBy(_._1)
+          )
+          .mapError(_ => IoFailure(root, IoFault.Walk))
+        digest <- newDigest(root)
+        _ <- mark(digest, root, canonical.toString)
+        _ <- ZIO.foreachDiscard(files): (name, file) =>
+          mark(digest, file, name) *> bytes(file).chunks.foreach(chunk =>
+            ZIO
+              .attemptBlocking(digest.update(chunk.toArray))
               .mapError(_ => IoFailure(file, IoFault.Read))
-            regular <- ZIO
-              .attemptBlocking(Files.isRegularFile(file))
-              .mapError(_ => IoFailure(file, IoFault.Stat))
-            hash <-
-              if regular then sha256(file).map(_.value) else ZIO.succeed("")
-            _ <- ZIO
-              .attemptBlocking(
-                digest.update(
-                  hash.getBytes(java.nio.charset.StandardCharsets.UTF_8)
-                )
-              )
-              .mapError(_ => IoFailure(file, IoFault.Read))
-          yield ()
+          )
         hash <- ZIO
           .attemptBlocking(Sha256.fromDigest(digest.digest()))
-          .mapError(_ => IoFailure(home, IoFault.Read))
+          .mapError(_ => IoFailure(root, IoFault.Read))
       yield hash
+
+  private def mark(
+      digest: MessageDigest,
+      path: Path,
+      text: String
+  ): IO[IoFailure, Unit] =
+    ZIO
+      .attemptBlocking:
+        digest.update(text.getBytes(StandardCharsets.UTF_8))
+        digest.update(0.toByte)
+      .mapError(_ => IoFailure(path, IoFault.Read))
 
   private def newDigest(path: Path): IO[IoFailure, MessageDigest] =
     ZIO

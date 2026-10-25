@@ -22,9 +22,7 @@ object ToolFixture:
       for
         root <- Workspace.work("histos-test-tools")
         built <- ZIO.fromEither(graph)
-        tools <- locked(root, built).provide(
-          Resolve.live(root.resolve("cache"))
-        )
+        tools <- locked(root, built).provide(Resolve.coursier)
       yield tools
 
   def locked(
@@ -68,8 +66,52 @@ object ToolFixture:
           )
           lock <- Resolve.readLock(root)
           view <- LockedTools.make(lock, built)
-        yield view).provide(Resolve.live(root.resolve("cache")))
+        yield view).provide(Resolve.coursier)
       yield tools
+
+  /** File and ivy artifacts stay on `cache`. A central artifact uses the tools
+    * resolver.
+    */
+  def beside(cache: Path): ZLayer[LockedTools, Nothing, Resolve] =
+    ZLayer.fromZIO:
+      ZIO.serviceWithZIO[LockedTools]: tools =>
+        ZIO
+          .service[Resolve]
+          .provide(Resolve.live(cache))
+          .map: local =>
+            new Resolve:
+              def resolveTool(request: histos.resolve.ToolRequest) =
+                tools.resolve.resolveTool(request)
+              def resolve(cell: histos.resolve.ResolveCell) =
+                local.resolve(cell)
+              def fetch(artifact: histos.resolve.LockedArtifact) =
+                if kept(artifact.repository) then local.fetch(artifact)
+                else tools.resolve.fetch(artifact)
+              def resolvePlugin(
+                  dependency: Dep,
+                  repositories: histos.resolve.Repositories
+              ) = local.resolvePlugin(dependency, repositories)
+              def sources(
+                  organization: String,
+                  name: String,
+                  revision: String,
+                  repository: histos.resolve.Repository
+              ) =
+                if kept(repository) then
+                  local.sources(organization, name, revision, repository)
+                else
+                  tools.resolve.sources(
+                    organization,
+                    name,
+                    revision,
+                    repository
+                  )
+
+  private def kept(repository: histos.resolve.Repository): Boolean =
+    repository match
+      case histos.resolve.Repository.Maven(url) => url.value.startsWith("file:")
+      case histos.resolve.Repository.IvyLocal   => true
+      case histos.resolve.Repository.Central    => false
 
   val resolver: ZLayer[LockedTools, Nothing, Resolve] =
     ZLayer.fromZIO(ZIO.serviceWith[LockedTools](_.resolve))

@@ -50,6 +50,8 @@ object CommandName:
     trusted("testOnly"),
     trusted("testQuick"),
     trusted("compile"),
+    trusted("clean"),
+    trusted("cleanFull"),
     trusted("assembly"),
     trusted("publish"),
     trusted("mcp"),

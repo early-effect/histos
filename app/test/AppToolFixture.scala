@@ -10,7 +10,7 @@ import histos.resolve.{
 }
 import histos.workspace.{IoFailure, Workspace}
 import java.nio.file.Path
-import zio.{Scope, ZIO, ZLayer}
+import zio.{Scope, ULayer, ZIO, ZLayer}
 
 object AppToolFixture:
   def layer(
@@ -24,8 +24,11 @@ object AppToolFixture:
           _ <- Resolve.update(root, built, BuildResolvers(built.resolvers))
           lock <- Resolve.readLock(root)
           view <- LockedTools.make(lock, built)
-        yield view).provide(Resolve.live(root.resolve("cache")))
+        yield view).provide(Resolve.coursier)
       yield tools
+
+  /** Coursier's cache. A coordinate already there is not downloaded again. */
+  val resolve: ULayer[Resolve] = Resolve.coursier
 
   val resolver: ZLayer[LockedTools, Nothing, Resolve] =
     ZLayer.fromZIO(ZIO.serviceWith[LockedTools](_.resolve))

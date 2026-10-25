@@ -207,16 +207,18 @@ object Toolchain:
       _ <- ZIO
         .fail(ToolchainError.Rejected(path, Reject.NoJavac))
         .unless(home.hasJavac)
-      version <- ZIO
-        .fromEither(home.version)
+      released <- ZIO
+        .fromEither(home.release)
         .mapError(error =>
           ToolchainError.Rejected(path, Reject.UnreadableVersion(error))
         )
       _ <- ZIO
-        .fail(ToolchainError.TooOld(Floor, version, path))
-        .unless(version.atLeast(Floor))
-      identity <- RuntimeFiles.identity(path).mapError(ToolchainError.Io(_))
-    yield JdkRuntime(path, version, identity)
+        .fail(ToolchainError.TooOld(Floor, released.version, path))
+        .unless(released.version.atLeast(Floor))
+      identity <- RuntimeFiles
+        .identity(path, released.build.value)
+        .mapError(ToolchainError.Io(_))
+    yield JdkRuntime(path, released.version, identity)
 
   private def readOverride(repo: Path): IO[ToolchainError, Option[Path]] =
     LocalOverride

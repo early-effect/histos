@@ -676,12 +676,13 @@ object PluginRunSpec extends ZIOSpecDefault:
           }.orDie
           (_, cache) <- recording
           _ <- histos.ToolFixture.seed(dir, built)
+          tools <- ZIO.service[histos.resolve.LockedTools]
           _ <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
             cache,
-            Resolve.live(dir.resolve("coursier"))
+            ZLayer.succeed(tools.resolve)
           )
           text <- ZIO.attempt(Files.readString(dir.resolve("out.txt"))).orDie
           classes = dir
@@ -742,12 +743,13 @@ object PluginRunSpec extends ZIOSpecDefault:
           }.orDie
           (_, cache) <- recording
           _ <- histos.ToolFixture.seed(dir, built)
+          tools <- ZIO.service[histos.resolve.LockedTools]
           ran <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
             cache,
-            Resolve.live(dir.resolve("coursier"))
+            ZLayer.succeed(tools.resolve)
           ).either
           count <- calls.get
         yield

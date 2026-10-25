@@ -202,7 +202,8 @@ object Bsp:
       captured: Ref[Option[DependencyLock]]
   ):
     /** One request sees the graph it started with. A later swap does not
-      * rewrite it.
+      * rewrite it. The JDK and Node are the ones captured when the session
+      * opened.
       */
     def answer(payload: String): ZIO[Resolve, Nothing, Answer] =
       current.get.flatMap(graph => answer(graph, payload))
@@ -211,22 +212,13 @@ object Bsp:
         seen: ProjectGraph,
         payload: String
     ): ZIO[Resolve, Nothing, Answer] =
-      val id = payload
-        .fromJson[zio.json.ast.Json]
-        .toOption
-        .flatMap(_.as[Rpc.Incoming].toOption)
-        .map(Rpc.idOf)
-        .getOrElse(Rpc.RpcId.Absent)
-      (for
-        machine <- histos.jdk.Machine.load(repo).mapError(BspError.Machine(_))
-        selected <- GraphCompile.jdk(machine).mapError(BspError.Sources(_))
-        runtimes <- Runtimes.read(machine)
+      for
         requested <- Ref.make(seen)
         lock <- Ref.make(Option.empty[DependencyLock])
         session = Session.start(
           BuildScala,
           repo,
-          selected,
+          jdk,
           runtimes,
           buildClasspath,
           notify,
@@ -238,9 +230,7 @@ object Bsp:
           lock
         )
         answer <- session.read(payload)
-      yield answer).catchAll(error =>
-        ZIO.succeed(Answer.Reply(failure(id, error)))
-      )
+      yield answer
 
     /** Kinds are BSP's created (1), changed (2), and deleted (3). */
     def changed(

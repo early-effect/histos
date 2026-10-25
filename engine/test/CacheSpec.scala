@@ -247,6 +247,61 @@ object CacheSpec extends ZIOSpecDefault:
           removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
         yield assertTrue(removed.isEmpty)
     ,
+    test(
+      "forget drops this project's entries of any age and leaves the other project"
+    ):
+      ZIO.scoped:
+        for
+          saved <- store
+          shared = digest("shared")
+          exclusive = digest("exclusive")
+          other = digest("other")
+          pluginKey = digest("plugin")
+          _ <- saved.put(shared, bytes, at)
+          _ <- saved.put(exclusive, bytes, later)
+          _ <- saved.put(other, bytes, at)
+          _ <- plant(saved, pluginKey, at)
+          _ <- saved.replace(project, Set(shared, exclusive, pluginKey))
+          _ <- saved.replace(elsewhere, Set(shared, other))
+          now = later
+          stamped = saved.root.resolve("tmp").resolve("now")
+          old = saved.root.resolve("tmp").resolve("old")
+          _ <- ZIO.attempt {
+            Files.createDirectories(stamped.getParent)
+            Files.writeString(stamped, "live")
+            Files.writeString(old, "leftover")
+            Files.setLastModifiedTime(stamped, FileTime.from(now))
+            Files.setLastModifiedTime(old, FileTime.from(at))
+          }
+          gone <- saved.forget(project, now)
+          sharedStill <- saved.read(shared)
+          exclusiveGone <- saved.read(exclusive)
+          otherStill <- saved.read(other)
+          pluginGone <- ZIO.attempt(
+            !Files.exists(saved.root.resolve("plugins").resolve(pluginKey.value))
+          )
+          projectKeep <- ZIO.attempt(
+            Files.exists(saved.root.resolve("keep").resolve(project.value))
+          )
+          otherKeep <- ZIO.attempt(
+            Files.isRegularFile(
+              saved.root.resolve("keep").resolve(elsewhere.value)
+            )
+          )
+          nowStays <- ZIO.attempt(Files.isRegularFile(stamped))
+          oldGone <- ZIO.attempt(!Files.exists(old))
+        yield assertTrue(
+          gone.map(_.digest).toSet == Set(exclusive, pluginKey),
+          sharedStill.contains(bytes),
+          exclusiveGone.isEmpty,
+          otherStill.contains(bytes),
+          pluginGone,
+          !projectKeep,
+          otherKeep,
+          nowStays,
+          oldGone
+        )
+    ,
     test("the home directory follows XDG, then the user cache"):
       assertTrue(
         ContentStore.home(Some("/xdg"), "/home/me") == Path.of("/xdg/histos"),

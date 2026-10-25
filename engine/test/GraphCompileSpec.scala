@@ -213,6 +213,44 @@ object GraphCompileSpec extends ZIOSpecDefault:
           names.toList == List("compiling core", "core", "compiling app", "app")
         )
     ,
+    test("a second compile of the same sources is skipped"):
+      ZIO.scoped:
+        for
+          jdk <- GraphCompile.jdkHere
+          root <- temp
+          built <- ZIO
+            .attempt {
+              val core = module("core", Jvm)(ScalaVersion("3.9.0"))
+              write(
+                root,
+                "core/src/main/scala/Core.scala",
+                "object Core:\n  def n: Int = 1\n"
+              )
+              write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+              Projects(core)
+            }
+            .flatMap(ZIO.fromEither(_))
+          run = histos.ToolFixture
+            .streamAt(root, built)(
+              GraphCompile
+                .console(root, built, Nil, jdk, NativeOrigin.Central)
+            )
+            .runCollect
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver
+            )
+          _ <- run
+          second <- run
+          began = second.collect { case CompileFeed.Began(module, _, _) =>
+            module.value
+          }
+          done = second.collect { case CompileFeed.Done(cell) => cell }
+        yield assertTrue(
+          began.toList == List("core"),
+          done.map(_.module.value).toList == List("core"),
+          done.map(_.changed).toList == List(false)
+        )
+    ,
     test("a cell starts while an unrelated upstream is still compiling"):
       ZIO.scoped:
         for

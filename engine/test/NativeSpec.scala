@@ -1,7 +1,6 @@
 package histos.native
 
 import histos.pack.MainClass
-import histos.resolve.Resolve
 import histos.testrun.{ModuleTest, ModuleTestError, TestRun}
 import histos.toolchain.Runtimes
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile}
@@ -359,11 +358,11 @@ object NativeSpec extends ZIOSpecDefault:
           _ <- histos.ToolFixture.seed(root, built)
           compiled <- GraphCompile
             .run(root, built, List("app"), jdk, here.native)
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
           tested <- ModuleTest
             .run(TestRun(root, built, List("check"), jdk, here))
-            .provide(Resolve.live(root.resolve("coursier")))
+            .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
           main <- ZIO.fromEither(MainClass.from("demo.Hello"))
           toolchain <- ZIO.fromEither(

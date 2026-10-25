@@ -82,8 +82,8 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, IO, Ref, UIO, ZIO}
-import zio.stream.ZStream
+import zio.{Chunk, IO, Queue, Ref, UIO, ZIO}
+import zio.stream.{Take, ZStream}
 
 object ModuleTest:
   /** Compile each requested module, then run its test provider once per Scala
@@ -110,9 +110,9 @@ object ModuleTest:
         Reports(Transcript.empty, have.done :+ TestReport(cell, have.heard))
       case TestFeed.Cached(_, _, _, _) => have
 
-  /** Test compiles stay parallel. The console is `concatAll`: one suite's
-    * lines, then the next, in module name order. Merging the trees would make
-    * them unreadable.
+  /** Test compiles stay parallel. Cells run in parallel. The console emits one
+    * cell, then the next, so the trees do not interleave. The speaking cell is
+    * printed as it writes. A later cell keeps only its own lines.
     */
   def console(asked: TestRun): ZStream[Resolve, ModuleTestError, TestFeed] =
     ZStream.unwrap:
@@ -167,17 +167,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed
   ] =
-    val TestRun(
-      repo,
-      graph,
-      names,
-      jdk,
-      runtimes,
-      patterns,
-      quick,
-      onTestCompile
-    ) = asked
-    val repositories = BuildResolvers(graph.resolvers)
+    val TestRun(_, graph, names, jdk, runtimes, patterns, _, _) = asked
     ZStream.unwrap:
       for
         wanted <- ZIO.fromEither(
@@ -189,53 +179,98 @@ object ModuleTest:
           .sortBy: cell =>
             (cell.module.value, cell.version.value, platformRank(cell.platform))
         tools <- ZIO.service[LockedTools]
-        steps = cells.map: cell =>
-          val module = graph.projects.collectFirst {
-            case found: Module if found.name == cell.module => found
-          }
-          val inputs = Chunk(
-            Input(
-              InputName("jdk"),
-              InputValue.Text(Runtimes.identityToken(jdk.identity))
-            ),
-            Input(
-              InputName("tools"),
-              InputValue.Text(
-                module.toList
-                  .flatMap(found =>
-                    tools.declaredCompilation(
-                      found,
-                      cell.version,
-                      cell.platform,
-                      runtimes.native
+      yield
+        val gate = unmatched(patterns, matched)
+        if cells.isEmpty then gate
+        else
+          ZStream.unwrapScoped:
+            for
+              queues <- ZIO.foreach(cells)(_ => cellQueue)
+              steps = cells
+                .zip(queues)
+                .map: (cell, queue) =>
+                  val module = graph.projects.collectFirst {
+                    case found: Module if found.name == cell.module => found
+                  }
+                  val inputs = Chunk(
+                    Input(
+                      InputName("jdk"),
+                      InputValue.Text(Runtimes.identityToken(jdk.identity))
+                    ),
+                    Input(
+                      InputName("tools"),
+                      InputValue.Text(
+                        module.toList
+                          .flatMap(found =>
+                            tools.declaredCompilation(
+                              found,
+                              cell.version,
+                              cell.platform,
+                              runtimes.native
+                            )
+                          )
+                          .mkString("\n")
+                      )
                     )
                   )
-                  .mkString("\n")
-              )
-            )
-          )
-          testStep(asked, cell, lock, matched, inputs)
-        feeds <- execute(combine(steps))
-      yield
-        val ran =
-          ZStream.fromChunk(feeds.foldLeft(Chunk.empty[TestFeed])(_ ++ _))
-        val gate =
-          if patterns.isEmpty then ZStream.empty
-          else
-            ZStream.unwrap(matched.get.map: hit =>
-              if hit then ZStream.empty
-              else ZStream.fail(ModuleTestError.NoneMatched(patterns)))
-        ran ++ gate
+                  testStep(asked, cell, lock, matched, inputs, queue)
+              fiber <- execute(combine(steps)).forkScoped
+            yield inOrder(queues) ++
+              ZStream.fromZIO(fiber.join).drain ++
+              gate
+
+  /** One queue per cell. Unbounded because a later cell that blocked on a full
+    * queue would keep its process permit, and that permit can stop the speaking
+    * cell from starting.
+    */
+  private def cellQueue: UIO[Queue[Take[ModuleTestError, TestFeed]]] =
+    Queue.unbounded
+
+  /** Feeds in cell order. The queue being read is emitted as it arrives. */
+  private[testrun] def inOrder(
+      queues: List[Queue[Take[ModuleTestError, TestFeed]]]
+  ): ZStream[Any, ModuleTestError, TestFeed] =
+    ZStream.unwrap:
+      Ref
+        .make(queues)
+        .map: state =>
+          ZStream.repeatZIOChunkOption:
+            def read(
+                left: List[Queue[Take[ModuleTestError, TestFeed]]]
+            ): ZIO[Any, Option[ModuleTestError], Chunk[TestFeed]] =
+              left match
+                case Nil           => ZIO.fail(None)
+                case queue :: more =>
+                  queue.take.flatMap: taken =>
+                    taken.foldZIO(
+                      state.set(more) *> read(more),
+                      cause => ZIO.failCause(cause.map(Some(_))),
+                      feeds =>
+                        if feeds.isEmpty then read(left)
+                        else ZIO.succeed(feeds)
+                    )
+            state.get.flatMap(read)
+
+  private def unmatched(
+      patterns: List[SuitePattern],
+      matched: Ref[Boolean]
+  ): ZStream[Any, ModuleTestError, Nothing] =
+    if patterns.isEmpty then ZStream.empty
+    else
+      ZStream.unwrap(
+        matched.get.map: hit =>
+          if hit then ZStream.empty
+          else ZStream.fail(ModuleTestError.NoneMatched(patterns))
+      )
 
   private def testStep(
       asked: TestRun,
       cell: CompiledCell,
       lock: DependencyLock,
       matched: Ref[Boolean],
-      inputs: Chunk[Input]
-  ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Chunk[
-    TestFeed
-  ]] =
+      inputs: Chunk[Input],
+      queue: Queue[Take[ModuleTestError, TestFeed]]
+  ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Unit] =
     val TestRun(repo, graph, _, jdk, runtimes, patterns, quick, onTestCompile) =
       asked
     val repositories = BuildResolvers(graph.resolvers)
@@ -244,7 +279,7 @@ object ModuleTest:
       inputs,
       Set(Need.Process)
     )
-    Step.local[Chunk[TestFeed]](info):
+    Step.local[Unit](info):
       prepare(
         repo,
         graph,
@@ -257,31 +292,50 @@ object ModuleTest:
         matched,
         quick,
         onTestCompile
-      ).flatMap(stream => watch(matched, stream).runCollect)
+      ).flatMap(stream => publish(queue, watch(matched, stream)))
+        .exit
+        .flatMap: exit =>
+          exit.foldExit(
+            cause =>
+              queue.offer(Take.failCause(cause)) *>
+                ZIO.when(cause.isInterrupted)(ZIO.failCause(cause)).unit,
+            _ => ZIO.unit
+          )
+
+  /** The step stays successful. A cell failure is a failed take, so lines
+    * already written stay written and the drain fails when it reaches them.
+    */
+  private def publish(
+      queue: Queue[Take[ModuleTestError, TestFeed]],
+      stream: ZStream[Any, ModuleTestError, TestFeed]
+  ): UIO[Unit] =
+    Ref
+      .make(false)
+      .flatMap: closed =>
+        stream
+          .runForeach(feed => queue.offer(Take.single(feed)).unit)
+          .exit
+          .flatMap: exit =>
+            queue.offer(exit.foldExit(Take.failCause, _ => Take.end)) *>
+              closed.set(true)
+          .ensuring(
+            closed.get
+              .flatMap(done => ZIO.unless(done)(queue.offer(Take.end)).unit)
+          )
 
   private def combine(
       steps: List[
-        Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Chunk[
-          TestFeed
-        ]]
+        Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Unit]
       ]
-  ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, List[
-    Chunk[TestFeed]
-  ]] =
+  ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Unit] =
     steps match
       case Nil =>
-        Step.local[List[Chunk[TestFeed]]](
+        Step.local[Unit](
           StepInfo(StepId.Work("test"), Chunk.empty, Set(Need.Process))
-        )(ZIO.succeed(Nil))
+        )(ZIO.unit)
       case head :: tail =>
-        tail.foldLeft[
-          Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, List[
-            Chunk[TestFeed]
-          ]]
-        ](
-          head.map(List(_))
-        ): (acc, step) =>
-          acc.zip(step).map((all, next) => all :+ next)
+        tail.foldLeft(head): (acc, step) =>
+          acc.zip(step).map((_, _) => ())
 
   private def execute[A](
       goal: Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, A]
@@ -320,7 +374,7 @@ object ModuleTest:
       patterns: List[SuitePattern],
       matched: Ref[Boolean],
       quick: Boolean,
-      onTestCompile: (ProjectName, ScalaVersion, Platform) => UIO[Unit]
+      onTestCompile: (ProjectName, ScalaVersion, Platform, Boolean) => UIO[Unit]
   ): ZIO[
     Resolve & ProviderInstall & LockedTools,
     ModuleTestError,
@@ -347,99 +401,117 @@ object ModuleTest:
                 if !SuitePattern.allows(patterns, main.value) then
                   ZIO.succeed(ZStream.empty)
                 else
-                  onTestCompile(cell.module, cell.version, cell.platform) *>
-                    (cell.platform match
-                      case Platform.Jvm =>
-                        SuiteLaunch.execute(
-                          repo,
-                          modules,
-                          module,
-                          cell,
-                          sources,
-                          main,
-                          jdk,
-                          runtimes,
-                          lock,
-                          repositories,
-                          quick
-                        )
-                      case Platform.Js =>
-                        SuiteLaunch.runJs(
-                          repo,
-                          modules,
-                          module,
-                          cell,
-                          sources,
-                          main,
-                          jdk,
-                          runtimes,
-                          lock,
-                          repositories,
-                          quick
-                        )
-                      case Platform.Native =>
-                        SuiteLaunch.runNative(
-                          repo,
-                          modules,
-                          module,
-                          cell,
-                          sources,
-                          main,
-                          jdk,
-                          runtimes,
-                          lock,
-                          repositories,
-                          quick
-                        ))
-              case (_, None, provider) =>
-                val framework = provider.getOrElse(TestProvider.Zio)
-                onTestCompile(cell.module, cell.version, cell.platform) *>
-                  (cell.platform match
+                  val note = (changed: Boolean) =>
+                    onTestCompile(
+                      cell.module,
+                      cell.version,
+                      cell.platform,
+                      changed
+                    )
+                  cell.platform match
                     case Platform.Jvm =>
-                      SuiteLaunch.provide(
+                      SuiteLaunch.execute(
                         repo,
                         modules,
                         module,
                         cell,
                         sources,
-                        framework,
+                        main,
                         jdk,
                         runtimes,
                         lock,
                         repositories,
-                        patterns,
-                        quick
+                        quick,
+                        note
                       )
                     case Platform.Js =>
-                      SuiteLaunch.runJsProvider(
+                      SuiteLaunch.runJs(
                         repo,
                         modules,
                         module,
                         cell,
                         sources,
-                        framework,
+                        main,
                         jdk,
                         runtimes,
                         lock,
                         repositories,
-                        patterns,
-                        quick
+                        quick,
+                        note
                       )
                     case Platform.Native =>
-                      SuiteLaunch.runNativeProvider(
+                      SuiteLaunch.runNative(
                         repo,
                         modules,
                         module,
                         cell,
                         sources,
-                        framework,
+                        main,
                         jdk,
                         runtimes,
                         lock,
                         repositories,
-                        patterns,
-                        quick
-                      ))
+                        quick,
+                        note
+                      )
+              case (_, None, provider) =>
+                val framework = provider.getOrElse(TestProvider.Zio)
+                val note = (changed: Boolean) =>
+                  onTestCompile(
+                    cell.module,
+                    cell.version,
+                    cell.platform,
+                    changed
+                  )
+                cell.platform match
+                  case Platform.Jvm =>
+                    SuiteLaunch.provide(
+                      repo,
+                      modules,
+                      module,
+                      cell,
+                      sources,
+                      framework,
+                      jdk,
+                      runtimes,
+                      lock,
+                      repositories,
+                      patterns,
+                      quick,
+                      note
+                    )
+                  case Platform.Js =>
+                    SuiteLaunch.runJsProvider(
+                      repo,
+                      modules,
+                      module,
+                      cell,
+                      sources,
+                      framework,
+                      jdk,
+                      runtimes,
+                      lock,
+                      repositories,
+                      patterns,
+                      quick,
+                      note
+                    )
+                  case Platform.Native =>
+                    SuiteLaunch.runNativeProvider(
+                      repo,
+                      modules,
+                      module,
+                      cell,
+                      sources,
+                      framework,
+                      jdk,
+                      runtimes,
+                      lock,
+                      repositories,
+                      patterns,
+                      quick,
+                      note
+                    )
             val executes = sources.nonEmpty && (module.test match
               case Some(main) => SuitePattern.allows(patterns, main.value)
               case None       =>

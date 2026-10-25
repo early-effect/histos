@@ -34,6 +34,12 @@ trait ContentStore:
   def kept: IO[CacheError, Set[Digest]]
   def clean(now: Instant, retention: Duration, dryRun: Boolean): IO[CacheError, List[CacheEntry]]
 
+  /** Drop this project's keep file, then delete `cas` and `plugins` entries no
+    * remaining keep set names. Age does not matter. A temp stamped at `now`
+    * stays.
+    */
+  def forget(project: CacheProject, now: Instant): IO[CacheError, List[CacheEntry]]
+
 object ContentStore:
   val Retention: Duration = Duration.ofDays(30)
 
@@ -112,6 +118,21 @@ private final class DiskStore(val root: Path) extends ContentStore:
       stale    = entries.filter(entry => entry.lastUsed.isBefore(cutoff) && !keep.contains(entry.digest))
       _       <- ZIO.unless(dryRun)(ZIO.foreachDiscard(stale)(entry => delete(entry.path)) *> sweepTemps(cutoff))
     yield stale
+
+  def forget(project: CacheProject, now: Instant): IO[CacheError, List[CacheEntry]] =
+    for
+      _       <- dropKeep(project)
+      entries <- list
+      keep    <- kept
+      gone     = entries.filter(entry => !keep.contains(entry.digest))
+      _       <- ZIO.foreachDiscard(gone)(entry => delete(entry.path))
+      _       <- sweepTemps(now)
+    yield gone
+
+  private def dropKeep(project: CacheProject): IO[CacheError, Unit] =
+    withKeep(IoFault.Delete): dir =>
+      Files.deleteIfExists(dir.resolve(project.value))
+      ()
 
   private def objectPath(digest: Digest): Path =
     val hex = digest.value

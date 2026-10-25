@@ -152,7 +152,12 @@ final case class CompileRequest(
     compilerPlugins: List[histos.resolve.ToolInput] = Nil
 )
 
-final case class CompileOutput(classes: Path, classFiles: Int, key: Sha256)
+final case class CompileOutput(
+    classes: Path,
+    classFiles: Int,
+    key: Sha256,
+    changed: Boolean
+)
 
 /** Zinc positions are 1-based. Dotty positions are already 0-based. */
 enum PositionBase:
@@ -611,7 +616,12 @@ object JvmCompile:
       if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
       else
         Right(
-          CompileOutput(request.classes, countClasses(request.classes), key)
+          CompileOutput(
+            request.classes,
+            countClasses(request.classes),
+            key,
+            result.hasModified
+          )
         )
     catch
       case _: xsbti.CompileFailed =>

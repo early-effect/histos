@@ -3,7 +3,7 @@ package histos.server
 import histos.jdk.JdkRuntime
 import histos.assembly.Assemble
 import histos.cache.ContentStore
-import histos.cli.{Cli, CliExit, GraphText, Lines}
+import histos.cli.{Cli, CliExit, CompileConsole, GraphText, Lines}
 import histos.testrun.{
   ModuleTest,
   ModuleTestError,
@@ -90,25 +90,30 @@ object Calls:
       projects: List[String],
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
-    PublishRun
-      .run(
-        repo,
-        graph,
-        projects,
-        jdk,
-        machine.env,
-        repository,
-        feed => showCompile(repo, say, feed).ignore
-      )
-      .foldZIO(
-        failure => done(say, CliExit.PublishFailed.code, failure.message),
-        report =>
-          told(say, report.lines.mkString("\n")) *> done(
-            say,
-            CliExit.Success.code,
-            ""
-          )
-      )
+    CompileConsole.open(repo).flatMap { console =>
+      PublishRun
+        .run(
+          repo,
+          graph,
+          projects,
+          jdk,
+          machine.env,
+          repository,
+          feed => speak(say, console, feed).ignore
+        )
+        .foldZIO(
+          failure =>
+            console.announce(text => say(Message.Out(text))) *>
+              done(say, CliExit.PublishFailed.code, failure.message),
+          report =>
+            console.announce(text => say(Message.Out(text))) *>
+              told(say, report.lines.mkString("\n")) *> done(
+                say,
+                CliExit.Success.code,
+                ""
+              )
+        )
+    }
 
   def run(
       repo: Path,
@@ -338,29 +343,82 @@ object Calls:
       machine: Machine,
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
-    GraphCompile
-      .strict(
-        GraphCompile
-          .console(repo, graph, projects, jdk, NativeOrigin.read(machine.env))
-      )
-      .mapZIO {
-        case CompileFeed.Began(module, version, platform) =>
-          say(Message.Out(Lines.compiling(module, version, platform)))
-        case CompileFeed.Diagnostic(_, _, _, problem) =>
-          say(Message.Err(problem.text))
-        case CompileFeed.Done(cell) =>
-          say(Message.Out(Lines.compiled(repo, cell)))
-        case CompileFeed.Failed(error) =>
-          say(Message.Err(error.message))
-      }
-      .runDrain
+    CompileConsole.open(repo).flatMap { console =>
+      GraphCompile
+        .strict(
+          GraphCompile
+            .console(repo, graph, projects, jdk, NativeOrigin.read(machine.env))
+        )
+        .mapZIO(feed => speak(say, console, feed))
+        .runDrain
+        .foldZIO(
+          {
+            case error: GraphCompileError =>
+              console.announce(text => say(Message.Out(text))) *>
+                done(say, CliExit.CompileFailed.code, Cli.compileFailure(error))
+            case error: ServerError => ZIO.fail(error)
+          },
+          _ =>
+            console.announce(text => say(Message.Out(text))) *>
+              done(say, CliExit.Success.code, "")
+        )
+    }
+
+  /** No names wipe every product root and do not read `graph`. */
+  def clean(
+      repo: Path,
+      graph: ProjectGraph,
+      projects: List[String],
+      say: Say
+  ): IO[ServerError, Unit] =
+    val removed =
+      if projects.isEmpty then
+        histos.clean.Products.wipe(repo).as(histos.clean.Products.line(Nil))
+      else
+        histos.clean.Products
+          .named(repo, graph, projects)
+          .map(histos.clean.Products.line)
+    removed.foldZIO(
+      error =>
+        done(say, CliExit.TaskFailed.code, histos.clean.Products.fault(error)),
+      line => told(say, line) *> done(say, CliExit.Success.code, "")
+    )
+
+  def wipe(repo: Path, say: Say): IO[ServerError, Unit] =
+    histos.clean.Products
+      .wipe(repo)
       .foldZIO(
-        {
-          case error: GraphCompileError =>
-            done(say, CliExit.CompileFailed.code, Cli.compileFailure(error))
-          case error: ServerError => ZIO.fail(error)
-        },
-        _ => done(say, CliExit.Success.code, "")
+        error => done(say, CliExit.TaskFailed.code, error.message),
+        _ =>
+          told(say, histos.clean.Products.line(Nil)) *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
+      )
+
+  /** Products go first. A store failure is exit 3 and does not claim success.
+    */
+  def cleanFull(repo: Path, say: Say): ZIO[ContentStore, ServerError, Unit] =
+    histos.clean.Products
+      .wipe(repo)
+      .foldZIO(
+        error => done(say, CliExit.TaskFailed.code, error.message),
+        _ =>
+          ZIO
+            .serviceWithZIO[ContentStore]: store =>
+              zio.Clock.instant.flatMap(now =>
+                store.forget(histos.cache.CacheProject.of(repo), now)
+              )
+            .foldZIO(
+              error => done(say, CliExit.LoadFailed.code, error.message),
+              entries =>
+                told(say, histos.clean.Products.forgotten(entries)) *> done(
+                  say,
+                  CliExit.Success.code,
+                  ""
+                )
+            )
       )
 
   def test(
@@ -373,112 +431,117 @@ object Calls:
       machine: Machine,
       say: Say
   ): ZIO[Resolve, ServerError, Unit] =
-    Ref.make(false).flatMap { failed =>
-      Ref.make(List.empty[String]).flatMap { missed =>
-        val ran =
-          for
-            runtimes <- Runtimes.read(machine)
-            _ <- ZIO
-              .fromEither(histos.select.Selection.select(graph, projects))
-              .mapError(error =>
-                ModuleTestError.Compile(GraphCompileError.Target(error))
-              )
-            lock <- Resolve.readLock(repo).mapError(ModuleTestError.Lock(_))
-            cells <- GraphCompile
-              .console(
-                histos.zinc
-                  .CompileSession(repo, graph, jdk, runtimes.native, lock),
-                projects,
-                None
-              )
-              .mapError(ModuleTestError.Compile(_))
-              .mapZIO { feed =>
-                val sent = feed match
-                  case CompileFeed.Began(module, version, platform) =>
-                    say(Message.Out(Lines.compiling(module, version, platform)))
-                  case CompileFeed.Diagnostic(_, _, _, problem) =>
-                    say(Message.Err(problem.text))
-                  case CompileFeed.Done(cell) =>
-                    say(Message.Out(Lines.compiled(repo, cell)))
-                  case CompileFeed.Failed(error) =>
-                    missed.update(_ :+ error.message) *> say(
-                      Message.Err(error.message)
+    CompileConsole.open(repo).flatMap { console =>
+      CompileConsole.notes.flatMap { notes =>
+        Ref.make(false).flatMap { failed =>
+          Ref.make(List.empty[String]).flatMap { missed =>
+            val ran =
+              for
+                runtimes <- Runtimes.read(machine)
+                _ <- ZIO
+                  .fromEither(histos.select.Selection.select(graph, projects))
+                  .mapError(error =>
+                    ModuleTestError.Compile(GraphCompileError.Target(error))
+                  )
+                lock <- Resolve.readLock(repo).mapError(ModuleTestError.Lock(_))
+                cells <- GraphCompile
+                  .console(
+                    histos.zinc
+                      .CompileSession(repo, graph, jdk, runtimes.native, lock),
+                    projects,
+                    None
+                  )
+                  .mapError(ModuleTestError.Compile(_))
+                  .mapZIO { feed =>
+                    val sent = feed match
+                      case CompileFeed.Failed(error) =>
+                        missed.update(_ :+ error.message) *>
+                          speak(say, console, feed)
+                      case _ => speak(say, console, feed)
+                    sent.as(compiled(feed))
+                  }
+                  .collectSome
+                  .runCollect
+                _ <- console.announce(text => say(Message.Out(text)))
+                parsed <- ZIO
+                  .fromEither(
+                    patterns.foldLeft[Either[
+                      histos.testrun.SuitePatternError,
+                      List[SuitePattern]
+                    ]](Right(Nil)) { (acc, raw) =>
+                      acc.flatMap(have => SuitePattern.from(raw).map(have :+ _))
+                    }
+                  )
+                  .mapError(error =>
+                    ModuleTestError.Compile(
+                      GraphCompileError.Target(
+                        histos.workflow.CiError.BadName(error.message)
+                      )
                     )
-                sent.as(compiled(feed))
-              }
-              .collectSome
-              .runCollect
-            parsed <- ZIO
-              .fromEither(
-                patterns.foldLeft[Either[
-                  histos.testrun.SuitePatternError,
-                  List[SuitePattern]
-                ]](Right(Nil)) { (acc, raw) =>
-                  acc.flatMap(have => SuitePattern.from(raw).map(have :+ _))
-                }
-              )
-              .mapError(error =>
-                ModuleTestError.Compile(
-                  GraphCompileError.Target(
-                    histos.workflow.CiError.BadName(error.message)
                   )
-                )
-              )
-            _ <- ModuleTest
-              .suitesLocked(
-                TestRun(
-                  repo,
-                  graph,
-                  projects,
-                  jdk,
-                  runtimes,
-                  parsed,
-                  quick,
-                  (module, version, platform) =>
-                    say(
-                      Message
-                        .Out(Lines.compilingTests(module, version, platform))
-                    ).ignore
-                ),
-                cells.toList,
-                lock
-              )
-              .foreach {
-                case TestFeed.Begin(module, version, platform) =>
-                  say(Message.Out(Lines.begin(module, version, platform)))
-                case TestFeed.Out(text) => say(Message.Out(text))
-                case TestFeed.Err(text) => say(Message.Err(text))
-                case TestFeed.Cached(module, version, platform, suite) =>
-                  say(
-                    Message.Out(Lines.cached(module, version, platform, suite))
+                _ <- ModuleTest
+                  .suitesLocked(
+                    TestRun(
+                      repo,
+                      graph,
+                      projects,
+                      jdk,
+                      runtimes,
+                      parsed,
+                      quick,
+                      (module, version, platform, changed) =>
+                        notes(module, version, platform, changed)
+                          .flatMap(line => say(Message.Out(line)).ignore)
+                    ),
+                    cells.toList,
+                    lock
                   )
-                case TestFeed.Done(cell) =>
-                  ZIO.when(failedSuite(cell.status))(failed.set(true)) *>
-                    say(Message.Out(Lines.tested(cell))) *>
-                    say(Message.Out(""))
-              }
-            bad <- failed.get
-            compileErrors <- missed.get
-          yield
-            if compileErrors.nonEmpty then
-              (CliExit.TestFailed.code, compileErrors.mkString("\n"))
-            else if bad then (CliExit.TestFailed.code, "")
-            else (CliExit.Success.code, "")
-        ran.foldZIO(
-          {
-            case error: ServerError     => ZIO.fail(error)
-            case error: ModuleTestError =>
-              missed.get.flatMap { compileErrors =>
-                val (code, message) = error match
-                  case ModuleTestError.NoneMatched(_)
-                      if compileErrors.nonEmpty =>
-                    (CliExit.TestFailed.code, compileErrors.mkString("\n"))
-                  case other => Cli.testFailure(other)
-                done(say, code, message)
-              }
-          },
-          outcome => done(say, outcome._1, outcome._2)
-        )
+                  .foreach {
+                    case TestFeed.Begin(module, version, platform) =>
+                      say(Message.Out(Lines.begin(module, version, platform)))
+                    case TestFeed.Out(text) => say(Message.Out(text))
+                    case TestFeed.Err(text) => say(Message.Err(text))
+                    case TestFeed.Cached(module, version, platform, suite) =>
+                      say(
+                        Message
+                          .Out(Lines.cached(module, version, platform, suite))
+                      )
+                    case TestFeed.Done(cell) =>
+                      ZIO.when(failedSuite(cell.status))(failed.set(true)) *>
+                        say(Message.Out(Lines.tested(cell))) *>
+                        say(Message.Out(""))
+                  }
+                bad <- failed.get
+                compileErrors <- missed.get
+              yield
+                if compileErrors.nonEmpty then
+                  (CliExit.TestFailed.code, compileErrors.mkString("\n"))
+                else if bad then (CliExit.TestFailed.code, "")
+                else (CliExit.Success.code, "")
+            ran.foldZIO(
+              {
+                case error: ServerError     => ZIO.fail(error)
+                case error: ModuleTestError =>
+                  console.announce(text => say(Message.Out(text))) *>
+                    notes.announce(text => say(Message.Out(text))) *>
+                    missed.get.flatMap { compileErrors =>
+                      val (code, message) = error match
+                        case ModuleTestError.NoneMatched(_)
+                            if compileErrors.nonEmpty =>
+                          (
+                            CliExit.TestFailed.code,
+                            compileErrors.mkString("\n")
+                          )
+                        case other => Cli.testFailure(other)
+                      done(say, code, message)
+                    }
+              },
+              outcome =>
+                notes.announce(text => say(Message.Out(text))) *>
+                  done(say, outcome._1, outcome._2)
+            )
+          }
+        }
       }
     }
 
@@ -621,20 +684,18 @@ object Calls:
           s"could not write ${repo.resolve(".histos").resolve("assembly.sha256")}"
         )
 
-  private def showCompile(
-      repo: Path,
+  private def speak(
       say: Say,
+      console: CompileConsole.Session,
       feed: CompileFeed
   ): IO[ServerError, Unit] =
-    feed match
-      case CompileFeed.Began(module, version, platform) =>
-        say(Message.Out(Lines.compiling(module, version, platform)))
-      case CompileFeed.Diagnostic(_, _, _, problem) =>
-        say(Message.Err(problem.text))
-      case CompileFeed.Done(cell) =>
-        say(Message.Out(Lines.compiled(repo, cell)))
-      case CompileFeed.Failed(error) =>
-        say(Message.Err(error.message))
+    console.hear(feed).flatMap { lines =>
+      CompileConsole.show(
+        lines,
+        text => say(Message.Out(text)),
+        text => say(Message.Err(text))
+      )
+    }
 
   private def compiled(feed: CompileFeed): Option[histos.zinc.CompiledCell] =
     feed match

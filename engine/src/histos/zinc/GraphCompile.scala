@@ -32,7 +32,8 @@ final case class CompiledCell(
     platform: Platform,
     classes: Path,
     classFiles: Int,
-    key: Option[Sha256] = None
+    key: Option[Sha256] = None,
+    changed: Boolean = true
 )
 
 /** One cell's console. Diagnostics stay with that cell. Parallel cells are not
@@ -571,7 +572,8 @@ object GraphCompile:
             platform,
             compiled.classes,
             compiled.classFiles,
-            Some(compiled.key)
+            Some(compiled.key),
+            compiled.changed
           )
     yield compiled
 
@@ -593,7 +595,7 @@ object GraphCompile:
           finally walk.close()
           paths.sortBy(path => -path.getNameCount).foreach(Files.deleteIfExists)
         Files.createDirectories(classes)
-        CompiledCell(module, version, platform, classes, 0)
+        CompiledCell(module, version, platform, classes, 0, changed = false)
       }
       .mapError(_ => GraphCompileError.Output(classes))
 
