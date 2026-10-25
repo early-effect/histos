@@ -1045,7 +1045,7 @@ object Daemon:
         ZIO.when(close)(generation.scope.close(Exit.unit)).unit
       }
 
-  private def occupy[R, E](permit: Semaphore, call: Call)(
+  private[server] def occupy[R, E](permit: Semaphore, call: Call)(
       body: ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
     call match

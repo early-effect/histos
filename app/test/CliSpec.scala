@@ -25,7 +25,18 @@ import histos.resolve.{
   ResolveCell,
   ResolveError
 }
-import histos.server.{Calls, Daemon, Message}
+import histos.server.{
+  Attach,
+  Call,
+  Calls,
+  Client,
+  Daemon,
+  Decision,
+  Feed,
+  Message,
+  Record,
+  ServerError
+}
 import histos.zinc.GraphCompile
 import histos.Dep
 import histos.*
@@ -1197,6 +1208,63 @@ object CliSpec extends ZIOSpecDefault:
             line == "watching" || line == "watching histos.scala"
           )
         )
+    @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
+    test("reload with no server reports that no server is running"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          done <- Cli
+            .execute(List("reload"), dir, jar)
+            .provideSome[Scope](layers(dir))
+          record <- Record.read(dir)
+          socket <- ZIO.attempt(Files.exists(Record.socket(dir)))
+        yield assertTrue(
+          done.exit == CliExit.LoadFailed,
+          done.err == ServerError.NoServer.message,
+          done.out.isEmpty,
+          done.playback == Playback.Held,
+          record.isEmpty,
+          !socket
+        )
+    ,
+    test("reboot with no server starts one"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          absent <- Attach.decide(dir, Cli.VersionText)
+          fiber <- Cli
+            .execute(List("reboot"), dir, jar)
+            .provideSome[Scope](layers(dir))
+            .forkScoped
+          found <- serverRecord(dir, fiber)
+          feeds <- found match
+            case Right(written) =>
+              Client
+                .talk(written.socket, Call.Version)
+                .runCollect
+                .map(Some(_))
+            case Left(_) => ZIO.succeed(None)
+          _ <- fiber.interrupt
+        yield
+          val detail = found match
+            case Left(done) => s"${done.exit.code} ${done.err}"
+            case Right(_)   => ""
+          val heard = feeds.getOrElse(Chunk.empty)
+          assertTrue(
+            absent == Decision.Absent,
+            detail.isEmpty,
+            heard.exists {
+              case Feed.Out(text) => text == Cli.VersionText
+              case _              => false
+            },
+            heard.exists {
+              case Feed.Exit(code, err) =>
+                code == CliExit.Success.code && err.isEmpty
+              case _ => false
+            }
+          )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds)
   )
 
@@ -1279,6 +1347,30 @@ object CliSpec extends ZIOSpecDefault:
 
   private def refused(done: Completed): Boolean =
     done.exit == CliExit.Usage && done.err.contains("usage:")
+
+  private def serverRecord(
+      dir: Path,
+      fiber: Fiber[LoadError, Completed]
+  ): UIO[Either[Completed, Record.Written]] =
+    fiber.poll.flatMap:
+      case Some(Exit.Success(done))  => ZIO.succeed(Left(done))
+      case Some(Exit.Failure(cause)) =>
+        ZIO.succeed(
+          Left(
+            Completed(
+              CliExit.TaskFailed,
+              "",
+              cause.prettyPrint,
+              Playback.Held
+            )
+          )
+        )
+      case None =>
+        Record
+          .read(dir)
+          .flatMap:
+            case Some(written) => ZIO.succeed(Right(written))
+            case None => ZIO.sleep(50.millis) *> serverRecord(dir, fiber)
 
   private def printed(pred: String => Boolean): UIO[Unit] =
     TestConsole.output.flatMap { lines =>
