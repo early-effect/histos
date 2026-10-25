@@ -8,7 +8,7 @@ M0-M3 establish the kernel and resource ownership. M4 adds tool identity, the JD
 
 The build is immutable data. Work is a typed effect. Dependencies compose as Step values; Histos schedules them with bounded concurrency and independent failures as outcome data. Scoped construction owns compilers, classloaders, sockets, processes, temporary files and HTTP clients.
 
-A human and an agent are the same operator. They drive the same operations through one typed request. The CLI renders a report and an exit. MCP returns that report as data and streams the same events. BSP is the editor protocol. `histos mcp`, `histos bsp`, and `histos server` start a transport and are not operations. The CLI, server, BSP, and MCP already share a graph, and they do not yet share that request. Cancellation names a run rather than a task string.
+A human and an agent are the same operator. They drive the same operations through one typed request. The CLI renders a report and an exit. MCP returns that report as data and streams the same events. BSP is the editor protocol. `histos mcp`, `histos bsp`, and `histos server` start a transport and are not operations. The CLI, server, and MCP already share that request for the operations this tree implements. MCP still returns one string of CLI text, and it does not stream events. Cancellation still names the task id the server already keys.
 
 Both operators see each decision as it happens, and either can ask what an operation will do before paying for it. The answer is the work plan: which units would run, and why. It is not a predicted duration.
 
@@ -166,4 +166,4 @@ The M5 edges concern later backend/platform/bridge integration, not a ban on sta
 - Docs link to source/tests without line anchors or copied implemented examples. Comments explain constraints, not implementation narration.
 - Humans merge PRs. Publication authority does not authorize releases or merges.
 
-Sandboxing, live remote cache/execution, MiMa/Api linking at 1.0, an importer, the Scala.js editor host and DAP remain future capabilities. Tests are not sendable until a real isolation policy makes that claim honest. MCP results are still one string of CLI text. That shape, the operations MCP cannot request, the cell tally, and the lack of a preview are current behavior to retire, not the target contract. Duration history stays with M9. A preview does not invent a clock time.
+Sandboxing, live remote cache/execution, MiMa/Api linking at 1.0, an importer, the Scala.js editor host and DAP remain future capabilities. Tests are not sendable until a real isolation policy makes that claim honest. MCP results are still one string of CLI text. Streamed events, typed reports, and run-id cancellation remain. `preview compile` writes nothing and says file-level staleness is unknown. Test, publish, clean, and run still cannot be previewed. Duration history stays with M9. A preview does not invent a clock time.

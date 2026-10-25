@@ -151,9 +151,9 @@ Load failures nest in LoadError and exit 3. A deliberate task failure or mapped 
 
 The grammar is closed before loading. Only an unknown root outside [`CommandName.reserved`](../api/src/histos/plugin/Names.scala) falls through to plugin commands. Built-ins, including launcher, win; acp remains reserved although deleted. Cache subcommand words remain available at the root. A malformed command under a reserved root does not load plugins.
 
-[`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch uses the same dispatch. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
+[`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch does not use that dispatch. It sends the raw tokens, and a server parses them with the built-in grammar, so a contributed command is usage while a server is up. With no server, watch re-enters the CLI. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
 
-`run <plugin>/<task>` uses empty arguments and refuses a platform token. A contributed command's parsed `PluginArgs` travel on `Call.Task`, so an attached CLI, the server, and MCP run those arguments. Cancellation through those surfaces is still keyed by the existing id, not a separate run id (A8/A23). No plugin-specific MCP tool or BSP task target exists.
+`run <plugin>/<task>` uses empty arguments and refuses a platform token. A one-shot contributed command's parsed `PluginArgs` travel on `Call.Task`, so an attached CLI, the server, and the MCP `run` tool run those arguments. Watch does not send that call. Cancellation through those surfaces is still keyed by the existing id, not a separate run id (A8/A23). No plugin-specific MCP tool or BSP task target exists.
 
 Graph text shows plugin binary/source provenance, task seal/needs/declared paths, commands and jobs. Server fingerprints the build, dependency lock and path-plugin files and reloads changed generations. Resource leasing, typed surface reports and current request runtime/lock proof are separate A20/L11/L13 concerns, not plugin-cache guarantees.
 
@@ -175,7 +175,7 @@ A plugin author can call run with ZIO Test and [`PluginFixture`](../api/src/hist
 | Compile/Same-only dependencies, separate declared kind, no public typed phase Steps | M7 G16 |
 | String notes/settings and registration/version error flattening | M7 G6/G10/G14/G15 |
 | Empty compiled fixture values and missing complete examples | M7 G17/T14 |
-| Lost remote command arguments, serial cancel/progress and string reports | M6 A1/A2/A8/A23/A25 |
+| Serial cancel, no progress stream, and string reports. One-shot `PluginArgs` travel on `Call.Task`; watch does not send that call | M6 A1/A2/A8/A23/A25 |
 | No live remote cache configuration, output bytes never transferred | D10 and future remote cache |
 | No binary compatibility promise before 1.0; Api linking refused | Deliberate prerelease contract |
 
