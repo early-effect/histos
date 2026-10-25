@@ -24,6 +24,7 @@ object Grammar:
   private enum Wire:
     case Version, Graph, Mcp, Bsp, Server, CachePath, CacheList, Toolchain,
       Reload, Reboot
+    case Cancel(id: String)
     case Run(name: String, platform: Option[String])
     case Test(projects: List[String])
     case TestOnly(args: List[String])
@@ -78,6 +79,8 @@ object Grammar:
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
   private val reload = CliCommand("reload").map(_ => Wire.Reload)
   private val reboot = CliCommand("reboot").map(_ => Wire.Reboot)
+  private val cancel =
+    CliCommand("cancel", Args.text("id")).map(Wire.Cancel(_))
   private val path = CliCommand("path").map(_ => Wire.CachePath)
   private val list = CliCommand("list").map(_ => Wire.CacheList)
   private val clean =
@@ -99,7 +102,7 @@ object Grammar:
     CliCommand("launcher", Options.boolean("update")).map(Wire.Launcher(_))
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot
+      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a
@@ -113,8 +116,9 @@ object Grammar:
         ZIO.fail(CliParseError.WatchCommand("watch needs a command"))
       case "~" :: "~" :: _ =>
         ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
-      case "~" :: rest => parseRoot(rest).map(Command.Watch(_))
-      case _           => parseRoot(args)
+      case "~" :: rest =>
+        parseRoot(rest).map(command => Command.Watch(command, rest))
+      case _ => parseRoot(args)
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
     root
@@ -138,6 +142,7 @@ object Grammar:
       case Wire.Toolchain           => ZIO.succeed(Command.Toolchain)
       case Wire.Reload              => ZIO.succeed(Command.Reload)
       case Wire.Reboot              => ZIO.succeed(Command.Reboot)
+      case Wire.Cancel(id)          => ZIO.succeed(Command.Cancel(id))
       case Wire.CacheClean(dryRun)  => ZIO.succeed(Command.CacheClean(dryRun))
       case Wire.Resolve(true, true) => ZIO.fail(CliParseError.Rejected)
       case Wire.Resolve(update, check) =>

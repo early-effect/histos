@@ -15,21 +15,29 @@ import histos.testrun.{
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
 import histos.jdk.Sha256
-import histos.load.{LoadError, PluginLink, PluginRuntime}
+import histos.load.{LoadError, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
-import histos.publish.PublishRun
-import histos.resolve.{BuildResolvers, Repositories, Resolve, ResolveError}
+import histos.publish.{LauncherPin, LauncherScript, PublishRun, ScriptError}
+import histos.resolve.{
+  BuildResolvers,
+  DependencyLock,
+  PluginUpdate,
+  Repositories,
+  Resolve,
+  ResolveError
+}
 import histos.schedule.RemoteCache
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
+import histos.cli.ResolveAction
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.{Platform, ProjectGraph}
 
 import zio.json.*
-import zio.{Chunk, Fiber, IO, Ref, ZIO, ZLayer}
+import zio.{Chunk, Exit, Fiber, IO, Ref, Scope, ZIO, ZLayer}
 
 import java.io.OutputStream
 import java.nio.file.{Files, Path}
@@ -37,6 +45,14 @@ import java.nio.file.{Files, Path}
 /** One CLI message, sent as a frame or kept for a tool result. */
 final class Say(private val send: Message => IO[ServerError, Unit]):
   def apply(message: Message): IO[ServerError, Unit] = send(message)
+
+  /** Inner watch iterations keep their text and do not end the session. */
+  def dropExit: Say =
+    new Say({
+      case Message.Exit(_, err) =>
+        if err.isEmpty then ZIO.unit else send(Message.Err(err))
+      case other => send(other)
+    })
 
 object Say:
   def frames(stream: OutputStream, socket: Path): Say =
@@ -53,6 +69,14 @@ object Say:
       case Message.Exit(code, err) => feeds.update(_ :+ Feed.Exit(code, err))
       case _                       => ZIO.unit
     })
+
+enum WorkflowFault:
+  case Files(error: histos.workflow.CiError)
+  case Scripts(error: ScriptError)
+
+  def message: String = this match
+    case Files(error)   => error.message
+    case Scripts(error) => error.message
 
 /** One graph command, written as the CLI would print it. */
 object Calls:
@@ -165,33 +189,48 @@ object Calls:
       plugins: PluginRuntime,
       machine: Machine,
       id: String,
+      args: PluginArgs,
       say: Say
   ): ZIO[Resolve & histos.load.Loader & ContentStore, ServerError, Unit] =
     TaskId.from(id) match
       case Left(error) => done(say, CliExit.TaskFailed.code, error.message)
       case Right(found) if found == TaskId.Inspect =>
-        told(say, graph.projects.map(_.name.value).mkString(",")) *> done(
-          say,
-          CliExit.Success.code,
-          ""
-        )
-      case Right(found) if found == TaskId.Versions =>
-        VersionTask
-          .fromRepo(graph, repo, machine.env)
-          .foldZIO(
-            error => done(say, CliExit.TaskFailed.code, error.message),
-            result =>
-              told(say, result.render) *> done(
-                say,
-                CliExit.Success.code,
-                ""
-              )
+        if args != PluginArgs.empty then
+          done(
+            say,
+            CliExit.TaskFailed.code,
+            s"run ${found.value} does not take arguments"
           )
+        else
+          told(say, graph.projects.map(_.name.value).mkString(",")) *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
+      case Right(found) if found == TaskId.Versions =>
+        if args != PluginArgs.empty then
+          done(
+            say,
+            CliExit.TaskFailed.code,
+            s"run ${found.value} does not take arguments"
+          )
+        else
+          VersionTask
+            .fromRepo(graph, repo, machine.env)
+            .foldZIO(
+              error => done(say, CliExit.TaskFailed.code, error.message),
+              result =>
+                told(say, result.render) *> done(
+                  say,
+                  CliExit.Success.code,
+                  ""
+                )
+            )
       case Right(_) =>
         PluginTaskId.parse(id) match
           case Left(error) =>
             done(say, CliExit.TaskFailed.code, error.message)
-          case Right(taskId) => plugin(plugins, taskId, say)
+          case Right(taskId) => plugin(plugins, taskId, args, say)
 
   def toolchain(
       machine: Machine,
@@ -217,72 +256,98 @@ object Calls:
 
   def resolve(
       repo: Path,
-      graph: ProjectGraph,
+      apiJar: Path,
       action: String,
       say: Say,
       native: histos.native.NativeOrigin
-  ): ZIO[Resolve & histos.load.Loader, ServerError, Unit] =
+  ): ZIO[Resolve & Loader, ServerError, Unit] =
     resolveAction(action) match
       case None =>
         done(say, CliExit.Usage.code, s"'$action' is not a resolve action")
       case Some(kind) =>
-        ZIO
-          .serviceWithZIO[histos.load.Loader](_.scan(repo))
-          .either
-          .flatMap:
-            case Left(error) =>
+        resolveWork(repo, apiJar, kind, native).foldZIO(
+          {
+            case error: LoadError =>
               done(say, CliExit.LoadFailed.code, error.message)
-            case Right(scanned) =>
-              val followed: ZIO[
-                Resolve,
-                LoadError | ResolveError,
-                String
-              ] =
-                kind match
-                  case histos.cli.ResolveAction.Verify =>
-                    Resolve.requirePlugins(repo, scanned.requests) *>
-                      Resolve.verify(
-                        repo,
-                        graph,
-                        BuildResolvers(graph.resolvers),
-                        native
-                      )
-                  case histos.cli.ResolveAction.Check =>
-                    Resolve.requirePlugins(repo, scanned.requests) *>
-                      Resolve.checkPlugins(
-                        repo,
-                        scanned.requests,
-                        Repositories.central
-                      ) *>
-                      Resolve.check(
-                        repo,
-                        graph,
-                        BuildResolvers(graph.resolvers),
-                        native
-                      )
-                  case histos.cli.ResolveAction.Update =>
-                    for
-                      plugins <- Resolve.planPlugins(
-                        scanned.requests,
-                        Repositories.central
-                      )
-                      updated <- Resolve.update(
-                        repo,
-                        graph,
-                        BuildResolvers(graph.resolvers),
-                        native = native,
-                        plugins = histos.resolve.PluginUpdate.Replace(plugins)
-                      )
-                    yield updated
-              followed.foldZIO(
-                {
-                  case error: LoadError =>
-                    done(say, CliExit.LoadFailed.code, error.message)
-                  case error: ResolveError =>
-                    done(say, CliExit.ResolveFailed.code, error.message)
-                },
-                text => told(say, text) *> done(say, CliExit.Success.code, "")
+            case error: ResolveError =>
+              done(say, CliExit.ResolveFailed.code, error.message)
+          },
+          text => told(say, text) *> done(say, CliExit.Success.code, "")
+        )
+
+  /** Stage plugin cells, load that generation, then solve and commit once.
+    * Check and verify load the locked generation. The adopted graph is not the
+    * update input.
+    */
+  def resolveWork(
+      repo: Path,
+      apiJar: Path,
+      action: ResolveAction,
+      native: histos.native.NativeOrigin
+  ): ZIO[Loader & Resolve, LoadError | ResolveError, String] =
+    ZIO.serviceWithZIO[Loader](_.scan(repo)).flatMap { scanned =>
+      val followed: ZIO[Loader & Resolve, LoadError | ResolveError, String] =
+        action match
+          case ResolveAction.Update =>
+            for
+              plugins <- Resolve.planPlugins(
+                scanned.requests,
+                Repositories.central
               )
+              prior <- Resolve.readLock(repo).catchSome {
+                case ResolveError.NoLock(_) =>
+                  ZIO.succeed(DependencyLock(Nil))
+              }
+              built <- generation(
+                _.loadLocked(repo, apiJar, prior.copy(plugins = plugins))
+              )
+              updated <- Resolve.update(
+                repo,
+                built.graph,
+                BuildResolvers(built.graph.resolvers),
+                native,
+                PluginUpdate.Replace(plugins)
+              )
+            yield updated
+          case ResolveAction.Check =>
+            for
+              _ <- Resolve.requirePlugins(repo, scanned.requests)
+              _ <- Resolve.checkPlugins(
+                repo,
+                scanned.requests,
+                Repositories.central
+              )
+              built <- generation(_.load(repo, apiJar))
+              text <- Resolve.check(
+                repo,
+                built.graph,
+                BuildResolvers(built.graph.resolvers),
+                native
+              )
+            yield text
+          case ResolveAction.Verify =>
+            for
+              _ <- Resolve.requirePlugins(repo, scanned.requests)
+              built <- generation(_.load(repo, apiJar))
+              text <- Resolve.verify(
+                repo,
+                built.graph,
+                BuildResolvers(built.graph.resolvers),
+                native
+              )
+            yield text
+      followed
+    }
+
+  private def generation[A](
+      load: Loader => ZIO[Scope, LoadError, A]
+  ): ZIO[Loader, LoadError, A] =
+    ZIO.serviceWithZIO[Loader] { loader =>
+      for
+        scope <- Scope.make
+        result <- scope.extend(load(loader)).ensuring(scope.close(Exit.unit))
+      yield result
+    }
 
   def workflow(
       repo: Path,
@@ -294,11 +359,8 @@ object Calls:
       case None =>
         done(say, CliExit.Usage.code, s"'$action' is not a workflow action")
       case Some(kind) =>
-        val effect = kind match
-          case WorkflowAction.Check  => Workflow.check(repo, graph)
-          case WorkflowAction.Update => Workflow.update(repo, graph)
-        effect.foldZIO(
-          error => done(say, CliExit.WorkflowFailed.code, error.message),
+        workflowWork(repo, graph, kind).foldZIO(
+          fault => done(say, CliExit.WorkflowFailed.code, fault.message),
           file =>
             told(say, file.toString) *> done(
               say,
@@ -306,6 +368,81 @@ object Calls:
               ""
             )
         )
+
+  /** Workflow files and launcher scripts. The pin is not advanced. */
+  def workflowWork(
+      repo: Path,
+      graph: ProjectGraph,
+      action: WorkflowAction
+  ): IO[WorkflowFault, Path] =
+    val rendered = action match
+      case WorkflowAction.Check =>
+        Workflow.check(repo, graph).mapError(WorkflowFault.Files(_))
+      case WorkflowAction.Update =>
+        Workflow.update(repo, graph).mapError(WorkflowFault.Files(_))
+    val scripts = action match
+      case WorkflowAction.Check =>
+        LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
+      case WorkflowAction.Update =>
+        LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
+    rendered *> scripts.as(Workflow.path(repo))
+
+  def version(text: String, say: Say): IO[ServerError, Unit] =
+    told(say, text) *> done(say, CliExit.Success.code, "")
+
+  def cachePath(say: Say): ZIO[ContentStore, ServerError, Unit] =
+    ZIO.serviceWithZIO[ContentStore] { store =>
+      told(say, store.root.toString) *> done(say, CliExit.Success.code, "")
+    }
+
+  def cacheList(say: Say): ZIO[ContentStore, ServerError, Unit] =
+    ZIO
+      .serviceWithZIO[ContentStore](_.list)
+      .foldZIO(
+        error => done(say, CliExit.LoadFailed.code, error.message),
+        entries =>
+          val text =
+            if entries.isEmpty then ""
+            else
+              entries
+                .map(entry => s"${entry.digest.value} ${entry.bytes}")
+                .mkString("\n")
+          told(say, text) *> done(say, CliExit.Success.code, "")
+      )
+
+  def cacheClean(
+      dryRun: Boolean,
+      say: Say
+  ): ZIO[ContentStore, ServerError, Unit] =
+    ZIO
+      .serviceWithZIO[ContentStore]: store =>
+        zio.Clock.instant
+          .flatMap(now => store.clean(now, ContentStore.Retention, dryRun))
+      .foldZIO(
+        error => done(say, CliExit.LoadFailed.code, error.message),
+        entries =>
+          val verb = if dryRun then "would remove" else "removed"
+          val text =
+            if entries.isEmpty then s"$verb nothing"
+            else
+              entries
+                .map(entry => s"$verb ${entry.digest.value}")
+                .mkString("\n")
+          told(say, text) *> done(say, CliExit.Success.code, "")
+      )
+
+  def launcherUpdate(repo: Path, say: Say): IO[ServerError, Unit] =
+    LauncherPin
+      .update(repo)
+      .foldZIO(
+        error => done(say, CliExit.ResolveFailed.code, error.message),
+        pin =>
+          told(say, s"${pin.revision} ${pin.sha256.value}") *> done(
+            say,
+            CliExit.Success.code,
+            ""
+          )
+      )
 
   def assembly(
       repo: Path,
@@ -592,11 +729,12 @@ object Calls:
   private def plugin(
       plugins: PluginRuntime,
       id: PluginTaskId,
+      args: PluginArgs,
       say: Say
   ): ZIO[ContentStore & Resolve, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>
       plugins
-        .run(id, PluginArgs.empty)
+        .run(id, args)
         .provideSome[Resolve](
           ZLayer.succeed(ContentStore.actions(store)),
           RemoteCache.off
@@ -709,6 +847,12 @@ object Calls:
       case TestStatus.Failed(_)                                          => true
       case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed =>
         false
+
+  def tell(say: Say, text: String): IO[ServerError, Unit] =
+    told(say, text)
+
+  def finish(say: Say, code: Int, err: String): IO[ServerError, Unit] =
+    done(say, code, err)
 
   private def told(say: Say, text: String): IO[ServerError, Unit] =
     if text.isEmpty then ZIO.unit else emit(say, Message.Out(text))
