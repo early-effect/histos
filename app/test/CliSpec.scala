@@ -5,8 +5,28 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.native.NativeOrigin
 import histos.load.PluginLink
 import histos.plugin.*
-import histos.workflow.WorkflowAction
-import histos.load.{ApiJar, LoadError}
+import histos.workflow.{Workflow, WorkflowAction}
+import histos.load.{
+  ApiJar,
+  BuildNotes,
+  LoadError,
+  LoadedBuild,
+  Loader,
+  ScannedBuild
+}
+import histos.cache.ContentStore
+import histos.resolve.{
+  LockedArtifact,
+  Repositories,
+  Repository,
+  RepositoryIo,
+  Resolve,
+  ResolveCell,
+  ResolveError
+}
+import histos.server.{Calls, Daemon}
+import histos.zinc.GraphCompile
+import histos.Dep
 import histos.*
 
 import java.nio.file.{Files, Path}
@@ -133,6 +153,13 @@ object CliSpec extends ZIOSpecDefault:
         both == Left(CliParseError.Rejected)
       )
     ,
+    test("cancel names the id the server already keys"):
+      for parsed <- Cli.parse(List("cancel", "inspect"))
+      yield assertTrue(
+        parsed == Command.Cancel("inspect"),
+        Operation.call(parsed) == Right(histos.server.Call.Cancel("inspect"))
+      )
+    ,
     test("workflow checks by default and update rewrites"):
       for
         plain <- Cli.parse(List("workflow"))
@@ -178,7 +205,10 @@ object CliSpec extends ZIOSpecDefault:
         all == Command.Clean(Nil),
         named == Command.Clean(List("engine")),
         full == Command.CleanFull,
-        watched == Command.Watch(Command.Clean(List("engine"))),
+        watched == Command.Watch(
+          Command.Clean(List("engine")),
+          List("clean", "engine")
+        ),
         flag == Left(CliParseError.Pattern("clean does not take --dry-run")),
         extra == Left(
           CliParseError.Pattern("cleanFull does not take a project")
@@ -215,8 +245,11 @@ object CliSpec extends ZIOSpecDefault:
           case _ => false
         ,
         watched match
-          case Command.Watch(Command.TestQuick(Nil, patterns)) =>
-            patterns.map(_.value) == List("com.acme.Foo*")
+          case Command.Watch(Command.TestQuick(Nil, patterns), args) =>
+            patterns.map(_.value) == List("com.acme.Foo*") && args == List(
+              "testQuick",
+              "com.acme.Foo*"
+            )
           case _ => false
         ,
         empty == Left(CliParseError.WatchCommand("watch needs a command")),
@@ -664,7 +697,7 @@ object CliSpec extends ZIOSpecDefault:
           case Left(CliParseError.BadPluginTask(_)) => true
           case _                                    => false,
         site == Left(CliParseError.UnknownRoot),
-        watched == Command.Watch(Command.Test(Nil)),
+        watched == Command.Watch(Command.Test(Nil), List("test")),
         cache == Left(CliParseError.UnknownCommand),
         flag match
           case Left(CliParseError.UnknownRoot) => false
@@ -802,7 +835,168 @@ object CliSpec extends ZIOSpecDefault:
           CliParseError.UnknownCommand
         )
       )
+    ,
+    test(
+      "resolve --update loads the staged generation with and without a server"
+    ):
+      ZIO.scoped:
+        Projects(module("core", Jvm)(scala"3.9.0")) match
+          case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
+          case Right(graph) =>
+            for
+              jar <- apiJar.mapError(_.message)
+              dir <- repo.mapError(_.message)
+              trace <- Ref.make(List.empty[String])
+              loader = Recording(trace, graph)
+              stack = ZLayer.succeed(loader) ++
+                ZLayer.succeed(FetchResolve) ++
+                ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
+                ZLayer.succeed(machine(dir, Map.empty))
+              local <- Cli
+                .execute(List("resolve", "--update"), dir, jar)
+                .provideSome[Scope](stack)
+              localTrace <- trace.getAndSet(Nil)
+              jdk <- GraphCompile.jdkHere.mapError(_.message)
+              _ <- ZIO
+                .attempt {
+                  Files.createDirectories(dir.resolve(".histos"))
+                  Files.writeString(
+                    dir.resolve(".histos").resolve("toolchain.local"),
+                    jdk.home.toAbsolutePath.normalize.toString + "\n"
+                  )
+                }
+                .mapError(_.toString)
+              _ <- Daemon
+                .open(
+                  dir,
+                  graph,
+                  jdk,
+                  Cli.VersionText,
+                  jar,
+                  Nil,
+                  ZIO.succeed(BuildNotes(false, Nil)),
+                  Calls.quiet,
+                  machine(dir, Map.empty)
+                )
+                .provideSome[Scope](stack)
+                .mapError(_.message)
+              remote <- Cli
+                .execute(List("resolve", "--update"), dir, jar)
+                .provideSome[Scope](stack)
+              remoteTrace <- trace.get
+            yield assertTrue(
+              local.exit == CliExit.ResolveFailed,
+              remote.exit == CliExit.ResolveFailed,
+              local.err.contains("resolve failed while fetch"),
+              remote.err.contains("resolve failed while fetch"),
+              localTrace == List("scan", "locked:0"),
+              remoteTrace == List("scan", "locked:0")
+            )
+    ,
+    test("workflow checks launcher scripts with and without a server"):
+      ZIO.scoped:
+        for
+          jar <- apiJar.mapError(_.message)
+          dir <- bare.mapError(_.message)
+          _ <- ZIO
+            .attempt(Files.writeString(dir.resolve("histos.scala"), ship))
+            .mapError(_.toString)
+          jdk <- GraphCompile.jdkHere.mapError(_.message)
+          _ <- ZIO
+            .attempt {
+              Files.createDirectories(dir.resolve(".histos"))
+              Files.writeString(
+                dir.resolve(".histos").resolve("toolchain.local"),
+                jdk.home.toAbsolutePath.normalize.toString + "\n"
+              )
+            }
+            .mapError(_.toString)
+          stack = layers(dir)
+          loaded <- ZIO
+            .serviceWithZIO[Loader](_.load(dir, jar))
+            .provideSome[Scope](stack)
+            .mapError(_.message)
+          _ <- Workflow.update(dir, loaded.graph).mapError(_.message)
+          local <- Cli
+            .execute(List("workflow"), dir, jar)
+            .provideSome[Scope](stack)
+          _ <- Daemon
+            .open(
+              dir,
+              loaded.graph,
+              jdk,
+              Cli.VersionText,
+              jar,
+              Nil,
+              ZIO.succeed(BuildNotes(false, Nil)),
+              loaded.plugins
+            )
+            .provideSome[Scope](stack)
+            .mapError:
+              case error: histos.server.ServerError => error.message
+              case error: LoadError                 => error.message
+          remote <- Cli
+            .execute(List("workflow"), dir, jar)
+            .provideSome[Scope](stack)
+        yield
+          val assembled = loaded.graph.assembly match
+            case Some(_) => true
+            case None    => false
+          assertTrue(
+            assembled,
+            local.exit == CliExit.WorkflowFailed,
+            remote.exit == CliExit.WorkflowFailed,
+            local.err.contains("launcher pin is absent"),
+            remote.err.contains("launcher pin is absent")
+          )
   )
+
+  private val ship =
+    """import histos.*
+      |object build extends HistosBuild:
+      |  def graph =
+      |    val api = module("api", Jvm)(scala"3.9.0")
+      |    Projects
+      |      .organization(organization"rocks.earlyeffect")
+      |      .assembly(artifact"histos")(
+      |        ships(manual("histos", manual"0.0.1-SNAPSHOT")(api)),
+      |        api
+      |      )
+      |""".stripMargin
+
+  private final class Recording(trace: Ref[List[String]], graph: ProjectGraph)
+      extends Loader:
+    def scan(repo: Path) =
+      trace.update(_ :+ "scan").as(ScannedBuild(Nil, ""))
+    def loadLocked(
+        repo: Path,
+        apiJar: Path,
+        lock: histos.resolve.DependencyLock
+    ) =
+      trace
+        .update(_ :+ s"locked:${lock.plugins.length}")
+        .as(
+          LoadedBuild(graph, Calls.quiet)
+        )
+    def load(repo: Path, apiJar: Path) =
+      trace.update(_ :+ "load").as(LoadedBuild(graph, Calls.quiet))
+    def buildClasspath(apiJar: Path) = ZIO.succeed(Nil)
+    def reportBuild(repo: Path, apiJar: Path) =
+      ZIO.succeed(BuildNotes(false, Nil))
+
+  private object FetchResolve extends Resolve:
+    private val failed: IO[ResolveError, Nothing] =
+      ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+    def resolveTool(request: histos.resolve.ToolRequest) = failed
+    def resolve(cell: ResolveCell) = failed
+    def fetch(artifact: LockedArtifact) = failed
+    def resolvePlugin(dependency: Dep, repositories: Repositories) = failed
+    def sources(
+        organization: String,
+        name: String,
+        revision: String,
+        repository: Repository
+    ) = failed
 
   private def layers(dir: Path, env: Map[String, String] = Map.empty) =
     ZLayer.make[

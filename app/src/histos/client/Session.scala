@@ -1,18 +1,22 @@
 package histos.client
 
 import histos.jdk.JdkRuntime
-import histos.cli.{Cli, CliExit}
+import histos.cli.{Cli, CliExit, Grammar, Operation}
 import histos.jdk.Machine
 import histos.load.{LoadedBuild, Loader}
+import histos.plugin.PluginArgs
 import histos.server.{
   Attach,
   Call,
+  Calls,
   Client,
   Decision,
   Feed,
   Fingerprint,
+  Message,
   Say,
-  ServerError
+  ServerError,
+  Watching
 }
 import histos.task.TaskId
 import histos.testrun.ModuleTestError
@@ -51,7 +55,7 @@ object Session:
       desk: Desk,
       call: Call
   ): ZIO[
-    Loader & histos.resolve.Resolve & histos.cache.ContentStore,
+    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     String,
     String
   ] =
@@ -77,21 +81,28 @@ object Session:
   /** `inspect`, `versions`, and a plugin task reject a platform. A main may
     * name one.
     */
-  def runCall(id: String, platform: Option[String]): Either[String, Call] =
+  def runCall(
+      id: String,
+      platform: Option[String],
+      args: PluginArgs
+  ): Either[String, Call] =
     val task =
       id.contains("/") || TaskId
         .from(id)
         .toOption
         .exists(found => found == TaskId.Inspect || found == TaskId.Versions)
-    platform match
-      case Some(_) if task =>
-        Left(histos.cli.CliParseError.TaskPlatform(id).message)
-      case Some(raw) =>
-        Platform.from(raw) match
-          case Left(error) => Left(error.message)
-          case Right(_)    => Right(Call.Run(id, platform))
-      case None if task => Right(Call.Task(id))
-      case None         => Right(Call.Run(id, None))
+    if !task && args != PluginArgs.empty then
+      Left(s"run $id does not take arguments")
+    else
+      platform match
+        case Some(_) if task =>
+          Left(histos.cli.CliParseError.TaskPlatform(id).message)
+        case Some(raw) =>
+          Platform.from(raw) match
+            case Left(error) => Left(error.message)
+            case Right(_)    => Right(Call.Run(id, platform))
+        case None if task => Right(Call.Task(id, args))
+        case None         => Right(Call.Run(id, None))
 
   def spoken(feeds: List[Feed]): Either[String, String] =
     val out = feeds.collect { case Feed.Out(text) => text }
@@ -116,45 +127,123 @@ object Session:
       desk: Desk,
       call: Call
   ): ZIO[
-    Loader & histos.resolve.Resolve & histos.cache.ContentStore,
+    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     String,
     String
   ] =
     call match
-      case Call.Clean(Nil) =>
-        finishLocal(say => histos.server.Calls.wipe(repo, say))
-      case Call.CleanFull =>
-        finishLocal(say => histos.server.Calls.cleanFull(repo, say))
-      case _ =>
+      case Call.Reboot =>
+        Cli
+          .reboot(repo, apiJar)
+          .provideSomeLayer(ZLayer.succeed(machine))
+          .flatMap: done =>
+            if done.exit == CliExit.Success then ZIO.succeed(done.out)
+            else
+              val shown = if done.err.nonEmpty then done.err else done.out
+              ZIO.fail(shown)
+      case other =>
         for
-          loaded <- fresh(repo, apiJar, desk)
           feeds <- Ref.make(Chunk.empty[Feed])
-          _ <- dispatch(repo, loaded, machine, desk, call, Say.record(feeds))
+          _ <- answer(repo, apiJar, machine, desk, other, Say.record(feeds))
             .mapError(_.message)
           spokenFeeds <- feeds.get
           text <- ZIO.fromEither(spoken(spokenFeeds.toList))
         yield text
 
-  /** No graph load. A broken `histos.scala` cannot block the wipe. */
-  private def finishLocal(
-      run: Say => ZIO[histos.cache.ContentStore, ServerError, Unit]
-  ): ZIO[histos.cache.ContentStore, String, String] =
-    for
-      feeds <- Ref.make(Chunk.empty[Feed])
-      _ <- run(Say.record(feeds)).mapError(_.message)
-      spokenFeeds <- feeds.get
-      text <- ZIO.fromEither(spoken(spokenFeeds.toList))
-    yield text
+  /** Commands that do not use the adopted graph. */
+  private def answer(
+      repo: Path,
+      apiJar: Path,
+      machine: Machine,
+      desk: Desk,
+      call: Call,
+      say: Say
+  ): ZIO[
+    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
+    ServerError,
+    Unit
+  ] =
+    call match
+      case Call.Version =>
+        Calls.version(Cli.VersionText, say)
+      case Call.CachePath =>
+        Calls.cachePath(say)
+      case Call.CacheList =>
+        Calls.cacheList(say)
+      case Call.CacheClean(dryRun) =>
+        Calls.cacheClean(dryRun, say)
+      case Call.LauncherUpdate =>
+        Calls.launcherUpdate(repo, say)
+      case Call.Clean(Nil) =>
+        Calls.wipe(repo, say)
+      case Call.CleanFull =>
+        Calls.cleanFull(repo, say)
+      case Call.Resolve(action) =>
+        Calls.resolve(repo, apiJar, action, say, machine.native)
+      case Call.Reload =>
+        say(Message.Exit(CliExit.LoadFailed.code, ServerError.NoServer.message))
+      case Call.Reboot =>
+        Cli
+          .reboot(repo, apiJar)
+          .provideSomeLayer(ZLayer.succeed(machine))
+          .flatMap(done => say(Message.Exit(done.exit.code, done.err)))
+      case Call.Bsp =>
+        say(Message.Exit(CliExit.Usage.code, "not a tool"))
+      case Call.Watch(args) =>
+        watch(repo, apiJar, machine, desk, args, say)
+      case other =>
+        fresh(repo, apiJar, desk).either.flatMap:
+          case Left(message) =>
+            say(Message.Exit(CliExit.LoadFailed.code, message))
+          case Right(loaded) =>
+            dispatch(repo, apiJar, loaded, machine, desk, other, say)
+
+  private def watch(
+      repo: Path,
+      apiJar: Path,
+      machine: Machine,
+      desk: Desk,
+      args: List[String],
+      say: Say
+  ): ZIO[
+    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
+    ServerError,
+    Unit
+  ] =
+    args match
+      case Nil =>
+        Calls.finish(say, CliExit.Usage.code, "watch needs a command")
+      case _ =>
+        Grammar
+          .parse(args)
+          .either
+          .flatMap:
+            case Left(error) =>
+              Calls.finish(say, CliExit.Usage.code, error.message)
+            case Right(command) =>
+              Operation.operation(command) match
+                case Left(error) =>
+                  Calls.finish(say, CliExit.Usage.code, error.message)
+                case Right(inner) =>
+                  Watching.session(
+                    say,
+                    answer(repo, apiJar, machine, desk, inner, say.dropExit),
+                    fresh(repo, apiJar, desk).either.map:
+                      case Left(_)       => List(repo.resolve("histos.scala"))
+                      case Right(loaded) =>
+                        Watching.roots(repo, command, loaded.graph)
+                  )
 
   private def dispatch(
       repo: Path,
+      apiJar: Path,
       loaded: LoadedBuild,
       machine: Machine,
       desk: Desk,
       call: Call,
       say: Say
   ): ZIO[
-    Loader & histos.resolve.Resolve & histos.cache.ContentStore,
+    Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     ServerError,
     Unit
   ] =
@@ -205,21 +294,39 @@ object Session:
                   .run(repo, graph, jdk, machine, id, platform, say)
               )
           )
-      case Call.Task(id) =>
-        histos.server.Calls.tracked(desk.runs, id, say)(
-          histos.server.Calls
-            .task(repo, graph, loaded.plugins, machine, id, say)
+      case Call.Task(id, args) =>
+        Calls.tracked(desk.runs, id, say)(
+          Calls.task(repo, graph, loaded.plugins, machine, id, args, say)
         )
       case Call.Resolve(action) =>
-        histos.server.Calls.resolve(repo, graph, action, say, machine.native)
+        Calls.resolve(repo, apiJar, action, say, machine.native)
       case Call.Workflow(action) =>
-        histos.server.Calls.workflow(repo, graph, action, say)
+        Calls.workflow(repo, graph, action, say)
       case Call.Clean(projects) =>
-        histos.server.Calls.clean(repo, graph, projects, say)
+        Calls.clean(repo, graph, projects, say)
       case Call.CleanFull =>
-        histos.server.Calls.cleanFull(repo, say)
-      case Call.Reload | Call.Reboot | Call.Bsp =>
-        say(histos.server.Message.Exit(CliExit.Usage.code, "not a tool"))
+        Calls.cleanFull(repo, say)
+      case Call.Version =>
+        Calls.version(Cli.VersionText, say)
+      case Call.CachePath =>
+        Calls.cachePath(say)
+      case Call.CacheList =>
+        Calls.cacheList(say)
+      case Call.CacheClean(dryRun) =>
+        Calls.cacheClean(dryRun, say)
+      case Call.LauncherUpdate =>
+        Calls.launcherUpdate(repo, say)
+      case Call.Reload =>
+        say(Message.Exit(CliExit.LoadFailed.code, ServerError.NoServer.message))
+      case Call.Reboot =>
+        Cli
+          .reboot(repo, apiJar)
+          .provideSomeLayer(ZLayer.succeed(machine))
+          .flatMap(done => say(Message.Exit(done.exit.code, done.err)))
+      case Call.Bsp =>
+        say(Message.Exit(CliExit.Usage.code, "not a tool"))
+      case Call.Watch(args) =>
+        watch(repo, apiJar, machine, desk, args, say)
 
   private def withJdk(machine: Machine, say: Say, exit: CliExit)(
       use: JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]

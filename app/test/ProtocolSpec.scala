@@ -3,7 +3,10 @@ package histos.mcp
 import heddle.LinePipe
 import histos.workspace.{IoFailure, IoFault}
 import heddle.mcp.protocol.{ProtocolVersion, RequestMeta}
-import histos.cli.{CliParseError, Command}
+import histos.cli.{Cli, CliParseError, Command}
+import histos.client.Session
+import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.server.Call
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
@@ -143,6 +146,23 @@ object ProtocolSpec extends ZIOSpecDefault:
         case Some(line) => readLines(pipe, n - 1).map(line :: _)
 
   private val protocol = suite("mcp")(
+    test("a task call keeps plugin arguments"):
+      val args = PluginArgs(
+        List(NamedText(ParamName("out"), "docs")),
+        Set(FlagName("all"))
+      )
+      val call = Call.Task("dev.example/echo", args)
+      assertTrue(
+        call.toJson.fromJson[Call] == Right(call),
+        Session.runCall("dev.example/echo", None, args) == Right(call),
+        Session.runCall("dev.example/echo", Some("jvm"), args) == Left(
+          CliParseError.TaskPlatform("dev.example/echo").message
+        ),
+        Session.runCall("inspect", None, PluginArgs.empty) == Right(
+          Call.Task("inspect", PluginArgs.empty)
+        )
+      )
+    ,
     test("mcp is a command, and acp is a reserved word with no command"):
       for
         mcp <- histos.cli.Cli.parse(List("mcp"))
@@ -336,6 +356,63 @@ object ProtocolSpec extends ZIOSpecDefault:
             .mkString("\n")
             .contains("plugin task dev.example/echo is not in the graph")
         )
+    ,
+    test("version, cache path, and a rejected watch answer on the pipe"):
+      ZIO.scoped:
+        for
+          jar <- apiJar
+          dir <- repo
+          (client, server) <- LinePipe.connected
+          done <- HistosMcp
+            .serve(dir, jar, server, machine(dir))
+            .provideSome[Scope](loading(dir))
+            .forkScoped
+          _ <- client.writeLine(req("server/discover", obj(), 1).toJson)
+          _ <- client.writeLine(
+            req(
+              "tools/call",
+              obj("name" -> Json.Str("version"), "arguments" -> obj()),
+              2
+            ).toJson
+          )
+          _ <- client.writeLine(
+            req(
+              "tools/call",
+              obj("name" -> Json.Str("cachePath"), "arguments" -> obj()),
+              3
+            ).toJson
+          )
+          _ <- client.writeLine(
+            req(
+              "tools/call",
+              obj(
+                "name" -> Json.Str("watch"),
+                "arguments" -> obj("args" -> Json.Arr())
+              ),
+              4
+            ).toJson
+          )
+          _ <- client.writeLine(
+            req(
+              "tools/call",
+              obj(
+                "name" -> Json.Str("watch"),
+                "arguments" -> obj("args" -> Json.Arr(Json.Str("mcp")))
+              ),
+              5
+            ).toJson
+          )
+          _ <- client.close
+          _ <- done.join
+          lines <- readLines(client, 5)
+        yield
+          val text = lines.mkString("\n")
+          assertTrue(
+            text.contains(Cli.VersionText),
+            text.contains(dir.resolve("cache").toString),
+            text.contains("watch needs a command"),
+            text.contains("usage: histos")
+          )
   ) @@ TestAspect.timeout(15.seconds)
 
   def spec = protocol @@ TestAspect.withLiveSystem
