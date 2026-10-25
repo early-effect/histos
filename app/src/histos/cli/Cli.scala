@@ -62,6 +62,12 @@ enum Command:
   case Reboot
   case Cancel(id: String)
   case PreviewCompile(projects: List[String])
+  case PreviewTest(projects: List[String])
+  case PreviewPublish(projects: List[String])
+  case PreviewClean(projects: List[String])
+  case PreviewCleanFull
+  case PreviewRun(id: TaskId, platform: Option[Platform])
+  case PreviewPlugin(id: PluginTaskId)
 
 enum ResolveAction:
   case Verify, Update, Check
@@ -145,7 +151,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publish [project ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -215,6 +221,18 @@ object Cli:
       case Command.Cancel(id)               => cancel(repo, id)
       case Command.PreviewCompile(projects) =>
         preview(repo, apiJar, projects)
+      case Command.PreviewTest(projects) =>
+        previewTest(repo, apiJar, projects)
+      case Command.PreviewPublish(projects) =>
+        previewPublish(repo, apiJar, projects)
+      case Command.PreviewClean(projects) =>
+        previewClean(repo, apiJar, projects)
+      case Command.PreviewCleanFull =>
+        previewCleanFull(repo)
+      case Command.PreviewRun(id, platform) =>
+        previewRun(repo, apiJar, id.value, platform)
+      case Command.PreviewPlugin(id) =>
+        previewRun(repo, apiJar, id.render, None)
 
   /** One `Call.Watch`. The server, or this process when no server is up, runs
     * that call again after a source save. `mcp`, `bsp`, `server`, and a nested
@@ -317,6 +335,28 @@ object Cli:
         cleanFullLocal(repo).flatMap(report(_, say))
       case Call.PreviewCompile(projects) =>
         loaded(repo, apiJar)(previewLocal(repo, _, projects)).flatMap(
+          report(_, say)
+        )
+      case Call.PreviewTest(projects) =>
+        loaded(repo, apiJar)(previewTestLocal(repo, _, projects)).flatMap(
+          report(_, say)
+        )
+      case Call.PreviewPublish(projects) =>
+        loaded(repo, apiJar)(build =>
+          ZIO.serviceWithZIO[Machine](machine =>
+            previewPublishLocal(repo, build, projects, machine.env)
+          )
+        ).flatMap(report(_, say))
+      case Call.PreviewClean(Nil) =>
+        previewCleanAll(repo).flatMap(report(_, say))
+      case Call.PreviewClean(projects) =>
+        loaded(repo, apiJar)(previewCleanLocal(repo, _, projects)).flatMap(
+          report(_, say)
+        )
+      case Call.PreviewCleanFull =>
+        previewCleanFullLocal(repo).flatMap(report(_, say))
+      case Call.PreviewRun(id, platform) =>
+        loaded(repo, apiJar)(previewRunLocal(_, id, platform)).flatMap(
           report(_, say)
         )
       case Call.Resolve(action) =>
@@ -572,6 +612,148 @@ object Cli:
           Completed(CliExit.CompileFailed, "", error.message, Playback.Held),
         text => Completed(CliExit.Success, text, "", Playback.Held)
       )
+
+  private def previewTest(
+      repo: Path,
+      apiJar: Path,
+      projects: List[String]
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    attach(
+      repo,
+      Call.PreviewTest(projects),
+      loaded(repo, apiJar)(build => previewTestLocal(repo, build, projects))
+    )
+
+  private def previewTestLocal(
+      repo: Path,
+      loaded: histos.load.LoadedBuild,
+      projects: List[String]
+  ): UIO[Completed] =
+    Plan
+      .test(repo, loaded.graph, projects)
+      .fold(
+        error =>
+          Completed(CliExit.TestFailed, "", error.message, Playback.Held),
+        plan =>
+          Completed(
+            CliExit.Success,
+            Plan.renderTest(repo, plan),
+            "",
+            Playback.Held
+          )
+      )
+
+  private def previewPublish(
+      repo: Path,
+      apiJar: Path,
+      projects: List[String]
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    ZIO.serviceWithZIO[Machine]: machine =>
+      attach(
+        repo,
+        Call.PreviewPublish(projects),
+        loaded(repo, apiJar)(build =>
+          previewPublishLocal(repo, build, projects, machine.env)
+        )
+      )
+
+  private def previewPublishLocal(
+      repo: Path,
+      loaded: histos.load.LoadedBuild,
+      projects: List[String],
+      env: Map[String, String]
+  ): UIO[Completed] =
+    Plan
+      .publish(repo, loaded.graph, projects, env)
+      .fold(
+        error =>
+          Completed(CliExit.PublishFailed, "", error.message, Playback.Held),
+        plan =>
+          Completed(CliExit.Success, Plan.renderPublish(plan), "", Playback.Held)
+      )
+
+  /** Empty names skip the graph. Nothing is deleted. */
+  private def previewClean(
+      repo: Path,
+      apiJar: Path,
+      projects: List[String]
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    attach(
+      repo,
+      Call.PreviewClean(projects),
+      if projects.isEmpty then previewCleanAll(repo)
+      else loaded(repo, apiJar)(previewCleanLocal(repo, _, projects))
+    )
+
+  private def previewCleanAll(repo: Path): UIO[Completed] =
+    val plan = Plan.cleanAll(repo)
+    ZIO.succeed(
+      Completed(CliExit.Success, Plan.renderClean(repo, plan), "", Playback.Held)
+    )
+
+  private def previewCleanLocal(
+      repo: Path,
+      loaded: histos.load.LoadedBuild,
+      projects: List[String]
+  ): UIO[Completed] =
+    Plan
+      .clean(repo, loaded.graph, projects)
+      .fold(
+        error =>
+          Completed(CliExit.TaskFailed, "", error.message, Playback.Held),
+        plan =>
+          Completed(
+            CliExit.Success,
+            Plan.renderClean(repo, plan),
+            "",
+            Playback.Held
+          )
+      )
+
+  private def previewCleanFull(
+      repo: Path
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    attach(repo, Call.PreviewCleanFull, previewCleanFullLocal(repo))
+
+  private def previewCleanFullLocal(repo: Path): UIO[Completed] =
+    val plan = Plan.cleanFull(repo)
+    ZIO.succeed(
+      Completed(CliExit.Success, Plan.renderClean(repo, plan), "", Playback.Held)
+    )
+
+  private def previewRun(
+      repo: Path,
+      apiJar: Path,
+      id: String,
+      platform: Option[Platform]
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    attach(
+      repo,
+      Call.PreviewRun(id, platform.map(_.token)),
+      loaded(repo, apiJar)(previewRunLocal(_, id, platform.map(_.token)))
+    )
+
+  private def previewRunLocal(
+      loaded: histos.load.LoadedBuild,
+      id: String,
+      platform: Option[String]
+  ): UIO[Completed] =
+    val parsed = platform match
+      case None => Right(None)
+      case Some(raw) =>
+        Platform.from(raw) match
+          case Left(error)  => Left(error.message)
+          case Right(found) => Right(Some(found))
+    ZIO.succeed:
+      parsed match
+        case Left(message) =>
+          Completed(CliExit.TaskFailed, "", message, Playback.Held)
+        case Right(choice) =>
+          Plan.run(loaded.graph, id, choice) match
+            case Left(error) =>
+              Completed(CliExit.TaskFailed, "", error.message, Playback.Held)
+            case Right(plan) =>
+              Completed(CliExit.Success, Plan.renderRun(plan), "", Playback.Held)
 
   private def assembly(
       repo: Path,

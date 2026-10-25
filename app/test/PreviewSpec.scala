@@ -1,10 +1,15 @@
 package histos.cli
 
+import histos.mcp.HistosMcp
+import histos.plugin.{PluginId, PluginTaskId, TaskName}
 import histos.preview.Plan
-import histos.server.{Calls, Feed, Say}
-import histos.{Jvm, Projects, ScalaVersion, module}
+import histos.server.{Call, Calls, Feed, Say}
+import histos.task.TaskId
+import histos.version.ManualVersion
+import histos.{Jvm, MainClass, Organization, Projects, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.FileTime
 
 import scala.jdk.CollectionConverters.*
 
@@ -14,13 +19,13 @@ import zio.test.*
 object PreviewSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
 
-  private val preview = suite("preview compile")(
+  private val commands = suite("preview commands")(
     test("preview compile is one command"):
       for
         named <- Cli.parse(List("preview", "compile", "app"))
         all <- Cli.parse(List("preview", "compile"))
         bare <- Cli.parse(List("preview")).either
-        other <- Cli.parse(List("preview", "test")).either
+        other <- Cli.parse(List("preview", "nope")).either
       yield assertTrue(
         named == Command.PreviewCompile(List("app")),
         all == Command.PreviewCompile(Nil),
@@ -28,59 +33,264 @@ object PreviewSpec extends ZIOSpecDefault:
         other == Left(CliParseError.UnknownCommand)
       )
     ,
-    test("the handler prints the plan and creates no classes directory"):
+    test("preview test, publish, clean, cleanFull, and run parse"):
+      for
+        tests <- Cli.parse(List("preview", "test", "app"))
+        publish <- Cli.parse(List("preview", "publish"))
+        clean <- Cli.parse(List("preview", "clean", "app"))
+        full <- Cli.parse(List("preview", "cleanFull"))
+        extra <- Cli.parse(List("preview", "cleanFull", "app")).either
+        run <- Cli.parse(List("preview", "run", "app"))
+        jvm <- Cli.parse(List("preview", "run", "app", "jvm"))
+        inspect <- Cli.parse(List("preview", "run", "inspect"))
+        plugin <- Cli.parse(List("preview", "run", "dev.example/echo"))
+      yield assertTrue(
+        tests == Command.PreviewTest(List("app")),
+        publish == Command.PreviewPublish(Nil),
+        clean == Command.PreviewClean(List("app")),
+        full == Command.PreviewCleanFull,
+        extra == Left(
+          CliParseError.Pattern("cleanFull does not take a project")
+        ),
+        run match
+          case Command.PreviewRun(id, None) => id.value == "app"
+          case _                            => false
+        ,
+        jvm match
+          case Command.PreviewRun(id, Some(Jvm)) => id.value == "app"
+          case _                                 => false
+        ,
+        inspect == Command.PreviewRun(TaskId.Inspect, None),
+        plugin == Command.PreviewPlugin(
+          PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+        )
+      )
+    ,
+    test("the preview tool accepts the five operations and requires a run id"):
+      val args = HistosMcp.PreviewArgs
+      assertTrue(
+        HistosMcp.previewCall(args("compile", "", Nil)) == Right(
+          Call.PreviewCompile(Nil)
+        ),
+        HistosMcp.previewCall(args("test", "ignored", List("app"))) == Right(
+          Call.PreviewTest(List("app"))
+        ),
+        HistosMcp.previewCall(args("publish", "", List("app"))) == Right(
+          Call.PreviewPublish(List("app"))
+        ),
+        HistosMcp.previewCall(args("clean", "", Nil)) == Right(
+          Call.PreviewClean(Nil)
+        ),
+        HistosMcp.previewCall(args("cleanFull", "x")) == Right(
+          Call.PreviewCleanFull
+        ),
+        HistosMcp.previewCall(args("cleanFull", "x", List("app"))) == Left(
+          "cleanFull does not take a project"
+        ),
+        HistosMcp.previewCall(args("run", "")) == Left("run needs one name"),
+        HistosMcp.previewCall(args("run", "app")) == Right(
+          Call.PreviewRun("app", None)
+        ),
+        HistosMcp.previewCall(args("nope", "x")) == Left(
+          "preview does not run nope"
+        )
+      )
+  )
+
+  private val handlers = suite("preview handlers")(
+    test("preview test prints test sources and leaves the class file"):
       ZIO.scoped {
         for
           repo <- keep
           _ <- write(repo, "core/src/main/scala/Core.scala", "object Core")
+          _ <- write(repo, "core/src/test/scala/CoreSpec.scala", "object CoreSpec")
           _ <- write(repo, "app/src/main/scala/App.scala", "object App")
           _ <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
+          planted <- plant(repo)
           core = module("core", Jvm)(scala3)
           app = module("app", Jvm)(scala3).dependsOn(core)
           graph <- ZIO.fromEither(Projects(core, app))
-          text <- Plan.show(repo, graph, List("app"))
-          feeds <- Ref.make(Chunk.empty[Feed])
-          _ <- Calls.previewCompile(repo, graph, List("app"), Say.record(feeds))
-          heard <- feeds.get
-          outs = heard.collect { case Feed.Out(line) => line }
-          exit = heard.collect { case Feed.Exit(code, err) => (code, err) }
+          text <- Plan.test(repo, graph, List("app")).map(Plan.renderTest(repo, _))
+          heard <- ask(Calls.previewTest(repo, graph, List("app"), _))
+          kept <- same(planted)
         yield assertTrue(
-          outs == Chunk(text),
-          exit == Chunk((CliExit.Success.code, "")),
+          heard.outs == Chunk(text),
+          heard.exit == Chunk((CliExit.Success.code, "")),
           text.startsWith("file-level staleness: unknown"),
           text.contains("core 3.10.0 jvm upstream"),
+          text.contains("sources core/src/test/scala/CoreSpec.scala"),
           text.contains("app 3.10.0 jvm selected"),
-          text.contains("upstreams core"),
-          text.contains("sources core/src/main/scala/Core.scala"),
-          text.contains("sources app/src/main/scala/App.scala"),
-          !text.contains("AppSpec"),
-          !text.contains("duration"),
-          !Files.exists(repo.resolve(".histos"))
+          text.contains("sources app/src/test/scala/AppSpec.scala"),
+          !text.contains("src/main"),
+          !text.contains("testQuick"),
+          !text.contains("skipped"),
+          !text.contains("would take"),
+          kept,
+          !Files.exists(repo.resolve(".histos").resolve("test-classes"))
         )
       }
     ,
-    test("an unknown project fails the plan and creates no classes directory"):
+    test("preview publish prints the ship lines and writes no jar"):
       ZIO.scoped {
         for
           repo <- keep
+          planted <- plant(repo)
           core = module("core", Jvm)(scala3)
-          graph <- ZIO.fromEither(Projects(core))
-          feeds <- Ref.make(Chunk.empty[Feed])
-          _ <- Calls.previewCompile(
-            repo,
-            graph,
-            List("missing"),
-            Say.record(feeds)
+          app = module("app", Jvm)(scala3).dependsOn(core)
+          graph <- ZIO.fromEither(
+            Projects.organization(Organization("com.example"))(
+              histos.ships(
+                histos.manual("libs", ManualVersion("1.0.0"))(core, app)
+              ),
+              core,
+              app
+            )
           )
-          heard <- feeds.get
+          text <- Plan
+            .publish(repo, graph, List("app"), Map.empty)
+            .map(Plan.renderPublish)
+          heard <- ask(
+            Calls.previewPublish(repo, graph, List("app"), Map.empty, _)
+          )
+          kept <- same(planted)
         yield assertTrue(
-          heard.collect { case Feed.Exit(code, err) => (code, err) } == Chunk(
-            (CliExit.CompileFailed.code, "'missing' is not a project")
+          heard.outs == Chunk(text),
+          heard.exit == Chunk((CliExit.Success.code, "")),
+          text ==
+            """file-level staleness: unknown
+              |core libs 1.0.0 upstream
+              |app libs 1.0.0 selected""".stripMargin,
+          kept,
+          !Files.exists(repo.resolve(".histos").resolve("jars"))
+        )
+      }
+    ,
+    test("preview clean does not delete a planted class"):
+      ZIO.scoped {
+        for
+          repo <- keep
+          planted <- plant(repo)
+          _ <- write(repo, ".histos/server.json", "{}")
+          _ <- write(repo, ".histos/dependencies.lock", "lock")
+          app = module("app", Jvm)(scala3)
+          graph <- ZIO.fromEither(Projects(app))
+          server = repo.resolve(".histos").resolve("server.json")
+          lock = repo.resolve(".histos").resolve("dependencies.lock")
+          named <- Plan.clean(repo, graph, List("app")).map(Plan.renderClean(repo, _))
+          heard <- ask(Calls.previewClean(repo, graph, List("app"), _))
+          all = Plan.renderClean(repo, Plan.cleanAll(repo))
+          wiped <- ask(Calls.previewCleanAll(repo, _))
+          kept <- same(planted)
+          serverLeft <- ZIO.attempt(Files.isRegularFile(server))
+          lockLeft <- ZIO.attempt(Files.isRegularFile(lock))
+        yield assertTrue(
+          heard.outs == Chunk(named),
+          heard.exit == Chunk((CliExit.Success.code, "")),
+          named.contains(".histos/classes/app"),
+          !named.contains("provider"),
+          !named.contains("server.json"),
+          wiped.outs == Chunk(all),
+          all.contains(".histos/classes"),
+          all.contains(".histos/provider"),
+          !all.contains("server.json"),
+          !all.contains("dependencies.lock"),
+          kept,
+          serverLeft,
+          lockLeft
+        )
+      }
+    ,
+    test("preview cleanFull names the forgotten store and deletes nothing"):
+      ZIO.scoped {
+        for
+          repo <- keep
+          planted <- plant(repo)
+          text = Plan.renderClean(repo, Plan.cleanFull(repo))
+          heard <- ask(Calls.previewCleanFull(repo, _))
+          kept <- same(planted)
+          sentence = "content-store entries for this repo would be forgotten"
+        yield assertTrue(
+          heard.outs == Chunk(text),
+          heard.exit == Chunk((CliExit.Success.code, "")),
+          text.startsWith("file-level staleness: unknown"),
+          text.contains(".histos/classes"),
+          text.endsWith(sentence),
+          !text.contains("byte"),
+          kept
+        )
+      }
+    ,
+    test("preview run prints the module and an unknown id is a typed error"):
+      ZIO.scoped {
+        for
+          repo <- keep
+          planted <- plant(repo)
+          core = module("core", Jvm)(scala3)
+          app = module("app", Jvm)(scala3)
+            .dependsOn(core)
+            .main(MainClass("demo.App"))
+          graph <- ZIO.fromEither(Projects(core, app))
+          planned <- ZIO.fromEither(Plan.run(graph, "app", Some(Jvm)))
+          text = Plan.renderRun(planned)
+          heard <- ask(Calls.previewRun(graph, "app", Some("jvm"), _))
+          missing <- ask(Calls.previewRun(graph, "missing", None, _))
+          kept <- same(planted)
+        yield assertTrue(
+          heard.outs == Chunk(text),
+          heard.exit == Chunk((CliExit.Success.code, "")),
+          text ==
+            """file-level staleness: unknown
+              |app jvm
+              |upstreams core""".stripMargin,
+          missing.outs.isEmpty,
+          missing.exit == Chunk(
+            (CliExit.TaskFailed.code, "'missing' is not a module")
           ),
-          !Files.exists(repo.resolve(".histos").resolve("classes"))
+          kept
         )
       }
   )
+
+  private final case class Heard(outs: Chunk[String], exit: Chunk[(Int, String)])
+
+  private def ask[E](
+      call: Say => ZIO[Any, E, Unit]
+  ): ZIO[Any, E, Heard] =
+    for
+      feeds <- Ref.make(Chunk.empty[Feed])
+      _ <- call(Say.record(feeds))
+      heard <- feeds.get
+    yield Heard(
+      heard.collect { case Feed.Out(line) => line },
+      heard.collect { case Feed.Exit(code, err) => (code, err) }
+    )
+
+  private final case class Planted(
+      path: Path,
+      time: FileTime,
+      bytes: Array[Byte]
+  )
+
+  private def plant(repo: Path): ZIO[Any, Throwable, Planted] =
+    ZIO.attempt {
+      val path = repo
+        .resolve(".histos")
+        .resolve("classes")
+        .resolve("app")
+        .resolve("Demo.class")
+      Files.createDirectories(path.getParent)
+      val bytes = Array[Byte](1, 2, 3)
+      Files.write(path, bytes)
+      Files.setLastModifiedTime(path, FileTime.fromMillis(1700000000000L))
+      Planted(path, Files.getLastModifiedTime(path), bytes)
+    }
+
+  private def same(planted: Planted): ZIO[Any, Throwable, Boolean] =
+    ZIO.attempt {
+      Files.isRegularFile(planted.path) &&
+      Files.getLastModifiedTime(planted.path) == planted.time &&
+      java.util.Arrays.equals(Files.readAllBytes(planted.path), planted.bytes)
+    }
 
   private def keep: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(
@@ -111,4 +321,4 @@ object PreviewSpec extends ZIOSpecDefault:
           .foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  def spec = preview
+  def spec = suite("preview")(commands, handlers)
