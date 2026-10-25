@@ -2,7 +2,8 @@ package histos.cli
 
 import histos.client.{Remote, Session}
 import histos.report.{Diagnostic, ModuleTally, Observation, Report, Severity}
-import histos.server.{Feed, Message, Say}
+import histos.server.{Calls, Feed, Message, Say}
+import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
   CompileFacts,
@@ -457,6 +458,81 @@ object CompileConsoleSpec extends ZIOSpecDefault:
               diag.message == "no file" && diag.path == None && diag.line == None && diag.column == None
             ),
           )
+      }
+    ,
+    test("run, assembly, and publish keep the diagnostic"):
+      name("core").flatMap { core =>
+        ZIO.scoped {
+          for
+            home <- Workspace.work("histos-run-diagnostics")
+            warn = CompileProblem(
+              "unused",
+              Some(home.resolve("core/src/Core.scala")),
+              CompileSeverity.Warn,
+              Some(4),
+              Some(2),
+              Some(4),
+              Some(8),
+              PositionBase.Zinc,
+            )
+            bare = CompileProblem(
+              "no file",
+              None,
+              CompileSeverity.Info,
+              None,
+              None,
+              None,
+              None,
+              PositionBase.Zinc,
+            )
+            console <- CompileConsole.open(home)
+            feeds   <- Ref.make(Chunk.empty[Feed])
+            say = Say.record(feeds)
+            _           <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, warn))
+            _           <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, bare))
+            _           <- Calls.finishNoted(home, say, console, List(console.observation), 0, "")
+            chunk       <- feeds.get
+            run         <- say.run
+            observation <- say.observation
+            carried     <- say.diagnostics
+            found = Session.spoken(chunk.toList, run, observation, carried)
+          yield
+            val zinc    = Lines.diagnostic(home, warn)
+            val missing = Lines.diagnostic(home, bare)
+            val heard   = found match
+              case Right(report) => report.diagnostics
+              case Left(_)       => Chunk.empty
+            val expected = Chunk(
+              Diagnostic(
+                Some("core/src/Core.scala"),
+                Some(4),
+                Some(2),
+                Some(4),
+                Some(8),
+                Severity.Warn,
+                "unused",
+              ),
+              Diagnostic(None, None, None, None, None, Severity.Info, "no file"),
+            )
+            assertTrue(
+              found == Right(Report(0, Chunk.empty, Chunk(zinc, missing), None, None, expected)),
+              zinc == "core/src/Core.scala:4:2: warn: unused",
+              missing == "info: no file",
+              heard.exists(diag =>
+                diag.message == "unused" && diag.path == Some("core/src/Core.scala") &&
+                  diag.line == Some(4) && diag.column == Some(2) &&
+                  diag.endLine == Some(4) && diag.endColumn == Some(8)
+              ),
+              heard.exists(diag =>
+                diag.message == "no file" && diag.path == None && diag.line == None &&
+                  diag.column == None && diag.endLine == None && diag.endColumn == None
+              ),
+              !heard.exists(diag =>
+                diag.line.contains(0) || diag.column.contains(0) || diag.endLine.contains(0) ||
+                  diag.endColumn.contains(0) || diag.path.contains("0")
+              ),
+            )
+        }
       },
   )
 

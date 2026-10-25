@@ -194,18 +194,20 @@ object Calls:
         .foldZIO(
           failure =>
             console.announce(text => say(Message.Out(text))) *>
-              finishObserved(
+              finishNoted(
                 repo,
                 say,
+                console,
                 List(console.observation),
                 CliExit.PublishFailed.code,
                 failure.message,
               ),
           report =>
             console.announce(text => say(Message.Out(text))) *>
-              told(say, report.lines.mkString("\n")) *> finishObserved(
+              told(say, report.lines.mkString("\n")) *> finishNoted(
                 repo,
                 say,
+                console,
                 List(console.observation),
                 CliExit.Success.code,
                 "",
@@ -262,9 +264,10 @@ object Calls:
                           case histos.program.ProgramError.Compile(_) =>
                             console.announce(text => say(Message.Out(text)))
                           case _ => ZIO.unit
-                        announced *> finishObserved(
+                        announced *> finishNoted(
                           repo,
                           say,
+                          console,
                           List(console.observation),
                           programCode(error),
                           error.message,
@@ -273,9 +276,10 @@ object Calls:
                     },
                     _ =>
                       status.get.flatMap: code =>
-                        finishObserved(
+                        finishNoted(
                           repo,
                           say,
+                          console,
                           List(console.observation),
                           if code == 0 then CliExit.Success.code else code,
                           "",
@@ -570,9 +574,10 @@ object Calls:
             .foldZIO(
               error =>
                 console.announce(text => say(Message.Out(text))) *>
-                  finishObserved(
+                  finishNoted(
                     repo,
                     say,
+                    console,
                     List(console.observation),
                     CliExit.CompileFailed.code,
                     error.message,
@@ -581,18 +586,20 @@ object Calls:
                 console.announce(text => say(Message.Out(text))) *>
                   pin(repo, assembled.path).foldZIO(
                     message =>
-                      finishObserved(
+                      finishNoted(
                         repo,
                         say,
+                        console,
                         List(console.observation),
                         CliExit.CompileFailed.code,
                         message,
                       ),
                     _ =>
                       told(say, relative(repo, assembled.path)) *>
-                        finishObserved(
+                        finishNoted(
                           repo,
                           say,
+                          console,
                           List(console.observation),
                           CliExit.Success.code,
                           "",
@@ -1130,7 +1137,7 @@ object Calls:
     emit(say, Message.Exit(code, err))
 
   /** Compile and test read the console once. The exit frame then carries that chunk. */
-  private def finishNoted(
+  private[histos] def finishNoted(
       repo: Path,
       say: Say,
       console: CompileConsole.Session,
