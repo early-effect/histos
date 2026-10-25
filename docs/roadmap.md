@@ -8,7 +8,11 @@ M0-M3 establish the kernel and resource ownership. M4 adds tool identity, the JD
 
 The build is immutable data. Work is a typed effect. Dependencies compose as Step values; Histos schedules them with bounded concurrency and independent failures as outcome data. Scoped construction owns compilers, classloaders, sockets, processes, temporary files and HTTP clients.
 
-The CLI, server, BSP and MCP already share a graph, but not one application contract. The target is one Build service with typed requests, streamed events, reports and faults. Protocols become codecs; cancellation names a run rather than a task string.
+A human and an agent are the same operator. They drive the same operations through one typed request. The CLI renders a report and an exit. MCP returns that report as data and streams the same events. BSP is the editor protocol. `histos mcp`, `histos bsp`, and `histos server` start a transport and are not operations. The CLI, server, BSP, and MCP already share a graph, and they do not yet share that request. Cancellation names a run rather than a task string.
+
+Both operators see each decision as it happens, and either can ask what an operation will do before paying for it. The answer is the work plan: which units would run, and why. It is not a predicted duration.
+
+The numbers a person reads are source files, class files produced this round, and modules (name, Scala version, and platform). A Zinc cell is a scheduling unit, not a tally. Until a class count is honest, the floor is source files.
 
 The lock is authoritative for the dependency and tool artifacts it records. A JDK or Node floor is a minimum already installed on the machine. `.histos/toolchain.local` and `.histos/node.local` name a home the user already chose. Neither declared inputs nor these locks make arbitrary plugin code, system packages, clang, or browsers hermetic. Portable source-root identity and a real sandbox remain distinct work.
 
@@ -59,7 +63,7 @@ Source-root portability, clang and browser packaging, and sandboxing retain thei
 
 - **PlatformBackend:** compile, link, launch and packaging use typed requests/results. Shared orchestration stays outside adapters. Resource/tool views are operation-owned, with verified identity retained until the child boundary. No Tool[T]/Toolchains/ResolvedTools layer is added merely to rename working services.
 - **Build application service:** local and remote implementations share Request, BuildEvent, Report, BuildFault and RunId. Internal error unions map to one closed CellError enum nesting domain errors. A request that cannot start is a fault; completed failed cells are report data.
-- **Surface codecs:** CLI maps a report to an exit in one place. BSP maps typed diagnostics and cancels by run id. MCP exposes tagged report-or-fault schemas plus progress; text is an optional rendering, never the only result shape. The socket codec preserves the same typed contract.
+- **Surface codecs:** CLI maps a report to an exit in one place. BSP maps typed diagnostics and cancels by run id. MCP exposes the same operations as the CLI, with tagged report-or-fault schemas plus progress. Text is an optional rendering, never the only result shape. The socket codec preserves the same typed contract. The M6 exit is this boundary: parity, observation, and preview, not only a schema.
 - **Session resources:** Build owns build-generation leases and scoped compiler/resource reuse. Runtime selections refresh per operation, not indefinitely with an old server graph. Concurrent requests need output-scoped locks, not one global run permit.
 - **Public plugin steps:** A task's cache kind must come from the typed Step rather than a separate declaration that can disagree. Core phase dependencies and a deliberate API classloader boundary replace the current Compile/Same limit.
 - **Recorded build data:** Platform settings, TestRunner, module aspects, typed notes and CI tool needs are data. Illegal combinations do not typecheck; runtime input parsers retain typed errors.
@@ -86,17 +90,20 @@ Tool request namespace/component duplication remains current integration work (L
 
 ## M6. One application contract, four codecs
 
-**Goal:** Structured reports, streaming progress and cancellation are the same operation on every surface.
+**Goal:** A human and an agent request the same operation, see the same decisions, and can read what the operation will do before it runs. Reports, progress, and cancellation are that operation, not a separate channel per surface.
 
-Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service.
+Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service. Parking this work after M9 would make the agent an afterthought. Honest testQuick preview still waits on P6 and P15. A compile preview does not.
 
 - **Wire types:** Typed selections, test modes, targets, events, reports, faults and run ids; preserve plugin command arguments. Owns A1/A3/A4/A12/A19/A21/A25.
 - **Build local/remote/attached:** Delete duplicated continuations/renderers and package cycles; centralize exit mapping, generation leasing and resource construction. Owns A5/A16-A18/A20/A24 and P19's session reuse/measurements.
 - **Multiplex and cancel:** Per-request supervised fibers, one serialized writer, run-id cancellation and output-directory locks; propagate diagnostics/progress without IO defects. Owns A8-A10/A13/A14/A23.
-- **Thin BSP/MCP:** Engine classpath service, typed BSP method/target URI, tagged MCP report/fault schemas and progress. Owns A2/A6/A7. A15's unused ToolchainView is now deleted, not a new reporting abstraction to preserve.
+- **Thin BSP/MCP:** Engine classpath service, typed BSP method/target URI, tagged MCP report/fault schemas and progress. Owns A2/A6/A7. A15's unused ToolchainView is now deleted, not a new reporting abstraction to preserve. BSP stays the editor protocol. Agent parity is not a longer BSP surface.
+- **Operator parity:** One request both codecs send: version, graph, compile, test, run, publish, assembly, clean, cleanFull, resolve, workflow, cache path, cache list, cache clean, launcher update, reload, reboot, watch, cancel, and a contributed plugin command with its arguments. `test`, `testOnly`, and `testQuick` stay one operation with a mode, and one server case. Empty clean and cleanFull still run before the graph is adopted. `resolve --update` is the staged load on every path. `workflow` includes launcher scripts on every path. `mcp`, `bsp`, and `server` stay entry points. Owns A25, A26, A27.
+- **Observation:** Events stream on the terminal and on MCP, in order. The compile report counts source files compiled, skipped, and failed; class files produced this round; and modules entered (name, Scala version, platform). The floor is source files. A class count that is not yet honest is omitted, never filled with the classes-directory census. `compiling` is said when the work starts. `skipped` names one reason. An unchanged test compile is not reported as tests skipped when the suites then run. Diagnostics on both codecs keep path, position, and severity. Run and assembly show the compile they perform. The report stays queryable after the summary is printed. Owns A29, A30, A31, A32, A33, and the delivery half of A2 and A23.
+- **Preview:** A mode of the operation, not a boolean on every argv. It returns the units and the reasons, writes nothing, and does not invent a duration. The cheap layer names selected modules, Scala versions, platforms, upstreams, and input sources, with reasons selected, upstream, or not selected. A claim that particular sources are stale waits on a miniature that proves Zinc can answer without writing class files or `inc.zip`. Until that miniature is green, the preview says file-level staleness is unknown. Owns A34 and the request-mode half of A19.
 - **Remaining server tests:** NoServer, permit-on-interrupt, testOnly through server, and concurrency/error paths not already covered by M1. Owns remaining A22.
 
-**Exit:** An MCP compile failure returns structured path/position/severity, an agent cancels its own in-flight test, and local/attached/BSP operations agree on reports, runtimes and exits. Wire foundations can start after M4 without waiting for every backend rewrite.
+**Exit:** An agent and a human can request the same operation and read the same report. An MCP compile failure carries path, position, and severity. Either operator can cancel the run they started, by run id, while it is in flight. A one-file edit tallies as files, classes produced, and modules, not as one cell. A compile preview names the sources Zinc would recompile, or says invalidation is unknown, and writes nothing. Wire foundations can start after M4 without waiting for every backend rewrite.
 
 ## M7. Honest public build and plugin APIs
 
@@ -159,4 +166,4 @@ The M5 edges concern later backend/platform/bridge integration, not a ban on sta
 - Docs link to source/tests without line anchors or copied implemented examples. Comments explain constraints, not implementation narration.
 - Humans merge PRs. Publication authority does not authorize releases or merges.
 
-Sandboxing, live remote cache/execution, MiMa/Api linking at 1.0, an importer, the Scala.js editor host and DAP remain future capabilities. Tests are not sendable until a real isolation policy makes that claim honest. The earlier MCP-as-CLI-text design is current behavior to retire, not the target contract.
+Sandboxing, live remote cache/execution, MiMa/Api linking at 1.0, an importer, the Scala.js editor host and DAP remain future capabilities. Tests are not sendable until a real isolation policy makes that claim honest. MCP results are still one string of CLI text. That shape, the operations MCP cannot request, the cell tally, and the lack of a preview are current behavior to retire, not the target contract. Duration history stays with M9. A preview does not invent a clock time.
