@@ -745,48 +745,64 @@ object JvmCompile:
       if compiled == 0 then None
       else Some(SourceCount(compiled, tracked.size - compiled))
 
-  private final case class ClassMark(
+  private[zinc] final case class ClassMark(
       modified: java.nio.file.attribute.FileTime,
       bytes: Long
   )
 
-  /** A matching mark was already there. An unreadable snapshot is unknown, not
-    * a failed write. The directory census is not a write.
-    */
-  private def writtenClasses(
-      before: Option[Map[Path, ClassMark]],
-      root: Path
-  ): Option[Int] =
-    before.flatMap: prior =>
-      classMarks(root).map: now =>
-        now.count: (path, mark) =>
-          prior.get(path) match
-            case Some(old) => old != mark
-            case None      => true
-
-  private def classMarks(root: Path): Option[Map[Path, ClassMark]] =
-    listed(root).flatMap: paths =>
-      paths.foldLeft(Option(Map.empty[Path, ClassMark])):
-        case (None, _)          => None
-        case (Some(have), path) =>
-          stamp(path) match
-            case Stamp.Skip       => Some(have)
-            case Stamp.Failed     => None
-            case Stamp.Read(mark) => Some(have.updated(path, mark))
-
-  private enum Stamp:
+  private[zinc] enum ClassStamp:
     case Skip
     case Failed
     case Read(mark: ClassMark)
 
-  private def stamp(path: Path): Stamp =
+  /** One failed stamp makes the write count unknown. Unknown is not zero and is
+    * not the directory census. A new or changed mark counts. An unchanged mark
+    * does not.
+    */
+  private[zinc] def foldWritten(
+      before: Option[Map[Path, ClassMark]],
+      stamps: Option[List[(Path, ClassStamp)]]
+  ): Option[Int] =
+    before.flatMap: prior =>
+      stamps
+        .flatMap(accumulate)
+        .map: now =>
+          now.count: (path, mark) =>
+            prior.get(path) match
+              case Some(old) => old != mark
+              case None      => true
+
+  private def accumulate(
+      stamps: List[(Path, ClassStamp)]
+  ): Option[Map[Path, ClassMark]] =
+    stamps.foldLeft(Option(Map.empty[Path, ClassMark])):
+      case (None, _)                                   => None
+      case (Some(have), (_, ClassStamp.Skip))          => Some(have)
+      case (Some(_), (_, ClassStamp.Failed))           => None
+      case (Some(have), (path, ClassStamp.Read(mark))) =>
+        Some(have.updated(path, mark))
+
+  private def writtenClasses(
+      before: Option[Map[Path, ClassMark]],
+      root: Path
+  ): Option[Int] =
+    before.flatMap: _ =>
+      foldWritten(before, readStamps(root))
+
+  private def classMarks(root: Path): Option[Map[Path, ClassMark]] =
+    readStamps(root).flatMap(accumulate)
+
+  private def readStamps(root: Path): Option[List[(Path, ClassStamp)]] =
+    listed(root).map(paths => paths.map(path => path -> stamp(path)))
+
+  private def stamp(path: Path): ClassStamp =
     if produced(path) then
       try
-        Stamp.Read(
+        ClassStamp.Read(
           ClassMark(Files.getLastModifiedTime(path), Files.size(path))
         )
-      catch case _: IOException | _: UncheckedIOException => Stamp.Failed
-    else Stamp.Skip
+      catch case _: IOException | _: UncheckedIOException => ClassStamp.Failed
+    else ClassStamp.Skip
 
   private def produced(path: Path): Boolean =
     Option(path.getFileName).exists(name => producedName(name.toString))
