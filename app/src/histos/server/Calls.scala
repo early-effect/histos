@@ -854,23 +854,8 @@ object Calls:
                   .collectSome
                   .runCollect
                 _      <- console.announce(text => say(Message.Out(text)))
-                parsed <- ZIO
-                  .fromEither(
-                    patterns.foldLeft[Either[
-                      histos.testrun.SuitePatternError,
-                      List[SuitePattern],
-                    ]](Right(Nil)) { (acc, raw) =>
-                      acc.flatMap(have => SuitePattern.from(raw).map(have :+ _))
-                    }
-                  )
-                  .mapError(error =>
-                    ModuleTestError.Compile(
-                      GraphCompileError.Target(
-                        histos.workflow.CiError.BadName(error.message)
-                      )
-                    )
-                  )
-                _ <- ModuleTest
+                parsed <- ZIO.fromEither(suitePatterns(patterns))
+                _      <- ModuleTest
                   .suitesLocked(
                     TestRun(
                       repo,
@@ -1113,6 +1098,15 @@ object Calls:
       case CompileFeed.Began(_, _, _)         => None
       case CompileFeed.Diagnostic(_, _, _, _) => None
       case CompileFeed.Failed(_)              => None
+
+  private[histos] def suitePatterns(
+      raw: List[String]
+  ): Either[ModuleTestError, List[SuitePattern]] =
+    raw.foldLeft[Either[ModuleTestError, List[SuitePattern]]](Right(Nil)): (acc, item) =>
+      for
+        have    <- acc
+        pattern <- SuitePattern.from(item).left.map(ModuleTestError.Pattern(_))
+      yield have :+ pattern
 
   private def failedSuite(status: TestStatus): Boolean =
     status match

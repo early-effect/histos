@@ -5,7 +5,7 @@ import histos.plugin.PluginTaskId
 import histos.publish.LocalPublishError
 import histos.select.Selection
 import histos.task.TaskId
-import histos.testrun.{ModuleTestError, TestCompile}
+import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
 import histos.toolchain.VersionOrder
 import histos.version.{Decision, HoldReason, PublishAction, ShipName, VersionError, VersionTask}
 import histos.workflow.CiError
@@ -120,6 +120,7 @@ enum PreviewError:
   case Version(error: VersionError)
   case Publish(error: LocalPublishError)
   case Run(miss: RunMiss)
+  case Pattern(error: SuitePatternError)
 
   def message: String = this match
     case Target(error)    => error.message
@@ -128,6 +129,7 @@ enum PreviewError:
     case Version(error)   => error.message
     case Publish(error)   => error.message
     case Run(miss)        => miss.message
+    case Pattern(error)   => error.message
 end PreviewError
 
 object Plan:
@@ -658,6 +660,8 @@ object Plan:
         PreviewError.Sources(failure)
       case ModuleTestError.Root(path) =>
         PreviewError.Sources(IoFailure(path, IoFault.Stat))
+      case ModuleTestError.Pattern(error) =>
+        PreviewError.Pattern(error)
       case ModuleTestError.Tool(_, _, _) | ModuleTestError.Compile(_) | ModuleTestError.Lock(_) |
           ModuleTestError.LockRead(_) | ModuleTestError.Sources(_, _, _) | ModuleTestError.MissingSources(_, _) |
           ModuleTestError.MissingProvider(_, _) | ModuleTestError.ProviderDependency(_, _) |

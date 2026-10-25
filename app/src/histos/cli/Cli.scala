@@ -818,6 +818,8 @@ object Cli:
         CliExit.ResolveFailed
       case ModuleTestError.Lock(_) | ModuleTestError.LockRead(_) =>
         CliExit.ResolveFailed
+      case ModuleTestError.Pattern(_) =>
+        CliExit.Usage
       case _ =>
         CliExit.TestFailed
 
