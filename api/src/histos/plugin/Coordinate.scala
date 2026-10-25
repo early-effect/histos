@@ -15,3 +15,4 @@ enum PluginCoordinate:
         case DepKind.Full   => ":::"
       s"${dependency.organization}$separator${dependency.name}:${dependency.revision}"
     case Path(path) => path.value
+end PluginCoordinate

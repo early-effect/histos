@@ -4,20 +4,18 @@ import histos.{Dep, DepKind, Platform, ScalaVersion}
 
 /** Platform suffixes from design section 5.2. The fetch uses these values. */
 object PlatformSuffix:
-  val Js: String = "_sjs1"
+  val Js: String     = "_sjs1"
   val Native: String = "_native0.5"
 
-/** The published artifact name. The Scala suffix is applied here, not when a
-  * `Dep` is parsed.
+/** The published artifact name. The Scala suffix is applied here, not when a `Dep` is parsed.
   */
 object ArtifactName:
-  /** The name Histos publishes for one of its modules. Binary suffix, same rule
-    * as a `::` dependency.
+  /** The name Histos publishes for one of its modules. Binary suffix, same rule as a `::` dependency.
     */
   def published(
       base: String,
       version: ScalaVersion,
-      platform: Platform
+      platform: Platform,
   ): String =
     s"$base${platformSuffix(platform)}_${binary(version)}"
 
@@ -40,3 +38,4 @@ object ArtifactName:
       case Array("3", _, _)       => "3"
       case Array(major, minor, _) => s"$major.$minor"
       case _                      => version.value
+end ArtifactName

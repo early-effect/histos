@@ -10,10 +10,11 @@ enum Revision:
   case Manual(version: ManualVersion)
 
   def render: String = this match
-    case Release(version)       => version.render
-    case Snapshot(coordinate)   => coordinate.render
-    case Pointer(pointer)       => pointer.render
-    case Manual(version)        => version.value
+    case Release(version)     => version.render
+    case Snapshot(coordinate) => coordinate.render
+    case Pointer(pointer)     => pointer.render
+    case Manual(version)      => version.value
+end Revision
 
 /** A Maven artifact id. One path segment, not a group. */
 opaque type ArtifactId = String
@@ -28,9 +29,11 @@ object ArtifactId:
     else Left(ArtifactIdError.Bad(raw))
 
   extension (name: ArtifactId) def value: String = name
+end ArtifactId
 
 enum ArtifactIdError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not an artifact id"
+end ArtifactIdError

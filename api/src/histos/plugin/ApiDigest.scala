@@ -21,12 +21,14 @@ object ApiDigest:
   extension (digest: ApiDigest) def value: String = digest
 
   @publicInBinary private[histos] def trusted(raw: String): ApiDigest = raw
+end ApiDigest
 
 enum ApiDigestError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not a sha256"
+end ApiDigestError
 
 /** Sha256 of declared content: a file, a directory, or a module's class directories. Not the api jar. */
 opaque type ContentHash = String
@@ -44,9 +46,11 @@ object ContentHash:
   extension (hash: ContentHash) def value: String = hash
 
   @publicInBinary private[histos] def trusted(raw: String): ContentHash = raw
+end ContentHash
 
 enum ContentHashError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not a sha256"
+end ContentHashError

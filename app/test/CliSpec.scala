@@ -7,37 +7,10 @@ import histos.load.PluginLink
 import histos.plugin.*
 import histos.publish.{LauncherPin, LauncherScript}
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.load.{
-  ApiJar,
-  BuildNotes,
-  LoadError,
-  LoadedBuild,
-  Loader,
-  PluginRuntime,
-  ScannedBuild
-}
+import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
 import histos.cache.ContentStore
-import histos.resolve.{
-  LockedArtifact,
-  Repositories,
-  Repository,
-  RepositoryIo,
-  Resolve,
-  ResolveCell,
-  ResolveError
-}
-import histos.server.{
-  Attach,
-  Call,
-  Calls,
-  Client,
-  Daemon,
-  Decision,
-  Feed,
-  Message,
-  Record,
-  ServerError
-}
+import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
+import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ServerError}
 import histos.zinc.GraphCompile
 import histos.Dep
 import histos.*
@@ -74,10 +47,10 @@ object CliSpec extends ZIOSpecDefault:
             Set(Need.Network),
             List(
               DeclaredInput.Directory(RepoPath("docs")),
-              DeclaredInput.Env(EnvName("TOKEN"))
+              DeclaredInput.Env(EnvName("TOKEN")),
             ),
             Nil,
-            Nil
+            Nil,
           )
         ),
         List(
@@ -85,14 +58,15 @@ object CliSpec extends ZIOSpecDefault:
             CommandName("list"),
             Nil,
             TaskName("echo"),
-            PluginDetail("lists the site")
+            PluginDetail("lists the site"),
           )
         ),
-        List(CiJob(JobName("nightly"), TaskName("echo"), JobWhen.Always))
+        List(CiJob(JobName("nightly"), TaskName("echo"), JobWhen.Always)),
       )
 
     def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
       ZIO.succeed(PluginOutput("", Nil))
+  end Listed
 
   private final class Listing extends HistosPlugin:
     val id: PluginId = PluginId("dev.example")
@@ -106,7 +80,7 @@ object CliSpec extends ZIOSpecDefault:
             Set(Need.Network),
             Nil,
             Nil,
-            Nil
+            Nil,
           )
         ),
         List(
@@ -114,20 +88,20 @@ object CliSpec extends ZIOSpecDefault:
             CommandName("list"),
             List(
               CliParam.Text(ParamName("out")),
-              CliParam.Flag(FlagName("all"))
+              CliParam.Flag(FlagName("all")),
             ),
             TaskName("echo"),
-            PluginDetail("lists the site")
+            PluginDetail("lists the site"),
           )
         ),
-        Nil
+        Nil,
       )
 
     def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
       ZIO.succeed(PluginOutput("", Nil))
+  end Listing
 
-  private final class RecordingRuntime(seen: Ref[Option[PluginArgs]])
-      extends PluginRuntime:
+  private final class RecordingRuntime(seen: Ref[Option[PluginArgs]]) extends PluginRuntime:
     def run(id: PluginTaskId, args: PluginArgs) =
       seen.set(Some(args)).as(PluginOutput("ran docs", Nil))
 
@@ -135,11 +109,12 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.succeed(
         Map.empty[
           histos.task.TaskId,
-          IO[histos.task.TaskError, histos.task.TaskResult]
+          IO[histos.task.TaskError, histos.task.TaskResult],
         ]
       )
 
     def links: List[PluginLink] = Nil
+  end RecordingRuntime
 
   private def bare: ZIO[Scope, LoadError, Path] =
     for
@@ -163,7 +138,7 @@ object CliSpec extends ZIOSpecDefault:
   private def delete(root: Path): UIO[Unit] =
     ZIO.attempt {
       if Files.exists(root) then
-        val walk = Files.walk(root)
+        val walk  = Files.walk(root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()
@@ -175,8 +150,8 @@ object CliSpec extends ZIOSpecDefault:
 
   private def invoke(args: List[String]): ZIO[Scope, LoadError, Completed] =
     for
-      jar <- apiJar
-      dir <- repo
+      jar  <- apiJar
+      dir  <- repo
       done <- Cli.execute(args, dir, jar).provideSome[Scope](layers(dir))
     yield done
 
@@ -185,7 +160,7 @@ object CliSpec extends ZIOSpecDefault:
       for
         release <- Promise.make[Nothing, Unit]
         started <- Promise.make[Nothing, Unit]
-        fiber <- Cli.recorded { say =>
+        fiber   <- Cli.recorded { say =>
           say(Message.Out("compiling core")) *>
             say(Message.Err("unused")) *>
             say(Message.Out("")) *>
@@ -194,13 +169,13 @@ object CliSpec extends ZIOSpecDefault:
             say(Message.Out("suite passed")) *>
             say(Message.Exit(1, "failed"))
         }.fork
-        _ <- started.await
+        _         <- started.await
         duringOut <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
         duringErr <- TestConsole.outputErr.map(
           _.map(_.stripSuffix("\n")).toList
         )
-        _ <- release.succeed(())
-        done <- fiber.join
+        _        <- release.succeed(())
+        done     <- fiber.join
         afterOut <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
         afterErr <- TestConsole.outputErr.map(_.map(_.stripSuffix("\n")).toList)
       yield assertTrue(
@@ -211,7 +186,7 @@ object CliSpec extends ZIOSpecDefault:
         done.out == "compiling core\n\nsuite passed",
         done.err == "unused\nfailed",
         done.exit == CliExit.TaskFailed,
-        done.playback == Playback.Heard
+        done.playback == Playback.Heard,
       )
     ,
     test("version does not touch the build"):
@@ -223,7 +198,7 @@ object CliSpec extends ZIOSpecDefault:
     test("cache clean takes --dry-run"):
       for
         preview <- Cli.parse(List("cache", "clean", "--dry-run"))
-        clean <- Cli.parse(List("cache", "clean"))
+        clean   <- Cli.parse(List("cache", "clean"))
       yield assertTrue(
         preview == Command.CacheClean(true) && clean == Command.CacheClean(
           false
@@ -236,50 +211,50 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("resolve takes update or check, not both"):
       for
-        plain <- Cli.parse(List("resolve"))
+        plain  <- Cli.parse(List("resolve"))
         update <- Cli.parse(List("resolve", "--update"))
-        check <- Cli.parse(List("resolve", "--check"))
-        both <- Cli.parse(List("resolve", "--update", "--check")).either
+        check  <- Cli.parse(List("resolve", "--check"))
+        both   <- Cli.parse(List("resolve", "--update", "--check")).either
       yield assertTrue(
         plain == Command.Resolve(ResolveAction.Verify),
         update == Command.Resolve(ResolveAction.Update),
         check == Command.Resolve(ResolveAction.Check),
-        both == Left(CliParseError.Rejected)
+        both == Left(CliParseError.Rejected),
       )
     ,
     test("cancel names the id the server already keys"):
       for parsed <- Cli.parse(List("cancel", "inspect"))
       yield assertTrue(
         parsed == Command.Cancel("inspect"),
-        Operation.call(parsed) == Right(histos.server.Call.Cancel("inspect"))
+        Operation.call(parsed) == Right(histos.server.Call.Cancel("inspect")),
       )
     ,
     test("workflow checks by default and update rewrites"):
       for
-        plain <- Cli.parse(List("workflow"))
-        check <- Cli.parse(List("workflow", "--check"))
+        plain  <- Cli.parse(List("workflow"))
+        check  <- Cli.parse(List("workflow", "--check"))
         update <- Cli.parse(List("workflow", "--update"))
-        both <- Cli.parse(List("workflow", "--check", "--update")).either
+        both   <- Cli.parse(List("workflow", "--check", "--update")).either
       yield assertTrue(
         plain == Command.Workflow(WorkflowAction.Check),
         check == Command.Workflow(WorkflowAction.Check),
         update == Command.Workflow(WorkflowAction.Update),
-        both == Left(CliParseError.Rejected)
+        both == Left(CliParseError.Rejected),
       )
     ,
     test("publish takes a repository and project names"):
       for
         named <- Cli.parse(List("publish", "repo", "core"))
-        bare <- Cli.parse(List("publish")).either
+        bare  <- Cli.parse(List("publish")).either
       yield assertTrue(
         named == Command.Publish("repo", List("core")),
-        bare == Left(CliParseError.MissingArgument)
+        bare == Left(CliParseError.MissingArgument),
       )
     ,
     test("assembly takes an optional path"):
       for
         plain <- Cli.parse(List("assembly"))
-        path <- Cli.parse(List("assembly", "dist/histos.jar"))
+        path  <- Cli.parse(List("assembly", "dist/histos.jar"))
       yield assertTrue(
         plain == Command.Assembly(None) && path == Command.Assembly(
           Some("dist/histos.jar")
@@ -288,46 +263,46 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("clean wipes products and cleanFull takes no names"):
       for
-        all <- Cli.parse(List("clean"))
-        named <- Cli.parse(List("clean", "engine"))
-        full <- Cli.parse(List("cleanFull"))
+        all     <- Cli.parse(List("clean"))
+        named   <- Cli.parse(List("clean", "engine"))
+        full    <- Cli.parse(List("cleanFull"))
         watched <- Cli.parse(List("~", "clean", "engine"))
-        flag <- Cli.parse(List("clean", "--dry-run")).either
-        extra <- Cli.parse(List("cleanFull", "engine")).either
-        cache <- Cli.parse(List("cache", "clean", "--dry-run"))
+        flag    <- Cli.parse(List("clean", "--dry-run")).either
+        extra   <- Cli.parse(List("cleanFull", "engine")).either
+        cache   <- Cli.parse(List("cache", "clean", "--dry-run"))
       yield assertTrue(
         all == Command.Clean(Nil),
         named == Command.Clean(List("engine")),
         full == Command.CleanFull,
         watched == Command.Watch(
           Command.Clean(List("engine")),
-          List("clean", "engine")
+          List("clean", "engine"),
         ),
         flag == Left(CliParseError.Pattern("clean does not take --dry-run")),
         extra == Left(
           CliParseError.Pattern("cleanFull does not take a project")
         ),
-        cache == Command.CacheClean(true)
+        cache == Command.CacheClean(true),
       )
     ,
     test("compile takes project names"):
       for
         entire <- Cli.parse(List("compile"))
-        named <- Cli.parse(List("compile", "core"))
+        named  <- Cli.parse(List("compile", "core"))
       yield assertTrue(
         entire == Command.Compile(Nil),
-        named == Command.Compile(List("core"))
+        named == Command.Compile(List("core")),
       )
     ,
     test("testQuick and watch parse"):
       for
-        all <- Cli.parse(List("testQuick"))
+        all    <- Cli.parse(List("testQuick"))
         scoped <- Cli.parse(
           List("testQuick", "--module", "engine", "com.acme.Foo*")
         )
         watched <- Cli.parse(List("~", "testQuick", "com.acme.Foo*"))
-        empty <- Cli.parse(List("~")).either
-        nested <- Cli.parse(List("~", "~", "test")).either
+        empty   <- Cli.parse(List("~")).either
+        nested  <- Cli.parse(List("~", "~", "test")).either
       yield assertTrue(
         all match
           case Command.TestQuick(Nil, Nil) => true
@@ -342,17 +317,17 @@ object CliSpec extends ZIOSpecDefault:
           case Command.Watch(Command.TestQuick(Nil, patterns), args) =>
             patterns.map(_.value) == List("com.acme.Foo*") && args == List(
               "testQuick",
-              "com.acme.Foo*"
+              "com.acme.Foo*",
             )
           case _ => false
         ,
         empty == Left(CliParseError.WatchCommand("watch needs a command")),
-        nested == Left(CliParseError.WatchCommand("watch does not nest"))
+        nested == Left(CliParseError.WatchCommand("watch does not nest")),
       )
     ,
     test("testOnly selects suites by name"):
       for
-        plain <- Cli.parse(List("testOnly", "com.acme.Foo*"))
+        plain  <- Cli.parse(List("testOnly", "com.acme.Foo*"))
         scoped <- Cli.parse(
           List(
             "testOnly",
@@ -361,11 +336,11 @@ object CliSpec extends ZIOSpecDefault:
             "--module",
             "app",
             "com.acme.*",
-            "com.acme.Foo?"
+            "com.acme.Foo?",
           )
         )
         missing <- Cli.parse(List("testOnly")).either
-        flag <- Cli.parse(List("testOnly", "--nope", "com.acme.Foo*")).either
+        flag    <- Cli.parse(List("testOnly", "--nope", "com.acme.Foo*")).either
       yield assertTrue(
         plain match
           case Command.TestOnly(Nil, patterns) =>
@@ -376,21 +351,21 @@ object CliSpec extends ZIOSpecDefault:
           case Command.TestOnly(modules, patterns) =>
             modules == List("engine", "app") && patterns.map(_.value) == List(
               "com.acme.*",
-              "com.acme.Foo?"
+              "com.acme.Foo?",
             )
           case _ => false
         ,
         missing == Left(CliParseError.MissingPattern),
-        flag == Left(CliParseError.Pattern("testOnly does not take --nope"))
+        flag == Left(CliParseError.Pattern("testOnly does not take --nope")),
       )
     ,
     test("test takes project names"):
       for
         entire <- Cli.parse(List("test"))
-        named <- Cli.parse(List("test", "core"))
+        named  <- Cli.parse(List("test", "core"))
       yield assertTrue(
         entire == Command.Test(Nil),
-        named == Command.Test(List("core"))
+        named == Command.Test(List("core")),
       )
     ,
     test("workflow without a file fails"):
@@ -421,7 +396,7 @@ object CliSpec extends ZIOSpecDefault:
             .contains("dependencies.lock"),
           unknown.exit == CliExit.CompileFailed && unknown.err.contains(
             "missing"
-          ) && !unknown.err.contains("dependencies.lock")
+          ) && !unknown.err.contains("dependencies.lock"),
         )
     ,
     test(
@@ -431,17 +406,17 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           dir <- repo
-          _ <- ZIO
+          _   <- ZIO
             .attempt {
               Files.createDirectories(dir.resolve("core/src"))
               Files.writeString(
                 dir.resolve("core/src/Bad.scala"),
-                "object Bad:\n  val n: Int = \"text\"\n"
+                "object Bad:\n  val n: Int = \"text\"\n",
               )
               Files.createDirectories(dir.resolve(".histos"))
               Files.writeString(
                 dir.resolve(".histos/dependencies.lock"),
-                "cell core 3.9.0 jvm\n"
+                "cell core 3.9.0 jvm\n",
               )
             }
             .mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -462,7 +437,7 @@ object CliSpec extends ZIOSpecDefault:
             "dependencies.lock"
           ),
           unknown.exit == CliExit.TestFailed && unknown.exit.code == 7 && unknown.err
-            .contains("missing")
+            .contains("missing"),
         )
     ,
     test("resolve without a lock fails"):
@@ -479,7 +454,7 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(
           done.exit == CliExit.Success && done.out.startsWith("jdk "),
           !done.out.contains("node"),
-          !done.out.contains("clang")
+          !done.out.contains("clang"),
         )
     ,
     test("toolchain prints the chosen home"):
@@ -495,11 +470,11 @@ object CliSpec extends ZIOSpecDefault:
               Files.writeString(jdk.resolve("bin").resolve("javac"), "")
               Files.writeString(
                 jdk.resolve("release"),
-                "JAVA_VERSION=\"21.0.2\"\n"
+                "JAVA_VERSION=\"21.0.2\"\n",
               )
               Files.writeString(
                 dir.resolve(".histos/toolchain.local"),
-                jdk.toString + "\n"
+                jdk.toString + "\n",
               )
             }
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -511,7 +486,7 @@ object CliSpec extends ZIOSpecDefault:
             s"jdk 21.0.2 $jdk"
           ),
           !done.out.contains("node"),
-          !done.out.contains("clang")
+          !done.out.contains("clang"),
         )
     ,
     test("a js project without Node still prints the jdk"):
@@ -527,11 +502,11 @@ object CliSpec extends ZIOSpecDefault:
               Files.writeString(jdk.resolve("bin").resolve("javac"), "")
               Files.writeString(
                 jdk.resolve("release"),
-                "JAVA_VERSION=\"21.0.2\"\n"
+                "JAVA_VERSION=\"21.0.2\"\n",
               )
               Files.writeString(
                 dir.resolve(".histos/toolchain.local"),
-                jdk.toString + "\n"
+                jdk.toString + "\n",
               )
               Files.writeString(
                 dir.resolve("histos.scala"),
@@ -540,7 +515,7 @@ object CliSpec extends ZIOSpecDefault:
                      |  def graph =
                      |    val core = module("core", Js)(scala"3.9.0")
                      |    Projects(core)
-                     |""".stripMargin
+                     |""".stripMargin,
               )
             }
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -550,14 +525,14 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(
           done.exit == CliExit.ToolchainFailed,
           done.out.contains(s"jdk 21.0.2 $jdk"),
-          done.err.contains("25")
+          done.err.contains("25"),
         )
     ,
     test("unknown commands and missing ids are usage"):
       for
         empty <- Cli.parse(Nil).either
-        run <- Cli.parse(List("run")).either
-        nope <- Cli.parse(List("nope")).either
+        run   <- Cli.parse(List("run")).either
+        nope  <- Cli.parse(List("nope")).either
       yield assertTrue(empty.isLeft && run.isLeft && nope.isLeft)
     ,
     test("graph prints the module"):
@@ -584,7 +559,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           dir <- repo
-          _ <- ZIO
+          _   <- ZIO
             .attempt {
               Files.createDirectories(dir.resolve(".histos"))
               Files.writeString(
@@ -594,18 +569,18 @@ object CliSpec extends ZIOSpecDefault:
                      |  def graph =
                      |    val core = module("core", Jvm)(scala"3.9.0")
                      |    Projects(ships(ship("libs", ship"1.4.2")(core)), core)
-                     |""".stripMargin
+                     |""".stripMargin,
               )
               Files.writeString(
                 dir.resolve(".histos").resolve("releases"),
-                "libs matches\n"
+                "libs matches\n",
               )
             }
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           env = Map(
             "HISTOS_SESSION" -> "snapshot",
-            "HISTOS_SHA" -> "1234567890abcdef1234567890abcdef12345678",
-            "HISTOS_BRANCH" -> "default"
+            "HISTOS_SHA"     -> "1234567890abcdef1234567890abcdef12345678",
+            "HISTOS_BRANCH"  -> "default",
           )
           held <- Cli
             .execute(List("run", "versions"), dir, jar)
@@ -614,7 +589,7 @@ object CliSpec extends ZIOSpecDefault:
             .attempt(
               Files.writeString(
                 dir.resolve(".histos").resolve("releases"),
-                "libs moved\n"
+                "libs moved\n",
               )
             )
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -627,7 +602,7 @@ object CliSpec extends ZIOSpecDefault:
           ) && held.out.contains("1.4.2-ci"),
           refused.exit == CliExit.TaskFailed && refused.err.contains(
             "has changes since its tag"
-          )
+          ),
         )
     ,
     test("a manual version does not need a commit or a registry file"):
@@ -635,7 +610,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           dir <- repo
-          _ <- ZIO
+          _   <- ZIO
             .attempt(
               Files.writeString(
                 dir.resolve("histos.scala"),
@@ -644,7 +619,7 @@ object CliSpec extends ZIOSpecDefault:
                 |  def graph =
                 |    val core = module("core", Jvm)(scala"3.9.0")
                 |    Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core)
-                |""".stripMargin
+                |""".stripMargin,
               )
             )
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -656,7 +631,7 @@ object CliSpec extends ZIOSpecDefault:
           done.out.contains("session manual"),
           done.out.contains("compile 1.2.3-SNAPSHOT publish 1.2.3-SNAPSHOT"),
           !done.out.contains("-ci"),
-          done.err.isEmpty
+          done.err.isEmpty,
         )
     ,
     test("run of an unknown task fails"):
@@ -678,10 +653,10 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("run takes one platform and refuses a token that is not one"):
       for
-        plain <- Cli.parse(List("run", "app"))
-        jvm <- Cli.parse(List("run", "app", "jvm"))
-        bad <- Cli.parse(List("run", "app", "scala")).either
-        task <- Cli.parse(List("run", "versions", "jvm")).either
+        plain   <- Cli.parse(List("run", "app"))
+        jvm     <- Cli.parse(List("run", "app", "jvm"))
+        bad     <- Cli.parse(List("run", "app", "scala")).either
+        task    <- Cli.parse(List("run", "versions", "jvm")).either
         inspect <- Cli.parse(List("run", "inspect", "native")).either
       yield assertTrue(
         plain match
@@ -698,7 +673,7 @@ object CliSpec extends ZIOSpecDefault:
           )
         ),
         task == Left(CliParseError.TaskPlatform("versions")),
-        inspect == Left(CliParseError.TaskPlatform("inspect"))
+        inspect == Left(CliParseError.TaskPlatform("inspect")),
       )
     ,
     test("a multi-platform module names no platform and does not start"):
@@ -706,7 +681,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           dir <- repo
-          _ <- ZIO
+          _   <- ZIO
             .attempt(
               Files.writeString(
                 dir.resolve("histos.scala"),
@@ -715,7 +690,7 @@ object CliSpec extends ZIOSpecDefault:
                 |  def graph =
                 |    val app = module("app", Jvm, Js)(scala"3.9.0").main(MainClass("demo.Check"))
                 |    Projects(app)
-                |""".stripMargin
+                |""".stripMargin,
               )
             )
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -725,7 +700,7 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(
           done.exit == CliExit.TaskFailed,
           done.err.contains("histos run app jvm"),
-          done.out.isEmpty
+          done.out.isEmpty,
         )
     ,
     test("a platform the module does not build is refused before it starts"):
@@ -733,7 +708,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           dir <- repo
-          _ <- ZIO
+          _   <- ZIO
             .attempt(
               Files.writeString(
                 dir.resolve("histos.scala"),
@@ -742,7 +717,7 @@ object CliSpec extends ZIOSpecDefault:
                 |  def graph =
                 |    val app = module("app", Jvm)(scala"3.9.0").main(MainClass("demo.Check"))
                 |    Projects(app)
-                |""".stripMargin
+                |""".stripMargin,
               )
             )
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -762,7 +737,7 @@ object CliSpec extends ZIOSpecDefault:
           dir <- ZIO
             .attempt(Files.createTempDirectory("histos-none"))
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
-          _ <- ZIO.addFinalizer(delete(dir))
+          _    <- ZIO.addFinalizer(delete(dir))
           done <- Cli
             .execute(List("graph"), dir, jar)
             .provideSome[Scope](layers(dir))
@@ -773,18 +748,18 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("a slash id is a plugin task and a typo is an unknown root"):
       for
-        plain <- Cli.parse(List("run", "dev.example/echo"))
+        plain    <- Cli.parse(List("run", "dev.example/echo"))
         platform <- Cli.parse(List("run", "dev.example/echo", "jvm")).either
-        broken <- Cli.parse(List("run", "a/b/c")).either
-        site <- Cli.parse(List("~", "site")).either
-        watched <- Cli.parse(List("~", "test"))
-        cache <- Cli.parse(List("cache", "nope")).either
-        flag <- Cli.parse(List("test", "--nope")).either
-        list <- Cli.parse(List("list")).either
+        broken   <- Cli.parse(List("run", "a/b/c")).either
+        site     <- Cli.parse(List("~", "site")).either
+        watched  <- Cli.parse(List("~", "test"))
+        cache    <- Cli.parse(List("cache", "nope")).either
+        flag     <- Cli.parse(List("test", "--nope")).either
+        list     <- Cli.parse(List("list")).either
       yield assertTrue(
         plain == Command.Plugin(
           PluginTaskId(PluginId("dev.example"), TaskName("echo")),
-          PluginArgs.empty
+          PluginArgs.empty,
         ),
         platform == Left(CliParseError.TaskPlatform("dev.example/echo")),
         broken match
@@ -797,13 +772,13 @@ object CliSpec extends ZIOSpecDefault:
           case Left(CliParseError.UnknownRoot) => false
           case Left(_)                         => true
           case Right(_)                        => false,
-        list == Left(CliParseError.UnknownRoot)
+        list == Left(CliParseError.UnknownRoot),
       )
     ,
     test("built-in failures do not load, and an unknown root does"):
       ZIO.scoped:
         for
-          jar <- apiJar
+          jar   <- apiJar
           empty <- bare
           cache <- Cli
             .execute(List("cache", "nope"), empty, jar)
@@ -814,7 +789,7 @@ object CliSpec extends ZIOSpecDefault:
           typo <- Cli
             .execute(List("tst"), empty, jar)
             .provideSome[Scope](layers(empty))
-          dir <- repo
+          dir   <- repo
           usage <- Cli
             .execute(List("tst"), dir, jar)
             .provideSome[Scope](layers(dir))
@@ -836,7 +811,7 @@ object CliSpec extends ZIOSpecDefault:
             "plugin task"
           ) && !missing.err.contains("is not a module"),
           list.exit == CliExit.Usage && list.err.contains("usage:"),
-          watched.exit == CliExit.Usage && watched.err.contains("usage:")
+          watched.exit == CliExit.Usage && watched.err.contains("usage:"),
         )
     ,
     test("an api link prints the load error"):
@@ -844,7 +819,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar
           dir <- bare
-          _ <- ZIO
+          _   <- ZIO
             .attempt(
               Files.writeString(
                 dir.resolve("histos.scala"),
@@ -852,7 +827,7 @@ object CliSpec extends ZIOSpecDefault:
                 |import histos.*
                 |object build extends HistosBuild:
                 |  def graph = Projects(module("core", Jvm)(scala"3.9.0"))
-                |""".stripMargin
+                |""".stripMargin,
               )
             )
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
@@ -869,17 +844,17 @@ object CliSpec extends ZIOSpecDefault:
       Projects(use(Listed()), module("core", Jvm)(scala"3.9.0")) match
         case Left(err)    => assertTrue(err.message == "built")
         case Right(built) =>
-          val api = ApiDigest.trusted("ab" * 32)
-          val other = ApiDigest.trusted("cd" * 32)
+          val api    = ApiDigest.trusted("ab" * 32)
+          val other  = ApiDigest.trusted("cd" * 32)
           val binary = GraphText.render(
             built,
             List(
               PluginLink(
                 PluginId("dev.example"),
                 PluginLinked.FromBinary(api),
-                Nil
+                Nil,
               )
-            )
+            ),
           )
           val source = GraphText.render(
             built,
@@ -887,9 +862,9 @@ object CliSpec extends ZIOSpecDefault:
               PluginLink(
                 PluginId("dev.example"),
                 PluginLinked.FromSource(api, other),
-                Nil
+                Nil,
               )
-            )
+            ),
           )
           assertTrue(
             binary.contains("core jvm 3.9.0"),
@@ -898,7 +873,7 @@ object CliSpec extends ZIOSpecDefault:
             binary.contains("command list"),
             binary.contains("job nightly"),
             !binary.contains("TOKEN"),
-            source.contains("plugin dev.example source")
+            source.contains("plugin dev.example source"),
           )
     ,
     test("a contributed command parses its own argv"):
@@ -908,8 +883,8 @@ object CliSpec extends ZIOSpecDefault:
           CommandName("list"),
           List(CliParam.Text(ParamName("out")), CliParam.Flag(FlagName("all"))),
           TaskName("echo"),
-          PluginDetail("lists the site")
-        )
+          PluginDetail("lists the site"),
+        ),
       )
       val parsed =
         PluginCommands.parse(List(bound), List("list", "docs", "--all"))
@@ -920,14 +895,14 @@ object CliSpec extends ZIOSpecDefault:
             PluginTaskId(PluginId("dev.example"), TaskName("echo")),
             PluginArgs(
               List(NamedText(ParamName("out"), "docs")),
-              Set(FlagName("all"))
-            )
+              Set(FlagName("all")),
+            ),
           )
         ),
         usage.contains("list") && usage.contains("lists the site"),
         PluginCommands.parse(List(bound), List("nope")) == Left(
           CliParseError.UnknownCommand
-        )
+        ),
       )
     ,
     test(
@@ -938,11 +913,11 @@ object CliSpec extends ZIOSpecDefault:
           case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
           case Right(graph) =>
             for
-              jar <- apiJar.mapError(_.message)
-              dir <- repo.mapError(_.message)
+              jar   <- apiJar.mapError(_.message)
+              dir   <- repo.mapError(_.message)
               trace <- Ref.make(List.empty[String])
               loader = Recording(trace, graph)
-              stack = ZLayer.succeed(loader) ++
+              stack  = ZLayer.succeed(loader) ++
                 ZLayer.succeed(FetchResolve) ++
                 ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
                 ZLayer.succeed(machine(dir, Map.empty))
@@ -950,13 +925,13 @@ object CliSpec extends ZIOSpecDefault:
                 .execute(List("resolve", "--update"), dir, jar)
                 .provideSome[Scope](stack)
               localTrace <- trace.getAndSet(Nil)
-              jdk <- GraphCompile.jdkHere.mapError(_.message)
-              _ <- ZIO
+              jdk        <- GraphCompile.jdkHere.mapError(_.message)
+              _          <- ZIO
                 .attempt {
                   Files.createDirectories(dir.resolve(".histos"))
                   Files.writeString(
                     dir.resolve(".histos").resolve("toolchain.local"),
-                    jdk.home.toAbsolutePath.normalize.toString + "\n"
+                    jdk.home.toAbsolutePath.normalize.toString + "\n",
                   )
                 }
                 .mapError(_.toString)
@@ -970,7 +945,7 @@ object CliSpec extends ZIOSpecDefault:
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
                   Calls.quiet,
-                  machine(dir, Map.empty)
+                  machine(dir, Map.empty),
                 )
                 .provideSome[Scope](stack)
                 .mapError(_.message)
@@ -984,7 +959,7 @@ object CliSpec extends ZIOSpecDefault:
               local.err.contains("resolve failed while fetch"),
               remote.err.contains("resolve failed while fetch"),
               localTrace == List("scan", "locked:0"),
-              remoteTrace == List("scan", "locked:0")
+              remoteTrace == List("scan", "locked:0"),
             )
     ,
     test("workflow checks launcher scripts with and without a server"):
@@ -992,16 +967,16 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar.mapError(_.message)
           dir <- bare.mapError(_.message)
-          _ <- ZIO
+          _   <- ZIO
             .attempt(Files.writeString(dir.resolve("histos.scala"), ship))
             .mapError(_.toString)
           jdk <- GraphCompile.jdkHere.mapError(_.message)
-          _ <- ZIO
+          _   <- ZIO
             .attempt {
               Files.createDirectories(dir.resolve(".histos"))
               Files.writeString(
                 dir.resolve(".histos").resolve("toolchain.local"),
-                jdk.home.toAbsolutePath.normalize.toString + "\n"
+                jdk.home.toAbsolutePath.normalize.toString + "\n",
               )
             }
             .mapError(_.toString)
@@ -1010,7 +985,7 @@ object CliSpec extends ZIOSpecDefault:
             .serviceWithZIO[Loader](_.load(dir, jar))
             .provideSome[Scope](stack)
             .mapError(_.message)
-          _ <- Workflow.update(dir, loaded.graph).mapError(_.message)
+          _     <- Workflow.update(dir, loaded.graph).mapError(_.message)
           local <- Cli
             .execute(List("workflow"), dir, jar)
             .provideSome[Scope](stack)
@@ -1023,7 +998,7 @@ object CliSpec extends ZIOSpecDefault:
               jar,
               Nil,
               ZIO.succeed(BuildNotes(false, Nil)),
-              loaded.plugins
+              loaded.plugins,
             )
             .provideSome[Scope](stack)
             .mapError:
@@ -1041,7 +1016,7 @@ object CliSpec extends ZIOSpecDefault:
             local.exit == CliExit.WorkflowFailed,
             remote.exit == CliExit.WorkflowFailed,
             local.err.contains("launcher pin is absent"),
-            remote.err.contains("launcher pin is absent")
+            remote.err.contains("launcher pin is absent"),
           )
     ,
     test(
@@ -1051,7 +1026,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar.mapError(_.message)
           dir <- bare.mapError(_.message)
-          _ <- ZIO
+          _   <- ZIO
             .attempt(Files.writeString(dir.resolve("histos.scala"), ship))
             .mapError(_.toString)
           jdk <- GraphCompile.jdkHere.mapError(_.message)
@@ -1061,7 +1036,7 @@ object CliSpec extends ZIOSpecDefault:
               Files.createDirectories(dir.resolve(".histos"))
               Files.writeString(
                 dir.resolve(".histos").resolve("toolchain.local"),
-                jdk.home.toAbsolutePath.normalize.toString + "\n"
+                jdk.home.toAbsolutePath.normalize.toString + "\n",
               )
               Files.writeString(lockPath, launcherLock)
             }
@@ -1071,23 +1046,23 @@ object CliSpec extends ZIOSpecDefault:
             .serviceWithZIO[Loader](_.load(dir, jar))
             .provideSome[Scope](stack)
             .mapError(_.message)
-          pin <- LauncherPin.read(dir).mapError(_.message)
+          pin       <- LauncherPin.read(dir).mapError(_.message)
           lockBytes <- fileBytes(lockPath)
-          rendered <- ZIO
+          rendered  <- ZIO
             .fromEither(Workflow.render(loaded.graph))
             .mapError(_.message)
-          _ <- stageFile(dir.resolve("histos"), Some("stale\n"))
-          _ <- stageFile(dir.resolve("histos.bat"), None)
-          _ <- stageFile(Workflow.path(dir), Some("stale\n"))
+          _     <- stageFile(dir.resolve("histos"), Some("stale\n"))
+          _     <- stageFile(dir.resolve("histos.bat"), None)
+          _     <- stageFile(Workflow.path(dir), Some("stale\n"))
           local <- Cli
             .execute(List("workflow", "--update"), dir, jar)
             .provideSome[Scope](stack)
-          localPosix <- fileBytes(dir.resolve("histos"))
-          localWindows <- fileBytes(dir.resolve("histos.bat"))
+          localPosix    <- fileBytes(dir.resolve("histos"))
+          localWindows  <- fileBytes(dir.resolve("histos.bat"))
           localWorkflow <- fileBytes(Workflow.path(dir))
-          localLock <- fileBytes(lockPath)
-          localPin <- LauncherPin.read(dir).mapError(_.message)
-          _ <- Daemon
+          localLock     <- fileBytes(lockPath)
+          localPin      <- LauncherPin.read(dir).mapError(_.message)
+          _             <- Daemon
             .open(
               dir,
               loaded.graph,
@@ -1096,27 +1071,27 @@ object CliSpec extends ZIOSpecDefault:
               jar,
               Nil,
               ZIO.succeed(BuildNotes(false, Nil)),
-              loaded.plugins
+              loaded.plugins,
             )
             .provideSome[Scope](stack)
             .mapError:
               case error: histos.server.ServerError => error.message
               case error: LoadError                 => error.message
-          _ <- stageFile(dir.resolve("histos"), None)
-          _ <- stageFile(dir.resolve("histos.bat"), Some("stale\n"))
-          _ <- stageFile(Workflow.path(dir), Some("stale\n"))
+          _      <- stageFile(dir.resolve("histos"), None)
+          _      <- stageFile(dir.resolve("histos.bat"), Some("stale\n"))
+          _      <- stageFile(Workflow.path(dir), Some("stale\n"))
           remote <- Cli
             .execute(List("workflow", "--update"), dir, jar)
             .provideSome[Scope](stack)
-          remotePosix <- fileBytes(dir.resolve("histos"))
-          remoteWindows <- fileBytes(dir.resolve("histos.bat"))
+          remotePosix    <- fileBytes(dir.resolve("histos"))
+          remoteWindows  <- fileBytes(dir.resolve("histos.bat"))
           remoteWorkflow <- fileBytes(Workflow.path(dir))
-          remoteLock <- fileBytes(lockPath)
-          remotePin <- LauncherPin.read(dir).mapError(_.message)
+          remoteLock     <- fileBytes(lockPath)
+          remotePin      <- LauncherPin.read(dir).mapError(_.message)
         yield
-          val posix = utf8(LauncherScript.posix(pin.version))
-          val windows = utf8(LauncherScript.windows(pin.version))
-          val workflow = utf8(rendered)
+          val posix     = utf8(LauncherScript.posix(pin.version))
+          val windows   = utf8(LauncherScript.windows(pin.version))
+          val workflow  = utf8(rendered)
           val assembled = loaded.graph.assembly match
             case Some(_) => true
             case None    => false
@@ -1139,7 +1114,7 @@ object CliSpec extends ZIOSpecDefault:
             remoteWorkflow == workflow,
             remoteLock == lockBytes,
             remotePin.revision == pin.revision,
-            remotePin.version == pin.version
+            remotePin.version == pin.version,
           )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
     test("a watched contributed command runs on the server with its arguments"):
@@ -1148,22 +1123,22 @@ object CliSpec extends ZIOSpecDefault:
           case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
           case Right(graph) =>
             for
-              jar <- apiJar.mapError(_.message)
-              dir <- repo.mapError(_.message)
-              seen <- Ref.make(Option.empty[PluginArgs])
+              jar   <- apiJar.mapError(_.message)
+              dir   <- repo.mapError(_.message)
+              seen  <- Ref.make(Option.empty[PluginArgs])
               trace <- Ref.make(List.empty[String])
               loader = Recording(trace, graph)
-              stack = ZLayer.succeed(loader) ++
+              stack  = ZLayer.succeed(loader) ++
                 ZLayer.succeed(FetchResolve) ++
                 ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
                 ZLayer.succeed(machine(dir, Map.empty))
               jdk <- GraphCompile.jdkHere.mapError(_.message)
-              _ <- ZIO
+              _   <- ZIO
                 .attempt {
                   Files.createDirectories(dir.resolve(".histos"))
                   Files.writeString(
                     dir.resolve(".histos").resolve("toolchain.local"),
-                    jdk.home.toAbsolutePath.normalize.toString + "\n"
+                    jdk.home.toAbsolutePath.normalize.toString + "\n",
                   )
                 }
                 .mapError(_.toString)
@@ -1177,7 +1152,7 @@ object CliSpec extends ZIOSpecDefault:
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
                   RecordingRuntime(seen),
-                  machine(dir, Map.empty)
+                  machine(dir, Map.empty),
                 )
                 .provideSome[Scope](stack)
                 .mapError(_.message)
@@ -1185,19 +1160,19 @@ object CliSpec extends ZIOSpecDefault:
                 .execute(List("~", "list", "docs", "--all"), dir, jar)
                 .provideSome[Scope](stack)
                 .forkScoped
-              _ <- printed(line => line == "ran docs")
-              args <- seen.get
+              _     <- printed(line => line == "ran docs")
+              args  <- seen.get
               lines <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
-              _ <- fiber.interrupt
+              _     <- fiber.interrupt
             yield assertTrue(
               args == Some(
                 PluginArgs(
                   List(NamedText(ParamName("out"), "docs")),
-                  Set(FlagName("all"))
+                  Set(FlagName("all")),
                 )
               ),
               lines.contains("ran docs"),
-              !lines.exists(_.contains("usage:"))
+              !lines.exists(_.contains("usage:")),
             )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
     test("watch of mcp is usage with and without a server"):
@@ -1206,11 +1181,11 @@ object CliSpec extends ZIOSpecDefault:
           case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
           case Right(graph) =>
             for
-              jar <- apiJar.mapError(_.message)
-              dir <- repo.mapError(_.message)
+              jar   <- apiJar.mapError(_.message)
+              dir   <- repo.mapError(_.message)
               trace <- Ref.make(List.empty[String])
               loader = Recording(trace, graph)
-              stack = ZLayer.succeed(loader) ++
+              stack  = ZLayer.succeed(loader) ++
                 ZLayer.succeed(FetchResolve) ++
                 ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
                 ZLayer.succeed(machine(dir, Map.empty))
@@ -1227,12 +1202,12 @@ object CliSpec extends ZIOSpecDefault:
                 .execute(List("~", "~", "test"), dir, jar)
                 .provideSome[Scope](stack)
               jdk <- GraphCompile.jdkHere.mapError(_.message)
-              _ <- ZIO
+              _   <- ZIO
                 .attempt {
                   Files.createDirectories(dir.resolve(".histos"))
                   Files.writeString(
                     dir.resolve(".histos").resolve("toolchain.local"),
-                    jdk.home.toAbsolutePath.normalize.toString + "\n"
+                    jdk.home.toAbsolutePath.normalize.toString + "\n",
                   )
                 }
                 .mapError(_.toString)
@@ -1246,7 +1221,7 @@ object CliSpec extends ZIOSpecDefault:
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
                   Calls.quiet,
-                  machine(dir, Map.empty)
+                  machine(dir, Map.empty),
                 )
                 .provideSome[Scope](stack)
                 .mapError(_.message)
@@ -1274,14 +1249,14 @@ object CliSpec extends ZIOSpecDefault:
               ),
               remoteNested.exit == CliExit.Usage && remoteNested.err.contains(
                 "watch does not nest"
-              )
+              ),
             )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds),
     test("watch of compile names the path that changed"):
       ZIO.scoped:
         for
-          jar <- apiJar.mapError(_.message)
-          dir <- repo.mapError(_.message)
+          jar   <- apiJar.mapError(_.message)
+          dir   <- repo.mapError(_.message)
           fiber <- Cli
             .execute(List("~", "compile"), dir, jar)
             .provideSome[Scope](layers(dir))
@@ -1293,27 +1268,25 @@ object CliSpec extends ZIOSpecDefault:
               Files.writeString(
                 dir.resolve("histos.scala"),
                 "\n",
-                StandardOpenOption.APPEND
+                StandardOpenOption.APPEND,
               )
             )
             .mapError(_.toString)
-          _ <- printed(line => line == "watching histos.scala")
+          _     <- printed(line => line == "watching histos.scala")
           lines <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
           watched = lines.filter(_.startsWith("watching"))
           _ <- fiber.interrupt
         yield assertTrue(
           watched.contains("watching"),
           watched.contains("watching histos.scala"),
-          watched.forall(line =>
-            line == "watching" || line == "watching histos.scala"
-          )
+          watched.forall(line => line == "watching" || line == "watching histos.scala"),
         )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
     test("reload with no server reports that no server is running"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          dir <- repo
+          jar  <- apiJar
+          dir  <- repo
           done <- Cli
             .execute(List("reload"), dir, jar)
             .provideSome[Scope](layers(dir))
@@ -1325,16 +1298,16 @@ object CliSpec extends ZIOSpecDefault:
           done.out.isEmpty,
           done.playback == Playback.Held,
           record.isEmpty,
-          !socket
+          !socket,
         )
     ,
     test("reboot with no server starts one"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          dir <- repo
+          jar    <- apiJar
+          dir    <- repo
           absent <- Attach.decide(dir, Cli.VersionText)
-          fiber <- Cli
+          fiber  <- Cli
             .execute(List("reboot"), dir, jar)
             .provideSome[Scope](layers(dir))
             .forkScoped
@@ -1363,9 +1336,9 @@ object CliSpec extends ZIOSpecDefault:
               case Feed.Exit(code, err) =>
                 code == CliExit.Success.code && err.isEmpty
               case _ => false
-            }
+            },
           )
-    @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds)
+    @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
   )
 
   private val launcherLock =
@@ -1412,14 +1385,13 @@ object CliSpec extends ZIOSpecDefault:
       |      )
       |""".stripMargin
 
-  private final class Recording(trace: Ref[List[String]], graph: ProjectGraph)
-      extends Loader:
+  private final class Recording(trace: Ref[List[String]], graph: ProjectGraph) extends Loader:
     def scan(repo: Path) =
       trace.update(_ :+ "scan").as(ScannedBuild(Nil, ""))
     def loadLocked(
         repo: Path,
         apiJar: Path,
-        lock: histos.resolve.DependencyLock
+        lock: histos.resolve.DependencyLock,
     ) =
       trace
         .update(_ :+ s"locked:${lock.plugins.length}")
@@ -1428,40 +1400,37 @@ object CliSpec extends ZIOSpecDefault:
         )
     def load(repo: Path, apiJar: Path) =
       trace.update(_ :+ "load").as(LoadedBuild(graph, Calls.quiet))
-    def buildClasspath(apiJar: Path) = ZIO.succeed(Nil)
+    def buildClasspath(apiJar: Path)          = ZIO.succeed(Nil)
     def reportBuild(repo: Path, apiJar: Path) =
       ZIO.succeed(BuildNotes(false, Nil))
 
   private object FetchResolve extends Resolve:
     private val failed: IO[ResolveError, Nothing] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
-    def resolveTool(request: histos.resolve.ToolRequest) = failed
-    def resolve(cell: ResolveCell) = failed
-    def fetch(artifact: LockedArtifact) = failed
+    def resolveTool(request: histos.resolve.ToolRequest)           = failed
+    def resolve(cell: ResolveCell)                                 = failed
+    def fetch(artifact: LockedArtifact)                            = failed
     def resolvePlugin(dependency: Dep, repositories: Repositories) = failed
     def sources(
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ) = failed
 
   private def layers(dir: Path, env: Map[String, String] = Map.empty) =
     ZLayer.make[
-      histos.load.Loader & histos.cache.ContentStore & histos.jdk.Machine &
-        histos.resolve.Resolve
+      histos.load.Loader & histos.cache.ContentStore & histos.jdk.Machine & histos.resolve.Resolve
     ](
       histos.load.Loader.live,
       ZLayer.succeed(histos.cache.ContentStore.in(dir.resolve("cache"))),
       ZLayer.fromZIO(
         Machine
           .load(dir)
-          .mapError(error =>
-            LoadError.Runtime(histos.zinc.GraphCompileError.Runtime(error))
-          )
+          .mapError(error => LoadError.Runtime(histos.zinc.GraphCompileError.Runtime(error)))
           .map(actual => machine(dir, env).copy(running = actual.running))
       ),
-      histos.resolve.Resolve.live(dir.resolve("cache").resolve("resolve"))
+      histos.resolve.Resolve.live(dir.resolve("cache").resolve("resolve")),
     )
 
   private def machine(dir: Path, env: Map[String, String]): Machine =
@@ -1473,7 +1442,7 @@ object CliSpec extends ZIOSpecDefault:
       dir.resolve("cache"),
       dir,
       None,
-      NativeOrigin.read(env)
+      NativeOrigin.read(env),
     )
 
   private def refused(done: Completed): Boolean =
@@ -1481,7 +1450,7 @@ object CliSpec extends ZIOSpecDefault:
 
   private def serverRecord(
       dir: Path,
-      fiber: Fiber[LoadError, Completed]
+      fiber: Fiber[LoadError, Completed],
   ): UIO[Either[Completed, Record.Written]] =
     fiber.poll.flatMap:
       case Some(Exit.Success(done))  => ZIO.succeed(Left(done))
@@ -1492,7 +1461,7 @@ object CliSpec extends ZIOSpecDefault:
               CliExit.TaskFailed,
               "",
               cause.prettyPrint,
-              Playback.Held
+              Playback.Held,
             )
           )
         )
@@ -1501,7 +1470,7 @@ object CliSpec extends ZIOSpecDefault:
           .read(dir)
           .flatMap:
             case Some(written) => ZIO.succeed(Right(written))
-            case None => ZIO.sleep(50.millis) *> serverRecord(dir, fiber)
+            case None          => ZIO.sleep(50.millis) *> serverRecord(dir, fiber)
 
   private def printed(pred: String => Boolean): UIO[Unit] =
     TestConsole.output.flatMap { lines =>
@@ -1510,3 +1479,4 @@ object CliSpec extends ZIOSpecDefault:
     }
 
   def spec = cli @@ TestAspect.withLiveSystem
+end CliSpec

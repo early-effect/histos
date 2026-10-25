@@ -2,17 +2,7 @@ package histos.load
 
 import histos.plugin.{DeclaredTask, PluginRunError, PluginTaskId, TaskDep}
 import histos.schedule.Histos
-import histos.step.{
-  Input,
-  InputName,
-  InputValue,
-  Need,
-  Phase,
-  Step,
-  StepAspect,
-  StepId,
-  StepInfo
-}
+import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepAspect, StepId, StepInfo}
 
 import zio.{Chunk, ZIO}
 
@@ -21,7 +11,7 @@ import Histos.given
 /** The reachable plugin tasks, with each `TaskDep.Compile` as a compile step.
   */
 private[load] object PluginSteps:
-  private type R = histos.resolve.Resolve
+  private type R        = histos.resolve.Resolve
   private type CellStep = histos.step.HermeticStep[R, PluginFault, String]
 
   def goal(
@@ -31,18 +21,18 @@ private[load] object PluginSteps:
       compile: PluginCells.Cell => ZIO[
         histos.resolve.Resolve,
         PluginFault,
-        Unit
+        Unit,
       ],
       runOne: (PluginTaskId, DeclaredTask, String) => ZIO[
         R,
         PluginFault,
-        String
-      ]
+        String,
+      ],
   ): Either[PluginFault, CellStep] =
     val built = scala.collection.mutable.Map.empty[PluginTaskId, CellStep]
     def task(
         id: PluginTaskId,
-        stack: List[PluginTaskId]
+        stack: List[PluginTaskId],
     ): Either[PluginFault, CellStep] =
       built.get(id) match
         case Some(found) => Right(found)
@@ -59,16 +49,16 @@ private[load] object PluginSteps:
             made
     def make(
         id: PluginTaskId,
-        stack: List[PluginTaskId]
+        stack: List[PluginTaskId],
     ): Either[PluginFault, CellStep] =
       taskOf(id) match
-        case None => Left(PluginFault.Task(PluginRunError.Unknown(id)))
+        case None           => Left(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(declared) =>
           for
-            cells <- cellsOf(declared).left.map(PluginFault.Task(_))
+            cells     <- cellsOf(declared).left.map(PluginFault.Task(_))
             upstreams <- cells.distinct
-              .foldLeft[Either[PluginFault, List[CellStep]]](Right(Nil)):
-                (acc, cell) => acc.map(_ :+ compileStep(cell, compile))
+              .foldLeft[Either[PluginFault, List[CellStep]]](Right(Nil)): (acc, cell) =>
+                acc.map(_ :+ compileStep(cell, compile))
             same = declared.dependsOn.collect:
               case TaskDep.Same(name) => PluginTaskId(id.plugin, name)
             deps <- same.foldLeft[Either[PluginFault, List[CellStep]]](
@@ -83,8 +73,8 @@ private[load] object PluginSteps:
       compile: PluginCells.Cell => ZIO[
         histos.resolve.Resolve,
         PluginFault,
-        Unit
-      ]
+        Unit,
+      ],
   ): CellStep =
     val info = StepInfo(
       StepId.Cell(cell.module.name, cell.version, cell.platform, Phase.Compile),
@@ -93,10 +83,10 @@ private[load] object PluginSteps:
           InputName("cell"),
           InputValue.Text(
             s"${cell.module.name.value} ${cell.version.value} ${cell.platform.token}"
-          )
+          ),
         )
       ),
-      Set(Need.Cpu)
+      Set(Need.Cpu),
     )
     Step.hermetic[String](info)(
       compile(cell).as("")
@@ -109,21 +99,19 @@ private[load] object PluginSteps:
       runOne: (PluginTaskId, DeclaredTask, String) => ZIO[
         R,
         PluginFault,
-        String
-      ]
+        String,
+      ],
   ): CellStep =
     val info = StepInfo(
       StepId.Plugin(id),
       Chunk(Input(InputName("task"), InputValue.Text(id.render))),
-      Set(Need.Cpu)
+      Set(Need.Cpu),
     )
     val body = (upstream: String) => runOne(id, task, upstream)
     val step = upstreams match
       case Nil          => Step.hermetic[String](info)(body(""))
       case head :: tail =>
-        val joined = tail.foldLeft[CellStep](head)((acc, next) =>
-          acc.zip(next).map((left, right) => join(left, right))
-        )
+        val joined = tail.foldLeft[CellStep](head)((acc, next) => acc.zip(next).map((left, right) => join(left, right)))
         joined.andThenHermetic[String](info)(body)
     step @@ StepAspect.cached @@ StepAspect.remote
 
@@ -131,3 +119,4 @@ private[load] object PluginSteps:
     if left.isEmpty then right
     else if right.isEmpty then left
     else s"$left\n$right"
+end PluginSteps

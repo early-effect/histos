@@ -18,12 +18,12 @@ enum IoFault:
     case Create => "create"
     case Walk   => "walk"
     case Temp   => "create"
+end IoFault
 
 final case class IoFailure(path: Path, fault: IoFault):
   def message: String = s"could not ${fault.word} $path"
 
-/** Files the build owns: the dependency lock text, a tree delete, and a scoped
-  * work directory.
+/** Files the build owns: the dependency lock text, a tree delete, and a scoped work directory.
   */
 object Workspace:
   def readString(path: Path): IO[IoFailure, String] =
@@ -34,9 +34,7 @@ object Workspace:
   def writeString(path: Path, text: String): IO[IoFailure, Unit] =
     ZIO
       .attemptBlocking:
-        Option(path.getParent).foreach(parent =>
-          Files.createDirectories(parent)
-        )
+        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
         Files.writeString(path, text)
       .mapError(_ => IoFailure(path, IoFault.Write))
       .unit
@@ -63,12 +61,11 @@ object Workspace:
       .attemptBlocking(deleteSync(root))
       .mapError(_ => IoFailure(root, IoFault.Delete))
 
-  /** The same walk `delete` runs. A caller already inside one blocking effect
-    * uses this.
+  /** The same walk `delete` runs. A caller already inside one blocking effect uses this.
     */
   def deleteSync(root: Path): Unit =
     if Files.exists(root) then
-      val walk = Files.walk(root)
+      val walk  = Files.walk(root)
       val paths =
         try walk.iterator.asScala.toList
         finally walk.close()
@@ -84,3 +81,4 @@ object Workspace:
         .attemptBlocking(Files.createTempDirectory(prefix))
         .mapError(_ => IoFailure(Path.of(prefix), IoFault.Temp))
     )(path => delete(path).ignore)
+end Workspace

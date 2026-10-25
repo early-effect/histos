@@ -13,8 +13,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Scope, ZIO, durationInt}
 import zio.test.*
 
-/** A public change in an upstream class file must not leave the downstream
-  * class calling the old descriptor.
+/** A public change in an upstream class file must not leave the downstream class calling the old descriptor.
   */
 object UpstreamInvalidationSpec extends ZIOSpecDefault:
   private val version = ScalaVersion("3.9.0")
@@ -41,27 +40,27 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
-          root <- temp
+          jdk   <- GraphCompile.jdkHere
+          root  <- temp
           built <- ZIO
             .attempt {
-              val upstream = module("upstream", Jvm)(version)
+              val upstream   = module("upstream", Jvm)(version)
               val downstream =
                 module("downstream", Jvm)(version).dependsOn(upstream)
               write(
                 root,
                 "upstream/src/main/scala/Upstream.scala",
-                upstreamSource
+                upstreamSource,
               )
               write(
                 root,
                 "downstream/src/main/scala/Downstream.scala",
-                downstreamSource
+                downstreamSource,
               )
               write(
                 root,
                 ".histos/dependencies.lock",
-                "cell upstream 3.9.0 jvm\ncell downstream 3.9.0 jvm\n"
+                "cell upstream 3.9.0 jvm\ncell downstream 3.9.0 jvm\n",
               )
               Projects(upstream, downstream)
             }
@@ -75,14 +74,14 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
                 jdk,
                 NativeOrigin.Central,
                 None,
-                _ => ZIO.unit
+                _ => ZIO.unit,
               )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
             )
           work = root.resolve("run")
-          _ <- ZIO.attempt(Files.createDirectories(work))
+          _   <- ZIO.attempt(Files.createDirectories(work))
           ran <- run(jdk, first, work)
           before = first
             .collectFirst:
@@ -93,7 +92,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
             write(
               root,
               "upstream/src/main/scala/Upstream.scala",
-              upstreamChanged
+              upstreamChanged,
             )
           )
           second <- histos.ToolFixture
@@ -117,13 +116,12 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
           ran.out.text.trim == "ok",
           failure == None,
           upstreamRebuilt(feeds),
-          downstreamInvalidated(feeds, before)
+          downstreamInvalidated(feeds, before),
         )
   )
 
   private def reported(
-      error: GraphCompileError | histos.resolve.ResolveError |
-        histos.workspace.IoFailure
+      error: GraphCompileError | histos.resolve.ResolveError | histos.workspace.IoFailure
   ): String =
     error match
       case found: GraphCompileError           => found.message
@@ -136,12 +134,12 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
         cell.changed || cell.classesWritten.exists(_ > 0)
       case _ => false
 
-  /** A green second compile that keeps the old class file is the bug. A typed
-    * error means Zinc recompiled the unchanged downstream source.
+  /** A green second compile that keeps the old class file is the bug. A typed error means Zinc recompiled the unchanged
+    * downstream source.
     */
   private def downstreamInvalidated(
       feeds: Chunk[CompileFeed],
-      before: Map[String, ClassMark]
+      before: Map[String, ClassMark],
   ): Boolean =
     feeds.exists:
       case CompileFeed.Failed(
@@ -149,12 +147,10 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
               module,
               _,
               _,
-              CompileError.Failed(diagnostics)
+              CompileError.Failed(diagnostics),
             )
           ) =>
-        module.value == "downstream" && diagnostics.exists(diagnostic =>
-          diagnostic.text.contains("greet")
-        )
+        module.value == "downstream" && diagnostics.exists(diagnostic => diagnostic.text.contains("greet"))
       case CompileFeed.Done(cell) if cell.module.value == "downstream" =>
         cell.classesWritten.exists(_ > 0) || classMarks(cell.classes) != before
       case _ => false
@@ -162,7 +158,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
   private def run(
       jdk: histos.jdk.JdkRuntime,
       cells: List[CompiledCell],
-      work: Path
+      work: Path,
   ) =
     val down = cells.collect:
       case cell if cell.module.value == "downstream" => cell
@@ -179,7 +175,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
                 jdk.home.resolve("bin").resolve("java"),
                 ChildClasspath(cell.classes, classes :: library),
                 MainClass.trusted("Downstream"),
-                work
+                work,
               )
             )
       case _ =>
@@ -199,7 +195,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
           Some(
             name -> ClassMark(
               Files.getLastModifiedTime(path),
-              Files.size(path)
+              Files.size(path),
             )
           )
         catch case _: java.io.IOException => None
@@ -217,7 +213,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
     ): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -232,3 +228,4 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
   ](
     histos.ToolFixture.jvm(version)
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+end UpstreamInvalidationSpec

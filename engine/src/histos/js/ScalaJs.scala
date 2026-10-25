@@ -1,49 +1,22 @@
 package histos.js
 
-import histos.zinc.{
-  CompileError,
-  CompileOutput,
-  CompileProblem,
-  CompileRequest,
-  JsLibraryMiss,
-  JvmCompile,
-  ScalaSeries
-}
-import histos.{
-  Dep,
-  DepKind,
-  JsEnv,
-  JsVersion,
-  Platform,
-  ScalaVersion,
-  ToolCatalog
-}
-import histos.resolve.{
-  LockedTools,
-  ToolRoot,
-  ToolRequest,
-  ToolId,
-  ToolRole,
-  ToolVariant,
-  Repositories,
-  Transitivity
-}
+import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JsLibraryMiss, JvmCompile, ScalaSeries}
+import histos.{Dep, DepKind, JsEnv, JsVersion, Platform, ScalaVersion, ToolCatalog}
+import histos.resolve.{LockedTools, ToolRoot, ToolRequest, ToolId, ToolRole, ToolVariant, Repositories, Transitivity}
 
 import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** Scala.js compile for the Scala 3 compiler's own backend. The library
-  * replaces `scala-library` on the user classpath.
+/** Scala.js compile for the Scala 3 compiler's own backend. The library replaces `scala-library` on the user classpath.
   */
 object ScalaJs:
 
-  /** The jars the linker reads `.sjsir` from. The compiler uses the same list
-    * as its library classpath.
+  /** The jars the linker reads `.sjsir` from. The compiler uses the same list as its library classpath.
     */
   def libraries(
       version: ScalaVersion,
-      revision: Option[JsVersion] = None
+      revision: Option[JsVersion] = None,
   ): ZIO[LockedTools, CompileError, List[Path]] =
     library(version, revision)
 
@@ -51,7 +24,7 @@ object ScalaJs:
       request: CompileRequest,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
-      revision: Option[JsVersion] = None
+      revision: Option[JsVersion] = None,
   ): ZIO[LockedTools, CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Js then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
@@ -60,122 +33,121 @@ object ScalaJs:
         case Some(ScalaSeries.Scala3) =>
           input(request.toolchain.version, revision).flatMap: selected =>
             JvmCompile.compileWith(
-              request.copy(compilationTools =
-                request.compilationTools :+ selected
-              ),
+              request.copy(compilationTools = request.compilationTools :+ selected),
               selected.artifacts.map(_.path),
               Nil,
               List("-scalajs") ++ extra,
-              hear
+              hear,
             )
         case _ =>
           ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
 
   private def input(
       version: ScalaVersion,
-      revision: Option[JsVersion]
+      revision: Option[JsVersion],
   ): ZIO[LockedTools, CompileError, histos.resolve.ToolInput] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
       val request = histos.js.JsRequests.libraries(
         version,
         revision.getOrElse(tools.catalog.js.revision),
         tools.repositories,
-        tools.catalog
+        tools.catalog,
       )
       tools.selected(request).mapError(CompileError.Resolved(_))
 
   private def library(
       version: ScalaVersion,
-      revision: Option[JsVersion]
+      revision: Option[JsVersion],
   ): ZIO[LockedTools, CompileError, List[Path]] =
     input(version, revision).map(_.artifacts.map(_.path))
+end ScalaJs
 
 object JsRequests:
   def libraries(
       version: ScalaVersion,
       revision: JsVersion,
       repos: Repositories,
-      catalog: ToolCatalog
+      catalog: ToolCatalog,
   ): ToolRequest =
     val single = Transitivity.Single
-    val roots = List(
+    val roots  = List(
       ToolRoot.of(
         Dep.trusted(
           "org.scala-lang",
           "scala-library",
           version.value,
-          DepKind.Java
+          DepKind.Java,
         ),
         version,
         Platform.Jvm,
         single,
-        None
+        None,
       ),
       ToolRoot.of(
         Dep.trusted(
           "org.scala-lang",
           "scala3-library",
           version.value,
-          DepKind.Binary
+          DepKind.Binary,
         ),
         version,
         Platform.Jvm,
         single,
-        None
+        None,
       ),
       ToolRoot.of(
         Dep.trusted(
           "org.scala-lang",
           "scala3-library",
           version.value,
-          DepKind.Binary
+          DepKind.Binary,
         ),
         version,
         Platform.Js,
         single,
-        None
+        None,
       ),
       ToolRoot.of(
         Dep.trusted(
           "org.scala-js",
           "scalajs-library",
           revision.value,
-          DepKind.Binary
+          DepKind.Binary,
         ),
         catalog.js.bridgeScala,
         Platform.Jvm,
         single,
-        None
+        None,
       ),
       ToolRoot.of(
         Dep.trusted(
           "org.scala-js",
           "scalajs-scalalib",
           version.value,
-          DepKind.Binary
+          DepKind.Binary,
         ),
         catalog.js.bridgeScala,
         Platform.Jvm,
         single,
-        None
+        None,
       ),
       ToolRoot.of(
         Dep.trusted(
           "org.scala-js",
           "scalajs-javalib",
           revision.value,
-          DepKind.Java
+          DepKind.Java,
         ),
         version,
         Platform.Jvm,
         single,
-        None
-      )
+        None,
+      ),
     )
     ToolRequest(
       ToolId(ToolRole.JsLibraries, version, ToolVariant.Js(revision)),
       roots,
-      repos
+      repos,
     )
 
   def compiler(env: JsEnv, catalog: ToolCatalog): ScalaVersion = env match
@@ -185,30 +157,30 @@ object JsRequests:
   def environment(
       env: JsEnv,
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
-    val version = compiler(env, catalog)
+    val version                        = compiler(env, catalog)
     val (org, name, revision, variant) = env match
       case JsEnv.Node =>
         (
           "org.scala-js",
           "scalajs-env-nodejs",
           catalog.js.node,
-          ToolVariant.Node
+          ToolVariant.Node,
         )
       case JsEnv.Jsdom =>
         (
           "org.scala-js",
           "scalajs-env-jsdom-nodejs",
           catalog.js.jsdom,
-          ToolVariant.Jsdom
+          ToolVariant.Jsdom,
         )
       case JsEnv.Firefox =>
         (
           "rocks.earlyeffect",
           "chekhov-jsenv",
           catalog.js.chekhov,
-          ToolVariant.Firefox
+          ToolVariant.Firefox,
         )
     ToolRequest(
       ToolId(ToolRole.JsEnvironment, version, variant),
@@ -218,16 +190,16 @@ object JsRequests:
           version,
           Platform.Jvm,
           Transitivity.Closure,
-          None
+          None,
         )
       ),
-      repos
+      repos,
     )
 
   def linker(
       revision: JsVersion,
       version: ScalaVersion,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     ToolRequest(
       ToolId(ToolRole.JsLinker, version, ToolVariant.Js(revision)),
@@ -237,47 +209,47 @@ object JsRequests:
             "org.scala-js",
             "scalajs-linker",
             revision.value,
-            DepKind.Binary
+            DepKind.Binary,
           ),
           version,
           Platform.Jvm,
           Transitivity.Closure,
-          None
+          None,
         )
       ),
-      repos
+      repos,
     )
 
   def suite(
       revision: JsVersion,
       env: JsEnv,
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     val version = compiler(env, catalog)
-    val roots = environment(env, catalog, repos).roots ++ List(
+    val roots   = environment(env, catalog, repos).roots ++ List(
       "scalajs-linker",
-      "scalajs-sbt-test-adapter"
+      "scalajs-sbt-test-adapter",
     ).map(name =>
       ToolRoot.of(
         Dep.trusted("org.scala-js", name, revision.value, DepKind.Binary),
         version,
         Platform.Jvm,
         Transitivity.Closure,
-        None
+        None,
       )
     )
     // Environment roots participate in drift, so the same linker revision can serve different environments.
     ToolRequest(
       ToolId(ToolRole.JsSuite, version, ToolVariant.Suite(revision, env)),
       roots,
-      repos
+      repos,
     )
 
   def testBridge(
       revision: JsVersion,
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     val version = catalog.js.bridgeScala
     ToolRequest(
@@ -288,13 +260,14 @@ object JsRequests:
             "org.scala-js",
             "scalajs-test-bridge",
             revision.value,
-            DepKind.Binary
+            DepKind.Binary,
           ),
           version,
           Platform.Jvm,
           Transitivity.Single,
-          None
+          None,
         )
       ),
-      repos
+      repos,
     )
+end JsRequests

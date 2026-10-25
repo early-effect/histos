@@ -10,19 +10,20 @@ import zio.{Chunk, IO, ZIO}
 /** LSP base-protocol frames. BSP rides these, not newline-delimited JSON. */
 object Frame:
   private val HeaderLimit: Int = 8192
-  private val BodyLimit: Int = 8 * 1024 * 1024
+  private val BodyLimit: Int   = 8 * 1024 * 1024
 
   enum FrameError:
     case Header, MissingLength, BadLength, Truncated, TooLarge, Encoding, Io
 
     def message: String = this match
-      case Header         => "bsp header is not a content-length frame"
-      case MissingLength  => "bsp frame has no content-length"
-      case BadLength      => "bsp content-length is not a byte count"
-      case Truncated      => "bsp frame ended early"
-      case TooLarge       => "bsp frame is too large"
-      case Encoding       => "bsp frame is not utf-8"
-      case Io             => "bsp frame could not be read"
+      case Header        => "bsp header is not a content-length frame"
+      case MissingLength => "bsp frame has no content-length"
+      case BadLength     => "bsp content-length is not a byte count"
+      case Truncated     => "bsp frame ended early"
+      case TooLarge      => "bsp frame is too large"
+      case Encoding      => "bsp frame is not utf-8"
+      case Io            => "bsp frame could not be read"
+  end FrameError
 
   /** Interrupt closes the stream so a blocked read returns. Stdin ignores thread interrupts. */
   def read(in: InputStream): IO[FrameError, Option[String]] =
@@ -35,17 +36,19 @@ object Frame:
     val bytes = payload.getBytes(StandardCharsets.UTF_8)
     if bytes.length > BodyLimit then ZIO.fail(FrameError.TooLarge)
     else
-      ZIO.attemptBlocking {
-        val header = s"Content-Length: ${bytes.length}\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
-        out.write(header)
-        out.write(bytes)
-        out.flush()
-      }.mapError(_ => FrameError.Io)
+      ZIO
+        .attemptBlocking {
+          val header = s"Content-Length: ${bytes.length}\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
+          out.write(header)
+          out.write(bytes)
+          out.flush()
+        }
+        .mapError(_ => FrameError.Io)
 
   private def readMessage(in: InputStream): Either[FrameError, Option[String]] =
     try
       readHeader(in, Chunk.empty).flatMap:
-        case None => Right(None)
+        case None         => Right(None)
         case Some(length) =>
           val body = in.readNBytes(length)
           if body.length != length then Left(FrameError.Truncated)
@@ -57,12 +60,13 @@ object Frame:
     else if marker(seen) then lengthOf(seen.dropRight(4)).map(Some(_))
     else
       val next = in.read()
-      if next < 0 then
-        if seen.isEmpty then Right(None) else Left(FrameError.Truncated)
+      if next < 0 then if seen.isEmpty then Right(None) else Left(FrameError.Truncated)
       else readHeader(in, seen :+ next.toByte)
 
   private def marker(seen: Chunk[Byte]): Boolean =
-    seen.length >= 4 && seen.drop(seen.length - 4).sameElements(Chunk[Byte]('\r'.toByte, '\n'.toByte, '\r'.toByte, '\n'.toByte))
+    seen.length >= 4 && seen
+      .drop(seen.length - 4)
+      .sameElements(Chunk[Byte]('\r'.toByte, '\n'.toByte, '\r'.toByte, '\n'.toByte))
 
   private def lengthOf(bytes: Chunk[Byte]): Either[FrameError, Int] =
     ascii(bytes).flatMap: text =>
@@ -76,9 +80,9 @@ object Frame:
           case None    => Left(FrameError.MissingLength)
       case line :: rest =>
         classify(line) match
-          case HeaderLine.Ignore => fold(rest, found)
+          case HeaderLine.Ignore     => fold(rest, found)
           case HeaderLine.Bad(error) => Left(error)
-          case HeaderLine.Length(n) =>
+          case HeaderLine.Length(n)  =>
             found match
               case Some(_) => Left(FrameError.BadLength)
               case None    => fold(rest, Some(n))
@@ -92,7 +96,7 @@ object Frame:
     val colon = line.indexOf(':')
     if colon <= 0 then HeaderLine.Bad(FrameError.Header)
     else
-      val name = line.take(colon).trim
+      val name  = line.take(colon).trim
       val value = line.drop(colon + 1).trim
       if name.equalsIgnoreCase("Content-Length") then
         digits(value) match

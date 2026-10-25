@@ -22,14 +22,16 @@ object AssemblySpec extends ZIOSpecDefault:
           repo  <- System.env("HISTOS_REPO")
           xdg   <- System.env("XDG_CACHE_HOME")
           home  <- System.property("user.home")
-          found <- ZIO.attemptBlocking((rooted(repo, "dist/histos.jar") ++ cachedLaunchers(xdg, home)).find(path => Files.isRegularFile(path)))
+          found <- ZIO.attemptBlocking(
+            (rooted(repo, "dist/histos.jar") ++ cachedLaunchers(xdg, home)).find(path => Files.isRegularFile(path))
+          )
           checked <- found match
-            case None => ZIO.succeed(assertTrue(found.nonEmpty))
+            case None      => ZIO.succeed(assertTrue(found.nonEmpty))
             case Some(jar) =>
               for
-                root <- temp
-                ran <- ZIO.attempt(exec(jar, root.resolve("work"), javaBin))
-                names <- ZIO.attempt(namesOf(jar))
+                root     <- temp
+                ran      <- ZIO.attempt(exec(jar, root.resolve("work"), javaBin))
+                names    <- ZIO.attempt(namesOf(jar))
                 manifest <- ZIO.attempt(manifestOf(jar))
               yield
                 val lines = ran.output.linesIterator.map(_.trim).filter(_.nonEmpty).toList
@@ -42,11 +44,13 @@ object AssemblySpec extends ZIOSpecDefault:
                   manifest.contains("Main-Class: histos.cli.Main"),
                 )
         yield checked
-    ,
   )
 
   private def rooted(repo: Option[String], name: String): List[Path] =
-    repo.filter(_.nonEmpty).map(Path.of(_)).toList.map(_.resolve(name)) ++ List(Path.of(name), Path.of("..").resolve(name))
+    repo.filter(_.nonEmpty).map(Path.of(_)).toList.map(_.resolve(name)) ++ List(
+      Path.of(name),
+      Path.of("..").resolve(name),
+    )
 
   /** The launcher `./histos` downloaded when `dist/histos.jar` is not in the checkout. */
   private def cachedLaunchers(xdg: Option[String], home: Option[String]): List[Path] =
@@ -69,15 +73,15 @@ object AssemblySpec extends ZIOSpecDefault:
   private def exec(jar: Path, work: Path, javaBin: Path): Ran =
     Files.createDirectories(work)
     val builder = new ProcessBuilder(javaBin.toString, Toolchain.NativeAccess, "-jar", jar.toString, "version")
-    val out = work.resolve("out")
+    val out     = work.resolve("out")
     builder.directory(work.toFile)
     builder.redirectOutput(out.toFile)
     builder.redirectError(work.resolve("err").toFile)
-    val process = builder.start()
+    val process  = builder.start()
     val finished = process.waitFor(120, TimeUnit.SECONDS)
     if !finished then process.destroyForcibly()
     val output = if Files.isRegularFile(out) then Files.readString(out) else ""
-    val err = work.resolve("err")
+    val err    = work.resolve("err")
     val errors = if Files.isRegularFile(err) then Files.readString(err) else ""
     Ran(finished, if finished then process.exitValue() else -1, output + errors)
 
@@ -90,7 +94,7 @@ object AssemblySpec extends ZIOSpecDefault:
     val zip = new ZipFile(path.toFile)
     try
       Option(zip.getEntry("META-INF/MANIFEST.MF")) match
-        case None => ""
+        case None        => ""
         case Some(entry) =>
           val in = zip.getInputStream(entry)
           try new String(in.readAllBytes(), utf8)
@@ -101,7 +105,7 @@ object AssemblySpec extends ZIOSpecDefault:
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-runtime"))): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -111,3 +115,4 @@ object AssemblySpec extends ZIOSpecDefault:
   private final case class Ran(finished: Boolean, code: Int, output: String)
 
   def spec = checks @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+end AssemblySpec

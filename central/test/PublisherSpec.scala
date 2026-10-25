@@ -45,11 +45,11 @@ object PublisherSpec extends ZIOSpecDefault:
       use: fixture =>
         ZIO.scoped:
           for
-            root <- directory
+            root      <- directory
             published <- send(root, fixture, Revision.Release(ReleaseVersion(fixture.number)), fixture.widget)
-            checked <- readLocal(published)
+            checked   <- readLocal(published)
             result = checked match
-              case None => assertTrue(s"$published" == "Published.Local")
+              case None                                      => assertTrue(s"$published" == "Published.Local")
               case Some((pom, stored, sidecar, jar, sha256)) =>
                 assertTrue(
                   jar.endsWith(Path.of("com", "example", "widget", "1.4.2", "widget-1.4.2.jar")),
@@ -65,8 +65,13 @@ object PublisherSpec extends ZIOSpecDefault:
       use: fixture =>
         ZIO.scoped:
           for
-            root <- directory
-            snapshot <- send(root, fixture, Revision.Snapshot(SnapshotCoordinate(fixture.number, fixture.commit.abbreviate)), fixture.widget)
+            root     <- directory
+            snapshot <- send(
+              root,
+              fixture,
+              Revision.Snapshot(SnapshotCoordinate(fixture.number, fixture.commit.abbreviate)),
+              fixture.widget,
+            )
             stated <- send(root, fixture, Revision.Manual(fixture.manual), fixture.app)
           yield assertTrue(
             jarOf(snapshot).exists(_.toString.contains("widget-1.4.2-1234567890ab-SNAPSHOT.jar")),
@@ -77,23 +82,35 @@ object PublisherSpec extends ZIOSpecDefault:
       use: fixture =>
         ZIO.scoped:
           for
-            root <- directory
+            root      <- directory
             published <- send(root, fixture, Revision.Pointer(SnapshotPointer(fixture.number)), fixture.widget)
           yield assertTrue(
-            jarOf(published).exists(path => path.toString.contains("widget-1.4.2-SNAPSHOT.jar") && !path.toString.contains("1234567890ab")),
+            jarOf(published).exists(path =>
+              path.toString.contains("widget-1.4.2-SNAPSHOT.jar") && !path.toString.contains("1234567890ab")
+            )
           )
     ,
     test("a dependency is written into the pom"):
       use: fixture =>
         ZIO.scoped:
           for
-            root <- directory
-            name <- ZIO.fromEither(ArtifactId.from("zio_3"))
+            root    <- directory
+            name    <- ZIO.fromEither(ArtifactId.from("zio_3"))
             version <- ZIO.fromEither(DependencyVersion.from("2.1.27"))
             dependency = MavenDependency(Organization("dev.zio"), name, version)
-            published <- ZIO.serviceWithZIO[Publisher](
-                           _.publish(Artifact(fixture.group, fixture.widget, Revision.Release(ReleaseVersion(fixture.number)), bytes, List(dependency)))
-                         ).provide(Publisher.local(root))
+            published <- ZIO
+              .serviceWithZIO[Publisher](
+                _.publish(
+                  Artifact(
+                    fixture.group,
+                    fixture.widget,
+                    Revision.Release(ReleaseVersion(fixture.number)),
+                    bytes,
+                    List(dependency),
+                  )
+                )
+              )
+              .provide(Publisher.local(root))
             pom <- pomOf(published)
           yield assertTrue(
             pom.contains("<artifactId>zio_3</artifactId>"),
@@ -105,9 +122,9 @@ object PublisherSpec extends ZIOSpecDefault:
       use: fixture =>
         ZIO.scoped:
           for
-            root <- directory
-            empty <- sendBytes(root, fixture, Chunk.empty).either
-            text <- sendBytes(root, fixture, Chunk.fromArray("not a jar".getBytes)).either
+            root   <- directory
+            empty  <- sendBytes(root, fixture, Chunk.empty).either
+            text   <- sendBytes(root, fixture, Chunk.fromArray("not a jar".getBytes)).either
             listed <- ZIO.attempt(Option(root.toFile.list()).map(_.toList).getOrElse(Nil))
           yield assertTrue(
             empty == Left(PublishError.EmptyJar),
@@ -115,15 +132,14 @@ object PublisherSpec extends ZIOSpecDefault:
             ArtifactId.from("..") == Left(ArtifactIdError.Bad("..")),
             DependencyVersion.from("../1") == Left(DependencyVersionError.Bad("../1")),
             listed.isEmpty,
-          )
-    ,
+          ),
   )
 
   private def directory: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-central"))): path =>
       ZIO.attempt {
         if Files.exists(path) then
-          val walk = Files.walk(path)
+          val walk  = Files.walk(path)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -151,12 +167,16 @@ object PublisherSpec extends ZIOSpecDefault:
       case Published.Snapshot(_, _) => ZIO.succeed(None)
 
   private def send(root: Path, fixture: Fixture, revision: Revision, name: ArtifactId) =
-    ZIO.serviceWithZIO[Publisher](_.publish(Artifact(fixture.group, name, revision, bytes)))
+    ZIO
+      .serviceWithZIO[Publisher](_.publish(Artifact(fixture.group, name, revision, bytes)))
       .provide(Publisher.local(root))
 
   private def sendBytes(root: Path, fixture: Fixture, body: Chunk[Byte]) =
-    ZIO.serviceWithZIO[Publisher](
-      _.publish(Artifact(fixture.group, fixture.widget, Revision.Release(ReleaseVersion(fixture.number)), body))
-    ).provide(Publisher.local(root))
+    ZIO
+      .serviceWithZIO[Publisher](
+        _.publish(Artifact(fixture.group, fixture.widget, Revision.Release(ReleaseVersion(fixture.number)), body))
+      )
+      .provide(Publisher.local(root))
 
   def spec = publish
+end PublisherSpec

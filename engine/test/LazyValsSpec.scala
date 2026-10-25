@@ -18,10 +18,10 @@ object LazyValsSpec extends ZIOSpecDefault:
     test("a 3.3 lazy val becomes a VarHandle and still initializes"):
       val old = oldClass
       LazyVals.catalog(List("demo/OldLazy.class" -> old)) match
-        case Left(error) => assertTrue(error.message.isEmpty)
+        case Left(error)    => assertTrue(error.message.isEmpty)
         case Right(handles) =>
           LazyVals.rewrite("demo/OldLazy.class", old, handles, getClass.getClassLoader) match
-            case Left(error) => assertTrue(error.message.isEmpty)
+            case Left(error)  => assertTrue(error.message.isEmpty)
             case Right(bytes) =>
               val initialized =
                 try
@@ -42,31 +42,39 @@ object LazyValsSpec extends ZIOSpecDefault:
     test("the assembly writes the rewritten class"):
       ZIO.scoped:
         for
-          root <- temp
+          root    <- temp
           classes <- ZIO.attempt {
-                       val dir = root.resolve("classes")
-                       val path = dir.resolve("demo").resolve("Entry.class")
-                       Files.createDirectories(path.getParent)
-                       Files.write(path, Array[Byte](1))
-                       dir
-                     }
+            val dir  = root.resolve("classes")
+            val path = dir.resolve("demo").resolve("Entry.class")
+            Files.createDirectories(path.getParent)
+            Files.write(path, Array[Byte](1))
+            dir
+          }
           dependency = root.resolve("old.jar")
           _ <- ZIO.attempt {
-                 val out = new ZipOutputStream(Files.newOutputStream(dependency))
-                 try
-                   out.putNextEntry(new ZipEntry("demo/OldLazy.class"))
-                   out.write(oldClass)
-                   out.closeEntry()
-                 finally out.close()
-               }
-          packed <- Assembly.write(List(classes), List(dependency), MainClass.trusted("demo.Entry"), root.resolve("app.jar"))
+            val out = new ZipOutputStream(Files.newOutputStream(dependency))
+            try
+              out.putNextEntry(new ZipEntry("demo/OldLazy.class"))
+              out.write(oldClass)
+              out.closeEntry()
+            finally out.close()
+          }
+          packed <- Assembly.write(
+            List(classes),
+            List(dependency),
+            MainClass.trusted("demo.Entry"),
+            root.resolve("app.jar"),
+          )
           bytes <- ZIO.attempt(entry(packed.path, "demo/OldLazy.class"))
-        yield assertTrue(bytes.nonEmpty && bytes.forall(body => !calls(body, "scala/runtime/LazyVals$", "getOffsetStatic")))
+        yield assertTrue(
+          bytes.nonEmpty && bytes.forall(body => !calls(body, "scala/runtime/LazyVals$", "getOffsetStatic"))
+        )
     ,
     test("the LazyVals runtime stays and a stray call is refused"):
-      val kept = LazyVals.rewrite("scala/runtime/LazyVals.class", forwarder, Map.empty, getClass.getClassLoader)
+      val kept        = LazyVals.rewrite("scala/runtime/LazyVals.class", forwarder, Map.empty, getClass.getClassLoader)
       val moduleBytes = runtimeModule
-      val keptModule = LazyVals.rewrite("scala/runtime/LazyVals$.class", moduleBytes, Map.empty, getClass.getClassLoader)
+      val keptModule  =
+        LazyVals.rewrite("scala/runtime/LazyVals$.class", moduleBytes, Map.empty, getClass.getClassLoader)
       val refused = LazyVals.rewrite("demo/Stray.class", stray, Map.empty, getClass.getClassLoader)
       assertTrue(
         kept.exists(bytes => calls(bytes, "scala/runtime/LazyVals$", "getOffsetStatic")),
@@ -75,14 +83,14 @@ object LazyValsSpec extends ZIOSpecDefault:
       )
     ,
     test("a companion offset can publish a VarHandle for the module's private field"):
-      val host = splitHost
+      val host   = splitHost
       val module = splitModule
       LazyVals.catalog(List("demo/Split.class" -> host, "demo/Split$.class" -> module)) match
-        case Left(error) => assertTrue(error.message.isEmpty)
+        case Left(error)    => assertTrue(error.message.isEmpty)
         case Right(handles) =>
-          val hostBytes = LazyVals.rewrite("demo/Split.class", host, handles, getClass.getClassLoader)
+          val hostBytes   = LazyVals.rewrite("demo/Split.class", host, handles, getClass.getClassLoader)
           val moduleBytes = LazyVals.rewrite("demo/Split$.class", module, handles, getClass.getClassLoader)
-          val loaded = (hostBytes, moduleBytes) match
+          val loaded      = (hostBytes, moduleBytes) match
             case (Right(hostBody), Right(moduleBody)) =>
               val classes = Map("demo.Split" -> hostBody, "demo.Split$" -> moduleBody)
               try
@@ -100,7 +108,7 @@ object LazyValsSpec extends ZIOSpecDefault:
             loaded.isEmpty,
             hostBytes.exists(body => calls(body, "java/lang/invoke/MethodHandles", "privateLookupIn")),
             hostBytes.exists(body => !calls(body, "scala/runtime/LazyVals$", "getOffsetStatic")),
-          )
+          ),
   )
 
   private def entry(path: Path, name: String): Option[Array[Byte]] =
@@ -116,7 +124,7 @@ object LazyValsSpec extends ZIOSpecDefault:
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-lazy"))): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -129,7 +137,7 @@ object LazyValsSpec extends ZIOSpecDefault:
     node.methods.asScala.exists: method =>
       method.instructions.iterator.asScala.exists:
         case call: MethodInsnNode => call.owner == owner && call.name == name
-        case _ => false
+        case _                    => false
 
   private def oldClass: Array[Byte] =
     val writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
@@ -141,8 +149,20 @@ object LazyValsSpec extends ZIOSpecDefault:
     clinit.visitFieldInsn(GETSTATIC, "scala/runtime/LazyVals$", "MODULE$", "Lscala/runtime/LazyVals$;")
     clinit.visitLdcInsn(Type.getObjectType("demo/OldLazy"))
     clinit.visitLdcInsn("value$lzy1")
-    clinit.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Class", "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;", false)
-    clinit.visitMethodInsn(INVOKEVIRTUAL, "scala/runtime/LazyVals$", "getOffsetStatic", "(Ljava/lang/reflect/Field;)J", false)
+    clinit.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "java/lang/Class",
+      "getDeclaredField",
+      "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+      false,
+    )
+    clinit.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "getOffsetStatic",
+      "(Ljava/lang/reflect/Field;)J",
+      false,
+    )
     clinit.visitFieldInsn(PUTSTATIC, "demo/OldLazy", "OFFSET$0", "J")
     clinit.visitInsn(RETURN)
     clinit.visitMaxs(0, 0)
@@ -160,8 +180,19 @@ object LazyValsSpec extends ZIOSpecDefault:
     body.visitVarInsn(ALOAD, 0)
     body.visitFieldInsn(GETSTATIC, "demo/OldLazy", "OFFSET$0", "J")
     body.visitInsn(ACONST_NULL)
-    body.visitFieldInsn(GETSTATIC, "scala/runtime/LazyVals$Evaluating$", "MODULE$", "Lscala/runtime/LazyVals$Evaluating$;")
-    body.visitMethodInsn(INVOKEVIRTUAL, "scala/runtime/LazyVals$", "objCAS", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", false)
+    body.visitFieldInsn(
+      GETSTATIC,
+      "scala/runtime/LazyVals$Evaluating$",
+      "MODULE$",
+      "Lscala/runtime/LazyVals$Evaluating$;",
+    )
+    body.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "objCAS",
+      "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+      false,
+    )
     body.visitInsn(POP)
     body.visitInsn(ACONST_NULL)
     body.visitInsn(ARETURN)
@@ -173,11 +204,18 @@ object LazyValsSpec extends ZIOSpecDefault:
   private def forwarder: Array[Byte] =
     val writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
     writer.visit(V1_8, ACC_PUBLIC | ACC_FINAL, "scala/runtime/LazyVals", null, "java/lang/Object", null)
-    val method = writer.visitMethod(ACC_PUBLIC | ACC_STATIC, "getOffsetStatic", "(Ljava/lang/reflect/Field;)J", null, null)
+    val method =
+      writer.visitMethod(ACC_PUBLIC | ACC_STATIC, "getOffsetStatic", "(Ljava/lang/reflect/Field;)J", null, null)
     method.visitCode()
     method.visitFieldInsn(GETSTATIC, "scala/runtime/LazyVals$", "MODULE$", "Lscala/runtime/LazyVals$;")
     method.visitVarInsn(ALOAD, 0)
-    method.visitMethodInsn(INVOKEVIRTUAL, "scala/runtime/LazyVals$", "getOffsetStatic", "(Ljava/lang/reflect/Field;)J", false)
+    method.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "getOffsetStatic",
+      "(Ljava/lang/reflect/Field;)J",
+      false,
+    )
     method.visitInsn(LRETURN)
     method.visitMaxs(0, 0)
     method.visitEnd()
@@ -205,8 +243,20 @@ object LazyValsSpec extends ZIOSpecDefault:
     clinit.visitFieldInsn(GETSTATIC, "scala/runtime/LazyVals$", "MODULE$", "Lscala/runtime/LazyVals$;")
     clinit.visitLdcInsn(Type.getObjectType("demo/Split$"))
     clinit.visitLdcInsn("value$lzy1")
-    clinit.visitMethodInsn(INVOKEVIRTUAL, "java/lang/Class", "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;", false)
-    clinit.visitMethodInsn(INVOKEVIRTUAL, "scala/runtime/LazyVals$", "getOffsetStatic", "(Ljava/lang/reflect/Field;)J", false)
+    clinit.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "java/lang/Class",
+      "getDeclaredField",
+      "(Ljava/lang/String;)Ljava/lang/reflect/Field;",
+      false,
+    )
+    clinit.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "getOffsetStatic",
+      "(Ljava/lang/reflect/Field;)J",
+      false,
+    )
     clinit.visitFieldInsn(PUTSTATIC, "demo/Split", "OFFSET$0", "J")
     clinit.visitInsn(RETURN)
     clinit.visitMaxs(0, 0)
@@ -232,7 +282,13 @@ object LazyValsSpec extends ZIOSpecDefault:
     touch.visitFieldInsn(GETSTATIC, "demo/Split", "OFFSET$0", "J")
     touch.visitInsn(ACONST_NULL)
     touch.visitLdcInsn("ok")
-    touch.visitMethodInsn(INVOKEVIRTUAL, "scala/runtime/LazyVals$", "objCAS", "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z", false)
+    touch.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "objCAS",
+      "(Ljava/lang/Object;JLjava/lang/Object;Ljava/lang/Object;)Z",
+      false,
+    )
     touch.visitInsn(POP)
     touch.visitInsn(RETURN)
     touch.visitMaxs(0, 0)
@@ -256,7 +312,13 @@ object LazyValsSpec extends ZIOSpecDefault:
     method.visitCode()
     method.visitFieldInsn(GETSTATIC, "scala/runtime/LazyVals$", "MODULE$", "Lscala/runtime/LazyVals$;")
     method.visitInsn(ACONST_NULL)
-    method.visitMethodInsn(INVOKEVIRTUAL, "scala/runtime/LazyVals$", "getOffsetStatic", "(Ljava/lang/reflect/Field;)J", false)
+    method.visitMethodInsn(
+      INVOKEVIRTUAL,
+      "scala/runtime/LazyVals$",
+      "getOffsetStatic",
+      "(Ljava/lang/reflect/Field;)J",
+      false,
+    )
     method.visitInsn(POP2)
     method.visitInsn(RETURN)
     method.visitMaxs(0, 0)
@@ -265,3 +327,4 @@ object LazyValsSpec extends ZIOSpecDefault:
     writer.toByteArray
 
   def spec = rewritten
+end LazyValsSpec

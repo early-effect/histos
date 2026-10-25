@@ -20,6 +20,7 @@ object NativeVersion:
   extension (version: NativeVersion) def value: String = version
 
   @publicInBinary private[histos] def trusted(raw: String): NativeVersion = raw
+end NativeVersion
 
 enum NativeVersionError:
   case Empty
@@ -28,3 +29,4 @@ enum NativeVersionError:
   def message: String = this match
     case Empty    => "a Scala Native version is not empty"
     case Bad(raw) => s"'$raw' is not a Scala Native version (major.minor.patch)"
+end NativeVersionError

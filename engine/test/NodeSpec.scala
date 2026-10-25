@@ -19,17 +19,17 @@ object NodeSpec extends ZIOSpecDefault:
       assertTrue(
         NodeToolchain.Floor.value == "25",
         newer.exists(_.atLeast(NodeToolchain.Floor)),
-        older.exists(!_.atLeast(NodeToolchain.Floor))
+        older.exists(!_.atLeast(NodeToolchain.Floor)),
       )
     ,
     test("a present Node 25 is accepted and nothing is fetched"):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-node-floor")
-          home <- node(root.resolve("home"), "v25.2.0")
+          root      <- Workspace.work("histos-node-floor")
+          home      <- node(root.resolve("home"), "v25.2.0")
           canonical <- ZIO.attemptBlocking(home.toRealPath().normalize)
-          found <- NodeToolchain.resolve(onPath(root, home))
-          fetched <- ZIO.attemptBlocking(
+          found     <- NodeToolchain.resolve(onPath(root, home))
+          fetched   <- ZIO.attemptBlocking(
             Files.exists(root.resolve("cache").resolve("nodes"))
           )
         yield assertTrue(
@@ -37,34 +37,32 @@ object NodeSpec extends ZIOSpecDefault:
           (found.identity match
             case RuntimeIdentity.Local(path, _) => path == canonical
           ),
-          !fetched
+          !fetched,
         )
     ,
     test("Node 22 fails with the floor and the found version"):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-node-old")
-          home <- node(root.resolve("home"), "v22.14.0")
+          root      <- Workspace.work("histos-node-old")
+          home      <- node(root.resolve("home"), "v22.14.0")
           canonical <- ZIO.attemptBlocking(home.toRealPath().normalize)
-          result <- NodeToolchain.resolve(onPath(root, home)).either
-          version <- ZIO.fromEither(NodeVersion.from("22.14.0"))
+          result    <- NodeToolchain.resolve(onPath(root, home)).either
+          version   <- ZIO.fromEither(NodeVersion.from("22.14.0"))
         yield assertTrue(
           result == Left(
             NodeMiss.TooOld(NodeToolchain.Floor, version, canonical)
           ),
-          result.left.exists(error =>
-            error.message.contains("25") && error.message.contains("22.14.0")
-          )
+          result.left.exists(error => error.message.contains("25") && error.message.contains("22.14.0")),
         )
     ,
     test("a missing binary fails naming the floor"):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-node-absent")
+          root   <- Workspace.work("histos-node-absent")
           result <- NodeToolchain.resolve(machine(root, Map.empty)).either
         yield assertTrue(
           result == Left(NodeMiss.Absent(NodeToolchain.Floor)),
-          result.left.exists(_.message.contains("25"))
+          result.left.exists(_.message.contains("25")),
         )
     ,
     test("node.local below the floor does not fall through"):
@@ -72,10 +70,10 @@ object NodeSpec extends ZIOSpecDefault:
         for
           root <- Workspace.work("histos-node-local")
           good <- node(root.resolve("good"), "v25.2.0")
-          bad <- node(root.resolve("bad"), "v22.14.0")
-          _ <- Workspace.writeString(
+          bad  <- node(root.resolve("bad"), "v22.14.0")
+          _    <- Workspace.writeString(
             root.resolve(".histos/node.local"),
-            bad.toString + "\n"
+            bad.toString + "\n",
           )
           result <- NodeToolchain
             .resolve(onPath(root, good))
@@ -83,7 +81,7 @@ object NodeSpec extends ZIOSpecDefault:
           version <- ZIO.fromEither(NodeVersion.from("22.14.0"))
         yield assertTrue(
           result == Left(NodeMiss.TooOld(NodeToolchain.Floor, version, bad))
-        )
+        ),
   ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem
 
   private def machine(root: Path, env: Map[String, String]): Machine =
@@ -95,7 +93,7 @@ object NodeSpec extends ZIOSpecDefault:
       root.resolve("cache"),
       root,
       None,
-      NativeOrigin.Central
+      NativeOrigin.Central,
     )
 
   private def onPath(root: Path, home: Path): Machine =
@@ -107,14 +105,15 @@ object NodeSpec extends ZIOSpecDefault:
       _ <- Workspace.createDirectories(binary.getParent)
       _ <- Workspace.writeString(
         binary,
-        s"#!/bin/sh\nprintf '%s\\n' '$version'\n"
+        s"#!/bin/sh\nprintf '%s\\n' '$version'\n",
       )
       _ <- ZIO
         .attemptBlocking(
           Files.setPosixFilePermissions(
             binary,
-            PosixFilePermissions.fromString("rwxr-xr-x")
+            PosixFilePermissions.fromString("rwxr-xr-x"),
           )
         )
         .mapError(_ => IoFailure(binary, IoFault.Write))
     yield home
+end NodeSpec

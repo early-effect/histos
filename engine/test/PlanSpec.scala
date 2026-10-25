@@ -21,7 +21,7 @@ import histos.{
   ScalaVersions,
   SourcePos,
   aggregate,
-  module
+  module,
 }
 
 import java.nio.file.{Files, Path}
@@ -34,8 +34,8 @@ import zio.test.*
 
 object PlanSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
-  private val older = ScalaVersion("3.8.0")
-  private val at = SourcePos("histos.scala", 1, 1)
+  private val older  = ScalaVersion("3.8.0")
+  private val at     = SourcePos("histos.scala", 1, 1)
 
   private val plans = suite("compile preview")(
     test(
@@ -44,15 +44,15 @@ object PlanSpec extends ZIOSpecDefault:
       ZIO.scoped {
         for
           repo <- keep("histos-preview")
-          _ <- write(repo, "core/src/main/scala/Core.scala", "object Core")
-          _ <- write(repo, "app/src/main/scala/App.scala", "object App")
-          _ <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
-          _ <- write(repo, "idle/src/main/scala/Idle.scala", "object Idle")
+          _    <- write(repo, "core/src/main/scala/Core.scala", "object Core")
+          _    <- write(repo, "app/src/main/scala/App.scala", "object App")
+          _    <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
+          _    <- write(repo, "idle/src/main/scala/Idle.scala", "object Idle")
           core = module("core", Jvm)(scala3)
-          app = module("app", Jvm)(scala3).dependsOn(core)
+          app  = module("app", Jvm)(scala3).dependsOn(core)
           idle = module("idle", Jvm)(scala3)
           graph <- ZIO.fromEither(Projects(core, app, idle))
-          plan <- Plan.compile(repo, graph, List("app"))
+          plan  <- Plan.compile(repo, graph, List("app"))
           text = Plan.render(repo, plan)
           shown <- Plan.show(repo, graph, List("app"))
         yield assertTrue(
@@ -69,7 +69,7 @@ object PlanSpec extends ZIOSpecDefault:
           plan.units.collect { case PlanUnit.NotSelected(name) =>
             name.value
           } == List("idle"),
-          !Files.exists(repo.resolve(".histos"))
+          !Files.exists(repo.resolve(".histos")),
         )
       }
     ,
@@ -80,11 +80,11 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo <- keep("histos-preview-cells")
           core = module("core", Jvm)(scala3)
-          app = module("app", Native, Js, Jvm)(scala3, older)
+          app  = module("app", Native, Js, Jvm)(scala3, older)
             .dependsOn(Jvm)(core)
             .clang(ClangMajor(21))
           graph <- ZIO.fromEither(Projects(core, app))
-          plan <- Plan.compile(repo, graph, List("app"))
+          plan  <- Plan.compile(repo, graph, List("app"))
         yield assertTrue(
           plan.staleness == FileStaleness.Unknown,
           shapes(plan) == List(
@@ -94,13 +94,13 @@ object PlanSpec extends ZIOSpecDefault:
             ("app", "3.8.0", "native", Reason.Selected, Nil),
             ("app", "3.10.0", "jvm", Reason.Selected, List("core")),
             ("app", "3.10.0", "js", Reason.Selected, Nil),
-            ("app", "3.10.0", "native", Reason.Selected, Nil)
+            ("app", "3.10.0", "native", Reason.Selected, Nil),
           ),
           plan.units.forall:
             case chosen: PlanUnit.Chosen => chosen.sources.isEmpty
             case PlanUnit.NotSelected(_) => true
           ,
-          !Files.exists(repo.resolve(".histos"))
+          !Files.exists(repo.resolve(".histos")),
         )
       }
     ,
@@ -109,12 +109,12 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo <- keep("histos-preview-all")
           core = module("core", Jvm)(scala3)
-          app = module("app", Jvm)(scala3).dependsOn(core)
+          app  = module("app", Jvm)(scala3).dependsOn(core)
           graph <- ZIO.fromEither(Projects(core, app))
-          plan <- Plan.compile(repo, graph, Nil)
+          plan  <- Plan.compile(repo, graph, Nil)
         yield assertTrue(
           shapes(plan).map(_._4) == List(Reason.Selected, Reason.Selected),
-          shapes(plan).map(_._5) == List(Nil, List("core"))
+          shapes(plan).map(_._5) == List(Nil, List("core")),
         )
       }
     ,
@@ -123,14 +123,14 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo <- keep("histos-preview-agg")
           core = module("core", Jvm)(scala3)
-          app = module("app", Jvm)(scala3).dependsOn(core)
+          app  = module("app", Jvm)(scala3).dependsOn(core)
           root = aggregate("root", core, app)
           graph <- ZIO.fromEither(Projects(root, core, app))
-          plan <- Plan.compile(repo, graph, List("root"))
+          plan  <- Plan.compile(repo, graph, List("root"))
         yield assertTrue(
           shapes(plan) == List(
             ("core", "3.10.0", "jvm", Reason.Selected, Nil),
-            ("app", "3.10.0", "jvm", Reason.Selected, List("core"))
+            ("app", "3.10.0", "jvm", Reason.Selected, List("core")),
           )
         )
       }
@@ -141,15 +141,15 @@ object PlanSpec extends ZIOSpecDefault:
       ZIO.scoped {
         for
           repo <- keep("histos-preview-src")
-          _ <- write(repo, "src/main/scala/Shared.scala", "object Shared")
+          _    <- write(repo, "src/main/scala/Shared.scala", "object Shared")
           only = module("only", Jvm)(scala3)
-          alone <- ZIO.fromEither(Projects(only))
+          alone  <- ZIO.fromEither(Projects(only))
           shared <- Plan.compile(repo, alone, Nil)
-          _ <- write(repo, "only/src/main/scala/Own.scala", "object Own")
-          named <- Plan.compile(repo, alone, Nil)
+          _      <- write(repo, "only/src/main/scala/Own.scala", "object Own")
+          named  <- Plan.compile(repo, alone, Nil)
         yield assertTrue(
           relativeSources(repo, shared) == List("src/main/scala/Shared.scala"),
-          relativeSources(repo, named) == List("only/src/main/scala/Own.scala")
+          relativeSources(repo, named) == List("only/src/main/scala/Own.scala"),
         )
       }
     ,
@@ -158,53 +158,53 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo <- keep("histos-preview-names")
           core = module("core", Jvm)(scala3)
-          graph <- ZIO.fromEither(Projects(core))
-          missing <- ZIO.fromEither(ProjectName.from("missing"))
-          coreName <- ZIO.fromEither(ProjectName.from("core"))
-          unknown <- Plan.compile(repo, graph, List("missing")).either
+          graph     <- ZIO.fromEither(Projects(core))
+          missing   <- ZIO.fromEither(ProjectName.from("missing"))
+          coreName  <- ZIO.fromEither(ProjectName.from("core"))
+          unknown   <- Plan.compile(repo, graph, List("missing")).either
           duplicate <- Plan.compile(repo, graph, List("core", "core")).either
-          bad <- Plan.compile(repo, graph, List("1core")).either
+          bad       <- Plan.compile(repo, graph, List("1core")).either
         yield assertTrue(
           unknown == Left(PreviewError.Target(CiError.Unknown(missing))),
           duplicate == Left(PreviewError.Target(CiError.Duplicate(coreName))),
-          bad == Left(PreviewError.Target(CiError.BadName("1core")))
+          bad == Left(PreviewError.Target(CiError.BadName("1core"))),
         )
       }
     ,
     test("a cycle is a cycle error and writes nothing"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-cycle")
-          left <- ZIO.fromEither(ProjectName.from("left"))
+          repo  <- keep("histos-preview-cycle")
+          left  <- ZIO.fromEither(ProjectName.from("left"))
           right <- ZIO.fromEither(ProjectName.from("right"))
           graph = ProjectGraph.trusted(
             List(
               cell(left, List(right)),
-              cell(right, List(left))
+              cell(right, List(left)),
             )
           )
           planned <- Plan.compile(repo, graph, List("left")).either
         yield assertTrue(
           planned == Left(PreviewError.Cycle(left)),
-          !Files.exists(repo.resolve(".histos"))
+          !Files.exists(repo.resolve(".histos")),
         )
-      }
+      },
   )
 
   private val asked = suite("the other previews")(
     test("test lists test sources in numeric Scala order and writes nothing"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-test")
-          _ <- write(repo, "core/src/main/scala/Core.scala", "object Core")
-          _ <- write(repo, "core/src/test/scala/CoreSpec.scala", "object CoreSpec")
-          _ <- write(repo, "app/src/main/scala/App.scala", "object App")
-          _ <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
+          repo    <- keep("histos-preview-test")
+          _       <- write(repo, "core/src/main/scala/Core.scala", "object Core")
+          _       <- write(repo, "core/src/test/scala/CoreSpec.scala", "object CoreSpec")
+          _       <- write(repo, "app/src/main/scala/App.scala", "object App")
+          _       <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
           planted <- plant(repo)
           core = module("core", Jvm)(scala3)
-          app = module("app", Jvm)(older, scala3).dependsOn(core)
+          app  = module("app", Jvm)(older, scala3).dependsOn(core)
           graph <- ZIO.fromEither(Projects(core, app))
-          plan <- Plan.test(repo, graph, List("app"))
+          plan  <- Plan.test(repo, graph, List("app"))
           text = Plan.renderTest(repo, plan)
           kept <- same(planted)
         yield assertTrue(
@@ -217,25 +217,25 @@ object PlanSpec extends ZIOSpecDefault:
           lines(plan.units) == List(
             ("core", "3.10.0", "jvm", Reason.Upstream, List()),
             ("app", "3.8.0", "jvm", Reason.Selected, List("core")),
-            ("app", "3.10.0", "jvm", Reason.Selected, List("core"))
+            ("app", "3.10.0", "jvm", Reason.Selected, List("core")),
           ),
           shownSources(repo, plan.units) == List(
             "core/src/test/scala/CoreSpec.scala",
             "app/src/test/scala/AppSpec.scala",
-            "app/src/test/scala/AppSpec.scala"
+            "app/src/test/scala/AppSpec.scala",
           ),
           kept,
-          !Files.exists(repo.resolve(".histos").resolve("test-classes"))
+          !Files.exists(repo.resolve(".histos").resolve("test-classes")),
         )
       }
     ,
     test("publish names the modules and the upstream, and writes no jar"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-publish")
+          repo    <- keep("histos-preview-publish")
           planted <- plant(repo)
-          graph <- ZIO.fromEither(manualLibrary)
-          plan <- Plan.publish(repo, graph, List("app"), Map.empty)
+          graph   <- ZIO.fromEither(manualLibrary)
+          plan    <- Plan.publish(repo, graph, List("app"), Map.empty)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
@@ -245,18 +245,18 @@ object PlanSpec extends ZIOSpecDefault:
               |core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,
-          !Files.exists(repo.resolve(".histos").resolve("jars"))
+          !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
       }
     ,
     test("a held ship stays held and an unreleased ship names both revisions"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-hold")
+          repo    <- keep("histos-preview-hold")
           planted <- plant(repo)
-          _ <- write(repo, ".histos/releases", "libs matches\n")
-          graph <- ZIO.fromEither(twoShips)
-          plan <- Plan.publish(repo, graph, Nil, snapshotEnv)
+          _       <- write(repo, ".histos/releases", "libs matches\n")
+          graph   <- ZIO.fromEither(twoShips)
+          plan    <- Plan.publish(repo, graph, Nil, snapshotEnv)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
@@ -266,18 +266,18 @@ object PlanSpec extends ZIOSpecDefault:
               |app client 2.0.0-SNAPSHOT selected
               |held libs 1.4.2-ci already-released""".stripMargin,
           kept,
-          !Files.exists(repo.resolve(".histos").resolve("jars"))
+          !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
       }
     ,
     test("a ship that only matches is held and is not a publish line"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-only-hold")
+          repo    <- keep("histos-preview-only-hold")
           planted <- plant(repo)
-          _ <- write(repo, ".histos/releases", "libs matches\n")
-          graph <- ZIO.fromEither(heldShip)
-          plan <- Plan.publish(repo, graph, Nil, snapshotEnv)
+          _       <- write(repo, ".histos/releases", "libs matches\n")
+          graph   <- ZIO.fromEither(heldShip)
+          plan    <- Plan.publish(repo, graph, Nil, snapshotEnv)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
@@ -285,17 +285,17 @@ object PlanSpec extends ZIOSpecDefault:
             """file-level staleness: unknown
               |held libs 1.4.2-ci already-released""".stripMargin,
           !text.contains("SNAPSHOT"),
-          kept
+          kept,
         )
       }
     ,
     test("development is not published and is not called held"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-develop")
+          repo    <- keep("histos-preview-develop")
           planted <- plant(repo)
-          graph <- ZIO.fromEither(developShip)
-          plan <- Plan.publish(repo, graph, Nil, Map.empty)
+          graph   <- ZIO.fromEither(developShip)
+          plan    <- Plan.publish(repo, graph, Nil, Map.empty)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
@@ -304,18 +304,18 @@ object PlanSpec extends ZIOSpecDefault:
               |libs 1.0.0-ci not published""".stripMargin,
           !text.contains("held"),
           kept,
-          !Files.exists(repo.resolve(".histos").resolve("jars"))
+          !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
       }
     ,
     test("a snapshot with no registry is refused, not held"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-refused")
+          repo    <- keep("histos-preview-refused")
           planted <- plant(repo)
-          graph <- ZIO.fromEither(heldShip)
+          graph   <- ZIO.fromEither(heldShip)
           refused <- Plan.publish(repo, graph, Nil, snapshotEnv).either
-          kept <- same(planted)
+          kept    <- same(planted)
         yield assertTrue(
           refused match
             case Left(
@@ -326,39 +326,39 @@ object PlanSpec extends ZIOSpecDefault:
               true
             case _ => false
           ,
-          kept
+          kept,
         )
       }
     ,
     test("a module outside the ship is not published"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-not-ship")
+          repo    <- keep("histos-preview-not-ship")
           planted <- plant(repo)
-          idle <- ZIO.fromEither(ProjectName.from("idle"))
-          graph <- ZIO.fromEither(withIdle)
+          idle    <- ZIO.fromEither(ProjectName.from("idle"))
+          graph   <- ZIO.fromEither(withIdle)
           refused <- Plan.publish(repo, graph, List("idle"), Map.empty).either
-          kept <- same(planted)
+          kept    <- same(planted)
         yield assertTrue(
           refused == Left(
             PreviewError.Publish(LocalPublishError.NotPublished(idle))
           ),
-          kept
+          kept,
         )
       }
     ,
     test("an empty clean names every product root and does not delete"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-clean")
+          repo    <- keep("histos-preview-clean")
           planted <- plant(repo)
-          _ <- write(repo, ".histos/dependencies.lock", "lock")
-          _ <- write(repo, ".histos/server.json", "{}")
-          empty <- ZIO.fromEither(Projects())
-          plan <- Plan.clean(repo, empty, Nil)
+          _       <- write(repo, ".histos/dependencies.lock", "lock")
+          _       <- write(repo, ".histos/server.json", "{}")
+          empty   <- ZIO.fromEither(Projects())
+          plan    <- Plan.clean(repo, empty, Nil)
           text = Plan.renderClean(repo, plan)
           kept <- same(planted)
-          lock = Files.isRegularFile(repo.resolve(".histos/dependencies.lock"))
+          lock   = Files.isRegularFile(repo.resolve(".histos/dependencies.lock"))
           server = Files.isRegularFile(repo.resolve(".histos/server.json"))
         yield assertTrue(
           plan == Plan.cleanAll(repo),
@@ -369,19 +369,19 @@ object PlanSpec extends ZIOSpecDefault:
           !text.contains("server.json"),
           !text.contains("dependencies.lock"),
           !text.contains("assembly"),
-          kept && lock && server
+          kept && lock && server,
         )
       }
     ,
     test("a named clean lists that module and leaves the class file"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-clean-named")
+          repo    <- keep("histos-preview-clean-named")
           planted <- plant(repo)
-          app = module("app", Jvm)(scala3)
+          app  = module("app", Jvm)(scala3)
           idle = module("idle", Jvm)(scala3)
           graph <- ZIO.fromEither(Projects(app, idle))
-          plan <- Plan.clean(repo, graph, List("app"))
+          plan  <- Plan.clean(repo, graph, List("app"))
           text = Plan.renderClean(repo, plan)
           kept <- same(planted)
         yield assertTrue(
@@ -389,14 +389,14 @@ object PlanSpec extends ZIOSpecDefault:
           !text.contains("provider"),
           !text.contains("idle"),
           text.startsWith("file-level staleness: unknown"),
-          kept
+          kept,
         )
       }
     ,
     test("cleanFull names the roots and the forgotten store, and deletes neither"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-clean-full")
+          repo    <- keep("histos-preview-clean-full")
           planted <- plant(repo)
           plan = Plan.cleanFull(repo)
           text = Plan.renderClean(repo, plan)
@@ -410,28 +410,28 @@ object PlanSpec extends ZIOSpecDefault:
           text.endsWith(sentence),
           text.linesIterator.count(_ == sentence) == 1,
           !text.contains("byte"),
-          kept
+          kept,
         )
       }
     ,
     test("run names the module, the platform, and the upstreams"):
       ZIO.scoped {
         for
-          repo <- keep("histos-preview-run")
-          planted <- plant(repo)
-          graph <- ZIO.fromEither(runners)
-          appName <- ZIO.fromEither(ProjectName.from("app"))
+          repo     <- keep("histos-preview-run")
+          planted  <- plant(repo)
+          graph    <- ZIO.fromEither(runners)
+          appName  <- ZIO.fromEither(ProjectName.from("app"))
           idleName <- ZIO.fromEither(ProjectName.from("idle"))
           rootName <- ZIO.fromEither(ProjectName.from("root"))
           planned = Plan.run(graph, "app", None)
-          chosen = Plan.run(graph, "app", Some(Jvm))
+          chosen  = Plan.run(graph, "app", Some(Jvm))
           missing = Plan.run(graph, "missing", None)
-          wide = Plan.run(graph, "wide", None)
+          wide    = Plan.run(graph, "wide", None)
           unbuilt = Plan.run(graph, "app", Some(Native))
-          idle = Plan.run(graph, "idle", None)
-          root = Plan.run(graph, "root", None)
+          idle    = Plan.run(graph, "idle", None)
+          root    = Plan.run(graph, "root", None)
           inspect = Plan.run(graph, "inspect", None)
-          bad = Plan.run(graph, "inspect", Some(Jvm))
+          bad     = Plan.run(graph, "inspect", Some(Jvm))
           kept <- same(planted)
           text = planned.map(Plan.renderRun)
         yield assertTrue(
@@ -456,9 +456,9 @@ object PlanSpec extends ZIOSpecDefault:
               RunMiss.BadId("run inspect does not take a platform")
             )
           ),
-          kept
+          kept,
         )
-      }
+      },
   )
 
   private def lines(units: List[PlanUnit]): List[(String, String, String, Reason, List[String])] =
@@ -468,7 +468,7 @@ object PlanSpec extends ZIOSpecDefault:
         chosen.version.value,
         chosen.platform.token,
         chosen.reason,
-        chosen.upstreams.map(_.value)
+        chosen.upstreams.map(_.value),
       )
     }
 
@@ -486,7 +486,7 @@ object PlanSpec extends ZIOSpecDefault:
 
   private def wideMatch(
       graph: ProjectGraph,
-      result: Either[PreviewError, RunPlan]
+      result: Either[PreviewError, RunPlan],
   ): Boolean =
     graph.projects.collect {
       case item: Module if item.name.value == "wide" =>
@@ -499,46 +499,46 @@ object PlanSpec extends ZIOSpecDefault:
       case _ => false
 
   private val snapshotEnv = Map(
-    Session.Key -> "snapshot",
-    Session.ShaKey -> "1234567890abcdef1234567890abcdef12345678",
-    Session.BranchKey -> "default"
+    Session.Key       -> "snapshot",
+    Session.ShaKey    -> "1234567890abcdef1234567890abcdef12345678",
+    Session.BranchKey -> "default",
   )
 
   private def manualLibrary: Either[histos.BuildError, ProjectGraph] =
     val core = module("core", Jvm)(scala3)
-    val app = module("app", Jvm)(scala3).dependsOn(core)
+    val app  = module("app", Jvm)(scala3).dependsOn(core)
     Projects.organization(Organization("com.example"))(
       histos.ships(
         histos.manual("libs", ManualVersion("1.0.0"))(core, app)
       ),
       core,
-      app
+      app,
     )
 
   private def twoShips: Either[histos.BuildError, ProjectGraph] =
     val core = module("core", Jvm)(scala3)
-    val app = module("app", Jvm)(scala3)
+    val app  = module("app", Jvm)(scala3)
     Projects.organization(Organization("com.example"))(
       histos.ships(
         histos.ship("libs", ShipNumber("1.4.2"))(core),
-        histos.ship("client", ShipNumber("2.0.0"))(app)
+        histos.ship("client", ShipNumber("2.0.0"))(app),
       ),
       core,
-      app
+      app,
     )
 
   private def heldShip: Either[histos.BuildError, ProjectGraph] =
     val core = module("core", Jvm)(scala3)
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.ship("libs", ShipNumber("1.4.2"))(core)),
-      core
+      core,
     )
 
   private def developShip: Either[histos.BuildError, ProjectGraph] =
     val core = module("core", Jvm)(scala3)
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.ship("libs", ShipNumber("1.0.0"))(core)),
-      core
+      core,
     )
 
   private def withIdle: Either[histos.BuildError, ProjectGraph] =
@@ -547,12 +547,12 @@ object PlanSpec extends ZIOSpecDefault:
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)),
       core,
-      idle
+      idle,
     )
 
   private def runners: Either[histos.BuildError, ProjectGraph] =
     val core = module("core", Jvm)(scala3)
-    val app = module("app", Jvm)(scala3)
+    val app  = module("app", Jvm)(scala3)
       .dependsOn(core)
       .main(MainClass("demo.App"))
     val wide = module("wide", Jvm, Js)(scala3).main(MainClass("demo.App"))
@@ -597,7 +597,7 @@ object PlanSpec extends ZIOSpecDefault:
       ScalaVersions(scala3, Nil),
       Nil,
       upstream.map(item => ProjectDep(item, None)),
-      at
+      at,
     )
 
   private def keep(prefix: String): ZIO[Scope, Throwable, Path] =
@@ -606,7 +606,7 @@ object PlanSpec extends ZIOSpecDefault:
   private def write(
       root: Path,
       name: String,
-      text: String
+      text: String,
   ): ZIO[Any, Throwable, Unit] =
     ZIO.attempt {
       val path = root.resolve(name)
@@ -617,7 +617,7 @@ object PlanSpec extends ZIOSpecDefault:
   private def delete(root: Path): ZIO[Any, Nothing, Unit] =
     ZIO.attempt {
       if Files.exists(root) then
-        val walk = Files.walk(root)
+        val walk  = Files.walk(root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()
@@ -628,3 +628,4 @@ object PlanSpec extends ZIOSpecDefault:
     }.ignore
 
   def spec = suite("preview plans")(plans, asked)
+end PlanSpec

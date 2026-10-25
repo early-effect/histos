@@ -16,11 +16,11 @@ object QuickLineSpec extends ZIOSpecDefault:
               module,
               ScalaVersion("3.10.0"),
               Platform.Jvm,
-              "demo.Foo"
+              "demo.Foo",
             )
           assertTrue(
             line.contains("demo.Foo"),
             !line.contains("skipped"),
-            line == s"${module.value} 3.10.0 jvm demo.Foo cached"
+            line == s"${module.value} 3.10.0 jvm demo.Foo cached",
           )
   )

@@ -11,7 +11,7 @@ import histos.zinc.{
   CompileToolchain,
   JvmCompile,
 
-  ScalacFlags
+  ScalacFlags,
 }
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
 
@@ -29,24 +29,23 @@ final case class JsRunRequest(
     work: Path,
     jdk: JdkRuntime,
     processEnv: Map[String, String],
-    node: NodeBinary
+    node: NodeBinary,
 )
 
-/** Start a linked script in the module's JavaScript environment. The engine
-  * does not load a `JSEnv`.
+/** Start a linked script in the module's JavaScript environment. The engine does not load a `JSEnv`.
   */
 object JsRun:
   private val SuiteMain: String = "subprocess.JsRun"
 
   def start(request: JsRunRequest): ZIO[LockedTools, JsRunError, ChildRequest] =
     val JsRunRequest(env, kind, script, work, jdk, processEnv, node) = request
-    val bridgeRoot = work.resolve("js-run")
-    val classes = bridgeRoot.resolve("classes")
-    val source =
+    val bridgeRoot                                                   = work.resolve("js-run")
+    val classes                                                      = bridgeRoot.resolve("classes")
+    val source                                                       =
       bridgeRoot.resolve("src").resolve("subprocess").resolve("JsRun.scala")
     val child = work.resolve("js-run-child")
     for
-      view <- ZIO.service[LockedTools]
+      view  <- ZIO.service[LockedTools]
       tools <- view
         .materialize(
           histos.js.JsRequests.environment(env, view.catalog, view.repositories)
@@ -61,13 +60,13 @@ object JsRun:
               histos.js.JsRequests.compiler(env, view.catalog),
               histos.Platform.Jvm,
               jdk,
-              ScalacFlags.empty
+              ScalacFlags.empty,
             ),
             List(source),
             tools,
             classes,
             bridgeRoot.resolve("analysis"),
-            Nil
+            Nil,
           )
         )
         .mapError(JsRunError.Compile(_))
@@ -80,17 +79,16 @@ object JsRun:
       child,
       processEnv ++ nodeEnv(env, node) ++ Map(
         "JS_SCRIPT" -> script.toAbsolutePath.toString,
-        "JS_MODULE" -> kind.token
-      )
+        "JS_MODULE" -> kind.token,
+      ),
     )
 
-  /** The child hands the chosen `node` to its `JSEnv`. Chekhov's Playwright
-    * driver reads `PLAYWRIGHT_NODEJS_PATH`.
+  /** The child hands the chosen `node` to its `JSEnv`. Chekhov's Playwright driver reads `PLAYWRIGHT_NODEJS_PATH`.
     */
   private[js] def nodeEnv(env: JsEnv, node: NodeBinary): Map[String, String] =
     env match
       case JsEnv.Node | JsEnv.Jsdom => Map("JS_NODE" -> node.path.toString)
-      case JsEnv.Firefox => Map("PLAYWRIGHT_NODEJS_PATH" -> node.path.toString)
+      case JsEnv.Firefox            => Map("PLAYWRIGHT_NODEJS_PATH" -> node.path.toString)
 
   /** The expression that builds the `JSEnv` on the `node` in `JS_NODE`. */
   private[js] def envExpr(env: JsEnv): String = env match
@@ -146,6 +144,7 @@ object JsRun:
 
   private def empty(path: Path): IO[JsRunError, Unit] =
     Workspace.recreate(path).mapError(_ => JsRunError.Write(path)).unit
+end JsRun
 
 enum JsRunError:
   case Resolved(error: ResolveError)
@@ -158,3 +157,4 @@ enum JsRunError:
     case Unavailable     => "the JavaScript environment could not be fetched"
     case Compile(error)  => error.message
     case Write(path)     => s"could not write $path"
+end JsRunError

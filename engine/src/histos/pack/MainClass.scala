@@ -17,6 +17,7 @@ object MainClass:
   private[histos] def trusted(raw: String): MainClass = raw
 
   extension (name: MainClass) def binary: String = name
+end MainClass
 
 enum MainClassError:
   case Empty
@@ -25,3 +26,4 @@ enum MainClassError:
   def message: String = this match
     case Empty    => "a main class is not empty"
     case Bad(raw) => s"'$raw' is not a main class"
+end MainClassError

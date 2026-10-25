@@ -10,18 +10,18 @@ final case class ProviderNote(framework: String, classes: Path, patterns: List[S
     val indexed = patterns.zipWithIndex.map: (pattern, index) =>
       s"${ProviderRunner.PatternPrefix}$index" -> pattern.value
     Map(
-      ProviderRunner.Framework -> framework,
-      ProviderRunner.Classes -> classes.toAbsolutePath.toString,
+      ProviderRunner.Framework    -> framework,
+      ProviderRunner.Classes      -> classes.toAbsolutePath.toString,
       ProviderRunner.PatternCount -> patterns.length.toString,
     ) ++ indexed
 
 /** The child that loads an sbt `Framework`. The engine does not. */
 object ProviderRunner:
-  private[testrun] val Framework: String = "HISTOS_FRAMEWORK"
-  private[testrun] val Classes: String = "HISTOS_CLASSES"
-  private[testrun] val PatternCount: String = "HISTOS_PATTERN_COUNT"
+  private[testrun] val Framework: String     = "HISTOS_FRAMEWORK"
+  private[testrun] val Classes: String       = "HISTOS_CLASSES"
+  private[testrun] val PatternCount: String  = "HISTOS_PATTERN_COUNT"
   private[testrun] val PatternPrefix: String = "HISTOS_PATTERN_"
-  val Main: MainClass = MainClass.trusted("subprocess.Provider")
+  val Main: MainClass                        = MainClass.trusted("subprocess.Provider")
 
   /** The child uses this status when the framework discovers nothing. It is not `no tests`. */
   val NoneFound: Int = 2
@@ -175,3 +175,4 @@ object ProviderRunner:
 
   def note(framework: String, classes: Path, patterns: List[SuitePattern]): String =
     (framework :: classes.toAbsolutePath.toString :: patterns.map(_.value)).mkString("\n") + "\n"
+end ProviderRunner

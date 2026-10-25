@@ -35,6 +35,7 @@ object ShipDef:
       position: SourcePos,
   ): ShipDef =
     new ShipDef(name, ShipSpec.Manual(version), members, position)
+end ShipDef
 
 /** One or more ships. The empty catalog is [[CatalogSpec.empty]], not a call with no ships. */
 final case class CatalogSpec private (ships: List[ShipDef])
@@ -44,14 +45,16 @@ object CatalogSpec:
 
   def apply(first: ShipDef, rest: ShipDef*): CatalogSpec =
     new CatalogSpec(first :: rest.toList)
+end CatalogSpec
 
 object ShipLink:
   def catalog(spec: CatalogSpec, projects: List[Project]): Either[BuildError, Catalog] =
-    spec.ships.foldLeft[Either[BuildError, List[(Ship, SourcePos)]]](Right(Nil)): (acc, defn) =>
-      acc.flatMap: seen =>
-        one(defn, projects, seen).map(ship => seen :+ (ship, defn.position))
-    .flatMap: built =>
-      Catalog.from(built.map(_._1)).left.map(error => asBuild(built, error))
+    spec.ships
+      .foldLeft[Either[BuildError, List[(Ship, SourcePos)]]](Right(Nil)): (acc, defn) =>
+        acc.flatMap: seen =>
+          one(defn, projects, seen).map(ship => seen :+ (ship, defn.position))
+      .flatMap: built =>
+        Catalog.from(built.map(_._1)).left.map(error => asBuild(built, error))
 
   private def one(
       defn: ShipDef,
@@ -59,12 +62,12 @@ object ShipLink:
       seen: List[(Ship, SourcePos)],
   ): Either[BuildError, Ship] =
     ShipName.from(defn.name) match
-      case Left(ShipNameError.Empty) => Left(BuildError.EmptyShipName(defn.position))
+      case Left(ShipNameError.Empty)    => Left(BuildError.EmptyShipName(defn.position))
       case Left(ShipNameError.Bad(raw)) => Left(BuildError.BadShipName(raw, defn.position))
-      case Right(name) =>
+      case Right(name)                  =>
         seen.collectFirst { case (ship, pos) if ship.name == name => pos } match
           case Some(first) => Left(BuildError.DuplicateShip(name, first, defn.position))
-          case None =>
+          case None        =>
             members(defn, name, projects, seen.map(_._1)).map: parsed =>
               defn.spec match
                 case ShipSpec.Line(number)    => Ship.Line(name, number, parsed)
@@ -79,10 +82,11 @@ object ShipLink:
     defn.members match
       case member :: rest =>
         resolve(defn, ship, member, projects, seen, Nil).flatMap: first =>
-          rest.foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, item) =>
-            acc.flatMap: names =>
-              resolve(defn, ship, item, projects, seen, first :: names).map(names :+ _)
-          .map(tail => ::(first, tail))
+          rest
+            .foldLeft[Either[BuildError, List[ProjectName]]](Right(Nil)): (acc, item) =>
+              acc.flatMap: names =>
+                resolve(defn, ship, item, projects, seen, first :: names).map(names :+ _)
+            .map(tail => ::(first, tail))
 
   private def resolve(
       defn: ShipDef,
@@ -93,9 +97,9 @@ object ShipLink:
       chosen: List[ProjectName],
   ): Either[BuildError, ProjectName] =
     projects.find(_.name.value == member.name) match
-      case None => Left(BuildError.MissingProject(member.name, member.position))
+      case None                     => Left(BuildError.MissingProject(member.name, member.position))
       case Some(project: Aggregate) => Left(BuildError.AggregateShipMember(ship, project.name, defn.position))
-      case Some(project: Module) =>
+      case Some(project: Module)    =>
         val name = project.name
         if chosen.contains(name) then Left(BuildError.RepeatedShipMember(ship, name, defn.position))
         else
@@ -107,12 +111,12 @@ object ShipLink:
 
   private def asBuild(built: List[(Ship, SourcePos)], error: CatalogError): BuildError =
     error match
-      case CatalogError.MixedScheme => BuildError.MixedScheme(mismatch(built))
+      case CatalogError.MixedScheme         => BuildError.MixedScheme(mismatch(built))
       case CatalogError.DuplicateName(name) =>
         built.collect { case (ship, pos) if ship.name == name => pos } match
           case first :: second :: _ => BuildError.DuplicateShip(name, first, second)
-          case pos :: _              => BuildError.DuplicateShip(name, pos, pos)
-          case Nil                   => BuildError.BadShipName(name.value, at(built))
+          case pos :: _             => BuildError.DuplicateShip(name, pos, pos)
+          case Nil                  => BuildError.BadShipName(name.value, at(built))
       case CatalogError.RepeatedMember(ship, member) =>
         BuildError.RepeatedShipMember(ship, member, at(built))
       case CatalogError.InTwoShips(member, first, second) =>
@@ -133,3 +137,4 @@ object ShipLink:
     built match
       case (_, pos) :: _ => pos
       case Nil           => SourcePos("<catalog>", 1, 1)
+end ShipLink

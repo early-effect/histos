@@ -1,14 +1,7 @@
 package histos.jdk
 
 import histos.native.{NativeOrigin, NativeToolchain}
-import histos.toolchain.{
-  Architecture,
-  HostPlatform,
-  LocalOverride,
-  LocalOverrideError,
-  RuntimeFiles,
-  RuntimeIdentity
-}
+import histos.toolchain.{Architecture, HostPlatform, LocalOverride, LocalOverrideError, RuntimeFiles, RuntimeIdentity}
 import histos.workspace.IoFailure
 
 import java.nio.file.Path
@@ -34,7 +27,7 @@ final case class Machine(
     cache: Path,
     repo: Path,
     running: Option[Path],
-    native: NativeOrigin
+    native: NativeOrigin,
 ):
   def host: HostPlatform = HostPlatform.of(os, architecture)
 
@@ -50,21 +43,20 @@ object Machine:
             case Left(error)   => NativeOrigin.Refused(error)
             case Right(source) => NativeOrigin.Chosen(source)
 
-  /** One read of the fiber's `zio.System`. `HISTOS_NATIVE` is `zio.Config` over
-    * that map. ZIO keeps `System` on the default-services fiber ref, so this
-    * effect's environment stays empty: tests swap the ref, they do not provide
-    * a layer.
+  /** One read of the fiber's `zio.System`. `HISTOS_NATIVE` is `zio.Config` over that map. ZIO keeps `System` on the
+    * default-services fiber ref, so this effect's environment stays empty: tests swap the ref, they do not provide a
+    * layer.
     */
   def load(repo: Path): IO[ToolchainError, Machine] =
     ZIO.systemWith: system =>
       for
-        env <- system.envs.mapError(_ => ToolchainError.Denied)
+        env  <- system.envs.mapError(_ => ToolchainError.Denied)
         home <- system
           .property("user.home")
           .mapError(_ => ToolchainError.Denied)
           .flatMap:
             case Some(value) if value.nonEmpty => ZIO.succeed(value)
-            case _ => ZIO.fail(ToolchainError.NoUserHome)
+            case _                             => ZIO.fail(ToolchainError.NoUserHome)
         os <- system
           .property("os.name")
           .mapError(_ => ToolchainError.Denied)
@@ -97,11 +89,12 @@ object Machine:
         histos.cache.ContentStore.home(env.get("XDG_CACHE_HOME"), home),
         repo,
         running,
-        origin
+        origin,
       )
 
   def layer(repo: Path): ZLayer[Any, ToolchainError, Machine] =
     ZLayer.fromZIO(load(repo))
+end Machine
 
 enum OverrideError:
   case Empty
@@ -114,6 +107,7 @@ enum OverrideError:
     case Multiple      => "toolchain.local has more than one path"
     case Relative(raw) => s"toolchain.local path is not absolute: $raw"
     case Invalid(raw)  => s"toolchain.local path is invalid: $raw"
+end OverrideError
 
 enum ToolchainError:
   case Probe(error: JdkError)
@@ -147,45 +141,43 @@ enum ToolchainError:
       (path, message) => s"${place(path)} $message",
       (path, message) => s"${place(path)} $message",
       (path, message, _) => s"${place(path)} $message",
-      (path, message) => s"${place(path)} $message"
+      (path, message) => s"${place(path)} $message",
     )((left, right) => s"$left; $right", (left, right) => s"$left or $right")
 
   private def place(path: zio.Chunk[String]): String =
     if path.isEmpty then "config" else path.mkString(".")
+end ToolchainError
 
 /** The JDK this command is running on. */
 final case class JdkSurvey(
     home: Path,
     version: JdkVersion,
-    identity: RuntimeIdentity
+    identity: RuntimeIdentity,
 )
 
 final case class JdkRuntime(
     home: Path,
     version: JdkVersion,
-    identity: RuntimeIdentity
+    identity: RuntimeIdentity,
 )
 
 object Toolchain:
   /** Oldest JDK this process will accept. The Loom executor needs 21. */
   val Floor: JdkVersion = JdkVersion.trusted("21", JdkMajor.trusted(21))
 
-  /** JDK 25 refuses unnamed native access without this flag. The manifest
-    * attribute is the jar form.
+  /** JDK 25 refuses unnamed native access without this flag. The manifest attribute is the jar form.
     */
-  val NativeAccess: String = "--enable-native-access=ALL-UNNAMED"
+  val NativeAccess: String         = "--enable-native-access=ALL-UNNAMED"
   val NativeAccessManifest: String = "Enable-Native-Access: ALL-UNNAMED"
 
   def explain(machine: Machine): IO[ToolchainError, JdkSurvey] =
-    resolve(machine).map(runtime =>
-      JdkSurvey(runtime.home, runtime.version, runtime.identity)
-    )
+    resolve(machine).map(runtime => JdkSurvey(runtime.home, runtime.version, runtime.identity))
 
   def text(survey: JdkSurvey): String =
     s"jdk ${survey.version.value} ${survey.home}"
 
-  /** Fail the command when the running JVM, or `toolchain.local`, is missing or
-    * older than [[Floor]]. Histos does not fetch a JDK.
+  /** Fail the command when the running JVM, or `toolchain.local`, is missing or older than [[Floor]]. Histos does not
+    * fetch a JDK.
     */
   def prepare(machine: Machine): IO[ToolchainError, Unit] =
     resolve(machine).unit
@@ -204,14 +196,12 @@ object Toolchain:
   private def accept(path: Path): IO[ToolchainError, JdkRuntime] =
     for
       home <- Jdk.home(path).mapError(ToolchainError.Probe(_))
-      _ <- ZIO
+      _    <- ZIO
         .fail(ToolchainError.Rejected(path, Reject.NoJavac))
         .unless(home.hasJavac)
       released <- ZIO
         .fromEither(home.release)
-        .mapError(error =>
-          ToolchainError.Rejected(path, Reject.UnreadableVersion(error))
-        )
+        .mapError(error => ToolchainError.Rejected(path, Reject.UnreadableVersion(error)))
       _ <- ZIO
         .fail(ToolchainError.TooOld(Floor, released.version, path))
         .unless(released.version.atLeast(Floor))

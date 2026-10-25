@@ -6,21 +6,15 @@ import java.nio.file.attribute.BasicFileAttributes
 import scala.jdk.CollectionConverters.*
 import scala.util.control.NonFatal
 
-import org.objectweb.asm.{
-  ClassReader,
-  ClassVisitor,
-  MethodVisitor,
-  Opcodes,
-  Type
-}
+import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes, Type}
 
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, IoFault}
 
 import zio.{Chunk, IO, ZIO}
 
-/** Why a suite digest could not be built. A missing suite class is not one of
-  * these: that digest is absent and the suite runs.
+/** Why a suite digest could not be built. A missing suite class is not one of these: that digest is absent and the
+  * suite runs.
   */
 enum StampError:
   case Io(failure: IoFailure)
@@ -31,43 +25,38 @@ enum StampError:
     case Io(failure)   => failure.message
     case Class(path)   => s"could not read class $path"
     case Missing(name) => s"stamp index has no $name"
+end StampError
 
-/** Digest of one suite, the classes it references, the locked jars, the
-  * upstream jars, the JDK, and the scalac flags. Each class is a fingerprint
-  * and the names it points at. The bytes are not kept. A class this suite does
-  * not reference is not part of the digest. Tool and runtime hashes supplied by
-  * [[histos.testrun.TestContext]] are jar lines. This digest adds the upstream
-  * jars, the JDK token, and the flags.
+/** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, and the scalac flags.
+  * Each class is a fingerprint and the names it points at. The bytes are not kept. A class this suite does not
+  * reference is not part of the digest. Tool and runtime hashes supplied by [[histos.testrun.TestContext]] are jar
+  * lines. This digest adds the upstream jars, the JDK token, and the flags.
   */
 object SuiteStamp:
   /** Fingerprint of one class file, and the binary names it mentions. */
   private[testrun] final case class Print(
       fingerprint: String,
-      refs: Set[String]
+      refs: Set[String],
   )
 
-  /** Identity besides the referenced class files. `jars` are this module's
-    * locked artifacts. `upstream` are compile jars of upstream modules. `jdk`
-    * is the accepted runtime token. `flags` are the scalac arguments.
+  /** Identity besides the referenced class files. `jars` are this module's locked artifacts. `upstream` are compile
+    * jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac arguments.
     */
   private[testrun] final case class Cover(
       jars: List[String],
       upstream: List[String],
       jdk: String,
-      flags: List[String]
+      flags: List[String],
   )
 
   def digest(
       suite: String,
       directories: List[Path],
-      cover: Cover
+      cover: Cover,
   ): IO[StampError, Option[String]] =
-    index(directories).flatMap(tree =>
-      ZIO.fromEither(digest(suite, tree, cover))
-    )
+    index(directories).flatMap(tree => ZIO.fromEither(digest(suite, tree, cover)))
 
-  /** One walk of the class directories. `remember` stamps every suite from
-    * this.
+  /** One walk of the class directories. `remember` stamps every suite from this.
     */
   private[testrun] def index(
       directories: List[Path]
@@ -81,7 +70,7 @@ object SuiteStamp:
   private[testrun] def digest(
       suite: String,
       indexed: Map[String, Print],
-      cover: Cover
+      cover: Cover,
   ): Either[StampError, Option[String]] =
     val start = List(suite, s"$suite$$").filter(indexed.contains)
     if start.isEmpty then Right(None)
@@ -115,7 +104,7 @@ object SuiteStamp:
 
   private def foldClasses(
       root: Path,
-      walk: java.util.stream.Stream[Path]
+      walk: java.util.stream.Stream[Path],
   ): Either[StampError, List[(String, Print)]] =
     walk.iterator.asScala
       .foldLeft[Either[StampError, List[(String, Print)]]](Right(Nil)):
@@ -127,7 +116,7 @@ object SuiteStamp:
 
   private def readClass(
       root: Path,
-      path: Path
+      path: Path,
   ): Either[StampError, Option[(String, Print)]] =
     if !Files.isRegularFile(path) then Right(None)
     else
@@ -149,7 +138,7 @@ object SuiteStamp:
 
   private def fingerprints(
       names: List[String],
-      index: Map[String, Print]
+      index: Map[String, Print],
   ): Either[StampError, List[String]] =
     names.foldLeft[Either[StampError, List[String]]](Right(Nil)):
       case (Left(error), _)     => Left(error)
@@ -173,7 +162,7 @@ object SuiteStamp:
 
   private def closure(
       start: List[String],
-      index: Map[String, Print]
+      index: Map[String, Print],
   ): Set[String] =
     def step(seen: Set[String], queue: List[String]): Set[String] =
       queue match
@@ -192,16 +181,15 @@ object SuiteStamp:
     step(Set.empty, start.distinct)
 
   private def alias(name: String): List[String] =
-    if name.endsWith("$") && !name.endsWith("$$") then
-      List(name, name.dropRight(1))
+    if name.endsWith("$") && !name.endsWith("$$") then List(name, name.dropRight(1))
     else List(name, s"$name$$")
 
   private def references(
       path: Path,
-      bytes: Array[Byte]
+      bytes: Array[Byte],
   ): Either[StampError, Set[String]] =
-    val found = scala.collection.mutable.Set.empty[String]
-    val faults = scala.collection.mutable.ListBuffer.empty[StampError]
+    val found                         = scala.collection.mutable.Set.empty[String]
+    val faults                        = scala.collection.mutable.ListBuffer.empty[StampError]
     def fail(error: StampError): Unit =
       if faults.isEmpty then faults += error
     def add(name: String): Unit =
@@ -230,7 +218,7 @@ object SuiteStamp:
               name: String,
               signature: String,
               superName: String,
-              interfaces: Array[String]
+              interfaces: Array[String],
           ): Unit =
             if superName != null then add(superName)
             if interfaces != null then interfaces.foreach(add)
@@ -240,7 +228,7 @@ object SuiteStamp:
               name: String,
               descriptor: String,
               signature: String,
-              value: Object
+              value: Object,
           ): org.objectweb.asm.FieldVisitor =
             note(descriptor)
             null
@@ -250,7 +238,7 @@ object SuiteStamp:
               name: String,
               descriptor: String,
               signature: String,
-              exceptions: Array[String]
+              exceptions: Array[String],
           ): MethodVisitor =
             note(descriptor)
             new MethodVisitor(Opcodes.ASM9):
@@ -260,7 +248,7 @@ object SuiteStamp:
                   opcode: Int,
                   owner: String,
                   name: String,
-                  descriptor: String
+                  descriptor: String,
               ): Unit =
                 add(owner)
                 note(descriptor)
@@ -269,7 +257,7 @@ object SuiteStamp:
                   owner: String,
                   name: String,
                   descriptor: String,
-                  isInterface: Boolean
+                  isInterface: Boolean,
               ): Unit =
                 add(owner)
                 note(descriptor)
@@ -278,9 +266,12 @@ object SuiteStamp:
                   case kind: Type => collect(kind)
                   case _          => ()
         ,
-        ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES
+        ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES,
       )
     catch case NonFatal(_) => fail(StampError.Class(path))
+    end try
     faults.headOption match
       case Some(error) => Left(error)
       case None        => Right(found.toSet)
+  end references
+end SuiteStamp

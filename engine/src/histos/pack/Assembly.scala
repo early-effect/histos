@@ -39,6 +39,7 @@ enum AssemblyError:
     case NotAFile(path)          => s"$path is not a file"
     case LazyVal(error)          => error.message
     case Io(op)                  => s"assembly failed while ${op.toString.toLowerCase}"
+end AssemblyError
 
 final case class Assembled(path: Path, entries: Int)
 
@@ -46,9 +47,9 @@ final case class Assembled(path: Path, entries: Int)
 final case class AssemblyFile(entry: String, file: Path)
 
 object Assembly:
-  /** Merge application classes and runtime jars into one jar `java -jar` can exec.
-    * Application classes win, then earlier jars. Service files are concatenated.
-    * Signature files and `module-info.class` are omitted. The jar is not those signed artifacts and it is not a JPMS module.
+  /** Merge application classes and runtime jars into one jar `java -jar` can exec. Application classes win, then
+    * earlier jars. Service files are concatenated. Signature files and `module-info.class` are omitted. The jar is not
+    * those signed artifacts and it is not a JPMS module.
     */
   def write(
       classes: List[Path],
@@ -77,8 +78,11 @@ object Assembly:
       if resource.entry.isEmpty || escaped(resource.entry) then ZIO.fail(AssemblyError.Escaped(resource.entry))
       else if taken.contains(resource.entry) then ZIO.fail(AssemblyError.Duplicate(resource.entry))
       else
-        ZIO.attemptBlocking(Files.isRegularFile(resource.file)).mapError(_ => AssemblyError.Io(JarIo.Read(resource.file))).flatMap: present =>
-          if present then ZIO.unit else ZIO.fail(AssemblyError.NotAFile(resource.file))
+        ZIO
+          .attemptBlocking(Files.isRegularFile(resource.file))
+          .mapError(_ => AssemblyError.Io(JarIo.Read(resource.file)))
+          .flatMap: present =>
+            if present then ZIO.unit else ZIO.fail(AssemblyError.NotAFile(resource.file))
 
   private enum Classified:
     case Drop, Escape, Service, Keep
@@ -89,15 +93,15 @@ object Assembly:
       handles: Map[(String, String), LazyVals.Handle],
       loader: ClassLoader,
   ):
-    private var seen: Set[String] = Set.empty
-    private var count: Int = 0
-    private var foundMain: Boolean = false
-    private var serviceOrder: List[String] = Nil
+    private var seen: Set[String]                         = Set.empty
+    private var count: Int                                = 0
+    private var foundMain: Boolean                        = false
+    private var serviceOrder: List[String]                = Nil
     private var serviceLines: Map[String, Vector[String]] = Map.empty
-    private var serviceSeen: Map[String, Set[String]] = Map.empty
+    private var serviceSeen: Map[String, Set[String]]     = Map.empty
 
-    def written: Int = count
-    def hasMain: Boolean = foundMain
+    def written: Int               = count
+    def hasMain: Boolean           = foundMain
     def has(name: String): Boolean = seen.contains(name)
 
     def manifest(bytes: Array[Byte]): Unit =
@@ -138,13 +142,17 @@ object Assembly:
         Right(())
 
     private def store(name: String, bytes: Array[Byte]): Either[AssemblyError, Unit] =
-      LazyVals.rewrite(name, bytes, handles, loader).left.map(AssemblyError.LazyVal(_)).map: rewritten =>
-        seen = seen + name
-        out.putNextEntry(new ZipEntry(name))
-        out.write(rewritten)
-        out.closeEntry()
-        count += 1
-        if name == mainClass then foundMain = true
+      LazyVals
+        .rewrite(name, bytes, handles, loader)
+        .left
+        .map(AssemblyError.LazyVal(_))
+        .map: rewritten =>
+          seen = seen + name
+          out.putNextEntry(new ZipEntry(name))
+          out.write(rewritten)
+          out.closeEntry()
+          count += 1
+          if name == mainClass then foundMain = true
 
     def writeServices(): Unit =
       serviceOrder.reverse.foreach: name =>
@@ -163,37 +171,46 @@ object Assembly:
         .toList
         .map(_.stripSuffix("\r").trim)
         .filter(_.nonEmpty)
+  end Merge
 
   private def entries(classes: Path, destination: Path): IO[AssemblyError, List[(String, Path)]] =
-    ZIO.attemptBlocking {
-      val base = classes.toAbsolutePath.normalize
-      val dest = destination.toAbsolutePath.normalize
-      if !Files.isDirectory(classes) then Left(AssemblyError.NotADirectory(classes))
-      else if dest.startsWith(base) then Left(AssemblyError.DestinationInside(destination))
-      else
-        val walk = Files.walk(classes)
-        val files =
-          try walk.iterator.asScala.filter(path => Files.isRegularFile(path)).toList
-          finally walk.close()
-        files.sortBy(_.toString).foldLeft[Either[AssemblyError, List[(String, Path)]]](Right(Nil)): (acc, file) =>
-          acc.flatMap: seen =>
-            val absolute = file.toAbsolutePath.normalize
-            val relative = base.relativize(absolute)
-            val name = relative.iterator.asScala.map(_.toString).mkString("/")
-            if !absolute.startsWith(base) || relative.startsWith("..") then Left(AssemblyError.Escaped(name))
-            else Right(seen :+ (name, file))
-        .flatMap: named =>
-          if named.isEmpty then Left(AssemblyError.Empty(classes)) else Right(named)
-    }.mapError(_ => AssemblyError.Io(JarIo.Read(classes))).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlocking {
+        val base = classes.toAbsolutePath.normalize
+        val dest = destination.toAbsolutePath.normalize
+        if !Files.isDirectory(classes) then Left(AssemblyError.NotADirectory(classes))
+        else if dest.startsWith(base) then Left(AssemblyError.DestinationInside(destination))
+        else
+          val walk  = Files.walk(classes)
+          val files =
+            try walk.iterator.asScala.filter(path => Files.isRegularFile(path)).toList
+            finally walk.close()
+          files
+            .sortBy(_.toString)
+            .foldLeft[Either[AssemblyError, List[(String, Path)]]](Right(Nil)): (acc, file) =>
+              acc.flatMap: seen =>
+                val absolute = file.toAbsolutePath.normalize
+                val relative = base.relativize(absolute)
+                val name     = relative.iterator.asScala.map(_.toString).mkString("/")
+                if !absolute.startsWith(base) || relative.startsWith("..") then Left(AssemblyError.Escaped(name))
+                else Right(seen :+ (name, file))
+            .flatMap: named =>
+              if named.isEmpty then Left(AssemblyError.Empty(classes)) else Right(named)
+      }
+      .mapError(_ => AssemblyError.Io(JarIo.Read(classes)))
+      .flatMap(ZIO.fromEither)
 
   private def overlap(jars: List[Path], destination: Path): IO[AssemblyError, Unit] =
-    ZIO.attemptBlocking {
-      val dest = destination.toAbsolutePath.normalize
-      jars.foldLeft[Either[AssemblyError, Unit]](Right(())): (acc, jar) =>
-        acc.flatMap: _ =>
-          val path = jar.toAbsolutePath.normalize
-          if path == dest then Left(AssemblyError.Overlap(jar)) else Right(())
-    }.mapError(_ => AssemblyError.Io(JarIo.Read(destination))).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlocking {
+        val dest = destination.toAbsolutePath.normalize
+        jars.foldLeft[Either[AssemblyError, Unit]](Right(())): (acc, jar) =>
+          acc.flatMap: _ =>
+            val path = jar.toAbsolutePath.normalize
+            if path == dest then Left(AssemblyError.Overlap(jar)) else Right(())
+      }
+      .mapError(_ => AssemblyError.Io(JarIo.Read(destination)))
+      .flatMap(ZIO.fromEither)
 
   private def place(
       destination: Path,
@@ -203,18 +220,21 @@ object Assembly:
       resources: List[AssemblyFile],
       main: MainClass,
   ): IO[AssemblyError, Int] =
-    val parent = Option(destination.getParent).getOrElse(destination)
+    val parent   = Option(destination.getParent).getOrElse(destination)
     val fileName = Option(destination.getFileName).map(_.toString).getOrElse("histos.jar")
-    val temp = parent.resolve(s"$fileName.tmp")
-    ZIO.acquireReleaseWith(ZIO.succeed(temp))(leftover => ZIO.attemptBlocking(Files.deleteIfExists(leftover)).ignore): _ =>
-      written(temp, parent, classes, files, jars, resources, main).flatMap: count =>
-        ZIO.attemptBlocking {
-          try Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-          catch
-            case _: AtomicMoveNotSupportedException =>
-              Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING)
-          count
-        }.mapError(_ => AssemblyError.Io(JarIo.Move(destination)))
+    val temp     = parent.resolve(s"$fileName.tmp")
+    ZIO.acquireReleaseWith(ZIO.succeed(temp))(leftover => ZIO.attemptBlocking(Files.deleteIfExists(leftover)).ignore):
+      _ =>
+        written(temp, parent, classes, files, jars, resources, main).flatMap: count =>
+          ZIO
+            .attemptBlocking {
+              try Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+              catch
+                case _: AtomicMoveNotSupportedException =>
+                  Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING)
+              count
+            }
+            .mapError(_ => AssemblyError.Io(JarIo.Move(destination)))
 
   private def written(
       temp: Path,
@@ -227,23 +247,26 @@ object Assembly:
   ): IO[AssemblyError, Int] =
     ZIO.scoped:
       hierarchy(classes, jars).flatMap: loader =>
-        ZIO.attemptBlocking {
-          Files.createDirectories(parent)
-          val stream = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(temp)))
-          try
-            val packed = LazyVals.catalog(ownBytes(files) ++ jarBytes(jars)) match
-              case Left(error) => Left(AssemblyError.LazyVal(error))
-              case Right(handles) =>
-                val merge = Merge(stream, classFile(main), handles, loader)
-                merge.manifest(manifest(main))
-                writeOwn(merge, files).flatMap: _ =>
-                  writeResources(merge, resources).flatMap: _ =>
-                    writeJars(merge, jars).flatMap: _ =>
-                      merge.writeServices()
-                      if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
-            packed
-          finally stream.close()
-        }.mapError(_ => AssemblyError.Io(JarIo.Write(temp))).flatMap(ZIO.fromEither)
+        ZIO
+          .attemptBlocking {
+            Files.createDirectories(parent)
+            val stream = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(temp)))
+            try
+              val packed = LazyVals.catalog(ownBytes(files) ++ jarBytes(jars)) match
+                case Left(error)    => Left(AssemblyError.LazyVal(error))
+                case Right(handles) =>
+                  val merge = Merge(stream, classFile(main), handles, loader)
+                  merge.manifest(manifest(main))
+                  writeOwn(merge, files).flatMap: _ =>
+                    writeResources(merge, resources).flatMap: _ =>
+                      writeJars(merge, jars).flatMap: _ =>
+                        merge.writeServices()
+                        if merge.hasMain then Right(merge.written) else Left(AssemblyError.MissingMain(main))
+              packed
+            finally stream.close()
+          }
+          .mapError(_ => AssemblyError.Io(JarIo.Write(temp)))
+          .flatMap(ZIO.fromEither)
 
   private def ownBytes(files: List[(String, Path)]): List[(String, Array[Byte])] =
     files.collect:
@@ -261,7 +284,7 @@ object Assembly:
               if !name.endsWith(".class") then Nil
               else
                 Option(zip.getInputStream(entry)) match
-                  case None => Nil
+                  case None        => Nil
                   case Some(input) =>
                     try List(name -> input.readAllBytes())
                     finally input.close()
@@ -271,7 +294,8 @@ object Assembly:
   /** Every class directory and jar, for the frames of rewritten lazy vals. */
   private[pack] def hierarchy(classes: List[Path], jars: List[Path]): ZIO[Scope, AssemblyError, URLClassLoader] =
     ZIO.acquireRelease(
-      ZIO.attempt(URLClassLoader((classes ++ jars).map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader))
+      ZIO
+        .attempt(URLClassLoader((classes ++ jars).map(_.toUri.toURL).toArray, ClassLoader.getPlatformClassLoader))
         .mapError(_ => AssemblyError.Io(JarIo.Read(classes.headOption.getOrElse(Path.of(".")))))
     )(loader => ZIO.attemptBlocking(loader.close()).ignore)
 
@@ -321,7 +345,7 @@ object Assembly:
       case Classified.Drop =>
         input.transferTo(OutputStream.nullOutputStream())
         Right(())
-      case Classified.Escape => Left(AssemblyError.Escaped(name))
+      case Classified.Escape  => Left(AssemblyError.Escaped(name))
       case Classified.Service =>
         merge.service(name, input.readAllBytes())
         Right(())
@@ -364,3 +388,4 @@ object Assembly:
         s"${Toolchain.NativeAccessManifest}\r\n" +
         "Multi-Release: true\r\n\r\n"
     text.getBytes(StandardCharsets.UTF_8)
+end Assembly

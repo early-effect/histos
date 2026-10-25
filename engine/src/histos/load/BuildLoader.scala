@@ -5,21 +5,19 @@ import java.util.concurrent.atomic.AtomicReference
 
 import scala.jdk.OptionConverters.*
 
-/**
- * The classloader API reports a missing class by throwing. The refused binary name is stored
- * on the loader. Callers read that name. They do not read the exception text.
- *
- * Boundary names load from `host`, the loader that defined `HistosBuild`. `ProjectGraph` has to be
- * that loader's class. A second copy from the api jar is a different class, and the build object
- * would not match. Refused `histos.*` names are not delegated, so a plugin cannot link
- * `histos.schedule` through this parent. JDK types resolve on the platform loader. The api jar
- * stays on the compile classpath. It does not define these classes a second time.
- */
+/** The classloader API reports a missing class by throwing. The refused binary name is stored on the loader. Callers
+  * read that name. They do not read the exception text.
+  *
+  * Boundary names load from `host`, the loader that defined `HistosBuild`. `ProjectGraph` has to be that loader's
+  * class. A second copy from the api jar is a different class, and the build object would not match. Refused `histos.*`
+  * names are not delegated, so a plugin cannot link `histos.schedule` through this parent. JDK types resolve on the
+  * platform loader. The api jar stays on the compile classpath. It does not define these classes a second time.
+  */
 private[load] final class ApiBoundary(host: ClassLoader) extends ClassLoader(ClassLoader.getPlatformClassLoader):
   override protected def loadClass(name: String, resolve: Boolean): Class[?] =
     getClassLoadingLock(name).synchronized:
       ClassHome.of(name) match
-        case ClassHome.Refused => throw new ClassNotFoundException(name)
+        case ClassHome.Refused  => throw new ClassNotFoundException(name)
         case ClassHome.Boundary =>
           val loaded = host.loadClass(name)
           if resolve then resolveClass(loaded)
@@ -40,7 +38,7 @@ private[load] final class BuildLoader(urls: Array[URL], parent: ClassLoader) ext
   override protected def loadClass(name: String, resolve: Boolean): Class[?] =
     getClassLoadingLock(name).synchronized:
       ClassHome.of(name) match
-        case ClassHome.Refused => refuse(name)
+        case ClassHome.Refused  => refuse(name)
         case ClassHome.Boundary =>
           val loaded = getParent.loadClass(name)
           if resolve then resolveClass(loaded)
@@ -63,3 +61,4 @@ private[load] final class BuildLoader(urls: Array[URL], parent: ClassLoader) ext
       .getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
       .walk(frames => frames.map(_.getDeclaringClass).filter(_.getClassLoader eq this).findFirst)
       .toScala
+end BuildLoader

@@ -12,15 +12,15 @@ object RuntimeHostSchemaSpec extends ZIOSpecDefault:
       assertTrue(
         HostPlatform.of(
           Os.from("Darwin"),
-          Architecture.fromMachine("arm64")
+          Architecture.fromMachine("arm64"),
         ) == HostPlatform.MacosAarch64,
         HostPlatform.of(
           Os.from("Linux"),
-          Architecture.fromMachine("amd64")
+          Architecture.fromMachine("amd64"),
         ) == HostPlatform.LinuxX86_64,
         HostPlatform.of(
           Os.from("Windows 11"),
-          Architecture.fromMachine("x86_64")
+          Architecture.fromMachine("x86_64"),
         ) == HostPlatform.WindowsX86_64,
         Architecture.fromMachine(" ARM64 ") == Architecture.Aarch64,
         Architecture.fromMachine("riscv64") == Architecture.Unsupported(
@@ -28,7 +28,7 @@ object RuntimeHostSchemaSpec extends ZIOSpecDefault:
         ),
         HostPlatform.from("macos-arm64") == Left(
           HostPlatformError.Unknown("macos-arm64")
-        )
+        ),
       )
     ,
     test(
@@ -36,20 +36,20 @@ object RuntimeHostSchemaSpec extends ZIOSpecDefault:
     ):
       TestSystem.save.flatMap: restore =>
         (for
-          _ <- TestSystem.putProperty("user.home", "/fixtures")
-          _ <- TestSystem.putProperty("os.name", "Mac OS X")
-          _ <- TestSystem.putProperty("os.arch", "arm64")
-          first <- Machine.load(Path.of("/fixtures/repo"))
-          _ <- TestSystem.putProperty("os.arch", "riscv64")
+          _       <- TestSystem.putProperty("user.home", "/fixtures")
+          _       <- TestSystem.putProperty("os.name", "Mac OS X")
+          _       <- TestSystem.putProperty("os.arch", "arm64")
+          first   <- Machine.load(Path.of("/fixtures/repo"))
+          _       <- TestSystem.putProperty("os.arch", "riscv64")
           unknown <- Machine.load(Path.of("/fixtures/repo"))
-          _ <- TestSystem.clearProperty("os.arch")
+          _       <- TestSystem.clearProperty("os.arch")
           missing <- Machine.load(Path.of("/fixtures/repo")).either
         yield assertTrue(
           first.architecture == Architecture.Aarch64,
           first.host == HostPlatform.MacosAarch64,
           unknown.host == HostPlatform
             .Unsupported(Os.Mac, Architecture.Unsupported("riscv64")),
-          missing == Left(ToolchainError.NoArchitecture)
+          missing == Left(ToolchainError.NoArchitecture),
         )).ensuring(restore)
     ,
     test("host literals are checked at compile time"):
@@ -65,6 +65,6 @@ object RuntimeHostSchemaSpec extends ZIOSpecDefault:
         valid == Nil,
         invalid.map(_.message) == List(
           "unknown canonical runtime host: linux-amd64"
-        )
-      )
+        ),
+      ),
   )

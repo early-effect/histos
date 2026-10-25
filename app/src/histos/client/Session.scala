@@ -2,22 +2,12 @@ package histos.client
 
 import histos.jdk.JdkRuntime
 import histos.cli.{Cli, CliExit, Operation}
+import histos.mcp.Notice
 import histos.report.{Observation, Report}
 import histos.jdk.Machine
 import histos.load.{LoadedBuild, Loader}
 import histos.plugin.PluginArgs
-import histos.server.{
-  Attach,
-  Call,
-  Calls,
-  Decision,
-  Feed,
-  Fingerprint,
-  Message,
-  Say,
-  ServerError,
-  Watching
-}
+import histos.server.{Attach, Call, Calls, Decision, Feed, Fingerprint, Message, Say, ServerError, Watching}
 import histos.task.{RunId, TaskId}
 import histos.testrun.ModuleTestError
 import histos.zinc.{GraphCompile, GraphCompileError}
@@ -28,8 +18,7 @@ import java.nio.file.Path
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO, ZLayer}
 
-/** One MCP process. It sends [[Call]] while the server matches, and keeps a
-  * single graph otherwise.
+/** One MCP process. It sends [[Call]] while the server matches, and keeps a single graph otherwise.
   */
 object Session:
   enum SessionError:
@@ -41,16 +30,17 @@ object Session:
       case DifferentVersion => ServerError.DifferentVersion.message
       case Remote(error)    => error.message
       case DidNotFinish     => "the call did not finish"
+  end SessionError
 
   final case class Held(
       fingerprint: Fingerprint,
       loaded: LoadedBuild,
-      scope: Scope.Closeable
+      scope: Scope.Closeable,
   )
 
   final case class Desk(
       held: Ref[Option[Held]],
-      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]]
+      runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
   )
 
   def desk: UIO[Desk] =
@@ -64,11 +54,11 @@ object Session:
       apiJar: Path,
       machine: Machine,
       desk: Desk,
-      call: Call
+      call: Call,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     SessionError,
-    Report
+    Report,
   ] =
     Attach.decide(repo, Cli.VersionText).flatMap {
       case Decision.DifferentVersion =>
@@ -85,7 +75,7 @@ object Session:
             heard =>
               ZIO.fromEither(
                 spoken(heard.feeds.toList, heard.run, heard.observation)
-              )
+              ),
           )
       case Decision.Absent =>
         locally(repo, apiJar, machine, desk, call)
@@ -98,21 +88,19 @@ object Session:
       else ZIO.fail(report.toJson)
     }
 
-  /** `inspect`, `versions`, and a plugin task reject a platform. A main may
-    * name one.
+  /** `inspect`, `versions`, and a plugin task reject a platform. A main may name one.
     */
   def runCall(
       id: String,
       platform: Option[String],
-      args: PluginArgs
+      args: PluginArgs,
   ): Either[String, Call] =
     val task =
       id.contains("/") || TaskId
         .from(id)
         .toOption
         .exists(found => found == TaskId.Inspect || found == TaskId.Versions)
-    if !task && args != PluginArgs.empty then
-      Left(s"run $id does not take arguments")
+    if !task && args != PluginArgs.empty then Left(s"run $id does not take arguments")
     else
       platform match
         case Some(_) if task =>
@@ -127,9 +115,9 @@ object Session:
   def spoken(
       feeds: List[Feed],
       run: Option[String],
-      observation: Option[Observation]
+      observation: Option[Observation],
   ): Either[SessionError, Report] =
-    val out = Chunk.fromIterable(feeds.collect { case Feed.Out(text) => text })
+    val out      = Chunk.fromIterable(feeds.collect { case Feed.Out(text) => text })
     val errLines = feeds.collect { case Feed.Err(text) => text }
     feeds.reverse.collectFirst { case Feed.Exit(code, message) =>
       (code, message)
@@ -137,8 +125,7 @@ object Session:
       case None                  => Left(SessionError.DidNotFinish)
       case Some((code, message)) =>
         val err =
-          if message.isEmpty || errLines.contains(message) then
-            Chunk.fromIterable(errLines)
+          if message.isEmpty || errLines.contains(message) then Chunk.fromIterable(errLines)
           else Chunk.fromIterable(errLines) :+ message
         Right(Report(code, out, err, run, observation))
 
@@ -147,19 +134,26 @@ object Session:
       apiJar: Path,
       machine: Machine,
       desk: Desk,
-      call: Call
+      call: Call,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     SessionError,
-    Report
+    Report,
   ] =
     call match
       case Call.Reboot =>
         Cli
           .reboot(repo, apiJar)
           .provideSomeLayer(ZLayer.succeed(machine))
-          .map: done =>
-            Report(done.exit.code, lines(done.out), lines(done.err), None, None)
+          .flatMap: done =>
+            val out = lines(done.out)
+            val err = lines(done.err)
+            ZIO.foreachDiscard(out)(Notice.out) *>
+              ZIO
+                .foreachDiscard(err)(Notice.err)
+                .as(
+                  Report(done.exit.code, out, err, None, None)
+                )
       case other =>
         for
           feeds <- Ref.make(Chunk.empty[Feed])
@@ -168,9 +162,9 @@ object Session:
             SessionError.Remote(_)
           )
           spokenFeeds <- feeds.get
-          run <- say.run
+          run         <- say.run
           observation <- say.observation
-          report <- ZIO.fromEither(
+          report      <- ZIO.fromEither(
             spoken(spokenFeeds.toList, run, observation)
           )
         yield report
@@ -186,11 +180,11 @@ object Session:
       machine: Machine,
       desk: Desk,
       call: Call,
-      say: Say
+      say: Say,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     ServerError,
-    Unit
+    Unit,
   ] =
     call match
       case Call.Version =>
@@ -237,11 +231,11 @@ object Session:
       machine: Machine,
       desk: Desk,
       inner: Call,
-      say: Say
+      say: Say,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     ServerError,
-    Unit
+    Unit,
   ] =
     Operation.underWatch(inner) match
       case Left(error) =>
@@ -253,7 +247,7 @@ object Session:
           answer(repo, apiJar, machine, desk, call, say.dropExit),
           fresh(repo, apiJar, desk).either.map:
             case Left(_)       => List(repo.resolve("histos.scala"))
-            case Right(loaded) => Watching.roots(repo, call, loaded.graph)
+            case Right(loaded) => Watching.roots(repo, call, loaded.graph),
         )
 
   private def dispatch(
@@ -263,11 +257,11 @@ object Session:
       machine: Machine,
       desk: Desk,
       call: Call,
-      say: Say
+      say: Say,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     ServerError,
-    Unit
+    Unit,
   ] =
     val graph = loaded.graph
     call match
@@ -303,8 +297,8 @@ object Session:
                   quick,
                   jdk,
                   machine,
-                  say
-                )
+                  say,
+                ),
             )
         )
       case Call.Publish(repository, projects) =>
@@ -326,11 +320,10 @@ object Session:
           GraphCompile
             .jdk(machine)
             .foldZIO(
-              error =>
-                say(histos.server.Message.Exit(jdkCode(error), error.message)),
+              error => say(histos.server.Message.Exit(jdkCode(error), error.message)),
               jdk =>
                 histos.server.Calls
-                  .run(repo, graph, jdk, machine, id, platform, say)
+                  .run(repo, graph, jdk, machine, id, platform, say),
             )
         )
       case Call.Task(id, args) =>
@@ -387,7 +380,7 @@ object Session:
       .jdk(machine)
       .foldZIO(
         error => say(histos.server.Message.Exit(exit.code, error.message)),
-        use
+        use,
       )
 
   private def jdkCode(error: GraphCompileError): Int =
@@ -399,16 +392,16 @@ object Session:
   private def fresh(
       repo: Path,
       apiJar: Path,
-      desk: Desk
+      desk: Desk,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore,
     String,
-    LoadedBuild
+    LoadedBuild,
   ] =
     for
-      now <- Fingerprint.read(repo).mapError(_.message)
+      now     <- Fingerprint.read(repo).mapError(_.message)
       current <- desk.held.get
-      loaded <- current match
+      loaded  <- current match
         case Some(held) if held.fingerprint == now => ZIO.succeed(held.loaded)
         case other                                 =>
           ZIO.foreachDiscard(other)(_.scope.close(Exit.unit)) *>
@@ -419,14 +412,14 @@ object Session:
       repo: Path,
       apiJar: Path,
       now: Fingerprint,
-      desk: Desk
+      desk: Desk,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore,
     String,
-    LoadedBuild
+    LoadedBuild,
   ] =
     for
-      scope <- Scope.make
+      scope  <- Scope.make
       loaded <- scope
         .extend(ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)))
         .mapError(_.message)

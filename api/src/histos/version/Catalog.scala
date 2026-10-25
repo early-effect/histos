@@ -18,14 +18,16 @@ object ShipName:
 
   private def valid(head: Char, raw: String): Boolean =
     head.isLetter && raw.forall(char => char.isLetterOrDigit || char == '_' || char == '-')
+end ShipName
 
 enum ShipNameError:
   case Empty
   case Bad(raw: String)
 
   def message: String = this match
-    case Empty     => "a ship name is not empty"
-    case Bad(raw)  => s"'$raw' is not a ship name"
+    case Empty    => "a ship name is not empty"
+    case Bad(raw) => s"'$raw' is not a ship name"
+end ShipNameError
 
 /** One catalog row. A line derives coordinates from a ship number. A manual row publishes the version it states. */
 enum Ship:
@@ -39,6 +41,7 @@ enum Ship:
   def members: ::[ProjectName] = this match
     case Line(_, _, modules)   => modules
     case Manual(_, _, modules) => modules
+end Ship
 
 /** How a build versions its ships. The two schemes are not mixed. Empty is an application. */
 enum Catalog:
@@ -50,47 +53,51 @@ enum Catalog:
     ships.find(_.name == name)
 
   def ships: List[Ship] = this match
-    case Empty         => Nil
-    case Lines(rows)   => rows.map(ship => ship: Ship)
-    case Manual(rows)  => rows.map(ship => ship: Ship)
+    case Empty        => Nil
+    case Lines(rows)  => rows.map(ship => ship: Ship)
+    case Manual(rows) => rows.map(ship => ship: Ship)
+end Catalog
 
 object Catalog:
   val empty: Catalog = Empty
 
   def from(ships: List[Ship]): Either[CatalogError, Catalog] =
-    ships.foldLeft[Either[CatalogError, List[Ship]]](Right(Nil)): (acc, ship) =>
-      acc.flatMap: seen =>
-        if seen.exists(_.name == ship.name) then Left(CatalogError.DuplicateName(ship.name))
-        else
-          repeated(ship) match
-            case Some(member) => Left(CatalogError.RepeatedMember(ship.name, member))
-            case None =>
-              clash(seen, ship) match
-                case Some(member, first) => Left(CatalogError.InTwoShips(member, first, ship.name))
-                case None                => Right(seen :+ ship)
-    .flatMap(assemble)
+    ships
+      .foldLeft[Either[CatalogError, List[Ship]]](Right(Nil)): (acc, ship) =>
+        acc.flatMap: seen =>
+          if seen.exists(_.name == ship.name) then Left(CatalogError.DuplicateName(ship.name))
+          else
+            repeated(ship) match
+              case Some(member) => Left(CatalogError.RepeatedMember(ship.name, member))
+              case None         =>
+                clash(seen, ship) match
+                  case Some(member, first) => Left(CatalogError.InTwoShips(member, first, ship.name))
+                  case None                => Right(seen :+ ship)
+      .flatMap(assemble)
 
   private def assemble(ships: List[Ship]): Either[CatalogError, Catalog] =
-    val lines = ships.collect { case line: Ship.Line => line }
+    val lines  = ships.collect { case line: Ship.Line => line }
     val manual = ships.collect { case row: Ship.Manual => row }
     (lines, manual) match
-      case (Nil, Nil)             => Right(Empty)
-      case (first :: rest, Nil)   => Right(Lines(::(first, rest)))
-      case (Nil, first :: rest)   => Right(Manual(::(first, rest)))
-      case _                      => Left(CatalogError.MixedScheme)
+      case (Nil, Nil)           => Right(Empty)
+      case (first :: rest, Nil) => Right(Lines(::(first, rest)))
+      case (Nil, first :: rest) => Right(Manual(::(first, rest)))
+      case _                    => Left(CatalogError.MixedScheme)
 
   private def repeated(ship: Ship): Option[ProjectName] =
-    ship.members.foldLeft[(List[ProjectName], Option[ProjectName])]((Nil, None)):
-      case ((_, found @ Some(_)), _) => (Nil, found)
-      case ((seen, None), member)    =>
-        if seen.contains(member) then (seen, Some(member)) else (member :: seen, None)
-    ._2
+    ship.members
+      .foldLeft[(List[ProjectName], Option[ProjectName])]((Nil, None)):
+        case ((_, found @ Some(_)), _) => (Nil, found)
+        case ((seen, None), member)    =>
+          if seen.contains(member) then (seen, Some(member)) else (member :: seen, None)
+      ._2
 
   private def clash(seen: List[Ship], ship: Ship): Option[(ProjectName, ShipName)] =
     ship.members.foldLeft[Option[(ProjectName, ShipName)]](None): (found, member) =>
       found.orElse:
         seen.collectFirst:
           case other if other.members.contains(member) => (member, other.name)
+end Catalog
 
 enum CatalogError:
   case DuplicateName(name: ShipName)
@@ -99,10 +106,11 @@ enum CatalogError:
   case MixedScheme
 
   def message: String = this match
-    case DuplicateName(name) => s"ship '${name.value}' is declared twice"
+    case DuplicateName(name)          => s"ship '${name.value}' is declared twice"
     case RepeatedMember(ship, member) =>
       s"ship '${ship.value}' lists '${member.value}' twice"
     case InTwoShips(member, first, second) =>
       s"'${member.value}' is in ship '${first.value}' and ship '${second.value}'"
     case MixedScheme =>
       "a catalog is either early-effect ships or manual versions, and this one is both"
+end CatalogError

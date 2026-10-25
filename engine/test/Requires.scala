@@ -30,18 +30,18 @@ object Requires:
 
   private def present(tool: Tool): UIO[Boolean] =
     for
-      env  <- System.envs.orElseSucceed(Map.empty[String, String])
-      home <- System.property("user.home").orElseSucceed(None)
-      os   <- System.property("os.name").orElseSucceed(None)
+      env   <- System.envs.orElseSucceed(Map.empty[String, String])
+      home  <- System.property("user.home").orElseSucceed(None)
+      os    <- System.property("os.name").orElseSucceed(None)
       found <- tool match
-        case Tool.AnyClang       => ClangProbe.found(env).isSuccess
-        case Tool.Clang(major)   => ClangProbe.resolve(major, env).isSuccess
-        case Tool.Node           => onPath(env, "node")
-        case Tool.Npm            => onPath(env, "npm")
-        case Tool.Firefox        => firefox(env, home, os)
+        case Tool.AnyClang                 => ClangProbe.found(env).isSuccess
+        case Tool.Clang(major)             => ClangProbe.resolve(major, env).isSuccess
+        case Tool.Node                     => onPath(env, "node")
+        case Tool.Npm                      => onPath(env, "npm")
+        case Tool.Firefox                  => firefox(env, home, os)
         case Tool.IvyLocalNative(revision) =>
           home match
-            case None => ZIO.succeed(false)
+            case None      => ZIO.succeed(false)
             case Some(dir) =>
               exists(Path.of(dir, ".ivy2", "local", "org.scala-native", "nativelib_native0.5_3", revision.value))
     yield found
@@ -53,16 +53,25 @@ object Requires:
   /** Chekhov's own lookup for the Playwright driver and its Firefox build. */
   private def firefox(env: Map[String, String], home: Option[String], os: Option[String]): UIO[Boolean] =
     home match
-      case None => ZIO.succeed(false)
+      case None      => ZIO.succeed(false)
       case Some(dir) =>
         ZIO
           .attemptBlocking:
             val cache  = osCache(env, Path.of(dir), os)
-            val driver = setting(env, "PLAYWRIGHT_DRIVER_CLI").map(Path.of(_)).getOrElse:
-              setting(env, "CHEKHOV_CACHE").map(Path.of(_)).getOrElse(cache.resolve("chekhov"))
-                .resolve("playwright").resolve(chekhovPlaywright)
-                .resolve("node_modules").resolve("playwright").resolve("cli.js")
-            val browsers = setting(env, "PLAYWRIGHT_BROWSERS_PATH").filter(_ != "0").map(Path.of(_))
+            val driver = setting(env, "PLAYWRIGHT_DRIVER_CLI")
+              .map(Path.of(_))
+              .getOrElse:
+                setting(env, "CHEKHOV_CACHE")
+                  .map(Path.of(_))
+                  .getOrElse(cache.resolve("chekhov"))
+                  .resolve("playwright")
+                  .resolve(chekhovPlaywright)
+                  .resolve("node_modules")
+                  .resolve("playwright")
+                  .resolve("cli.js")
+            val browsers = setting(env, "PLAYWRIGHT_BROWSERS_PATH")
+              .filter(_ != "0")
+              .map(Path.of(_))
               .getOrElse(cache.resolve("ms-playwright"))
             (driver, browsers)
           .flatMap: (driver, browsers) =>
@@ -89,3 +98,4 @@ object Requires:
 
   private def setting(env: Map[String, String], name: String): Option[String] =
     env.get(name).filter(_.nonEmpty)
+end Requires

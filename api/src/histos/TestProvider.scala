@@ -20,6 +20,7 @@ object FrameworkClass:
   extension (framework: FrameworkClass) def value: String = framework
 
   @publicInBinary private[histos] def trusted(raw: String): FrameworkClass = raw
+end FrameworkClass
 
 enum FrameworkClassError:
   case Empty
@@ -28,6 +29,7 @@ enum FrameworkClassError:
   def message: String = this match
     case Empty    => "a test framework is not empty"
     case Bad(raw) => s"'$raw' is not a test framework"
+end FrameworkClassError
 
 /** The test-scoped library that brings a provider onto the child classpath. The revision is the build's. */
 final case class ProviderLibrary private (organization: String, name: String)
@@ -35,24 +37,26 @@ final case class ProviderLibrary private (organization: String, name: String)
 object ProviderLibrary:
   def from(organization: String, name: String): Either[ProviderLibraryError, ProviderLibrary] =
     if organization.isEmpty || name.isEmpty then Left(ProviderLibraryError.Empty)
-    else if organization.exists(_.isWhitespace) || name.exists(_.isWhitespace) then Left(ProviderLibraryError.Bad(organization, name))
+    else if organization.exists(_.isWhitespace) || name.exists(_.isWhitespace) then
+      Left(ProviderLibraryError.Bad(organization, name))
     else Right(trusted(organization, name))
 
   @publicInBinary private[histos] def trusted(organization: String, name: String): ProviderLibrary =
     new ProviderLibrary(organization, name)
+end ProviderLibrary
 
 enum ProviderLibraryError:
   case Empty
   case Bad(organization: String, name: String)
 
   def message: String = this match
-    case Empty                 => "a test provider library is not empty"
+    case Empty                   => "a test provider library is not empty"
     case Bad(organization, name) => s"'$organization' '$name' is not a test provider library"
+end ProviderLibraryError
 
-/**
- * A framework the child process runs. `Zio` is the provider `histos test` uses when a module
- * does not name another one and does not name a main.
- */
+/** A framework the child process runs. `Zio` is the provider `histos test` uses when a module does not name another one
+  * and does not name a main.
+  */
 final case class TestProvider private (framework: FrameworkClass, library: ProviderLibrary)
 
 object TestProvider:
@@ -66,3 +70,4 @@ object TestProvider:
 
   @publicInBinary private[histos] def trusted(framework: FrameworkClass, library: ProviderLibrary): TestProvider =
     new TestProvider(framework, library)
+end TestProvider

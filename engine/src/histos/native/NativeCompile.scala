@@ -1,19 +1,13 @@
 package histos.native
 
-import histos.zinc.{
-  CompileError,
-  CompileOutput,
-  CompileProblem,
-  CompileRequest,
-  JvmCompile
-}
+import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JvmCompile}
 import histos.{NativeVersion, Platform}
 import histos.resolve.LockedTools
 
 import zio.{IO, ZIO}
 
-/** Compile a Native cell with that revision's compiler plugin. Linking is
-  * separate. The engine does not load the plugin.
+/** Compile a Native cell with that revision's compiler plugin. Linking is separate. The engine does not load the
+  * plugin.
   */
 object NativeCompile:
   def compile(
@@ -21,7 +15,7 @@ object NativeCompile:
       revision: NativeVersion,
       origin: NativeOrigin,
       extra: List[String] = Nil,
-      hear: CompileProblem => Unit = _ => ()
+      hear: CompileProblem => Unit = _ => (),
   ): ZIO[LockedTools, CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Native then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
@@ -38,12 +32,10 @@ object NativeCompile:
             classpath = libs.libraries ++ request.classpath,
             compilationTools = request.compilationTools :+ libs.input,
             compilerPlugins =
-              request.compilerPlugins :+ libs.input.copy(artifacts =
-                libs.input.artifacts.filter(_.path == libs.plugin)
-              )
+              request.compilerPlugins :+ libs.input.copy(artifacts = libs.input.artifacts.filter(_.path == libs.plugin)),
           ),
           List(libs.plugin),
           extra,
-          hear
+          hear,
         )
       yield compiled

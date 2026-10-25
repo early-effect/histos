@@ -39,7 +39,8 @@ object LiteralSpec extends ZIOSpecDefault:
         ScalaVersion.from("3") == Left(ScalaVersionError.NotFull("3")),
         ScalaVersion.from("2.13") == Left(ScalaVersionError.NotFull("2.13")),
         ScalaVersion.from("") == Left(ScalaVersionError.Empty),
-      ),
+      )
+    ,
     test("a series is rejected when the build file compiles"):
       val errors = typeCheckErrors("""scala"2.13"""")
       assertTrue:
@@ -57,7 +58,8 @@ object LiteralSpec extends ZIOSpecDefault:
         Dep.from("nope") == Left(DepError.BadShape("nope")),
         Dep.from("") == Left(DepError.Empty),
         Dep.from("a::b::c") == Left(DepError.BadShape("a::b::c")),
-      ),
+      )
+    ,
     test("a ship number rejects leading zeros and short forms"):
       val errors = typeCheckErrors("""ship"01.2.3"""")
       assertTrue(
@@ -69,7 +71,7 @@ object LiteralSpec extends ZIOSpecDefault:
         ShipNumber.from("") == Left(ShipNumberError.Empty),
         errors match
           case e :: _ => e.message.contains("01.2.3")
-          case Nil    => false
+          case Nil    => false,
       )
     ,
     test("a manual version is the text that was written"):
@@ -83,7 +85,7 @@ object LiteralSpec extends ZIOSpecDefault:
         ManualVersion.from(" 1.2.3") == Left(ManualVersionError.NotAVersion(" 1.2.3")),
         errors match
           case e :: _ => e.message.contains("1.2..3")
-          case Nil    => false
+          case Nil    => false,
       )
     ,
     test("a broken dependency literal does not compile"):
@@ -91,8 +93,8 @@ object LiteralSpec extends ZIOSpecDefault:
       assertTrue:
         errors match
           case e :: _ => e.message.contains("nope")
-          case Nil    => false
-    ,
+          case Nil    => false,
   )
 
   def spec = literals
+end LiteralSpec

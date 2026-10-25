@@ -6,7 +6,7 @@ import _root_.scala.quoted.*
 opaque type JarClassifier = String
 
 object JarClassifier:
-  given CanEqual[JarClassifier, JarClassifier] = CanEqual.derived
+  given CanEqual[JarClassifier, JarClassifier]        = CanEqual.derived
   inline def apply(inline raw: String): JarClassifier = ${
     JarClassifierMacro.literal('raw)
   }
@@ -17,7 +17,7 @@ object JarClassifier:
       )
     then Right(trusted(raw))
     else Left(ClassifierError.Invalid(raw))
-  extension (classifier: JarClassifier) def value: String = classifier
+  extension (classifier: JarClassifier) def value: String                 = classifier
   @publicInBinary private[histos] def trusted(raw: String): JarClassifier = raw
 
 enum ClassifierError:
@@ -33,7 +33,7 @@ private object JarClassifierMacro:
       case None =>
         quotes.reflect.report.errorAndAbort(
           "JarClassifier(...) takes a literal. Use JarClassifier.from at runtime.",
-          raw
+          raw,
         )
       case Some(value) =>
         JarClassifier.from(value) match

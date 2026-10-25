@@ -7,7 +7,7 @@ import histos.step.{
   Need as StepNeed,
   Step,
   StepId,
-  StepInfo
+  StepInfo,
 }
 
 import Histos.given
@@ -25,33 +25,33 @@ enum ScheduleError[+E]:
   case Remote(error: RemoteError)
 
   def message: String = this match
-    case UnknownAction(id)   => s"no action '${id.value}'"
-    case DuplicateAction(id) => s"action '${id.value}' is declared twice"
+    case UnknownAction(id)                  => s"no action '${id.value}'"
+    case DuplicateAction(id)                => s"action '${id.value}' is declared twice"
     case MissingDependency(action, missing) =>
       s"'${action.value}' depends on '${missing.value}', which is not in the plan"
-    case Cycle(path) => s"action cycle ${path.map(_.value).mkString(" -> ")}"
+    case Cycle(path)                  => s"action cycle ${path.map(_.value).mkString(" -> ")}"
     case DuplicateInput(action, name) =>
       s"'${action.value}' declares input '${name.value}' twice"
     case Failed(action, error) => s"'${action.value}' failed: $error"
     case Cache(error)          => error.message
     case Remote(error)         => error.message
+end ScheduleError
 
-/** One executor and the caches for this run. The caches are the caller's, so a
-  * test passes its own.
+/** One executor and the caches for this run. The caches are the caller's, so a test passes its own.
   */
 final case class Scheduler(
     runner: Histos,
     cache: ActionCache,
-    remote: RemoteCache
+    remote: RemoteCache,
 ):
-  /** Run `root` after its dependencies. A remote hit is the stored output. A
-    * miss runs `local`. A write cache uploads only a sendable action.
+  /** Run `root` after its dependencies. A remote hit is the stored output. A miss runs `local`. A write cache uploads
+    * only a sendable action.
     */
   def execute[E](
       root: ActionId,
       actions: List[Action],
       local: (Action, String) => IO[E, String],
-      verdict: Action => Verdict = Sendable.ofAction
+      verdict: Action => Verdict = Sendable.ofAction,
   ): IO[ScheduleError[E], String] =
     ZIO
       .fromEither(prepare(root, actions))
@@ -62,7 +62,7 @@ final case class Scheduler(
   private[schedule] def planned[E](
       root: ActionId,
       actions: List[Action],
-      local: (Action, String) => IO[E, String]
+      local: (Action, String) => IO[E, String],
   ): IO[ScheduleError[E], histos.step.HermeticStep[Any, ScheduleError[
     E
   ], String]] =
@@ -70,32 +70,31 @@ final case class Scheduler(
       .fromEither(prepare(root, actions))
       .flatMap(ready => build(root, ready, local, Sendable.ofAction))
 
-  /** Cache policy for one action. The caller already ordered its upstream
-    * steps.
+  /** Cache policy for one action. The caller already ordered its upstream steps.
     */
   def cached[E](
       action: Action,
       digest: Digest,
       local: IO[E, String],
-      verdict: Action => Verdict = Sendable.ofAction
+      verdict: Action => Verdict = Sendable.ofAction,
   ): IO[ScheduleError[E], String] =
     perform(action, digest, (_, _) => local, verdict, "")
 
   private final case class Ready(
       byId: Map[ActionId, Action],
       order: List[ActionId],
-      digests: Map[ActionId, Digest]
+      digests: Map[ActionId, Digest],
   )
 
   private def prepare(
       root: ActionId,
-      actions: List[Action]
+      actions: List[Action],
   ): Either[ScheduleError[Nothing], Ready] =
     for
-      byId <- index(actions)
-      _ <- byId.get(root).toRight(ScheduleError.UnknownAction(root))
-      _ <- inputs(byId)
-      order <- closure(root, byId)
+      byId   <- index(actions)
+      _      <- byId.get(root).toRight(ScheduleError.UnknownAction(root))
+      _      <- inputs(byId)
+      order  <- closure(root, byId)
       hashed <- hashes(order, byId)
     yield Ready(byId, order, hashed)
 
@@ -106,42 +105,39 @@ final case class Scheduler(
       Right(Map.empty)
     ): (acc, action) =>
       acc.flatMap: seen =>
-        if seen.contains(action.id) then
-          Left(ScheduleError.DuplicateAction(action.id))
+        if seen.contains(action.id) then Left(ScheduleError.DuplicateAction(action.id))
         else Right(seen + (action.id -> action))
 
   private def inputs(
       byId: Map[ActionId, Action]
   ): Either[ScheduleError[Nothing], Unit] =
-    byId.values.foldLeft[Either[ScheduleError[Nothing], Unit]](Right(())):
-      (acc, action) =>
-        acc.flatMap: _ =>
-          val names = action.inputs.map(_.name.value)
-          names
-            .foldLeft[(List[String], Option[String])]((Nil, None)):
-              case ((_, Some(name)), _) => (Nil, Some(name))
-              case ((seen, None), name) =>
-                if seen.contains(name) then (seen, Some(name))
-                else (name :: seen, None)
-            ._2 match
-            case Some(name) =>
-              Left(
-                ScheduleError.DuplicateInput(action.id, InputName.trusted(name))
-              )
-            case None => Right(())
+    byId.values.foldLeft[Either[ScheduleError[Nothing], Unit]](Right(())): (acc, action) =>
+      acc.flatMap: _ =>
+        val names = action.inputs.map(_.name.value)
+        names
+          .foldLeft[(List[String], Option[String])]((Nil, None)):
+            case ((_, Some(name)), _) => (Nil, Some(name))
+            case ((seen, None), name) =>
+              if seen.contains(name) then (seen, Some(name))
+              else (name :: seen, None)
+          ._2 match
+          case Some(name) =>
+            Left(
+              ScheduleError.DuplicateInput(action.id, InputName.trusted(name))
+            )
+          case None => Right(())
 
   private def closure(
       root: ActionId,
-      byId: Map[ActionId, Action]
+      byId: Map[ActionId, Action],
   ): Either[ScheduleError[Nothing], List[ActionId]] =
     def walk(
         id: ActionId,
         path: List[ActionId],
-        done: Set[ActionId]
+        done: Set[ActionId],
     ): Either[ScheduleError[Nothing], (List[ActionId], Set[ActionId])] =
       if done.contains(id) then Right((Nil, done))
-      else if path.contains(id) then
-        Left(ScheduleError.Cycle((id :: path).reverse.dropWhile(_ != id)))
+      else if path.contains(id) then Left(ScheduleError.Cycle((id :: path).reverse.dropWhile(_ != id)))
       else
         byId.get(id) match
           case None =>
@@ -162,10 +158,11 @@ final case class Scheduler(
               (deps :+ id, seen + id)
 
     walk(root, Nil, Set.empty).map(_._1)
+  end closure
 
   private def hashes(
       order: List[ActionId],
-      byId: Map[ActionId, Action]
+      byId: Map[ActionId, Action],
   ): Either[ScheduleError[Nothing], Map[ActionId, Digest]] =
     order.foldLeft[Either[ScheduleError[Nothing], Map[ActionId, Digest]]](
       Right(Map.empty)
@@ -183,12 +180,12 @@ final case class Scheduler(
       root: ActionId,
       ready: Ready,
       local: (Action, String) => IO[E, String],
-      verdict: Action => Verdict
+      verdict: Action => Verdict,
   ): IO[ScheduleError[E], String] =
     for
-      step <- build(root, ready, local, verdict)
+      step    <- build(root, ready, local, verdict)
       outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
-      result <- outcome match
+      result  <- outcome match
         case Outcome.Done(value)      => ZIO.succeed(value)
         case Outcome.Failed(failures) => recover(failures)
     yield result
@@ -208,7 +205,7 @@ final case class Scheduler(
       id: ActionId,
       ready: Ready,
       local: (Action, String) => IO[E, String],
-      verdict: Action => Verdict
+      verdict: Action => Verdict,
   ): IO[ScheduleError[E], histos.step.HermeticStep[Any, ScheduleError[
     E
   ], String]] =
@@ -237,9 +234,7 @@ final case class Scheduler(
                     ): (acc, next) =>
                       acc.zip(next).map((left, right) => join(left, right))
                 case Nil => step.map(_ => "")
-              upstream.andThenHermetic[String](info)(value =>
-                perform(action, digest, local, verdict, value)
-              )
+              upstream.andThenHermetic[String](info)(value => perform(action, digest, local, verdict, value))
     yield wired
 
   private def join(left: String, right: String): String =
@@ -253,10 +248,10 @@ final case class Scheduler(
       Chunk(
         StepInput(
           StepInputName(digest.value),
-          StepInputValue.Digest(digest.value)
+          StepInputValue.Digest(digest.value),
         )
       ),
-      Set(StepNeed.Cpu)
+      Set(StepNeed.Cpu),
     )
 
   private def perform[E](
@@ -264,11 +259,11 @@ final case class Scheduler(
       digest: Digest,
       local: (Action, String) => IO[E, String],
       verdict: Action => Verdict,
-      upstream: String
+      upstream: String,
   ): IO[ScheduleError[E], String] =
     for
       remoteHit <- ScheduleAspects.remote(remote, action, digest)
-      out <- remoteHit match
+      out       <- remoteHit match
         case Some(value) => runner.note(Source.RemoteHit).as(value)
         case None        =>
           ScheduleAspects
@@ -279,8 +274,8 @@ final case class Scheduler(
                 miss(action, digest, cache, remote, local, verdict, upstream)
     yield out
 
-  /** `Policy.Core` stores every local success. A plugin stores only a sendable
-    * result. A stayed plugin result is returned and not written.
+  /** `Policy.Core` stores every local success. A plugin stores only a sendable result. A stayed plugin result is
+    * returned and not written.
     */
   private def miss[E](
       action: Action,
@@ -289,13 +284,13 @@ final case class Scheduler(
       remote: RemoteCache,
       local: (Action, String) => IO[E, String],
       verdict: Action => Verdict,
-      upstream: String
+      upstream: String,
   ): IO[ScheduleError[E], String] =
     local(action, upstream)
       .mapError(ScheduleError.Failed(action.id, _))
       .flatMap: value =>
         val decided = verdict(action)
-        val store = action.policy match
+        val store   = action.policy match
           case Policy.Core               => true
           case Policy.Plugin(_, _, _, _) =>
             decided match

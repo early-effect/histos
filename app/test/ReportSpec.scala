@@ -21,7 +21,7 @@ import histos.resolve.{
   Resolve,
   ResolveCell,
   ResolveError,
-  ToolRequest
+  ToolRequest,
 }
 
 import java.nio.file.Path
@@ -31,7 +31,7 @@ import zio.test.*
 import zio.{Chunk, Fiber, Ref, Scope, ZIO, ZLayer}
 
 object ReportSpec extends ZIOSpecDefault:
-  private val version = ScalaVersion("3.10.0")
+  private val version  = ScalaVersion("3.10.0")
   private val repoRoot = Path.of("/repo")
 
   def spec = suite("report")(
@@ -41,21 +41,21 @@ object ReportSpec extends ZIOSpecDefault:
         Chunk("compiled", "done"),
         Chunk.empty,
         Some("run-1"),
-        Some(sample)
+        Some(sample),
       )
       val json = report.toJson
       assertTrue(
         json.fromJson[Report] == Right(report),
         sample.toJson.fromJson[Observation] == Right(sample),
         json.contains(""""out":["compiled","done"]"""),
-        json.contains(""""run":"run-1"""")
+        json.contains(""""run":"run-1""""),
       )
     ,
     test("spoken keeps the minted id when the transcript names another"):
       val found = Session.spoken(
         List(Feed.Out("run other"), Feed.Exit(0, "")),
         Some("minted"),
-        None
+        None,
       )
       assertTrue(
         found == Right(
@@ -65,43 +65,43 @@ object ReportSpec extends ZIOSpecDefault:
     ,
     test("a warning stays in the report when the exit is 0"):
       val warning = "core/src/Core.scala:4:2: warn: unused"
-      val spoken = Session.spoken(
+      val spoken  = Session.spoken(
         List(Feed.Out("ok"), Feed.Err(warning), Feed.Exit(0, "")),
         None,
-        None
+        None,
       )
       for
-        report <- ZIO.fromEither(spoken)
+        report    <- ZIO.fromEither(spoken)
         delivered <- Session.deliver(ZIO.succeed(report))
       yield assertTrue(
         delivered.exit == 0,
         delivered.out == Chunk("ok"),
-        delivered.err == Chunk(warning)
+        delivered.err == Chunk(warning),
       )
     ,
     test("a failed report keeps stderr and the tool error is that json"):
-      val line = "core/src/Core.scala:4:1: error: missing"
+      val line   = "core/src/Core.scala:4:1: error: missing"
       val report = Report(8, Chunk("out"), Chunk(line), None, Some(sample))
       Session.deliver(ZIO.succeed(report)).either.map {
         case Left(text) =>
           assertTrue(
             text.fromJson[Report] == Right(report),
-            text.contains(line)
+            text.contains(line),
           )
         case Right(_) => assertTrue(false)
       }
     ,
     test("tracked passes the minted id and does not read it from the line"):
       for
-        runs <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
+        runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
         feeds <- Ref.make(Chunk.empty[Feed])
         say = Say.record(feeds)
         held <- Ref.make(Option.empty[String])
-        _ <- Calls.tracked(runs, say)(
+        _    <- Calls.tracked(runs, say)(
           say.run.flatMap(id => held.set(id) *> say(Message.Exit(0, "")))
         )
-        id <- held.get
-        run <- say.run
+        id    <- held.get
+        run   <- say.run
         chunk <- feeds.get
         found = Session.spoken(chunk.toList, run, None)
       yield assertTrue(
@@ -113,17 +113,17 @@ object ReportSpec extends ZIOSpecDefault:
               Chunk(s"run $value"),
               Chunk.empty,
               Some(value),
-              None
+              None,
             )
-          case _ => false
+          case _ => false,
       )
     ,
     test(
       "an exit frame keeps the run id and the tally, and still decodes as Exit"
     ):
-      val json = Say.wire(Message.Exit(0, ""), Some("minted"), Some(sample))
+      val json  = Say.wire(Message.Exit(0, ""), Some("minted"), Some(sample))
       val plain = Say.wire(Message.Exit(7, "boom"), None, None)
-      val out = Say.wire(Message.Out("hi"), None, None)
+      val out   = Say.wire(Message.Out("hi"), None, None)
       assertTrue(
         json.fromJson[Message] == Right(Message.Exit(0, "")),
         Remote.event(json) == Right(
@@ -132,49 +132,49 @@ object ReportSpec extends ZIOSpecDefault:
         Remote.event(plain) == Right(
           Remote.Event.Stop(Feed.Exit(7, "boom"), None, None)
         ),
-        Remote.event(out) == Right(Remote.Event.More(Feed.Out("hi")))
+        Remote.event(out) == Right(Remote.Event.More(Feed.Out("hi"))),
       )
     ,
     test("a different server version is not a report"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-version")
+          repo  <- Workspace.work("histos-report-version")
           loads <- Ref.make(0)
-          _ <- Workspace.writeString(
+          _     <- Workspace.writeString(
             repo.resolve(".histos").resolve("server.json"),
-            """{"version":"other","fingerprint":"abc","socket":"/tmp/nope"}"""
+            """{"version":"other","fingerprint":"abc","socket":"/tmp/nope"}""",
           )
-          desk <- Session.desk
+          desk   <- Session.desk
           result <- Session
             .perform(
               repo,
               Path.of("api.jar"),
               Calls.idleMachine,
               desk,
-              Call.Version
+              Call.Version,
             )
             .provideSome[Scope](observeLayers(repo, loads))
             .either
           seen <- loads.get
         yield assertTrue(
           result == Left(SessionError.DifferentVersion),
-          seen == 0
+          seen == 0,
         )
       }
     ,
     test("version is a report with no run id"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-plain")
-          loads <- Ref.make(0)
-          desk <- Session.desk
+          repo   <- Workspace.work("histos-report-plain")
+          loads  <- Ref.make(0)
+          desk   <- Session.desk
           result <- Session
             .perform(
               repo,
               Path.of("api.jar"),
               Calls.idleMachine,
               desk,
-              Call.Version
+              Call.Version,
             )
             .provideSome[Scope](observeLayers(repo, loads))
           seen <- loads.get
@@ -184,31 +184,31 @@ object ReportSpec extends ZIOSpecDefault:
           result.observation.isEmpty,
           result.out == Chunk(Cli.VersionText),
           result.err.isEmpty,
-          seen == 0
+          seen == 0,
         )
       }
     ,
     test("a finished tally is the file a later read sees"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-file")
+          repo  <- Workspace.work("histos-report-file")
           saved <- remember(repo)
-          read <- Stored.read(repo)
+          read  <- Stored.read(repo)
         yield assertTrue(
           read == saved,
           read.classes.isEmpty,
           read.compiled.isEmpty,
           !read.toJson.contains(""""classes":4"""),
-          !read.toJson.contains(""""classes":9""")
+          !read.toJson.contains(""""classes":9"""),
         )
       }
     ,
     test("a missing tally is a typed error, and garbage is not a tally"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-missing")
+          repo    <- Workspace.work("histos-report-missing")
           missing <- Stored.read(repo).either
-          _ <- Workspace.writeString(Products.observation(repo), "nope")
+          _       <- Workspace.writeString(Products.observation(repo), "nope")
           garbage <- Stored.read(repo).either
           path = Products.observation(repo).toString
         yield assertTrue(
@@ -218,24 +218,24 @@ object ReportSpec extends ZIOSpecDefault:
               ObserveError.Missing(found).message == s"no observation at $path"
             case _ => false
           ,
-          garbage == Left(ObserveError.Malformed(path))
+          garbage == Left(ObserveError.Malformed(path)),
         )
       }
     ,
     test("a compile that enters no module replaces the stored tally"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-compile")
-          _ <- Stored.keep(repo, Some(sample))
+          repo  <- Workspace.work("histos-report-compile")
+          _     <- Stored.keep(repo, Some(sample))
           built <- ZIO.fromEither(Projects(module("core", Jvm)(version)))
           feeds <- Ref.make(Chunk.empty[Feed])
           say = Say.record(feeds)
           _ <- Calls
             .compile(repo, built, Nil, jdk, Calls.idleMachine, say)
             .provide(ZLayer.succeed(DeadResolve))
-          read <- Stored.read(repo).either
+          read        <- Stored.read(repo).either
           observation <- say.observation
-          chunk <- feeds.get
+          chunk       <- feeds.get
         yield assertTrue(
           read == Left(
             ObserveError.Missing(Products.observation(repo).toString)
@@ -244,55 +244,55 @@ object ReportSpec extends ZIOSpecDefault:
           chunk.exists {
             case Feed.Exit(code, _) => code != 0
             case _                  => false
-          }
+          },
         )
       }
     ,
     test("observe prints the file and does not compile"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-observe")
+          repo  <- Workspace.work("histos-report-observe")
           loads <- Ref.make(0)
-          _ <- Stored.keep(repo, Some(sample))
-          done <- Cli
+          _     <- Stored.keep(repo, Some(sample))
+          done  <- Cli
             .execute(List("observe"), repo, Path.of("api.jar"))
             .provideSome[Scope](observeLayers(repo, loads))
-          out <- TestConsole.output
+          out  <- TestConsole.output
           seen <- loads.get
         yield assertTrue(
           done.exit == CliExit.Success,
           done.out == sample.toJson,
           out.mkString.contains(sample.toJson),
-          seen == 0
+          seen == 0,
         )
       }
     ,
     test("observe with no file prints the missing line and does not compile"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-observe-missing")
+          repo  <- Workspace.work("histos-report-observe-missing")
           loads <- Ref.make(0)
-          done <- Cli
+          done  <- Cli
             .execute(List("observe"), repo, Path.of("api.jar"))
             .provideSome[Scope](observeLayers(repo, loads))
-          err <- TestConsole.outputErr
+          err  <- TestConsole.outputErr
           seen <- loads.get
           path = Products.observation(repo).toString
         yield assertTrue(
           done.exit == CliExit.TaskFailed,
           done.err == s"no observation at $path",
           err.mkString.contains(s"no observation at $path"),
-          seen == 0
+          seen == 0,
         )
       }
     ,
     test("observe is reserved, and watch of it is usage"):
       ZIO.scoped {
         for
-          repo <- Workspace.work("histos-report-watch")
+          repo  <- Workspace.work("histos-report-watch")
           loads <- Ref.make(0)
-          bad <- Cli.parse(List("observe", "--bad")).either
-          done <- Cli
+          bad   <- Cli.parse(List("observe", "--bad")).either
+          done  <- Cli
             .execute(List("~", "observe"), repo, Path.of("api.jar"))
             .provideSome[Scope](observeLayers(repo, loads))
           seen <- loads.get
@@ -304,20 +304,20 @@ object ReportSpec extends ZIOSpecDefault:
           ,
           done.exit == CliExit.Usage,
           done.err.contains("usage: histos"),
-          seen == 0
+          seen == 0,
         )
-      }
+      },
   )
 
   private def remember(repo: Path): ZIO[
     Any,
     histos.workspace.IoFailure | histos.ProjectNameError,
-    Observation
+    Observation,
   ] =
     for
-      name <- ZIO.fromEither(ProjectName.from("core"))
+      name    <- ZIO.fromEither(ProjectName.from("core"))
       console <- CompileConsole.open(repo)
-      _ <- console.hear(
+      _       <- console.hear(
         CompileFeed.Done(
           CompiledCell(
             name,
@@ -328,19 +328,19 @@ object ReportSpec extends ZIOSpecDefault:
             None,
             changed = true,
             sources = None,
-            classesWritten = Some(9)
+            classesWritten = Some(9),
           )
         )
       )
       found <- console.observation
-      _ <- Stored.keep(repo, found)
+      _     <- Stored.keep(repo, found)
       saved <- found match
         case Some(value) => ZIO.succeed(value)
         case None        =>
           ZIO.fail(
             histos.workspace.IoFailure(
               Products.observation(repo),
-              histos.workspace.IoFault.Write
+              histos.workspace.IoFault.Write,
             )
           )
     yield saved
@@ -350,7 +350,7 @@ object ReportSpec extends ZIOSpecDefault:
     Some(2),
     Some(1),
     Some(4),
-    1
+    1,
   )
 
   private val jdk = JdkRuntime(
@@ -358,8 +358,8 @@ object ReportSpec extends ZIOSpecDefault:
     JdkVersion.trusted("25.0.5", JdkMajor.trusted(25)),
     RuntimeIdentity.Local(
       Path.of("jdk"),
-      Sha256.of(Chunk.fromArray(Array[Byte](1)))
-    )
+      Sha256.of(Chunk.fromArray(Array[Byte](1))),
+    ),
   )
 
   private final class Counting(loads: Ref[Int]) extends Loader:
@@ -367,12 +367,12 @@ object ReportSpec extends ZIOSpecDefault:
     def loadLocked(
         repo: Path,
         apiJar: Path,
-        lock: histos.resolve.DependencyLock
+        lock: histos.resolve.DependencyLock,
     ) =
       loads.update(_ + 1) *> ZIO.fail(LoadError.MissingFile(repo))
     def load(repo: Path, apiJar: Path) =
       loads.update(_ + 1) *> ZIO.fail(LoadError.MissingFile(repo))
-    def buildClasspath(apiJar: Path) = ZIO.succeed(Nil)
+    def buildClasspath(apiJar: Path)          = ZIO.succeed(Nil)
     def reportBuild(repo: Path, apiJar: Path) =
       ZIO.fail(LoadError.MissingFile(apiJar))
 
@@ -385,14 +385,15 @@ object ReportSpec extends ZIOSpecDefault:
   private object DeadResolve extends Resolve:
     private val failed: zio.IO[ResolveError, Nothing] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
-    def resolveTool(request: ToolRequest) = failed
-    def resolve(cell: ResolveCell) = failed
-    def fetch(artifact: LockedArtifact) = failed
+    def resolveTool(request: ToolRequest)                                 = failed
+    def resolve(cell: ResolveCell)                                        = failed
+    def fetch(artifact: LockedArtifact)                                   = failed
     def resolvePlugin(dependency: histos.Dep, repositories: Repositories) =
       failed
     def sources(
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ) = failed
+end ReportSpec

@@ -16,18 +16,22 @@ object ClassShapes:
   final case class Shape(name: String, module: Boolean, parents: List[String])
 
   def read(classpath: List[Path]): IO[ClassShapeError, List[Shape]] =
-    ZIO.attemptBlocking(collect(classpath)).mapError(thrown => ClassShapeError.Failed(thrown.getClass.getName)).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlocking(collect(classpath))
+      .mapError(thrown => ClassShapeError.Failed(thrown.getClass.getName))
+      .flatMap(ZIO.fromEither)
 
   private def collect(classpath: List[Path]): Either[ClassShapeError, List[Shape]] =
-    classpath.foldLeft[Either[ClassShapeError, Map[String, Shape]]](Right(Map.empty)): (acc, path) =>
-      acc.flatMap: seen =>
-        entries(path).flatMap: found =>
-          found.foldLeft[Either[ClassShapeError, Map[String, Shape]]](Right(seen)): (shapes, entry) =>
-            shapes.flatMap: have =>
-              shape(entry).map:
-                case Some(next) => have.updated(next.name, next)
-                case None       => have
-    .map(_.values.toList.sortBy(_.name))
+    classpath
+      .foldLeft[Either[ClassShapeError, Map[String, Shape]]](Right(Map.empty)): (acc, path) =>
+        acc.flatMap: seen =>
+          entries(path).flatMap: found =>
+            found.foldLeft[Either[ClassShapeError, Map[String, Shape]]](Right(seen)): (shapes, entry) =>
+              shapes.flatMap: have =>
+                shape(entry).map:
+                  case Some(next) => have.updated(next.name, next)
+                  case None       => have
+      .map(_.values.toList.sortBy(_.name))
 
   private def entries(path: Path): Either[ClassShapeError, List[ClassBytes]] =
     if !Files.exists(path) then Right(Nil)
@@ -40,8 +44,7 @@ object ClassShapes:
     try
       walk.iterator.asScala.foldLeft[Either[ClassShapeError, List[ClassBytes]]](Right(Nil)): (acc, path) =>
         acc.flatMap: seen =>
-          if Files.isRegularFile(path) && nameOf(path).endsWith(".class") then
-            bytes(path.toString, path).map(seen :+ _)
+          if Files.isRegularFile(path) && nameOf(path).endsWith(".class") then bytes(path.toString, path).map(seen :+ _)
           else Right(seen)
     catch case NonFatal(_) => Left(ClassShapeError.Read(root))
     finally walk.close()
@@ -72,13 +75,13 @@ object ClassShapes:
   private def shape(entry: ClassBytes): Either[ClassShapeError, Option[Shape]] =
     try
       val reader = new ClassReader(entry.bytes)
-      val node = new ClassNode()
+      val node   = new ClassNode()
       reader.accept(node, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES)
       val binary = Option(node.name).map(_.replace('/', '.')).getOrElse("")
       if binary.isEmpty || binary.contains("$$") then Right(None)
       else
         val interfaces = Option(node.interfaces).toList.flatMap(_.asScala)
-        val parents = (Option(node.superName).toList ++ interfaces)
+        val parents    = (Option(node.superName).toList ++ interfaces)
           .map(_.replace('/', '.'))
           .filter(name => name.nonEmpty && name != "java.lang.Object")
         Right(Some(Shape(binary, binary.endsWith("$"), parents)))
@@ -88,6 +91,7 @@ object ClassShapes:
     Option(path.getFileName).map(_.toString).getOrElse("")
 
   private final case class ClassBytes(label: String, bytes: Array[Byte])
+end ClassShapes
 
 enum ClassShapeError:
   case Failed(kind: String)
@@ -98,3 +102,4 @@ enum ClassShapeError:
     case Failed(kind)     => s"could not read class files ($kind)"
     case Read(path)       => s"could not read class files under $path"
     case ClassFile(label) => s"could not read the class file $label"
+end ClassShapeError

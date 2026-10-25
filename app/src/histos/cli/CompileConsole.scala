@@ -8,8 +8,7 @@ import java.nio.file.Path
 
 import zio.{Chunk, Ref, UIO, ZIO}
 
-/** One compile's console. Parallel cells share the ref. The tally stays after
-  * it is read.
+/** One compile's console. Parallel cells share the ref. The tally stays after it is read.
   */
 object CompileConsole:
   enum Line:
@@ -25,7 +24,7 @@ object CompileConsole:
   def show[R, E](
       lines: Chunk[Line],
       out: String => ZIO[R, E, Unit],
-      err: String => ZIO[R, E, Unit]
+      err: String => ZIO[R, E, Unit],
   ): ZIO[R, E, Unit] =
     ZIO.foreachDiscard(lines):
       case Line.Out(text) => out(text)
@@ -48,7 +47,7 @@ object CompileConsole:
                 cell.version,
                 cell.platform,
                 cell.sources,
-                cell.classesWritten
+                cell.classesWritten,
               )
             )
             .as {
@@ -59,7 +58,7 @@ object CompileConsole:
                   cell.platform,
                   cell.changed,
                   cell.sources,
-                  cell.classesWritten
+                  cell.classesWritten,
                 )
                 .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
             }
@@ -79,6 +78,7 @@ object CompileConsole:
 
     def observation: UIO[Option[Observation]] =
       counts.get.map(_.observed)
+  end Session
 
   /** Test compiles. The same ref, read when the test run ends. */
   final class Notes private[CompileConsole] (counts: Ref[Counts]):
@@ -86,7 +86,7 @@ object CompileConsole:
         module: ProjectName,
         version: ScalaVersion,
         platform: Platform,
-        facts: CompileFacts
+        facts: CompileFacts,
     ): UIO[String] =
       counts
         .update(
@@ -95,7 +95,7 @@ object CompileConsole:
             version,
             platform,
             facts.sources,
-            facts.classesWritten
+            facts.classesWritten,
           )
         )
         .as(
@@ -105,7 +105,7 @@ object CompileConsole:
             platform,
             facts.changed,
             facts.sources,
-            facts.classesWritten
+            facts.classesWritten,
           )
         )
 
@@ -119,6 +119,7 @@ object CompileConsole:
 
     def observation: UIO[Option[Observation]] =
       counts.get.map(_.observed)
+  end Notes
 
   private enum Files:
     case Empty
@@ -135,22 +136,22 @@ object CompileConsole:
       failed: Int,
       files: Files,
       classes: Classes,
-      entered: Chunk[ModuleTally]
+      entered: Chunk[ModuleTally],
   ):
     def finish(
         module: ProjectName,
         version: ScalaVersion,
         platform: Platform,
         sources: Option[SourceCount],
-        classesWritten: Option[Int]
+        classesWritten: Option[Int],
     ): Counts =
       val nextFiles = addFiles(files, sources)
-      val record = Observation.recorded(
+      val record    = Observation.recorded(
         module,
         version,
         platform,
         sources,
-        classesWritten
+        classesWritten,
       )
       copy(
         modules = modules + 1,
@@ -159,7 +160,7 @@ object CompileConsole:
           case Files.Unknown                => Classes.Unknown
           case Files.Empty | Files.Known(_) =>
             addClasses(classes, classesWritten),
-        entered = entered :+ record
+        entered = entered :+ record,
       )
 
     /** A failed cell has no honest file or class total. */
@@ -169,7 +170,7 @@ object CompileConsole:
         failed = failed + 1,
         files = Files.Unknown,
         classes = Classes.Unknown,
-        entered = record.fold(entered)(entered :+ _)
+        entered = record.fold(entered)(entered :+ _),
       )
 
     def line(
@@ -177,7 +178,7 @@ object CompileConsole:
             Int,
             Int,
             Option[SourceCount],
-            Option[Int]
+            Option[Int],
         ) => Option[String]
     ): Option[String] =
       spell(modules, failed, knownFiles, knownClasses)
@@ -201,9 +202,10 @@ object CompileConsole:
             knownFiles.map(_.compiled),
             knownFiles.map(_.skipped),
             knownClasses,
-            modules
+            modules,
           )
         )
+  end Counts
 
   private def addFiles(sum: Files, sources: Option[SourceCount]): Files =
     (sum, sources) match
@@ -214,7 +216,7 @@ object CompileConsole:
         Files.Known(
           SourceCount(
             have.compiled + count.compiled,
-            have.skipped + count.skipped
+            have.skipped + count.skipped,
           )
         )
 

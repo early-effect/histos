@@ -4,12 +4,12 @@ import zio.{Chunk, Ref, UIO, ZIO}
 
 private final case class RemoteState(
     actions: Map[Digest, Digest],
-    blobs: Map[Digest, Chunk[Byte]]
+    blobs: Map[Digest, Chunk[Byte]],
 )
 
 private final class TestRemoteCache(
     val mode: RemoteMode,
-    state: Ref[RemoteState]
+    state: Ref[RemoteState],
 ) extends RemoteCache:
   def find(action: Digest): zio.IO[RemoteError, Option[Chunk[Byte]]] =
     state.get.flatMap: current =>
@@ -29,7 +29,7 @@ private final class TestRemoteCache(
         state.update(current =>
           current.copy(
             actions = current.actions + (action -> output),
-            blobs = current.blobs + (output -> bytes)
+            blobs = current.blobs + (output     -> bytes),
           )
         )
 
@@ -38,20 +38,19 @@ private final class TestRemoteCache(
     state.update(current =>
       current.copy(
         actions = current.actions + (action -> output),
-        blobs = current.blobs + (output -> bytes)
+        blobs = current.blobs + (output     -> bytes),
       )
     )
 
   def plantDangling(action: Digest): UIO[Digest] =
     val output = Digest.ofBytes(Chunk.single(1.toByte))
     state
-      .update(current =>
-        current.copy(actions = current.actions + (action -> output))
-      )
+      .update(current => current.copy(actions = current.actions + (action -> output)))
       .as(output)
 
   def holds(action: Digest): UIO[Boolean] =
     state.get.map(_.actions.contains(action))
+end TestRemoteCache
 
 object TestRemoteCache:
   def memory(mode: RemoteMode): UIO[TestRemoteCache] =

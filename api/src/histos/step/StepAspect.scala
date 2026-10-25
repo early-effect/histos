@@ -2,8 +2,8 @@ package histos.step
 
 import zio.{ZIO, ZIOAspect}
 
-/** A decoration. `K` is the least kind it accepts, and it is contravariant, so
-  * a wider aspect cannot hide a narrower one.
+/** A decoration. `K` is the least kind it accepts, and it is contravariant, so a wider aspect cannot hide a narrower
+  * one.
   */
 trait StepAspect[-R, +E, -K <: StepKind]:
   def apply[R1 <: R, E1 >: E, A, K1 <: StepKind](
@@ -15,6 +15,7 @@ trait StepAspect[-R, +E, -K <: StepKind]:
       that: StepAspect[R1, E1, K2]
   ): StepAspect[R1, E1, K & K2] =
     StepAspect.compose(this, that)
+end StepAspect
 
 object StepAspect:
   val identity: StepAspect[Any, Nothing, StepKind] =
@@ -68,10 +69,11 @@ object StepAspect:
 
   private[step] def compose[R, E, K <: StepKind, K2 <: StepKind](
       first: StepAspect[R, E, K],
-      second: StepAspect[R, E, K2]
+      second: StepAspect[R, E, K2],
   ): StepAspect[R, E, K & K2] =
     new StepAspect[R, E, K & K2]:
       def apply[R1 <: R, E1 >: E, A, K1 <: StepKind](
           step: Step.Leaf[R1, E1, A, K1]
       ): Step.Leaf[R1, E1, A, K1] =
         second(first(step))
+end StepAspect

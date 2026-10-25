@@ -133,16 +133,16 @@ object Rpc:
           case Json.Obj(fields) =>
             val map = fields.toMap
             for
-              name <- text(map, "class")
+              name      <- text(map, "class")
               arguments <- texts(map, "arguments")
-              options <- texts(map, "jvmOptions")
+              options   <- texts(map, "jvmOptions")
             yield ScalaMainClass(name, arguments, options)
           case _ => Left("a main class is an object")
         },
         main =>
           Json.Obj(
-            "class" -> Json.Str(main.className),
-            "arguments" -> Json.Arr(main.arguments.map(Json.Str(_))*),
+            "class"      -> Json.Str(main.className),
+            "arguments"  -> Json.Arr(main.arguments.map(Json.Str(_))*),
             "jvmOptions" -> Json.Arr(main.jvmOptions.map(Json.Str(_))*),
           ),
       )
@@ -160,10 +160,12 @@ object Rpc:
             case (Right(acc), Json.Str(value)) => Right(acc :+ value)
             case (Right(_), _)                 => Left(s"$name is a list of strings")
         case _ => Left(s"$name is required")
+  end ScalaMainClass
 
   final case class ScalaMainClassesItem(target: TargetId, classes: List[ScalaMainClass]) derives JsonCodec
   final case class ScalaMainClassesResult(items: List[ScalaMainClassesItem]) derives JsonCodec
-  final case class ScalaTestClassesItem(target: TargetId, classes: List[String], framework: Option[String]) derives JsonCodec
+  final case class ScalaTestClassesItem(target: TargetId, classes: List[String], framework: Option[String])
+      derives JsonCodec
   final case class ScalaTestClassesResult(items: List[ScalaTestClassesItem]) derives JsonCodec
   final case class JvmEnvironmentItem(
       target: TargetId,
@@ -197,7 +199,7 @@ object Rpc:
 
   def targets(params: Option[Json]): Either[ParamsDecode, List[String]] =
     params match
-      case None => Left(ParamsDecode.Missing)
+      case None       => Left(ParamsDecode.Missing)
       case Some(json) =>
         json.as[Targets].left.map(_ => ParamsDecode.Rejected).map(_.targets.map(_.uri))
 

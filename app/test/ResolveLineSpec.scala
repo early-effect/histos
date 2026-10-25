@@ -15,7 +15,7 @@ import histos.resolve.{
   ResolveCell,
   ResolveError,
   ResolvedArtifact,
-  ToolRequest
+  ToolRequest,
 }
 import histos.workspace.Workspace
 import histos.{Dep, Jvm, Platform, ProjectName, Projects, ScalaVersion, module}
@@ -26,28 +26,28 @@ import zio.{Chunk, ZIO, ZLayer}
 import zio.test.*
 
 object ResolveLineSpec extends ZIOSpecDefault:
-  private val digest = Sha256.of(Chunk.fromArray(Array[Byte](1, 2, 3)))
-  private val kept = Eviction("dev.histos", "base", "1.0.0", "1.1.0")
-  private val support = Eviction("dev.histos", "support", "1.0.0", "1.1.0")
-  private val hidden = Eviction("dev.histos", "hidden", "", "9.9.9")
-  private val keptLine = "evict dev.histos base 1.0.0 1.1.0"
+  private val digest      = Sha256.of(Chunk.fromArray(Array[Byte](1, 2, 3)))
+  private val kept        = Eviction("dev.histos", "base", "1.0.0", "1.1.0")
+  private val support     = Eviction("dev.histos", "support", "1.0.0", "1.1.0")
+  private val hidden      = Eviction("dev.histos", "hidden", "", "9.9.9")
+  private val keptLine    = "evict dev.histos base 1.0.0 1.1.0"
   private val supportLine = "evict dev.histos support 1.0.0 1.1.0"
 
   def spec = suite("resolve lines")(
     test("a resolve check names the cell and the eviction"):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-resolve-line")
+          root  <- Workspace.work("histos-resolve-line")
           graph <- ZIO.fromEither(opened)
           resolver = Solving(digest)
-          loader = Fixed(graph)
-          layer = ZLayer.succeed(loader) ++ ZLayer.succeed[Resolve](resolver)
+          loader   = Fixed(graph)
+          layer    = ZLayer.succeed(loader) ++ ZLayer.succeed[Resolve](resolver)
           updated <- Calls
             .resolveWork(
               root,
               Path.of("api.jar"),
               ResolveAction.Update,
-              NativeOrigin.Central
+              NativeOrigin.Central,
             )
             .provide(layer)
           checked <- Calls
@@ -55,7 +55,7 @@ object ResolveLineSpec extends ZIOSpecDefault:
               root,
               Path.of("api.jar"),
               ResolveAction.Check,
-              NativeOrigin.Central
+              NativeOrigin.Central,
             )
             .provide(layer)
         yield assertTrue(
@@ -66,7 +66,7 @@ object ResolveLineSpec extends ZIOSpecDefault:
           checked.contains(keptLine),
           checked.contains(supportLine),
           !checked.contains("hidden"),
-          !updated.contains("hidden")
+          !updated.contains("hidden"),
         )
     ,
     test("an unprintable eviction is left out of the success text"):
@@ -82,15 +82,15 @@ object ResolveLineSpec extends ZIOSpecDefault:
                 Nil,
                 Nil,
                 List(kept, hidden),
-                ClasspathScope.Compile
+                ClasspathScope.Compile,
               )
             )
           )
           val text = DependencyLock.withEvictions("core 3.10.0 jvm", lock)
           assertTrue(
             text == s"core 3.10.0 jvm\n$keptLine",
-            !text.contains("hidden")
-          )
+            !text.contains("hidden"),
+          ),
   )
 
   private def opened =
@@ -101,11 +101,11 @@ object ResolveLineSpec extends ZIOSpecDefault:
     def loadLocked(
         repo: Path,
         apiJar: Path,
-        lock: DependencyLock
-    ) = ZIO.succeed(LoadedBuild(graph, Calls.quiet))
+        lock: DependencyLock,
+    )                                  = ZIO.succeed(LoadedBuild(graph, Calls.quiet))
     def load(repo: Path, apiJar: Path) =
       ZIO.succeed(LoadedBuild(graph, Calls.quiet))
-    def buildClasspath(apiJar: Path) = ZIO.succeed(Nil)
+    def buildClasspath(apiJar: Path)          = ZIO.succeed(Nil)
     def reportBuild(repo: Path, apiJar: Path) =
       ZIO.succeed(BuildNotes(false, Nil))
 
@@ -119,7 +119,7 @@ object ResolveLineSpec extends ZIOSpecDefault:
           Path.of("tool.jar"),
           sha,
           request.repositories.first,
-          None
+          None,
         )
       ZIO.succeed(Classpath(artifacts, List(support)))
     def resolve(cell: ResolveCell) =
@@ -133,18 +133,18 @@ object ResolveLineSpec extends ZIOSpecDefault:
           Path.of("tool.jar"),
           artifact.sha256,
           artifact.repository,
-          artifact.classifier
+          artifact.classifier,
         )
       )
     def resolvePlugin(
         dependency: Dep,
-        repositories: histos.resolve.Repositories
+        repositories: histos.resolve.Repositories,
     ) =
       ZIO.succeed(Classpath(Nil, Nil))
     def sources(
         organization: String,
         name: String,
         revision: String,
-        repository: histos.resolve.Repository
+        repository: histos.resolve.Repository,
     ) = ZIO.fail(ResolveError.NotFound(organization, name, revision))
 end ResolveLineSpec

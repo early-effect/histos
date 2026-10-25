@@ -10,7 +10,7 @@ import histos.zinc.{
   CompiledCell,
   GraphCompileError,
   PositionBase,
-  SourceCount
+  SourceCount,
 }
 import histos.{Platform, ProjectName, ProjectNameError, ScalaVersion}
 
@@ -21,7 +21,7 @@ import zio.json.*
 import zio.test.*
 
 object CompileConsoleSpec extends ZIOSpecDefault:
-  private val repo = Path.of("/repo")
+  private val repo    = Path.of("/repo")
   private val version = ScalaVersion("3.10.0")
 
   def spec = suite("compile console")(
@@ -35,7 +35,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           Some(2),
           None,
           None,
-          PositionBase.Zinc
+          PositionBase.Zinc,
         )
         val dotty = CompileProblem(
           "missing",
@@ -45,30 +45,30 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           Some(0),
           None,
           None,
-          PositionBase.Dotty
+          PositionBase.Dotty,
         )
         val appCell = cell(
           app,
           changed = false,
           sources = Some(SourceCount(0, 3)),
-          classesWritten = Some(0)
+          classesWritten = Some(0),
         )
         val coreCell = cell(
           core,
           changed = true,
           sources = Some(SourceCount(2, 1)),
-          classesWritten = Some(4)
+          classesWritten = Some(4),
         )
         for
           console <- CompileConsole.open(repo)
-          lines <- play(
+          lines   <- play(
             console,
             CompileFeed.Began(core, version, Platform.Jvm),
             CompileFeed.Began(app, version, Platform.Jvm),
             CompileFeed.Done(appCell),
             CompileFeed.Diagnostic(core, version, Platform.Jvm, warn),
             CompileFeed.Diagnostic(core, version, Platform.Jvm, dotty),
-            CompileFeed.Done(coreCell)
+            CompileFeed.Done(coreCell),
           )
           tally <- console.tally
           again <- console.tally
@@ -91,12 +91,12 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             ),
             CompileConsole.Line.Out(
               "core 3.10.0 jvm files compiled: 2 skipped: 1 classes: 4"
-            )
+            ),
           ),
           tally.contains(
             "files compiled: 2 skipped: 4; modules: 2; classes: 4"
           ),
-          again == tally
+          again == tally,
         )
       }
     ,
@@ -105,10 +105,10 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         val bare = cell(core, changed = true, classesWritten = Some(9))
         for
           console <- CompileConsole.open(repo)
-          lines <- play(
+          lines   <- play(
             console,
             CompileFeed.Began(core, version, Platform.Jvm),
-            CompileFeed.Done(bare)
+            CompileFeed.Done(bare),
           )
           tally <- console.tally
           found <- console.observation
@@ -126,7 +126,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             case CompileConsole.Line.Out(text) =>
               text.contains("classes:") || text.contains("4")
             case CompileConsole.Line.Err(_) => false
-          }
+          },
         )
       }
     ,
@@ -136,14 +136,14 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         .flatMap { names =>
           for
             console <- CompileConsole.open(repo)
-            _ <- ZIO.foreachDiscard(names) { module =>
+            _       <- ZIO.foreachDiscard(names) { module =>
               console.hear(
                 CompileFeed.Done(
                   cell(
                     module,
                     changed = false,
                     sources = Some(SourceCount(0, 2)),
-                    classesWritten = Some(0)
+                    classesWritten = Some(0),
                   )
                 )
               )
@@ -161,7 +161,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         val error = GraphCompileError.NoRoot(core)
         for
           console <- CompileConsole.open(repo)
-          lines <- play(
+          lines   <- play(
             console,
             CompileFeed.Began(core, version, Platform.Jvm),
             CompileFeed.Done(
@@ -169,10 +169,10 @@ object CompileConsoleSpec extends ZIOSpecDefault:
                 core,
                 changed = true,
                 sources = Some(SourceCount(1, 0)),
-                classesWritten = Some(1)
+                classesWritten = Some(1),
               )
             ),
-            CompileFeed.Failed(error)
+            CompileFeed.Failed(error),
           )
           tally <- console.tally
           found <- console.observation
@@ -187,9 +187,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             case CompileConsole.Line.Out(_)    => false
           },
           tally.contains("modules: 2 failed: 1"),
-          !tally.exists(line =>
-            line.contains("files") || line.contains("classes")
-          ),
+          !tally.exists(line => line.contains("files") || line.contains("classes")),
           found == Some(
             Observation(
               Chunk(
@@ -199,15 +197,15 @@ object CompileConsoleSpec extends ZIOSpecDefault:
                   Platform.Jvm.token,
                   Some(1),
                   Some(0),
-                  Some(1)
+                  Some(1),
                 )
               ),
               None,
               None,
               None,
-              2
+              2,
             )
-          )
+          ),
         )
       }
     ,
@@ -217,20 +215,20 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           core,
           version,
           Platform.Jvm,
-          CompileError.NoSources
+          CompileError.NoSources,
         )
         val missing = GraphCompileError.MissingUpstream(
           app,
           core,
           version,
-          Platform.Jvm
+          Platform.Jvm,
         )
         for
           console <- CompileConsole.open(repo)
-          _ <- play(
+          _       <- play(
             console,
             CompileFeed.Failed(failed),
-            CompileFeed.Failed(missing)
+            CompileFeed.Failed(missing),
           )
           found <- console.observation
         yield assertTrue(
@@ -241,7 +239,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             observation.classes.isEmpty &&
             observation.modules == Chunk(
               ModuleTally("core", "3.10.0", "jvm", None, None, None),
-              ModuleTally("app", "3.10.0", "jvm", None, None, None)
+              ModuleTally("app", "3.10.0", "jvm", None, None, None),
             )
           }
         )
@@ -252,19 +250,19 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         val unchanged = CompileFacts(
           changed = false,
           sources = Some(SourceCount(0, 5)),
-          classesWritten = Some(0)
+          classesWritten = Some(0),
         )
         val changed = CompileFacts(
           changed = true,
           sources = Some(SourceCount(1, 0)),
-          classesWritten = Some(2)
+          classesWritten = Some(2),
         )
         for
-          notes <- CompileConsole.notes
-          skipped <- notes(api, version, Platform.Jvm, unchanged)
+          notes    <- CompileConsole.notes
+          skipped  <- notes(api, version, Platform.Jvm, unchanged)
           compiled <- notes(engine, version, Platform.Jvm, changed)
-          tally <- notes.tally
-          again <- notes.tally
+          tally    <- notes.tally
+          again    <- notes.tally
         yield assertTrue(
           skipped ==
             "api 3.10.0 jvm test compile unchanged files compiled: 0 skipped: 5 classes: 0",
@@ -275,7 +273,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           tally.contains(
             "test files compiled: 1 skipped: 5; modules: 2; classes: 2"
           ),
-          again == tally
+          again == tally,
         )
       }
     ,
@@ -285,22 +283,22 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           core,
           changed = false,
           sources = Some(SourceCount(0, 3)),
-          classesWritten = Some(0)
+          classesWritten = Some(0),
         )
         val written = cell(
           app,
           changed = true,
           sources = Some(SourceCount(2, 1)),
-          classesWritten = Some(7)
+          classesWritten = Some(7),
         )
         for
           console <- CompileConsole.open(repo)
-          lines <- play(
+          lines   <- play(
             console,
             CompileFeed.Began(core, version, Platform.Jvm),
             CompileFeed.Done(unchanged),
             CompileFeed.Began(app, version, Platform.Jvm),
-            CompileFeed.Done(written)
+            CompileFeed.Done(written),
           )
         yield assertTrue(
           lines == Chunk(
@@ -311,7 +309,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             CompileConsole.Line.Out("compiling app 3.10.0 jvm"),
             CompileConsole.Line.Out(
               "app 3.10.0 jvm files compiled: 2 skipped: 1 classes: 7"
-            )
+            ),
           )
         )
       }
@@ -321,7 +319,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         console.tally.zip(console.observation).map { (tally, found) =>
           assertTrue(tally.isEmpty, found.isEmpty)
         }
-      }
+      },
   )
 
   private def unknownOmitsClasses(observation: Observation): Boolean =
@@ -346,7 +344,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
       module: ProjectName,
       changed: Boolean,
       sources: Option[SourceCount] = None,
-      classesWritten: Option[Int] = None
+      classesWritten: Option[Int] = None,
   ): CompiledCell =
     CompiledCell(
       module,
@@ -357,7 +355,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
       key = None,
       changed = changed,
       sources = sources,
-      classesWritten = classesWritten
+      classesWritten = classesWritten,
     )
 
   private def name(raw: String): IO[ProjectNameError, ProjectName] =
@@ -365,7 +363,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
 
   private def named(
       left: String,
-      right: String
+      right: String,
   ): IO[ProjectNameError, (ProjectName, ProjectName)] =
     name(left).zip(name(right))
 end CompileConsoleSpec

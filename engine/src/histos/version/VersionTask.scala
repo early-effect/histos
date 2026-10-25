@@ -9,9 +9,8 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** The `versions` task. The registry file is a stand-in for the registry read
-  * Central will own. A missing file is [[Evidence.Unchecked]], not an empty
-  * registry.
+/** The `versions` task. The registry file is a stand-in for the registry read Central will own. A missing file is
+  * [[Evidence.Unchecked]], not an empty registry.
   */
 object VersionTask:
   val fileName: String = "releases"
@@ -19,7 +18,7 @@ object VersionTask:
   def decide(
       graph: ProjectGraph,
       repo: Path,
-      env: Map[String, String]
+      env: Map[String, String],
   ): IO[VersionError, Decision] =
     evidence(graph, repo).flatMap: found =>
       ZIO.fromEither(Versions.assess(graph.catalog, env, found))
@@ -27,14 +26,14 @@ object VersionTask:
   def fromRepo(
       graph: ProjectGraph,
       repo: Path,
-      env: Map[String, String]
+      env: Map[String, String],
   ): IO[TaskError, TaskResult] =
     decide(graph, repo, env).mapError(TaskError.Version(_)).flatMap(complete)
 
   def effect(
       catalog: Catalog,
       env: Map[String, String],
-      evidence: Evidence
+      evidence: Evidence,
   ): IO[TaskError, TaskResult] =
     ZIO
       .fromEither(Versions.assess(catalog, env, evidence))
@@ -52,7 +51,7 @@ object VersionTask:
 
   private def evidence(
       graph: ProjectGraph,
-      repo: Path
+      repo: Path,
   ): IO[VersionError, Evidence] =
     graph.catalog match
       case Catalog.Empty | Catalog.Manual(_) => ZIO.succeed(Evidence.Unchecked)
@@ -62,8 +61,7 @@ object VersionTask:
     val file = path(repo)
     ZIO
       .attemptBlocking {
-        if Files.isRegularFile(file) then
-          Some(Files.readAllLines(file).asScala.toList)
+        if Files.isRegularFile(file) then Some(Files.readAllLines(file).asScala.toList)
         else None
       }
       .mapError(_ => VersionError.Unreadable)
@@ -73,3 +71,4 @@ object VersionTask:
           ZIO
             .fromEither(Registry.parse(lines).map(Evidence.Checked(_)))
             .mapError(VersionError.Registry(_))
+end VersionTask

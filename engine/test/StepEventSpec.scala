@@ -27,13 +27,13 @@ object StepEventSpec extends ZIOSpecDefault:
     Action(
       ActionId.trusted(id),
       List(Input(InputName.trusted("src"), InputValue.Text(id))),
-      deps.toList
+      deps.toList,
     )
 
   private def oneFinish[E](
       events: Chunk[StepEvent[E]],
       id: StepId,
-      source: Source
+      source: Source,
   ): Boolean =
     events.toList match
       case StepEvent.Started(started) ::
@@ -48,7 +48,7 @@ object StepEventSpec extends ZIOSpecDefault:
       root: ActionId,
       actions: List[Action],
       local: (Action, String) => zio.IO[E, String],
-      count: Int
+      count: Int,
   ) =
     for
       step <- scheduler.planned(root, actions, local)
@@ -58,20 +58,20 @@ object StepEventSpec extends ZIOSpecDefault:
           .flatMap: running =>
             for
               outcome <- running.outcome
-              events <- running.events.take(count).runCollect
+              events  <- running.events.take(count).runCollect
             yield (outcome, events)
     yield pair
 
   def spec = suite("step events")(
     test("a ran step records Source.Ran and its duration"):
       for
-        calls <- Ref.make(0)
+        calls  <- Ref.make(0)
         runner <- ZIO.service[Histos]
-        node = action("a")
+        node      = action("a")
         scheduler = Scheduler(
           runner,
           ActionCache.miss,
-          RemoteCache.unconfigured
+          RemoteCache.unconfigured,
         )
         pair <- watch(
           runner,
@@ -79,24 +79,24 @@ object StepEventSpec extends ZIOSpecDefault:
           node.id,
           List(node),
           (_, _) => calls.update(_ + 1).as("ran"),
-          2
+          2,
         )
         (outcome, events) = pair
         did <- calls.get
       yield assertTrue(
         outcome == Outcome.Done("ran"),
         did == 1,
-        oneFinish(events, StepId.Work("a"), Source.Ran)
+        oneFinish(events, StepId.Work("a"), Source.Ran),
       )
     ,
     test("a local cache hit is Source.LocalHit and does not run"):
       val hit: ActionCache = new ActionCache:
-        def get(digest: Digest) = ZIO.some("from-local")
+        def get(digest: Digest)                = ZIO.some("from-local")
         def put(digest: Digest, value: String) = ZIO.unit
       for
-        calls <- Ref.make(0)
+        calls  <- Ref.make(0)
         runner <- ZIO.service[Histos]
-        node = action("a")
+        node      = action("a")
         scheduler = Scheduler(runner, hit, RemoteCache.unconfigured)
         pair <- watch(
           runner,
@@ -104,25 +104,25 @@ object StepEventSpec extends ZIOSpecDefault:
           node.id,
           List(node),
           (_, _) => calls.update(_ + 1).as("ran"),
-          2
+          2,
         )
         (outcome, events) = pair
         did <- calls.get
       yield assertTrue(
         outcome == Outcome.Done("from-local"),
         did == 0,
-        oneFinish(events, StepId.Work("a"), Source.LocalHit)
+        oneFinish(events, StepId.Work("a"), Source.LocalHit),
       )
     ,
     test("a remote cache hit is Source.RemoteHit and does not run"):
       for
-        calls <- Ref.make(0)
+        calls  <- Ref.make(0)
         runner <- ZIO.service[Histos]
         node = action("a")
         remote <- TestRemoteCache.memory(RemoteMode.Read)
-        _ <- remote.plant(
+        _      <- remote.plant(
           Digest.of(node, Map.empty),
-          Chunk.fromArray("from-remote".getBytes(StandardCharsets.UTF_8))
+          Chunk.fromArray("from-remote".getBytes(StandardCharsets.UTF_8)),
         )
         scheduler = Scheduler(runner, ActionCache.miss, remote)
         pair <- watch(
@@ -131,20 +131,20 @@ object StepEventSpec extends ZIOSpecDefault:
           node.id,
           List(node),
           (_, _) => calls.update(_ + 1).as("ran"),
-          2
+          2,
         )
         (outcome, events) = pair
         did <- calls.get
       yield assertTrue(
         outcome == Outcome.Done("from-remote"),
         did == 0,
-        oneFinish(events, StepId.Work("a"), Source.RemoteHit)
+        oneFinish(events, StepId.Work("a"), Source.RemoteHit),
       )
     ,
     test("a dependent served from the local cache is Source.LocalHit"):
       for
-        calls <- Ref.make(0)
-        gets <- Ref.make(0)
+        calls  <- Ref.make(0)
+        gets   <- Ref.make(0)
         runner <- ZIO.service[Histos]
         cache: ActionCache = new ActionCache:
           def get(digest: Digest) =
@@ -153,8 +153,8 @@ object StepEventSpec extends ZIOSpecDefault:
               .flatMap: seen =>
                 if seen == 0 then ZIO.none else ZIO.some("from-cache")
           def put(digest: Digest, value: String) = ZIO.unit
-        upstream = action("b")
-        root = action("a", upstream.id)
+        upstream  = action("b")
+        root      = action("a", upstream.id)
         scheduler = Scheduler(runner, cache, RemoteCache.unconfigured)
         pair <- watch(
           runner,
@@ -162,7 +162,7 @@ object StepEventSpec extends ZIOSpecDefault:
           root.id,
           List(root, upstream),
           (node, _) => calls.update(_ + 1).as(node.id.value),
-          4
+          4,
         )
         (outcome, events) = pair
         did <- calls.get
@@ -183,16 +183,14 @@ object StepEventSpec extends ZIOSpecDefault:
     test("an upstream failure stops the dependent as skipped"):
       ZIO.scoped:
         for
-          ran <- Ref.make(false)
+          ran    <- Ref.make(false)
           runner <- ZIO.service[Histos]
-          upstream = Step.local[Int](infoA)(ZIO.fail("boom"))
-          dependent = upstream.andThenHermetic[Int](infoB)(_ =>
-            ran.set(true) *> ZIO.succeed(1)
-          )
+          upstream  = Step.local[Int](infoA)(ZIO.fail("boom"))
+          dependent = upstream.andThenHermetic[Int](infoB)(_ => ran.set(true) *> ZIO.succeed(1))
           running <- runner.start(dependent)
           outcome <- running.outcome
-          events <- running.events.take(3).runCollect
-          did <- ran.get
+          events  <- running.events.take(3).runCollect
+          did     <- ran.get
         yield
           val skipped = events.toList match
             case StepEvent.Started(started) ::
@@ -206,7 +204,7 @@ object StepEventSpec extends ZIOSpecDefault:
           val failed = outcome match
             case _: Outcome.Failed[?, ?] => true
             case _: Outcome.Done[?, ?]   => false
-          assertTrue(!did, failed, skipped)
+          assertTrue(!did, failed, skipped),
   ).provide(opened) @@ TestAspect.withLiveClock @@ TestAspect.timeout(
     30.seconds
   )

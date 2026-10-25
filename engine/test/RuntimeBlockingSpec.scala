@@ -12,10 +12,10 @@ object RuntimeBlockingSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           started <- ZIO.succeed(new CountDownLatch(1))
-          finish <- ZIO.succeed(new CountDownLatch(1))
-          wrote <- ZIO.succeed(new AtomicBoolean(false))
-          closed <- Ref.make(false)
-          fiber <- ZIO
+          finish  <- ZIO.succeed(new CountDownLatch(1))
+          wrote   <- ZIO.succeed(new AtomicBoolean(false))
+          closed  <- Ref.make(false)
+          fiber   <- ZIO
             .scoped(
               ZIO.acquireRelease(ZIO.unit)(_ => closed.set(true)) *>
                 ZIO.attemptBlocking {
@@ -25,17 +25,17 @@ object RuntimeBlockingSpec extends ZIOSpecDefault:
                 }
             )
             .forkScoped
-          _ <- ZIO.attemptBlocking(started.await())
+          _           <- ZIO.attemptBlocking(started.await())
           interrupted <- fiber.interrupt.timeout(100.millis)
-          early <- closed.get
-          _ <- ZIO.succeed(finish.countDown())
-          exit <- fiber.await
-          released <- closed.get
+          early       <- closed.get
+          _           <- ZIO.succeed(finish.countDown())
+          exit        <- fiber.await
+          released    <- closed.get
         yield assertTrue(
           interrupted.isEmpty,
           !early,
           exit.isInterrupted,
           wrote.get(),
-          released
+          released,
         )
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds)

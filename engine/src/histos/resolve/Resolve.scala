@@ -3,23 +3,9 @@ package histos.resolve
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
-import histos.{
-  Aggregate,
-  Dep,
-  DepKind,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion
-}
+import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.{
-  AtomicMoveNotSupportedException,
-  Files,
-  Path,
-  StandardCopyOption
-}
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
 import zio.{IO, ULayer, ZIO, ZLayer}
 
@@ -31,28 +17,26 @@ trait Resolve:
   def resolveTool(request: ToolRequest): IO[ResolveError, Classpath]
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath]
 
-  /** Download one locked artifact from the repository the lock recorded. No
-    * transitive solve.
+  /** Download one locked artifact from the repository the lock recorded. No transitive solve.
     */
   def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact]
 
-  /** Resolve one plugin coordinate as a Scala 3 JVM binary. Plugins are not
-    * module cells.
+  /** Resolve one plugin coordinate as a Scala 3 JVM binary. Plugins are not module cells.
     */
   def resolvePlugin(
       dependency: Dep,
-      repositories: Repositories
+      repositories: Repositories,
   ): IO[ResolveError, Classpath]
 
-  /** Download the sources jar of one locked coordinate. The caller compares the
-    * checksum.
+  /** Download the sources jar of one locked coordinate. The caller compares the checksum.
     */
   def sources(
       organization: String,
       name: String,
       revision: String,
-      repository: Repository
+      repository: Repository,
   ): IO[ResolveError, ResolvedArtifact]
+end Resolve
 
 object Resolve:
   def live(cache: Path): ULayer[Resolve] =
@@ -67,46 +51,45 @@ object Resolve:
   def offline(cache: Path): ULayer[Resolve] =
     ZLayer.succeed(CoursierResolve(cache, CacheMode.Offline))
 
-  /** Coursier's cache. A file already there is used. A missing coordinate is
-    * fetched into that cache.
+  /** Coursier's cache. A file already there is used. A missing coordinate is fetched into that cache.
     */
   def coursier: ULayer[Resolve] =
     ZLayer.succeed(
       CoursierResolve(
         _root_.coursier.cache.CacheDefaults.location.toPath,
-        CacheMode.Retain
+        CacheMode.Retain,
       )
     )
 
   def lockPath(repo: Path): Path =
     repo.resolve(".histos").resolve("dependencies.lock")
 
-  /** Aggregates have no cell. Order is graph order, then platform, then Scala
-    * version. A test cell follows its compile cell.
+  /** Aggregates have no cell. Order is graph order, then platform, then Scala version. A test cell follows its compile
+    * cell.
     */
   def cells(
       graph: ProjectGraph,
-      repositories: Repositories
+      repositories: Repositories,
   ): List[ResolveCell] =
     graph.projects.flatMap:
       case Aggregate(_, _, _) => Nil
       case module: Module     =>
-        val name = module.name
-        val platforms = module.platforms
-        val versions = module.versions
-        val dependencies = module.dependencies
+        val name             = module.name
+        val platforms        = module.platforms
+        val versions         = module.versions
+        val dependencies     = module.dependencies
         val testDependencies = module.testDependencies
         platforms.all.flatMap: platform =>
           versions.all.flatMap: version =>
             val compileDeps = Dep.select(dependencies, platform)
-            val testDeps = Dep.select(testDependencies, platform)
-            val compile = ResolveCell(
+            val testDeps    = Dep.select(testDependencies, platform)
+            val compile     = ResolveCell(
               name,
               compileDeps,
               version,
               platform,
               repositories,
-              ClasspathScope.Compile
+              ClasspathScope.Compile,
             )
             val tests =
               if testDeps.isEmpty then Nil
@@ -118,7 +101,7 @@ object Resolve:
                     version,
                     platform,
                     repositories,
-                    ClasspathScope.Test
+                    ClasspathScope.Test,
                   )
                 )
             compile :: tests
@@ -127,18 +110,16 @@ object Resolve:
       repo: Path,
       graph: ProjectGraph,
       repositories: Repositories,
-      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central
+      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
   ): ZIO[Resolve, ResolveError, String] =
     for
       planned <- LockedTools.plan(graph, native)
       modules = cells(graph, repositories)
-      _ <- ZIO.foreachDiscard(modules)(prepare)
-      lock <- readLock(repo)
-      view <- LockedTools.make(lock, graph)
-      _ <- ZIO.foreachDiscard(planned)(view.materialize)
-      lines <- ZIO.foreach(modules)(cell =>
-        materialize(cell, lock).as(describe(cell))
-      )
+      _     <- ZIO.foreachDiscard(modules)(prepare)
+      lock  <- readLock(repo)
+      view  <- LockedTools.make(lock, graph)
+      _     <- ZIO.foreachDiscard(planned)(view.materialize)
+      lines <- ZIO.foreach(modules)(cell => materialize(cell, lock).as(describe(cell)))
     yield lines.mkString("\n")
 
   def update(
@@ -146,12 +127,12 @@ object Resolve:
       graph: ProjectGraph,
       repositories: Repositories,
       native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
-      plugins: PluginUpdate = PluginUpdate.Keep
+      plugins: PluginUpdate = PluginUpdate.Keep,
   ): ZIO[Resolve, ResolveError, String] =
     for
       planned <- LockedTools.plan(graph, native)
-      _ <- ZIO.foreachDiscard(cells(graph, repositories))(prepare)
-      solved <- ZIO.foreach(cells(graph, repositories))(cell =>
+      _       <- ZIO.foreachDiscard(cells(graph, repositories))(prepare)
+      solved  <- ZIO.foreach(cells(graph, repositories))(cell =>
         ZIO.serviceWithZIO[Resolve](_.resolve(cell)).map(lockCell(cell, _))
       )
       tools <- ZIO.foreach(planned)(request =>
@@ -184,48 +165,48 @@ object Resolve:
           artifact.revision,
           artifact.sha256,
           artifact.repository,
-          artifact.classifier
+          artifact.classifier,
         )
       ),
-      classpath.evictions
+      classpath.evictions,
     )
 
   def verifyTools(
       repo: Path,
       graph: ProjectGraph,
-      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central
+      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
   ): ZIO[Resolve, ResolveError, Unit] =
     for
       planned <- LockedTools.plan(graph, native)
-      lock <- readLock(repo)
-      tools <- LockedTools.make(lock, graph)
-      _ <- ZIO.foreachDiscard(planned)(tools.materialize)
+      lock    <- readLock(repo)
+      tools   <- LockedTools.make(lock, graph)
+      _       <- ZIO.foreachDiscard(planned)(tools.materialize)
     yield ()
 
   def check(
       repo: Path,
       graph: ProjectGraph,
       repositories: Repositories,
-      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central
+      native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
   ): ZIO[Resolve, ResolveError, String] =
     for
       planned <- LockedTools.plan(graph, native)
       modules = cells(graph, repositories)
-      _ <- ZIO.foreachDiscard(modules)(prepare)
-      lock <- readLock(repo)
-      view <- LockedTools.make(lock, graph)
-      _ <- ZIO.foreachDiscard(planned)(view.materialize)
+      _     <- ZIO.foreachDiscard(modules)(prepare)
+      lock  <- readLock(repo)
+      view  <- LockedTools.make(lock, graph)
+      _     <- ZIO.foreachDiscard(planned)(view.materialize)
       lines <- ZIO.foreach(modules): cell =>
         for
           locked <- ZIO.fromEither(locate(cell, lock))
-          fresh <- ZIO.serviceWithZIO[Resolve](_.resolve(cell))
-          _ <- ZIO.fromEither(agree(cell, fresh, locked))
+          fresh  <- ZIO.serviceWithZIO[Resolve](_.resolve(cell))
+          _      <- ZIO.fromEither(agree(cell, fresh, locked))
         yield describe(cell)
     yield lines.mkString("\n")
 
   def planPlugins(
       requests: List[PluginRequest],
-      repositories: Repositories
+      repositories: Repositories,
   ): ZIO[Resolve, ResolveError, List[LockedPlugin]] =
     ZIO.foreach(requests.collect { case PluginRequest.Dep(dependency, link) =>
       (dependency, link)
@@ -234,17 +215,16 @@ object Resolve:
         .serviceWithZIO[Resolve](_.resolvePlugin(dependency, repositories))
         .flatMap(classpath => lockPlugin(dependency, link, classpath))
 
-  /** Resolve each header coordinate and write those plugin cells, keeping
-    * module cells already there. The write happens only after every coordinate
-    * resolves. A failure leaves the previous file.
+  /** Resolve each header coordinate and write those plugin cells, keeping module cells already there. The write happens
+    * only after every coordinate resolves. A failure leaves the previous file.
     */
   def updatePlugins(
       repo: Path,
       requests: List[PluginRequest],
-      repositories: Repositories
+      repositories: Repositories,
   ): ZIO[Resolve, ResolveError, String] =
-    val requested = requests.collect {
-      case PluginRequest.Dep(dependency, link) => (dependency, link)
+    val requested = requests.collect { case PluginRequest.Dep(dependency, link) =>
+      (dependency, link)
     }
     if requested.isEmpty then ZIO.succeed("")
     else
@@ -260,20 +240,19 @@ object Resolve:
             case ResolveError.NoLock(_) => ZIO.succeed(DependencyLock(Nil))
             case other                  => ZIO.fail(other)
           },
-          ZIO.succeed
+          ZIO.succeed,
         )
         _ <- write(path, DependencyLock(prior.cells, solved, prior.tools))
       yield path.toString
 
-  /** A missing plugin cell is `Unlocked` and does not compile. A path plugin
-    * has no cell.
+  /** A missing plugin cell is `Unlocked` and does not compile. A path plugin has no cell.
     */
   def requirePlugins(
       repo: Path,
-      requests: List[PluginRequest]
+      requests: List[PluginRequest],
   ): ZIO[Resolve, ResolveError, Unit] =
-    val dependencies = requests.collect {
-      case PluginRequest.Dep(dependency, _) => dependency
+    val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) =>
+      dependency
     }
     if dependencies.isEmpty then ZIO.unit
     else
@@ -297,26 +276,25 @@ object Resolve:
           ZIO.foreachDiscard(dependencies): dependency =>
             ZIO
               .fromEither(PluginCells.locate(lock, dependency))
-              .mapError(error => ResolveError.Plugin(error))
+              .mapError(error => ResolveError.Plugin(error)),
       )
 
-  /** Re-resolve plugin cells and fail when the fresh classpath disagrees with
-    * the lock.
+  /** Re-resolve plugin cells and fail when the fresh classpath disagrees with the lock.
     */
   def checkPlugins(
       repo: Path,
       requests: List[PluginRequest],
-      repositories: Repositories
+      repositories: Repositories,
   ): ZIO[Resolve, ResolveError, Unit] =
-    val dependencies = requests.collect {
-      case PluginRequest.Dep(dependency, _) => dependency
+    val dependencies = requests.collect { case PluginRequest.Dep(dependency, _) =>
+      dependency
     }
     if dependencies.isEmpty then ZIO.unit
     else
       for
-        lock <- read(lockPath(repo))
+        lock          <- read(lockPath(repo))
         pluginVersion <- pluginScala
-        _ <- ZIO.foreachDiscard(dependencies): dependency =>
+        _             <- ZIO.foreachDiscard(dependencies): dependency =>
           lock.plugins.find(plugin =>
             plugin.organization == dependency.organization &&
               plugin.name == dependency.name &&
@@ -327,7 +305,7 @@ object Resolve:
                 ResolveError.NotFound(
                   dependency.organization,
                   ArtifactName.of(dependency, pluginVersion, Platform.Jvm),
-                  dependency.revision
+                  dependency.revision,
                 )
               )
             case Some(locked) =>
@@ -343,14 +321,12 @@ object Resolve:
   /** Compare directs, then download each locked jar. Does not re-solve. */
   def materialize(
       cell: ResolveCell,
-      lock: DependencyLock
+      lock: DependencyLock,
   ): ZIO[Resolve, ResolveError, Classpath] =
     for
-      _ <- prepare(cell)
-      locked <- ZIO.fromEither(locate(cell, lock))
-      artifacts <- ZIO.foreach(locked.artifacts)(artifact =>
-        ZIO.serviceWithZIO[Resolve](_.fetch(artifact))
-      )
+      _         <- prepare(cell)
+      locked    <- ZIO.fromEither(locate(cell, lock))
+      artifacts <- ZIO.foreach(locked.artifacts)(artifact => ZIO.serviceWithZIO[Resolve](_.fetch(artifact)))
     yield Classpath(artifacts, locked.evictions)
 
   private[resolve] def prepare(cell: ResolveCell): IO[ResolveError, Unit] =
@@ -362,7 +338,7 @@ object Resolve:
 
   private def locate(
       cell: ResolveCell,
-      lock: DependencyLock
+      lock: DependencyLock,
   ): Either[ResolveError, LockedCell] =
     val drift = drifted(cell)
     lock.cells.find(same(cell)) match
@@ -373,15 +349,15 @@ object Resolve:
   private def agree(
       cell: ResolveCell,
       fresh: Classpath,
-      locked: LockedCell
+      locked: LockedCell,
   ): Either[ResolveError, Unit] =
     val drift = drifted(cell)
-    val got = fresh.artifacts.map(artifact =>
+    val got   = fresh.artifacts.map(artifact =>
       (
         artifact.organization,
         artifact.name,
         artifact.revision,
-        artifact.repository
+        artifact.repository,
       )
     )
     val want = locked.artifacts.map(artifact =>
@@ -389,7 +365,7 @@ object Resolve:
         artifact.organization,
         artifact.name,
         artifact.revision,
-        artifact.repository
+        artifact.repository,
       )
     )
     if got != want || fresh.evictions != locked.evictions then Left(drift)
@@ -397,12 +373,11 @@ object Resolve:
       fresh.artifacts
         .zip(locked.artifacts)
         .collectFirst:
-          case (artifact, lockedArtifact)
-              if artifact.sha256 != lockedArtifact.sha256 =>
+          case (artifact, lockedArtifact) if artifact.sha256 != lockedArtifact.sha256 =>
             ResolveError.Checksum(
               artifact.path,
               lockedArtifact.sha256,
-              artifact.sha256
+              artifact.sha256,
             )
       match
         case Some(error) => Left(error)
@@ -421,11 +396,11 @@ object Resolve:
           artifact.revision,
           artifact.sha256,
           artifact.repository,
-          artifact.classifier
+          artifact.classifier,
         )
       ),
       classpath.evictions,
-      cell.scope
+      cell.scope,
     )
 
   private def directs(cell: ResolveCell): List[LockedDirect] =
@@ -434,7 +409,7 @@ object Resolve:
         dependency.organization,
         dependency.name,
         dependency.revision,
-        dependency.kind
+        dependency.kind,
       )
     )
 
@@ -449,7 +424,7 @@ object Resolve:
       cell.module,
       cell.scalaVersion,
       cell.platform,
-      cell.scope
+      cell.scope,
     )
 
   private def describe(cell: ResolveCell): String =
@@ -477,7 +452,7 @@ object Resolve:
   private def lockPlugin(
       dependency: Dep,
       link: LinkStrategy,
-      classpath: Classpath
+      classpath: Classpath,
   ): ZIO[Resolve, ResolveError, LockedPlugin] =
     sourceOf(dependency, link, classpath).map: source =>
       LockedPlugin(
@@ -490,7 +465,7 @@ object Resolve:
             dependency.organization,
             dependency.name,
             dependency.revision,
-            dependency.kind
+            dependency.kind,
           )
         ),
         classpath.artifacts.map(artifact =>
@@ -500,19 +475,18 @@ object Resolve:
             artifact.revision,
             artifact.sha256,
             artifact.repository,
-            artifact.classifier
+            artifact.classifier,
           )
         ),
-        source
+        source,
       )
 
-  /** `Source` and `BinaryOrSource` record the sources classifier. `ExactBinary`
-    * omits the line.
+  /** `Source` and `BinaryOrSource` record the sources classifier. `ExactBinary` omits the line.
     */
   private def sourceOf(
       dependency: Dep,
       link: LinkStrategy,
-      classpath: Classpath
+      classpath: Classpath,
   ): ZIO[Resolve, ResolveError, Option[LockedArtifact]] =
     link match
       case LinkStrategy.Source | LinkStrategy.BinaryOrSource =>
@@ -529,7 +503,7 @@ object Resolve:
                 ResolveError.NotFound(
                   dependency.organization,
                   published,
-                  dependency.revision
+                  dependency.revision,
                 )
               )
             case Some(direct) =>
@@ -539,7 +513,7 @@ object Resolve:
                     direct.organization,
                     direct.name,
                     direct.revision,
-                    direct.repository
+                    direct.repository,
                   )
                 )
                 .map: fetched =>
@@ -549,13 +523,12 @@ object Resolve:
                       fetched.name,
                       fetched.revision,
                       fetched.sha256,
-                      fetched.repository
+                      fetched.repository,
                     )
                   )
       case LinkStrategy.ExactBinary | LinkStrategy.Api => ZIO.succeed(None)
 
-  /** Re-fetch a recorded sources line. A cell with no line does not touch the
-    * network.
+  /** Re-fetch a recorded sources line. A cell with no line does not touch the network.
     */
   private def checkSource(
       locked: LockedPlugin
@@ -569,7 +542,7 @@ object Resolve:
               source.organization,
               source.name,
               source.revision,
-              source.repository
+              source.repository,
             )
           )
           .flatMap: fetched =>
@@ -583,7 +556,7 @@ object Resolve:
   private def agreePlugin(
       dependency: Dep,
       fresh: Classpath,
-      locked: LockedPlugin
+      locked: LockedPlugin,
   ): Either[ResolveError, Unit] =
     val got = fresh.artifacts.map(artifact =>
       (
@@ -591,7 +564,7 @@ object Resolve:
         artifact.name,
         artifact.revision,
         artifact.repository,
-        artifact.classifier
+        artifact.classifier,
       )
     )
     val want = locked.artifacts.map(artifact =>
@@ -600,7 +573,7 @@ object Resolve:
         artifact.name,
         artifact.revision,
         artifact.repository,
-        artifact.classifier
+        artifact.classifier,
       )
     )
     if got != want then Left(ResolveError.PluginDrift(dependency))
@@ -608,12 +581,11 @@ object Resolve:
       fresh.artifacts
         .zip(locked.artifacts)
         .collectFirst:
-          case (artifact, lockedArtifact)
-              if artifact.sha256 != lockedArtifact.sha256 =>
+          case (artifact, lockedArtifact) if artifact.sha256 != lockedArtifact.sha256 =>
             ResolveError.Checksum(
               artifact.path,
               lockedArtifact.sha256,
-              artifact.sha256
+              artifact.sha256,
             )
       match
         case Some(error) => Left(error)
@@ -631,7 +603,7 @@ object Resolve:
 
   private def write(path: Path, lock: DependencyLock): IO[ResolveError, Unit] =
     Option(path.getParent) match
-      case None => ZIO.fail(ResolveError.Io(IoFailure(path, IoFault.Write)))
+      case None         => ZIO.fail(ResolveError.Io(IoFailure(path, IoFault.Write)))
       case Some(parent) =>
         ZIO
           .attemptBlocking(replace(parent, path, DependencyLock.render(lock)))
@@ -649,9 +621,10 @@ object Resolve:
           temp,
           path,
           StandardCopyOption.ATOMIC_MOVE,
-          StandardCopyOption.REPLACE_EXISTING
+          StandardCopyOption.REPLACE_EXISTING,
         )
       catch
         case _: AtomicMoveNotSupportedException =>
           Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING)
     finally Files.deleteIfExists(temp)
+end Resolve

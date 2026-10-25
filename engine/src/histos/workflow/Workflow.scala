@@ -57,13 +57,14 @@ enum CiError:
   case Io(failure: IoFailure)
 
   def message: String = this match
-    case BadName(raw)  => s"'$raw' is not a project name"
-    case Unknown(name) => s"'${name.value}' is not a project"
+    case BadName(raw)    => s"'$raw' is not a project name"
+    case Unknown(name)   => s"'${name.value}' is not a project"
     case NotModule(name) => s"'${name.value}' is not a module"
     case Duplicate(name) => s"'${name.value}' is listed twice"
-    case Missing(path) => s"no workflow at $path"
-    case Drift         => "workflow does not match the graph"
-    case Io(failure)   => failure.message
+    case Missing(path)   => s"no workflow at $path"
+    case Drift           => "workflow does not match the graph"
+    case Io(failure)     => failure.message
+end CiError
 
 object Workflow:
   val fileName: String = "ci.yml"
@@ -79,7 +80,7 @@ object Workflow:
   def plan(graph: ProjectGraph, event: CiEvent): Either[CiError, List[TestJob]] =
     val modules = graph.projects.collect { case module: Module => module }
     event match
-      case CiEvent.Other => Right(jobs(graph.splits, CiEvent.Other, modules, modules))
+      case CiEvent.Other                => Right(jobs(graph.splits, CiEvent.Other, modules, modules))
       case CiEvent.PullRequest(changed) =>
         affected(graph, changed).map: names =>
           val chosen = modules.filter(module => names.contains(module.name))
@@ -89,19 +90,20 @@ object Workflow:
   def target(graph: ProjectGraph, raw: List[String]): Either[CiError, TestTarget] =
     if raw.isEmpty then Right(TestTarget.Entire)
     else
-      raw.foldLeft[Either[CiError, List[ProjectName]]](Right(Nil)): (acc, item) =>
-        acc.flatMap: seen =>
-          ProjectName.from(item) match
-            case Left(_) => Left(CiError.BadName(item))
-            case Right(name) if seen.contains(name) => Left(CiError.Duplicate(name))
-            case Right(name) =>
-              graph.get(name) match
-                case None              => Left(CiError.Unknown(name))
-                case Some(_: Aggregate) => Left(CiError.NotModule(name))
-                case Some(_: Module)   => Right(seen :+ name)
-      .flatMap:
-        case first :: rest => Right(TestTarget.Named(first, rest))
-        case Nil           => Right(TestTarget.Entire)
+      raw
+        .foldLeft[Either[CiError, List[ProjectName]]](Right(Nil)): (acc, item) =>
+          acc.flatMap: seen =>
+            ProjectName.from(item) match
+              case Left(_)                            => Left(CiError.BadName(item))
+              case Right(name) if seen.contains(name) => Left(CiError.Duplicate(name))
+              case Right(name)                        =>
+                graph.get(name) match
+                  case None               => Left(CiError.Unknown(name))
+                  case Some(_: Aggregate) => Left(CiError.NotModule(name))
+                  case Some(_: Module)    => Right(seen :+ name)
+        .flatMap:
+          case first :: rest => Right(TestTarget.Named(first, rest))
+          case Nil           => Right(TestTarget.Entire)
 
   def render(graph: ProjectGraph, setup: Boolean = false): Either[CiError, String] =
     plan(graph, CiEvent.Other).map(jobs => document(graph, jobs, setup))
@@ -116,7 +118,7 @@ object Workflow:
 
   def check(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
     for
-      setup <- present(repo)
+      setup    <- present(repo)
       rendered <- ZIO.fromEither(renderAll(graph, setup))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
@@ -125,7 +127,7 @@ object Workflow:
 
   def update(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
     for
-      setup <- present(repo)
+      setup    <- present(repo)
       rendered <- ZIO.fromEither(renderAll(graph, setup))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
@@ -139,26 +141,26 @@ object Workflow:
   def argv(job: TestJob): List[String] =
     val head = List("./histos", "test")
     job match
-      case TestJob.Aggregate(TestTarget.Entire) => head
+      case TestJob.Aggregate(TestTarget.Entire)             => head
       case TestJob.Aggregate(TestTarget.Named(first, rest)) =>
         head ++ (first :: rest).map(_.value)
       case TestJob.Split(module, platform, version) =>
         val projects = module match
-          case ModuleRef.All        => Nil
-          case ModuleRef.One(name)  => List(name.value)
+          case ModuleRef.All       => Nil
+          case ModuleRef.One(name) => List(name.value)
         val platforms = platform match
-          case PlatformRef.All            => Nil
-          case PlatformRef.One(selected)  => List("--platform", PlatformToken.render(selected))
+          case PlatformRef.All           => Nil
+          case PlatformRef.One(selected) => List("--platform", PlatformToken.render(selected))
         val versions = version match
-          case VersionRef.All            => Nil
-          case VersionRef.One(selected)  => List("--scala", selected.value)
+          case VersionRef.All           => Nil
+          case VersionRef.One(selected) => List("--scala", selected.value)
         head ++ projects ++ platforms ++ versions
 
   private def affected(graph: ProjectGraph, changed: Set[ProjectName]): Either[CiError, List[ProjectName]] =
     val known = graph.projects.map(_.name).toSet
     changed.toList.filter(name => !known.contains(name)).sortBy(_.value) match
       case missing :: _ => Left(CiError.Unknown(missing))
-      case Nil =>
+      case Nil          =>
         val modules = graph.projects.collect { case module: Module => module }
         Right(close(modules, changed))
 
@@ -183,11 +185,11 @@ object Workflow:
 
   private def aggregate(event: CiEvent, all: List[Module], chosen: List[Module]): List[TestJob] =
     event match
-      case CiEvent.Other => List(TestJob.Aggregate(TestTarget.Entire))
+      case CiEvent.Other          => List(TestJob.Aggregate(TestTarget.Entire))
       case CiEvent.PullRequest(_) =>
         val names = all.collect { case module if chosen.exists(_.name == module.name) => module.name }
         names match
-          case Nil          => Nil
+          case Nil           => Nil
           case first :: rest => List(TestJob.Aggregate(TestTarget.Named(first, rest)))
 
   private def matrix(splits: Splits, modules: List[Module]): List[TestJob] =
@@ -239,8 +241,8 @@ object Workflow:
     plugins.flatMap: plugin =>
       plugin.contribution.jobs.flatMap: job =>
         job.when match
-          case JobWhen.Always         => List(jobLines(plugin, job).mkString("\n"))
-          case JobWhen.Schedule(_)    => Nil
+          case JobWhen.Always      => List(jobLines(plugin, job).mkString("\n"))
+          case JobWhen.Schedule(_) => Nil
 
   private def scheduled(graph: ProjectGraph): List[RenderedWorkflow] =
     graph.plugins.flatMap: plugin =>
@@ -275,7 +277,8 @@ object Workflow:
       case JobPermissions.ContentsRead  => "read"
       case JobPermissions.ContentsWrite => "write"
 
-  /** A pull request runs once. `push` is only `main`, so the branch push that updates a PR does not start a second run. */
+  /** A pull request runs once. `push` is only `main`, so the branch push that updates a PR does not start a second run.
+    */
   private val header: List[String] =
     List(
       "name: ci",
@@ -289,8 +292,8 @@ object Workflow:
       "jobs:",
     )
 
-  /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action.
-    * Chekhov 0.1.3 reads Playwright 1.62.1 from `~/.cache/chekhov`, not from an npx cache.
+  /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action. Chekhov 0.1.3
+    * reads Playwright 1.62.1 from `~/.cache/chekhov`, not from an npx cache.
     */
   private val tools: List[String] =
     List(
@@ -318,7 +321,7 @@ object Workflow:
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ prepare ++ List(
-          s"      - run: ${quote(argv(aggregate).mkString(" "))}",
+          s"      - run: ${quote(argv(aggregate).mkString(" "))}"
         )
       case _ =>
         List(
@@ -332,7 +335,7 @@ object Workflow:
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ prepare ++ List(
-          "      - run: \"${{ matrix.command }}\"",
+          "      - run: \"${{ matrix.command }}\""
         )
 
   private def include(job: TestJob): List[String] =
@@ -343,7 +346,7 @@ object Workflow:
 
   private def slug(job: TestJob): String =
     job match
-      case TestJob.Aggregate(_) => "all"
+      case TestJob.Aggregate(_)                     => "all"
       case TestJob.Split(module, platform, version) =>
         val parts = List(modulePart(module), platformPart(platform), versionPart(version)).flatten
         if parts.isEmpty then "all" else parts.mkString("-")
@@ -390,7 +393,7 @@ object Workflow:
     read(file(repo, rendered.name)).foldZIO(
       {
         case CiError.Missing(_) if rendered.name != fileName => ZIO.fail(CiError.Drift)
-        case other                                            => ZIO.fail(other)
+        case other                                           => ZIO.fail(other)
       },
       committed => ZIO.fromEither(differs(rendered.body, committed)),
     )
@@ -398,14 +401,16 @@ object Workflow:
   /** `histos-*.yml` files this graph did not emit. Other workflow names stay. */
   private def orphans(repo: Path, emitted: Set[String]): IO[CiError, List[Path]] =
     val dir = repo.resolve(".github").resolve("workflows")
-    ZIO.attemptBlocking {
-      if Files.isDirectory(dir) then histosFiles(dir).filter(path => !emitted.contains(fileNameOf(path)))
-      else Nil
-    }.mapError(_ => CiError.Io(IoFailure(dir, IoFault.Walk)))
+    ZIO
+      .attemptBlocking {
+        if Files.isDirectory(dir) then histosFiles(dir).filter(path => !emitted.contains(fileNameOf(path)))
+        else Nil
+      }
+      .mapError(_ => CiError.Io(IoFailure(dir, IoFault.Walk)))
 
   private def histosFiles(dir: Path): List[Path] =
     val stream = Files.list(dir)
-    val found =
+    val found  =
       try stream.iterator.asScala.toList
       finally stream.close()
     found.filter: path =>
@@ -416,13 +421,16 @@ object Workflow:
     Option(path.getFileName).map(_.toString).getOrElse("")
 
   private def read(file: Path): IO[CiError, String] =
-    ZIO.attemptBlocking {
-      if Files.isRegularFile(file) then Right(Files.readString(file)) else Left(CiError.Missing(file))
-    }.mapError(_ => CiError.Io(IoFailure(file, IoFault.Read))).flatMap(ZIO.fromEither)
+    ZIO
+      .attemptBlocking {
+        if Files.isRegularFile(file) then Right(Files.readString(file)) else Left(CiError.Missing(file))
+      }
+      .mapError(_ => CiError.Io(IoFailure(file, IoFault.Read)))
+      .flatMap(ZIO.fromEither)
 
   private def write(file: Path, text: String): IO[CiError, Unit] =
     Option(file.getParent) match
-      case None => ZIO.fail(CiError.Io(IoFailure(file, IoFault.Write)))
+      case None         => ZIO.fail(CiError.Io(IoFailure(file, IoFault.Write)))
       case Some(parent) =>
         ZIO
           .attemptBlocking(replace(parent, file, text))
@@ -437,3 +445,4 @@ object Workflow:
     catch
       case _: AtomicMoveNotSupportedException =>
         Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING)
+end Workflow

@@ -50,8 +50,9 @@ object NativeBridge:
 
   private def escape(raw: String): String =
     raw.flatMap {
-      case '\\'  => "\\\\"
-      case '"'   => "\\\""
-      case '\n'  => "\\n"
-      case char  => char.toString
+      case '\\' => "\\\\"
+      case '"'  => "\\\""
+      case '\n' => "\\n"
+      case char => char.toString
     }
+end NativeBridge

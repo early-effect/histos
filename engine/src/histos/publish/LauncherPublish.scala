@@ -12,7 +12,7 @@ import zio.{Chunk, ZIO}
 object LauncherPublish:
   def ready(repo: Path, graph: ProjectGraph): Either[LocalPublishError, Unit] =
     graph.assembly match
-      case None => Right(())
+      case None    => Right(())
       case Some(_) =>
         for
           _ <- organization(graph)
@@ -26,17 +26,21 @@ object LauncherPublish:
       written: PublishOutput,
   ): ZIO[Publisher, LocalPublishError, PublishOutput] =
     graph.assembly match
-      case None => ZIO.succeed(written)
+      case None       => ZIO.succeed(written)
       case Some(name) =>
         val path = jar(repo)
         for
-          version <- ZIO.fromEither(manual(graph))
-          _ <- ZIO.fromEither(revisions(written, version))
-          group <- ZIO.fromEither(organization(graph))
-          id <- ZIO.fromEither(artifact(group, name.value, version))
+          version  <- ZIO.fromEither(manual(graph))
+          _        <- ZIO.fromEither(revisions(written, version))
+          group    <- ZIO.fromEither(organization(graph))
+          id       <- ZIO.fromEither(artifact(group, name.value, version))
           revision <- ZIO.fromEither(manualRevision(version))
-          bytes <- ZIO.attemptBlocking(Chunk.fromArray(Files.readAllBytes(path))).mapError(_ => LocalPublishError.Read(path))
-          published <- ZIO.serviceWithZIO[Publisher](_.publish(Artifact(group, id, revision, bytes))).mapError(LocalPublishError.Publish(_))
+          bytes    <- ZIO
+            .attemptBlocking(Chunk.fromArray(Files.readAllBytes(path)))
+            .mapError(_ => LocalPublishError.Read(path))
+          published <- ZIO
+            .serviceWithZIO[Publisher](_.publish(Artifact(group, id, revision, bytes)))
+            .mapError(LocalPublishError.Publish(_))
           line = published match
             case Published.Local(jar, _, _)    => PublishedModule(group, name.value, version, Some(jar))
             case Published.Snapshot(unique, _) => PublishedModule(group, name.value, version, None, Some(unique.value))
@@ -77,3 +81,4 @@ object LauncherPublish:
 
   private def jar(repo: Path): Path =
     repo.resolve("dist").resolve("histos.jar")
+end LauncherPublish

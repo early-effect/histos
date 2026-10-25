@@ -12,19 +12,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 import zio.stream.Take
-import zio.{
-  Chunk,
-  Dequeue,
-  IO,
-  NonEmptyChunk,
-  Promise,
-  Queue,
-  Ref,
-  Scope,
-  ZIO,
-  ZLayer,
-  durationInt
-}
+import zio.{Chunk, Dequeue, IO, NonEmptyChunk, Promise, Queue, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object RunSpec extends ZIOSpecDefault:
@@ -39,21 +27,21 @@ object RunSpec extends ZIOSpecDefault:
         temp.flatMap: root =>
           val program =
             for
-              gates <- Queue.unbounded[Promise[Nothing, String]]
+              gates   <- Queue.unbounded[Promise[Nothing, String]]
               running <- serve(root, holding(gates))
               socket = running.record.socket
-              first <- live(socket, call)
-              feedA <- first.next.timeout(15.seconds)
-              gateA <- gates.take.timeout(15.seconds)
+              first  <- live(socket, call)
+              feedA  <- first.next.timeout(15.seconds)
+              gateA  <- gates.take.timeout(15.seconds)
               second <- live(socket, call)
-              feedB <- second.next.timeout(15.seconds)
-              gateB <- gates.take.timeout(15.seconds)
+              feedB  <- second.next.timeout(15.seconds)
+              gateB  <- gates.take.timeout(15.seconds)
               idA = feedA.flatMap(runText)
               idB = feedB.flatMap(runText)
-              stopped <- cancel(socket, idA)
-              afterA <- untilExit(first).timeout(5.seconds)
-              _ <- ZIO.foreachDiscard(gateB)(_.succeed("beta"))
-              afterB <- untilExit(second).timeout(5.seconds)
+              stopped  <- cancel(socket, idA)
+              afterA   <- untilExit(first).timeout(5.seconds)
+              _        <- ZIO.foreachDiscard(gateB)(_.succeed("beta"))
+              afterB   <- untilExit(second).timeout(5.seconds)
               finished <- cancel(socket, idB)
             yield assertTrue(
               gateA.isDefined,
@@ -68,7 +56,7 @@ object RunSpec extends ZIOSpecDefault:
               !afterA.exists(said(_, "beta")),
               afterB.exists(said(_, "beta")),
               afterB.exists(exited(_, CliExit.Success.code)),
-              idB.exists(id => failed(finished, s"no run '$id'"))
+              idB.exists(id => failed(finished, s"no run '$id'")),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
@@ -81,7 +69,7 @@ object RunSpec extends ZIOSpecDefault:
         temp.flatMap: root =>
           val program =
             for
-              gates <- Queue.unbounded[Promise[Nothing, String]]
+              gates   <- Queue.unbounded[Promise[Nothing, String]]
               running <- serve(root, holding(gates))
               socket = running.record.socket
               open <- live(socket, call)
@@ -89,7 +77,7 @@ object RunSpec extends ZIOSpecDefault:
               gate <- gates.take.timeout(15.seconds)
               id = feed.flatMap(runText)
               stopped <- cancel(socket, id)
-              after <- untilExit(open).timeout(5.seconds)
+              after   <- untilExit(open).timeout(5.seconds)
             yield assertTrue(
               id.isDefined,
               id != Some(task),
@@ -97,7 +85,7 @@ object RunSpec extends ZIOSpecDefault:
               told(stopped, "cancelled"),
               exited(stopped, CliExit.Success.code),
               after.exists(exited(_, CliExit.Interrupted.code)),
-              !after.exists(said(_, "still"))
+              !after.exists(said(_, "still")),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
@@ -108,7 +96,7 @@ object RunSpec extends ZIOSpecDefault:
         temp.flatMap: root =>
           val program =
             for
-              gates <- Queue.unbounded[Promise[Nothing, String]]
+              gates   <- Queue.unbounded[Promise[Nothing, String]]
               running <- serve(root, holding(gates))
               socket = running.record.socket
               open <- live(socket, call)
@@ -116,30 +104,29 @@ object RunSpec extends ZIOSpecDefault:
               gate <- gates.take.timeout(15.seconds)
               id = feed.flatMap(runText)
               missing <- Client.talk(socket, Call.Cancel(task)).runCollect
-              _ <- ZIO.foreachDiscard(gate)(_.succeed("lived"))
-              after <- untilExit(open).timeout(5.seconds)
+              _       <- ZIO.foreachDiscard(gate)(_.succeed("lived"))
+              after   <- untilExit(open).timeout(5.seconds)
             yield assertTrue(
               id.isDefined,
               id != Some(task),
               failed(missing, s"no run '$task'"),
               after.exists(said(_, "lived")),
-              after.exists(exited(_, CliExit.Success.code))
+              after.exists(exited(_, CliExit.Success.code)),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
-          )
+          ),
   )
 
   private def holding(
       gates: Queue[Promise[Nothing, String]]
   ): PluginRuntime =
     new PluginRuntime:
-      def links: List[PluginLink] = Nil
+      def links: List[PluginLink]                                           = Nil
       def bind: ZIO[Any, TaskError, Map[TaskId, IO[TaskError, TaskResult]]] =
         ZIO.succeed(Map.empty)
       def run(id: PluginTaskId, args: PluginArgs) =
-        if id.render != task || args != PluginArgs.empty then
-          ZIO.succeed(PluginOutput(id.render, Nil))
+        if id.render != task || args != PluginArgs.empty then ZIO.succeed(PluginOutput(id.render, Nil))
         else
           Promise.make[Nothing, String].flatMap { gate =>
             gates.offer(gate) *> gate.await.map(text => PluginOutput(text, Nil))
@@ -147,7 +134,7 @@ object RunSpec extends ZIOSpecDefault:
 
   private final class Live(
       queue: Dequeue[Take[ServerError, Feed]],
-      pending: Ref[Chunk[Feed]]
+      pending: Ref[Chunk[Feed]],
   ):
     def next: IO[ServerError, Feed] =
       pending
@@ -175,7 +162,7 @@ object RunSpec extends ZIOSpecDefault:
 
   private def live(socket: Path, asked: Call): ZIO[Scope, ServerError, Live] =
     for
-      queue <- Client.talk(socket, asked).toQueueUnbounded
+      queue   <- Client.talk(socket, asked).toQueueUnbounded
       pending <- Ref.make(Chunk.empty[Feed])
     yield Live(queue, pending)
 
@@ -189,7 +176,7 @@ object RunSpec extends ZIOSpecDefault:
 
   private def cancel(
       socket: Path,
-      id: Option[String]
+      id: Option[String],
   ): ZIO[Any, ServerError, Chunk[Feed]] =
     id match
       case Some(found) => Client.talk(socket, Call.Cancel(found)).runCollect
@@ -246,7 +233,7 @@ object RunSpec extends ZIOSpecDefault:
                 root.resolve("missing-api.jar"),
                 Nil,
                 ZIO.succeed(BuildNotes(false, Nil)),
-                plugins
+                plugins,
               )
             )
           }
@@ -268,7 +255,7 @@ object RunSpec extends ZIOSpecDefault:
     ): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -287,3 +274,4 @@ object RunSpec extends ZIOSpecDefault:
       )
     ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@
       TestAspect.timeout(45.seconds)
+end RunSpec

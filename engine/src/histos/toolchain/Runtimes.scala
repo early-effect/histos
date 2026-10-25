@@ -3,30 +3,29 @@ package histos.toolchain
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.node.{NodeBinary, NodeMiss, NodeToolchain, NodeRuntime}
-import histos.{Platform}
+import histos.Platform
 import histos.step.{Input, InputName, InputValue}
 import zio.{Chunk, ZIO}
 
 import zio.{IO, UIO}
 
-/** What one command links and runs with, read once from [[Machine]]: the
-  * environment children start from, the Scala Native origin, and Node. Node is
-  * chosen at the first Js launch and kept for the rest of the command, so a
-  * command that launches no Js does not look for it.
+/** What one command links and runs with, read once from [[Machine]]: the environment children start from, the Scala
+  * Native origin, and Node. Node is chosen at the first Js launch and kept for the rest of the command, so a command
+  * that launches no Js does not look for it.
   */
 final class Runtimes private (
     val env: Map[String, String],
     val native: NativeOrigin,
-    val nodeRuntime: IO[NodeMiss, NodeRuntime]
+    val nodeRuntime: IO[NodeMiss, NodeRuntime],
 ):
-  def node: IO[NodeMiss, NodeBinary] = nodeRuntime.map(_.binary)
+  def node: IO[NodeMiss, NodeBinary]                         = nodeRuntime.map(_.binary)
   def inputs(platform: Platform): IO[NodeMiss, Chunk[Input]] = platform match
     case Platform.Js =>
       nodeRuntime.map(runtime =>
         Chunk(
           Input(
             InputName("node"),
-            InputValue.Text(Runtimes.identityToken(runtime.identity))
+            InputValue.Text(Runtimes.identityToken(runtime.identity)),
           )
         )
       )
@@ -42,3 +41,4 @@ object Runtimes:
       .resolve(machine)
       .memoize
       .map(node => new Runtimes(machine.env, machine.native, node))
+end Runtimes

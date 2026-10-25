@@ -11,16 +11,16 @@ object NodeMajor:
   private[histos] def trusted(raw: Int): NodeMajor = raw
 
   extension (major: NodeMajor) def value: Int = major
+end NodeMajor
 
-/** A full Node version, such as `22.14.0`. The leading `v` from
-  * `node --version` is not part of it.
+/** A full Node version, such as `22.14.0`. The leading `v` from `node --version` is not part of it.
   */
 final case class NodeVersion private (value: String, major: NodeMajor):
   def atLeast(floor: NodeVersion): Boolean =
     histos.toolchain.VersionOrder.atLeast(
       value,
       floor.value,
-      stripJavaOne = false
+      stripJavaOne = false,
     )
 
 object NodeVersion:
@@ -43,6 +43,7 @@ object NodeVersion:
 
   private[histos] def trusted(text: String, major: NodeMajor): NodeVersion =
     NodeVersion(text, major)
+end NodeVersion
 
 enum NodeVersionError:
   case Bad(raw: String)
@@ -59,3 +60,4 @@ enum NodeVersionError:
     case Process(error)        => error.message
     case Missing               => "node binary is missing"
     case NotExecutable(binary) => s"$binary is not executable"
+end NodeVersionError

@@ -9,8 +9,8 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import zio.{IO, UIO, ZIO}
 
-/** A stored success could not be written or removed. A missing record is not
-  * one of these: [[QuickRecord.hit]] treats that as a miss.
+/** A stored success could not be written or removed. A missing record is not one of these: [[QuickRecord.hit]] treats
+  * that as a miss.
   */
 enum QuickError:
   case Save(failure: IoFailure)
@@ -19,9 +19,10 @@ enum QuickError:
   def message: String = this match
     case Save(failure)  => failure.message
     case Clear(failure) => failure.message
+end QuickError
 
-/** A stored success. A missing record, or a different digest, is not a success.
-  * An unreadable record is a miss. A failed save or clear is [[QuickError]].
+/** A stored success. A missing record, or a different digest, is not a success. An unreadable record is a miss. A
+  * failed save or clear is [[QuickError]].
   */
 object QuickRecord:
   def hit(
@@ -30,7 +31,7 @@ object QuickRecord:
       version: ScalaVersion,
       platform: Platform,
       suite: String,
-      digest: String
+      digest: String,
   ): UIO[Boolean] =
     ZIO
       .attemptBlocking(read(file(repo, module, version, platform, suite)))
@@ -43,7 +44,7 @@ object QuickRecord:
       version: ScalaVersion,
       platform: Platform,
       suite: String,
-      digest: String
+      digest: String,
   ): IO[QuickError, Unit] =
     val path = file(repo, module, version, platform, suite)
     // Unlink first. A mode that forbids reading still lets the owner replace
@@ -61,7 +62,7 @@ object QuickRecord:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-      suite: String
+      suite: String,
   ): IO[QuickError, Unit] =
     val path = file(repo, module, version, platform, suite)
     ZIO
@@ -74,7 +75,7 @@ object QuickRecord:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-      suite: String
+      suite: String,
   ): Path =
     val base = repo
       .resolve(".histos")
@@ -98,3 +99,4 @@ object QuickRecord:
               Some(text.stripPrefix("success ").trim)
             case _ => None
       catch case NonFatal(_) => None
+end QuickRecord

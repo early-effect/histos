@@ -7,16 +7,15 @@ import _root_.scala.quoted.*
 opaque type ToolRevision = String
 
 object ToolRevision:
-  given CanEqual[ToolRevision, ToolRevision] = CanEqual.derived
+  given CanEqual[ToolRevision, ToolRevision]         = CanEqual.derived
   inline def apply(inline raw: String): ToolRevision = ${
     ToolRevisionMacro.literal('raw)
   }
   def from(raw: String): Either[ToolRevisionError, ToolRevision] =
     if raw.isEmpty then Left(ToolRevisionError.Empty)
-    else if """\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?""".r.matches(raw) then
-      Right(trusted(raw))
+    else if """\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?""".r.matches(raw) then Right(trusted(raw))
     else Left(ToolRevisionError.NotExact(raw))
-  extension (value: ToolRevision) def value: String = value
+  extension (value: ToolRevision) def value: String                      = value
   @publicInBinary private[histos] def trusted(raw: String): ToolRevision = raw
 
 enum ToolRevisionError:
@@ -32,7 +31,7 @@ private object ToolRevisionMacro:
       case None =>
         quotes.reflect.report.errorAndAbort(
           "ToolRevision(...) takes a literal. Use ToolRevision.from at runtime.",
-          raw
+          raw,
         )
       case Some(text) =>
         ToolRevision.from(text) match

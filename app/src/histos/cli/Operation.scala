@@ -5,8 +5,7 @@ import histos.server.Call
 import histos.task.TaskId
 import histos.workflow.WorkflowAction
 
-/** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not
-  * operations.
+/** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not operations.
   */
 object Operation:
   def call(command: Command): Either[CliParseError, Call] =
@@ -32,8 +31,7 @@ object Operation:
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)
       case Command.Run(id, platform) =>
-        if id == TaskId.Inspect || id == TaskId.Versions then
-          Right(Call.Task(id.value, PluginArgs.empty))
+        if id == TaskId.Inspect || id == TaskId.Versions then Right(Call.Task(id.value, PluginArgs.empty))
         else Right(Call.Run(id.value, platform.map(_.token)))
       case Command.Plugin(id, args) => Right(Call.Task(id.render, args))
       case Command.Test(projects)   =>
@@ -49,16 +47,16 @@ object Operation:
         Right(Call.Assembly(destination))
       case Command.Publish(repository, projects) =>
         Right(Call.Publish(repository, projects))
-      case Command.Toolchain          => Right(Call.Toolchain)
-      case Command.CachePath          => Right(Call.CachePath)
-      case Command.CacheList          => Right(Call.CacheList)
-      case Command.CacheClean(dryRun) => Right(Call.CacheClean(dryRun))
-      case Command.Resolve(action)    => Right(Call.Resolve(resolve(action)))
-      case Command.Workflow(action)   => Right(Call.Workflow(workflow(action)))
-      case Command.LauncherUpdate     => Right(Call.LauncherUpdate)
-      case Command.Reload             => Right(Call.Reload)
-      case Command.Reboot             => Right(Call.Reboot)
-      case Command.Cancel(id)         => Right(Call.Cancel(id))
+      case Command.Toolchain                => Right(Call.Toolchain)
+      case Command.CachePath                => Right(Call.CachePath)
+      case Command.CacheList                => Right(Call.CacheList)
+      case Command.CacheClean(dryRun)       => Right(Call.CacheClean(dryRun))
+      case Command.Resolve(action)          => Right(Call.Resolve(resolve(action)))
+      case Command.Workflow(action)         => Right(Call.Workflow(workflow(action)))
+      case Command.LauncherUpdate           => Right(Call.LauncherUpdate)
+      case Command.Reload                   => Right(Call.Reload)
+      case Command.Reboot                   => Right(Call.Reboot)
+      case Command.Cancel(id)               => Right(Call.Cancel(id))
       case Command.PreviewCompile(projects) =>
         Right(Call.PreviewCompile(projects))
       case Command.PreviewTest(projects) =>
@@ -84,3 +82,4 @@ object Operation:
     action match
       case WorkflowAction.Check  => "check"
       case WorkflowAction.Update => "update"
+end Operation

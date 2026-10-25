@@ -10,3 +10,4 @@ enum JsEnv:
     case Node    => "node"
     case Jsdom   => "jsdom"
     case Firefox => "firefox"
+end JsEnv

@@ -32,10 +32,11 @@ private[zinc] enum ClassMarker:
     Option(loader.getResource(entry)).isDefined
 
   def classpathBan: Option[ClasspathBan] = this match
-    case DottyDriver                          => Some(ClasspathBan.Scala3Compiler)
-    case NscGlobal                            => Some(ClasspathBan.Scala2Compiler)
-    case HistosBuild | PluginEntry           => Some(ClasspathBan.Histos)
+    case DottyDriver                             => Some(ClasspathBan.Scala3Compiler)
+    case NscGlobal                               => Some(ClasspathBan.Scala2Compiler)
+    case HistosBuild | PluginEntry               => Some(ClasspathBan.Histos)
     case DottyBridge | XsbtBridge | JavaUniverse => None
+end ClassMarker
 
 private[zinc] object ClassMarker:
   val userBans: List[ClassMarker] =

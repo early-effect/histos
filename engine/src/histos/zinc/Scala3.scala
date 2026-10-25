@@ -1,16 +1,7 @@
 package histos.zinc
 
 import histos.{Dep, DepKind, Platform, ScalaVersion, ToolCatalog}
-import histos.resolve.{
-  LockedTools,
-  ToolRoot,
-  ToolRequest,
-  ToolId,
-  ToolRole,
-  ToolVariant,
-  Repositories,
-  Transitivity
-}
+import histos.resolve.{LockedTools, ToolRoot, ToolRequest, ToolId, ToolRole, ToolVariant, Repositories, Transitivity}
 
 import java.net.{URL, URLClassLoader}
 import java.util.Enumeration
@@ -22,24 +13,22 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** The Scala 3 compiler a module names. It is fetched off the engine classpath,
-  * because the engine runs on one Scala 3 version and a module may name
-  * another.
+/** The Scala 3 compiler a module names. It is fetched off the engine classpath, because the engine runs on one Scala 3
+  * version and a module may name another.
   */
 private[zinc] object Scala3:
   private[zinc] final class Toolchain private[Scala3] (
       private[zinc] val bridgeJar: Path,
       private[zinc] val runtime: List[Path],
-      private[zinc] val compilerClasspath: List[Path]
+      private[zinc] val compilerClasspath: List[Path],
   ):
-    /** Parent is the platform loader, plus `xsbti` from Zinc. The engine's
-      * Scala library and compiler are not visible here. `xsbti` is shared
-      * because the compiler calls Zinc's callback.
+    /** Parent is the platform loader, plus `xsbti` from Zinc. The engine's Scala library and compiler are not visible
+      * here. `xsbti` is shared because the compiler calls Zinc's callback.
       */
     private[zinc] def openLoader(engine: ClassLoader): URLClassLoader =
       new URLClassLoader(
         (compilerClasspath ++ runtime).map(_.toUri.toURL).toArray,
-        new EngineBoundary(engine)
+        new EngineBoundary(engine),
       )
 
   private[zinc] def jars(
@@ -58,10 +47,10 @@ private[zinc] object Scala3:
           )
           .flatMap(ZIO.fromEither)
 
-  private val ListClass = "scala/collection/immutable/List.class"
-  private val Scala3Runtime = "scala/runtime/Scala3RunTime.class"
+  private val ListClass         = "scala/collection/immutable/List.class"
+  private val Scala3Runtime     = "scala/runtime/Scala3RunTime.class"
   private val LibraryProperties = "library.properties"
-  private val VersionNumber = "version.number="
+  private val VersionNumber     = "version.number="
 
   private enum Found:
     case Bridge(path: Path)
@@ -73,7 +62,7 @@ private[zinc] object Scala3:
 
   private def assemble(
       version: ScalaVersion,
-      paths: List[Path]
+      paths: List[Path],
   ): Either[CompileError, Toolchain] =
     val found = paths.map(inspect)
     found.collect { case Left(path) => path } match
@@ -83,12 +72,12 @@ private[zinc] object Scala3:
           bridge <- only(
             version,
             jars.collect { case Found.Bridge(path) => path },
-            CompilerPart.Scala3Bridge
+            CompilerPart.Scala3Bridge,
           )
           compiler <- only(
             version,
             jars.collect { case Found.Compiler(path) => path },
-            CompilerPart.Scala3Compiler
+            CompilerPart.Scala3Compiler,
           )
           runtime <- runtimeOf(version, jars)
         yield
@@ -97,20 +86,18 @@ private[zinc] object Scala3:
       case foreign =>
         Left(CompileError.Toolchain(ToolchainMiss.Unexpected(version, foreign)))
 
-  /** `scala-library` is the classpath a program sees. Before the library merge
-    * it also needs `scala3-library`.
+  /** `scala-library` is the classpath a program sees. Before the library merge it also needs `scala3-library`.
     */
   private def runtimeOf(
       version: ScalaVersion,
-      jars: List[Found]
+      jars: List[Found],
   ): Either[CompileError, List[Path]] =
     val stdlibs = jars.collect { case Found.Stdlib(path, found, scala3) =>
       (path, found, scala3)
     }
     val legacy = jars.collect { case Found.Scala3Lib(path) => path }
     stdlibs match
-      case (path, found, scala3) :: Nil
-          if libraryOk(version, found) && scala3 && legacy.isEmpty =>
+      case (path, found, scala3) :: Nil if libraryOk(version, found) && scala3 && legacy.isEmpty =>
         Right(List(path))
       case (_, found, true) :: Nil if libraryOk(version, found) =>
         Left(
@@ -148,8 +135,7 @@ private[zinc] object Scala3:
           )
         )
 
-  /** A merged Scala 3 library reports the requested version. An older compiler
-    * still ships a 2.13 library.
+  /** A merged Scala 3 library reports the requested version. An older compiler still ships a 2.13 library.
     */
   private def libraryOk(requested: ScalaVersion, found: ScalaVersion): Boolean =
     found == requested || ScalaSeries.of(found).contains(ScalaSeries.Scala2(13))
@@ -157,7 +143,7 @@ private[zinc] object Scala3:
   private def only(
       version: ScalaVersion,
       paths: List[Path],
-      part: CompilerPart
+      part: CompilerPart,
   ): Either[CompileError, Path] =
     paths match
       case path :: Nil => Right(path)
@@ -174,8 +160,7 @@ private[zinc] object Scala3:
   private def classify(path: Path, zip: ZipFile): Found =
     val names = zip.entries.asScala.map(_.getName).toSet
     if names.contains(ClassMarker.DottyBridge.entry) then Found.Bridge(path)
-    else if names.contains(ClassMarker.DottyDriver.entry) then
-      Found.Compiler(path)
+    else if names.contains(ClassMarker.DottyDriver.entry) then Found.Compiler(path)
     else if names.exists(_.startsWith("xsbti/")) then Found.Interface(path)
     else if names.contains(ListClass) then
       libraryVersion(zip) match
@@ -206,13 +191,12 @@ private[zinc] object Scala3:
       try Some(use(zip))
       finally zip.close()
     catch case _: ZipException => None
+end Scala3
 
-/** The only types a project compiler shares with the engine. Everything else
-  * resolves on the platform loader, so the engine's Scala library cannot
-  * satisfy a compile.
+/** The only types a project compiler shares with the engine. Everything else resolves on the platform loader, so the
+  * engine's Scala library cannot satisfy a compile.
   */
-private final class EngineBoundary(engine: ClassLoader)
-    extends ClassLoader(ClassLoader.getPlatformClassLoader):
+private final class EngineBoundary(engine: ClassLoader) extends ClassLoader(ClassLoader.getPlatformClassLoader):
   override protected def loadClass(name: String, resolve: Boolean): Class[?] =
     if EngineBoundary.shared(name) then
       val loaded = engine.loadClass(name)
@@ -227,16 +211,17 @@ private final class EngineBoundary(engine: ClassLoader)
   override def getResources(name: String): Enumeration[URL] =
     if EngineBoundary.sharedResource(name) then engine.getResources(name)
     else super.getResources(name)
+end EngineBoundary
 
 private object EngineBoundary:
-  def shared(name: String): Boolean = name.startsWith("xsbti.")
+  def shared(name: String): Boolean         = name.startsWith("xsbti.")
   def sharedResource(name: String): Boolean = name.startsWith("xsbti/")
 
 object CompilerRequests:
   def supporting(
       versions: List[ScalaVersion],
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): List[ToolRequest] =
     versions.distinct.flatMap(version =>
       compiler(version, repos) :: Option
@@ -247,14 +232,13 @@ object CompilerRequests:
     )
 
   def compiler(version: ScalaVersion, repos: Repositories): ToolRequest =
-    val names = if version.value.startsWith("3.") then
-      List("scala3-compiler_3", "scala3-sbt-bridge")
+    val names = if version.value.startsWith("3.") then List("scala3-compiler_3", "scala3-sbt-bridge")
     else
       List(
         "scala-library",
         "scala-compiler",
         "scala-reflect",
-        "scala2-sbt-bridge"
+        "scala2-sbt-bridge",
       )
     ToolRequest(
       ToolId(ToolRole.Compiler, version, ToolVariant.Jvm),
@@ -264,16 +248,16 @@ object CompilerRequests:
           version,
           Platform.Jvm,
           Transitivity.Closure,
-          None
+          None,
         )
       ),
-      repos
+      repos,
     )
 
   def semanticdb(
       version: ScalaVersion,
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     ToolRequest(
       ToolId(ToolRole.Semanticdb, version, ToolVariant.Jvm),
@@ -283,13 +267,14 @@ object CompilerRequests:
             "org.scalameta",
             "semanticdb-scalac",
             catalog.compilers.semanticdb.value,
-            DepKind.Full
+            DepKind.Full,
           ),
           version,
           Platform.Jvm,
           Transitivity.Closure,
-          None
+          None,
         )
       ),
-      repos
+      repos,
     )
+end CompilerRequests

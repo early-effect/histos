@@ -71,3 +71,4 @@ private[histos] object Tokens:
 
   private def isHex(char: Char): Boolean =
     char.isDigit || (char >= 'a' && char <= 'f')
+end Tokens

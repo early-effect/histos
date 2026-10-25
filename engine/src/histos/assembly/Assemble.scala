@@ -5,15 +5,7 @@ import histos.resolve.LockedTools
 import histos.zinc.JvmCompile
 import histos.load.BuildClasspath
 import histos.native.NativeOrigin
-import histos.pack.{
-  Assembly,
-  AssemblyError,
-  AssemblyFile,
-  Assembled,
-  ClassJar,
-  JarError,
-  MainClass
-}
+import histos.pack.{Assembly, AssemblyError, AssemblyFile, Assembled, ClassJar, JarError, MainClass}
 import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
@@ -22,7 +14,7 @@ import histos.resolve.{
   RepositoryIo,
   Resolve,
   ResolveCell,
-  ResolveError
+  ResolveError,
 }
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError}
@@ -54,13 +46,13 @@ enum AssembleError:
     case NoClasses(module, version) =>
       s"'${module.value}' has no ${version.value} classes"
     case Io(path) => s"could not write $path"
+end AssembleError
 
 object Assemble:
   val ApiEntry: String = BuildClasspath.Entry
-  private val Program = MainClass.trusted("histos.cli.Main")
+  private val Program  = MainClass.trusted("histos.cli.Main")
 
-  /** Compile `app` and the modules it depends on, and write the one jar the
-    * launcher execs.
+  /** Compile `app` and the modules it depends on, and write the one jar the launcher execs.
     */
   def run(
       repo: Path,
@@ -68,19 +60,19 @@ object Assemble:
       jdk: JdkRuntime,
       native: NativeOrigin,
       destination: Path,
-      report: CompileFeed => UIO[Unit]
+      report: CompileFeed => UIO[Unit],
   ): ZIO[Resolve, AssembleError, Assembled] =
     for
-      app <- module(graph, "app")
-      api <- module(graph, "api")
-      ordered <- ZIO.fromEither(closure(app, index(graph)))
-      lock <- readLock(repo)
+      app      <- module(graph, "app")
+      api      <- module(graph, "api")
+      ordered  <- ZIO.fromEither(closure(app, index(graph)))
+      lock     <- readLock(repo)
       compiled <- GraphCompile
         .run(
           histos.zinc.CompileSession(repo, graph, jdk, native, lock),
           List(app.name.value),
           None,
-          report
+          report,
         )
         .mapError(AssembleError.Compile(_))
       classes <- ZIO.fromEither(
@@ -90,7 +82,7 @@ object Assemble:
         ordered,
         app.versions.first,
         BuildResolvers(graph.resolvers),
-        lock
+        lock,
       )
       library <- JvmCompile
         .runtime(app.versions.first)
@@ -105,13 +97,13 @@ object Assemble:
         classes,
         library ++ jars.filterNot(library.contains),
         apiClasses,
-        destination
+        destination,
       )
     yield assembled
 
   private def module(
       graph: ProjectGraph,
-      name: String
+      name: String,
   ): IO[AssembleError, Module] =
     ZIO
       .fromEither(
@@ -130,7 +122,7 @@ object Assemble:
 
   private def closure(
       module: Module,
-      modules: Map[ProjectName, Module]
+      modules: Map[ProjectName, Module],
   ): Either[AssembleError, List[Module]] =
     module
       .upstream(Platform.Jvm)
@@ -145,20 +137,19 @@ object Assemble:
   private def directories(
       ordered: List[Module],
       compiled: List[CompiledCell],
-      version: ScalaVersion
+      version: ScalaVersion,
   ): Either[AssembleError, List[Path]] =
     val cells = compiled.filter(_.version == version)
-    ordered.foldLeft[Either[AssembleError, List[Path]]](Right(Nil)):
-      (acc, module) =>
-        acc.flatMap: paths =>
-          cells.find(_.module == module.name) match
-            case Some(cell) => Right(paths :+ cell.classes)
-            case None => Left(AssembleError.NoClasses(module.name, version))
+    ordered.foldLeft[Either[AssembleError, List[Path]]](Right(Nil)): (acc, module) =>
+      acc.flatMap: paths =>
+        cells.find(_.module == module.name) match
+          case Some(cell) => Right(paths :+ cell.classes)
+          case None       => Left(AssembleError.NoClasses(module.name, version))
 
   private def apiDirectory(
       api: ProjectName,
       compiled: List[CompiledCell],
-      version: ScalaVersion
+      version: ScalaVersion,
   ): Either[AssembleError, Path] =
     compiled.find(cell => cell.module == api && cell.version == version) match
       case Some(cell) => Right(cell.classes)
@@ -168,7 +159,7 @@ object Assemble:
       ordered: List[Module],
       version: ScalaVersion,
       repositories: Repositories,
-      lock: DependencyLock
+      lock: DependencyLock,
   ): ZIO[Resolve, AssembleError, List[Path]] =
     ZIO.foldLeft(ordered)(List.empty[Path]): (acc, module) =>
       val cell = ResolveCell(
@@ -177,7 +168,7 @@ object Assemble:
         version,
         Platform.Jvm,
         repositories,
-        ClasspathScope.Compile
+        ClasspathScope.Compile,
       )
       Resolve
         .materialize(cell, lock)
@@ -185,7 +176,7 @@ object Assemble:
           AssembleError.Resolve(_),
           classpath =>
             val fresh = classpath.artifacts.map(_.path).filterNot(acc.contains)
-            acc ++ fresh
+            acc ++ fresh,
         )
 
   private def readLock(repo: Path): IO[AssembleError, DependencyLock] =
@@ -199,20 +190,20 @@ object Assemble:
       classes: List[Path],
       jars: List[Path],
       apiClasses: Path,
-      destination: Path
+      destination: Path,
   ): ZIO[Any, AssembleError, Assembled] =
     ZIO.scoped:
       for
         dir <- temp
         jar = dir.resolve("histos-api.jar")
-        _ <- ClassJar.write(apiClasses, jar).mapError(AssembleError.Jar(_))
+        _         <- ClassJar.write(apiClasses, jar).mapError(AssembleError.Jar(_))
         assembled <- Assembly
           .write(
             classes,
             jars,
             Program,
             destination,
-            List(AssemblyFile(ApiEntry, jar))
+            List(AssemblyFile(ApiEntry, jar)),
           )
           .mapError(AssembleError.Pack(_))
       yield assembled
@@ -221,3 +212,4 @@ object Assemble:
     Workspace
       .work("histos-api")
       .mapError(failure => AssembleError.Io(failure.path))
+end Assemble

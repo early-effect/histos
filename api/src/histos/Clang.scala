@@ -15,12 +15,14 @@ object ClangMajor:
   private[histos] def trusted(raw: Int): ClangMajor = raw
 
   extension (major: ClangMajor) def value: Int = major
+end ClangMajor
 
 enum ClangError:
   case NotPositive(raw: Int)
 
   def message: String = this match
     case NotPositive(raw) => s"$raw is not a clang major"
+end ClangError
 
 /** Present only on a module that targets Native. `Unused` is not a missing major. */
 enum ClangPin:

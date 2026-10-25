@@ -22,7 +22,7 @@ object Products:
     "test-quick",
     "jars",
     "link",
-    "run"
+    "run",
   )
 
   val sharedRoots: List[String] = List("provider", "provider-src")
@@ -33,28 +33,24 @@ object Products:
 
   /** Every product root, and the stored tally. Does not read the build. */
   def wipe(repo: Path): IO[IoFailure, Unit] =
-    ZIO.foreachDiscard(moduleRoots ++ sharedRoots)(name =>
-      Workspace.delete(dot(repo).resolve(name))
-    ) *> Workspace.delete(observation(repo))
+    ZIO.foreachDiscard(moduleRoots ++ sharedRoots)(name => Workspace.delete(dot(repo).resolve(name))) *> Workspace
+      .delete(observation(repo))
 
-  /** One module's subtree under each per-module root. Shared roots stay. The
-    * stored tally goes too: it named products this wipe just removed.
+  /** One module's subtree under each per-module root. Shared roots stay. The stored tally goes too: it named products
+    * this wipe just removed.
     */
   def wipe(repo: Path, modules: List[Module]): IO[IoFailure, Unit] =
     ZIO.foreachDiscard(modules)(module =>
-      ZIO.foreachDiscard(moduleRoots)(name =>
-        Workspace.delete(dot(repo).resolve(name).resolve(module.name.value))
-      )
+      ZIO.foreachDiscard(moduleRoots)(name => Workspace.delete(dot(repo).resolve(name).resolve(module.name.value)))
     ) *> Workspace.delete(observation(repo))
 
-  /** Empty names are the full wipe, including shared roots. A name selects
-    * modules only: an aggregate expands to its modules, and upstream stays. A
-    * bad name deletes nothing.
+  /** Empty names are the full wipe, including shared roots. A name selects modules only: an aggregate expands to its
+    * modules, and upstream stays. A bad name deletes nothing.
     */
   def named(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String]
+      names: List[String],
   ): IO[CiError | IoFailure, List[ProjectName]] =
     if names.isEmpty then wipe(repo).as(Nil)
     else
@@ -82,3 +78,4 @@ object Products:
       case found: IoFailure => found.message
 
   private def dot(repo: Path): Path = repo.resolve(".histos")
+end Products

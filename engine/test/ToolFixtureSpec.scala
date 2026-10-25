@@ -14,7 +14,7 @@ object ToolFixtureSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- Workspace.work("histos-fixture-policy")
-          url <- ZIO.fromEither(
+          url  <- ZIO.fromEither(
             RepositoryUrl.from(root.resolve("maven").toUri.toASCIIString)
           )
           graph <- ZIO.fromEither(
@@ -24,12 +24,12 @@ object ToolFixtureSpec extends ZIOSpecDefault:
           )
           expected <- LockedTools.plan(
             graph,
-            histos.native.NativeOrigin.Central
+            histos.native.NativeOrigin.Central,
           )
           calls <- Ref.make(List.empty[ToolRequest])
           repositories = BuildResolvers(graph.resolvers)
-          digest = Sha256.of(Chunk.single(1.toByte))
-          resolver = new Resolve:
+          digest       = Sha256.of(Chunk.single(1.toByte))
+          resolver     = new Resolve:
             def resolveTool(request: ToolRequest): IO[ResolveError, Classpath] =
               if request.repositories != repositories || !expected.contains(
                   request
@@ -47,10 +47,10 @@ object ToolFixtureSpec extends ZIOSpecDefault:
                           tool.revision,
                           root.resolve("cache").resolve(tool.name + ".jar"),
                           digest,
-                          repositories.first
+                          repositories.first,
                         )
                       ),
-                      Nil
+                      Nil,
                     )
                   )
             def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
@@ -63,14 +63,14 @@ object ToolFixtureSpec extends ZIOSpecDefault:
               ZIO.fail(ResolveError.NoLock(root))
             def resolvePlugin(
                 dependency: Dep,
-                repositories: Repositories
+                repositories: Repositories,
             ): IO[ResolveError, Classpath] =
               ZIO.fail(ResolveError.NoLock(root))
             def sources(
                 organization: String,
                 name: String,
                 revision: String,
-                repository: Repository
+                repository: Repository,
             ): IO[ResolveError, ResolvedArtifact] =
               ZIO.fail(ResolveError.NoLock(root))
           view <- ToolFixture
@@ -84,6 +84,6 @@ object ToolFixtureSpec extends ZIOSpecDefault:
           view.lock.tools.forall(_.repositories == repositories.all),
           view.lock.tools
             .flatMap(_.artifacts)
-            .forall(_.repository == repositories.first)
+            .forall(_.repository == repositories.first),
         )
   )

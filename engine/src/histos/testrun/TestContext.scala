@@ -6,16 +6,15 @@ import histos.jdk.Sha256
 import histos.native.NativeToolchain
 import histos.resolve.{LockedTools, ToolInput}
 import histos.toolchain.{Runtimes, RuntimeIdentity}
-import histos.zinc.{CompiledCell}
+import histos.zinc.CompiledCell
 import java.nio.charset.StandardCharsets
 import zio.{Chunk, ZIO}
 
-/** Verified compilation and execution inputs checked before a cached test
-  * success.
+/** Verified compilation and execution inputs checked before a cached test success.
   */
 final case class TestContext(
     tools: List[ToolInput],
-    runtimes: List[RuntimeIdentity]
+    runtimes: List[RuntimeIdentity],
 ):
   def hashes: List[Sha256] =
     tools.map(_.fingerprint) ++ runtimes.map(identity =>
@@ -33,10 +32,10 @@ object TestContext:
       module: Module,
       cell: CompiledCell,
       jdk: JdkRuntime,
-      runtimes: Runtimes
+      runtimes: Runtimes,
   ): ZIO[LockedTools, ModuleTestError, TestContext] =
     ZIO.serviceWithZIO[LockedTools]: view =>
-      val provider = module.test.isEmpty
+      val provider                                = module.test.isEmpty
       def compilers(versions: List[ScalaVersion]) =
         versions.distinct.flatMap(version =>
           histos.zinc.CompilerRequests
@@ -61,29 +60,29 @@ object TestContext:
                   revision,
                   module.jsEnv,
                   view.catalog,
-                  view.repositories
+                  view.repositories,
                 ),
                 histos.js.JsRequests
-                  .testBridge(revision, view.catalog, view.repositories)
+                  .testBridge(revision, view.catalog, view.repositories),
               )
             else
               List(
                 histos.js.JsRequests.linker(
                   revision,
                   view.catalog.js.bridgeScala,
-                  view.repositories
+                  view.repositories,
                 ),
                 histos.js.JsRequests.environment(
                   module.jsEnv,
                   view.catalog,
-                  view.repositories
-                )
+                  view.repositories,
+                ),
               )
             ZIO.succeed(
               selected ++ compilers(
                 List(
                   view.catalog.js.bridgeScala,
-                  histos.js.JsRequests.compiler(module.jsEnv, view.catalog)
+                  histos.js.JsRequests.compiler(module.jsEnv, view.catalog),
                 )
               )
             )
@@ -92,14 +91,14 @@ object TestContext:
               .fromEither(
                 NativeToolchain.of(
                   module.nativeVersion.getOrElse(view.catalog.native.revision),
-                  runtimes.native
+                  runtimes.native,
                 )
               )
               .mapError(error =>
                 ModuleTestError.Tool(
                   cell.module,
                   cell.version,
-                  histos.toolchain.PlatformToolError.NativeOrigin(error)
+                  histos.toolchain.PlatformToolError.NativeOrigin(error),
                 )
               )
               .map(toolchain =>
@@ -120,11 +119,10 @@ object TestContext:
           if cell.platform == Platform.Js then
             runtimes.nodeRuntime
               .map(runtime => List(runtime.identity))
-              .mapError(error =>
-                ModuleTestError.NoNode(cell.module, cell.version, error)
-              )
+              .mapError(error => ModuleTestError.NoNode(cell.module, cell.version, error))
           else ZIO.succeed(Nil)
       yield TestContext(
         (compilation ++ execution).distinctBy(_.id),
-        jdk.identity :: node
+        jdk.identity :: node,
       )
+end TestContext

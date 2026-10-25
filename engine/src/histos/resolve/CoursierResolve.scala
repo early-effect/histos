@@ -8,9 +8,8 @@ import java.nio.file.{Files, Path}
 
 import zio.{Chunk, IO, ZIO}
 
-/** Coursier is linked as a library. `coursier.util.Task` runs on `Future`, and
-  * `eitherResult` is that library's runner. Callers see [[ResolveError]]. The
-  * Scala 2.13 toolchain is fetched separately and is not a user dependency.
+/** Coursier is linked as a library. `coursier.util.Task` runs on `Future`, and `eitherResult` is that library's runner.
+  * Callers see [[ResolveError]]. The Scala 2.13 toolchain is fetched separately and is not a user dependency.
   */
 private[resolve] enum CacheMode:
   case Revalidate
@@ -19,7 +18,7 @@ private[resolve] enum CacheMode:
 
 private[resolve] final class CoursierResolve(
     cache: Path,
-    mode: CacheMode = CacheMode.Revalidate
+    mode: CacheMode = CacheMode.Revalidate,
 ) extends Resolve:
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
     Resolve.prepare(cell) *> {
@@ -29,31 +28,28 @@ private[resolve] final class CoursierResolve(
           cell.dependencies,
           cell.scalaVersion,
           cell.platform,
-          cell.repositories
+          cell.repositories,
         )
     }
 
   def resolvePlugin(
       dependency: Dep,
-      repositories: Repositories
+      repositories: Repositories,
   ): IO[ResolveError, Classpath] =
     if Resolve.ranged(dependency) then ZIO.fail(ResolveError.Range(dependency))
-    else
-      Resolve.pluginScala.flatMap(version =>
-        solve(List(dependency), version, Platform.Jvm, repositories)
-      )
+    else Resolve.pluginScala.flatMap(version => solve(List(dependency), version, Platform.Jvm, repositories))
 
   override def resolveTool(request: ToolRequest): IO[ResolveError, Classpath] =
     val dependencies = request.roots.map(root =>
       dependency(root.organization, root.name, root.revision)
         .copy(transitive = root.transitivity == Transitivity.Closure)
     )
-    val origins = request.roots.flatMap(_.origin).distinct
+    val origins      = request.roots.flatMap(_.origin).distinct
     val repositories = Repositories.ordered(request.repositories)
-    val ordered = (origins ++ repositories).distinct
-    val policy = Repositories(
+    val ordered      = (origins ++ repositories).distinct
+    val policy       = Repositories(
       ordered.headOption.getOrElse(request.repositories.first),
-      ordered.drop(1)
+      ordered.drop(1),
     )
     for
       _ <- ZIO.foreachDiscard(request.roots)(root =>
@@ -66,7 +62,7 @@ private[resolve] final class CoursierResolve(
           case None         => ZIO.unit
           case Some(origin) =>
             for
-              base <- session()
+              base   <- session()
               result <- execute(
                 base
                   .withRepositories(Seq(toCoursier(origin)))
@@ -81,13 +77,13 @@ private[resolve] final class CoursierResolve(
                 located(root.organization, root.name, root.revision, result)
               )
             yield ()
-      base <- session()
+      base   <- session()
       result <- execute(
         base
           .withRepositories(ordered.map(toCoursier))
           .withDependencies(dependencies)
       )
-      found <- ZIO.fromEither(rows(result))
+      found     <- ZIO.fromEither(rows(result))
       artifacts <- ZIO.foreach(found)(row => place(policy, row))
     yield Classpath(artifacts, evictions(result.resolution))
 
@@ -99,12 +95,12 @@ private[resolve] final class CoursierResolve(
       single = dependency(
         artifact.organization,
         artifact.name,
-        artifact.revision
+        artifact.revision,
       ).copy(transitive = false)
         .withAttributes(
           coursier.core.Attributes(
             coursier.core.Type.jar,
-            coursier.core.Classifier(artifact.classifier.fold("")(_.value))
+            coursier.core.Classifier(artifact.classifier.fold("")(_.value)),
           )
         )
       result <- execute(
@@ -118,7 +114,7 @@ private[resolve] final class CoursierResolve(
           artifact.name,
           artifact.revision,
           result,
-          artifact.classifier
+          artifact.classifier,
         )
       )
       sha <- digest(path)
@@ -132,7 +128,7 @@ private[resolve] final class CoursierResolve(
               path,
               sha,
               artifact.repository,
-              artifact.classifier
+              artifact.classifier,
             )
           )
         else ZIO.fail(ResolveError.Checksum(path, artifact.sha256, sha))
@@ -142,7 +138,7 @@ private[resolve] final class CoursierResolve(
       organization: String,
       name: String,
       revision: String,
-      repository: Repository
+      repository: Repository,
   ): IO[ResolveError, ResolvedArtifact] =
     val single = dependency(organization, name, revision)
       .copy(transitive = false)
@@ -151,7 +147,7 @@ private[resolve] final class CoursierResolve(
           .Attributes(coursier.core.Type.jar, coursier.core.Classifier.sources)
       )
     for
-      base <- session()
+      base   <- session()
       result <- execute(
         base
           .withRepositories(Seq(toCoursier(repository)))
@@ -163,7 +159,7 @@ private[resolve] final class CoursierResolve(
           name,
           revision,
           result,
-          Some(JarClassifier("sources"))
+          Some(JarClassifier("sources")),
         )
       )
       sha <- digest(path)
@@ -173,19 +169,19 @@ private[resolve] final class CoursierResolve(
       dependencies: List[Dep],
       version: ScalaVersion,
       platform: Platform,
-      repositories: Repositories
+      repositories: Repositories,
   ): IO[ResolveError, Classpath] =
     val requested = dependencies.map(dep =>
       dependency(
         dep.organization,
         ArtifactName.of(dep, version, platform),
-        dep.revision
+        dep.revision,
       )
     )
     val coursierRepositories =
       Repositories.ordered(repositories).map(toCoursier)
     for
-      base <- session()
+      base   <- session()
       result <- execute(
         base.withRepositories(coursierRepositories).withDependencies(requested)
       )
@@ -198,9 +194,8 @@ private[resolve] final class CoursierResolve(
   private enum CacheUse:
     case Solve, Locked, Offline
 
-  /** Retain uses a file already in the cache and fetches only a missing one.
-    * Offline never fetches. Revalidate is Coursier's default, which also
-    * rechecks changing artifacts.
+  /** Retain uses a file already in the cache and fetches only a missing one. Offline never fetches. Revalidate is
+    * Coursier's default, which also rechecks changing artifacts.
     */
   private val opened: CacheUse = mode match
     case CacheMode.Revalidate => CacheUse.Solve
@@ -217,18 +212,16 @@ private[resolve] final class CoursierResolve(
           .withLocation(cache.toString)
           .copy(allowCacheSubstitution = false)
         val files = use match
-          case CacheUse.Solve   => configured
-          case CacheUse.Locked  =>
+          case CacheUse.Solve  => configured
+          case CacheUse.Locked =>
             configured.copy(cachePolicies =
               Seq(
                 coursier.cache.CachePolicy.LocalOnly,
-                coursier.cache.CachePolicy.FetchMissing
+                coursier.cache.CachePolicy.FetchMissing,
               )
             )
           case CacheUse.Offline =>
-            configured.copy(cachePolicies =
-              Seq(coursier.cache.CachePolicy.LocalOnly)
-            )
+            configured.copy(cachePolicies = Seq(coursier.cache.CachePolicy.LocalOnly))
         coursier
           .Fetch(files)(using coursier.util.Task.sync)
           .noMirrors
@@ -248,10 +241,10 @@ private[resolve] final class CoursierResolve(
 
   private def place(
       repositories: Repositories,
-      row: Row
+      row: Row,
   ): IO[ResolveError, ResolvedArtifact] =
     Repository.recorded(row.url, Repositories.ordered(repositories)) match
-      case None => ZIO.fail(ResolveError.Repository(RepositoryIo.Metadata))
+      case None             => ZIO.fail(ResolveError.Repository(RepositoryIo.Metadata))
       case Some(repository) =>
         digest(row.path).map(sha =>
           ResolvedArtifact(
@@ -261,7 +254,7 @@ private[resolve] final class CoursierResolve(
             row.path,
             sha,
             repository,
-            row.classifier
+            row.classifier,
           )
         )
 
@@ -269,7 +262,7 @@ private[resolve] final class CoursierResolve(
       dependencies: List[Dep],
       version: ScalaVersion,
       platform: Platform,
-      result: coursier.Fetch.Result
+      result: coursier.Fetch.Result,
   ): Either[ResolveError, List[Row]] =
     rows(result).flatMap: found =>
       if found.nonEmpty then Right(found)
@@ -280,7 +273,7 @@ private[resolve] final class CoursierResolve(
               ResolveError.NotFound(
                 dependency.organization,
                 ArtifactName.of(dependency, version, platform),
-                dependency.revision
+                dependency.revision,
               )
             )
           case Nil => Right(Nil)
@@ -290,21 +283,21 @@ private[resolve] final class CoursierResolve(
       name: String,
       revision: String,
       result: coursier.Fetch.Result,
-      classifier: Option[JarClassifier] = None
+      classifier: Option[JarClassifier] = None,
   ): Either[ResolveError, Path] =
     rows(result).flatMap: found =>
       found.find(row =>
         row.organization == organization && row.name == name && row.revision == revision && row.classifier == classifier
       ) match
         case Some(row) => Right(row.path)
-        case None => Left(ResolveError.NotFound(organization, name, revision))
+        case None      => Left(ResolveError.NotFound(organization, name, revision))
 
   private def rows(
       result: coursier.Fetch.Result
   ): Either[ResolveError, List[Row]] =
     result.detailedArtifacts0.toList
       .foldLeft[Either[ResolveError, List[Row]]](Right(Nil)):
-        case (Left(error), _) => Left(error)
+        case (Left(error), _)                                         => Left(error)
         case (Right(seen), (dependency, publication, artifact, file)) =>
           val path = file.toPath
           if !file.getName.endsWith(".jar") then Right(seen)
@@ -322,9 +315,7 @@ private[resolve] final class CoursierResolve(
                   JarClassifier
                     .from(raw)
                     .left
-                    .map(error =>
-                      ResolveError.Lock(LockError.Classifier(error))
-                    )
+                    .map(error => ResolveError.Lock(LockError.Classifier(error)))
                     .map(Some(_))
               row = Row(
                 dependency.module.organization.value,
@@ -332,7 +323,7 @@ private[resolve] final class CoursierResolve(
                 version.asString,
                 path,
                 artifact.url,
-                classifier
+                classifier,
               )
             yield
               if seen.exists(prior =>
@@ -341,48 +332,42 @@ private[resolve] final class CoursierResolve(
               then seen
               else seen :+ row
 
-  /** Project metadata is a map, so this order is sorted. The classpath order is
-    * not.
+  /** Project metadata is a map, so this order is sorted. The classpath order is not.
     */
   private def evictions(resolution: coursier.core.Resolution): List[Eviction] =
-    val selected = resolution.reconciledVersions
+    val selected                                                    = resolution.reconciledVersions
     def one(dependency: coursier.core.Dependency): Option[Eviction] =
       selected
         .get(dependency.module)
         .flatMap: chosen =>
           val requested = dependency.versionConstraint.asString
-          val got = chosen.asString
-          val eviction = Eviction(
+          val got       = chosen.asString
+          val eviction  = Eviction(
             dependency.module.organization.value,
             dependency.module.name.value,
             requested,
-            got
+            got,
           )
           if requested == got || !Eviction.printable(eviction) then None
           else Some(eviction)
-    val roots = resolution.rootDependencies.toList.flatMap(one)
-    val transitive = resolution.projectCache0.toList.flatMap {
-      case (_, (_, project)) =>
-        project.dependencies0.toList.flatMap((_, dependency) => one(dependency))
+    val roots      = resolution.rootDependencies.toList.flatMap(one)
+    val transitive = resolution.projectCache0.toList.flatMap { case (_, (_, project)) =>
+      project.dependencies0.toList.flatMap((_, dependency) => one(dependency))
     }
-    distinct(roots ++ transitive).sortBy(item =>
-      (item.organization, item.name, item.requested, item.selected)
-    )
+    distinct(roots ++ transitive).sortBy(item => (item.organization, item.name, item.requested, item.selected))
 
   private def distinct(items: List[Eviction]): List[Eviction] =
-    items.foldLeft(List.empty[Eviction])((seen, item) =>
-      if seen.contains(item) then seen else seen :+ item
-    )
+    items.foldLeft(List.empty[Eviction])((seen, item) => if seen.contains(item) then seen else seen :+ item)
 
   private def dependency(
       organization: String,
       name: String,
-      revision: String
+      revision: String,
   ): coursier.core.Dependency =
     coursier.Dependency(
       coursier
         .Module(coursier.Organization(organization), coursier.ModuleName(name)),
-      coursier.version.VersionConstraint(revision)
+      coursier.version.VersionConstraint(revision),
     )
 
   private def toCoursier(repository: Repository): coursier.core.Repository =
@@ -406,7 +391,7 @@ private[resolve] final class CoursierResolve(
             ResolveError.NotFound(
               missing.module.organization.value,
               missing.module.name.value,
-              missing.versionConstraint.asString
+              missing.versionConstraint.asString,
             )
           case _ => ResolveError.Repository(RepositoryIo.Metadata)
       case _ => ResolveError.Repository(RepositoryIo.Fetch)
@@ -417,7 +402,7 @@ private[resolve] final class CoursierResolve(
       revision: String,
       path: Path,
       url: String,
-      classifier: Option[JarClassifier]
+      classifier: Option[JarClassifier],
   )
 
 end CoursierResolve

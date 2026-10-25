@@ -2,10 +2,9 @@ package histos.plugin
 
 import zio.{Scope, ZIO}
 
-/**
- * One object in the plugin jar. `contribute` is data and is not a `ZIO`.
- * `run` is the effect the engine calls later, inside a `Scope`.
- */
+/** One object in the plugin jar. `contribute` is data and is not a `ZIO`. `run` is the effect the engine calls later,
+  * inside a `Scope`.
+  */
 trait HistosPlugin:
   def id: PluginId
   def contribute: Contribution

@@ -16,11 +16,11 @@ import zio.stream.ZStream
 import java.security.MessageDigest
 
 object LauncherPinSpec extends ZIOSpecDefault:
-  private val version = "0.0.1-SNAPSHOT"
+  private val version  = "0.0.1-SNAPSHOT"
   private val revision = "0.0.1-20261023.224241-14"
-  private val bytes =
+  private val bytes    =
     Chunk.fromArray("pinned launcher".getBytes(StandardCharsets.UTF_8))
-  private val sha = Sha256.of(bytes).value
+  private val sha        = Sha256.of(bytes).value
   private val repository =
     "https://central.sonatype.com/repository/maven-snapshots"
   private val lock =
@@ -47,7 +47,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
         LauncherPin.parse(lock.replace(s"sha256 $sha\n", "")) == Left(
           LauncherError.Missing(LauncherField.Sha256)
         ),
-        LauncherPin.parse("version\n") == Left(LauncherError.Line("version"))
+        LauncherPin.parse("version\n") == Left(LauncherError.Line("version")),
       )
     ,
     test(
@@ -67,7 +67,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
         LauncherPin
           .from(repository, version, "0.0.1-20261023.224241-0", sha)
           .isLeft,
-        LauncherPin.from(repository, version, revision, "g" * 64).isLeft
+        LauncherPin.from(repository, version, revision, "g" * 64).isLeft,
       )
     ,
     test("PR snapshot qualifiers keep their exact immutable coordinate"):
@@ -75,11 +75,11 @@ object LauncherPinSpec extends ZIOSpecDefault:
         repository,
         "0.0.1-pr31-SNAPSHOT",
         "0.0.1-pr31-20261023.224241-14",
-        sha
+        sha,
       )
       assertTrue(
         pin.map(_.version).contains("0.0.1-pr31-SNAPSHOT"),
-        pin.map(_.revision).contains("0.0.1-pr31-20261023.224241-14")
+        pin.map(_.revision).contains("0.0.1-pr31-20261023.224241-14"),
       )
     ,
     test("only https or loopback http repositories are accepted"):
@@ -101,7 +101,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
           .isLeft,
         LauncherPin
           .from(repository + "/../other", version, revision, sha)
-          .isLeft
+          .isLeft,
       )
     ,
     test("canonical URL outcomes match the shared bootstrap corpus"):
@@ -124,7 +124,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
               case kind :: expected :: encoded :: Nil =>
                 val raw = new String(
                   java.util.Base64.getDecoder.decode(encoded),
-                  StandardCharsets.UTF_8
+                  StandardCharsets.UTF_8,
                 )
                 val found =
                   if kind == "repository" then LauncherUrl.repository(raw)
@@ -141,30 +141,30 @@ object LauncherPinSpec extends ZIOSpecDefault:
         wrong <- LauncherMetadata
           .revision(
             metadata.replace("<artifactId>histos", "<artifactId>other"),
-            version
+            version,
           )
           .either
         duplicate <- LauncherMetadata
           .revision(
             metadata.replace(
               "</snapshotVersions>",
-              s"<snapshotVersion><extension>jar</extension><value>$revision</value></snapshotVersion></snapshotVersions>"
+              s"<snapshotVersion><extension>jar</extension><value>$revision</value></snapshotVersion></snapshotVersions>",
             ),
-            version
+            version,
           )
           .either
         jar <- LauncherMetadata
           .revision(
             metadata.replace(s"<value>$revision", "<value>0.0.1-SNAPSHOT"),
-            version
+            version,
           )
           .either
-        missing <- LauncherMetadata.revision("<metadata/>", version).either
+        missing   <- LauncherMetadata.revision("<metadata/>", version).either
         malformed <- LauncherMetadata.revision("<metadata>", version).either
-        entity <- LauncherMetadata
+        entity    <- LauncherMetadata
           .revision(
             "<!DOCTYPE metadata [<!ENTITY leak SYSTEM 'file:///etc/passwd'>]><metadata>&leak;</metadata>",
-            version
+            version,
           )
           .either
       yield assertTrue(
@@ -178,7 +178,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
           LauncherError.Metadata(LauncherMetadataError.Missing("groupId"))
         ),
         malformed == Left(LauncherError.Metadata(LauncherMetadataError.Xml)),
-        entity == Left(LauncherError.Metadata(LauncherMetadataError.Xml))
+        entity == Left(LauncherError.Metadata(LauncherMetadataError.Xml)),
       )
     ,
     test(
@@ -191,23 +191,23 @@ object LauncherPinSpec extends ZIOSpecDefault:
           routes = fixture(metadata, bytes, sha, seen)
           server <- Server.install(
             routes,
-            Server.Config.default.copy(host = "127.0.0.1", port = Port(0))
+            Server.Config.default.copy(host = "127.0.0.1", port = Port(0)),
           )
           port <- server.port
-          old <- ZIO.fromEither(
+          old  <- ZIO.fromEither(
             LauncherPin.from(
               s"http://127.0.0.1:$port/repo",
               version,
               "0.0.1-20261022.224241-13",
-              sha
+              sha,
             )
           )
           _ <- Workspace.writeString(
             root.resolve(LauncherPin.file),
-            LauncherPin.render(old)
+            LauncherPin.render(old),
           )
-          pin <- LauncherPin.update(root)
-          read <- LauncherPin.read(root)
+          pin    <- LauncherPin.update(root)
+          read   <- LauncherPin.read(root)
           staged <- ZIO
             .attemptBlocking(
               Files.readAllBytes(
@@ -223,14 +223,14 @@ object LauncherPinSpec extends ZIOSpecDefault:
               )
             )
           requests <- seen.get
-          temps <- temporary(root)
+          temps    <- temporary(root)
         yield assertTrue(
           pin.revision == revision,
           LauncherPin.render(read) == LauncherPin.render(pin),
           Chunk.fromArray(staged) == bytes,
           requests.exists(_.endsWith("maven-metadata.xml")),
           requests.exists(_.endsWith(s"histos-$revision.jar")),
-          temps.isEmpty
+          temps.isEmpty,
         )
     ,
     test(
@@ -245,22 +245,22 @@ object LauncherPinSpec extends ZIOSpecDefault:
               (
                 metadata,
                 Chunk.fromArray("corrupt".getBytes(StandardCharsets.UTF_8)),
-                sha
-              )
+                sha,
+              ),
             )
           ): (xml, artifact, checksum) =>
             for
-              root <- Workspace.work("launcher-refuse")
-              _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
-              seen <- Ref.make(List.empty[String])
+              root   <- Workspace.work("launcher-refuse")
+              _      <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+              seen   <- Ref.make(List.empty[String])
               client <- ZIO
                 .service[Client]
                 .provide(
                   Client.inMemory(fixture(xml, artifact, checksum, seen))
                 )
               refused <- LauncherUpdater(client).update(root).either
-              after <- Workspace.readString(root.resolve(LauncherPin.file))
-              temps <- temporary(root)
+              after   <- Workspace.readString(root.resolve(LauncherPin.file))
+              temps   <- temporary(root)
             yield assertTrue(refused.isLeft, after == lock, temps.isEmpty)
           .map(results => results.foldLeft(assertTrue(true))(_ && _))
     ,
@@ -270,34 +270,32 @@ object LauncherPinSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- Workspace.work("launcher-atomic")
-          _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
-          _ <- Workspace.writeString(
+          _    <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+          _    <- Workspace.writeString(
             root.resolve(".histos/launcher-cache"),
-            "blocked destination"
+            "blocked destination",
           )
-          seen <- Ref.make(List.empty[String])
+          seen   <- Ref.make(List.empty[String])
           client <- ZIO
             .service[Client]
             .provide(Client.inMemory(fixture(metadata, bytes, sha, seen)))
           updater = LauncherUpdater(client)
-          refused <- updater.update(root).either
-          old <- Workspace.readString(root.resolve(LauncherPin.file))
-          _ <- Workspace.delete(root.resolve(".histos/launcher-cache"))
-          published <- ZIO.foreachPar(List(1, 2, 3))(_ =>
-            updater.update(root).either
-          )
-          pin <- LauncherPin.read(root)
-          temps <- temporary(root)
+          refused   <- updater.update(root).either
+          old       <- Workspace.readString(root.resolve(LauncherPin.file))
+          _         <- Workspace.delete(root.resolve(".histos/launcher-cache"))
+          published <- ZIO.foreachPar(List(1, 2, 3))(_ => updater.update(root).either)
+          pin       <- LauncherPin.read(root)
+          temps     <- temporary(root)
         yield assertTrue(
           refused.isLeft,
           old == lock,
           published.forall {
-            case Right(pin) => pin.revision == revision
+            case Right(pin)                               => pin.revision == revision
             case Left(LauncherError.Conflict(_, current)) => current == revision
             case _                                        => false
           },
           pin.revision == revision,
-          temps.isEmpty
+          temps.isEmpty,
         )
     ,
     suite("80 MiB HTTP framing")(
@@ -305,7 +303,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
         test(s"streamed launcher accepts $framing framing"):
           ZIO.scoped:
             val block = Chunk.fromArray(Array.fill[Byte](64 * 1024)(42))
-            val size = 80L * 1024 * 1024
+            val size  = 80L * 1024 * 1024
             for
               expected <- ZIO
                 .attemptBlocking:
@@ -318,9 +316,9 @@ object LauncherPinSpec extends ZIOSpecDefault:
                   )
                 )
               stream = ZStream.repeatZIOChunk(ZIO.succeed(block)).take(size)
-              body = Body.stream(
+              body   = Body.stream(
                 stream,
-                length = if framing == "chunked" then None else Some(size)
+                length = if framing == "chunked" then None else Some(size),
               )
               artifact =
                 if framing == "close" then
@@ -330,30 +328,29 @@ object LauncherPinSpec extends ZIOSpecDefault:
                 else Response(Status.Ok, body)
               routes = Routes.fromHandler(Handler { (request: Request) =>
                 val path = request.path.render
-                ZIO.succeed(if path.endsWith("maven-metadata.xml") then
-                  Response.text(metadata)
+                ZIO.succeed(if path.endsWith("maven-metadata.xml") then Response.text(metadata)
                 else if path.endsWith(".sha256") then Response.text(expected)
                 else artifact)
               })
-              root <- Workspace.work("launcher-large")
+              root   <- Workspace.work("launcher-large")
               server <- Server.install(
                 routes,
-                Server.Config.default.copy(host = "127.0.0.1", port = Port(0))
+                Server.Config.default.copy(host = "127.0.0.1", port = Port(0)),
               )
               port <- server.port
-              old <- ZIO.fromEither(
+              old  <- ZIO.fromEither(
                 LauncherPin.from(
                   s"http://127.0.0.1:$port/repo",
                   version,
                   revision,
-                  sha
+                  sha,
                 )
               )
               _ <- Workspace.writeString(
                 root.resolve(LauncherPin.file),
-                LauncherPin.render(old)
+                LauncherPin.render(old),
               )
-              pin <- LauncherPin.update(root)
+              pin    <- LauncherPin.update(root)
               staged <- ZIO
                 .attemptBlocking(
                   Files.size(
@@ -370,7 +367,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
             yield assertTrue(
               pin.sha256.value == expected,
               staged == size,
-              temps.isEmpty
+              temps.isEmpty,
             )
       }*
     ),
@@ -381,39 +378,37 @@ object LauncherPinSpec extends ZIOSpecDefault:
             List(
               LauncherPayload.Metadata,
               LauncherPayload.Checksum,
-              LauncherPayload.Artifact
+              LauncherPayload.Artifact,
             )
           ): kind =>
-            val block = Chunk.fromArray(Array.fill[Byte](64 * 1024)(42))
+            val block    = Chunk.fromArray(Array.fill[Byte](64 * 1024)(42))
             val tooLarge = Response(
               Status.Ok,
               Body.stream(
                 ZStream.repeatZIOChunk(ZIO.succeed(block)).take(kind.limit + 1)
-              )
+              ),
             )
             val routes = Routes.fromHandler(Handler { (request: Request) =>
-              val path = request.path.render
-              val chosen = if path.endsWith("maven-metadata.xml") then
-                LauncherPayload.Metadata
+              val path   = request.path.render
+              val chosen = if path.endsWith("maven-metadata.xml") then LauncherPayload.Metadata
               else if path.endsWith(".sha256") then LauncherPayload.Checksum
               else LauncherPayload.Artifact
               ZIO.succeed(if chosen == kind then tooLarge
-              else if chosen == LauncherPayload.Metadata then
-                Response.text(metadata)
+              else if chosen == LauncherPayload.Metadata then Response.text(metadata)
               else if chosen == LauncherPayload.Checksum then Response.text(sha)
               else Response(Status.Ok, Body.fromBytes(bytes)))
             })
             for
-              root <- Workspace.work("launcher-size")
-              _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+              root   <- Workspace.work("launcher-size")
+              _      <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
               client <- ZIO.service[Client].provide(Client.inMemory(routes))
               result <- LauncherUpdater(client).update(root).either
-              after <- Workspace.readString(root.resolve(LauncherPin.file))
-              temps <- temporary(root)
+              after  <- Workspace.readString(root.resolve(LauncherPin.file))
+              temps  <- temporary(root)
             yield assertTrue(
               result == Left(LauncherError.Size(kind, kind.limit)),
               after == lock,
-              temps.isEmpty
+              temps.isEmpty,
             )
           .map(_.foldLeft(assertTrue(true))(_ && _))
     ,
@@ -422,21 +417,20 @@ object LauncherPinSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-trust-checksum")
-          _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+          root      <- Workspace.work("histos-trust-checksum")
+          _         <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
           requested <- Ref.make(false)
-          closed <- Ref.make(false)
+          closed    <- Ref.make(false)
           sidecar = Response(
             Status.Ok,
             Body.stream(
               ZStream.fromChunk(Chunk.fromArray(Array.fill[Byte](257)(42))) ++
                 ZStream.fromZIO(requested.set(true) *> ZIO.never).drain
-            )
+            ),
           )
           client = new Client:
             def batched(request: Request) = ZIO.succeed(
-              if request.path.render.endsWith("maven-metadata.xml") then
-                Response.text(metadata)
+              if request.path.render.endsWith("maven-metadata.xml") then Response.text(metadata)
               else sidecar
             )
             def streaming(request: Request) =
@@ -451,9 +445,9 @@ object LauncherPinSpec extends ZIOSpecDefault:
             .either
             .timeout(1.second)
           continuation <- requested.get
-          released <- closed.get
-          after <- Workspace.readString(root.resolve(LauncherPin.file))
-          temps <- temporary(root)
+          released     <- closed.get
+          after        <- Workspace.readString(root.resolve(LauncherPin.file))
+          temps        <- temporary(root)
         yield assertTrue(
           result.contains(
             Left(LauncherError.Size(LauncherPayload.Checksum, 256))
@@ -461,7 +455,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
           !continuation,
           released,
           after == lock,
-          temps.isEmpty
+          temps.isEmpty,
         )
     ,
     test(
@@ -469,7 +463,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-trust-updater")
+          root   <- Workspace.work("histos-trust-updater")
           shared <- Workspace.createDirectories(root.resolve("shared"))
           target <- Workspace.createDirectories(shared.resolve("private"))
           alias = root.resolve("alias")
@@ -477,25 +471,25 @@ object LauncherPinSpec extends ZIOSpecDefault:
             Files.setPosixFilePermissions(
               shared,
               java.nio.file.attribute.PosixFilePermissions
-                .fromString("rwxrwxrwx")
+                .fromString("rwxrwxrwx"),
             )
             Files.setPosixFilePermissions(
               target,
               java.nio.file.attribute.PosixFilePermissions
-                .fromString("rwx------")
+                .fromString("rwx------"),
             )
             Files.createSymbolicLink(alias, target)
-          _ <- Workspace.writeString(target.resolve(LauncherPin.file), lock)
-          seen <- Ref.make(List.empty[String])
+          _      <- Workspace.writeString(target.resolve(LauncherPin.file), lock)
+          seen   <- Ref.make(List.empty[String])
           client <- ZIO
             .service[Client]
             .provide(Client.inMemory(fixture(metadata, bytes, sha, seen)))
-          result <- LauncherUpdater(client).update(alias).either
-          after <- Workspace.readString(target.resolve(LauncherPin.file))
+          result  <- LauncherUpdater(client).update(alias).either
+          after   <- Workspace.readString(target.resolve(LauncherPin.file))
           created <- ZIO.attemptBlocking(
             Files.exists(target.resolve(".histos/launcher-cache"))
           )
-          temps <- temporary(target)
+          temps    <- temporary(target)
           requests <- seen.get
         yield assertTrue(
           result == Left(
@@ -504,7 +498,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
           after == lock,
           !created,
           temps.isEmpty,
-          !requests.exists(_.endsWith(".jar"))
+          !requests.exists(_.endsWith(".jar")),
         )
     ,
     test(
@@ -517,7 +511,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
               .attemptBlocking(
                 Files.createTempDirectory(
                   Path.of("/tmp"),
-                  "histos-trust-updater-positive"
+                  "histos-trust-updater-positive",
                 )
               )
               .mapError(_ =>
@@ -537,7 +531,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
                   .IoFailure(alias, histos.workspace.IoFault.Create)
               )
             )
-          _ <- Workspace.writeString(target.resolve(LauncherPin.file), lock)
+          _        <- Workspace.writeString(target.resolve(LauncherPin.file), lock)
           relative <- ZIO
             .attemptBlocking(Path.of("").toAbsolutePath.relativize(alias))
             .mapError(_ =>
@@ -545,11 +539,11 @@ object LauncherPinSpec extends ZIOSpecDefault:
                 histos.workspace.IoFailure(alias, histos.workspace.IoFault.Stat)
               )
             )
-          seen <- Ref.make(List.empty[String])
+          seen   <- Ref.make(List.empty[String])
           client <- ZIO
             .service[Client]
             .provide(Client.inMemory(fixture(metadata, bytes, sha, seen)))
-          pin <- LauncherUpdater(client).update(relative)
+          pin    <- LauncherUpdater(client).update(relative)
           cached <- Workspace.readString(
             target.resolve(s".histos/launcher-cache/$sha/histos.jar")
           )
@@ -557,17 +551,17 @@ object LauncherPinSpec extends ZIOSpecDefault:
         yield assertTrue(
           pin.sha256.value == sha,
           cached == "pinned launcher",
-          temps.isEmpty
+          temps.isEmpty,
         )
     ,
     test("a delayed R1 updater cannot overwrite a newer R2 pin"):
       ZIO.scoped:
         for
-          root <- Workspace.work("launcher-conflict")
-          _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+          root    <- Workspace.work("launcher-conflict")
+          _       <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
           entered <- Promise.make[Nothing, Unit]
-          resume <- Promise.make[Nothing, Unit]
-          newer = revision.stripSuffix("14") + "15"
+          resume  <- Promise.make[Nothing, Unit]
+          newer     = revision.stripSuffix("14") + "15"
           firstBody = Body.stream(
             ZStream
               .fromZIO(entered.succeed(()) *> resume.await)
@@ -589,22 +583,22 @@ object LauncherPinSpec extends ZIOSpecDefault:
                     .replace("<buildNumber>14", "<buildNumber>15")
                     .replace(revision, newer),
                   sha,
-                  Response(Status.Ok, Body.fromBytes(bytes))
+                  Response(Status.Ok, Body.fromBytes(bytes)),
                 )
               )
             )
-          delayed <- LauncherUpdater(first).update(root).either.forkScoped
-          _ <- entered.await
+          delayed  <- LauncherUpdater(first).update(root).either.forkScoped
+          _        <- entered.await
           advanced <- LauncherUpdater(second).update(root)
-          _ <- resume.succeed(())
-          refused <- delayed.join
-          current <- LauncherPin.read(root)
-          temps <- temporary(root)
+          _        <- resume.succeed(())
+          refused  <- delayed.join
+          current  <- LauncherPin.read(root)
+          temps    <- temporary(root)
         yield assertTrue(
           advanced.revision == newer,
           current.revision == newer,
           refused == Left(LauncherError.Conflict(revision, newer)),
-          temps.isEmpty
+          temps.isEmpty,
         )
     ,
     test(
@@ -612,16 +606,16 @@ object LauncherPinSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- Workspace.work("launcher-process-conflict")
-          entered <- Promise.make[Nothing, Unit]
-          resume <- Promise.make[Nothing, Unit]
+          root          <- Workspace.work("launcher-process-conflict")
+          entered       <- Promise.make[Nothing, Unit]
+          resume        <- Promise.make[Nothing, Unit]
           metadataCalls <- Ref.make(0)
-          newer = revision.stripSuffix("14") + "15"
+          newer       = revision.stripSuffix("14") + "15"
           delayedBody = Body.stream(
             ZStream
               .fromZIO(entered.succeed(()) *> resume.await)
               .drain ++ ZStream.fromChunk(bytes),
-            length = Some(bytes.length.toLong)
+            length = Some(bytes.length.toLong),
           )
           routes = Routes.fromHandler(Handler { (request: Request) =>
             val path = request.path.render
@@ -636,26 +630,25 @@ object LauncherPinSpec extends ZIOSpecDefault:
                       .replace(revision, newer))
             else
               ZIO.succeed(if path.endsWith(".sha256") then Response.text(sha)
-              else if path.endsWith(s"histos-$revision.jar") then
-                Response(Status.Ok, delayedBody)
+              else if path.endsWith(s"histos-$revision.jar") then Response(Status.Ok, delayedBody)
               else Response(Status.Ok, Body.fromBytes(bytes)))
           })
           server <- Server.install(
             routes,
-            Server.Config.default.copy(host = "127.0.0.1", port = Port(0))
+            Server.Config.default.copy(host = "127.0.0.1", port = Port(0)),
           )
           port <- server.port
-          old <- ZIO.fromEither(
+          old  <- ZIO.fromEither(
             LauncherPin.from(
               s"http://127.0.0.1:$port/repo",
               version,
               revision,
-              sha
+              sha,
             )
           )
           _ <- Workspace.writeString(
             root.resolve(LauncherPin.file),
-            LauncherPin.render(old)
+            LauncherPin.render(old),
           )
           javaHome <- zio.System
             .property("java.home")
@@ -673,8 +666,8 @@ object LauncherPinSpec extends ZIOSpecDefault:
             .split(java.io.File.pathSeparator)
             .map(raw => Path.of(raw).toAbsolutePath.normalize.toString)
             .mkString(java.io.File.pathSeparator)
-          env <- zio.System.envs.mapError(_ => LauncherProcessError.Environment)
-          work <- Workspace.createDirectories(root.resolve("process"))
+          env     <- zio.System.envs.mapError(_ => LauncherProcessError.Environment)
+          work    <- Workspace.createDirectories(root.resolve("process"))
           delayed <- ChildProcess
             .command(
               List(
@@ -683,20 +676,20 @@ object LauncherPinSpec extends ZIOSpecDefault:
                 "-cp",
                 classpath,
                 "histos.publish.LauncherPinProcess",
-                root.toString
+                root.toString,
               ),
               work,
-              env
+              env,
             )
             .runCollect
             .forkScoped
-          _ <- ZIO.addFinalizer(resume.succeed(()).unit)
-          _ <- entered.await
+          _        <- ZIO.addFinalizer(resume.succeed(()).unit)
+          _        <- entered.await
           advanced <- LauncherPin.update(root)
-          _ <- resume.succeed(())
-          refused <- delayed.join
-          current <- LauncherPin.read(root)
-          temps <- temporary(root)
+          _        <- resume.succeed(())
+          refused  <- delayed.join
+          current  <- LauncherPin.read(root)
+          temps    <- temporary(root)
         yield assertTrue(
           advanced.revision == newer,
           current.revision == newer,
@@ -708,7 +701,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
               text.contains("Conflict") && text.contains(newer)
             case ChildEvent.Exited(_) => false
           },
-          temps.isEmpty
+          temps.isEmpty,
         )
     ,
     test(
@@ -716,10 +709,10 @@ object LauncherPinSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- Workspace.work("launcher-interrupt")
-          _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+          root    <- Workspace.work("launcher-interrupt")
+          _       <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
           entered <- Promise.make[Nothing, Unit]
-          closed <- Ref.make(false)
+          closed  <- Ref.make(false)
           response = Response(
             Status.Ok,
             Body.stream(
@@ -727,26 +720,26 @@ object LauncherPinSpec extends ZIOSpecDefault:
                 Chunk.fromArray(Array.fill[Byte](64 * 1024)(42))
               ) ++
                 ZStream.fromZIO(entered.succeed(()) *> ZIO.never).drain
-            )
+            ),
           )
           base <- ZIO
             .service[Client]
             .provide(Client.inMemory(updaterRoutes(metadata, sha, response)))
           client = new Client:
-            def batched(request: Request) = base.batched(request)
+            def batched(request: Request)   = base.batched(request)
             def streaming(request: Request) =
               ZIO.acquireRelease(base.streaming(request))(_ => closed.set(true))
-          fiber <- LauncherUpdater(client).update(root).forkScoped
-          _ <- entered.await
-          exit <- fiber.interrupt
-          after <- Workspace.readString(root.resolve(LauncherPin.file))
-          temps <- temporary(root)
+          fiber    <- LauncherUpdater(client).update(root).forkScoped
+          _        <- entered.await
+          exit     <- fiber.interrupt
+          after    <- Workspace.readString(root.resolve(LauncherPin.file))
+          temps    <- temporary(root)
           released <- closed.get
         yield assertTrue(
           exit.isInterrupted,
           after == lock,
           temps.isEmpty,
-          released
+          released,
         )
     ,
     test(
@@ -754,14 +747,14 @@ object LauncherPinSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- Workspace.work("launcher-commit-interrupt")
-          _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
-          locked <- Promise.make[Nothing, Unit]
+          root    <- Workspace.work("launcher-commit-interrupt")
+          _       <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+          locked  <- Promise.make[Nothing, Unit]
           release <- Promise.make[Nothing, Unit]
-          holder <- LauncherFiles
+          holder  <- LauncherFiles
             .locked(root)(locked.succeed(()) *> release.await)
             .forkScoped
-          _ <- locked.await
+          _      <- locked.await
           client <- ZIO
             .service[Client]
             .provide(
@@ -769,17 +762,17 @@ object LauncherPinSpec extends ZIOSpecDefault:
                 updaterRoutes(
                   metadata,
                   sha,
-                  Response(Status.Ok, Body.fromBytes(bytes))
+                  Response(Status.Ok, Body.fromBytes(bytes)),
                 )
               )
             )
           updater <- LauncherUpdater(client).update(root).forkScoped
-          _ <- temporary(root).repeatUntil(_.size >= 2)
-          exit <- updater.interrupt
-          after <- Workspace.readString(root.resolve(LauncherPin.file))
-          temps <- temporary(root)
-          _ <- release.succeed(())
-          _ <- holder.join
+          _       <- temporary(root).repeatUntil(_.size >= 2)
+          exit    <- updater.interrupt
+          after   <- Workspace.readString(root.resolve(LauncherPin.file))
+          temps   <- temporary(root)
+          _       <- release.succeed(())
+          _       <- holder.join
         yield assertTrue(exit.isInterrupted, after == lock, temps.isEmpty)
     ,
     test(
@@ -787,45 +780,43 @@ object LauncherPinSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         ZIO
-          .foreach(List(LauncherPayload.Metadata, LauncherPayload.Checksum)):
-            kind =>
-              for
-                root <- Workspace.work("launcher-small-interrupt")
-                _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
-                entered <- Promise.make[Nothing, Unit]
-                closed <- Ref.make(false)
-                waiting = Response(
-                  Status.Ok,
-                  Body.stream(
-                    ZStream.fromZIO(entered.succeed(()) *> ZIO.never).drain
-                  )
-                )
-                routes = Routes.fromHandler(Handler { (request: Request) =>
-                  val selected =
-                    if request.path.render.endsWith("maven-metadata.xml") then
-                      LauncherPayload.Metadata
-                    else LauncherPayload.Checksum
-                  ZIO.succeed(if kind == selected then waiting
-                  else Response.text(metadata))
-                })
-                base <- ZIO.service[Client].provide(Client.inMemory(routes))
-                client = new Client:
-                  def batched(request: Request) = base.batched(request)
-                  def streaming(request: Request) = ZIO.acquireRelease(
-                    base.streaming(request)
-                  )(_ => closed.set(true))
-                fiber <- LauncherUpdater(client).update(root).forkScoped
-                _ <- entered.await
-                exit <- fiber.interrupt
-                after <- Workspace.readString(root.resolve(LauncherPin.file))
-                temps <- temporary(root)
-                released <- closed.get
-              yield assertTrue(
-                exit.isInterrupted,
-                after == lock,
-                temps.isEmpty,
-                released
+          .foreach(List(LauncherPayload.Metadata, LauncherPayload.Checksum)): kind =>
+            for
+              root    <- Workspace.work("launcher-small-interrupt")
+              _       <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+              entered <- Promise.make[Nothing, Unit]
+              closed  <- Ref.make(false)
+              waiting = Response(
+                Status.Ok,
+                Body.stream(
+                  ZStream.fromZIO(entered.succeed(()) *> ZIO.never).drain
+                ),
               )
+              routes = Routes.fromHandler(Handler { (request: Request) =>
+                val selected =
+                  if request.path.render.endsWith("maven-metadata.xml") then LauncherPayload.Metadata
+                  else LauncherPayload.Checksum
+                ZIO.succeed(if kind == selected then waiting
+                else Response.text(metadata))
+              })
+              base <- ZIO.service[Client].provide(Client.inMemory(routes))
+              client = new Client:
+                def batched(request: Request)   = base.batched(request)
+                def streaming(request: Request) = ZIO.acquireRelease(
+                  base.streaming(request)
+                )(_ => closed.set(true))
+              fiber    <- LauncherUpdater(client).update(root).forkScoped
+              _        <- entered.await
+              exit     <- fiber.interrupt
+              after    <- Workspace.readString(root.resolve(LauncherPin.file))
+              temps    <- temporary(root)
+              released <- closed.get
+            yield assertTrue(
+              exit.isInterrupted,
+              after == lock,
+              temps.isEmpty,
+              released,
+            )
           .map(_.foldLeft(assertTrue(true))(_ && _))
     ,
     test(
@@ -836,24 +827,24 @@ object LauncherPinSpec extends ZIOSpecDefault:
           .foreach(List("write", "artifact-move", "pin-move")): phase =>
             for
               root <- Workspace.work("launcher-io-boundary")
-              old <- ZIO.fromEither(
+              old  <- ZIO.fromEither(
                 LauncherPin
                   .from(repository, version, "0.0.1-20261022.224241-13", sha)
               )
               _ <- Workspace.writeString(
                 root.resolve(LauncherPin.file),
-                LauncherPin.render(old)
+                LauncherPin.render(old),
               )
               entered <- ZIO.succeed(new java.util.concurrent.Semaphore(0))
-              resume <- ZIO.succeed(new java.util.concurrent.Semaphore(0))
-              client <- ZIO
+              resume  <- ZIO.succeed(new java.util.concurrent.Semaphore(0))
+              client  <- ZIO
                 .service[Client]
                 .provide(
                   Client.inMemory(
                     updaterRoutes(
                       metadata,
                       sha,
-                      Response(Status.Ok, Body.fromBytes(bytes))
+                      Response(Status.Ok, Body.fromBytes(bytes)),
                     )
                   )
                 )
@@ -876,18 +867,18 @@ object LauncherPinSpec extends ZIOSpecDefault:
                    then barrier
                    else ZIO.unit) *> LauncherCommit.live.move(from, to)
               fiber <- LauncherUpdater(client, storage).update(root).forkScoped
-              _ <- ZIO.addFinalizer(ZIO.succeed(resume.release()))
-              _ <- ZIO
+              _     <- ZIO.addFinalizer(ZIO.succeed(resume.release()))
+              _     <- ZIO
                 .attemptBlockingInterrupt(entered.acquire())
                 .mapError(_ => LauncherError.InvalidPath(root))
               interrupted <- fiber.interrupt.fork
-              _ <- ZIO.yieldNow
-              before <- LauncherPin.read(root)
-              pending <- interrupted.poll
-              _ <- ZIO.succeed(resume.release())
-              exit <- interrupted.join
-              after <- LauncherPin.read(root)
-              temps <- temporary(root)
+              _           <- ZIO.yieldNow
+              before      <- LauncherPin.read(root)
+              pending     <- interrupted.poll
+              _           <- ZIO.succeed(resume.release())
+              exit        <- interrupted.join
+              after       <- LauncherPin.read(root)
+              temps       <- temporary(root)
               finalArtifact = root.resolve(
                 s".histos/launcher-cache/$sha/histos.jar"
               )
@@ -908,7 +899,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
               after.revision == (if phase == "write" then old.revision
                                  else revision),
               if phase == "write" then verified.isEmpty
-              else verified.contains(sha)
+              else verified.contains(sha),
             )
           .map(_.foldLeft(assertTrue(true))(_ && _))
     ,
@@ -919,10 +910,10 @@ object LauncherPinSpec extends ZIOSpecDefault:
         for
           root <- Workspace.work("launcher-presence")
           path = root.resolve(LauncherPin.file)
-          _ <- Workspace.createDirectories(path)
+          _         <- Workspace.createDirectories(path)
           directory <- LauncherPin.read(root).either
-          _ <- Workspace.delete(path)
-          _ <- ZIO
+          _         <- Workspace.delete(path)
+          _         <- ZIO
             .attemptBlocking(
               Files.createSymbolicLink(path, root.resolve("missing"))
             )
@@ -933,14 +924,14 @@ object LauncherPinSpec extends ZIOSpecDefault:
               )
             )
           dangling <- LauncherPin.read(root).either
-          _ <- ZIO
+          _        <- ZIO
             .attemptBlocking(Files.delete(path))
             .mapError(_ => LauncherError.InvalidPath(path))
           absent <- LauncherPin.read(root).either
         yield assertTrue(
           directory == Left(LauncherError.InvalidPath(path)),
           dangling == Left(LauncherError.InvalidPath(path)),
-          absent == Left(LauncherError.Absent(path))
+          absent == Left(LauncherError.Absent(path)),
         )
     ,
     test(
@@ -949,7 +940,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- Workspace.work("launcher-offline")
-          _ <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
+          _    <- Workspace.writeString(root.resolve(LauncherPin.file), lock)
           read <- LauncherPin.read(root)
         yield assertTrue(read.revision == revision, read.sha256.value == sha)
     ,
@@ -962,8 +953,8 @@ object LauncherPinSpec extends ZIOSpecDefault:
         script.contains("--enable-native-access=ALL-UNNAMED"),
         !script.contains("certutil"),
         !script.contains("maven-metadata.xml"),
-        !script.contains(".jar.sha256")
-      )
+        !script.contains(".jar.sha256"),
+      ),
   ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.sequential @@ TestAspect
     .timeout(90.seconds)
 
@@ -971,23 +962,19 @@ object LauncherPinSpec extends ZIOSpecDefault:
       xml: String,
       bytes: Chunk[Byte],
       checksum: String,
-      seen: Ref[List[String]]
+      seen: Ref[List[String]],
   ) =
     Routes.fromHandler(Handler { (request: Request) =>
       val path = request.path.render
       val body =
-        if path.endsWith("maven-metadata.xml") then
-          Some(Chunk.fromArray(xml.getBytes(StandardCharsets.UTF_8)))
-        else if path.endsWith(".jar.sha256") then
-          Some(Chunk.fromArray(checksum.getBytes(StandardCharsets.UTF_8)))
+        if path.endsWith("maven-metadata.xml") then Some(Chunk.fromArray(xml.getBytes(StandardCharsets.UTF_8)))
+        else if path.endsWith(".jar.sha256") then Some(Chunk.fromArray(checksum.getBytes(StandardCharsets.UTF_8)))
         else if path.endsWith(".jar") then Some(bytes)
         else None
       seen
         .update(_ :+ path)
         .as(
-          body.fold(Response.notFound())(bytes =>
-            Response(Status.Ok, Body.fromBytes(bytes))
-          )
+          body.fold(Response.notFound())(bytes => Response(Status.Ok, Body.fromBytes(bytes)))
         )
     })
 
@@ -1014,6 +1001,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
           histos.workspace.IoFailure(root, histos.workspace.IoFault.Walk)
         )
       )
+end LauncherPinSpec
 
 private enum LauncherProcessError:
   case Arguments

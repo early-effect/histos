@@ -25,7 +25,7 @@ object SchedulerSpec extends ZIOSpecDefault:
     Action(
       id,
       List(Input(InputName.trusted("src"), InputValue.Text(id.value))),
-      deps.toList
+      deps.toList,
     )
 
   private val localOk: Action => IO[TaskError, String] =
@@ -34,7 +34,7 @@ object SchedulerSpec extends ZIOSpecDefault:
   private def execute(
       root: ActionId,
       actions: List[Action],
-      local: Action => IO[TaskError, String] = localOk
+      local: Action => IO[TaskError, String] = localOk,
   ) =
     ZIO
       .serviceWithZIO[Scheduler](
@@ -43,18 +43,17 @@ object SchedulerSpec extends ZIOSpecDefault:
       .provide(
         Scheduler.live,
         ZLayer.succeed(ActionCache.miss),
-        RemoteCache.off
+        RemoteCache.off,
       )
 
   private val schedule = suite("scheduler")(
     test("a miss runs the action after its dependencies, and only those"):
       for
         seen <- Ref.make(List.empty[String])
-        out <- execute(
+        out  <- execute(
           a,
           List(action(a, b), action(b, c), action(c), action(d)),
-          action =>
-            seen.update(action.id.value :: _) *> ZIO.succeed(action.id.value)
+          action => seen.update(action.id.value :: _) *> ZIO.succeed(action.id.value),
         )
         ran <- seen.get
       yield assertTrue(out == "a" && ran.reverse == List("c", "b", "a"))
@@ -62,13 +61,11 @@ object SchedulerSpec extends ZIOSpecDefault:
     test("a shared dependency runs once"):
       for
         count <- Ref.make(Map.empty[String, Int])
-        _ <- execute(
+        _     <- execute(
           a,
           List(action(a, b, c), action(b, d), action(c, d), action(d)),
           action =>
-            count.update(m =>
-              m + (action.id.value -> (m.getOrElse(action.id.value, 0) + 1))
-            ) *> ZIO.succeed("ok")
+            count.update(m => m + (action.id.value -> (m.getOrElse(action.id.value, 0) + 1))) *> ZIO.succeed("ok"),
         )
         ran <- count.get
       yield assertTrue(ran.getOrElse("d", 0) == 1 && ran.getOrElse("a", 0) == 1)
@@ -77,23 +74,21 @@ object SchedulerSpec extends ZIOSpecDefault:
       (for
         startedB <- Promise.make[Nothing, Unit]
         startedC <- Promise.make[Nothing, Unit]
-        out <-
+        out      <-
           ZIO.serviceWithZIO[Scheduler](
             _.execute(
               a,
               List(action(a, b, c), action(b), action(c)),
               (action, _) =>
-                if action.id == b then
-                  startedB.succeed(()) *> startedC.await.as("b")
-                else if action.id == c then
-                  startedC.succeed(()) *> startedB.await.as("c")
-                else ZIO.succeed("a")
+                if action.id == b then startedB.succeed(()) *> startedC.await.as("b")
+                else if action.id == c then startedC.succeed(()) *> startedB.await.as("c")
+                else ZIO.succeed("a"),
             )
           )
       yield assertTrue(out == "a")).provide(
         Scheduler.live,
         ZLayer.succeed(ActionCache.miss),
-        RemoteCache.off
+        RemoteCache.off,
       )
     ) @@ TestAspect.timeout(2.seconds),
     test("a cycle runs nothing"):
@@ -102,7 +97,7 @@ object SchedulerSpec extends ZIOSpecDefault:
         out <- execute(
           a,
           List(action(a, b), action(b, a)),
-          _ => ran.set(true) *> ZIO.succeed("x")
+          _ => ran.set(true) *> ZIO.succeed("x"),
         ).either
         did <- ran.get
       yield assertTrue:
@@ -114,17 +109,17 @@ object SchedulerSpec extends ZIOSpecDefault:
     test("a failure stops only its dependents"):
       for
         seen <- Ref.make(Set.empty[String])
-        out <- execute(
+        out  <- execute(
           a,
           List(action(a, b, c), action(b), action(c)),
           node =>
             if node.id == b then ZIO.fail(TaskError.EmptyId)
-            else seen.update(_ + node.id.value).as(node.id.value)
+            else seen.update(_ + node.id.value).as(node.id.value),
         ).either
         ran <- seen.get
       yield assertTrue(
         out == Left(ScheduleError.Failed(b, TaskError.EmptyId)),
-        ran == Set("c")
+        ran == Set("c"),
       )
     ,
     test("duplicate actions are rejected"):
@@ -142,7 +137,7 @@ object SchedulerSpec extends ZIOSpecDefault:
       val duplicate = action(a).copy(
         inputs = List(
           Input(InputName.trusted("same"), InputValue.Text("one")),
-          Input(InputName.trusted("same"), InputValue.Text("two"))
+          Input(InputName.trusted("same"), InputValue.Text("two")),
         )
       )
       execute(a, List(duplicate)).either.map:
@@ -158,40 +153,40 @@ object SchedulerSpec extends ZIOSpecDefault:
             List(action(a, b), action(b)),
             (node, upstream) =>
               if node.id == b then ZIO.succeed("from-b")
-              else ZIO.succeed(upstream)
+              else ZIO.succeed(upstream),
           )
         .provide(
           Scheduler.live,
           ZLayer.succeed(ActionCache.miss),
-          RemoteCache.off
+          RemoteCache.off,
         )
         .map(out => assertTrue(out == "from-b"))
     ,
     test("interrupting the run interrupts the local action"):
       for
         started <- Promise.make[Nothing, Unit]
-        fiber <- execute(
+        fiber   <- execute(
           a,
           List(action(a)),
-          _ => started.succeed(()) *> ZIO.never
+          _ => started.succeed(()) *> ZIO.never,
         ).fork
-        _ <- started.await
-        _ <- fiber.interrupt
+        _    <- started.await
+        _    <- fiber.interrupt
         exit <- fiber.await
       yield assertTrue(exit.isInterrupted)
     ,
     test("a cache hit does not run locally"):
       val hit: ActionCache = new ActionCache:
-        def get(digest: Digest): UIO[Option[String]] = ZIO.some("cached")
+        def get(digest: Digest): UIO[Option[String]]      = ZIO.some("cached")
         def put(digest: Digest, value: String): UIO[Unit] = ZIO.unit
       (for
         called <- Ref.make(false)
-        out <- ZIO
+        out    <- ZIO
           .serviceWithZIO[Scheduler](
             _.execute(
               a,
               List(action(a)),
-              (_, _) => called.set(true) *> ZIO.succeed("local")
+              (_, _) => called.set(true) *> ZIO.succeed("local"),
             )
           )
           .either
@@ -200,24 +195,22 @@ object SchedulerSpec extends ZIOSpecDefault:
         .provide(Scheduler.live, ZLayer.succeed(hit), RemoteCache.off)
     ,
     test("changing an input changes the digest"):
-      val first = action(a)
-      val second = first.copy(inputs =
-        List(Input(InputName.trusted("src"), InputValue.Text("other")))
-      )
+      val first  = action(a)
+      val second = first.copy(inputs = List(Input(InputName.trusted("src"), InputValue.Text("other"))))
       assertTrue(Digest.of(first, Map.empty) != Digest.of(second, Map.empty))
     ,
     test(
       "a core compile digest has no policy line, and a plugin seal changes it"
     ):
-      val id = aid("compile")
+      val id     = aid("compile")
       val action = Action(
         id,
         List(Input(InputName.trusted("compile"), InputValue.Text("cell"))),
-        Nil
+        Nil,
       )
-      val body = "compile\ncompile=text cell\n"
+      val body     = "compile\ncompile=text cell\n"
       val expected = sha256(body)
-      val plugin = action.copy(
+      val plugin   = action.copy(
         policy = Policy.Plugin(Seal.Hermetic, Set(Need.Network, Need.Docker))
       )
       assertTrue(
@@ -225,30 +218,30 @@ object SchedulerSpec extends ZIOSpecDefault:
         Digest
           .of(action.copy(policy = Policy.Core), Map.empty)
           .value == expected,
-        Digest.of(plugin, Map.empty).value != expected
+        Digest.of(plugin, Map.empty).value != expected,
       )
     ,
     test("an open plugin is not stored"):
       val open = pluginAction("dev.example/echo", Seal.Open, None, Nil)
       for
         (values, cache) <- recording
-        calls <- Ref.make(0)
-        out <- executeCached(
+        calls           <- Ref.make(0)
+        out             <- executeCached(
           cache,
           RemoteCache.unconfigured,
           open.id,
           List(open),
-          _ => calls.update(_ + 1).as("hello")
+          _ => calls.update(_ + 1).as("hello"),
         )
         again <- executeCached(
           cache,
           RemoteCache.unconfigured,
           open.id,
           List(open),
-          _ => calls.update(_ + 1).as("hello")
+          _ => calls.update(_ + 1).as("hello"),
         )
         stored <- values.get
-        ran <- calls.get
+        ran    <- calls.get
       yield assertTrue(
         out == "hello" && again == "hello" && stored.isEmpty && ran == 2
       )
@@ -257,24 +250,24 @@ object SchedulerSpec extends ZIOSpecDefault:
       val task = pluginAction("dev.example/echo", Seal.Hermetic, None, Nil)
       for
         (values, cache) <- recording
-        calls <- Ref.make(0)
+        calls           <- Ref.make(0)
         local = (_: Action) => calls.update(_ + 1).as("hello")
         out <- executeCached(
           cache,
           RemoteCache.unconfigured,
           task.id,
           List(task),
-          local
+          local,
         )
         again <- executeCached(
           cache,
           RemoteCache.unconfigured,
           task.id,
           List(task),
-          local
+          local,
         )
         stored <- values.get
-        ran <- calls.get
+        ran    <- calls.get
       yield assertTrue(
         out == "hello" && again == "hello" && stored.values.toList == List(
           "hello"
@@ -287,7 +280,7 @@ object SchedulerSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           dir <- directory
-          _ <- ZIO
+          _   <- ZIO
             .attempt(Files.writeString(dir.resolve("out.txt"), "page"))
             .orDie
           manifest <- manifestOf(dir)
@@ -295,44 +288,44 @@ object SchedulerSpec extends ZIOSpecDefault:
             "dev.example/page",
             Seal.Hermetic,
             Some(dir),
-            List(RepoPath("out.txt"))
+            List(RepoPath("out.txt")),
           )
           digest = Digest.of(task, Map.empty)
           (values, cache) <- recording
-          _ <- values.set(Map(digest.value -> manifest))
-          calls <- Ref.make(0)
+          _               <- values.set(Map(digest.value -> manifest))
+          calls           <- Ref.make(0)
           local = (_: Action) => calls.update(_ + 1).as(manifest)
           hit <- executeCached(
             cache,
             RemoteCache.unconfigured,
             task.id,
             List(task),
-            local
+            local,
           )
           afterHit <- calls.get
-          _ <- ZIO.attempt(Files.delete(dir.resolve("out.txt"))).orDie
-          _ <- executeCached(
+          _        <- ZIO.attempt(Files.delete(dir.resolve("out.txt"))).orDie
+          _        <- executeCached(
             cache,
             RemoteCache.unconfigured,
             task.id,
             List(task),
-            local
+            local,
           )
           afterMiss <- calls.get
-          stored <- values.get
+          stored    <- values.get
         yield assertTrue(
           hit == manifest,
           afterHit == 0,
           afterMiss == 1,
           stored.get(digest.value).contains(manifest),
-          manifest.startsWith(PluginManifest.Header)
+          manifest.startsWith(PluginManifest.Header),
         )
     ,
     test("a remote read whose declared file is missing is a miss"):
       ZIO.scoped:
         for
           dir <- directory
-          _ <- ZIO
+          _   <- ZIO
             .attempt(Files.writeString(dir.resolve("out.txt"), "page"))
             .orDie
           manifest <- manifestOf(dir)
@@ -340,13 +333,13 @@ object SchedulerSpec extends ZIOSpecDefault:
             "dev.example/page",
             Seal.Hermetic,
             Some(dir),
-            List(RepoPath("out.txt"))
+            List(RepoPath("out.txt")),
           )
           digest = Digest.of(task, Map.empty)
           remote <- TestRemoteCache.memory(RemoteMode.Read)
-          _ <- remote.plant(
+          _      <- remote.plant(
             digest,
-            Chunk.fromArray(manifest.getBytes(StandardCharsets.UTF_8))
+            Chunk.fromArray(manifest.getBytes(StandardCharsets.UTF_8)),
           )
           calls <- Ref.make(0)
           local = (_: Action) => calls.update(_ + 1).as("ran")
@@ -355,34 +348,34 @@ object SchedulerSpec extends ZIOSpecDefault:
             remote,
             task.id,
             List(task),
-            local
+            local,
           )
           afterHit <- calls.get
-          _ <- ZIO.attempt(Files.delete(dir.resolve("out.txt"))).orDie
-          missed <- executeCached(
+          _        <- ZIO.attempt(Files.delete(dir.resolve("out.txt"))).orDie
+          missed   <- executeCached(
             ActionCache.miss,
             remote,
             task.id,
             List(task),
-            local
+            local,
           )
           afterMiss <- calls.get
         yield assertTrue(
           hit == manifest && afterHit == 0 && missed == "ran" && afterMiss == 1
-        )
+        ),
   )
 
   private def pluginAction(
       id: String,
       seal: Seal,
       root: Option[Path],
-      outputs: List[RepoPath]
+      outputs: List[RepoPath],
   ): Action =
     Action(
       aid(id),
       Nil,
       Nil,
-      Policy.Plugin(seal, Set.empty, root, outputs)
+      Policy.Plugin(seal, Set.empty, root, outputs),
     )
 
   private def recording: UIO[(Ref[Map[String, String]], ActionCache)] =
@@ -401,7 +394,7 @@ object SchedulerSpec extends ZIOSpecDefault:
       remote: RemoteCache,
       root: ActionId,
       actions: List[Action],
-      local: Action => IO[TaskError, String]
+      local: Action => IO[TaskError, String],
   ) =
     ZIO
       .serviceWithZIO[Scheduler](
@@ -419,14 +412,14 @@ object SchedulerSpec extends ZIOSpecDefault:
       val bytes = Files.readAllBytes(dir.resolve("out.txt"))
       PluginManifest.store(
         "page",
-        List(RepoPath("out.txt") -> Sha256.of(Chunk.fromArray(bytes)))
+        List(RepoPath("out.txt") -> Sha256.of(Chunk.fromArray(bytes))),
       )
     }.orDie
 
   private def delete(root: Path): UIO[Unit] =
     ZIO.attempt {
       if Files.exists(root) then
-        val walk = Files.walk(root)
+        val walk  = Files.walk(root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()
@@ -443,3 +436,4 @@ object SchedulerSpec extends ZIOSpecDefault:
     bytes.map(b => f"${b & 0xff}%02x").mkString
 
   def spec = schedule @@ TestAspect.timeout(10.seconds)
+end SchedulerSpec

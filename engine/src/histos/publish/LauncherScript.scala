@@ -8,9 +8,8 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** `histos` and `histos.bat`, rendered from the manual ship the way a workflow
-  * file is. Each script finds `java` and runs the pinned launcher jar. Histos
-  * does not install a JDK.
+/** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and
+  * runs the pinned launcher jar. Histos does not install a JDK.
   */
 object LauncherScript:
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
@@ -23,8 +22,7 @@ object LauncherScript:
             .read(repo)
             .mapError(ScriptError.Pin(_))
             .flatMap: pin =>
-              if pin.version != version then
-                ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
+              if pin.version != version then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
               else
                 agree(repo.resolve("histos"), posix(version)) *>
                   agree(repo.resolve("histos.bat"), windows(version))
@@ -39,18 +37,17 @@ object LauncherScript:
             .read(repo)
             .mapError(ScriptError.Pin(_))
             .flatMap: pin =>
-              if pin.version != version then
-                ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
+              if pin.version != version then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
               else
                 write(
                   repo.resolve("histos"),
                   posix(version),
-                  executable = true
+                  executable = true,
                 ) *>
                   write(
                     repo.resolve("histos.bat"),
                     windows(version),
-                    executable = false
+                    executable = false,
                   )
 
   def posix(version: String): String =
@@ -83,7 +80,7 @@ object LauncherScript:
   private def write(
       path: Path,
       body: String,
-      executable: Boolean
+      executable: Boolean,
   ): IO[ScriptError, Unit] =
     ZIO
       .attemptBlocking {
@@ -333,6 +330,7 @@ if ($jar) {
 & $java --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE
 """
+end LauncherScript
 
 enum ScriptError:
   case Drift(path: Path)
@@ -347,3 +345,4 @@ enum ScriptError:
     case Io(failure)   => failure.message
     case Pin(error)    => error.message
     case Revision      => "the launcher script needs one manual ship version"
+end ScriptError

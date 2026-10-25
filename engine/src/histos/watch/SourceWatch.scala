@@ -16,7 +16,7 @@ object SourceWatch:
   final case class Entry(path: String, modified: Long, bytes: Long)
   final case class Snapshot(entries: List[Entry])
 
-  val Poll: zio.Duration = 200.millis
+  val Poll: zio.Duration   = 200.millis
   val Settle: zio.Duration = 300.millis
 
   def roots(repo: Path, modules: List[Module]): List[Path] =
@@ -24,8 +24,7 @@ object SourceWatch:
       val base = repo.resolve(module.baseDirectory)
       List(base.resolve("src"), base.resolve("test"))
     }
-    val shared = if modules.length == 1 then
-      List(repo.resolve("src"), repo.resolve("test"))
+    val shared = if modules.length == 1 then List(repo.resolve("src"), repo.resolve("test"))
     else Nil
     (repo.resolve("histos.scala") :: owned ::: shared).distinct
 
@@ -35,8 +34,8 @@ object SourceWatch:
   private def one(root: Path): IO[WatchError, List[Entry]] =
     ZIO.attemptBlocking(entries(root)).mapError(_ => WatchError.Read(root))
 
-  /** Wait until a snapshot differs, and until a burst of writes has settled.
-    * The paths are the ones that differ from the snapshot taken at the start.
+  /** Wait until a snapshot differs, and until a burst of writes has settled. The paths are the ones that differ from
+    * the snapshot taken at the start.
     */
   def changed(roots: List[Path]): IO[WatchError, List[Path]] =
     take(roots).flatMap { start =>
@@ -53,11 +52,10 @@ object SourceWatch:
 
   private def woke(before: Snapshot, after: Snapshot): List[Path] =
     val previous = before.entries.map(entry => entry.path -> entry).toMap
-    val next = after.entries.map(entry => entry.path -> entry).toMap
+    val next     = after.entries.map(entry => entry.path -> entry).toMap
     (previous.keySet ++ next.keySet).toList.sorted.flatMap { path =>
       (previous.get(path), next.get(path)) match
-        case (Some(left), Some(right))
-            if left.modified == right.modified && left.bytes == right.bytes =>
+        case (Some(left), Some(right)) if left.modified == right.modified && left.bytes == right.bytes =>
           None
         case _ => Some(Path.of(path))
     }
@@ -80,13 +78,15 @@ object SourceWatch:
           Entry(
             path.toAbsolutePath.normalize.toString,
             attributes.lastModifiedTime.toMillis,
-            attributes.size
+            attributes.size,
           )
         )
       catch case NonFatal(_) => None
+end SourceWatch
 
 enum WatchError:
   case Read(path: Path)
 
   def message: String = this match
     case Read(path) => s"could not read sources under $path"
+end WatchError

@@ -2,7 +2,7 @@ package histos.resolve
 
 import histos.{JsEnv, Module, Platform, ProjectGraph, ScalaVersion, ToolCatalog}
 import histos.native.{NativeOrigin, NativeToolchain}
-import histos.toolchain.{BuildCompiler}
+import histos.toolchain.BuildCompiler
 import java.nio.file.Path
 import zio.{IO, ZIO, ZLayer}
 
@@ -11,7 +11,7 @@ final case class LockedTools(
     lock: DependencyLock,
     catalog: ToolCatalog,
     repositories: Repositories,
-    resolve: Resolve
+    resolve: Resolve,
 ):
   def materialize(request: ToolRequest): IO[ResolveError, Classpath] =
     lock.tools.find(_.id == request.id) match
@@ -29,7 +29,7 @@ final case class LockedTools(
       module: Module,
       version: ScalaVersion,
       platform: Platform,
-      native: NativeOrigin
+      native: NativeOrigin,
   ): Either[ResolveError, List[ToolRequest]] =
     val compiler = histos.zinc.CompilerRequests.compiler(version, repositories)
     val semantic = if version.value.startsWith("2.13.") then
@@ -46,7 +46,7 @@ final case class LockedTools(
               version,
               module.jsVersion.getOrElse(catalog.js.revision),
               repositories,
-              catalog
+              catalog,
             )
           )
         )
@@ -67,7 +67,7 @@ final case class LockedTools(
       module: Module,
       version: ScalaVersion,
       platform: Platform,
-      native: NativeOrigin
+      native: NativeOrigin,
   ): IO[ResolveError, List[ToolInput]] =
     ZIO
       .fromEither(compilationRequests(module, version, platform, native))
@@ -77,7 +77,7 @@ final case class LockedTools(
       module: Module,
       version: ScalaVersion,
       platform: Platform,
-      native: NativeOrigin
+      native: NativeOrigin,
   ): IO[ResolveError, List[ToolInput]] =
     val execution = platform match
       case Platform.Jvm => Right(Nil)
@@ -88,14 +88,14 @@ final case class LockedTools(
             histos.js.JsRequests
               .linker(revision, catalog.js.bridgeScala, repositories),
             histos.js.JsRequests
-              .environment(module.jsEnv, catalog, repositories)
+              .environment(module.jsEnv, catalog, repositories),
           ) ++ histos.zinc.CompilerRequests.supporting(
             List(
               catalog.js.bridgeScala,
-              histos.js.JsRequests.compiler(module.jsEnv, catalog)
+              histos.js.JsRequests.compiler(module.jsEnv, catalog),
             ),
             catalog,
-            repositories
+            repositories,
           )
         )
       case Platform.Native =>
@@ -109,26 +109,26 @@ final case class LockedTools(
               histos.zinc.CompilerRequests.supporting(
                 List(catalog.native.bridgeScala),
                 catalog,
-                repositories
+                repositories,
               )
           )
     for
       compiled <- compilation(module, version, platform, native)
       requests <- ZIO.fromEither(execution)
-      linked <- ZIO.foreach(requests.distinct)(selected)
+      linked   <- ZIO.foreach(requests.distinct)(selected)
     yield (compiled ++ linked).distinctBy(_.id)
 
   def declaredCompilation(
       module: Module,
       version: ScalaVersion,
       platform: Platform,
-      native: NativeOrigin
+      native: NativeOrigin,
   ): List[String] =
     compilationRequests(
       module,
       version,
       platform,
-      native
+      native,
     ).toOption.toList.flatten.flatMap(request =>
       lock.tools
         .find(_.id == request.id)
@@ -144,111 +144,102 @@ final case class LockedTools(
 
   def compiler(version: ScalaVersion): IO[ResolveError, Classpath] =
     materialize(histos.zinc.CompilerRequests.compiler(version, repositories))
+end LockedTools
 
 object LockedTools:
   def validate(
       request: ToolRequest,
-      cell: LockedTool
+      cell: LockedTool,
   ): Either[ResolveError, Unit] =
     if cell.roots != request.roots || cell.repositories != Repositories.ordered(
         request.repositories
       )
     then Left(ResolveError.ToolDrift(request.id))
     else
-      request.roots.foldLeft[Either[ResolveError, Unit]](Right(())):
-        (checked, root) =>
-          checked.flatMap: _ =>
-            val revision = cell.evictions
-              .find(item =>
-                item.organization == root.organization && item.name == root.name && item.requested == root.revision
+      request.roots.foldLeft[Either[ResolveError, Unit]](Right(())): (checked, root) =>
+        checked.flatMap: _ =>
+          val revision = cell.evictions
+            .find(item =>
+              item.organization == root.organization && item.name == root.name && item.requested == root.revision
+            )
+            .fold(root.revision)(_.selected)
+          cell.artifacts.filter(artifact =>
+            artifact.organization == root.organization && artifact.name == root.name && artifact.revision == revision && artifact.classifier.isEmpty
+          ) match
+            case _ :: Nil => Right(())
+            case Nil      =>
+              Left(
+                ResolveError.ToolRoot(request.id, root, ToolRootFault.Missing)
               )
-              .fold(root.revision)(_.selected)
-            cell.artifacts.filter(artifact =>
-              artifact.organization == root.organization && artifact.name == root.name && artifact.revision == revision && artifact.classifier.isEmpty
-            ) match
-              case _ :: Nil => Right(())
-              case Nil      =>
-                Left(
-                  ResolveError.ToolRoot(request.id, root, ToolRootFault.Missing)
+            case _ =>
+              Left(
+                ResolveError.ToolRoot(
+                  request.id,
+                  root,
+                  ToolRootFault.Duplicated,
                 )
-              case _ =>
-                Left(
-                  ResolveError.ToolRoot(
-                    request.id,
-                    root,
-                    ToolRootFault.Duplicated
-                  )
-                )
+              )
 
   def make(
       lock: DependencyLock,
-      graph: ProjectGraph
+      graph: ProjectGraph,
   ): ZIO[Resolve, Nothing, LockedTools] =
-    ZIO.serviceWith[Resolve](resolve =>
-      LockedTools(lock, graph.tools, BuildResolvers(graph.resolvers), resolve)
-    )
+    ZIO.serviceWith[Resolve](resolve => LockedTools(lock, graph.tools, BuildResolvers(graph.resolvers), resolve))
 
   def layer(
       repo: Path,
-      graph: ProjectGraph
+      graph: ProjectGraph,
   ): ZLayer[Resolve, ResolveError, LockedTools] =
     ZLayer.fromZIO(Resolve.readLock(repo).flatMap(make(_, graph)))
 
   def plan(
       graph: ProjectGraph,
-      native: NativeOrigin
+      native: NativeOrigin,
   ): IO[ResolveError, List[ToolRequest]] =
-    val repos = BuildResolvers(graph.resolvers)
-    val catalog = graph.tools
-    val modules = graph.projects.collect { case module: Module => module }
+    val repos            = BuildResolvers(graph.resolvers)
+    val catalog          = graph.tools
+    val modules          = graph.projects.collect { case module: Module => module }
     val compilerVersions = modules.flatMap(_.versions.all)
-    val js = modules.filter(_.platforms.all.contains(Platform.Js))
-    val natives = modules.filter(_.platforms.all.contains(Platform.Native))
+    val js               = modules.filter(_.platforms.all.contains(Platform.Js))
+    val natives          = modules.filter(_.platforms.all.contains(Platform.Native))
     for
-      build <- BuildCompiler.version
+      build       <- BuildCompiler.version
       nativePlans <- ZIO.foreach(natives): module =>
         ZIO
           .fromEither(
             NativeToolchain.of(
               module.nativeVersion.getOrElse(catalog.native.revision),
-              native
+              native,
             )
           )
           .mapError(ResolveError.NativeOrigin(_))
           .map: toolchain =>
-            module.versions.all.map(version =>
-              histos.native.NativeRequests.libraries(version, toolchain, repos)
-            ) ++
+            module.versions.all.map(version => histos.native.NativeRequests.libraries(version, toolchain, repos)) ++
               List(
                 histos.native.NativeRequests.linker(toolchain, catalog, repos),
-                histos.native.NativeRequests.suite(toolchain, catalog, repos)
+                histos.native.NativeRequests.suite(toolchain, catalog, repos),
               )
     yield
       val jsPlans = js.flatMap: module =>
         val revision = module.jsVersion.getOrElse(catalog.js.revision)
-        module.versions.all.map(version =>
-          histos.js.JsRequests.libraries(version, revision, repos, catalog)
-        ) ++ List(
+        module.versions.all.map(version => histos.js.JsRequests.libraries(version, revision, repos, catalog)) ++ List(
           histos.js.JsRequests.linker(revision, catalog.js.bridgeScala, repos),
           histos.js.JsRequests.environment(module.jsEnv, catalog, repos),
           histos.js.JsRequests.suite(revision, module.jsEnv, catalog, repos),
-          histos.js.JsRequests.testBridge(revision, catalog, repos)
+          histos.js.JsRequests.testBridge(revision, catalog, repos),
         )
       val auxiliary = js.flatMap(module =>
         List(
           catalog.js.bridgeScala,
-          histos.js.JsRequests.compiler(module.jsEnv, catalog)
+          histos.js.JsRequests.compiler(module.jsEnv, catalog),
         )
       ) ++
         Option.when(natives.nonEmpty)(catalog.native.bridgeScala).toList
-      val versions = (build :: compilerVersions ++ auxiliary).distinct
+      val versions      = (build :: compilerVersions ++ auxiliary).distinct
       val compilerPlans =
-        versions.map(version =>
-          histos.zinc.CompilerRequests.compiler(version, repos)
-        ) ++
+        versions.map(version => histos.zinc.CompilerRequests.compiler(version, repos)) ++
           versions
             .filter(_.value.startsWith("2.13."))
-            .map(version =>
-              histos.zinc.CompilerRequests.semanticdb(version, catalog, repos)
-            )
+            .map(version => histos.zinc.CompilerRequests.semanticdb(version, catalog, repos))
       (compilerPlans ++ jsPlans ++ nativePlans.flatten).distinct
+end LockedTools

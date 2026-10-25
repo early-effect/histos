@@ -7,8 +7,7 @@ import java.nio.file.{Files, LinkOption, Path}
 
 import zio.{Trace, ZIO, ZIOAspect}
 
-/** The build loader follows the plugin fiber, and a declared output has to be
-  * on disk.
+/** The build loader follows the plugin fiber, and a declared output has to be on disk.
   */
 private[load] object PluginAspects:
   def loader(
@@ -18,25 +17,24 @@ private[load] object PluginAspects:
       def apply[
           R >: Nothing <: Any,
           E >: PluginFault <: Any,
-          A >: Nothing <: Any
+          A >: Nothing <: Any,
       ](zio: ZIO[R, E, A])(using
           Trace
       ): ZIO[R, E, A] =
         threads.run(zio))
 
-  /** After the task returns, every declared path is a real file. An extra
-    * returned path fails first.
+  /** After the task returns, every declared path is a real file. An extra returned path fails first.
     */
   def declaredOutputs(
       repo: Path,
       task: DeclaredTask,
-      output: zio.Ref[Option[PluginOutput]]
+      output: zio.Ref[Option[PluginOutput]],
   ): StepAspect[Any, PluginFault, histos.step.StepKind] =
     StepAspect.lift(new ZIOAspect[Nothing, Any, PluginFault, Any, Nothing, Any]:
       def apply[
           R >: Nothing <: Any,
           E >: PluginFault <: Any,
-          A >: Nothing <: Any
+          A >: Nothing <: Any,
       ](zio: ZIO[R, E, A])(using
           Trace
       ): ZIO[R, E, A] =
@@ -47,7 +45,7 @@ private[load] object PluginAspects:
   private def verify(
       repo: Path,
       task: DeclaredTask,
-      output: zio.Ref[Option[PluginOutput]]
+      output: zio.Ref[Option[PluginOutput]],
   ): zio.IO[PluginRunError, Unit] =
     output.get.flatMap:
       case None          => ZIO.unit
@@ -60,7 +58,7 @@ private[load] object PluginAspects:
 
   private def present(
       repo: Path,
-      task: DeclaredTask
+      task: DeclaredTask,
   ): zio.IO[PluginRunError, Unit] =
     ZIO.foreachDiscard(task.outputs): declared =>
       val file = repo.resolve(declared.path.value)
@@ -70,3 +68,4 @@ private[load] object PluginAspects:
         .flatMap:
           case true  => ZIO.unit
           case false => ZIO.fail(PluginRunError.MissingOutput(declared.name))
+end PluginAspects

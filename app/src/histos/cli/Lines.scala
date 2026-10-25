@@ -6,14 +6,13 @@ import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
 
-/** The lines a compile or a test prints. The daemon and the local command use
-  * the same text.
+/** The lines a compile or a test prints. The daemon and the local command use the same text.
   */
 object Lines:
   def compiling(
       module: ProjectName,
       version: ScalaVersion,
-      platform: Platform
+      platform: Platform,
   ): String =
     s"compiling ${module.value} ${version.value} ${token(platform)}"
 
@@ -24,9 +23,9 @@ object Lines:
       platform: Platform,
       changed: Boolean,
       sources: Option[SourceCount],
-      classesWritten: Option[Int]
+      classesWritten: Option[Int],
   ): Option[String] =
-    val id = s"${module.value} ${version.value} ${token(platform)}"
+    val id     = s"${module.value} ${version.value} ${token(platform)}"
     val detail = counts(sources, classesWritten)
     if changed then detail.map(text => s"$id $text")
     else
@@ -43,9 +42,9 @@ object Lines:
       platform: Platform,
       changed: Boolean,
       sources: Option[SourceCount],
-      classesWritten: Option[Int]
+      classesWritten: Option[Int],
   ): String =
-    val id = s"${module.value} ${version.value} ${token(platform)} test"
+    val id     = s"${module.value} ${version.value} ${token(platform)} test"
     val detail = counts(sources, classesWritten)
     if changed then
       detail match
@@ -56,22 +55,20 @@ object Lines:
         case Some(text) => s"$id compile unchanged $text"
         case None       => s"$id compile unchanged"
 
-  /** File and class numbers are omitted when they are unknown. An empty run
-    * spells nothing. `failed` is named only when one happened.
+  /** File and class numbers are omitted when they are unknown. An empty run spells nothing. `failed` is named only when
+    * one happened.
     */
   def tally(
       modules: Int,
       failed: Int,
       files: Option[SourceCount],
-      classesWritten: Option[Int]
+      classesWritten: Option[Int],
   ): Option[String] =
     if modules == 0 then None
     else
       val parts =
         files
-          .map(count =>
-            s"files compiled: ${count.compiled} skipped: ${count.skipped}"
-          )
+          .map(count => s"files compiled: ${count.compiled} skipped: ${count.skipped}")
           .toList ++
           List(s"modules: $modules") ++
           classesWritten.map(count => s"classes: $count").toList
@@ -82,7 +79,7 @@ object Lines:
       modules: Int,
       failed: Int,
       files: Option[SourceCount],
-      classesWritten: Option[Int]
+      classesWritten: Option[Int],
   ): Option[String] =
     tally(modules, failed, files, classesWritten).map(line => s"test $line")
 
@@ -110,16 +107,14 @@ object Lines:
 
   private def counts(
       sources: Option[SourceCount],
-      classesWritten: Option[Int]
+      classesWritten: Option[Int],
   ): Option[String] =
     val written = sources match
       case Some(_) => classesWritten
       case None    => None
     val parts =
       sources
-        .map(count =>
-          s"files compiled: ${count.compiled} skipped: ${count.skipped}"
-        )
+        .map(count => s"files compiled: ${count.compiled} skipped: ${count.skipped}")
         .toList ++ written.map(count => s"classes: $count").toList
     if parts.isEmpty then None else Some(parts.mkString(" "))
 
@@ -131,7 +126,7 @@ object Lines:
   def begin(
       module: ProjectName,
       version: ScalaVersion,
-      platform: Platform
+      platform: Platform,
   ): String =
     s"${module.value} ${version.value} ${token(platform)}"
 
@@ -142,7 +137,7 @@ object Lines:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-      suite: String
+      suite: String,
   ): String =
     s"${module.value} ${version.value} ${token(platform)} $suite cached"
 

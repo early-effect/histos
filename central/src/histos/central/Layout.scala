@@ -16,18 +16,20 @@ object Digest:
 
   private def digest(algorithm: String, bytes: Chunk[Byte]): String =
     MessageDigest.getInstance(algorithm).digest(bytes.toArray).map(byte => f"${byte & 0xff}%02x").mkString
+end Digest
 
 private[central] object JarCheck:
   def accept(jar: Chunk[Byte]): Either[PublishError, Chunk[Byte]] =
     jar match
-      case Chunk()                 => Left(PublishError.EmptyJar)
-      case bytes if zip(bytes)     => Right(bytes)
-      case _                       => Left(PublishError.NotAJar)
+      case Chunk()             => Left(PublishError.EmptyJar)
+      case bytes if zip(bytes) => Right(bytes)
+      case _                   => Left(PublishError.NotAJar)
 
   private def zip(bytes: Chunk[Byte]): Boolean =
     bytes.take(2) match
       case first +: second +: Chunk() => first == 0x50.toByte && second == 0x4b.toByte
       case _                          => false
+end JarCheck
 
 object Layout:
   def paths(root: Path, artifact: Artifact): Either[PublishError, MavenPaths] =
@@ -47,7 +49,7 @@ object Layout:
 
   def pom(artifact: Artifact): String =
     val dependencies = artifact.dependencies match
-      case Nil => ""
+      case Nil    => ""
       case listed =>
         val rows = listed
           .map: dependency =>
@@ -72,7 +74,7 @@ object Layout:
        |""".stripMargin
 
   private def under(root: Path, segments: List[String]): Either[PublishError, Path] =
-    val base = root.toAbsolutePath.normalize
+    val base   = root.toAbsolutePath.normalize
     val target = segments.foldLeft(base)(_.resolve(_)).normalize
     if target.startsWith(base) then Right(target) else Left(PublishError.Escaped(target))
-
+end Layout

@@ -10,3 +10,4 @@ private[load] object ReservedPackage:
     name.startsWith("histos/") || name.startsWith("zio/") || name.startsWith(
       "scala/"
     )
+end ReservedPackage

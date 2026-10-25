@@ -1,14 +1,7 @@
 package histos
 
 import histos.native.{NativeOrigin, NativeToolchain}
-import histos.resolve.{
-  BuildResolvers,
-  DependencyLock,
-  LockedTool,
-  LockedTools,
-  Resolve,
-  ResolveError
-}
+import histos.resolve.{BuildResolvers, DependencyLock, LockedTool, LockedTools, Resolve, ResolveError}
 import histos.workspace.{IoFailure, Workspace}
 import java.nio.file.Path
 import zio.{Scope, ZIO, ZLayer}
@@ -20,17 +13,17 @@ object ToolFixture:
   ): ZLayer[Scope, ResolveError | BuildError | IoFailure, LockedTools] =
     ZLayer.scoped:
       for
-        root <- Workspace.work("histos-test-tools")
+        root  <- Workspace.work("histos-test-tools")
         built <- ZIO.fromEither(graph)
         tools <- locked(root, built).provide(Resolve.coursier)
       yield tools
 
   def locked(
       repo: Path,
-      graph: ProjectGraph
+      graph: ProjectGraph,
   ): ZIO[Resolve, ResolveError, LockedTools] =
     for
-      _ <- Resolve.update(repo, graph, BuildResolvers(graph.resolvers))
+      _    <- Resolve.update(repo, graph, BuildResolvers(graph.resolvers))
       lock <- Resolve.readLock(repo)
       view <- LockedTools.make(lock, graph)
     yield view
@@ -47,8 +40,8 @@ object ToolFixture:
     ZLayer.scoped:
       for
         current <- ZIO.service[LockedTools]
-        root <- Workspace.work("histos-test-native-tools")
-        built <- ZIO.fromEither(
+        root    <- Workspace.work("histos-test-native-tools")
+        built   <- ZIO.fromEither(
           Projects.tools(current.catalog)(
             module("native", Platform.Native)(
               current.catalog.native.bridgeScala
@@ -62,15 +55,14 @@ object ToolFixture:
             root,
             built,
             BuildResolvers(built.resolvers),
-            NativeOrigin.Chosen(toolchain.source)
+            NativeOrigin.Chosen(toolchain.source),
           )
           lock <- Resolve.readLock(root)
           view <- LockedTools.make(lock, built)
         yield view).provide(Resolve.coursier)
       yield tools
 
-  /** File and ivy artifacts stay on `cache`. A central artifact uses the tools
-    * resolver.
+  /** File and ivy artifacts stay on `cache`. A central artifact uses the tools resolver.
     */
   def beside(cache: Path): ZLayer[LockedTools, Nothing, Resolve] =
     ZLayer.fromZIO:
@@ -89,22 +81,21 @@ object ToolFixture:
                 else tools.resolve.fetch(artifact)
               def resolvePlugin(
                   dependency: Dep,
-                  repositories: histos.resolve.Repositories
+                  repositories: histos.resolve.Repositories,
               ) = local.resolvePlugin(dependency, repositories)
               def sources(
                   organization: String,
                   name: String,
                   revision: String,
-                  repository: histos.resolve.Repository
+                  repository: histos.resolve.Repository,
               ) =
-                if kept(repository) then
-                  local.sources(organization, name, revision, repository)
+                if kept(repository) then local.sources(organization, name, revision, repository)
                 else
                   tools.resolve.sources(
                     organization,
                     name,
                     revision,
-                    repository
+                    repository,
                   )
 
   private def kept(repository: histos.resolve.Repository): Boolean =
@@ -119,17 +110,17 @@ object ToolFixture:
   def seed(
       repo: Path,
       graph: ProjectGraph,
-      native: NativeOrigin = NativeOrigin.Central
+      native: NativeOrigin = NativeOrigin.Central,
   ): ZIO[LockedTools, ResolveError | IoFailure, Unit] =
     for
       tools <- ZIO.service[LockedTools]
-      lock <- Resolve
+      lock  <- Resolve
         .readLock(repo)
         .catchSome:
           case ResolveError.NoLock(_) => ZIO.succeed(DependencyLock(Nil))
       _ <- ZIO.when(lock.tools.isEmpty):
         for
-          planned <- LockedTools.plan(graph, native)
+          planned  <- LockedTools.plan(graph, native)
           selected <- ZIO.foreach(planned)(request =>
             tools.lock.tools.find(cell =>
               cell.id == request.id && LockedTools
@@ -152,16 +143,16 @@ object ToolFixture:
                           artifact.revision,
                           artifact.sha256,
                           artifact.repository,
-                          artifact.classifier
+                          artifact.classifier,
                         )
                       ),
-                      classpath.evictions
+                      classpath.evictions,
                     )
                   )
           )
           _ <- Workspace.writeString(
             Resolve.lockPath(repo),
-            DependencyLock.render(lock.copy(tools = selected))
+            DependencyLock.render(lock.copy(tools = selected)),
           )
         yield ()
     yield ()
@@ -175,3 +166,4 @@ object ToolFixture:
       stream: ZStream[R, E, A]
   ): ZStream[R & LockedTools, E | ResolveError | IoFailure, A] =
     ZStream.fromZIO(seed(repo, graph)) *> stream
+end ToolFixture

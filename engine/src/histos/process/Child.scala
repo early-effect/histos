@@ -9,9 +9,8 @@ final case class Ended(status: Int, output: String)
 
 /** A short-lived child whose output is read to the end. */
 object Child:
-  /** The release kills the tree, and so does an interrupt while the child runs:
-    * a blocked pipe read ignores thread interruption, so killing the writers is
-    * what ends it.
+  /** The release kills the tree, and so does an interrupt while the child runs: a blocked pipe read ignores thread
+    * interruption, so killing the writers is what ends it.
     */
   def run[E](start: IO[E, Process], failed: E): IO[E, Ended] =
     ZIO.scoped:
@@ -22,7 +21,7 @@ object Child:
             .attemptBlockingCancelable {
               val output = new String(
                 process.getInputStream.readAllBytes,
-                StandardCharsets.UTF_8
+                StandardCharsets.UTF_8,
               )
               Ended(process.waitFor(), output)
             }(stop(process))
@@ -30,3 +29,4 @@ object Child:
 
   private def stop(process: Process): UIO[Unit] =
     ProcessTree.of(process).flatMap(_.destroy)
+end Child

@@ -4,8 +4,7 @@ import histos.jdk.Sha256
 import java.nio.charset.StandardCharsets
 import zio.Chunk
 
-/** A selected request and its checksum-verified classpath, never the whole
-  * lock.
+/** A selected request and its checksum-verified classpath, never the whole lock.
   */
 final case class ToolInput(id: ToolId, artifacts: List[ResolvedArtifact]):
   def fingerprint: Sha256 =

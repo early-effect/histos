@@ -18,7 +18,7 @@ object SuitePatternSpec extends ZIOSpecDefault:
     ,
     test("a package pattern crosses dots, and a question mark is one character"):
       val packaged = SuitePattern.from("com.acme.*")
-      val one = SuitePattern.from("com.acme.Foo?")
+      val one      = SuitePattern.from("com.acme.Foo?")
       assertTrue:
         (packaged, one) match
           case (Right(wide), Right(mark)) =>
@@ -51,8 +51,8 @@ object SuitePatternSpec extends ZIOSpecDefault:
         ,
         SuitePattern.from("") == Left(SuitePatternError.Empty),
         SuitePattern.allows(Nil, "com.acme.FooA"),
-      )
-    ,
+      ),
   )
 
   def spec = patterns
+end SuitePatternSpec

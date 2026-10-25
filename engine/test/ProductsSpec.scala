@@ -19,7 +19,7 @@ object ProductsSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           repo <- Workspace.work("histos-clean")
-          _ <- Products.wipe(repo)
+          _    <- Products.wipe(repo)
           kept = List(
             ".histos/dependencies.lock",
             ".histos/launcher.lock",
@@ -29,7 +29,7 @@ object ProductsSpec extends ZIOSpecDefault:
             ".histos/node.local",
             ".histos/server.json",
             ".histos/server.sock",
-            "dist/histos.jar"
+            "dist/histos.jar",
           )
           dropped = List(
             ".histos/classes/engine/Demo.class",
@@ -42,45 +42,39 @@ object ProductsSpec extends ZIOSpecDefault:
             ".histos/run/engine/out",
             ".histos/provider/3.10.0/bridge.jar",
             ".histos/provider-src/3.10.0/Bridge.scala",
-            ".histos/observation.json"
+            ".histos/observation.json",
           )
-          _ <- ZIO.foreachDiscard(kept ++ dropped)(relative =>
-            plant(repo, relative)
-          )
+          _       <- ZIO.foreachDiscard(kept ++ dropped)(relative => plant(repo, relative))
           outside <- plant(repo, "kept.txt")
           link = repo.resolve(".histos").resolve("classes").resolve("linked")
-          _ <- ZIO.attempt(Files.createSymbolicLink(link, outside))
-          _ <- Products.wipe(repo)
-          stayed <- ZIO.foreach(kept)(relative =>
-            isFile(repo.resolve(relative))
-          )
-          gone <- ZIO.foreach(dropped)(relative =>
-            exists(repo.resolve(relative))
-          )
+          _            <- ZIO.attempt(Files.createSymbolicLink(link, outside))
+          _            <- Products.wipe(repo)
+          stayed       <- ZIO.foreach(kept)(relative => isFile(repo.resolve(relative)))
+          gone         <- ZIO.foreach(dropped)(relative => exists(repo.resolve(relative)))
           outsideStays <- isFile(outside)
-          classesGone <- exists(repo.resolve(".histos").resolve("classes"))
+          classesGone  <- exists(repo.resolve(".histos").resolve("classes"))
         yield assertTrue(
           Products.line(Nil) == "cleaned",
           stayed.forall(identity),
           gone.forall(!_),
           outsideStays,
-          !classesGone
+          !classesGone,
         )
     ,
     test("a module wipe leaves its sibling and the shared provider"):
       ZIO.scoped:
         for
-          repo <- Workspace.work("histos-clean-module")
-          engineClass <- plant(repo, ".histos/classes/engine/Demo.class")
-          appClass <- plant(repo, ".histos/classes/app/Demo.class")
-          provider <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
-          tally <- plant(repo, ".histos/observation.json")
-          built <- graph
-          cleaned <- Products.named(repo, built, List("engine"))
-          engineGone <- exists(engineClass)
-          appStays <- isFile(appClass)
+          repo          <- Workspace.work("histos-clean-module")
+          engineClass   <- plant(repo, ".histos/classes/engine/Demo.class")
+          appClass      <- plant(repo, ".histos/classes/app/Demo.class")
+          provider      <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
+          tally         <- plant(repo, ".histos/observation.json")
+          built         <- graph
+          cleaned       <- Products.named(repo, built, List("engine"))
+          engineGone    <- exists(engineClass)
+          appStays      <- isFile(appClass)
           providerStays <- isFile(provider)
-          tallyGone <- exists(tally)
+          tallyGone     <- exists(tally)
         yield assertTrue(
           cleaned.map(_.value) == List("engine"),
           Products.line(cleaned) == "cleaned engine",
@@ -88,25 +82,25 @@ object ProductsSpec extends ZIOSpecDefault:
           appStays,
           providerStays,
           !tallyGone,
-          tally == Products.observation(repo)
+          tally == Products.observation(repo),
         )
     ,
     test("an unknown, repeated, or bad name deletes nothing"):
       ZIO.scoped:
         for
-          repo <- Workspace.work("histos-clean-name")
-          klass <- plant(repo, ".histos/classes/engine/Demo.class")
-          tally <- plant(repo, ".histos/observation.json")
-          built <- graph
-          unknown <- Products.named(repo, built, List("missing")).either
+          repo      <- Workspace.work("histos-clean-name")
+          klass     <- plant(repo, ".histos/classes/engine/Demo.class")
+          tally     <- plant(repo, ".histos/observation.json")
+          built     <- graph
+          unknown   <- Products.named(repo, built, List("missing")).either
           duplicate <- Products
             .named(repo, built, List("engine", "engine"))
             .either
-          bad <- Products.named(repo, built, List("a/b")).either
-          still <- isFile(klass)
+          bad        <- Products.named(repo, built, List("a/b")).either
+          still      <- isFile(klass)
           tallyStays <- isFile(tally)
-          missing <- ZIO.fromEither(ProjectName.from("missing"))
-          engine <- ZIO.fromEither(ProjectName.from("engine"))
+          missing    <- ZIO.fromEither(ProjectName.from("missing"))
+          engine     <- ZIO.fromEither(ProjectName.from("engine"))
         yield assertTrue(
           unknown match
             case Left(CiError.Unknown(name)) => name == missing
@@ -121,53 +115,53 @@ object ProductsSpec extends ZIOSpecDefault:
             case _                          => false
           ,
           still,
-          tallyStays
+          tallyStays,
         )
     ,
     test("an aggregate wipe does not delete an upstream module"):
       ZIO.scoped:
         for
-          repo <- Workspace.work("histos-clean-aggregate")
+          repo      <- Workspace.work("histos-clean-aggregate")
           coreClass <- plant(repo, ".histos/classes/core/Demo.class")
-          appClass <- plant(repo, ".histos/classes/app/Demo.class")
-          provider <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
+          appClass  <- plant(repo, ".histos/classes/app/Demo.class")
+          provider  <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
           core = module("core", Jvm)(scala3)
-          app = module("app", Jvm)(scala3).dependsOn(core)
+          app  = module("app", Jvm)(scala3).dependsOn(core)
           root = aggregate("root", app)
-          built <- ZIO.fromEither(Projects(root, core, app))
-          cleaned <- Products.named(repo, built, List("root"))
-          coreStays <- isFile(coreClass)
-          appGone <- exists(appClass)
+          built         <- ZIO.fromEither(Projects(root, core, app))
+          cleaned       <- Products.named(repo, built, List("root"))
+          coreStays     <- isFile(coreClass)
+          appGone       <- exists(appClass)
           providerStays <- isFile(provider)
         yield assertTrue(
           cleaned.map(_.value) == List("app"),
           Products.line(cleaned) == "cleaned app",
           coreStays,
           !appGone,
-          providerStays
+          providerStays,
         )
     ,
     test("naming nothing is the full wipe, including the shared provider"):
       ZIO.scoped:
         for
-          repo <- Workspace.work("histos-clean-all")
-          provider <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
-          klass <- plant(repo, ".histos/classes/engine/Demo.class")
-          built <- graph
-          cleaned <- Products.named(repo, built, Nil)
+          repo         <- Workspace.work("histos-clean-all")
+          provider     <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
+          klass        <- plant(repo, ".histos/classes/engine/Demo.class")
+          built        <- graph
+          cleaned      <- Products.named(repo, built, Nil)
           providerGone <- exists(provider)
-          classGone <- exists(klass)
+          classGone    <- exists(klass)
         yield assertTrue(
           cleaned.isEmpty,
           Products.line(cleaned) == "cleaned",
           !providerGone,
-          !classGone
-        )
+          !classGone,
+        ),
   )
 
   private def graph =
     val engine = module("engine", Jvm)(scala3)
-    val app = module("app", Jvm)(scala3).dependsOn(engine)
+    val app    = module("app", Jvm)(scala3).dependsOn(engine)
     ZIO.fromEither(Projects(engine, app))
 
   private def plant(root: Path, relative: String): Task[Path] =
@@ -185,3 +179,4 @@ object ProductsSpec extends ZIOSpecDefault:
     ZIO.attempt(Files.isRegularFile(path))
 
   def spec = products
+end ProductsSpec

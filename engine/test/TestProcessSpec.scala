@@ -17,7 +17,7 @@ import zio.{Chunk, Ref, Scope, System, UIO, ZIO, durationInt}
 import zio.test.*
 
 object ChildProcessSpec extends ZIOSpecDefault:
-  private val exitMain = MainClass.trusted("demo.Exit")
+  private val exitMain  = MainClass.trusted("demo.Exit")
   private val sleepMain = MainClass.trusted("demo.Sleeper")
 
   private val types = suite("request")(
@@ -59,21 +59,21 @@ object ChildProcessSpec extends ZIOSpecDefault:
         yield assertTrue:
           out match
             case Left(ChildError.Java(path)) => path.endsWith("missing-java")
-            case _                          => false
+            case _                           => false,
   )
 
   private val process = suite("subprocess")(
     test("System.exit stays in the child, the environment is empty, and the resolved jar is on the classpath"):
       ZIO.scoped:
         for
-          root    <- temp
-          classes <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
+          root     <- temp
+          classes  <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
           built    <- libJar(root)
           compiled <- compile(root, classes, "Exit.java", exitSource, List(built.jar))
           work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
-          parent    = Option(java.lang.System.getenv("HOME")).filter(_.nonEmpty)
-          req      <- request(work, Platform.Jvm, exitMain, ChildClasspath(classes, List(built.jar)))
-          outcome  <- ChildProcess.run(req).either
+          parent = Option(java.lang.System.getenv("HOME")).filter(_.nonEmpty)
+          req     <- request(work, Platform.Jvm, exitMain, ChildClasspath(classes, List(built.jar)))
+          outcome <- ChildProcess.run(req).either
           lines    = outcome.map(_.out.text.linesIterator.map(_.trim).filter(_.nonEmpty).toList)
           scrubbed = lines match
             case Right(found) => found.contains("home=null") && parent.forall(home => !found.contains(s"home=$home"))
@@ -89,18 +89,18 @@ object ChildProcessSpec extends ZIOSpecDefault:
     test("cancel kills the sleeping test and the child in its process group"):
       ZIO.scoped:
         for
-          root    <- temp
-          classes <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
+          root     <- temp
+          classes  <- ZIO.attempt(Files.createDirectories(root.resolve("classes")))
           compiled <- compile(root, classes, "Sleeper.java", sleeperSource, Nil)
           work     <- ZIO.attempt(Files.createDirectories(root.resolve("work")).toRealPath())
-          sleepOk   = Files.isRegularFile(Path.of("/bin/sleep"))
-          req      <- request(work, Platform.Jvm, sleepMain, ChildClasspath(classes, Nil))
-          fiber    <- ChildProcess.run(req).fork
-          child    <- awaitPid(work.resolve("child.pid"))
-          self     <- awaitPid(work.resolve("self.pid"))
+          sleepOk = Files.isRegularFile(Path.of("/bin/sleep"))
+          req   <- request(work, Platform.Jvm, sleepMain, ChildClasspath(classes, Nil))
+          fiber <- ChildProcess.run(req).fork
+          child <- awaitPid(work.resolve("child.pid"))
+          self  <- awaitPid(work.resolve("self.pid"))
           childBefore = child.exists(alive)
           selfBefore  = self.exists(alive)
-          exit     <- fiber.interrupt
+          exit      <- fiber.interrupt
           childDead <- ZIO.foreach(child.toList)(awaitDead)
           selfDead  <- ZIO.foreach(self.toList)(awaitDead)
         yield assertTrue(
@@ -144,7 +144,7 @@ object ChildProcessSpec extends ZIOSpecDefault:
               case _ => ZIO.unit
             .take(1)
             .runCollect
-          pids   = shown.collect { case ChildEvent.Out(text) => text.trim.toLongOption }.flatten
+          pids = shown.collect { case ChildEvent.Out(text) => text.trim.toLongOption }.flatten
           dead  <- ZIO.foreach(pids)(awaitDead)
           found <- group.get
         yield assertTrue(
@@ -152,7 +152,7 @@ object ChildProcessSpec extends ZIOSpecDefault:
           dead == Chunk(true),
           found match
             case Some((pgid, ppid)) => pgid == ppid && pgid > 0
-            case None               => false
+            case None               => false,
         )
     ,
     test("a large output arrives whole and in bounded time"):
@@ -165,8 +165,8 @@ object ChildProcessSpec extends ZIOSpecDefault:
           req      <- request(work, Platform.Jvm, chattyMain, ChildClasspath(classes, Nil))
           timed    <- ChildProcess.run(req).timed
           (took, outcome) = timed
-          lines    = outcome.out.text.linesIterator.size
-          whole    = outcome.out.text == chattyText
+          lines           = outcome.out.text.linesIterator.size
+          whole           = outcome.out.text == chattyText
         yield assertTrue(
           compiled == Tool(0, ""),
           outcome.exit == ProcessExit(0),
@@ -190,7 +190,7 @@ object ChildProcessSpec extends ZIOSpecDefault:
           javac   <- awaitPid(root.resolve("javac.pid"))
           exit    <- fiber.interrupt.timeout(3.seconds)
           dead    <- ZIO.foreach(javac.toList)(awaitDead)
-        yield assertTrue(javac.nonEmpty, exit.exists(_.isInterrupted), dead == List(true))
+        yield assertTrue(javac.nonEmpty, exit.exists(_.isInterrupted), dead == List(true)),
   )
 
   private def executable(path: Path, body: String): ZIO[Any, Throwable, Path] =
@@ -202,14 +202,16 @@ object ChildProcessSpec extends ZIOSpecDefault:
 
   /** `pgid` equals `ppid` when the parent called `setpgid(0, 0)` before it started this process. */
   private def ps(pid: Long, field: String): UIO[Long] =
-    ZIO.attemptBlocking {
-      val process = new ProcessBuilder("ps", "-o", s"$field=", "-p", pid.toString).redirectErrorStream(true).start()
-      val text = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8).trim
-      process.waitFor()
-      text.toLongOption.getOrElse(0L)
-    }.orElseSucceed(0L)
-  private val leaverMain = MainClass.trusted("demo.Leaver")
-  private val chattyMain = MainClass.trusted("demo.Chatty")
+    ZIO
+      .attemptBlocking {
+        val process = new ProcessBuilder("ps", "-o", s"$field=", "-p", pid.toString).redirectErrorStream(true).start()
+        val text    = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8).trim
+        process.waitFor()
+        text.toLongOption.getOrElse(0L)
+      }
+      .orElseSucceed(0L)
+  private val leaverMain  = MainClass.trusted("demo.Leaver")
+  private val chattyMain  = MainClass.trusted("demo.Chatty")
   private val ChattyLines = 200000
   private val chattyText  = (0 until ChattyLines).map(index => s"line $index\n").mkString
 
@@ -225,13 +227,17 @@ object ChildProcessSpec extends ZIOSpecDefault:
   private def alive(pid: Long): Boolean =
     ProcessHandle.of(pid).toScala.exists(_.isAlive)
 
-  /** The file appears once the JVM reaches main. A busy runner spends the wait on bootstrap compile and process start. */
+  /** The file appears once the JVM reaches main. A busy runner spends the wait on bootstrap compile and process start.
+    */
   private def awaitPid(path: Path): ZIO[Any, Nothing, Option[Long]] =
-    ZIO.suspendSucceed {
-      readPid(path) match
-        case Some(pid) => ZIO.succeed(Some(pid))
-        case None      => ZIO.sleep(20.millis) *> awaitPid(path)
-    }.timeout(10.seconds).map(_.flatten)
+    ZIO
+      .suspendSucceed {
+        readPid(path) match
+          case Some(pid) => ZIO.succeed(Some(pid))
+          case None      => ZIO.sleep(20.millis) *> awaitPid(path)
+      }
+      .timeout(10.seconds)
+      .map(_.flatten)
 
   private def readPid(path: Path): Option[Long] =
     if !Files.isRegularFile(path) then None
@@ -242,9 +248,12 @@ object ChildProcessSpec extends ZIOSpecDefault:
       catch case _: java.io.IOException => None
 
   private def awaitDead(pid: Long): ZIO[Any, Nothing, Boolean] =
-    ZIO.suspendSucceed {
-      if alive(pid) then ZIO.sleep(20.millis) *> awaitDead(pid) else ZIO.succeed(true)
-    }.timeout(1.second).map(_.getOrElse(false))
+    ZIO
+      .suspendSucceed {
+        if alive(pid) then ZIO.sleep(20.millis) *> awaitDead(pid) else ZIO.succeed(true)
+      }
+      .timeout(1.second)
+      .map(_.getOrElse(false))
 
   private val exitSource =
     """package demo;
@@ -307,7 +316,7 @@ object ChildProcessSpec extends ZIOSpecDefault:
       pair <- ZIO.attempt:
         val sources = Files.createDirectories(root.resolve("lib-src"))
         val classes = Files.createDirectories(root.resolve("lib-classes"))
-        val file = sources.resolve("Lib.java")
+        val file    = sources.resolve("Lib.java")
         Files.writeString(file, libSource)
         (classes, file)
       (classes, file) = pair
@@ -335,7 +344,7 @@ object ChildProcessSpec extends ZIOSpecDefault:
     for
       args <- ZIO.attempt:
         val sources = Files.createDirectories(root.resolve("src"))
-        val file = sources.resolve(name)
+        val file    = sources.resolve(name)
         Files.writeString(file, source)
         val cp =
           if classpath.isEmpty then Nil
@@ -357,13 +366,17 @@ object ChildProcessSpec extends ZIOSpecDefault:
       delete(dir)
 
   private def delete(dir: Path): zio.UIO[Unit] =
-    ZIO.attempt:
-      if Files.exists(dir) then
-        val walk = Files.walk(dir)
-        val paths =
-          try walk.iterator.asScala.toList
-          finally walk.close()
-        paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
-    .ignore
+    ZIO
+      .attempt:
+        if Files.exists(dir) then
+          val walk  = Files.walk(dir)
+          val paths =
+            try walk.iterator.asScala.toList
+            finally walk.close()
+          paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
+      .ignore
 
-  def spec = suite("test subprocess")(types, process) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(45.seconds)
+  def spec =
+    suite("test subprocess")(types, process) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect
+      .timeout(45.seconds)
+end ChildProcessSpec

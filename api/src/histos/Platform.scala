@@ -8,6 +8,7 @@ enum Platform:
     case Jvm    => "jvm"
     case Js     => "js"
     case Native => "native"
+end Platform
 
 object Platform:
   def from(raw: String): Either[PlatformError, Platform] =
@@ -24,3 +25,4 @@ enum PlatformError:
 
   def message: String = this match
     case Unknown(raw) => s"'$raw' is not a platform (jvm, js, or native)"
+end PlatformError

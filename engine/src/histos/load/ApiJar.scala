@@ -12,15 +12,21 @@ import zio.{Scope, System, ZIO}
 /** The api jar tests compile a build file against. `dist/histos-api.jar` wins. Otherwise the classes just compiled. */
 object ApiJar:
   def locate: ZIO[Scope, LoadError, Path] =
-    System.env("HISTOS_REPO").mapError(_ => LoadError.Io(IoFailure(Path.of("HISTOS_REPO"), IoFault.Read))).flatMap: named =>
-      val roots = repoRoots(named.filter(_.nonEmpty).map(Path.of(_)))
-      val packed = roots.map(_.resolve("dist").resolve("histos-api.jar"))
-      ZIO.attemptBlocking(packed.find(path => Files.isRegularFile(path))).mapError(_ => LoadError.Io(IoFailure(Path.of("dist/histos-api.jar"), IoFault.Stat))).flatMap:
-        case Some(jar) => ZIO.succeed(jar)
-        case None =>
-          compiled(roots) match
-            case Some(classes) => jarOf(classes)
-            case None          => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
+    System
+      .env("HISTOS_REPO")
+      .mapError(_ => LoadError.Io(IoFailure(Path.of("HISTOS_REPO"), IoFault.Read)))
+      .flatMap: named =>
+        val roots  = repoRoots(named.filter(_.nonEmpty).map(Path.of(_)))
+        val packed = roots.map(_.resolve("dist").resolve("histos-api.jar"))
+        ZIO
+          .attemptBlocking(packed.find(path => Files.isRegularFile(path)))
+          .mapError(_ => LoadError.Io(IoFailure(Path.of("dist/histos-api.jar"), IoFault.Stat)))
+          .flatMap:
+            case Some(jar) => ZIO.succeed(jar)
+            case None      =>
+              compiled(roots) match
+                case Some(classes) => jarOf(classes)
+                case None          => ZIO.fail(LoadError.MissingFile(Path.of("dist/histos-api.jar")))
 
   private def repoRoots(named: Option[Path]): List[Path] =
     val cwd = Path.of("").toAbsolutePath.normalize
@@ -34,7 +40,7 @@ object ApiJar:
     val api = root.resolve(".histos").resolve("classes").resolve("api")
     if !Files.isDirectory(api) then None
     else
-      val listed = Files.list(api)
+      val listed   = Files.list(api)
       val versions =
         try listed.iterator.asScala.filter(path => Files.isDirectory(path)).toList
         finally listed.close()
@@ -46,6 +52,10 @@ object ApiJar:
         case _           => None
 
   private def jarOf(classes: Path): ZIO[Scope, LoadError, Path] =
-    Workspace.work("histos-api-jar").mapError(LoadError.Io(_)).flatMap: dir =>
-      val dest = dir.resolve("histos-api.jar")
-      ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(IoFailure(dest, IoFault.Write)), _.path)
+    Workspace
+      .work("histos-api-jar")
+      .mapError(LoadError.Io(_))
+      .flatMap: dir =>
+        val dest = dir.resolve("histos-api.jar")
+        ClassJar.write(classes, dest).mapBoth(_ => LoadError.Io(IoFailure(dest, IoFault.Write)), _.path)
+end ApiJar

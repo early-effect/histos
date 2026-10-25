@@ -13,7 +13,7 @@ object RemoteSpec extends ZIOSpecDefault:
     Action(
       compileId,
       List(Input(InputName.trusted("compile"), InputValue.Text("cell"))),
-      Nil
+      Nil,
     )
 
   private def digest(action: Action): Digest =
@@ -26,7 +26,7 @@ object RemoteSpec extends ZIOSpecDefault:
       remote: RemoteCache,
       action: Action,
       local: Action => ZIO[Any, Nothing, String],
-      verdict: Action => Verdict = Sendable.ofAction
+      verdict: Action => Verdict = Sendable.ofAction,
   ) =
     ZIO
       .serviceWithZIO[Scheduler](
@@ -35,7 +35,7 @@ object RemoteSpec extends ZIOSpecDefault:
       .provide(
         Scheduler.live,
         ZLayer.succeed(ActionCache.miss),
-        ZLayer.succeed(remote)
+        ZLayer.succeed(remote),
       )
 
   private val policy = suite("what may leave")(
@@ -47,7 +47,7 @@ object RemoteSpec extends ZIOSpecDefault:
         ),
         Sendable.decide(Runner.Compile, Set(Need.Docker)) == Verdict.Stay(
           Hold.Needs(Set(Need.Docker))
-        )
+        ),
       )
     ,
     test("publish, tests, closures, and an open plugin stay"):
@@ -62,7 +62,7 @@ object RemoteSpec extends ZIOSpecDefault:
         Sendable.decide(Runner.Plugin(Seal.Open), Set.empty) == Verdict.Stay(
           Hold.Plugin
         ),
-        Sendable.decide(Runner.Inspect, Set.empty) == Verdict.Stay(Hold.Inspect)
+        Sendable.decide(Runner.Inspect, Set.empty) == Verdict.Stay(Hold.Inspect),
       )
     ,
     test("a hermetic plugin is sendable until it declares a need"):
@@ -71,22 +71,22 @@ object RemoteSpec extends ZIOSpecDefault:
           .decide(Runner.Plugin(Seal.Hermetic), Set.empty) == Verdict.Send,
         Sendable.decide(
           Runner.Plugin(Seal.Hermetic),
-          Set(Need.Network, Need.Docker)
+          Set(Need.Network, Need.Docker),
         ) ==
-          Verdict.Stay(Hold.Needs(Set(Need.Network, Need.Docker)))
-      )
+          Verdict.Stay(Hold.Needs(Set(Need.Network, Need.Docker))),
+      ),
   )
 
   private val remote = suite("in-process remote")(
     test("an unconfigured cache runs locally and refuses a store"):
       for
         called <- Ref.make(false)
-        out <- run(
+        out    <- run(
           RemoteCache.unconfigured,
           compiled,
-          action => called.set(true) *> ZIO.succeed(action.id.value)
+          action => called.set(true) *> ZIO.succeed(action.id.value),
         )
-        did <- called.get
+        did     <- called.get
         refused <- RemoteCache.unconfigured
           .store(digest(compiled), Chunk.empty)
           .either
@@ -96,28 +96,28 @@ object RemoteSpec extends ZIOSpecDefault:
     ,
     test("a read-only hit does not run locally"):
       for
-        cache <- TestRemoteCache.memory(RemoteMode.Read)
-        _ <- cache.plant(digest(compiled), utf8("from-remote"))
+        cache  <- TestRemoteCache.memory(RemoteMode.Read)
+        _      <- cache.plant(digest(compiled), utf8("from-remote"))
         called <- Ref.make(false)
-        out <- run(
+        out    <- run(
           cache,
           compiled,
-          _ => called.set(true) *> ZIO.succeed("local")
+          _ => called.set(true) *> ZIO.succeed("local"),
         )
         did <- called.get
       yield assertTrue(out == "from-remote" && !did)
     ,
     test("a read-only miss runs locally and does not upload"):
       for
-        cache <- TestRemoteCache.memory(RemoteMode.Read)
+        cache  <- TestRemoteCache.memory(RemoteMode.Read)
         called <- Ref.make(false)
-        out <- run(
+        out    <- run(
           cache,
           compiled,
-          _ => called.set(true) *> ZIO.succeed("local")
+          _ => called.set(true) *> ZIO.succeed("local"),
         )
-        did <- called.get
-        held <- cache.holds(digest(compiled))
+        did     <- called.get
+        held    <- cache.holds(digest(compiled))
         refused <- cache.store(digest(compiled), utf8("local")).either
       yield assertTrue(
         out == "local" && did && !held && refused == Left(RemoteError.ReadOnly)
@@ -128,11 +128,11 @@ object RemoteSpec extends ZIOSpecDefault:
         cache <- TestRemoteCache.memory(RemoteMode.Write)
         calls <- Ref.make(0)
         local = (_: Action) => calls.update(_ + 1) *> ZIO.succeed("classes 1")
-        first <- run(cache, compiled, local)
-        once <- calls.get
-        held <- cache.holds(digest(compiled))
+        first  <- run(cache, compiled, local)
+        once   <- calls.get
+        held   <- cache.holds(digest(compiled))
         second <- run(cache, compiled, local)
-        twice <- calls.get
+        twice  <- calls.get
       yield assertTrue(
         first == "classes 1" && once == 1 && held && second == "classes 1" && twice == 1
       )
@@ -140,18 +140,18 @@ object RemoteSpec extends ZIOSpecDefault:
     test("a write cache does not upload a stayed action"):
       for
         cache <- TestRemoteCache.memory(RemoteMode.Write)
-        out <- run(
+        out   <- run(
           cache,
           compiled,
           _ => ZIO.succeed("local"),
-          _ => Verdict.Stay(Hold.Closure)
+          _ => Verdict.Stay(Hold.Closure),
         )
         held <- cache.holds(digest(compiled))
       yield assertTrue(out == "local" && !held)
     ,
     test("a hermetic plugin uploads, and a local hit is not uploaded"):
       val hit: ActionCache = new ActionCache:
-        def get(key: Digest): zio.UIO[Option[String]] = ZIO.some("local-hit")
+        def get(key: Digest): zio.UIO[Option[String]]      = ZIO.some("local-hit")
         def put(key: Digest, value: String): zio.UIO[Unit] = ZIO.unit
       for
         cache <- TestRemoteCache.memory(RemoteMode.Write)
@@ -160,23 +160,23 @@ object RemoteSpec extends ZIOSpecDefault:
           cache,
           plugin,
           _ => ZIO.succeed("plugin"),
-          _ => Verdict.Send
+          _ => Verdict.Send,
         )
-        held <- cache.holds(digest(plugin))
+        held      <- cache.holds(digest(plugin))
         localOnly <- TestRemoteCache.memory(RemoteMode.Write)
-        skipped <- ZIO
+        skipped   <- ZIO
           .serviceWithZIO[Scheduler](
             _.execute(
               plugin.id,
               List(plugin),
               (_, _) => ZIO.succeed("ran"),
-              _ => Verdict.Send
+              _ => Verdict.Send,
             )
           )
           .provide(
             Scheduler.live,
             ZLayer.succeed(hit),
-            ZLayer.succeed(localOnly)
+            ZLayer.succeed(localOnly),
           )
         kept <- localOnly.holds(digest(plugin))
       yield assertTrue(
@@ -187,16 +187,16 @@ object RemoteSpec extends ZIOSpecDefault:
       "a dangling output and a non-utf-8 blob fail instead of running locally"
     ):
       for
-        broken <- TestRemoteCache.memory(RemoteMode.Read)
+        broken  <- TestRemoteCache.memory(RemoteMode.Read)
         missing <- broken.plantDangling(digest(compiled))
         dangled <- run(broken, compiled, _ => ZIO.succeed("local")).either
         garbage <- TestRemoteCache.memory(RemoteMode.Read)
-        _ <- garbage.plant(digest(compiled), Chunk.single(0xff.toByte))
-        called <- Ref.make(false)
-        text <- run(
+        _       <- garbage.plant(digest(compiled), Chunk.single(0xff.toByte))
+        called  <- Ref.make(false)
+        text    <- run(
           garbage,
           compiled,
-          _ => called.set(true) *> ZIO.succeed("local")
+          _ => called.set(true) *> ZIO.succeed("local"),
         ).either
         did <- called.get
       yield assertTrue(
@@ -204,9 +204,10 @@ object RemoteSpec extends ZIOSpecDefault:
           ScheduleError.Remote(RemoteError.Dangling(digest(compiled), missing))
         ),
         text == Left(ScheduleError.Remote(RemoteError.Text(digest(compiled)))),
-        !did
-      )
+        !did,
+      ),
   )
 
   def spec =
     suite("remote cache")(policy, remote) @@ TestAspect.timeout(30.seconds)
+end RemoteSpec

@@ -19,7 +19,7 @@ final case class ModuleTally(
     platform: String,
     compiled: Option[Int],
     skipped: Option[Int],
-    classes: Option[Int]
+    classes: Option[Int],
 ) derives JsonCodec,
       Schema
 
@@ -29,7 +29,7 @@ final case class Observation(
     compiled: Option[Int],
     skipped: Option[Int],
     classes: Option[Int],
-    moduleCount: Int
+    moduleCount: Int,
 ) derives JsonCodec,
       Schema
 
@@ -39,7 +39,7 @@ final case class Report(
     out: Chunk[String],
     err: Chunk[String],
     run: Option[String],
-    observation: Option[Observation]
+    observation: Option[Observation],
 ) derives JsonCodec,
       Schema
 
@@ -52,6 +52,7 @@ enum ObserveError derives Schema, JsonCodec:
     case Missing(path)    => s"no observation at $path"
     case Unreadable(path) => s"could not read $path"
     case Malformed(path)  => s"observation at $path is not a tally"
+end ObserveError
 
 object Observation:
   def recorded(
@@ -59,9 +60,9 @@ object Observation:
       version: ScalaVersion,
       platform: Platform,
       sources: Option[SourceCount],
-      classesWritten: Option[Int]
+      classesWritten: Option[Int],
   ): ModuleTally =
-    val written = sources.flatMap(_ => classesWritten)
+    val written             = sources.flatMap(_ => classesWritten)
     val (compiled, skipped) = sources match
       case Some(count) => (Some(count.compiled), Some(count.skipped))
       case None        => (None, None)
@@ -71,7 +72,7 @@ object Observation:
       platform.token,
       compiled,
       skipped,
-      written
+      written,
     )
 
   /** A failure with a full cell identity. Other failures only poison totals. */
@@ -81,17 +82,15 @@ object Observation:
         Some(blank(module, version, platform))
       case GraphCompileError.MissingUpstream(module, _, version, platform) =>
         Some(blank(module, version, platform))
-      case GraphCompileError.Runtime(_) | GraphCompileError.Target(_) |
-          GraphCompileError.UnknownCell(_, _) | GraphCompileError.NoRoot(_) |
-          GraphCompileError.NoSources(_, _) | GraphCompileError.Cycle(_) |
-          GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) |
-          GraphCompileError.RootRead(_) | GraphCompileError.Output(_) |
-          GraphCompileError.Cells(_) =>
+      case GraphCompileError.Runtime(_) | GraphCompileError.Target(_) | GraphCompileError.UnknownCell(_, _) |
+          GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) | GraphCompileError.Cycle(_) |
+          GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) | GraphCompileError.RootRead(_) |
+          GraphCompileError.Output(_) | GraphCompileError.Cells(_) =>
         None
 
   def merge(
       left: Option[Observation],
-      right: Option[Observation]
+      right: Option[Observation],
   ): Option[Observation] =
     (left, right) match
       case (None, other)          => other
@@ -107,7 +106,7 @@ object Observation:
       sum(left.compiled, right.compiled),
       sum(left.skipped, right.skipped),
       sum(left.classes, right.classes),
-      left.moduleCount + right.moduleCount
+      left.moduleCount + right.moduleCount,
     )
 
   private def sum(left: Option[Int], right: Option[Int]): Option[Int] =
@@ -118,14 +117,15 @@ object Observation:
   private def blank(
       module: ProjectName,
       version: ScalaVersion,
-      platform: Platform
+      platform: Platform,
   ): ModuleTally =
     ModuleTally(module.value, version.value, platform.token, None, None, None)
+end Observation
 
 /** `.histos/observation.json`. One file, replaced, not a log. */
 object Stored:
   def read(repo: Path): IO[ObserveError, Observation] =
-    val path = Products.observation(repo)
+    val path  = Products.observation(repo)
     val shown = path.toString
     Workspace
       .readIfPresent(path)
@@ -139,9 +139,10 @@ object Stored:
 
   def keep(
       repo: Path,
-      observation: Option[Observation]
+      observation: Option[Observation],
   ): IO[histos.workspace.IoFailure, Unit] =
     val path = Products.observation(repo)
     observation match
       case None        => Workspace.delete(path)
       case Some(found) => Workspace.writeString(path, found.toJson)
+end Stored

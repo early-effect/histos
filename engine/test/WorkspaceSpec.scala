@@ -18,18 +18,18 @@ object WorkspaceSpec extends ZIOSpecDefault:
           root <- Workspace.work("histos-lock")
           path = Resolve.lockPath(root)
           missing <- Resolve.readLock(root).either
-          _ <- ZIO.attempt:
+          _       <- ZIO.attempt:
             Files.createDirectories(path.getParent)
             Files.writeString(path, "x")
             Files.setPosixFilePermissions(
               path,
-              PosixFilePermissions.fromString("---------")
+              PosixFilePermissions.fromString("---------"),
             )
           failed <- Resolve.readLock(root).either
-          _ <- ZIO.attempt(
+          _      <- ZIO.attempt(
             Files.setPosixFilePermissions(
               path,
-              PosixFilePermissions.fromString("rw-------")
+              PosixFilePermissions.fromString("rw-------"),
             )
           )
         yield assertTrue(
@@ -37,7 +37,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
           failed match
             case Left(ResolveError.Io(IoFailure(found, IoFault.Read))) =>
               found == path
-            case _ => false
+            case _ => false,
         )
     ,
     test("a lock that is not a lock keeps the parse error"):
@@ -68,7 +68,7 @@ object WorkspaceSpec extends ZIOSpecDefault:
           _ <- ZIO.attempt:
             Files.createDirectories(file.getParent)
             Files.writeString(file, "x")
-          _ <- Workspace.delete(root.resolve("a"))
+          _      <- Workspace.delete(root.resolve("a"))
           nested <- ZIO.attempt(Files.exists(file))
           parent <- ZIO.attempt(Files.exists(root))
         yield assertTrue(!nested, parent)
@@ -78,9 +78,9 @@ object WorkspaceSpec extends ZIOSpecDefault:
         for
           root <- Workspace.work("histos-write")
           file = root.resolve("a").resolve("b.txt")
-          _ <- Workspace.writeString(file, "x")
+          _      <- Workspace.writeString(file, "x")
           before <- ZIO.attempt(Files.readString(file))
-          _ <- Workspace.recreate(root.resolve("a"))
-          after <- ZIO.attempt(Files.exists(file))
-        yield assertTrue(before == "x", !after)
+          _      <- Workspace.recreate(root.resolve("a"))
+          after  <- ZIO.attempt(Files.exists(file))
+        yield assertTrue(before == "x", !after),
   )

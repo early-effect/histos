@@ -17,17 +17,19 @@ object RepositoryUrl:
 
   private def valid(raw: String): Boolean =
     val https = raw.startsWith("https://") && raw.length > "https://".length
-    val file = raw.startsWith("file:") && raw.length > "file:".length
+    val file  = raw.startsWith("file:") && raw.length > "file:".length
     (https || file) && !raw.exists(_.isWhitespace)
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): RepositoryUrl = raw
+end RepositoryUrl
 
 enum RepositoryUrlError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not a repository url"
+end RepositoryUrlError
 
 /** A repository the build asks. `IvyLocal` is not one of these. */
 enum Resolver:

@@ -22,7 +22,7 @@ object BuildCompiler:
         List(
           classOf[dotty.tools.dotc.Driver],
           classOf[dotty.tools.tasty.TastyReader],
-          classOf[dotty.tools.dotc.interfaces.ReporterResult]
+          classOf[dotty.tools.dotc.interfaces.ReporterResult],
         )
       )(locationOf)
       hashes <- ZIO.foreach((locations ++ boundary).distinct)(content)
@@ -40,15 +40,11 @@ object BuildCompiler:
           .flatMap(source => Option(source.getLocation))
           .map(url => Path.of(url.toURI))
       )
-      .mapError(_ =>
-        ResolveError.Io(IoFailure(Path.of("compiler"), IoFault.Read))
-      )
+      .mapError(_ => ResolveError.Io(IoFailure(Path.of("compiler"), IoFault.Read)))
       .flatMap(value =>
         ZIO
           .fromOption(value)
-          .mapError(_ =>
-            ResolveError.Io(IoFailure(Path.of("compiler"), IoFault.Read))
-          )
+          .mapError(_ => ResolveError.Io(IoFailure(Path.of("compiler"), IoFault.Read)))
       )
 
   private def content(location: Path): IO[ResolveError, Sha256] =
@@ -57,15 +53,15 @@ object BuildCompiler:
         .attemptBlocking(Files.isRegularFile(location))
         .mapError(_ => ResolveError.Io(IoFailure(location, IoFault.Stat)))
       hash <-
-        if regular then
-          RuntimeFiles.sha256(location).mapError(ResolveError.Io(_))
+        if regular then RuntimeFiles.sha256(location).mapError(ResolveError.Io(_))
         else RuntimeFiles.fingerprint(location).mapError(ResolveError.Io(_))
     yield hash
+end BuildCompiler
 
 final case class CompilerIdentity(
     version: ScalaVersion,
     embedded: Sha256,
-    runtime: RuntimeIdentity
+    runtime: RuntimeIdentity,
 ):
   def fingerprint: Sha256 = Sha256.of(
     Chunk.fromArray(

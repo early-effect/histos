@@ -12,13 +12,13 @@ object ToolCellsSpec extends ZIOSpecDefault:
   private val version = ScalaVersion("3.10.0")
   private val request =
     histos.zinc.CompilerRequests.compiler(version, Repositories.central)
-  private val digest = Sha256.of(Chunk.fromArray(Array[Byte](1, 2, 3)))
+  private val digest   = Sha256.of(Chunk.fromArray(Array[Byte](1, 2, 3)))
   private val artifact = LockedArtifact(
     "org.scala-lang",
     "scala3-compiler_3",
     version.value,
     digest,
-    Repository.Central
+    Repository.Central,
   )
   private val locked = LockedTool(
     request.id,
@@ -28,32 +28,32 @@ object ToolCellsSpec extends ZIOSpecDefault:
       artifact.copy(
         organization = root.organization,
         name = root.name,
-        revision = root.revision
+        revision = root.revision,
       )
     ),
-    Nil
+    Nil,
   )
 
   private final class Stub(
       solve: ToolRequest => IO[ResolveError, Classpath],
-      get: LockedArtifact => IO[ResolveError, ResolvedArtifact]
+      get: LockedArtifact => IO[ResolveError, ResolvedArtifact],
   ) extends Resolve:
     override def resolveTool(
         request: ToolRequest
-    ): IO[ResolveError, Classpath] = solve(request)
+    ): IO[ResolveError, Classpath]                              = solve(request)
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.succeed(Classpath(Nil, Nil))
     def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
       get(artifact)
     def resolvePlugin(
         dependency: Dep,
-        repositories: Repositories
+        repositories: Repositories,
     ): IO[ResolveError, Classpath] = ZIO.succeed(Classpath(Nil, Nil))
     def sources(
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ): IO[ResolveError, ResolvedArtifact] =
       ZIO.fail(ResolveError.NotFound(organization, name, revision))
 
@@ -64,19 +64,19 @@ object ToolCellsSpec extends ZIOSpecDefault:
       repo: Path,
       name: String,
       dependency: Option[(String, Option[JarClassifier])],
-      classifier: Option[JarClassifier] = None
+      classifier: Option[JarClassifier] = None,
   ): ZIO[Any, IoFailure, Unit] =
     val directory =
       repo.resolve("dev").resolve("fixture").resolve(name).resolve("1.0.0")
-    val stem = s"$name-1.0.0${classifier.fold("")(value => s"-${value.value}")}"
-    val jar = directory.resolve(s"$stem.jar")
+    val stem    = s"$name-1.0.0${classifier.fold("")(value => s"-${value.value}")}"
+    val jar     = directory.resolve(s"$stem.jar")
     val comment = classifier.fold(Array.emptyByteArray)(
       _.value.getBytes(java.nio.charset.StandardCharsets.UTF_8)
     )
     val bytes =
       Array[Byte](80, 75, 5, 6) ++ Array.fill[Byte](16)(0) ++ Array[Byte](
         comment.length.toByte,
-        0
+        0,
       ) ++ comment
     val dependencies = dependency.fold(""): (child, selected) =>
       val qualifier =
@@ -90,7 +90,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
           Files.createDirectories(directory); Files.write(jar, bytes); ()
         }
         .mapError(_ => IoFailure(jar, IoFault.Write))
-      _ <- Workspace.writeString(directory.resolve(s"$name-1.0.0.pom"), pom)
+      _   <- Workspace.writeString(directory.resolve(s"$name-1.0.0.pom"), pom)
       sha <- ZIO
         .attemptBlocking(
           java.security.MessageDigest
@@ -102,7 +102,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
         .mapError(_ => IoFailure(jar, IoFault.Read))
       _ <- Workspace.writeString(
         directory.resolve(s"$stem.jar.sha1"),
-        sha
+        sha,
       )
     yield ()
 
@@ -114,11 +114,11 @@ object ToolCellsSpec extends ZIOSpecDefault:
           error = ResolveError.Checksum(
             root.resolve("compiler.jar"),
             digest,
-            Sha256.of(Chunk.empty)
+            Sha256.of(Chunk.empty),
           )
           _ <- Workspace.writeString(
             Resolve.lockPath(root),
-            DependencyLock.render(DependencyLock(Nil, Nil, List(locked)))
+            DependencyLock.render(DependencyLock(Nil, Nil, List(locked))),
           )
           resolver = Stub(_ => refused, _ => ZIO.fail(error))
           verify <- Resolve
@@ -138,7 +138,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
           DependencyLock(
             Nil,
             Nil,
-            List(LockedTool(request.id, Nil, Nil, Nil, Nil))
+            List(LockedTool(request.id, Nil, Nil, Nil, Nil)),
           )
         )
       )
@@ -152,7 +152,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
         roots = request.roots.map(
           _.copy(transitivity = Transitivity.Single, origin = Some(origin))
         ),
-        evictions = List(Eviction("org.example", "support", "1.0.0", "2.0.0"))
+        evictions = List(Eviction("org.example", "support", "1.0.0", "2.0.0")),
       )
       val lock = DependencyLock(Nil, Nil, List(tool))
       assertTrue(
@@ -170,47 +170,45 @@ object ToolCellsSpec extends ZIOSpecDefault:
         ),
         DependencyLock.parse(
           header + "root org lib 1.0.0 unknown build"
-        ) == Left(LockError.BadLine("root org lib 1.0.0 unknown build"))
+        ) == Left(LockError.BadLine("root org lib 1.0.0 unknown build")),
       )
     ,
     test("different Js revisions and environments coexist"):
       val catalog = ToolCatalog.default
-      val one = histos.js.JsRequests.suite(
+      val one     = histos.js.JsRequests.suite(
         JsVersion("1.22.0"),
         JsEnv.Node,
         catalog,
-        Repositories.central
+        Repositories.central,
       )
       val two = histos.js.JsRequests.suite(
         JsVersion("1.22.0"),
         JsEnv.Jsdom,
         catalog,
-        Repositories.central
+        Repositories.central,
       )
       val three = histos.js.JsRequests.suite(
         JsVersion("1.21.0"),
         JsEnv.Node,
         catalog,
-        Repositories.central
+        Repositories.central,
       )
-      val tools = List(one, two, three).map(req =>
-        LockedTool(req.id, req.roots, List(Repository.Central), Nil, Nil)
-      )
-      val lock = DependencyLock(Nil, Nil, tools)
+      val tools = List(one, two, three).map(req => LockedTool(req.id, req.roots, List(Repository.Central), Nil, Nil))
+      val lock  = DependencyLock(Nil, Nil, tools)
       assertTrue(
         tools.map(_.id).distinct.size == 3,
-        DependencyLock.parse(DependencyLock.render(lock)) == Right(lock)
+        DependencyLock.parse(DependencyLock.render(lock)) == Right(lock),
       )
     ,
     test("missing and drifted tools fail before a fetch or solve"):
       for
         fetched <- Ref.make(0)
         resolver = Stub(_ => refused, _ => fetched.update(_ + 1) *> refused)
-        tools = LockedTools(
+        tools    = LockedTools(
           DependencyLock(Nil, Nil, List(locked)),
           ToolCatalog.default,
           Repositories.central,
-          resolver
+          resolver,
         )
         missing <- tools
           .copy(lock = DependencyLock(Nil))
@@ -225,13 +223,13 @@ object ToolCellsSpec extends ZIOSpecDefault:
       yield assertTrue(
         missing == Left(ResolveError.NoTool(request.id)),
         changed == Left(ResolveError.ToolDrift(request.id)),
-        used == 0
+        used == 0,
       )
     ,
     test("warm materialization fetches only recorded jars and never solves"):
       for
         fetched <- Ref.make(List.empty[LockedArtifact])
-        path = Path.of("warm/compiler.jar")
+        path     = Path.of("warm/compiler.jar")
         resolver = Stub(
           _ => refused,
           held =>
@@ -244,33 +242,33 @@ object ToolCellsSpec extends ZIOSpecDefault:
                   held.revision,
                   path,
                   held.sha256,
-                  held.repository
+                  held.repository,
                 )
-              )
+              ),
         )
         tools = LockedTools(
           DependencyLock(Nil, Nil, List(locked)),
           ToolCatalog.default,
           Repositories.central,
-          resolver
+          resolver,
         )
         result <- tools.materialize(request)
-        used <- fetched.get
+        used   <- fetched.get
       yield assertTrue(
         used == locked.artifacts,
-        result.artifacts.map(_.path) == List.fill(locked.artifacts.size)(path)
+        result.artifacts.map(_.path) == List.fill(locked.artifacts.size)(path),
       )
     ,
     test("a checksum error remains a checksum error"):
-      val path = Path.of("warm/compiler.jar")
-      val actual = Sha256.of(Chunk.empty)
-      val error = ResolveError.Checksum(path, digest, actual)
+      val path     = Path.of("warm/compiler.jar")
+      val actual   = Sha256.of(Chunk.empty)
+      val error    = ResolveError.Checksum(path, digest, actual)
       val resolver = Stub(_ => refused, _ => ZIO.fail(error))
       LockedTools(
         DependencyLock(Nil, Nil, List(locked)),
         ToolCatalog.default,
         Repositories.central,
-        resolver
+        resolver,
       ).materialize(request)
         .either
         .map(result => assertTrue(result == Left(error)))
@@ -285,34 +283,30 @@ object ToolCellsSpec extends ZIOSpecDefault:
           _ <- publish(repo, "support", None)
           _ <- publish(repo, "tool", Some("support" -> None))
           repositories = Repositories(Repository.Maven(RepoUrl.file(repo)), Nil)
-          requested = ToolRequest(
+          requested    = ToolRequest(
             request.id,
             List(
               ToolRoot("dev.fixture", "tool", "1.0.0", Transitivity.Closure)
             ),
-            repositories
+            repositories,
           )
           resolver <- ZIO
             .service[Resolve]
             .provide(Resolve.live(root.resolve("cache")))
           closure <- resolver.resolveTool(requested)
-          single <- resolver.resolveTool(
-            requested.copy(roots =
-              requested.roots.map(_.copy(transitivity = Transitivity.Single))
-            )
+          single  <- resolver.resolveTool(
+            requested.copy(roots = requested.roots.map(_.copy(transitivity = Transitivity.Single)))
           )
           first <- ZIO
             .fromOption(closure.artifacts.headOption)
-            .mapError(_ =>
-              ResolveError.NotFound("dev.fixture", "tool", "1.0.0")
-            )
+            .mapError(_ => ResolveError.NotFound("dev.fixture", "tool", "1.0.0"))
           artifacts = closure.artifacts.map(found =>
             LockedArtifact(
               found.organization,
               found.name,
               found.revision,
               found.sha256,
-              found.repository
+              found.repository,
             )
           )
           held = LockedTool(
@@ -320,19 +314,17 @@ object ToolCellsSpec extends ZIOSpecDefault:
             requested.roots,
             repositories.all,
             artifacts,
-            closure.evictions
+            closure.evictions,
           )
           strict = Stub(_ => refused, resolver.fetch)
-          view = LockedTools(
+          view   = LockedTools(
             DependencyLock(Nil, Nil, List(held)),
             ToolCatalog.default,
             repositories,
-            strict
+            strict,
           )
           warm <- view.materialize(requested)
-          tampered = held.copy(artifacts =
-            artifacts.map(_.copy(sha256 = digest))
-          )
+          tampered = held.copy(artifacts = artifacts.map(_.copy(sha256 = digest)))
           rejected <- view
             .copy(lock = DependencyLock(Nil, Nil, List(tampered)))
             .materialize(requested)
@@ -344,7 +336,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
           closure.artifacts.forall(_.repository == repositories.first),
           rejected == Left(
             ResolveError.Checksum(first.path, digest, first.sha256)
-          )
+          ),
         )
     ,
     test(
@@ -353,35 +345,33 @@ object ToolCellsSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- Workspace.work("histos-tool-classifier")
-          repo = root.resolve("maven")
+          repo      = root.resolve("maven")
           qualifier = JarClassifier("jdk8")
           _ <- publish(repo, "support", None)
           _ <- publish(repo, "support", None, Some(qualifier))
           _ <- publish(repo, "tool", Some("support" -> Some(qualifier)))
           repositories = Repositories(Repository.Maven(RepoUrl.file(repo)), Nil)
-          requested = ToolRequest(
+          requested    = ToolRequest(
             request.id,
             List(
               ToolRoot("dev.fixture", "tool", "1.0.0", Transitivity.Closure)
             ),
-            repositories
+            repositories,
           )
           resolver <- ZIO
             .service[Resolve]
             .provide(Resolve.live(root.resolve("cache")))
-          solved <- resolver.resolveTool(requested)
+          solved     <- resolver.resolveTool(requested)
           classified <- ZIO
             .fromOption(solved.artifacts.find(_.classifier.contains(qualifier)))
-            .mapError(_ =>
-              ResolveError.NotFound("dev.fixture", "support", "1.0.0")
-            )
+            .mapError(_ => ResolveError.NotFound("dev.fixture", "support", "1.0.0"))
           held = LockedArtifact(
             classified.organization,
             classified.name,
             classified.revision,
             classified.sha256,
             classified.repository,
-            classified.classifier
+            classified.classifier,
           )
           fetched <- resolver.fetch(held)
           cell = LockedTool(
@@ -389,20 +379,20 @@ object ToolCellsSpec extends ZIOSpecDefault:
             requested.roots,
             repositories.all,
             List(held),
-            Nil
+            Nil,
           )
           lock = DependencyLock(Nil, Nil, List(cell))
         yield assertTrue(
           fetched.classifier == Some(qualifier),
           fetched.sha256 == classified.sha256,
-          DependencyLock.parse(DependencyLock.render(lock)) == Right(lock)
+          DependencyLock.parse(DependencyLock.render(lock)) == Right(lock),
         )
     ,
     test("a Native origin is not silently replaced by Central"):
       ZIO.scoped:
         for
           root <- Workspace.work("histos-tool-origin")
-          origin = Repository.Maven(RepoUrl.file(root))
+          origin    = Repository.Maven(RepoUrl.file(root))
           requested = ToolRequest(
             request.id,
             List(
@@ -411,10 +401,10 @@ object ToolCellsSpec extends ZIOSpecDefault:
                 "scala-library",
                 version.value,
                 Transitivity.Single,
-                Some(origin)
+                Some(origin),
               )
             ),
-            Repositories.central
+            Repositories.central,
           )
           result <- ZIO
             .serviceWithZIO[Resolve](_.resolveTool(requested))
@@ -425,7 +415,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
             ResolveError.NotFound(
               "org.scala-lang",
               "scala-library",
-              version.value
+              version.value,
             )
           )
         )
@@ -435,7 +425,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
         for
           root <- Workspace.work("histos-tool-update")
           path = Resolve.lockPath(root)
-          old = DependencyLock(
+          old  = DependencyLock(
             Nil,
             List(
               LockedPlugin(
@@ -445,15 +435,15 @@ object ToolCellsSpec extends ZIOSpecDefault:
                 LinkStrategy.ExactBinary,
                 Nil,
                 Nil,
-                None
+                None,
               )
             ),
-            List(locked)
+            List(locked),
           )
           _ <- Workspace.writeString(path, DependencyLock.render(old))
           resolver = Stub(
             _ => ZIO.fail(ResolveError.ToolDrift(request.id)),
-            _ => refused
+            _ => refused,
           )
           result <- Resolve
             .update(root, ProjectGraph.trusted(Nil), Repositories.central)
@@ -462,7 +452,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
           after <- Resolve.readLock(root)
         yield assertTrue(
           result == Left(ResolveError.ToolDrift(request.id)),
-          after == old
+          after == old,
         )
     ,
     test(
@@ -471,7 +461,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- Workspace.work("histos-tool-generation")
-          path = Resolve.lockPath(root)
+          path  = Resolve.lockPath(root)
           prior = DependencyLock(
             Nil,
             List(
@@ -482,10 +472,10 @@ object ToolCellsSpec extends ZIOSpecDefault:
                 LinkStrategy.ExactBinary,
                 Nil,
                 Nil,
-                None
+                None,
               )
             ),
-            List(locked)
+            List(locked),
           )
           staged = List(
             LockedPlugin(
@@ -495,7 +485,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
               LinkStrategy.ExactBinary,
               Nil,
               Nil,
-              None
+              None,
             )
           )
           _ <- Workspace.writeString(path, DependencyLock.render(prior))
@@ -510,27 +500,27 @@ object ToolCellsSpec extends ZIOSpecDefault:
                       root.revision,
                       Path.of("fixture.jar"),
                       digest,
-                      req.repositories.first
+                      req.repositories.first,
                     )
                   ),
-                  Nil
+                  Nil,
                 )
               ),
-            _ => refused
+            _ => refused,
           )
           _ <- Resolve
             .update(
               root,
               ProjectGraph.trusted(Nil),
               Repositories.central,
-              plugins = PluginUpdate.Replace(staged)
+              plugins = PluginUpdate.Replace(staged),
             )
             .provide(ZLayer.succeed(resolver))
           after <- Resolve.readLock(root)
         yield assertTrue(
           after.plugins == staged,
           after.tools.map(_.id) == List(request.id),
-          after.tools.flatMap(_.roots) == request.roots
+          after.tools.flatMap(_.roots) == request.roots,
         )
     ,
     test("a plugin update keeps tool cells"):
@@ -540,7 +530,7 @@ object ToolCellsSpec extends ZIOSpecDefault:
           path = Resolve.lockPath(root)
           _ <- Workspace.writeString(
             path,
-            DependencyLock.render(DependencyLock(Nil, Nil, List(locked)))
+            DependencyLock.render(DependencyLock(Nil, Nil, List(locked))),
           )
           resolver = Stub(_ => refused, _ => refused)
           _ <- Resolve
@@ -549,15 +539,16 @@ object ToolCellsSpec extends ZIOSpecDefault:
               List(
                 PluginRequest.Dep(
                   Dep("dev.example::plugin:1.0.0"),
-                  LinkStrategy.ExactBinary
+                  LinkStrategy.ExactBinary,
                 )
               ),
-              Repositories.central
+              Repositories.central,
             )
             .provide(ZLayer.succeed(resolver))
           after <- Resolve.readLock(root)
         yield assertTrue(
           after.tools == List(locked),
-          after.plugins.map(_.name) == List("plugin")
-        )
+          after.plugins.map(_.name) == List("plugin"),
+        ),
   )
+end ToolCellsSpec

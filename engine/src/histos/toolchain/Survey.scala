@@ -1,29 +1,21 @@
 package histos.toolchain
 
 import histos.jdk.{JdkSurvey, Machine, Toolchain, ToolchainError}
-import histos.native.{
-  Clang,
-  ClangMiss,
-  ClangProbe,
-  NativeDeclaration,
-  NativeProject
-}
+import histos.native.{Clang, ClangMiss, ClangProbe, NativeDeclaration, NativeProject}
 import histos.node.{Node, NodeMiss, NodeSurvey, NodeToolchain}
 import histos.{ProjectGraph, ProjectName}
 
 import zio.{IO, ZIO}
 
-/** What `compile` would use: the JDK, Node when the graph has Js, and clang
-  * when it has Native.
+/** What `compile` would use: the JDK, Node when the graph has Js, and clang when it has Native.
   */
 final case class Survey(
     jdk: JdkSurvey,
     node: Option[NodeSurvey],
-    clang: Option[Clang]
+    clang: Option[Clang],
 )
 
-/** A JDK decision, and a Node decision when the graph asked for one, before
-  * clang is resolved.
+/** A JDK decision, and a Node decision when the graph asked for one, before clang is resolved.
   */
 final case class Reached(jdk: JdkSurvey, node: Option[NodeSurvey])
 
@@ -41,6 +33,7 @@ enum SurveyError:
     case Split(_, left, right) =>
       NativeDeclaration.Disagree(left, right).message
     case Clang(_, error) => error.message
+end SurveyError
 
 object Survey:
   def read(machine: Machine, graph: ProjectGraph): IO[SurveyError, Survey] =
@@ -55,7 +48,7 @@ object Survey:
               .explain(machine)
               .mapBoth(
                 error => SurveyError.Node(jdk, error),
-                found => Some(found)
+                found => Some(found),
               )
         node.flatMap: found =>
           val reached = Reached(jdk, found)
@@ -71,7 +64,7 @@ object Survey:
                 .resolve(major, machine.env)
                 .mapBoth(
                   error => SurveyError.Clang(reached, error),
-                  clang => Survey(jdk, found, Some(clang))
+                  clang => Survey(jdk, found, Some(clang)),
                 )
 
   /** The lines `histos toolchain` prints. */
@@ -81,8 +74,7 @@ object Survey:
       case Some(clang) =>
         s"${shown(Reached(survey.jdk, survey.node))}\n${clangLine(clang)}"
 
-  /** Lines already decided when a later toolchain fails. A JDK failure has
-    * printed nothing.
+  /** Lines already decided when a later toolchain fails. A JDK failure has printed nothing.
     */
   def shown(error: SurveyError): String = error match
     case SurveyError.Jdk(_)                 => ""
@@ -99,3 +91,4 @@ object Survey:
 
   private def clangLine(clang: Clang): String =
     s"chosen clang ${clang.version.value} ${clang.target.value} ${clang.clang}"
+end Survey

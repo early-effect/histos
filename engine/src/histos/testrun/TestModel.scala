@@ -2,14 +2,7 @@ package histos.testrun
 
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
-import histos.js.{
-  JsLink,
-  JsLinkError,
-  JsLinkRequest,
-  JsSuite,
-  JsSuiteRequest,
-  ScalaJs
-}
+import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
 import histos.native.{
   NativeCompile,
   NativeLink,
@@ -17,27 +10,13 @@ import histos.native.{
   NativeOrigin,
   NativeSuite,
   NativeSuiteRequest,
-  NativeToolchain
+  NativeToolchain,
 }
 import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
-import histos.resolve.{
-  BuildResolvers,
-  ClasspathScope,
-  DependencyLock,
-  Repositories,
-  Resolve,
-  ResolveCell,
-  ResolveError
-}
+import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.workflow.CiError
-import histos.process.{
-  ChildClasspath,
-  ChildError,
-  ChildEvent,
-  ChildProcess,
-  ChildRequest
-}
+import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -51,20 +30,10 @@ import histos.zinc.{
 
   ScalacFlags,
   SemanticDb,
-  Sources
+  Sources,
 }
 import histos.pack.{MainClass, MainClassError}
-import histos.{
-  ClangPin,
-  Dep,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion,
-  TestMain,
-  TestProvider
-}
+import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
 
 import java.nio.file.{Files, Path}
 
@@ -77,11 +46,11 @@ final case class TestedCell(
     module: ProjectName,
     version: ScalaVersion,
     platform: Platform,
-    status: TestStatus
+    status: TestStatus,
 )
 
-/** What one cell did. `NoTests` means there was nothing to run. It is not a
-  * passing suite. The output is not here: the console streams it once.
+/** What one cell did. `NoTests` means there was nothing to run. It is not a passing suite. The output is not here: the
+  * console streams it once.
   */
 enum TestStatus:
   case NoTests
@@ -94,12 +63,13 @@ enum TestStatus:
     case Unmatched    => "unmatched"
     case Passed       => "passed"
     case Failed(exit) => s"failed $exit"
+end TestStatus
 
 /** A finished cell and the lines its process wrote. */
 final case class TestReport(cell: TestedCell, transcript: Transcript)
 
-/** What the test console is doing. Cells may run together. Lines come out one
-  * cell at a time, in module, Scala version, then platform order.
+/** What the test console is doing. Cells may run together. Lines come out one cell at a time, in module, Scala version,
+  * then platform order.
   */
 enum TestFeed:
   case Begin(module: ProjectName, version: ScalaVersion, platform: Platform)
@@ -110,14 +80,14 @@ enum TestFeed:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-      suite: String
+      suite: String,
   )
 
 enum ModuleTestError:
   case Tool(
       module: ProjectName,
       version: ScalaVersion,
-      error: histos.toolchain.PlatformToolError
+      error: histos.toolchain.PlatformToolError,
   )
   case Target(error: CiError)
   case Compile(error: GraphCompileError)
@@ -136,7 +106,7 @@ enum ModuleTestError:
   case MissingUpstream(
       module: ProjectName,
       dependency: ProjectName,
-      version: ScalaVersion
+      version: ScalaVersion,
   )
   case Work(path: Path)
   case Root(path: Path)
@@ -145,7 +115,7 @@ enum ModuleTestError:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-      detail: String
+      detail: String,
   )
   case NoNode(module: ProjectName, version: ScalaVersion, miss: NodeMiss)
   case Stamp(error: StampError)
@@ -179,15 +149,16 @@ enum ModuleTestError:
       s"'${module.value}' was compiled and is not a module in the graph"
     case MissingUpstream(module, dependency, version) =>
       s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} classes"
-    case Work(path)   => s"could not prepare the test work directory $path"
-    case Root(path)   => s"could not read test roots under $path"
-    case Runner(path) => s"could not write the test provider runner at $path"
+    case Work(path)                                    => s"could not prepare the test work directory $path"
+    case Root(path)                                    => s"could not read test roots under $path"
+    case Runner(path)                                  => s"could not write the test provider runner at $path"
     case LinkFailed(module, version, platform, detail) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to link\n$detail"
     case NoNode(module, version, miss) =>
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
     case Stamp(error)  => error.message
     case Record(error) => error.message
+end ModuleTestError
 
 /** One test invocation. The callback runs after a cell's tests compile. */
 final case class TestRun(
@@ -202,6 +173,6 @@ final case class TestRun(
         ProjectName,
         ScalaVersion,
         Platform,
-        histos.zinc.CompileFacts
-    ) => UIO[Unit] = (_, _, _, _) => ZIO.unit
+        histos.zinc.CompileFacts,
+    ) => UIO[Unit] = (_, _, _, _) => ZIO.unit,
 )

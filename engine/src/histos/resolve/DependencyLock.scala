@@ -9,7 +9,7 @@ final case class LockedDirect(
     organization: String,
     name: String,
     revision: String,
-    kind: DepKind
+    kind: DepKind,
 )
 
 /** One classpath jar. `name` is the name after the Scala and platform suffix.
@@ -20,7 +20,7 @@ final case class LockedArtifact(
     revision: String,
     sha256: Sha256,
     repository: Repository,
-    classifier: Option[JarClassifier] = None
+    classifier: Option[JarClassifier] = None,
 )
 
 /** Which classpath a lock cell is. Compile is published. Test is not. */
@@ -31,9 +31,9 @@ enum ClasspathScope:
   def header: String = this match
     case Compile => "cell"
     case Test    => "test"
+end ClasspathScope
 
-/** One module, Scala version, platform, and classpath. An aggregate has no
-  * cell.
+/** One module, Scala version, platform, and classpath. An aggregate has no cell.
   */
 final case class LockedCell(
     module: ProjectName,
@@ -42,11 +42,10 @@ final case class LockedCell(
     directs: List[LockedDirect],
     artifacts: List[LockedArtifact],
     evictions: List[Eviction],
-    scope: ClasspathScope = ClasspathScope.Compile
+    scope: ClasspathScope = ClasspathScope.Compile,
 )
 
-/** One header coordinate. `source` is present for `Source` and
-  * `BinaryOrSource`. `ExactBinary` omits it.
+/** One header coordinate. `source` is present for `Source` and `BinaryOrSource`. `ExactBinary` omits it.
   */
 final case class LockedPlugin(
     organization: String,
@@ -55,22 +54,22 @@ final case class LockedPlugin(
     link: LinkStrategy,
     directs: List[LockedDirect],
     artifacts: List[LockedArtifact],
-    source: Option[LockedArtifact]
+    source: Option[LockedArtifact],
 )
 
-/** The committed `.histos/dependencies.lock`. Cells stay in file order. Plugin
-  * cells follow in file order.
+/** The committed `.histos/dependencies.lock`. Cells stay in file order. Plugin cells follow in file order.
   */
 final case class DependencyLock(
     cells: List[LockedCell],
     plugins: List[LockedPlugin] = Nil,
-    tools: List[LockedTool] = Nil
+    tools: List[LockedTool] = Nil,
 )
 
 object PlatformToken:
   def render(platform: Platform): String = platform.token
 
   def parse(raw: String): Option[Platform] = Platform.from(raw).toOption
+end PlatformToken
 
 object LinkToken:
   def render(link: LinkStrategy): String =
@@ -86,6 +85,7 @@ object LinkToken:
       case "source"           => Some(LinkStrategy.Source)
       case "binary-or-source" => Some(LinkStrategy.BinaryOrSource)
       case _                  => None
+end LinkToken
 
 object DependencyLock:
   def parse(text: String): Either[LockError, DependencyLock] =
@@ -94,8 +94,7 @@ object DependencyLock:
       .filter(line => line.nonEmpty && !line.startsWith("#"))
       .toList
     if lines.isEmpty then Left(LockError.Empty)
-    else
-      lines.foldLeft[Either[LockError, Acc]](Right(Acc()))(step).flatMap(build)
+    else lines.foldLeft[Either[LockError, Acc]](Right(Acc()))(step).flatMap(build)
 
   def render(lock: DependencyLock): String =
     val parts = lock.cells.map(renderCell) ++ lock.plugins.map(
@@ -136,9 +135,9 @@ object DependencyLock:
     val body = tool.roots.map(root =>
       s"root ${root.organization} ${root.name} ${root.revision} ${root.transitivity.token} ${root.origin.fold("build")(Repository.token)}"
     ) ++
-      tool.repositories.map(repo =>
-        s"resolver ${Repository.token(repo)}"
-      ) ++ tool.artifacts.map(renderArtifact) ++ tool.evictions
+      tool.repositories.map(repo => s"resolver ${Repository.token(repo)}") ++ tool.artifacts.map(
+        renderArtifact
+      ) ++ tool.evictions
         .filter(Eviction.printable)
         .map(renderEvict)
     (s"tool ${tool.id.token}" :: body).mkString("\n")
@@ -170,7 +169,7 @@ object DependencyLock:
       scope: ClasspathScope,
       directs: List[LockedDirect],
       artifacts: List[LockedArtifact],
-      evictions: List[Eviction]
+      evictions: List[Eviction],
   )
 
   private final case class PluginBuilding(
@@ -180,7 +179,7 @@ object DependencyLock:
       link: LinkStrategy,
       directs: List[LockedDirect],
       artifacts: List[LockedArtifact],
-      source: Option[LockedArtifact]
+      source: Option[LockedArtifact],
   )
 
   private enum Open:
@@ -192,12 +191,12 @@ object DependencyLock:
       cells: List[LockedCell] = Nil,
       plugins: List[LockedPlugin] = Nil,
       open: Option[Open] = None,
-      tools: List[LockedTool] = Nil
+      tools: List[LockedTool] = Nil,
   )
 
   private def step(
       acc: Either[LockError, Acc],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     acc.flatMap(state => applyLine(state, line))
 
@@ -231,7 +230,7 @@ object DependencyLock:
       state: Acc,
       field: LockField,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     field match
       case LockField.Tool     => openTool(state, rest, line)
@@ -239,7 +238,7 @@ object DependencyLock:
       case LockField.Resolver => repositoryTool(state, rest, line)
       case LockField.Cell     =>
         openModule(state, rest, line, ClasspathScope.Compile)
-      case LockField.Test => openModule(state, rest, line, ClasspathScope.Test)
+      case LockField.Test     => openModule(state, rest, line, ClasspathScope.Test)
       case LockField.Plugin   => openPlugin(state, rest, line)
       case LockField.Direct   => onOpen(state, line, directModule, directPlugin)
       case LockField.Artifact =>
@@ -253,21 +252,17 @@ object DependencyLock:
       module: (Building, List[String]) => Either[LockError, Building],
       plugin: (PluginBuilding, List[String]) => Either[
         LockError,
-        PluginBuilding
-      ]
+        PluginBuilding,
+      ],
   ): Either[LockError, Acc] =
     tokens(line) match
       case _ :: rest =>
         state.open match
-          case None => Left(LockError.Missing(LockField.Cell))
+          case None                    => Left(LockError.Missing(LockField.Cell))
           case Some(Open.Module(cell)) =>
-            module(cell, rest).map(next =>
-              state.copy(open = Some(Open.Module(next)))
-            )
+            module(cell, rest).map(next => state.copy(open = Some(Open.Module(next))))
           case Some(Open.Plugin(cell)) =>
-            plugin(cell, rest).map(next =>
-              state.copy(open = Some(Open.Plugin(next)))
-            )
+            plugin(cell, rest).map(next => state.copy(open = Some(Open.Plugin(next))))
           case Some(Open.Tool(cell)) =>
             tokens(line) match
               case "artifact" :: fields =>
@@ -286,7 +281,7 @@ object DependencyLock:
   private def evictOnly(
       state: Acc,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     state.open match
       case None                  => Left(LockError.Missing(LockField.Cell))
@@ -298,72 +293,64 @@ object DependencyLock:
               state.copy(open =
                 Some(
                   Open.Tool(
-                    cell.copy(evictions =
-                      cell.evictions :+ Eviction(org, name, requested, selected)
-                    )
+                    cell.copy(evictions = cell.evictions :+ Eviction(org, name, requested, selected))
                   )
                 )
               )
             )
           case _ => Left(LockError.BadLine(line))
       case Some(Open.Module(cell)) =>
-        evict(cell, rest).map(next =>
-          state.copy(open = Some(Open.Module(next)))
-        )
+        evict(cell, rest).map(next => state.copy(open = Some(Open.Module(next))))
 
   private def sourceOnly(
       state: Acc,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     state.open match
-      case None => Left(LockError.Missing(LockField.Plugin))
+      case None                                      => Left(LockError.Missing(LockField.Plugin))
       case Some(Open.Module(_)) | Some(Open.Tool(_)) =>
         Left(LockError.BadLine(line))
       case Some(Open.Plugin(cell)) =>
         if cell.source.isDefined then Left(LockError.BadLine(line))
         else
           artifactOf(rest, LockField.Source).map(source =>
-            state.copy(open =
-              Some(Open.Plugin(cell.copy(source = Some(source))))
-            )
+            state.copy(open = Some(Open.Plugin(cell.copy(source = Some(source)))))
           )
 
   private def openTool(
       state: Acc,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     rest match
       case role :: version :: variant :: Nil =>
         for
-          named <- ToolRole.from(role).toRight(LockError.BadLine(line))
+          named        <- ToolRole.from(role).toRight(LockError.BadLine(line))
           scalaVersion <- ScalaVersion
             .from(version)
             .left
             .map(_ => LockError.BadLine(line))
           chosen <- ToolVariant.from(variant).toRight(LockError.BadLine(line))
           closed = finish(state)
-          id = ToolId(named, scalaVersion, chosen)
+          id     = ToolId(named, scalaVersion, chosen)
           _ <- Either.cond(
             !closed.tools.exists(_.id == id),
             (),
-            LockError.DuplicateTool(id)
+            LockError.DuplicateTool(id),
           )
-        yield closed.copy(open =
-          Some(Open.Tool(LockedTool(id, Nil, Nil, Nil, Nil)))
-        )
+        yield closed.copy(open = Some(Open.Tool(LockedTool(id, Nil, Nil, Nil, Nil))))
       case _ => Left(LockError.BadLine(line))
 
   private def rootTool(
       state: Acc,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     (state.open, rest) match
       case (
             Some(Open.Tool(tool)),
-            org :: name :: revision :: raw :: origin :: Nil
+            org :: name :: revision :: raw :: origin :: Nil,
           ) =>
         for
           transitivity <- Transitivity
@@ -381,7 +368,7 @@ object DependencyLock:
                   name,
                   revision,
                   transitivity,
-                  source
+                  source,
                 )
               )
             )
@@ -392,7 +379,7 @@ object DependencyLock:
   private def repositoryTool(
       state: Acc,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     (state.open, rest) match
       case (Some(Open.Tool(tool)), raw :: Nil) =>
@@ -411,7 +398,7 @@ object DependencyLock:
       state: Acc,
       rest: List[String],
       line: String,
-      scope: ClasspathScope
+      scope: ClasspathScope,
   ): Either[LockError, Acc] =
     rest match
       case moduleRaw :: versionRaw :: platformRaw :: Nil =>
@@ -450,7 +437,7 @@ object DependencyLock:
   private def openPlugin(
       state: Acc,
       rest: List[String],
-      line: String
+      line: String,
   ): Either[LockError, Acc] =
     rest match
       case organization :: name :: revision :: strategyRaw :: Nil =>
@@ -474,7 +461,7 @@ object DependencyLock:
                         link,
                         Nil,
                         Nil,
-                        None
+                        None,
                       )
                     )
                   )
@@ -484,13 +471,13 @@ object DependencyLock:
 
   private def directModule(
       cell: Building,
-      rest: List[String]
+      rest: List[String],
   ): Either[LockError, Building] =
     directOf(rest).map(direct => cell.copy(directs = cell.directs :+ direct))
 
   private def directPlugin(
       cell: PluginBuilding,
-      rest: List[String]
+      rest: List[String],
   ): Either[LockError, PluginBuilding] =
     directOf(rest).map(direct => cell.copy(directs = cell.directs :+ direct))
 
@@ -510,35 +497,31 @@ object DependencyLock:
 
   private def artifactModule(
       cell: Building,
-      rest: List[String]
+      rest: List[String],
   ): Either[LockError, Building] =
-    artifactOf(rest, LockField.Artifact).map(artifact =>
-      cell.copy(artifacts = cell.artifacts :+ artifact)
-    )
+    artifactOf(rest, LockField.Artifact).map(artifact => cell.copy(artifacts = cell.artifacts :+ artifact))
 
   private def artifactPlugin(
       cell: PluginBuilding,
-      rest: List[String]
+      rest: List[String],
   ): Either[LockError, PluginBuilding] =
-    artifactOf(rest, LockField.Artifact).map(artifact =>
-      cell.copy(artifacts = cell.artifacts :+ artifact)
-    )
+    artifactOf(rest, LockField.Artifact).map(artifact => cell.copy(artifacts = cell.artifacts :+ artifact))
 
   private def artifactOf(
       rest: List[String],
-      field: LockField
+      field: LockField,
   ): Either[LockError, LockedArtifact] =
     rest match
       case organization :: name :: revision :: shaRaw :: repoRaw :: Nil =>
         for
-          sha <- Sha256.from(shaRaw).left.map(_ => LockError.BadSha256(shaRaw))
+          sha        <- Sha256.from(shaRaw).left.map(_ => LockError.BadSha256(shaRaw))
           repository <- Repository.parse(repoRaw)
         yield LockedArtifact(organization, name, revision, sha, repository)
       case organization :: name :: revision :: shaRaw :: repoRaw :: classifierRaw :: Nil =>
         for
           artifact <- artifactOf(
             List(organization, name, revision, shaRaw, repoRaw),
-            field
+            field,
           )
           classifier <- JarClassifier
             .from(classifierRaw)
@@ -549,14 +532,12 @@ object DependencyLock:
 
   private def evict(
       cell: Building,
-      rest: List[String]
+      rest: List[String],
   ): Either[LockError, Building] =
     rest match
       case organization :: name :: requested :: selected :: Nil =>
         Right(
-          cell.copy(evictions =
-            cell.evictions :+ Eviction(organization, name, requested, selected)
-          )
+          cell.copy(evictions = cell.evictions :+ Eviction(organization, name, requested, selected))
         )
       case _ => Left(LockError.Missing(LockField.Evict))
 
@@ -578,7 +559,7 @@ object DependencyLock:
           cell.directs,
           cell.artifacts,
           cell.evictions,
-          cell.scope
+          cell.scope,
         )
         state.copy(cells = state.cells :+ locked, open = None)
       case Some(Open.Tool(cell)) =>
@@ -591,7 +572,7 @@ object DependencyLock:
           cell.link,
           cell.directs,
           cell.artifacts,
-          cell.source
+          cell.source,
         )
         state.copy(plugins = state.plugins :+ locked, open = None)
 
@@ -603,3 +584,4 @@ object DependencyLock:
 
   private def tokens(line: String): List[String] =
     line.split("\\s+").toList.filter(_.nonEmpty)
+end DependencyLock

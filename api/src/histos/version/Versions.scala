@@ -19,11 +19,14 @@ enum HoldCompile:
   def render: String = this match
     case Everyday(version) => version.render
     case Release(version)  => version.render
+end HoldCompile
 
 enum HoldReason:
   case AlreadyReleased
 
-/** The release job opens a pull request for the next line. The tagged commit does not contain it, and the next number is not guessed here. */
+/** The release job opens a pull request for the next line. The tagged commit does not contain it, and the next number
+  * is not guessed here.
+  */
 final case class CatalogBump(ship: ShipName, released: ShipNumber)
 
 enum Drift:
@@ -49,8 +52,10 @@ enum Decision:
   case Develop(drift: Drift, lines: ::[DevelopLine])
   case Publish(kind: PublishKind, lines: ::[PublishLine])
   case Refused(refusals: ::[Refusal])
+
   /** The build stated these versions. Git, the registry, and a bump pull request are not involved. */
   case Manual(lines: ::[ManualLine])
+end Decision
 
 /** One manually versioned ship. Compile and publish use the same coordinate. */
 final case class ManualLine(ship: ShipName, version: ManualVersion)
@@ -60,7 +65,7 @@ object Decision:
   def rendered(line: PublishLine): String = publishText(line)
 
   def text(decision: Decision): String = decision match
-    case Decision.NoCatalog => "no catalog"
+    case Decision.NoCatalog             => "no catalog"
     case Decision.Develop(drift, lines) =>
       (sessionText(Session.Development) :: driftText(drift) :: lines.map(developText).toList).mkString("\n")
     case Decision.Publish(kind, lines) =>
@@ -74,13 +79,13 @@ object Decision:
     refusals.map(oneRefusal).mkString("\n")
 
   private def sessionText(session: Session): String = session match
-    case Session.Development => "session development"
+    case Session.Development         => "session development"
     case Session.Snapshot(_, branch) =>
       branch match
         case Branch.Default => "session snapshot default"
         case Branch.Other   => "session snapshot other"
     case Session.PullRequest(number, _) => s"session pr ${number.value}"
-    case Session.Release                 => "session release"
+    case Session.Release                => "session release"
 
   private def kindText(kind: PublishKind): String = kind match
     case PublishKind.Snapshot(_, branch) =>
@@ -122,6 +127,7 @@ object Decision:
       s"${ship.value} ${number.render} is released and its tag was not proven, so nothing publishes"
     case Refusal.NothingToRelease =>
       "every ship number is already released"
+end Decision
 
 enum VersionError:
   case Session(error: SessionError)
@@ -131,31 +137,36 @@ enum VersionError:
   case Unreadable
 
   def message: String = this match
-    case Session(error)   => error.message
-    case Registry(error)  => error.message
+    case Session(error)    => error.message
+    case Registry(error)   => error.message
     case UnknownShip(name) =>
       s"ship '${name.value}' is in .histos/releases and not in the catalog"
     case Refused(refusals) => Decision.refusalText(refusals)
-    case Unreadable       => "could not read .histos/releases"
+    case Unreadable        => "could not read .histos/releases"
+end VersionError
 
 object Versions:
   def assess(catalog: Catalog, env: Map[String, String], evidence: Evidence): Either[VersionError, Decision] =
     catalog match
       case Catalog.Empty | Catalog.Manual(_) => Right(decide(catalog, Session.Development, Evidence.Unchecked))
-      case Catalog.Lines(_) =>
-        Session.from(env).left.map(VersionError.Session(_)).flatMap: session =>
-          evidence match
-            case Evidence.Unchecked => Right(decide(catalog, session, evidence))
-            case Evidence.Checked(registry) =>
-              unknown(catalog, registry) match
-                case Some(name) => Left(VersionError.UnknownShip(name))
-                case None       => Right(decide(catalog, session, evidence))
+      case Catalog.Lines(_)                  =>
+        Session
+          .from(env)
+          .left
+          .map(VersionError.Session(_))
+          .flatMap: session =>
+            evidence match
+              case Evidence.Unchecked         => Right(decide(catalog, session, evidence))
+              case Evidence.Checked(registry) =>
+                unknown(catalog, registry) match
+                  case Some(name) => Left(VersionError.UnknownShip(name))
+                  case None       => Right(decide(catalog, session, evidence))
 
   def decide(catalog: Catalog, session: Session, evidence: Evidence): Decision =
     catalog match
-      case Catalog.Empty        => Decision.NoCatalog
+      case Catalog.Empty         => Decision.NoCatalog
       case Catalog.Manual(ships) => Decision.Manual(manualLines(ships))
-      case Catalog.Lines(ships) =>
+      case Catalog.Lines(ships)  =>
         evidence match
           case Evidence.Unchecked         => unchecked(session, ships)
           case Evidence.Checked(registry) => checked(session, ships, registry)
@@ -171,11 +182,11 @@ object Versions:
       case _                   => Decision.Refused(::(Refusal.Unchecked, Nil))
 
   private def checked(session: Session, ships: ::[Ship.Line], registry: Registry): Decision =
-    val judged = ships.map(ship => ship -> place(ship, registry.relation(ship.name)))
+    val judged   = ships.map(ship => ship -> place(ship, registry.relation(ship.name)))
     val refusals = judged.collect { case (_, Left(refusal)) => refusal }
     refusals match
       case head :: tail => Decision.Refused(::(head, tail))
-      case Nil =>
+      case Nil          =>
         judged.collect { case (ship, Right(state)) => ship -> state } match
           case (ship, state) :: rest => ready(session, ::((ship, state), rest))
           case Nil                   => Decision.NoCatalog
@@ -198,7 +209,10 @@ object Versions:
   private def developLines(ships: ::[Ship.Line]): ::[DevelopLine] =
     ships match
       case ship :: rest =>
-        ::(DevelopLine(ship.name, CiVersion(ship.number)), rest.map(item => DevelopLine(item.name, CiVersion(item.number))))
+        ::(
+          DevelopLine(ship.name, CiVersion(ship.number)),
+          rest.map(item => DevelopLine(item.name, CiVersion(item.number))),
+        )
 
   private def names(placed: ::[(Ship.Line, Placement)]): ::[Ship.Line] =
     placed match
@@ -249,3 +263,4 @@ object Versions:
   private enum Placement:
     case Unreleased
     case Current
+end Versions

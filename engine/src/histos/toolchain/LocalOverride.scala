@@ -24,13 +24,12 @@ object LocalOverride:
             Either.cond(
               path.isAbsolute,
               path,
-              LocalOverrideError.Relative(raw)
+              LocalOverrideError.Relative(raw),
             )
       case _ => Left(LocalOverrideError.Multiple)
 
   def read(path: Path): IO[IoFailure | LocalOverrideError, Option[Path]] =
     RuntimeFiles
       .readIfPresent(path)
-      .flatMap(text =>
-        ZIO.foreach(text)(value => ZIO.fromEither(parse(value)))
-      )
+      .flatMap(text => ZIO.foreach(text)(value => ZIO.fromEither(parse(value))))
+end LocalOverride

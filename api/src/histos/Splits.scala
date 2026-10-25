@@ -4,10 +4,9 @@ package histos
 enum Axis:
   case Platform, ScalaVersion, Module
 
-/**
- * How CI fans out. The empty set is Aggregate, one `./histos test` job, and it is the default.
- * A non-empty set is a matrix of those axes. There is no second renderer.
- */
+/** How CI fans out. The empty set is Aggregate, one `./histos test` job, and it is the default. A non-empty set is a
+  * matrix of those axes. There is no second renderer.
+  */
 final case class Splits private (axes: Set[Axis])
 
 object Splits:
@@ -15,3 +14,4 @@ object Splits:
 
   def of(axis: Axis, axes: Axis*): Splits =
     new Splits((axis :: axes.toList).toSet)
+end Splits

@@ -11,22 +11,10 @@ import histos.resolve.{
   Repository,
   DependencyLock,
   LockedCell,
-  LockedDirect
+  LockedDirect,
 }
 import histos.zinc.GraphCompile
-import histos.{
-  ClangMajor,
-  Js,
-  Jvm,
-  MainClass,
-  Native,
-  Projects,
-  Requires,
-  ScalaVersion,
-  TestMachine,
-  Tool,
-  module
-}
+import histos.{ClangMajor, Js, Jvm, MainClass, Native, Projects, Requires, ScalaVersion, TestMachine, Tool, module}
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
@@ -46,7 +34,7 @@ object ProgramSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           here <- TestMachine.runtimes(root)
           name <- ZIO.fromEither(histos.ProjectName.from("app"))
           dependency = histos.Dep("dev.fixture:gate:1.0.0")
@@ -80,7 +68,7 @@ object ProgramSpec extends ZIOSpecDefault:
             "gate",
             "1.0.0",
             hash,
-            Repository.Central
+            Repository.Central,
           )
           tools <- ZIO.service[histos.resolve.LockedTools]
           before = DependencyLock(
@@ -94,34 +82,34 @@ object ProgramSpec extends ZIOSpecDefault:
                     "dev.fixture",
                     "gate",
                     "1.0.0",
-                    histos.DepKind.Java
+                    histos.DepKind.Java,
                   )
                 ),
                 List(artifact),
-                Nil
+                Nil,
               )
             ),
             Nil,
             tools.lock.tools.filter(cell =>
               cell.id.role == histos.resolve.ToolRole.Compiler && cell.id.scalaVersion == scala3
-            )
+            ),
           )
           after = before.copy(
             cells = before.cells.map(_.copy(scalaVersion = afterVersion)),
             tools = tools.lock.tools.filter(cell =>
               cell.id.role == histos.resolve.ToolRole.Compiler && cell.id.scalaVersion == afterVersion
-            )
+            ),
           )
           _ <- Workspace.writeString(
             Resolve.lockPath(root),
-            DependencyLock.render(before)
+            DependencyLock.render(before),
           )
           reached <- Promise.make[Nothing, Unit]
           proceed <- Promise.make[Nothing, Unit]
           resolver = new Resolve:
             def resolveTool(request: ToolRequest) =
               tools.resolve.resolveTool(request)
-            def resolve(cell: ResolveCell) = tools.resolve.resolve(cell)
+            def resolve(cell: ResolveCell)  = tools.resolve.resolve(cell)
             def fetch(held: LockedArtifact) =
               if held.organization == "dev.fixture" && held.name == "gate" then
                 reached.succeed(()).unit *> proceed.await *>
@@ -132,19 +120,19 @@ object ProgramSpec extends ZIOSpecDefault:
                       held.revision,
                       jar,
                       hash,
-                      held.repository
+                      held.repository,
                     )
                   )
               else tools.resolve.fetch(held)
             def resolvePlugin(
                 dependency: histos.Dep,
-                repositories: Repositories
+                repositories: Repositories,
             ) = tools.resolve.resolvePlugin(dependency, repositories)
             def sources(
                 organization: String,
                 name: String,
                 revision: String,
-                repository: Repository
+                repository: Repository,
             ) = tools.resolve.sources(organization, name, revision, repository)
           running <- Program
             .console(
@@ -155,7 +143,7 @@ object ProgramSpec extends ZIOSpecDefault:
               here,
               choice = None,
               report = _ => ZIO.unit,
-              afterCompile = ZIO.unit
+              afterCompile = ZIO.unit,
             )
             .runCollect
             .provide(ZLayer.succeed(resolver))
@@ -163,11 +151,11 @@ object ProgramSpec extends ZIOSpecDefault:
           _ <- reached.await
           _ <- Workspace.writeString(
             Resolve.lockPath(root),
-            DependencyLock.render(after)
+            DependencyLock.render(after),
           )
-          _ <- proceed.succeed(())
+          _        <- proceed.succeed(())
           inFlight <- running.join
-          next <- Program
+          next     <- Program
             .console(
               root,
               afterGraph,
@@ -176,7 +164,7 @@ object ProgramSpec extends ZIOSpecDefault:
               here,
               choice = None,
               report = _ => ZIO.unit,
-              afterCompile = ZIO.unit
+              afterCompile = ZIO.unit,
             )
             .runCollect
             .provide(ZLayer.succeed(resolver))
@@ -190,17 +178,17 @@ object ProgramSpec extends ZIOSpecDefault:
           inFlight
             .collect { case ProgramFeed.Out(text) => text }
             .contains("hi"),
-          next.collect { case ProgramFeed.Out(text) => text }.contains("hi")
+          next.collect { case ProgramFeed.Out(text) => text }.contains("hi"),
         )
     ,
     test("a module without a main is not linked"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
-          root <- temp
+          jdk   <- GraphCompile.jdkHere
+          root  <- temp
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
-          here <- TestMachine.runtimes(root)
-          out <- histos.ToolFixture
+          here  <- TestMachine.runtimes(root)
+          out   <- histos.ToolFixture
             .streamAt(root, built)(
               Program
                 .console(
@@ -211,7 +199,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = None,
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -227,15 +215,15 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a jvm main runs on the main classpath"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          _ <- ZIO.attempt {
+          _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
             write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
           }
-          here <- TestMachine.runtimes(root)
+          here  <- TestMachine.runtimes(root)
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
@@ -247,7 +235,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = None,
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -265,23 +253,23 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) =>
             (platform, code)
           } == List((Jvm, 0)),
-          mainEntries.exists(_.endsWith("Check.class"))
+          mainEntries.exists(_.endsWith("Check.class")),
         )
     ,
     test("a js main links and starts in node"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          _ <- ZIO.attempt {
+          _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
             write(root, ".histos/dependencies.lock", "cell app 3.10.0 js\n")
           }
           chosen <- TestMachine.chosenNode(root)
-          here <- TestMachine.runtimes(root)
-          feeds <- histos.ToolFixture
+          here   <- TestMachine.runtimes(root)
+          feeds  <- histos.ToolFixture
             .streamAt(root, built)(
               Program
                 .console(
@@ -292,7 +280,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = None,
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -308,18 +296,18 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) =>
             (platform, code)
           } == List((Js, 0)),
-          ran.nonEmpty
+          ran.nonEmpty,
         )
     @@ Requires(Tool.Node),
     test("a multi-platform module does not start until a platform is named"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          here <- TestMachine.runtimes(root)
-          out <- histos.ToolFixture
+          here  <- TestMachine.runtimes(root)
+          out   <- histos.ToolFixture
             .streamAt(root, built)(
               Program
                 .console(
@@ -330,7 +318,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = None,
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -353,12 +341,12 @@ object ProgramSpec extends ZIOSpecDefault:
     test("a platform the module does not build is refused"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          here <- TestMachine.runtimes(root)
-          out <- histos.ToolFixture
+          here  <- TestMachine.runtimes(root)
+          out   <- histos.ToolFixture
             .streamAt(root, built)(
               Program
                 .console(
@@ -369,7 +357,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = Some(Native),
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -391,15 +379,15 @@ object ProgramSpec extends ZIOSpecDefault:
     test("an explicit platform runs only that platform"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Jvm, Js)(scala3).main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          _ <- ZIO.attempt {
+          _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
             write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
           }
-          here <- TestMachine.runtimes(root)
+          here  <- TestMachine.runtimes(root)
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
@@ -411,7 +399,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = Some(Jvm),
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -429,23 +417,23 @@ object ProgramSpec extends ZIOSpecDefault:
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) =>
             (platform, code)
           } == List((Jvm, 0)),
-          !jsClasses
+          !jsClasses,
         )
     ,
     test("a native main links and runs the binary"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           app = module("app", Native)(ScalaVersion("3.9.0"))
             .clang(ClangMajor(21))
             .main(MainClass("demo.Check"))
           built <- ZIO.fromEither(Projects(app))
-          _ <- ZIO.attempt {
+          _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
             write(root, ".histos/dependencies.lock", "cell app 3.9.0 native\n")
           }
-          here <- TestMachine.runtimes(root)
+          here  <- TestMachine.runtimes(root)
           feeds <- histos.ToolFixture
             .streamAt(root, built)(
               Program
@@ -457,7 +445,7 @@ object ProgramSpec extends ZIOSpecDefault:
                   here,
                   choice = None,
                   report = _ => ZIO.unit,
-                  afterCompile = ZIO.unit
+                  afterCompile = ZIO.unit,
                 )
             )
             .runCollect
@@ -471,9 +459,9 @@ object ProgramSpec extends ZIOSpecDefault:
             .contains("hi"),
           feeds.collect { case ProgramFeed.Exited(_, _, platform, code) =>
             (platform, code)
-          } == List((Native, 0))
+          } == List((Native, 0)),
         )
-    @@ Requires(Tool.Clang(ClangMajor(21)))
+    @@ Requires(Tool.Clang(ClangMajor(21))),
   )
 
   private val hi =
@@ -512,7 +500,8 @@ object ProgramSpec extends ZIOSpecDefault:
         histos.module("js", histos.Js)(histos.ScalaVersion("3.10.0")),
         histos
           .module("native", histos.Native)(histos.ScalaVersion("3.9.0"))
-          .clang(histos.ClangMajor(21))
+          .clang(histos.ClangMajor(21)),
       )
     )
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(12.minutes)
+end ProgramSpec

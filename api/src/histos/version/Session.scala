@@ -24,6 +24,7 @@ enum BranchError:
 
   def message: String = this match
     case Unknown(raw) => s"'$raw' is not a branch. A branch is default or other."
+end BranchError
 
 /** A pull request number. Zero and negative values are not pull requests. */
 opaque type PullRequestNumber = Int
@@ -42,19 +43,21 @@ object PullRequestNumber:
     else Left(PullRequestError.NotANumber(raw))
 
   extension (number: PullRequestNumber) def value: Int = number
+end PullRequestNumber
 
 enum PullRequestError:
   case NotANumber(raw: String)
   case NotPositive(value: Int)
 
   def message: String = this match
-    case NotANumber(raw)  => s"'$raw' is not a pull request number"
+    case NotANumber(raw)    => s"'$raw' is not a pull request number"
     case NotPositive(value) => s"$value is not a positive pull request number"
+end PullRequestError
 
 object Session:
-  val Key: String = "HISTOS_SESSION"
-  val ShaKey: String = "HISTOS_SHA"
-  val BranchKey: String = "HISTOS_BRANCH"
+  val Key: String            = "HISTOS_SESSION"
+  val ShaKey: String         = "HISTOS_SHA"
+  val BranchKey: String      = "HISTOS_BRANCH"
   val PullRequestKey: String = "HISTOS_PR"
 
   /** Absent means development. A snapshot or pull request without its commit is refused. */
@@ -91,6 +94,7 @@ object Session:
 
   private def parsePullRequest(raw: String): Either[SessionError, PullRequestNumber] =
     PullRequestNumber.parse(raw).left.map(SessionError.PullRequest(_))
+end Session
 
 enum SessionError:
   case Unknown(raw: String)
@@ -104,12 +108,13 @@ enum SessionError:
   def message: String = this match
     case Unknown(raw) =>
       s"'$raw' is not a session. Sessions are development, snapshot, pr, and release."
-    case MissingSha           => s"a snapshot session needs ${Session.ShaKey}, a 40-hex commit"
-    case MissingBranch        => s"a snapshot session needs ${Session.BranchKey}, default or other"
-    case MissingPullRequest   => s"a pull request session needs ${Session.PullRequestKey}, a positive number"
-    case Sha(error)           => error.message
-    case BadBranch(error)     => error.message
-    case PullRequest(error)   => error.message
+    case MissingSha         => s"a snapshot session needs ${Session.ShaKey}, a 40-hex commit"
+    case MissingBranch      => s"a snapshot session needs ${Session.BranchKey}, default or other"
+    case MissingPullRequest => s"a pull request session needs ${Session.PullRequestKey}, a positive number"
+    case Sha(error)         => error.message
+    case BadBranch(error)   => error.message
+    case PullRequest(error) => error.message
+end SessionError
 
 /** What git can prove about a ship that is already on the release registry. */
 enum TagRelation:
@@ -130,6 +135,7 @@ enum TagRelationError:
 
   def message: String = this match
     case Unknown(raw) => s"'$raw' is not a tag relation. A relation is matches, moved, or unknown."
+end TagRelationError
 
 /** A publish never treats "we did not look" as "nothing is released". */
 enum Evidence:
@@ -147,13 +153,14 @@ object Registry:
 
   def parse(lines: List[String]): Either[RegistryError, Registry] =
     val kept = lines.map(_.trim).filter(line => line.nonEmpty && !line.startsWith("#"))
-    kept.foldLeft[Either[RegistryError, List[(ShipName, TagRelation)]]](Right(Nil)): (acc, line) =>
-      acc.flatMap: seen =>
-        entry(line).flatMap: parsed =>
-          val (name, _) = parsed
-          if seen.exists((found, _) => found == name) then Left(RegistryError.Duplicate(name))
-          else Right(seen :+ parsed)
-    .map(parsed => new Registry(parsed))
+    kept
+      .foldLeft[Either[RegistryError, List[(ShipName, TagRelation)]]](Right(Nil)): (acc, line) =>
+        acc.flatMap: seen =>
+          entry(line).flatMap: parsed =>
+            val (name, _) = parsed
+            if seen.exists((found, _) => found == name) then Left(RegistryError.Duplicate(name))
+            else Right(seen :+ parsed)
+      .map(parsed => new Registry(parsed))
 
   private def entry(line: String): Either[RegistryError, (ShipName, TagRelation)] =
     line.split("\\s+").toList match
@@ -163,6 +170,7 @@ object Registry:
           tag  <- TagRelation.from(relation).left.map(_ => RegistryError.BadRelation(relation))
         yield (ship, tag)
       case _ => Left(RegistryError.BadLine(line))
+end Registry
 
 enum RegistryError:
   case BadLine(line: String)
@@ -173,6 +181,7 @@ enum RegistryError:
   def message: String = this match
     case BadLine(line) =>
       s"'$line' is not a registry line. A line is '<ship> matches', '<ship> moved', or '<ship> unknown'."
-    case BadName(raw)      => s"'$raw' is not a ship name"
-    case BadRelation(raw)  => s"'$raw' is not a tag relation. A relation is matches, moved, or unknown."
-    case Duplicate(name)   => s"ship '${name.value}' is listed twice in .histos/releases"
+    case BadName(raw)     => s"'$raw' is not a ship name"
+    case BadRelation(raw) => s"'$raw' is not a tag relation. A relation is matches, moved, or unknown."
+    case Duplicate(name)  => s"ship '${name.value}' is listed twice in .histos/releases"
+end RegistryError

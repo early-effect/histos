@@ -11,23 +11,17 @@ enum Placed:
   case Moved
   case Occupied
 
-/** A file or directory beside its destination, so a move into place stays on
-  * one file system. The scope removes whatever was not moved: a failure, an
-  * interrupt, or a lost race.
+/** A file or directory beside its destination, so a move into place stays on one file system. The scope removes
+  * whatever was not moved: a failure, an interrupt, or a lost race.
   */
 object Scratch:
   def file[E](beside: Path, failed: E): ZIO[Scope, E, Path] =
-    made(beside, failed)((parent, name) =>
-      Files.createTempFile(parent, name, ".partial")
-    )
+    made(beside, failed)((parent, name) => Files.createTempFile(parent, name, ".partial"))
 
   def directory[E](beside: Path, failed: E): ZIO[Scope, E, Path] =
-    made(beside, failed)((parent, name) =>
-      Files.createTempDirectory(parent, name)
-    )
+    made(beside, failed)((parent, name) => Files.createTempDirectory(parent, name))
 
-  /** `Occupied` means something was already at `to`: `from` stays where it is,
-    * for its scope to remove.
+  /** `Occupied` means something was already at `to`: `from` stays where it is, for its scope to remove.
     */
   def place[E](from: Path, to: Path, failed: E): IO[E, Placed] =
     ZIO
@@ -40,7 +34,7 @@ object Scratch:
             .flatMap: present =>
               if present then ZIO.succeed(Placed.Occupied)
               else ZIO.fail(failed),
-        _ => ZIO.succeed(Placed.Moved)
+        _ => ZIO.succeed(Placed.Moved),
       )
 
   private def made[E](beside: Path, failed: E)(
@@ -60,3 +54,4 @@ object Scratch:
 
   private def remove(path: Path): UIO[Unit] =
     Workspace.delete(path).ignore
+end Scratch

@@ -1,13 +1,6 @@
 package histos.pack
 
-import histos.zinc.{
-  CompileRequest,
-  CompileToolchain,
-  GraphCompile,
-  GraphCompileError,
-  JvmCompile,
-  ScalacFlags
-}
+import histos.zinc.{CompileRequest, CompileToolchain, GraphCompile, GraphCompileError, JvmCompile, ScalacFlags}
 
 import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
@@ -28,48 +21,48 @@ object JarSpec extends ZIOSpecDefault:
             Files.createDirectories(classes.resolve("demo"))
             Files.write(
               classes.resolve("demo").resolve("Hello.class"),
-              Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte)
+              Array[Byte](0xca.toByte, 0xfe.toByte, 0xba.toByte, 0xbe.toByte),
             )
             Files.write(
               classes.resolve("demo").resolve("Other.class"),
-              Array[Byte](1, 2, 3)
+              Array[Byte](1, 2, 3),
             )
           }
           packed <- ClassJar.write(
             classes,
-            root.resolve("out").resolve("lib.jar")
+            root.resolve("out").resolve("lib.jar"),
           )
           names <- ZIO.attempt {
             val zip = new ZipFile(packed.path.toFile)
             try zip.entries.asScala.map(_.getName).toList.sorted
             finally zip.close()
           }
-          _ <- ZIO.attempt(Files.createDirectories(root.resolve("empty")))
+          _     <- ZIO.attempt(Files.createDirectories(root.resolve("empty")))
           empty <- ClassJar
             .write(root.resolve("empty"), root.resolve("no.jar"))
             .either
         yield assertTrue(
           packed.entries == 2,
           names == List("demo/Hello.class", "demo/Other.class"),
-          empty == Left(JarError.Empty(root.resolve("empty")))
+          empty == Left(JarError.Empty(root.resolve("empty"))),
         )
     ,
     test("a compiled class is the entry in the jar"):
       ZIO.scoped:
         for
-          root <- temp
+          root   <- temp
           source <- ZIO.attempt {
             val path = root.resolve("Hello.scala")
             Files.writeString(
               path,
-              "object Hello:\n  def greet: String = \"hi\"\n"
+              "object Hello:\n  def greet: String = \"hi\"\n",
             )
             path
           }
-          ask <- request(root, source)
+          ask      <- request(root, source)
           compiled <- JvmCompile.compile(ask)
-          packed <- ClassJar.write(compiled.classes, root.resolve("hello.jar"))
-          names <- ZIO.attempt {
+          packed   <- ClassJar.write(compiled.classes, root.resolve("hello.jar"))
+          names    <- ZIO.attempt {
             val zip = new ZipFile(packed.path.toFile)
             try zip.entries.asScala.map(_.getName).toList
             finally zip.close()
@@ -79,13 +72,13 @@ object JarSpec extends ZIOSpecDefault:
           names.contains("Hello.class"),
           names.contains("Hello$.class"),
           names.contains("Hello.tasty"),
-          packed.entries == names.length
-        )
+          packed.entries == names.length,
+        ),
   )
 
   private def request(
       root: Path,
-      source: Path
+      source: Path,
   ): zio.IO[GraphCompileError, CompileRequest] =
     GraphCompile.jdkHere.map: jdk =>
       CompileRequest(
@@ -93,30 +86,30 @@ object JarSpec extends ZIOSpecDefault:
           histos.ScalaVersion("3.9.0"),
           histos.Platform.Jvm,
           jdk,
-          ScalacFlags.empty
+          ScalacFlags.empty,
         ),
         List(source),
         Nil,
         root.resolve("classes"),
         root.resolve("analysis"),
-        Nil
+        Nil,
       )
 
   private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-jar"))):
-      dir =>
-        ZIO.attempt {
-          if Files.exists(dir) then
-            val walk = Files.walk(dir)
-            val paths =
-              try walk.iterator.asScala.toList
-              finally walk.close()
-            paths
-              .sortBy(_.getNameCount)
-              .reverse
-              .foreach(path => Files.deleteIfExists(path))
-        }.ignore
+    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-jar"))): dir =>
+      ZIO.attempt {
+        if Files.exists(dir) then
+          val walk  = Files.walk(dir)
+          val paths =
+            try walk.iterator.asScala.toList
+            finally walk.close()
+          paths
+            .sortBy(_.getNameCount)
+            .reverse
+            .foreach(path => Files.deleteIfExists(path))
+      }.ignore
 
   def spec = jar.provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
     histos.ToolFixture.jvm(histos.ScalaVersion("3.9.0"))
   ) @@ TestAspect.withLiveSystem
+end JarSpec

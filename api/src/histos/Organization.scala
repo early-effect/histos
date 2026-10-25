@@ -18,14 +18,16 @@ object Organization:
     else Left(OrganizationError.Bad(raw))
 
   extension (organization: Organization)
-    def value: String = organization
+    def value: String          = organization
     def segments: List[String] = organization.split("\\.", -1).toList
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): Organization = raw
+end Organization
 
 enum OrganizationError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not an organization"
+end OrganizationError

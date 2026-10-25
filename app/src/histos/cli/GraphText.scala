@@ -8,7 +8,7 @@ import histos.{Aggregate, Module, Project, ProjectGraph}
 object GraphText:
   def render(graph: ProjectGraph, links: List[PluginLink]): String =
     val projects = renderProjects(graph.projects)
-    val plugins = renderPlugins(graph.plugins, links)
+    val plugins  = renderPlugins(graph.plugins, links)
     (projects, plugins) match
       case ("", "")      => ""
       case (found, "")   => found
@@ -26,13 +26,13 @@ object GraphText:
 
   private def renderPlugins(
       plugins: List[RegisteredPlugin],
-      links: List[PluginLink]
+      links: List[PluginLink],
   ): String =
     plugins.flatMap(lines(_, links)).mkString("\n")
 
   private def lines(
       plugin: RegisteredPlugin,
-      links: List[PluginLink]
+      links: List[PluginLink],
   ): List[String] =
     val kind = links.collectFirst {
       case link if link.id == plugin.id => link.linked
@@ -53,3 +53,4 @@ object GraphText:
 
   private def listed(values: List[String]): String =
     if values.isEmpty then "-" else values.mkString(",")
+end GraphText

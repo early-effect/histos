@@ -15,6 +15,7 @@ object StepKind:
 
   /** Local and remote caches may serve it: compile, link, package. */
   sealed trait Hermetic extends Cached
+end StepKind
 
 /** The kind a runner can match. The phantom and this value are set by the same constructor. */
 enum RuntimeKind:
@@ -23,9 +24,9 @@ enum RuntimeKind:
 object RuntimeKind:
   def join(left: RuntimeKind, right: RuntimeKind): RuntimeKind =
     (left, right) match
-      case (Mixed, _) | (_, Mixed)         => Mixed
-      case (Local, Local)                  => Local
-      case (Local, _) | (_, Local)         => Mixed
-      case (Cached, Cached)                => Cached
-      case (Hermetic, Hermetic)            => Hermetic
+      case (Mixed, _) | (_, Mixed)                 => Mixed
+      case (Local, Local)                          => Local
+      case (Local, _) | (_, Local)                 => Mixed
+      case (Cached, Cached)                        => Cached
+      case (Hermetic, Hermetic)                    => Hermetic
       case (Cached, Hermetic) | (Hermetic, Cached) => Cached

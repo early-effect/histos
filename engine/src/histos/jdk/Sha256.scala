@@ -25,9 +25,11 @@ object Sha256:
 
   private def isHex(c: Char): Boolean =
     (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+end Sha256
 
 enum Sha256Error:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"sha256 is not 64 hex digits: $raw"
+end Sha256Error

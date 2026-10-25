@@ -15,9 +15,8 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{Chunk, Clock, IO, UIO, ZIO}
 
-/** Compiles a plugin before the build file. The class directory lives under
-  * `plugins/<digest>` and outlives the load `Scope`. A directory is reused only
-  * after `.complete` is in place.
+/** Compiles a plugin before the build file. The class directory lives under `plugins/<digest>` and outlives the load
+  * `Scope`. A directory is reused only after `.complete` is in place.
   */
 private[load] object PluginCompile:
 
@@ -26,7 +25,7 @@ private[load] object PluginCompile:
       launcher: ApiDigest,
       jar: Path,
       checksums: List[String],
-      classpath: List[Path]
+      classpath: List[Path],
   ): IO[LoadError, Path] =
     fileSha(jar).flatMap(sources =>
       cached(
@@ -35,7 +34,7 @@ private[load] object PluginCompile:
         sources,
         checksums,
         classpath,
-        fillJar(jar, classpath)
+        fillJar(jar, classpath),
       )
     )
 
@@ -43,7 +42,7 @@ private[load] object PluginCompile:
       store: ContentStore,
       launcher: ApiDigest,
       tree: Path,
-      classpath: List[Path]
+      classpath: List[Path],
   ): IO[LoadError, Path] =
     treeSha(tree).flatMap(sources =>
       cached(
@@ -52,12 +51,11 @@ private[load] object PluginCompile:
         sources,
         Nil,
         classpath,
-        fillTree(tree, classpath)
+        fillTree(tree, classpath),
       )
     )
 
-  /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin
-    * tree.
+  /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin tree.
     */
   def engineClass(root: Path): IO[LoadError, Option[String]] =
     ZIO
@@ -67,8 +65,7 @@ private[load] object PluginCompile:
           val walk = Files.walk(root)
           try
             walk.iterator.asScala.collectFirst:
-              case path
-                  if classFile(path) && ReservedPackage.path(rel(root, path)) =>
+              case path if classFile(path) && ReservedPackage.path(rel(root, path)) =>
                 rel(root, path).stripSuffix(".class").replace('/', '.')
           finally walk.close()
       .mapError(_ => LoadError.Io(IoFailure(root, IoFault.Walk)))
@@ -79,7 +76,7 @@ private[load] object PluginCompile:
       sources: String,
       checksums: List[String],
       classpath: List[Path],
-      fill: Path => IO[LoadError, Unit]
+      fill: Path => IO[LoadError, Unit],
   ): IO[LoadError, Path] =
     (for
       version <- histos.toolchain.BuildCompiler.version.mapError(
@@ -94,11 +91,11 @@ private[load] object PluginCompile:
     yield histos.toolchain.CompilerIdentity(
       version,
       embedded,
-      runtime.identity
+      runtime.identity,
     )).flatMap: compiler =>
-      val hex = key(launcher, sources, checksums, compiler)
+      val hex     = key(launcher, sources, checksums, compiler)
       val plugins = store.root.resolve("plugins")
-      val dest = plugins.resolve(hex)
+      val dest    = plugins.resolve(hex)
       ZIO
         .attemptBlocking(ready(dest))
         .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Stat)))
@@ -107,48 +104,45 @@ private[load] object PluginCompile:
           case false =>
             ZIO
               .attemptBlocking(Files.createDirectories(plugins))
-              .mapError(_ =>
-                LoadError.Io(IoFailure(plugins, IoFault.Create))
-              ) *>
+              .mapError(_ => LoadError.Io(IoFailure(plugins, IoFault.Create))) *>
               ZIO.acquireReleaseWith(partial(plugins))(deleteTree): tmp =>
                 fill(tmp) *> mark(tmp) *> publish(tmp, dest) *> touch(
                   dest,
-                  hex
+                  hex,
                 )
 
   private def fillJar(jar: Path, classpath: List[Path])(
       classes: Path
   ): IO[LoadError, Unit] =
     parentOf(classes).flatMap: plugins =>
-      ZIO.acquireReleaseWith(partial(plugins, ".partial-src-"))(deleteTree):
-        src =>
-          for
-            _ <- extract(jar, src)
-            sources <- scalaSources(src)
-            _ <- scalac(sources, classpath, classes)
-            _ <- copyResources(src, classes)
-          yield ()
+      ZIO.acquireReleaseWith(partial(plugins, ".partial-src-"))(deleteTree): src =>
+        for
+          _       <- extract(jar, src)
+          sources <- scalaSources(src)
+          _       <- scalac(sources, classpath, classes)
+          _       <- copyResources(src, classes)
+        yield ()
 
   private def fillTree(tree: Path, classpath: List[Path])(
       classes: Path
   ): IO[LoadError, Unit] =
     for
       sources <- scalaSources(tree)
-      _ <- scalac(sources, classpath, classes)
-      _ <- copyResources(tree, classes)
+      _       <- scalac(sources, classpath, classes)
+      _       <- copyResources(tree, classes)
     yield ()
 
   private def key(
       launcher: ApiDigest,
       sources: String,
       checksums: List[String],
-      compiler: histos.toolchain.CompilerIdentity
+      compiler: histos.toolchain.CompilerIdentity,
   ): String =
     val lines =
       List(
         s"api ${launcher.value}",
         s"compiler ${compiler.fingerprint.value}",
-        s"sources $sources"
+        s"sources $sources",
       ) ++
         checksums.sorted.map(sha => s"artifact $sha")
     Sha256
@@ -159,7 +153,7 @@ private[load] object PluginCompile:
 
   private def partial(
       parent: Path,
-      prefix: String = ".partial-"
+      prefix: String = ".partial-",
   ): IO[LoadError, Path] =
     ZIO
       .attemptBlocking(Files.createTempDirectory(parent, prefix))
@@ -193,7 +187,7 @@ private[load] object PluginCompile:
                     Files.copy(
                       stream,
                       target,
-                      StandardCopyOption.REPLACE_EXISTING
+                      StandardCopyOption.REPLACE_EXISTING,
                     )
                   finally stream.close()
                   Right(())
@@ -207,7 +201,7 @@ private[load] object PluginCompile:
       Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
     else
       val target = root.resolve(name).normalize
-      val base = root.normalize
+      val base   = root.normalize
       if target.startsWith(base) then Right(target)
       else Left(LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(root))))
 
@@ -233,7 +227,7 @@ private[load] object PluginCompile:
   private def scalac(
       sources: List[Path],
       classpath: List[Path],
-      out: Path
+      out: Path,
   ): IO[LoadError, Unit] =
     sources match
       case Nil =>
@@ -250,7 +244,7 @@ private[load] object PluginCompile:
               classpath.map(_.toString).mkString(java.io.File.pathSeparator),
               "-d",
               out.toString,
-              "-color:never"
+              "-color:never",
             ) ++ sources.map(_.toString)
           )
           .mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write)))
@@ -298,9 +292,7 @@ private[load] object PluginCompile:
             val walk = Files.walk(root)
             try
               walk.iterator.asScala
-                .filter(path =>
-                  Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
-                )
+                .filter(path => Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
                 .toList
                 .sortBy(path => rel(root, path))
             finally walk.close()
@@ -345,7 +337,7 @@ private[load] object PluginCompile:
             .attemptBlocking(
               Files.setLastModifiedTime(
                 dest,
-                java.nio.file.attribute.FileTime.from(now)
+                java.nio.file.attribute.FileTime.from(now),
               )
             )
             .mapError(_ => LoadError.Io(IoFailure(dest, IoFault.Write)))
@@ -371,3 +363,4 @@ private[load] object PluginCompile:
   private def classFile(path: Path): Boolean =
     Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
       Option(path.getFileName).exists(_.toString.endsWith(".class"))
+end PluginCompile

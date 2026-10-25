@@ -3,14 +3,7 @@ package histos.testrun
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
 import histos.jdk.Sha256
-import histos.js.{
-  JsLink,
-  JsLinkError,
-  JsLinkRequest,
-  JsSuite,
-  JsSuiteRequest,
-  ScalaJs
-}
+import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
 import histos.native.{
   NativeCompile,
   NativeLink,
@@ -18,38 +11,15 @@ import histos.native.{
   NativeOrigin,
   NativeSuite,
   NativeSuiteRequest,
-  NativeToolchain
+  NativeToolchain,
 }
 import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
-import histos.resolve.{
-  BuildResolvers,
-  ClasspathScope,
-  DependencyLock,
-  Repositories,
-  Resolve,
-  ResolveCell,
-  ResolveError
-}
+import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
-import histos.step.{
-  Input,
-  InputName,
-  InputValue,
-  Need,
-  Phase,
-  Step,
-  StepId,
-  StepInfo
-}
+import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepId, StepInfo}
 import histos.workflow.CiError
-import histos.process.{
-  ChildClasspath,
-  ChildError,
-  ChildEvent,
-  ChildProcess,
-  ChildRequest
-}
+import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -63,20 +33,10 @@ import histos.zinc.{
 
   ScalacFlags,
   SemanticDb,
-  Sources
+  Sources,
 }
 import histos.pack.{MainClass, MainClassError}
-import histos.{
-  ClangPin,
-  Dep,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion,
-  TestMain,
-  TestProvider
-}
+import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
 
 import java.nio.file.{Files, Path}
 
@@ -86,10 +46,9 @@ import zio.{Chunk, IO, Queue, Ref, UIO, ZIO}
 import zio.stream.{Take, ZStream}
 
 object ModuleTest:
-  /** Compile each requested module, then run its test provider once per Scala
-    * version and platform. `TestProvider.Zio` is the provider when the module
-    * names neither a provider nor a main. Upstream modules are compiled and not
-    * run. The engine does not load the provider.
+  /** Compile each requested module, then run its test provider once per Scala version and platform. `TestProvider.Zio`
+    * is the provider when the module names neither a provider nor a main. Upstream modules are compiled and not run.
+    * The engine does not load the provider.
     */
   def run(asked: TestRun): ZIO[Resolve, ModuleTestError, List[TestReport]] =
     console(asked)
@@ -98,21 +57,19 @@ object ModuleTest:
 
   private final case class Reports(heard: Transcript, done: Chunk[TestReport])
 
-  /** Cells do not interleave, so the lines since the last cell belong to the
-    * next `Done`.
+  /** Cells do not interleave, so the lines since the last cell belong to the next `Done`.
     */
   private def report(have: Reports, feed: TestFeed): Reports =
     feed match
       case TestFeed.Begin(_, _, _) => have.copy(heard = Transcript.empty)
-      case TestFeed.Out(text)  => have.copy(heard = have.heard.withOut(text))
-      case TestFeed.Err(text)  => have.copy(heard = have.heard.withErr(text))
-      case TestFeed.Done(cell) =>
+      case TestFeed.Out(text)      => have.copy(heard = have.heard.withOut(text))
+      case TestFeed.Err(text)      => have.copy(heard = have.heard.withErr(text))
+      case TestFeed.Done(cell)     =>
         Reports(Transcript.empty, have.done :+ TestReport(cell, have.heard))
       case TestFeed.Cached(_, _, _, _) => have
 
-  /** Test compiles stay parallel. Cells run in parallel. The console emits one
-    * cell, then the next, so the trees do not interleave. The speaking cell is
-    * printed as it writes. A later cell keeps only its own lines.
+  /** Test compiles stay parallel. Cells run in parallel. The console emits one cell, then the next, so the trees do not
+    * interleave. The speaking cell is printed as it writes. A later cell keeps only its own lines.
     */
   def console(asked: TestRun): ZStream[Resolve, ModuleTestError, TestFeed] =
     ZStream.unwrap:
@@ -128,9 +85,9 @@ object ModuleTest:
                     asked.graph,
                     asked.jdk,
                     asked.runtimes.native,
-                    lock
+                    lock,
                   ),
-                  asked.names
+                  asked.names,
                 )
                 .mapError(ModuleTestError.Compile(_))
             )
@@ -138,7 +95,7 @@ object ModuleTest:
 
   def suites(
       asked: TestRun,
-      compiled: List[CompiledCell]
+      compiled: List[CompiledCell],
   ): ZStream[Resolve, ModuleTestError, TestFeed] =
     ZStream.unwrap(
       TestCompile
@@ -149,7 +106,7 @@ object ModuleTest:
   private[histos] def suitesLocked(
       asked: TestRun,
       compiled: List[CompiledCell],
-      lock: DependencyLock
+      lock: DependencyLock,
   ): ZStream[Resolve, ModuleTestError, TestFeed] =
     ZStream
       .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph)))
@@ -161,11 +118,11 @@ object ModuleTest:
   private def runCells(
       asked: TestRun,
       compiled: List[CompiledCell],
-      lock: DependencyLock
+      lock: DependencyLock,
   ): ZStream[
     Resolve & ProviderInstall & LockedTools,
     ModuleTestError,
-    TestFeed
+    TestFeed,
   ] =
     val TestRun(_, graph, names, jdk, runtimes, patterns, _, _) = asked
     ZStream.unwrap:
@@ -195,7 +152,7 @@ object ModuleTest:
                   val inputs = Chunk(
                     Input(
                       InputName("jdk"),
-                      InputValue.Text(Runtimes.identityToken(jdk.identity))
+                      InputValue.Text(Runtimes.identityToken(jdk.identity)),
                     ),
                     Input(
                       InputName("tools"),
@@ -206,12 +163,12 @@ object ModuleTest:
                               found,
                               cell.version,
                               cell.platform,
-                              runtimes.native
+                              runtimes.native,
                             )
                           )
                           .mkString("\n")
-                      )
-                    )
+                      ),
+                    ),
                   )
                   testStep(asked, cell, lock, matched, inputs, queue)
               fiber <- execute(combine(steps)).forkScoped
@@ -219,9 +176,8 @@ object ModuleTest:
               ZStream.fromZIO(fiber.join).drain ++
               gate
 
-  /** One queue per cell. Unbounded because a later cell that blocked on a full
-    * queue would keep its process permit, and that permit can stop the speaking
-    * cell from starting.
+  /** One queue per cell. Unbounded because a later cell that blocked on a full queue would keep its process permit, and
+    * that permit can stop the speaking cell from starting.
     */
   private def cellQueue: UIO[Queue[Take[ModuleTestError, TestFeed]]] =
     Queue.unbounded
@@ -247,13 +203,13 @@ object ModuleTest:
                       cause => ZIO.failCause(cause.map(Some(_))),
                       feeds =>
                         if feeds.isEmpty then read(left)
-                        else ZIO.succeed(feeds)
+                        else ZIO.succeed(feeds),
                     )
             state.get.flatMap(read)
 
   private def unmatched(
       patterns: List[SuitePattern],
-      matched: Ref[Boolean]
+      matched: Ref[Boolean],
   ): ZStream[Any, ModuleTestError, Nothing] =
     if patterns.isEmpty then ZStream.empty
     else
@@ -269,15 +225,15 @@ object ModuleTest:
       lock: DependencyLock,
       matched: Ref[Boolean],
       inputs: Chunk[Input],
-      queue: Queue[Take[ModuleTestError, TestFeed]]
+      queue: Queue[Take[ModuleTestError, TestFeed]],
   ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Unit] =
     val TestRun(repo, graph, _, jdk, runtimes, patterns, quick, onTestCompile) =
       asked
     val repositories = BuildResolvers(graph.resolvers)
-    val info = StepInfo(
+    val info         = StepInfo(
       StepId.Cell(cell.module, cell.version, cell.platform, Phase.Test),
       inputs,
-      Set(Need.Process)
+      Set(Need.Process),
     )
     Step.local[Unit](info):
       prepare(
@@ -291,7 +247,7 @@ object ModuleTest:
         patterns,
         matched,
         quick,
-        onTestCompile
+        onTestCompile,
       ).flatMap(stream => publish(queue, watch(matched, stream)))
         .exit
         .flatMap: exit =>
@@ -299,15 +255,15 @@ object ModuleTest:
             cause =>
               queue.offer(Take.failCause(cause)) *>
                 ZIO.when(cause.isInterrupted)(ZIO.failCause(cause)).unit,
-            _ => ZIO.unit
+            _ => ZIO.unit,
           )
 
-  /** The step stays successful. A cell failure is a failed take, so lines
-    * already written stay written and the drain fails when it reaches them.
+  /** The step stays successful. A cell failure is a failed take, so lines already written stay written and the drain
+    * fails when it reaches them.
     */
   private def publish(
       queue: Queue[Take[ModuleTestError, TestFeed]],
-      stream: ZStream[Any, ModuleTestError, TestFeed]
+      stream: ZStream[Any, ModuleTestError, TestFeed],
   ): UIO[Unit] =
     Ref
       .make(false)
@@ -357,7 +313,7 @@ object ModuleTest:
 
   private def requested(
       graph: ProjectGraph,
-      names: List[String]
+      names: List[String],
   ): Either[CiError, Set[ProjectName]] =
     histos.select.Selection
       .select(graph, names)
@@ -378,12 +334,12 @@ object ModuleTest:
           ProjectName,
           ScalaVersion,
           Platform,
-          histos.zinc.CompileFacts
-      ) => UIO[Unit]
+          histos.zinc.CompileFacts,
+      ) => UIO[Unit],
   ): ZIO[
     Resolve & ProviderInstall & LockedTools,
     ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed]
+    ZStream[Any, ModuleTestError, TestFeed],
   ] =
     val modules = graph.projects.collect { case module: Module => module }
     graph.get(cell.module) match
@@ -395,23 +351,21 @@ object ModuleTest:
               case (_, Some(_), Some(_)) =>
                 ZIO.fail(ModuleTestError.Mixed(cell.module))
               case (Nil, None, None) =>
-                if patterns.isEmpty then
-                  ZIO.succeed(SuiteLaunch.finished(cell, TestStatus.NoTests))
+                if patterns.isEmpty then ZIO.succeed(SuiteLaunch.finished(cell, TestStatus.NoTests))
                 else ZIO.succeed(ZStream.empty)
               case (Nil, Some(main), None) =>
                 ZIO.fail(ModuleTestError.MissingSources(cell.module, main))
               case (Nil, None, Some(provider)) =>
                 ZIO.fail(ModuleTestError.MissingProvider(cell.module, provider))
               case (_, Some(main), None) =>
-                if !SuitePattern.allows(patterns, main.value) then
-                  ZIO.succeed(ZStream.empty)
+                if !SuitePattern.allows(patterns, main.value) then ZIO.succeed(ZStream.empty)
                 else
                   val note = (facts: histos.zinc.CompileFacts) =>
                     onTestCompile(
                       cell.module,
                       cell.version,
                       cell.platform,
-                      facts
+                      facts,
                     )
                   cell.platform match
                     case Platform.Jvm =>
@@ -427,7 +381,7 @@ object ModuleTest:
                         lock,
                         repositories,
                         quick,
-                        note
+                        note,
                       )
                     case Platform.Js =>
                       SuiteLaunch.runJs(
@@ -442,7 +396,7 @@ object ModuleTest:
                         lock,
                         repositories,
                         quick,
-                        note
+                        note,
                       )
                     case Platform.Native =>
                       SuiteLaunch.runNative(
@@ -457,16 +411,16 @@ object ModuleTest:
                         lock,
                         repositories,
                         quick,
-                        note
+                        note,
                       )
               case (_, None, provider) =>
                 val framework = provider.getOrElse(TestProvider.Zio)
-                val note = (facts: histos.zinc.CompileFacts) =>
+                val note      = (facts: histos.zinc.CompileFacts) =>
                   onTestCompile(
                     cell.module,
                     cell.version,
                     cell.platform,
-                    facts
+                    facts,
                   )
                 cell.platform match
                   case Platform.Jvm =>
@@ -483,7 +437,7 @@ object ModuleTest:
                       repositories,
                       patterns,
                       quick,
-                      note
+                      note,
                     )
                   case Platform.Js =>
                     SuiteLaunch.runJsProvider(
@@ -499,7 +453,7 @@ object ModuleTest:
                       repositories,
                       patterns,
                       quick,
-                      note
+                      note,
                     )
                   case Platform.Native =>
                     SuiteLaunch.runNativeProvider(
@@ -515,17 +469,16 @@ object ModuleTest:
                       repositories,
                       patterns,
                       quick,
-                      note
+                      note,
                     )
             val executes = sources.nonEmpty && (module.test match
               case Some(main) => SuitePattern.allows(patterns, main.value)
               case None       =>
                 SuiteLaunch.satisfied(
                   module,
-                  module.provider.getOrElse(TestProvider.Zio)
+                  module.provider.getOrElse(TestProvider.Zio),
                 ))
-            val context = if executes then
-              TestContext.make(module, cell, jdk, runtimes)
+            val context = if executes then TestContext.make(module, cell, jdk, runtimes)
             else ZIO.succeed(TestContext.empty)
             context
               .flatMap(value =>
@@ -541,7 +494,7 @@ object ModuleTest:
     */
   private def watch(
       matched: Ref[Boolean],
-      stream: ZStream[Any, ModuleTestError, TestFeed]
+      stream: ZStream[Any, ModuleTestError, TestFeed],
   ): ZStream[Any, ModuleTestError, TestFeed] =
     stream.tap:
       case TestFeed.Cached(_, _, _, _) =>
@@ -551,7 +504,7 @@ object ModuleTest:
               _,
               _,
               _,
-              TestStatus.Passed | TestStatus.Failed(_)
+              TestStatus.Passed | TestStatus.Failed(_),
             )
           ) =>
         matched.set(true)
@@ -563,3 +516,4 @@ object ModuleTest:
       case Platform.Jvm    => 0
       case Platform.Js     => 1
       case Platform.Native => 2
+end ModuleTest

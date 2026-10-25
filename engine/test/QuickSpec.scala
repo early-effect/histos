@@ -17,7 +17,7 @@ import zio.test.*
 
 object QuickSpec extends ZIOSpecDefault:
   private val jdkToken = "test-jdk"
-  private val plain = SuiteStamp.Cover(Nil, Nil, jdkToken, Nil)
+  private val plain    = SuiteStamp.Cover(Nil, Nil, jdkToken, Nil)
 
   private def jars(names: List[String]): SuiteStamp.Cover =
     plain.copy(jars = names)
@@ -29,7 +29,7 @@ object QuickSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             writeClass(root, "demo/Foo", List("demo/Lib"))
             writeClass(root, "demo/Lib", Nil)
             writeClass(root, "demo/Other", Nil)
@@ -37,15 +37,15 @@ object QuickSpec extends ZIOSpecDefault:
           first <- SuiteStamp.digest(
             "demo.Foo",
             List(root),
-            jars(List("jar-a"))
+            jars(List("jar-a")),
           )
-          _ <- ZIO.attempt(writeClass(root, "demo/Other", List("demo/Nowhere")))
+          _     <- ZIO.attempt(writeClass(root, "demo/Other", List("demo/Nowhere")))
           other <- SuiteStamp.digest(
             "demo.Foo",
             List(root),
-            jars(List("jar-a"))
+            jars(List("jar-a")),
           )
-          _ <- ZIO.attempt(writeClass(root, "demo/Lib", List("demo/Other")))
+          _   <- ZIO.attempt(writeClass(root, "demo/Lib", List("demo/Other")))
           lib <- SuiteStamp.digest("demo.Foo", List(root), jars(List("jar-a")))
           jar <- SuiteStamp.digest("demo.Foo", List(root), jars(List("jar-b")))
         yield assertTrue(
@@ -56,16 +56,16 @@ object QuickSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             writeClass(root, "demo/Foo", List("demo/Lib"))
             writeClass(root, "demo/Lib", Nil)
           }
           direct <- SuiteStamp.digest(
             "demo.Foo",
             List(root),
-            jars(List("jar-a"))
+            jars(List("jar-a")),
           )
-          tree <- SuiteStamp.index(List(root))
+          tree    <- SuiteStamp.index(List(root))
           indexed <- ZIO.fromEither(
             SuiteStamp.digest("demo.Foo", tree, jars(List("jar-a")))
           )
@@ -74,15 +74,15 @@ object QuickSpec extends ZIOSpecDefault:
     test("a stored success matches only that digest"):
       ZIO.scoped:
         for
-          root <- temp
+          root   <- temp
           module <- ZIO.fromEither(ProjectName.from("app"))
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             ScalaVersion("3.10.0"),
             Jvm,
             "demo.Foo",
-            "aaa"
+            "aaa",
           )
           hit <- QuickRecord.hit(
             root,
@@ -90,7 +90,7 @@ object QuickSpec extends ZIOSpecDefault:
             ScalaVersion("3.10.0"),
             Jvm,
             "demo.Foo",
-            "aaa"
+            "aaa",
           )
           miss <- QuickRecord.hit(
             root,
@@ -98,14 +98,14 @@ object QuickSpec extends ZIOSpecDefault:
             ScalaVersion("3.10.0"),
             Jvm,
             "demo.Foo",
-            "bbb"
+            "bbb",
           )
           _ <- QuickRecord.clear(
             root,
             module,
             ScalaVersion("3.10.0"),
             Jvm,
-            "demo.Foo"
+            "demo.Foo",
           )
           gone <- QuickRecord.hit(
             root,
@@ -113,7 +113,7 @@ object QuickSpec extends ZIOSpecDefault:
             ScalaVersion("3.10.0"),
             Jvm,
             "demo.Foo",
-            "aaa"
+            "aaa",
           )
         yield assertTrue(hit && !miss && !gone)
     ,
@@ -122,19 +122,19 @@ object QuickSpec extends ZIOSpecDefault:
         ClassShapes.Shape(
           "demo.FooA$",
           module = true,
-          parents = List("zio.test.ZIOSpecDefault")
+          parents = List("zio.test.ZIOSpecDefault"),
         ),
         ClassShapes.Shape(
           "demo.Helper",
           module = false,
-          parents = List("java.lang.Object")
-        )
+          parents = List("java.lang.Object"),
+        ),
       )
       val world = (local ++ List(
         ClassShapes.Shape(
           "zio.test.ZIOSpecDefault",
           module = false,
-          parents = List("zio.test.ZIOSpecAbstract")
+          parents = List("zio.test.ZIOSpecAbstract"),
         )
       )).map(shape => shape.name -> shape).toMap
       val marks =
@@ -144,23 +144,23 @@ object QuickSpec extends ZIOSpecDefault:
     test("upstream jars, the jdk, and flags change the digest"):
       ZIO.scoped:
         for
-          root <- temp
-          _ <- ZIO.attempt(writeClass(root, "demo/Foo", Nil))
-          same <- SuiteStamp.digest("demo.Foo", List(root), plain)
+          root     <- temp
+          _        <- ZIO.attempt(writeClass(root, "demo/Foo", Nil))
+          same     <- SuiteStamp.digest("demo.Foo", List(root), plain)
           upstream <- SuiteStamp.digest(
             "demo.Foo",
             List(root),
-            plain.copy(upstream = List("up-1"))
+            plain.copy(upstream = List("up-1")),
           )
           jdk <- SuiteStamp.digest(
             "demo.Foo",
             List(root),
-            plain.copy(jdk = "other-jdk")
+            plain.copy(jdk = "other-jdk"),
           )
           flags <- SuiteStamp.digest(
             "demo.Foo",
             List(root),
-            plain.copy(flags = List("-encoding", "UTF-8"))
+            plain.copy(flags = List("-encoding", "UTF-8")),
           )
         yield assertTrue(
           same.isDefined && upstream != same && jdk != same && flags != same
@@ -183,8 +183,8 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           dir = root.resolve("classes")
-          _ <- ZIO.attempt(Files.createDirectories(dir))
-          _ <- unreadable(dir)
+          _       <- ZIO.attempt(Files.createDirectories(dir))
+          _       <- unreadable(dir)
           scanned <- SuiteStamp.index(List(dir)).either
         yield assertTrue(
           scanned == Left(StampError.Io(IoFailure(dir, IoFault.Walk)))
@@ -195,7 +195,7 @@ object QuickSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- temp
+          root   <- temp
           module <- named
           record = QuickRecord.file(root, module, scala3, Jvm, suiteName)
           parent = root
@@ -210,7 +210,7 @@ object QuickSpec extends ZIOSpecDefault:
             ZIO.attempt(
               Files.setPosixFilePermissions(
                 parent,
-                PosixFilePermissions.fromString("r-x------")
+                PosixFilePermissions.fromString("r-x------"),
               )
             )
           )(_ =>
@@ -218,7 +218,7 @@ object QuickSpec extends ZIOSpecDefault:
               .attempt(
                 Files.setPosixFilePermissions(
                   parent,
-                  PosixFilePermissions.fromString("rwx------")
+                  PosixFilePermissions.fromString("rwx------"),
                 )
               )
               .ignore
@@ -237,8 +237,8 @@ object QuickSpec extends ZIOSpecDefault:
             .either
         yield assertTrue(
           saved == Left(QuickError.Save(IoFailure(record, IoFault.Write))),
-          cleared == Left(QuickError.Clear(IoFailure(path, IoFault.Delete)))
-        )
+          cleared == Left(QuickError.Clear(IoFailure(path, IoFault.Delete))),
+        ),
   )
 
   private val runs = suite("testQuick run")(
@@ -247,16 +247,16 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
-          module <- named
-          digest <- requireDigest(classes)
+          _        <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          module   <- named
+          digest   <- requireDigest(classes)
           recorded <- QuickRecord.hit(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           feeds <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(!recorded, feeds == ran(module, TestStatus.Passed))
@@ -266,16 +266,16 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          _      <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           module <- named
           digest <- requireDigest(classes)
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            "not-this-digest"
+            "not-this-digest",
           )
           recorded <- QuickRecord.hit(
             root,
@@ -283,7 +283,7 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           stored <- QuickRecord.hit(
             root,
@@ -291,14 +291,14 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            "not-this-digest"
+            "not-this-digest",
           )
           feeds <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
           digest != "not-this-digest",
           !recorded,
           stored,
-          feeds == ran(module, TestStatus.Passed)
+          feeds == ran(module, TestStatus.Passed),
         )
     ,
     test("an unreadable quick record runs the suite"):
@@ -306,16 +306,16 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          _      <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           module <- named
           digest <- requireDigest(classes)
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           readable <- QuickRecord.hit(
             root,
@@ -323,7 +323,7 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           _ <- unreadable(
             QuickRecord.file(root, module, scala3, Jvm, suiteName)
@@ -334,13 +334,13 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           feeds <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
           readable,
           !hidden,
-          feeds == ran(module, TestStatus.Passed)
+          feeds == ran(module, TestStatus.Passed),
         )
     ,
     test("a suite with no digest runs"):
@@ -348,21 +348,21 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(Files.createDirectories(classes))
+          _      <- ZIO.attempt(Files.createDirectories(classes))
           module <- named
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            "recorded"
+            "recorded",
           )
           missing <- SuiteStamp.digest(suiteName, List(classes), plain)
-          feeds <- quick(root, module, classes, TestStatus.Passed, plain)
+          feeds   <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
           missing.isEmpty,
-          feeds == ran(module, TestStatus.Passed)
+          feeds == ran(module, TestStatus.Passed),
         )
     ,
     test("a record cleared after a failure runs the suite"):
@@ -370,29 +370,29 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          _      <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           module <- named
           digest <- requireDigest(classes)
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           _ <- ZIO.attempt(
             writeClass(classes, "demo/Foo", List("demo/Other"))
           )
           changed <- requireDigest(classes)
-          failed <- quick(root, module, classes, TestStatus.Failed(1), plain)
+          failed  <- quick(root, module, classes, TestStatus.Failed(1), plain)
           cleared <- QuickRecord.hit(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           replaced <- QuickRecord.hit(
             root,
@@ -400,18 +400,18 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            changed
+            changed,
           )
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          _        <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           restored <- requireDigest(classes)
-          again <- quick(root, module, classes, TestStatus.Passed, plain)
+          again    <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
           digest != changed,
           restored == digest,
           failed == ran(module, TestStatus.Failed(1)),
           !cleared,
           !replaced,
-          again == ran(module, TestStatus.Passed)
+          again == ran(module, TestStatus.Passed),
         )
     ,
     test("a quick hit is cached and the suite does not run"):
@@ -419,16 +419,16 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          _      <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           module <- named
           digest <- requireDigest(classes)
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           feeds <- quick(root, module, classes, TestStatus.Passed, plain)
         yield assertTrue(
@@ -442,24 +442,24 @@ object QuickSpec extends ZIOSpecDefault:
         for
           root <- temp
           classes = root.resolve("classes")
-          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
+          _      <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           module <- named
           digest <- requireDigest(classes)
-          _ <- QuickRecord.save(
+          _      <- QuickRecord.save(
             root,
             module,
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
-          same <- quick(root, module, classes, TestStatus.Passed, plain)
+          same     <- quick(root, module, classes, TestStatus.Passed, plain)
           upstream <- quick(
             root,
             module,
             classes,
             TestStatus.Passed,
-            plain.copy(upstream = List("up-1"))
+            plain.copy(upstream = List("up-1")),
           )
           _ <- QuickRecord.save(
             root,
@@ -467,14 +467,14 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           jdk <- quick(
             root,
             module,
             classes,
             TestStatus.Passed,
-            plain.copy(jdk = "other-jdk")
+            plain.copy(jdk = "other-jdk"),
           )
           _ <- QuickRecord.save(
             root,
@@ -482,21 +482,21 @@ object QuickSpec extends ZIOSpecDefault:
             scala3,
             Jvm,
             suiteName,
-            digest
+            digest,
           )
           flags <- quick(
             root,
             module,
             classes,
             TestStatus.Passed,
-            plain.copy(flags = List("-encoding", "UTF-8"))
+            plain.copy(flags = List("-encoding", "UTF-8")),
           )
         yield assertTrue(
           same == Chunk(TestFeed.Cached(module, scala3, Jvm, suiteName)),
           upstream == ran(module, TestStatus.Passed),
           jdk == ran(module, TestStatus.Passed),
-          flags == ran(module, TestStatus.Passed)
-        )
+          flags == ran(module, TestStatus.Passed),
+        ),
   )
 
   private val sources = suite("source watch")(
@@ -515,7 +515,7 @@ object QuickSpec extends ZIOSpecDefault:
           same <- SourceWatch.take(
             List(root.resolve("src"), root.resolve("histos.scala"))
           )
-          _ <- ZIO.attempt(Files.writeString(file, "two"))
+          _     <- ZIO.attempt(Files.writeString(file, "two"))
           after <- SourceWatch.take(
             List(root.resolve("src"), root.resolve("histos.scala"))
           )
@@ -525,7 +525,7 @@ object QuickSpec extends ZIOSpecDefault:
   private def writeClass(
       root: Path,
       internal: String,
-      calls: List[String]
+      calls: List[String],
   ): Unit =
     val writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
     writer.visit(
@@ -534,14 +534,14 @@ object QuickSpec extends ZIOSpecDefault:
       internal,
       null,
       "java/lang/Object",
-      null
+      null,
     )
     val method = writer.visitMethod(
       Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
       "run",
       "()V",
       null,
-      null
+      null,
     )
     calls.foreach { owner =>
       method.visitMethodInsn(Opcodes.INVOKESTATIC, owner, "run", "()V", false)
@@ -560,7 +560,7 @@ object QuickSpec extends ZIOSpecDefault:
       .work("histos-quick")
       .mapError(error => new java.io.IOException(error.message))
 
-  private val scala3 = ScalaVersion("3.10.0")
+  private val scala3    = ScalaVersion("3.10.0")
   private val suiteName = "demo.Foo"
 
   private def named: ZIO[Any, histos.ProjectNameError, ProjectName] =
@@ -577,7 +577,7 @@ object QuickSpec extends ZIOSpecDefault:
     Chunk(
       TestFeed.Begin(module, scala3, Jvm),
       TestFeed.Out(suiteName),
-      TestFeed.Done(TestedCell(module, scala3, Jvm, status))
+      TestFeed.Done(TestedCell(module, scala3, Jvm, status)),
     )
 
   private def quick(
@@ -585,7 +585,7 @@ object QuickSpec extends ZIOSpecDefault:
       module: ProjectName,
       classes: Path,
       status: TestStatus,
-      cover: SuiteStamp.Cover
+      cover: SuiteStamp.Cover,
   ): ZIO[Any, ModuleTestError, Chunk[TestFeed]] =
     SuiteLaunch
       .remember(
@@ -599,7 +599,7 @@ object QuickSpec extends ZIOSpecDefault:
           key = None,
           changed = true,
           sources = None,
-          classesWritten = None
+          classesWritten = None,
         ),
         List(suiteName),
         List(classes),
@@ -611,10 +611,10 @@ object QuickSpec extends ZIOSpecDefault:
               List(
                 TestFeed.Begin(module, scala3, Jvm),
                 TestFeed.Out(names.mkString(" ")),
-                TestFeed.Done(TestedCell(module, scala3, Jvm, status))
+                TestFeed.Done(TestedCell(module, scala3, Jvm, status)),
               )
             )
-          )
+          ),
       )
       .flatMap(_.runCollect)
       .provide(ZLayer.succeed(TestContext.empty))
@@ -625,7 +625,7 @@ object QuickSpec extends ZIOSpecDefault:
         ZIO.attempt(
           Files.setPosixFilePermissions(
             path,
-            PosixFilePermissions.fromString("---------")
+            PosixFilePermissions.fromString("---------"),
           )
         )
       )(_ =>
@@ -633,7 +633,7 @@ object QuickSpec extends ZIOSpecDefault:
           .attempt(
             Files.setPosixFilePermissions(
               path,
-              PosixFilePermissions.fromString("rw-------")
+              PosixFilePermissions.fromString("rw-------"),
             )
           )
           .ignore
@@ -641,3 +641,4 @@ object QuickSpec extends ZIOSpecDefault:
       .unit
 
   def spec = suite("quick")(stamps, sources, runs)
+end QuickSpec

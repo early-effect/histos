@@ -4,10 +4,9 @@ import java.util.concurrent.{ExecutorService, Executors, ThreadFactory}
 
 import zio.{Executor, Runtime, Scope, URIO, ZIO}
 
-/**
- * Daemon threads whose context class loader is the build loader. A fiber can move to another
- * thread at any step, so a context loader set on one thread does not follow build or plugin code.
- */
+/** Daemon threads whose context class loader is the build loader. A fiber can move to another thread at any step, so a
+  * context loader set on one thread does not follow build or plugin code.
+  */
 private[load] final class PluginThreads private (main: Executor, blocking: Executor):
   def run[R, E, A](effect: ZIO[R, E, A]): ZIO[R, E, A] =
     ZIO.scoped[R](Runtime.setBlockingExecutor(blocking).build *> effect.onExecutor(main))
@@ -31,3 +30,4 @@ private[load] object PluginThreads:
       thread.setDaemon(true)
       thread.setContextClassLoader(loader)
       thread
+end PluginThreads

@@ -1,13 +1,7 @@
 package histos.publish
 
 import histos.resolve.IdleResolve
-import histos.version.{
-  Decision,
-  PublishAction,
-  Session,
-  ShipNumber,
-  VersionTask
-}
+import histos.version.{Decision, PublishAction, Session, ShipNumber, VersionTask}
 import histos.zinc.GraphCompile
 import histos.{Organization, Projects, ScalaVersion, module}
 
@@ -20,32 +14,32 @@ import zio.test.*
 
 object PublishHoldSpec extends ZIOSpecDefault:
   private val line = "libs compile 1.0.0-ci hold already-released"
-  private val env = Map(
-    Session.Key -> "snapshot",
-    Session.ShaKey -> "0123456789abcdef0123456789abcdef01234567",
-    Session.BranchKey -> "default"
+  private val env  = Map(
+    Session.Key       -> "snapshot",
+    Session.ShaKey    -> "0123456789abcdef0123456789abcdef01234567",
+    Session.BranchKey -> "default",
   )
 
   def spec = suite("publish hold")(
     test("a held ship is named and not published"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           repo <- temp
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             Files.createDirectories(root.resolve(".histos"))
             Files.writeString(
               root.resolve(".histos").resolve("releases"),
-              "libs matches\n"
+              "libs matches\n",
             )
           }
-          graph <- ZIO.fromEither(held)
+          graph  <- ZIO.fromEither(held)
           report <- PublishRun
             .run(root, graph, Nil, jdk, env, repo.toString, _ => ZIO.unit)
             .provide(IdleResolve.layer)
           decision <- VersionTask.decide(graph, root, env)
-          wrote <- ZIO.attempt(
+          wrote    <- ZIO.attempt(
             Option(repo.toFile.list()).map(_.toList).getOrElse(Nil)
           )
         yield
@@ -61,10 +55,8 @@ object PublishHoldSpec extends ZIOSpecDefault:
             expected == List(line),
             report.lines == expected,
             report.output.modules.isEmpty,
-            report.lines.exists(text =>
-              text.contains("libs") && text.contains("already-released")
-            ),
-            wrote.isEmpty
+            report.lines.exists(text => text.contains("libs") && text.contains("already-released")),
+            wrote.isEmpty,
           )
   ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@ TestAspect
     .timeout(30.seconds)
@@ -73,7 +65,7 @@ object PublishHoldSpec extends ZIOSpecDefault:
     val core = module("core", histos.Jvm)(ScalaVersion("3.10.0"))
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.ship("libs", ShipNumber("1.0.0"))(core)),
-      core
+      core,
     )
 
   private def temp: ZIO[Scope, Throwable, Path] =
@@ -82,7 +74,7 @@ object PublishHoldSpec extends ZIOSpecDefault:
     ): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
