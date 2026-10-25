@@ -91,6 +91,7 @@ private final class HistosLive(
       gates <- Ref.make(Map.empty[StepId, Promise[StepFailure[E], Chunk[Byte]]])
       events <- Queue.unbounded[StepEvent[E]]
       done <- Promise.make[Nothing, Outcome[E, A]]
+      _ <- ZIO.addFinalizer(events.shutdown)
       _ <- eval(goal, limits, gates, events)
         .foldCauseZIO(
           cause =>
@@ -98,7 +99,6 @@ private final class HistosLive(
             else fail(goal, cause, done),
           value => done.succeed(Outcome.Done(value))
         )
-        .ensuring(events.shutdown)
         .forkScoped
     yield Running(ZStream.fromQueue(events), done.await)
 

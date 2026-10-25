@@ -51,21 +51,22 @@ object HistosSpec extends ZIOSpecDefault:
             case _: Outcome.Done[?, ?]   => false
           assertTrue(!did, failed)
     ,
-    (test("the event stream ends when the run ends"):
+    (test("events stay readable after the run completes"):
       ZIO.scoped:
         for
           running <- ZIO.serviceWithZIO[Histos](
             _.start(Step.local[Unit](infoA)(ZIO.unit))
           )
-          found <- running.events.runCollect.timeout(2.seconds)
+          _ <- running.outcome
+          found <- running.events.take(2).runCollect.timeout(2.seconds)
         yield
-          val ended = found match
+          val readable = found match
             case Some(events) =>
               events.exists:
                 case StepEvent.Finished(_, Source.Ran, _) => true
                 case _                                    => false
             case None => false
-          assertTrue(ended)
+          assertTrue(readable)
     ) @@ TestAspect.withLiveClock,
   ).provide(one)
 
