@@ -25,7 +25,7 @@ import histos.resolve.{
   ResolveCell,
   ResolveError
 }
-import histos.server.{Calls, Daemon}
+import histos.server.{Calls, Daemon, Message}
 import histos.zinc.GraphCompile
 import histos.Dep
 import histos.*
@@ -168,6 +168,39 @@ object CliSpec extends ZIOSpecDefault:
     yield done
 
   private val cli = suite("cli")(
+    test("a line reaches the console before the call finishes"):
+      for
+        release <- Promise.make[Nothing, Unit]
+        started <- Promise.make[Nothing, Unit]
+        fiber <- Cli.recorded { say =>
+          say(Message.Out("compiling core")) *>
+            say(Message.Err("unused")) *>
+            say(Message.Out("")) *>
+            started.succeed(()) *>
+            release.await *>
+            say(Message.Out("suite passed")) *>
+            say(Message.Exit(1, "failed"))
+        }.fork
+        _ <- started.await
+        duringOut <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
+        duringErr <- TestConsole.outputErr.map(
+          _.map(_.stripSuffix("\n")).toList
+        )
+        _ <- release.succeed(())
+        done <- fiber.join
+        afterOut <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
+        afterErr <- TestConsole.outputErr.map(_.map(_.stripSuffix("\n")).toList)
+      yield assertTrue(
+        duringOut == List("compiling core", ""),
+        duringErr == List("unused"),
+        afterOut == List("compiling core", "", "suite passed"),
+        afterErr == List("unused", "failed"),
+        done.out == "compiling core\n\nsuite passed",
+        done.err == "unused\nfailed",
+        done.exit == CliExit.TaskFailed,
+        done.playback == Playback.Heard
+      )
+    ,
     test("version does not touch the build"):
       for parsed <- Cli.parse(List("version"))
       yield assertTrue(

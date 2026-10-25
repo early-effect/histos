@@ -129,7 +129,17 @@ object CliExit:
       case 130   => Interrupted
       case other => Program(other)
 
-final case class Completed(exit: CliExit, out: String, err: String)
+/** Heard text is already on the console. Held text is printed by finish. */
+enum Playback:
+  case Heard
+  case Held
+
+final case class Completed(
+    exit: CliExit,
+    out: String,
+    err: String,
+    playback: Playback
+)
 
 object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
@@ -150,7 +160,9 @@ object Cli:
         {
           case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
           case detail                    =>
-            ZIO.succeed(Completed(CliExit.Usage, "", detail.message))
+            ZIO.succeed(
+              Completed(CliExit.Usage, "", detail.message, Playback.Held)
+            )
         },
         command => perform(repo, apiJar, command)
       )
@@ -165,7 +177,9 @@ object Cli:
         attach(
           repo,
           Call.Version,
-          ZIO.succeed(Completed(CliExit.Success, VersionText, ""))
+          ZIO.succeed(
+            Completed(CliExit.Success, VersionText, "", Playback.Held)
+          )
         )
       case Command.Graph                  => graph(repo, apiJar)
       case Command.Run(id, platform)      => run(repo, apiJar, id, platform)
@@ -213,7 +227,7 @@ object Cli:
   ): URIO[Local, Completed] =
     Operation.operation(inner) match
       case Left(error) =>
-        ZIO.succeed(Completed(CliExit.Usage, "", error.message))
+        ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
       case Right(call) =>
         attach(repo, Call.Watch(call), watchLocal(repo, apiJar, call))
 
@@ -222,29 +236,33 @@ object Cli:
       apiJar: Path,
       inner: Call
   ): URIO[Local, Completed] =
-    Ref.make(Completed(CliExit.Success, "", "")).flatMap { result =>
-      val printing = new Say({
-        case Message.Out(text)       => say(text)
-        case Message.Err(text)       => sayError(text)
-        case Message.Exit(code, err) =>
-          result.set(Completed(CliExit.fromCode(code), "", err))
-        case _ => ZIO.unit
-      })
-      Watching
-        .session(
-          repo,
-          printing,
-          operate(repo, apiJar, inner, printing.dropExit),
-          ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
-            case Left(_)       => List(repo.resolve("histos.scala"))
-            case Right(loaded) => Watching.roots(repo, inner, loaded.graph)
-          }
-        )
-        .foldZIO(
-          error =>
-            ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message)),
-          _ => result.get
-        )
+    Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap {
+      result =>
+        val printing = new Say({
+          case Message.Out(text)       => say(text)
+          case Message.Err(text)       => sayError(text)
+          case Message.Exit(code, err) =>
+            result
+              .set(Completed(CliExit.fromCode(code), "", err, Playback.Held))
+          case _ => ZIO.unit
+        })
+        Watching
+          .session(
+            repo,
+            printing,
+            operate(repo, apiJar, inner, printing.dropExit),
+            ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
+              case Left(_)       => List(repo.resolve("histos.scala"))
+              case Right(loaded) => Watching.roots(repo, inner, loaded.graph)
+            }
+          )
+          .foldZIO(
+            error =>
+              ZIO.succeed(
+                Completed(CliExit.TaskFailed, "", error.message, Playback.Held)
+              ),
+            _ => result.get
+          )
     }
 
   /** The no-server path for one call. Compile, test, run, publish, and assembly
@@ -487,12 +505,14 @@ object Cli:
       .serviceWithZIO[Loader](_.load(repo, apiJar))
       .either
       .map:
-        case Left(err)     => Completed(CliExit.LoadFailed, "", err.message)
+        case Left(err) =>
+          Completed(CliExit.LoadFailed, "", err.message, Playback.Held)
         case Right(loaded) =>
           Completed(
             CliExit.Success,
             GraphText.render(loaded.graph, loaded.plugins.links),
-            ""
+            "",
+            Playback.Held
           )
 
   private def run(
@@ -522,7 +542,10 @@ object Cli:
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
       .foldZIO(
-        error => ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+        error =>
+          ZIO.succeed(
+            Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+          ),
         use
       )
 
@@ -545,8 +568,9 @@ object Cli:
     Plan
       .show(repo, loaded.graph, projects)
       .fold(
-        error => Completed(CliExit.CompileFailed, "", error.message),
-        text => Completed(CliExit.Success, text, "")
+        error =>
+          Completed(CliExit.CompileFailed, "", error.message, Playback.Held),
+        text => Completed(CliExit.Success, text, "", Playback.Held)
       )
 
   private def assembly(
@@ -620,14 +644,14 @@ object Cli:
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store =>
-      Completed(CliExit.Success, store.root.toString, "")
+      Completed(CliExit.Success, store.root.toString, "", Playback.Held)
     )
 
   private def cacheList: URIO[ContentStore, Completed] =
     ZIO
       .serviceWithZIO[ContentStore](_.list)
       .mapBoth(
-        err => Completed(CliExit.LoadFailed, "", err.message),
+        err => Completed(CliExit.LoadFailed, "", err.message, Playback.Held),
         entries =>
           val text =
             if entries.isEmpty then ""
@@ -635,7 +659,7 @@ object Cli:
               entries
                 .map(entry => s"${entry.digest.value} ${entry.bytes}")
                 .mkString("\n")
-          Completed(CliExit.Success, text, "")
+          Completed(CliExit.Success, text, "", Playback.Held)
       )
       .merge
 
@@ -646,7 +670,7 @@ object Cli:
           store.clean(now, ContentStore.Retention, dryRun)
         )
       .mapBoth(
-        err => Completed(CliExit.LoadFailed, "", err.message),
+        err => Completed(CliExit.LoadFailed, "", err.message, Playback.Held),
         entries =>
           val verb = if dryRun then "would remove" else "removed"
           val text =
@@ -655,7 +679,7 @@ object Cli:
               entries
                 .map(entry => s"$verb ${entry.digest.value}")
                 .mkString("\n")
-          Completed(CliExit.Success, text, "")
+          Completed(CliExit.Success, text, "", Playback.Held)
       )
       .merge
 
@@ -676,8 +700,15 @@ object Cli:
     histos.clean.Products
       .wipe(repo)
       .fold(
-        error => Completed(CliExit.TaskFailed, "", error.message),
-        _ => Completed(CliExit.Success, histos.clean.Products.line(Nil), "")
+        error =>
+          Completed(CliExit.TaskFailed, "", error.message, Playback.Held),
+        _ =>
+          Completed(
+            CliExit.Success,
+            histos.clean.Products.line(Nil),
+            "",
+            Playback.Held
+          )
       )
 
   private def cleanNamed(
@@ -689,9 +720,19 @@ object Cli:
       .named(repo, build.graph, projects)
       .fold(
         error =>
-          Completed(CliExit.TaskFailed, "", histos.clean.Products.fault(error)),
+          Completed(
+            CliExit.TaskFailed,
+            "",
+            histos.clean.Products.fault(error),
+            Playback.Held
+          ),
         names =>
-          Completed(CliExit.Success, histos.clean.Products.line(names), "")
+          Completed(
+            CliExit.Success,
+            histos.clean.Products.line(names),
+            "",
+            Playback.Held
+          )
       )
 
   private def cleanFull(repo: Path): URIO[ContentStore, Completed] =
@@ -703,7 +744,10 @@ object Cli:
     histos.clean.Products
       .wipe(repo)
       .foldZIO(
-        error => ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message)),
+        error =>
+          ZIO.succeed(
+            Completed(CliExit.TaskFailed, "", error.message, Playback.Held)
+          ),
         _ =>
           ZIO
             .serviceWithZIO[ContentStore]: store =>
@@ -711,12 +755,14 @@ object Cli:
                 store.forget(histos.cache.CacheProject.of(repo), now)
               )
             .fold(
-              error => Completed(CliExit.LoadFailed, "", error.message),
+              error =>
+                Completed(CliExit.LoadFailed, "", error.message, Playback.Held),
               entries =>
                 Completed(
                   CliExit.Success,
                   histos.clean.Products.forgotten(entries),
-                  ""
+                  "",
+                  Playback.Held
                 )
             )
       )
@@ -743,11 +789,11 @@ object Cli:
         .fold(
           {
             case error: LoadError =>
-              Completed(CliExit.LoadFailed, "", error.message)
+              Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
             case error: ResolveError =>
-              Completed(CliExit.ResolveFailed, "", error.message)
+              Completed(CliExit.ResolveFailed, "", error.message, Playback.Held)
           },
-          text => Completed(CliExit.Success, text, "")
+          text => Completed(CliExit.Success, text, "", Playback.Held)
         )
 
   private def workflow(
@@ -771,13 +817,22 @@ object Cli:
       .either
       .flatMap:
         case Left(error) =>
-          ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+          ZIO.succeed(
+            Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+          )
         case Right(loaded) =>
           Calls
             .workflowWork(repo, loaded.graph, action)
             .fold(
-              fault => Completed(CliExit.WorkflowFailed, "", fault.message),
-              file => Completed(CliExit.Success, file.toString, "")
+              fault =>
+                Completed(
+                  CliExit.WorkflowFailed,
+                  "",
+                  fault.message,
+                  Playback.Held
+                ),
+              file =>
+                Completed(CliExit.Success, file.toString, "", Playback.Held)
             )
 
   private def toolchain(
@@ -799,12 +854,26 @@ object Cli:
             Toolchain
               .explain(machine)
               .mapBoth(
-                err => Completed(CliExit.ToolchainFailed, "", err.message),
-                found => Completed(CliExit.Success, Toolchain.text(found), "")
+                err =>
+                  Completed(
+                    CliExit.ToolchainFailed,
+                    "",
+                    err.message,
+                    Playback.Held
+                  ),
+                found =>
+                  Completed(
+                    CliExit.Success,
+                    Toolchain.text(found),
+                    "",
+                    Playback.Held
+                  )
               )
               .merge
           case Left(error) =>
-            ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+            ZIO.succeed(
+              Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+            )
           case Right(loaded) =>
             Survey
               .read(machine, loaded.graph)
@@ -813,9 +882,16 @@ object Cli:
                   Completed(
                     CliExit.ToolchainFailed,
                     Survey.shown(err),
-                    err.message
+                    err.message,
+                    Playback.Held
                   ),
-                found => Completed(CliExit.Success, Survey.text(found), "")
+                found =>
+                  Completed(
+                    CliExit.Success,
+                    Survey.text(found),
+                    "",
+                    Playback.Held
+                  )
               )
               .merge
     }
@@ -828,8 +904,8 @@ object Cli:
       HistosMcp
         .serve(repo, apiJar, LinePipe.standard, machine)
         .fold(
-          err => Completed(CliExit.LoadFailed, "", err.message),
-          _ => Completed(CliExit.Success, "", "")
+          err => Completed(CliExit.LoadFailed, "", err.message, Playback.Held),
+          _ => Completed(CliExit.Success, "", "", Playback.Held)
         )
 
   private def bsp(
@@ -847,14 +923,22 @@ object Cli:
                 case ServerError.Unreachable(_) =>
                   bspLocal(repo, apiJar)
                 case error =>
-                  ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                  ZIO.succeed(
+                    Completed(
+                      CliExit.LoadFailed,
+                      "",
+                      error.message,
+                      Playback.Held
+                    )
+                  )
               },
               code =>
                 ZIO.succeed(
                   Completed(
                     if code == 0 then CliExit.Success else CliExit.TaskFailed,
                     "",
-                    ""
+                    "",
+                    Playback.Held
                   )
                 )
             )
@@ -863,7 +947,8 @@ object Cli:
             Completed(
               CliExit.LoadFailed,
               "",
-              ServerError.DifferentVersion.message
+              ServerError.DifferentVersion.message,
+              Playback.Held
             )
           )
         case Decision.Absent => bspLocal(repo, apiJar)
@@ -877,12 +962,18 @@ object Cli:
             Completed(
               CliExit.LoadFailed,
               "",
-              ServerError.DifferentVersion.message
+              ServerError.DifferentVersion.message,
+              Playback.Held
             )
           )
         case Decision.Absent =>
           ZIO.succeed(
-            Completed(CliExit.LoadFailed, "", ServerError.NoServer.message)
+            Completed(
+              CliExit.LoadFailed,
+              "",
+              ServerError.NoServer.message,
+              Playback.Held
+            )
           )
         case Decision.Open(socket) =>
           remote(socket, Call.Reload).foldZIO(
@@ -892,11 +983,19 @@ object Cli:
                   Completed(
                     CliExit.LoadFailed,
                     "",
-                    ServerError.NoServer.message
+                    ServerError.NoServer.message,
+                    Playback.Held
                   )
                 )
               case error =>
-                ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                ZIO.succeed(
+                  Completed(
+                    CliExit.LoadFailed,
+                    "",
+                    error.message,
+                    Playback.Held
+                  )
+                )
             },
             done => ZIO.succeed(done)
           )
@@ -905,9 +1004,15 @@ object Cli:
     histos.publish.LauncherPin
       .update(repo)
       .fold(
-        error => Completed(CliExit.ResolveFailed, "", error.message),
+        error =>
+          Completed(CliExit.ResolveFailed, "", error.message, Playback.Held),
         pin =>
-          Completed(CliExit.Success, s"${pin.revision} ${pin.sha256.value}", "")
+          Completed(
+            CliExit.Success,
+            s"${pin.revision} ${pin.sha256.value}",
+            "",
+            Playback.Held
+          )
       )
 
   /** The id is the key the server already stores. No server has no runs. */
@@ -920,22 +1025,48 @@ object Cli:
         .flatMap(runs => recorded(Calls.cancel(runs, id, _)))
     )
 
-  private def recorded[R](
+  private[cli] def recorded[R](
       run: Say => ZIO[R, ServerError, Unit]
   ): URIO[R, Completed] =
     Ref.make(Chunk.empty[Feed]).flatMap { feeds =>
-      run(Say.record(feeds)).foldCauseZIO(
+      run(speaking(feeds)).foldCauseZIO(
         cause =>
           if cause.isInterruptedOnly then
-            ZIO.succeed(Completed(CliExit.Interrupted, "", ""))
+            ZIO.succeed(Completed(CliExit.Interrupted, "", "", Playback.Heard))
           else
             cause.failureOrCause match
               case Left(error) =>
-                ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                ZIO.succeed(
+                  Completed(
+                    CliExit.LoadFailed,
+                    "",
+                    error.message,
+                    Playback.Held
+                  )
+                )
               case Right(rest) => ZIO.failCause(rest),
-        _ => feeds.get.map(completed)
+        _ =>
+          feeds.get.flatMap: chunk =>
+            val done = completed(chunk)
+            if chunk.collectFirst { case Feed.Exit(_, _) => () }.isDefined then
+              ZIO.succeed(done)
+            else sayError("the call did not finish").as(done)
       )
     }
+
+  /** Print, then append, so the line is on the console before the next message.
+    */
+  private def speaking(feeds: Ref[Chunk[Feed]]): Say =
+    new Say({
+      case Message.Out(text) =>
+        say(text) *> feeds.update(_ :+ Feed.Out(text))
+      case Message.Err(text) =>
+        sayError(text) *> feeds.update(_ :+ Feed.Err(text))
+      case Message.Exit(code, err) =>
+        val shown = if err.isEmpty then ZIO.unit else sayError(err)
+        shown *> feeds.update(_ :+ Feed.Exit(code, err))
+      case _ => ZIO.unit
+    })
 
   private def completed(feeds: Chunk[Feed]): Completed =
     val out = feeds.collect { case Feed.Out(text) => text }.mkString("\n")
@@ -949,9 +1080,14 @@ object Cli:
           if message.isEmpty then errLines.mkString("\n")
           else if errLines.isEmpty then message
           else s"${errLines.mkString("\n")}\n$message"
-        Completed(CliExit.fromCode(code), out, err)
+        Completed(CliExit.fromCode(code), out, err, Playback.Heard)
       case Nil =>
-        Completed(CliExit.TaskFailed, out, "the call did not finish")
+        Completed(
+          CliExit.TaskFailed,
+          out,
+          "the call did not finish",
+          Playback.Heard
+        )
 
   /** A running server replaces itself. No server starts one. */
   private[histos] def reboot(
@@ -967,7 +1103,14 @@ object Cli:
               case ServerError.Unreachable(_) | ServerError.DifferentVersion =>
                 serve(repo, apiJar)
               case error =>
-                ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                ZIO.succeed(
+                  Completed(
+                    CliExit.LoadFailed,
+                    "",
+                    error.message,
+                    Playback.Held
+                  )
+                )
             },
             done => ZIO.succeed(done)
           )
@@ -985,7 +1128,9 @@ object Cli:
           .load(repo, apiJar)
           .foldZIO(
             error =>
-              ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+              ZIO.succeed(
+                Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+              ),
             loaded =>
               ZIO
                 .serviceWithZIO[Machine](GraphCompile.jdk)
@@ -993,7 +1138,12 @@ object Cli:
                   error =>
                     ZIO
                       .succeed(
-                        Completed(CliExit.CompileFailed, "", error.message)
+                        Completed(
+                          CliExit.CompileFailed,
+                          "",
+                          error.message,
+                          Playback.Held
+                        )
                       ),
                   jdk =>
                     loader
@@ -1001,7 +1151,12 @@ object Cli:
                       .foldZIO(
                         error =>
                           ZIO.succeed(
-                            Completed(CliExit.LoadFailed, "", error.message)
+                            Completed(
+                              CliExit.LoadFailed,
+                              "",
+                              error.message,
+                              Playback.Held
+                            )
                           ),
                         classpath =>
                           Daemon
@@ -1031,13 +1186,21 @@ object Cli:
                                       Completed(
                                         CliExit.LoadFailed,
                                         "",
-                                        error.message
+                                        error.message,
+                                        Playback.Held
                                       )
                                     )
                                   case Right(rest) => ZIO.failCause(rest)
                               ,
                               _ =>
-                                ZIO.succeed(Completed(CliExit.Success, "", ""))
+                                ZIO.succeed(
+                                  Completed(
+                                    CliExit.Success,
+                                    "",
+                                    "",
+                                    Playback.Held
+                                  )
+                                )
                             )
                       )
                 )
@@ -1061,7 +1224,14 @@ object Cli:
             {
               case ServerError.Unreachable(_) => local
               case error                      =>
-                ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message))
+                ZIO.succeed(
+                  Completed(
+                    CliExit.LoadFailed,
+                    "",
+                    error.message,
+                    Playback.Held
+                  )
+                )
             },
             done => ZIO.succeed(done)
           )
@@ -1070,7 +1240,8 @@ object Cli:
             Completed(
               CliExit.LoadFailed,
               "",
-              ServerError.DifferentVersion.message
+              ServerError.DifferentVersion.message,
+              Playback.Held
             )
           )
         case Decision.Absent => local
@@ -1079,13 +1250,16 @@ object Cli:
       socket: java.nio.file.Path,
       call: Call
   ): ZIO[Any, ServerError, Completed] =
-    zio.Ref.make(Completed(CliExit.Success, "", "")).flatMap { result =>
-      Client.talk(socket, call).foreach {
-        case histos.server.Feed.Out(text)       => say(text)
-        case histos.server.Feed.Err(text)       => sayError(text)
-        case histos.server.Feed.Exit(code, err) =>
-          result.set(Completed(CliExit.fromCode(code), "", err))
-      } *> result.get
+    zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap {
+      result =>
+        Client.talk(socket, call).foreach {
+          case histos.server.Feed.Out(text)       => say(text)
+          case histos.server.Feed.Err(text)       => sayError(text)
+          case histos.server.Feed.Exit(code, err) =>
+            result.set(
+              Completed(CliExit.fromCode(code), "", err, Playback.Held)
+            )
+        } *> result.get
     }
 
   private def bspLocal(
@@ -1098,7 +1272,9 @@ object Cli:
         .load(repo, apiJar)
         .foldZIO(
           error =>
-            ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message)),
+            ZIO.succeed(
+              Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+            ),
           loaded =>
             ZIO
               .serviceWithZIO[Machine](GraphCompile.jdk)
@@ -1106,7 +1282,12 @@ object Cli:
                 error =>
                   ZIO
                     .succeed(
-                      Completed(CliExit.CompileFailed, "", error.message)
+                      Completed(
+                        CliExit.CompileFailed,
+                        "",
+                        error.message,
+                        Playback.Held
+                      )
                     ),
                 jdk =>
                   loader
@@ -1114,7 +1295,12 @@ object Cli:
                     .foldZIO(
                       error =>
                         ZIO.succeed(
-                          Completed(CliExit.LoadFailed, "", error.message)
+                          Completed(
+                            CliExit.LoadFailed,
+                            "",
+                            error.message,
+                            Playback.Held
+                          )
                         ),
                       classpath =>
                         val output = java.lang.System.out
@@ -1142,7 +1328,8 @@ object Cli:
                                     Completed(
                                       CliExit.ResolveFailed,
                                       "",
-                                      error.message
+                                      error.message,
+                                      Playback.Held
                                     )
                                   )
                                 case Right(session) =>
@@ -1152,7 +1339,8 @@ object Cli:
                                         Completed(
                                           CliExit.LoadFailed,
                                           "",
-                                          error.message
+                                          error.message,
+                                          Playback.Held
                                         )
                                       ),
                                     code =>
@@ -1161,7 +1349,8 @@ object Cli:
                                           if code == 0 then CliExit.Success
                                           else CliExit.TaskFailed,
                                           "",
-                                          ""
+                                          "",
+                                          Playback.Held
                                         )
                                       )
                                   )
@@ -1199,11 +1388,13 @@ object Cli:
       .either
       .flatMap:
         case Left(err) =>
-          ZIO.succeed(Completed(CliExit.LoadFailed, "", err.message))
+          ZIO.succeed(
+            Completed(CliExit.LoadFailed, "", err.message, Playback.Held)
+          )
         case Right(loaded) =>
           taskFrom(loaded, tokens) match
             case TaskParsed.Usage(message) =>
-              ZIO.succeed(Completed(CliExit.Usage, "", message))
+              ZIO.succeed(Completed(CliExit.Usage, "", message, Playback.Held))
             case TaskParsed.Ready(task) =>
               if watched then
                 attach(repo, Call.Watch(task), watchLocal(repo, apiJar, task))
@@ -1289,7 +1480,10 @@ object Main extends ZIOAppDefault:
     Machine
       .load(repo)
       .foldZIO(
-        err => finish(Completed(CliExit.ToolchainFailed, "", err.message)),
+        err =>
+          finish(
+            Completed(CliExit.ToolchainFailed, "", err.message, Playback.Held)
+          ),
         machine =>
           Cli
             .parse(args)
@@ -1306,7 +1500,12 @@ object Main extends ZIOAppDefault:
                   .foldZIO(
                     err =>
                       finish(
-                        Completed(CliExit.ToolchainFailed, "", err.message)
+                        Completed(
+                          CliExit.ToolchainFailed,
+                          "",
+                          err.message,
+                          Playback.Held
+                        )
                       ),
                     _ => runCommand(args, repo, jars.api, machine)
                   )
@@ -1339,9 +1538,12 @@ object Main extends ZIOAppDefault:
     exit(zio.ExitCode(code))
 
   private def finish(done: Completed): UIO[Unit] =
-    Console.printLine(done.out).when(done.out.nonEmpty).ignore *>
-      Console.printLineError(done.err).when(done.err.nonEmpty).ignore *>
-      stop(done.exit.code)
+    val pending = done.playback match
+      case Playback.Heard => ZIO.unit
+      case Playback.Held  =>
+        Console.printLine(done.out).when(done.out.nonEmpty).ignore *>
+          Console.printLineError(done.err).when(done.err.nonEmpty).ignore
+    pending *> stop(done.exit.code)
 
   private def jars: IO[LoadError, Jars] =
     located.flatMap: program =>
