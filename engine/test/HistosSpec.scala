@@ -2,7 +2,7 @@ package histos.schedule
 
 import histos.step.{Need, Step, StepId, StepInfo, Stored, StoredError}
 
-import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object HistosSpec extends ZIOSpecDefault:
@@ -51,6 +51,22 @@ object HistosSpec extends ZIOSpecDefault:
             case _: Outcome.Done[?, ?]   => false
           assertTrue(!did, failed)
     ,
+    (test("the event stream ends when the run ends"):
+      ZIO.scoped:
+        for
+          running <- ZIO.serviceWithZIO[Histos](
+            _.start(Step.local[Unit](infoA)(ZIO.unit))
+          )
+          found <- running.events.runCollect.timeout(2.seconds)
+        yield
+          val ended = found match
+            case Some(events) =>
+              events.exists:
+                case StepEvent.Finished(_, Source.Ran, _) => true
+                case _                                    => false
+            case None => false
+          assertTrue(ended)
+    ) @@ TestAspect.withLiveClock,
   ).provide(one)
 
   def spec = executor
