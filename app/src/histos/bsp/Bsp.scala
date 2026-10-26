@@ -62,8 +62,8 @@ object Bsp:
     case Missing, Rejected
 
     def message: String = this match
-      case Missing  => "bsp params are required"
-      case Rejected => "bsp params were rejected"
+      case Missing  => Rpc.ParamsDecode.Missing.message
+      case Rejected => Rpc.ParamsDecode.Rejected.message
   end ParamFault
 
   private enum BspError:
