@@ -77,16 +77,15 @@ object LauncherSpec extends ZIOSpecDefault:
     test("a missing assembly is refused before a write"):
       ZIO.scoped:
         for
-          root  <- temp
-          graph <- ZIO.fromEither(opened)
-          ready <- ZIO
-            .attemptBlocking(LauncherPublish.ready(root, graph))
-            .mapError(_ => IoFailure(root, IoFault.Stat))
-          missingJar = ready match
+          root    <- temp
+          graph   <- ZIO.fromEither(opened)
+          refused <- LauncherPublish.ready(root, graph).either
+        yield assertTrue(
+          refused match
             case Left(LocalPublishError.NoAssembly(path)) =>
               path.endsWith(Path.of("dist", "histos.jar"))
             case _ => false
-        yield assertTrue(missingJar)
+        )
     ,
     test("a module revision other than the ship is refused"):
       ZIO.scoped:
