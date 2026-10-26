@@ -14,14 +14,14 @@ enum StepId:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-      phase: Phase
+      phase: Phase,
   )
   case Plugin(task: PluginTaskId)
 
-  /** A key that is not a cell or a plugin task. The scheduler uses the action
-    * id.
+  /** A key that is not a cell or a plugin task. The scheduler uses the action id.
     */
   case Work(key: String)
+end StepId
 
 opaque type InputName = String
 
@@ -29,6 +29,7 @@ object InputName:
   def apply(raw: String): InputName = raw
 
   extension (name: InputName) def value: String = name
+end InputName
 
 enum InputValue:
   case Text(value: String)
@@ -40,8 +41,7 @@ final case class Input(name: InputName, value: InputValue)
 enum Need:
   case Cpu, Io, Process
 
-/** What identifies the work. The digest is these inputs plus the content hash
-  * of each upstream value.
+/** What identifies the work. The digest is these inputs plus the content hash of each upstream value.
   */
 final case class StepInfo(id: StepId, inputs: Chunk[Input], needs: Set[Need])
 
@@ -50,8 +50,7 @@ final case class OutputFile(relative: String)
 enum StoredError:
   case Malformed
 
-/** How a value is kept in the action cache, hashed into a downstream key, and
-  * which files a hit must find.
+/** How a value is kept in the action cache, hashed into a downstream key, and which files a hit must find.
   */
 @scala.annotation.implicitNotFound(
   "${A} has no Stored codec, so it cannot be cached or feed a hermetic step"

@@ -21,11 +21,13 @@ object TestMain:
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): TestMain = raw
+end TestMain
 
 enum TestMainError:
   case Empty
   case Bad(raw: String)
 
   def message: String = this match
-    case Empty     => "a test main is not empty"
-    case Bad(raw)  => s"'$raw' is not a test main"
+    case Empty    => "a test main is not empty"
+    case Bad(raw) => s"'$raw' is not a test main"
+end TestMainError

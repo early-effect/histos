@@ -22,7 +22,7 @@ import histos.{
   TestMachine,
   TestMain,
   Tool,
-  module
+  module,
 }
 
 import java.io.File
@@ -35,12 +35,12 @@ import zio.{Scope, System, UIO, ZIO, durationInt}
 import zio.test.*
 
 object NativeSpec extends ZIOSpecDefault:
-  private val major21 = ClangMajor.trusted(21)
-  private val major17 = ClangMajor.trusted(17)
-  private val v21 = ClangVersion.trusted("21.0.0", major21)
-  private val v17 = ClangVersion.trusted("17.0.0", major17)
+  private val major21     = ClangMajor.trusted(21)
+  private val major17     = ClangMajor.trusted(17)
+  private val v21         = ClangVersion.trusted("21.0.0", major21)
+  private val v17         = ClangVersion.trusted("17.0.0", major17)
   private val ivySnapshot = NativeVersion("0.5.13-SNAPSHOT")
-  private val versions = suite("clang version")(
+  private val versions    = suite("clang version")(
     test(
       "apple clang reports its version and target, and a major is not a version"
     ):
@@ -57,7 +57,7 @@ object NativeSpec extends ZIOSpecDefault:
         ClangReport.parse("clang version 0.1.0\nTarget: x\n") == Left(
           ClangText.BadVersion("0.1.0")
         ),
-        ClangReport.parse("") == Left(ClangText.Empty)
+        ClangReport.parse("") == Left(ClangText.Empty),
       )
     ,
     test("the linker child keeps PATH and nothing else"):
@@ -66,7 +66,7 @@ object NativeSpec extends ZIOSpecDefault:
           Map("PATH" -> "/usr/bin", "HOME" -> "/tmp")
         ) == Map("PATH" -> "/usr/bin"),
         NativeLink.linkerEnv(Map("HOME" -> "/tmp")).isEmpty,
-        NativeLink.linkerEnv(Map("PATH" -> "")).isEmpty
+        NativeLink.linkerEnv(Map("PATH" -> "")).isEmpty,
       )
     ,
     test("the link key changes when the clang version or the target changes"):
@@ -75,7 +75,7 @@ object NativeSpec extends ZIOSpecDefault:
       )
       for
         arm64 <- ZIO.fromEither(ClangTarget.from("arm64-apple-darwin27.0.0"))
-        x64 <- ZIO.fromEither(ClangTarget.from("x86_64-apple-darwin27.0.0"))
+        x64   <- ZIO.fromEither(ClangTarget.from("x86_64-apple-darwin27.0.0"))
         base = NativeKey
           .of(histos.ScalaVersion("3.9.0"), v21, arm64, sources, Nil)
       yield assertTrue(
@@ -86,9 +86,9 @@ object NativeSpec extends ZIOSpecDefault:
           v21,
           x64,
           sources,
-          Nil
-        )
-      )
+          Nil,
+        ),
+      ),
   )
 
   private val probe = suite("clang on PATH")(
@@ -96,8 +96,8 @@ object NativeSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(pair(root, "17.0.0"))
-          out <- ClangProbe
+          _    <- ZIO.attempt(pair(root, "17.0.0"))
+          out  <- ClangProbe
             .resolve(major21, Map("PATH" -> root.toString))
             .either
         yield assertTrue(
@@ -108,7 +108,7 @@ object NativeSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             script(root, "clang", "21.0.0")
             script(root, "clang++", "17.0.0")
           }
@@ -123,6 +123,23 @@ object NativeSpec extends ZIOSpecDefault:
         .either
         .map: out =>
           assertTrue(out == Left(ClangMiss.NotOnPath(major21)))
+    ,
+    test("a NUL PATH entry is not a path"):
+      ClangProbe
+        .resolve(major21, Map("PATH" -> "\u0000"))
+        .either
+        .map: out =>
+          assertTrue(out == Left(ClangMiss.BadPath("\u0000")))
+    ,
+    test("clang with no clang++ beside it is a miss"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(script(root, "clang", "21.0.0"))
+          out  <- ClangProbe
+            .resolve(major21, Map("PATH" -> root.toString))
+            .either
+        yield assertTrue(out == Left(ClangMiss.NoClangPP(root.resolve("clang")))),
   )
 
   private val declare = suite("declaration")(
@@ -140,7 +157,7 @@ object NativeSpec extends ZIOSpecDefault:
                   Nil,
                   Nil,
                   SourcePos("histos.scala", 1, 1),
-                  clang
+                  clang,
                 )
               )
             )
@@ -148,13 +165,11 @@ object NativeSpec extends ZIOSpecDefault:
             NativeProject.declaration(one(Platform.Jvm, ClangPin.Unused)),
             NativeProject
               .declaration(one(Platform.Native, ClangPin.Major(major21))),
-            NativeProject.declaration(one(Platform.Native, ClangPin.Unused))
+            NativeProject.declaration(one(Platform.Native, ClangPin.Unused)),
           )
       val core = ProjectName.from("core")
       assertTrue(
-        named.map((jvm, native, missing) =>
-          (jvm, native, missing, core)
-        ) == Right(
+        named.map((jvm, native, missing) => (jvm, native, missing, core)) == Right(
           (
             NativeDeclaration.NotNative,
             NativeDeclaration.Major(major21),
@@ -162,7 +177,7 @@ object NativeSpec extends ZIOSpecDefault:
               case Right(name) => NativeDeclaration.Missing(name)
               case Left(_)     => NativeDeclaration.NotNative
             ,
-            core
+            core,
           )
         )
       )
@@ -172,7 +187,7 @@ object NativeSpec extends ZIOSpecDefault:
     test(
       "unset HISTOS_NATIVE is Central, and the revision stays on the module"
     ):
-      val ivy = NativeToolchain.source(Map(NativeToolchain.Key -> "ivy-local"))
+      val ivy  = NativeToolchain.source(Map(NativeToolchain.Key -> "ivy-local"))
       val file =
         NativeToolchain.source(Map(NativeToolchain.Key -> "file:///tmp/native"))
       val revision = NativeToolchain.source(
@@ -180,7 +195,7 @@ object NativeSpec extends ZIOSpecDefault:
       )
       val release = NativeToolchain.of(
         NativeToolchain.ReleaseRevision,
-        NativeOrigin.read(Map.empty)
+        NativeOrigin.read(Map.empty),
       )
       assertTrue(
         ivy == Right(NativeSource.IvyLocal),
@@ -192,13 +207,13 @@ object NativeSpec extends ZIOSpecDefault:
         NativeToolchain.parse("").isLeft,
         NativeToolchain.parse("central").isLeft,
         release == Right(NativeToolchain.Release),
-        NativeToolchain.Release.revision.value == "0.5.12"
+        NativeToolchain.Release.revision.value == "0.5.12",
       )
     ,
     test("the native linker is not on the engine classpath"):
       for
         classpath <- System.property("java.class.path")
-        loads <- ZIO
+        loads     <- ZIO
           .attempt(Class.forName("scala.scalanative.build.Build"))
           .isSuccess
         entries = classpath.toList
@@ -210,9 +225,9 @@ object NativeSpec extends ZIOSpecDefault:
           Option(Path.of(entry).getFileName)
             .exists(_.toString.startsWith("tools_3"))
         ),
-        !loads
+        !loads,
       )
-    @@ TestAspect.withLiveSystem
+    @@ TestAspect.withLiveSystem,
   )
 
   private val link = suite("link")(
@@ -228,44 +243,42 @@ object NativeSpec extends ZIOSpecDefault:
       yield assertTrue(
         paths.exists(_.contains(ivySnapshot.value)),
         paths.exists(_.contains("nativelib_native0.5_3")),
-        !paths.exists(_.contains("tools_3"))
+        !paths.exists(_.contains("tools_3")),
       )
     @@ Requires(Tool.IvyLocalNative(ivySnapshot)),
     test(
       "the toolchain jars are the native libraries and the plugin, not tools"
     ):
       for
-        env <- liveEnv
+        env       <- liveEnv
         toolchain <- ZIO.fromEither(
           NativeToolchain.of(
             NativeToolchain.ReleaseRevision,
-            NativeOrigin.read(env)
+            NativeOrigin.read(env),
           )
         )
         libs <- NativeClasspath.fetch(toolchain)
-        names = (libs.plugin :: libs.libraries).flatMap(path =>
-          Option(path.getFileName).map(_.toString)
-        )
+        names = (libs.plugin :: libs.libraries).flatMap(path => Option(path.getFileName).map(_.toString))
       yield assertTrue(
         names.exists(_.startsWith("nscplugin_3.9.0")),
         names.exists(_.startsWith("nativelib_native0.5_3")),
         names.exists(_.startsWith("scala3lib_native0.5_3")),
         names.exists(_.startsWith("scalalib_native0.5_3")),
-        !names.exists(_.startsWith("tools_3"))
+        !names.exists(_.startsWith("tools_3")),
       )
     ,
     test("hello links with the clang on PATH and prints hi"):
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(write(root, "native/Hello.scala", hello))
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(write(root, "native/Hello.scala", hello))
+          _    <- ZIO.attempt(
             write(root, "jvm/Skip.scala", "object Skip { def n = 1 }\n")
           )
-          env <- liveEnv
-          found <- ClangProbe.found(env)
-          jdk <- GraphCompile.jdkHere
-          main <- ZIO.fromEither(MainClass.from("Hello"))
+          env    <- liveEnv
+          found  <- ClangProbe.found(env)
+          jdk    <- GraphCompile.jdkHere
+          main   <- ZIO.fromEither(MainClass.from("Hello"))
           linked <- NativeLink.link(
             NativeLinkRequest(
               found.version.major,
@@ -274,9 +287,9 @@ object NativeSpec extends ZIOSpecDefault:
               root.resolve("work"),
               jdk,
               main,
-              histos.ScalaVersion("3.9.0")
+              histos.ScalaVersion("3.9.0"),
             ),
-            root
+            root,
           )
           ran <- ZIO.attemptBlocking {
             val process = new ProcessBuilder(linked.binary.toString)
@@ -285,7 +298,7 @@ object NativeSpec extends ZIOSpecDefault:
             try
               val text = new String(
                 process.getInputStream.readAllBytes,
-                StandardCharsets.UTF_8
+                StandardCharsets.UTF_8,
               )
               val code = process.waitFor()
               (code, text)
@@ -295,7 +308,7 @@ object NativeSpec extends ZIOSpecDefault:
             if Files.isRegularFile(linked.binary) then "file"
             else linked.binary.toString
         yield assertTrue(ran == (0, "hi\n"), shown == "file")
-    @@ Requires(Tool.AnyClang)
+    @@ Requires(Tool.AnyClang),
   ) @@ TestAspect.withLiveSystem
 
   private val origin = suite("HISTOS_NATIVE")(
@@ -311,17 +324,17 @@ object NativeSpec extends ZIOSpecDefault:
             write(
               root,
               "app/src/main/scala/demo/Hello.scala",
-              "package demo\n\nobject Hello:\n  def main(args: Array[String]): Unit = ()\n"
+              "package demo\n\nobject Hello:\n  def main(args: Array[String]): Unit = ()\n",
             )
             write(
               root,
               "check/src/test/scala/demo/Check.scala",
-              "package demo\n\nobject Check:\n  def main(args: Array[String]): Unit = ()\n"
+              "package demo\n\nobject Check:\n  def main(args: Array[String]): Unit = ()\n",
             )
             write(
               root,
               ".histos/dependencies.lock",
-              "cell app 3.9.0 native\ncell check 3.9.0 native\n"
+              "cell app 3.9.0 native\ncell check 3.9.0 native\n",
             )
           }
           chosen <- ZIO.fromEither(NativeToolchain.parse(empty.toUri.toString))
@@ -333,7 +346,7 @@ object NativeSpec extends ZIOSpecDefault:
                   histos.ScalaVersion("3.9.0"),
                   histos.resolve.ToolVariant.Native(
                     NativeToolchain.ReleaseRevision
-                  )
+                  ),
                 )
               )
             )
@@ -341,30 +354,38 @@ object NativeSpec extends ZIOSpecDefault:
           here <- Runtimes.read(
             TestMachine.at(
               root,
-              Map(NativeToolchain.Key -> empty.toUri.toString)
+              Map(NativeToolchain.Key -> empty.toUri.toString),
             )
           )
-          app <- ZIO.fromEither(ProjectName.from("app"))
+          app   <- ZIO.fromEither(ProjectName.from("app"))
           built <- ZIO.fromEither(
             Projects(
               module("app", Native)(histos.ScalaVersion("3.9.0"))
                 .clang(major21),
               module("check", Native)(histos.ScalaVersion("3.9.0"))
                 .clang(major21)
-                .test(TestMain("demo.Check"))
+                .test(TestMain("demo.Check")),
             )
           )
-          jdk <- GraphCompile.jdkHere
-          _ <- histos.ToolFixture.seed(root, built)
+          jdk      <- GraphCompile.jdkHere
+          _        <- histos.ToolFixture.seed(root, built)
           compiled <- GraphCompile
-            .run(root, built, List("app"), jdk, here.native)
+            .run(
+              root,
+              built,
+              List("app"),
+              jdk,
+              here.native,
+              None,
+              _ => ZIO.unit,
+            )
             .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
           tested <- ModuleTest
             .run(TestRun(root, built, List("check"), jdk, here))
             .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
-          main <- ZIO.fromEither(MainClass.from("demo.Hello"))
+          main      <- ZIO.fromEither(MainClass.from("demo.Hello"))
           toolchain <- ZIO.fromEither(
             NativeToolchain.of(NativeToolchain.ReleaseRevision, here.native)
           )
@@ -377,9 +398,9 @@ object NativeSpec extends ZIOSpecDefault:
                 root.resolve("link"),
                 jdk,
                 main,
-                histos.ScalaVersion("3.9.0")
+                histos.ScalaVersion("3.9.0"),
               ),
-              Nil
+              Nil,
             )
             .either
         yield assertTrue(
@@ -391,7 +412,7 @@ object NativeSpec extends ZIOSpecDefault:
                     app,
                     histos.ScalaVersion("3.9.0"),
                     Platform.Native,
-                    missing
+                    missing,
                   )
               )
             )
@@ -403,7 +424,7 @@ object NativeSpec extends ZIOSpecDefault:
                   histos.resolve.ToolRole.NativeLibraries,
                   histos.ScalaVersion("3.9.0"),
                   histos.resolve.ToolVariant
-                    .Native(NativeToolchain.ReleaseRevision)
+                    .Native(NativeToolchain.ReleaseRevision),
                 )
               )
             )
@@ -417,12 +438,12 @@ object NativeSpec extends ZIOSpecDefault:
                     histos.ScalaVersion("3.9.0"),
                     histos.resolve.ToolVariant.Native(
                       NativeToolchain.ReleaseRevision
-                    )
+                    ),
                   )
                 )
               )
             )
-          )
+          ),
         )
   )
 
@@ -447,7 +468,7 @@ object NativeSpec extends ZIOSpecDefault:
       s"""#!/bin/sh
          |printf '%s\\n' 'clang version $version'
          |printf '%s\\n' 'Target: arm64-apple-darwin27.0.0'
-         |""".stripMargin
+         |""".stripMargin,
     )
     file.toFile.setExecutable(true)
     file
@@ -459,19 +480,18 @@ object NativeSpec extends ZIOSpecDefault:
     path
 
   private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-native"))):
-      dir =>
-        ZIO.attempt {
-          if Files.exists(dir) then
-            val walk = Files.walk(dir)
-            val paths =
-              try walk.iterator.asScala.toList
-              finally walk.close()
-            paths
-              .sortBy(_.getNameCount)
-              .reverse
-              .foreach(path => Files.deleteIfExists(path))
-        }.ignore
+    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-native"))): dir =>
+      ZIO.attempt {
+        if Files.exists(dir) then
+          val walk  = Files.walk(dir)
+          val paths =
+            try walk.iterator.asScala.toList
+            finally walk.close()
+          paths
+            .sortBy(_.getNameCount)
+            .reverse
+            .foreach(path => Files.deleteIfExists(path))
+      }.ignore
 
   def spec =
     suite("scala native")(versions, probe, declare, toolchain, origin, link)
@@ -486,3 +506,4 @@ object NativeSpec extends ZIOSpecDefault:
       ) @@
       TestAspect.withLiveSystem @@
       TestAspect.timeout(5.minutes)
+end NativeSpec

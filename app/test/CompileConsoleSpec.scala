@@ -1,106 +1,566 @@
 package histos.cli
 
+import histos.client.{Remote, Session}
+import histos.report.{Diagnostic, ModuleTally, Observation, Report, Severity}
+import histos.server.{Calls, Feed, Message, Say}
+import histos.workspace.Workspace
 import histos.zinc.{
+  CompileError,
+  CompileFacts,
   CompileFeed,
   CompileProblem,
+  CompileSeverity,
   CompiledCell,
-  GraphCompileError
+  GraphCompileError,
+  PositionBase,
+  SourceCount,
 }
 import histos.{Platform, ProjectName, ProjectNameError, ScalaVersion}
 
 import java.nio.file.Path
 
 import zio.*
+import zio.json.*
 import zio.test.*
 
 object CompileConsoleSpec extends ZIOSpecDefault:
-  private val repo = Path.of("/repo")
+  private val repo    = Path.of("/repo")
   private val version = ScalaVersion("3.10.0")
 
   def spec = suite("compile console")(
-    test("a start is silent and each finished cell says what happened"):
+    test("a start names the module and a finished cell says what it did"):
       named("core", "app").flatMap { (core, app) =>
+        val warn = CompileProblem(
+          "unused",
+          Some(repo.resolve("core/src/Core.scala")),
+          CompileSeverity.Warn,
+          Some(4),
+          Some(2),
+          None,
+          None,
+          PositionBase.Zinc,
+        )
+        val dotty = CompileProblem(
+          "missing",
+          Some(repo.resolve("core/src/Core.scala")),
+          CompileSeverity.Error,
+          Some(3),
+          Some(0),
+          None,
+          None,
+          PositionBase.Dotty,
+        )
+        val appCell = cell(
+          app,
+          changed = false,
+          sources = Some(SourceCount(0, 3)),
+          classesWritten = Some(0),
+        )
+        val coreCell = cell(
+          core,
+          changed = true,
+          sources = Some(SourceCount(2, 1)),
+          classesWritten = Some(4),
+        )
         for
           console <- CompileConsole.open(repo)
-          lines <- play(
+          lines   <- play(
             console,
             CompileFeed.Began(core, version, Platform.Jvm),
             CompileFeed.Began(app, version, Platform.Jvm),
-            CompileFeed.Done(cell(app, changed = false)),
-            CompileFeed.Diagnostic(
-              core,
-              version,
-              Platform.Jvm,
-              CompileProblem.text("warn")
-            ),
-            CompileFeed.Done(cell(core, changed = true))
+            CompileFeed.Done(appCell),
+            CompileFeed.Diagnostic(core, version, Platform.Jvm, warn),
+            CompileFeed.Diagnostic(core, version, Platform.Jvm, dotty),
+            CompileFeed.Done(coreCell),
           )
           tally <- console.tally
           again <- console.tally
+          found <- console.diagnostics
         yield assertTrue(
           lines == Chunk(
-            CompileConsole.Line.Out(
-              Lines.skipped(app, version, Platform.Jvm)
-            ),
-            CompileConsole.Line.Err("warn"),
             CompileConsole.Line.Out(
               Lines.compiling(core, version, Platform.Jvm)
             ),
             CompileConsole.Line.Out(
-              Lines.compiled(repo, cell(core, changed = true))
-            )
+              Lines.compiling(app, version, Platform.Jvm)
+            ),
+            CompileConsole.Line.Out(
+              "app 3.10.0 jvm skipped unchanged files compiled: 0 skipped: 3 classes: 0"
+            ),
+            CompileConsole.Line.Err(Lines.diagnostic(repo, warn)),
+            CompileConsole.Line.Err(Lines.diagnostic(repo, dotty)),
+            CompileConsole.Line.Out(
+              "core 3.10.0 jvm files compiled: 2 skipped: 1 classes: 4"
+            ),
           ),
-          tally.contains("total: 2 skipped: 1 compiled: 1"),
-          again.isEmpty
+          Lines.diagnostic(repo, warn) == "core/src/Core.scala:4:2: warn: unused",
+          Lines.diagnostic(repo, dotty) == "core/src/Core.scala:4:1: error: missing",
+          found == Chunk(
+            Diagnostic(
+              Some("core/src/Core.scala"),
+              Some(4),
+              Some(2),
+              None,
+              None,
+              Severity.Warn,
+              "unused",
+            ),
+            Diagnostic(
+              Some("core/src/Core.scala"),
+              Some(4),
+              Some(1),
+              None,
+              None,
+              Severity.Error,
+              "missing",
+            ),
+          ),
+          tally.contains(
+            "files compiled: 2 skipped: 4; modules: 2; classes: 4"
+          ),
+          again == tally,
         )
       }
     ,
-    test("four unchanged cells spell the tally"):
+    test("unknown file counts are omitted and a census is not printed"):
+      name("core").flatMap { core =>
+        val bare = cell(core, changed = true, classesWritten = Some(9))
+        for
+          console <- CompileConsole.open(repo)
+          lines   <- play(
+            console,
+            CompileFeed.Began(core, version, Platform.Jvm),
+            CompileFeed.Done(bare),
+          )
+          tally <- console.tally
+          found <- console.observation
+        yield assertTrue(
+          lines == Chunk(
+            CompileConsole.Line.Out(
+              Lines.compiling(core, version, Platform.Jvm)
+            )
+          ),
+          tally.contains("modules: 1"),
+          !tally.exists(_.contains("files")),
+          !tally.exists(_.contains("classes:")),
+          found.exists(unknownOmitsClasses),
+          !lines.exists {
+            case CompileConsole.Line.Out(text) =>
+              text.contains("classes:") || text.contains("4")
+            case CompileConsole.Line.Err(_) => false
+          },
+        )
+      }
+    ,
+    test("four unchanged cells spell files and modules"):
       ZIO
         .foreach(List("api", "central", "engine", "app"))(name)
         .flatMap { names =>
           for
             console <- CompileConsole.open(repo)
-            _ <- ZIO.foreachDiscard(names) { module =>
-              console.hear(CompileFeed.Done(cell(module, changed = false)))
+            _       <- ZIO.foreachDiscard(names) { module =>
+              console.hear(
+                CompileFeed.Done(
+                  cell(
+                    module,
+                    changed = false,
+                    sources = Some(SourceCount(0, 2)),
+                    classesWritten = Some(0),
+                  )
+                )
+              )
             }
             tally <- console.tally
-          yield assertTrue(tally.contains("total: 4 skipped: 4 compiled: 0"))
+          yield assertTrue(
+            tally.contains(
+              "files compiled: 0 skipped: 8; modules: 4; classes: 0"
+            )
+          )
         }
     ,
-    test("a failed cell is counted on the tally"):
+    test("a failed cell drops the file total"):
       name("core").flatMap { core =>
         val error = GraphCompileError.NoRoot(core)
         for
           console <- CompileConsole.open(repo)
-          lines <- play(
+          lines   <- play(
             console,
             CompileFeed.Began(core, version, Platform.Jvm),
-            CompileFeed.Failed(error)
+            CompileFeed.Done(
+              cell(
+                core,
+                changed = true,
+                sources = Some(SourceCount(1, 0)),
+                classesWritten = Some(1),
+              )
+            ),
+            CompileFeed.Failed(error),
           )
           tally <- console.tally
+          found <- console.observation
         yield assertTrue(
-          lines == Chunk(CompileConsole.Line.Err(error.message)),
-          tally.contains("total: 1 skipped: 0 compiled: 0 failed: 1")
+          lines.exists {
+            case CompileConsole.Line.Out(text) =>
+              text == Lines.compiling(core, version, Platform.Jvm)
+            case CompileConsole.Line.Err(_) => false
+          },
+          lines.exists {
+            case CompileConsole.Line.Err(text) => text == error.message
+            case CompileConsole.Line.Out(_)    => false
+          },
+          tally.contains("modules: 2 failed: 1"),
+          !tally.exists(line => line.contains("files") || line.contains("classes")),
+          found == Some(
+            Observation(
+              Chunk(
+                ModuleTally(
+                  core.value,
+                  version.value,
+                  Platform.Jvm.token,
+                  Some(1),
+                  Some(0),
+                  Some(1),
+                )
+              ),
+              None,
+              None,
+              None,
+              2,
+            )
+          ),
         )
       }
     ,
-    test("test compiles keep a separate tally"):
-      named("api", "engine").flatMap { (api, engine) =>
+    test("a failed cell with a module records no counts"):
+      named("core", "app").flatMap { (core, app) =>
+        val failed = GraphCompileError.Failed(
+          core,
+          version,
+          Platform.Jvm,
+          CompileError.NoSources,
+        )
+        val missing = GraphCompileError.MissingUpstream(
+          app,
+          core,
+          version,
+          Platform.Jvm,
+        )
         for
-          notes <- CompileConsole.notes
-          skipped <- notes(api, version, Platform.Jvm, false)
-          compiled <- notes(engine, version, Platform.Jvm, true)
-          tally <- notes.tally
-          again <- notes.tally
+          console <- CompileConsole.open(repo)
+          _       <- play(
+            console,
+            CompileFeed.Failed(failed),
+            CompileFeed.Failed(missing),
+          )
+          found <- console.observation
         yield assertTrue(
-          skipped == Lines.skippedTests(api, version, Platform.Jvm),
-          compiled == Lines.compilingTests(engine, version, Platform.Jvm),
-          tally.contains("test total: 2 skipped: 1 compiled: 1"),
-          again.isEmpty
+          found.exists { observation =>
+            observation.moduleCount == 2 &&
+            observation.compiled.isEmpty &&
+            observation.skipped.isEmpty &&
+            observation.classes.isEmpty &&
+            observation.modules == Chunk(
+              ModuleTally("core", "3.10.0", "jvm", None, None, None),
+              ModuleTally("app", "3.10.0", "jvm", None, None, None),
+            )
+          }
         )
       }
+    ,
+    test("an unchanged test compile is not tests skipped"):
+      named("api", "engine").flatMap { (api, engine) =>
+        val unchanged = CompileFacts(
+          changed = false,
+          sources = Some(SourceCount(0, 5)),
+          classesWritten = Some(0),
+        )
+        val changed = CompileFacts(
+          changed = true,
+          sources = Some(SourceCount(1, 0)),
+          classesWritten = Some(2),
+        )
+        for
+          notes    <- CompileConsole.notes
+          skipped  <- notes(api, version, Platform.Jvm, unchanged)
+          compiled <- notes(engine, version, Platform.Jvm, changed)
+          tally    <- notes.tally
+          again    <- notes.tally
+        yield assertTrue(
+          skipped ==
+            "api 3.10.0 jvm test compile unchanged files compiled: 0 skipped: 5 classes: 0",
+          compiled ==
+            "engine 3.10.0 jvm test files compiled: 1 skipped: 0 classes: 2",
+          !skipped.contains("tests skipped"),
+          !compiled.contains("tests skipped"),
+          tally.contains(
+            "test files compiled: 1 skipped: 5; modules: 2; classes: 2"
+          ),
+          again == tally,
+        )
+      }
+    ,
+    test("run and assembly speak the same compile lines"):
+      named("core", "app").flatMap { (core, app) =>
+        val unchanged = cell(
+          core,
+          changed = false,
+          sources = Some(SourceCount(0, 3)),
+          classesWritten = Some(0),
+        )
+        val written = cell(
+          app,
+          changed = true,
+          sources = Some(SourceCount(2, 1)),
+          classesWritten = Some(7),
+        )
+        for
+          console <- CompileConsole.open(repo)
+          lines   <- play(
+            console,
+            CompileFeed.Began(core, version, Platform.Jvm),
+            CompileFeed.Done(unchanged),
+            CompileFeed.Began(app, version, Platform.Jvm),
+            CompileFeed.Done(written),
+          )
+        yield assertTrue(
+          lines == Chunk(
+            CompileConsole.Line.Out("compiling core 3.10.0 jvm"),
+            CompileConsole.Line.Out(
+              "core 3.10.0 jvm skipped unchanged files compiled: 0 skipped: 3 classes: 0"
+            ),
+            CompileConsole.Line.Out("compiling app 3.10.0 jvm"),
+            CompileConsole.Line.Out(
+              "app 3.10.0 jvm files compiled: 2 skipped: 1 classes: 7"
+            ),
+          )
+        )
+      }
+    ,
+    test("an empty run spells nothing"):
+      CompileConsole.open(repo).flatMap { console =>
+        for
+          tally <- console.tally
+          found <- console.observation
+          noted <- console.diagnostics
+        yield assertTrue(tally == None, found == None, noted == Chunk.empty)
+      }
+    ,
+    test("a diagnostic is the stderr line and the report fact"):
+      name("core").flatMap { core =>
+        val warn = CompileProblem(
+          "unused",
+          Some(repo.resolve("core/src/Core.scala")),
+          CompileSeverity.Warn,
+          Some(4),
+          Some(2),
+          Some(4),
+          Some(8),
+          PositionBase.Zinc,
+        )
+        val dotty = CompileProblem(
+          "missing",
+          Some(repo.resolve("core/src/Core.scala")),
+          CompileSeverity.Error,
+          Some(3),
+          Some(0),
+          Some(3),
+          Some(5),
+          PositionBase.Dotty,
+        )
+        val bare = CompileProblem(
+          "no file",
+          None,
+          CompileSeverity.Info,
+          None,
+          None,
+          None,
+          None,
+          PositionBase.Zinc,
+        )
+        val expected = Chunk(
+          Diagnostic(
+            Some("core/src/Core.scala"),
+            Some(4),
+            Some(2),
+            Some(4),
+            Some(8),
+            Severity.Warn,
+            "unused",
+          ),
+          Diagnostic(
+            Some("core/src/Core.scala"),
+            Some(4),
+            Some(1),
+            Some(4),
+            Some(6),
+            Severity.Error,
+            "missing",
+          ),
+          Diagnostic(None, None, None, None, None, Severity.Info, "no file"),
+        )
+        val problems = List(warn, dotty, bare)
+        for
+          console <- CompileConsole.open(repo)
+          feeds   <- Ref.make(Chunk.empty[Feed])
+          say = Say.record(feeds)
+          lines <- ZIO.foldLeft(problems)(Chunk.empty[CompileConsole.Line]) { (acc, problem) =>
+            speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, problem)).map(acc ++ _)
+          }
+          found       <- console.diagnostics
+          _           <- say.note(found)
+          _           <- say(Message.Exit(0, ""))
+          chunk       <- feeds.get
+          run         <- say.run
+          observation <- say.observation
+          carried     <- say.diagnostics
+          local  = Session.spoken(chunk.toList, run, observation, carried)
+          wired  = Say.wire(Message.Exit(0, ""), run, observation, carried)
+          remote = Remote.event(wired) match
+            case Right(Remote.Event.Stop(exit, id, tally, diags)) =>
+              val errs = chunk.collect { case feed @ Feed.Err(_) => feed }
+              Session.spoken(errs.toList :+ exit, id, tally, diags)
+            case _ => Left(Session.SessionError.DidNotFinish)
+          parallel <- CompileConsole.open(repo)
+          _        <- ZIO.foreachParDiscard(problems) { problem =>
+            parallel.hear(CompileFeed.Diagnostic(core, version, Platform.Jvm, problem))
+          }
+          kept <- parallel.diagnostics
+        yield
+          val report = Report(
+            0,
+            Chunk.empty,
+            Chunk(
+              Lines.diagnostic(repo, warn),
+              Lines.diagnostic(repo, dotty),
+              Lines.diagnostic(repo, bare),
+            ),
+            None,
+            None,
+            expected,
+          )
+          assertTrue(
+            lines == Chunk(
+              CompileConsole.Line.Err(Lines.diagnostic(repo, warn)),
+              CompileConsole.Line.Err(Lines.diagnostic(repo, dotty)),
+              CompileConsole.Line.Err(Lines.diagnostic(repo, bare)),
+            ),
+            Lines.diagnostic(repo, warn) == "core/src/Core.scala:4:2: warn: unused",
+            Lines.diagnostic(repo, dotty) == "core/src/Core.scala:4:1: error: missing",
+            Lines.diagnostic(repo, bare) == "info: no file",
+            found == expected,
+            carried == expected,
+            local == Right(report),
+            remote == Right(report),
+            kept.length == 3,
+            kept.exists(_.message == "unused"),
+            kept.exists(_.message == "missing"),
+            kept.exists(diag =>
+              diag.message == "no file" && diag.path == None && diag.line == None && diag.column == None
+            ),
+          )
+      }
+    ,
+    test("run, assembly, and publish keep the diagnostic"):
+      name("core").flatMap { core =>
+        ZIO.scoped {
+          for
+            home <- Workspace.work("histos-run-diagnostics")
+            warn = CompileProblem(
+              "unused",
+              Some(home.resolve("core/src/Core.scala")),
+              CompileSeverity.Warn,
+              Some(4),
+              Some(2),
+              Some(4),
+              Some(8),
+              PositionBase.Zinc,
+            )
+            bare = CompileProblem(
+              "no file",
+              None,
+              CompileSeverity.Info,
+              None,
+              None,
+              None,
+              None,
+              PositionBase.Zinc,
+            )
+            console <- CompileConsole.open(home)
+            feeds   <- Ref.make(Chunk.empty[Feed])
+            say = Say.record(feeds)
+            _           <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, warn))
+            _           <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, bare))
+            _           <- Calls.finishNoted(home, say, console, List(console.observation), 0, "")
+            chunk       <- feeds.get
+            run         <- say.run
+            observation <- say.observation
+            carried     <- say.diagnostics
+            found = Session.spoken(chunk.toList, run, observation, carried)
+          yield
+            val zinc    = Lines.diagnostic(home, warn)
+            val missing = Lines.diagnostic(home, bare)
+            val heard   = found match
+              case Right(report) => report.diagnostics
+              case Left(_)       => Chunk.empty
+            val expected = Chunk(
+              Diagnostic(
+                Some("core/src/Core.scala"),
+                Some(4),
+                Some(2),
+                Some(4),
+                Some(8),
+                Severity.Warn,
+                "unused",
+              ),
+              Diagnostic(None, None, None, None, None, Severity.Info, "no file"),
+            )
+            assertTrue(
+              found == Right(Report(0, Chunk.empty, Chunk(zinc, missing), None, None, expected)),
+              zinc == "core/src/Core.scala:4:2: warn: unused",
+              missing == "info: no file",
+              heard.exists(diag =>
+                diag.message == "unused" && diag.path == Some("core/src/Core.scala") &&
+                  diag.line == Some(4) && diag.column == Some(2) &&
+                  diag.endLine == Some(4) && diag.endColumn == Some(8)
+              ),
+              heard.exists(diag =>
+                diag.message == "no file" && diag.path == None && diag.line == None &&
+                  diag.column == None && diag.endLine == None && diag.endColumn == None
+              ),
+              !heard.exists(diag =>
+                diag.line.contains(0) || diag.column.contains(0) || diag.endLine.contains(0) ||
+                  diag.endColumn.contains(0) || diag.path.contains("0")
+              ),
+            )
+        }
+      },
   )
+
+  private def unknownOmitsClasses(observation: Observation): Boolean =
+    observation.compiled.isEmpty && observation.skipped.isEmpty &&
+      observation.classes.isEmpty && observation.moduleCount == 1 &&
+      (observation.modules match
+        case Chunk(tally) =>
+          tally.module == "core" && tally.version == "3.10.0" &&
+          tally.platform == "jvm" && tally.compiled.isEmpty &&
+          tally.skipped.isEmpty && tally.classes.isEmpty
+        case _ => false) && !observation.toJson.contains(""""classes":4""") &&
+      !observation.toJson.contains(""""classes":9""")
+
+  private def speak(
+      console: CompileConsole.Session,
+      say: Say,
+      feed: CompileFeed,
+  ): IO[histos.server.ServerError, Chunk[CompileConsole.Line]] =
+    console.hear(feed).flatMap { lines =>
+      CompileConsole
+        .show(
+          lines,
+          text => say(Message.Out(text)),
+          text => say(Message.Err(text)),
+        )
+        .as(lines)
+    }
 
   private def play(
       console: CompileConsole.Session,
@@ -109,14 +569,22 @@ object CompileConsoleSpec extends ZIOSpecDefault:
     ZIO.foldLeft(feeds.toList)(Chunk.empty[CompileConsole.Line]): (acc, feed) =>
       console.hear(feed).map(acc ++ _)
 
-  private def cell(module: ProjectName, changed: Boolean): CompiledCell =
+  private def cell(
+      module: ProjectName,
+      changed: Boolean,
+      sources: Option[SourceCount] = None,
+      classesWritten: Option[Int] = None,
+  ): CompiledCell =
     CompiledCell(
       module,
       version,
       Platform.Jvm,
       repo.resolve(module.value),
       4,
-      changed = changed
+      key = None,
+      changed = changed,
+      sources = sources,
+      classesWritten = classesWritten,
     )
 
   private def name(raw: String): IO[ProjectNameError, ProjectName] =
@@ -124,7 +592,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
 
   private def named(
       left: String,
-      right: String
+      right: String,
   ): IO[ProjectNameError, (ProjectName, ProjectName)] =
     name(left).zip(name(right))
 end CompileConsoleSpec

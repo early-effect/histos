@@ -13,7 +13,7 @@ import java.nio.file.attribute.{
   PosixFileAttributeView,
   PosixFilePermission,
   PosixFilePermissions,
-  UserPrincipal
+  UserPrincipal,
 }
 import java.util.EnumSet
 
@@ -35,16 +35,17 @@ enum RuntimeCacheError:
     case Unsupported(path)  =>
       s"runtime cache permissions cannot be secured: $path"
     case Io(failure) => failure.message
+end RuntimeCacheError
 
 private[histos] object RuntimeCache:
   private val privateMode = PosixFilePermissions.fromString("rwx------")
-  private val others = Set(
+  private val others      = Set(
     PosixFilePermission.GROUP_READ,
     PosixFilePermission.GROUP_WRITE,
     PosixFilePermission.GROUP_EXECUTE,
     PosixFilePermission.OTHERS_READ,
     PosixFilePermission.OTHERS_WRITE,
-    PosixFilePermission.OTHERS_EXECUTE
+    PosixFilePermission.OTHERS_EXECUTE,
   )
   private val writes = Set(
     AclEntryPermission.WRITE_DATA,
@@ -52,55 +53,54 @@ private[histos] object RuntimeCache:
     AclEntryPermission.DELETE_CHILD,
     AclEntryPermission.WRITE_ACL,
     AclEntryPermission.WRITE_OWNER,
-    AclEntryPermission.DELETE
+    AclEntryPermission.DELETE,
   )
 
-  def prepare(root: Path): IO[RuntimeCacheError, Unit] = owner.flatMap:
-    principal =>
-      for
-        // Lexical normalization can erase an alias before physical ancestry is checked.
-        absolute <- io(root, IoFault.Stat)(root.toAbsolutePath)
-        filesystemRoot <- ZIO
-          .fromOption(Option(absolute.getRoot))
-          .orElseFail(RuntimeCacheError.Unsupported(absolute))
-        system <- io(filesystemRoot, IoFault.Stat)(
-          Files.getOwner(filesystemRoot)
-        )
-        administrators <- io(filesystemRoot, IoFault.Stat):
-          Option(
-            Files.getFileAttributeView(
-              filesystemRoot,
-              classOf[AclFileAttributeView]
-            )
-          ).toList
-            .flatMap(view =>
-              view.getAcl.asScala.collect:
-                case entry
-                    if entry.`type`() == AclEntryType.ALLOW && entry
-                      .permissions()
-                      .contains(AclEntryPermission.WRITE_OWNER) && entry
-                      .permissions()
-                      .contains(AclEntryPermission.WRITE_ACL) =>
-                  entry.principal()
-            )
-            .toSet + system
-        ancestors = Iterator
-          .iterate(Option(absolute.getParent))(
-            _.flatMap(path => Option(path.getParent))
+  def prepare(root: Path): IO[RuntimeCacheError, Unit] = owner.flatMap: principal =>
+    for
+      // Lexical normalization can erase an alias before physical ancestry is checked.
+      absolute       <- io(root, IoFault.Stat)(root.toAbsolutePath)
+      filesystemRoot <- ZIO
+        .fromOption(Option(absolute.getRoot))
+        .orElseFail(RuntimeCacheError.Unsupported(absolute))
+      system <- io(filesystemRoot, IoFault.Stat)(
+        Files.getOwner(filesystemRoot)
+      )
+      administrators <- io(filesystemRoot, IoFault.Stat):
+        Option(
+          Files.getFileAttributeView(
+            filesystemRoot,
+            classOf[AclFileAttributeView],
           )
-          .takeWhile(_.nonEmpty)
-          .flatten
-          .toList
-          .reverse
-        _ <- ZIO.foreachDiscard(ancestors)(path =>
-          ensure(path, principal, administrators) *>
-            ancestor(path, principal, administrators) *>
-            physicalAncestors(path, principal, administrators)
+        ).toList
+          .flatMap(view =>
+            view.getAcl.asScala.collect:
+              case entry
+                  if entry.`type`() == AclEntryType.ALLOW && entry
+                    .permissions()
+                    .contains(AclEntryPermission.WRITE_OWNER) && entry
+                    .permissions()
+                    .contains(AclEntryPermission.WRITE_ACL) =>
+                entry.principal()
+          )
+          .toSet + system
+      ancestors = Iterator
+        .iterate(Option(absolute.getParent))(
+          _.flatMap(path => Option(path.getParent))
         )
-        _ <- ensure(absolute, principal, Set.empty)
-        _ <- physicalAncestors(absolute, principal, administrators)
-        _ <- privateDirectory(absolute, principal)
-      yield ()
+        .takeWhile(_.nonEmpty)
+        .flatten
+        .toList
+        .reverse
+      _ <- ZIO.foreachDiscard(ancestors)(path =>
+        ensure(path, principal, administrators) *>
+          ancestor(path, principal, administrators) *>
+          physicalAncestors(path, principal, administrators)
+      )
+      _ <- ensure(absolute, principal, Set.empty)
+      _ <- physicalAncestors(absolute, principal, administrators)
+      _ <- privateDirectory(absolute, principal)
+    yield ()
 
   private def owner: IO[RuntimeCacheError, UserPrincipal] =
     ZIO.scoped:
@@ -113,7 +113,7 @@ private[histos] object RuntimeCache:
   private def ensure(
       path: Path,
       principal: UserPrincipal,
-      allowedOwners: Set[UserPrincipal]
+      allowedOwners: Set[UserPrincipal],
   ): IO[RuntimeCacheError, Unit] =
     for
       exists <- io(path, IoFault.Stat)(
@@ -122,12 +122,11 @@ private[histos] object RuntimeCache:
       _ <-
         if exists then ZIO.unit
         else
-          create(path, principal).catchSome {
-            case RuntimeCacheError.Io(failure @ IoFailure(_, IoFault.Create)) =>
-              io(path, IoFault.Stat)(Files.isDirectory(path)).flatMap(present =>
-                if present then ZIO.unit
-                else ZIO.fail(RuntimeCacheError.Io(failure))
-              )
+          create(path, principal).catchSome { case RuntimeCacheError.Io(failure @ IoFailure(_, IoFault.Create)) =>
+            io(path, IoFault.Stat)(Files.isDirectory(path)).flatMap(present =>
+              if present then ZIO.unit
+              else ZIO.fail(RuntimeCacheError.Io(failure))
+            )
           }
       actual <- io(path, IoFault.Stat)(
         Files.getOwner(path, LinkOption.NOFOLLOW_LINKS)
@@ -136,13 +135,13 @@ private[histos] object RuntimeCache:
         .fail(RuntimeCacheError.Owner(path))
         .unless(actual == principal || allowedOwners.contains(actual))
       directory <- io(path, IoFault.Stat)(Files.isDirectory(path))
-      _ <- ZIO.fail(RuntimeCacheError.NotDirectory(path)).unless(directory)
+      _         <- ZIO.fail(RuntimeCacheError.NotDirectory(path)).unless(directory)
     yield ()
 
   private def physicalAncestors(
       path: Path,
       principal: UserPrincipal,
-      administrators: Set[UserPrincipal]
+      administrators: Set[UserPrincipal],
   ): IO[RuntimeCacheError, Unit] =
     io(path, IoFault.Stat)(path.toRealPath()).flatMap: physical =>
       val chain = Iterator
@@ -157,7 +156,7 @@ private[histos] object RuntimeCache:
 
   private def create(
       path: Path,
-      principal: UserPrincipal
+      principal: UserPrincipal,
   ): IO[RuntimeCacheError, Unit] =
     for
       views <- io(path, IoFault.Stat)(
@@ -168,12 +167,12 @@ private[histos] object RuntimeCache:
           io(path, IoFault.Create)(
             Files.createDirectory(
               path,
-              PosixFilePermissions.asFileAttribute(privateMode)
+              PosixFilePermissions.asFileAttribute(privateMode),
             )
           ).unit
         else if views.contains("acl") then
           val attribute = new FileAttribute[java.util.List[AclEntry]]:
-            def name(): String = "acl:acl"
+            def name(): String                    = "acl:acl"
             def value(): java.util.List[AclEntry] = List(
               ownerEntry(principal)
             ).asJava
@@ -183,14 +182,14 @@ private[histos] object RuntimeCache:
 
   private def privateDirectory(
       path: Path,
-      principal: UserPrincipal
+      principal: UserPrincipal,
   ): IO[RuntimeCacheError, Unit] =
     for
-      actual <- io(path, IoFault.Stat)(Files.getOwner(path))
-      _ <- ZIO.fail(RuntimeCacheError.Owner(path)).unless(actual == principal)
+      actual    <- io(path, IoFault.Stat)(Files.getOwner(path))
+      _         <- ZIO.fail(RuntimeCacheError.Owner(path)).unless(actual == principal)
       directory <- io(path, IoFault.Stat)(Files.isDirectory(path))
-      _ <- ZIO.fail(RuntimeCacheError.NotDirectory(path)).unless(directory)
-      posix <- io(path, IoFault.Stat)(
+      _         <- ZIO.fail(RuntimeCacheError.NotDirectory(path)).unless(directory)
+      posix     <- io(path, IoFault.Stat)(
         Option(
           Files.getFileAttributeView(path, classOf[PosixFileAttributeView])
         )
@@ -224,11 +223,11 @@ private[histos] object RuntimeCache:
   private def ancestor(
       path: Path,
       principal: UserPrincipal,
-      administrators: Set[UserPrincipal]
+      administrators: Set[UserPrincipal],
   ): IO[RuntimeCacheError, Unit] =
     for
       actual <- io(path, IoFault.Stat)(Files.getOwner(path))
-      _ <- ZIO
+      _      <- ZIO
         .fail(RuntimeCacheError.Owner(path))
         .unless(actual == principal || administrators.contains(actual))
       posix <- io(path, IoFault.Stat)(
@@ -295,3 +294,4 @@ private[histos] object RuntimeCache:
     ZIO
       .attemptBlocking(value)
       .mapError(_ => RuntimeCacheError.Io(IoFailure(path, fault)))
+end RuntimeCache

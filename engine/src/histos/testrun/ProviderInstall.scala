@@ -8,7 +8,7 @@ import histos.zinc.{
   CompileToolchain,
   JvmCompile,
 
-  ScalacFlags
+  ScalacFlags,
 }
 import histos.{Platform, ProjectName, ScalaVersion}
 
@@ -17,8 +17,7 @@ import java.nio.file.{Files, Path}
 
 import zio.{Chunk, Exit, IO, Promise, Ref, UIO, ZIO}
 
-/** One compiled provider runner. Cells that need the same install share it. One
-  * of them writes it.
+/** One compiled provider runner. Cells that need the same install share it. One of them writes it.
   */
 private[testrun] final class ProviderInstall(
     inflight: Ref[Map[Sha256, Promise[ModuleTestError, Path]]]
@@ -28,29 +27,28 @@ private[testrun] final class ProviderInstall(
       module: ProjectName,
       version: ScalaVersion,
       jdk: JdkRuntime,
-      classpath: List[Path]
+      classpath: List[Path],
   ): ZIO[LockedTools, ModuleTestError, Path] =
     val digest = ProviderInstall.digest(version, classpath)
-    val root = repo
+    val root   = repo
       .resolve(".histos")
       .resolve("provider")
       .resolve(version.value)
       .resolve(digest.value)
     for
       promise <- Promise.make[ModuleTestError, Path]
-      winner <- inflight.modify: have =>
+      winner  <- inflight.modify: have =>
         have.get(digest) match
           case Some(existing) => (existing, have)
           case None           => (promise, have.updated(digest, promise))
       path <-
-        if winner eq promise then
-          occupy(promise, compile(module, version, jdk, classpath, root))
+        if winner eq promise then occupy(promise, compile(module, version, jdk, classpath, root))
         else winner.await
     yield path
 
   private def occupy(
       promise: Promise[ModuleTestError, Path],
-      compile: ZIO[LockedTools, ModuleTestError, Path]
+      compile: ZIO[LockedTools, ModuleTestError, Path],
   ): ZIO[LockedTools, ModuleTestError, Path] =
     ZIO.uninterruptibleMask: restore =>
       restore(compile).onExit:
@@ -62,7 +60,7 @@ private[testrun] final class ProviderInstall(
       version: ScalaVersion,
       jdk: JdkRuntime,
       classpath: List[Path],
-      root: Path
+      root: Path,
   ): ZIO[LockedTools, ModuleTestError, Path] =
     val source =
       root.resolve("src").resolve("subprocess").resolve("Provider.scala")
@@ -82,11 +80,12 @@ private[testrun] final class ProviderInstall(
             classpath,
             classes,
             root.resolve("analysis"),
-            Nil
+            Nil,
           )
         )
         .mapError(error => ModuleTestError.Sources(module, version, error))
     yield classes
+end ProviderInstall
 
 private[testrun] object ProviderInstall:
   def make: UIO[ProviderInstall] =
@@ -100,3 +99,4 @@ private[testrun] object ProviderInstall:
         classpath.map(_.toAbsolutePath.toString).sorted.mkString("\n") + "\n" +
         ProviderRunner.source
     Sha256.of(Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8)))
+end ProviderInstall

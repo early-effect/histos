@@ -2,8 +2,7 @@ package histos.native
 
 import histos.{NativeVersion, RepositoryUrl, RepositoryUrlError}
 
-/** Where the linker fetches the Scala Native version the module named. The
-  * build file does not name this.
+/** Where the linker fetches the Scala Native version the module named. The build file does not name this.
   */
 enum NativeSource:
   case Central
@@ -14,6 +13,7 @@ enum NativeSource:
     case Central    => "Maven Central"
     case IvyLocal   => "ivy2 local"
     case Maven(url) => url.value
+end NativeSource
 
 /** A module's Scala Native revision, fetched from the machine's origin. */
 final case class NativeToolchain(source: NativeSource, revision: NativeVersion)
@@ -33,15 +33,14 @@ object NativeToolchain:
 
   def of(
       revision: NativeVersion,
-      origin: NativeOrigin
+      origin: NativeOrigin,
   ): Either[NativeToolchainError, NativeToolchain] =
     origin match
       case NativeOrigin.Chosen(source) =>
         Right(NativeToolchain(source, revision))
       case NativeOrigin.Refused(error) => Left(error)
 
-  /** Unset is Central. `ivy-local` or `file:/path` replaces the origin. The
-    * revision stays on the module.
+  /** Unset is Central. `ivy-local` or `file:/path` replaces the origin. The revision stays on the module.
     */
   def source(
       env: Map[String, String]
@@ -59,10 +58,10 @@ object NativeToolchain:
         case Left(error) => Left(NativeToolchainError.Repository(error))
         case Right(url)  => Right(NativeSource.Maven(url))
     else Left(NativeToolchainError.Origin(raw))
+end NativeToolchain
 
-/** `HISTOS_NATIVE` as one command read it from the machine. A refusal fails
-  * only the Native cells that fetch, so a graph without Native does not care
-  * what it says.
+/** `HISTOS_NATIVE` as one command read it from the machine. A refusal fails only the Native cells that fetch, so a
+  * graph without Native does not care what it says.
   */
 enum NativeOrigin:
   case Chosen(source: NativeSource)
@@ -73,6 +72,7 @@ object NativeOrigin:
 
   def read(env: Map[String, String]): NativeOrigin =
     NativeToolchain.source(env).fold(Refused(_), Chosen(_))
+end NativeOrigin
 
 enum NativeToolchainError:
   case Empty
@@ -87,3 +87,4 @@ enum NativeToolchainError:
     case Revision(raw) =>
       s"'$raw' puts a revision in HISTOS_NATIVE. Name nativeVersion on the module"
     case Repository(error) => error.message
+end NativeToolchainError

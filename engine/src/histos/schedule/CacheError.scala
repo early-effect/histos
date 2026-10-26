@@ -9,3 +9,4 @@ enum CacheError:
   def message: String = this match
     case Io(failure)     => failure.message
     case Corrupt(digest) => s"cache entry ${digest.value} failed verification"
+end CacheError

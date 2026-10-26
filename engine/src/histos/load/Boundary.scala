@@ -28,6 +28,7 @@ private[load] object ClassHome:
   /** Package `histos` with no subpackage. `histos.HistosBuild` is in. `histos.schedule.Sendable` is not. */
   private def root(name: String): Boolean =
     name.startsWith("histos.") && !name.substring("histos.".length).contains('.')
+end ClassHome
 
 /** Jars the api classloader already supplies. A plugin cell must not put a second copy on a flat classpath. */
 private[load] object Boundary:
@@ -35,26 +36,30 @@ private[load] object Boundary:
     name == "scala-library" || name == "scala3-library_3" || name == "zio_3" || name == "zio-stacktracer_3" ||
       name == "izumi-reflect_3" || name.startsWith("histos-api")
 
-  /**
-   * `ZIO.succeed` summons `Trace` from `zio-stacktracer`. `zio.Tag` extends `izumi.reflect.Tag`.
-   * Neither class is in the zio jar. A compile that sees `Tag` without izumi-reflect aborts in the compiler.
-   */
+  /** `ZIO.succeed` summons `Trace` from `zio-stacktracer`. `zio.Tag` extends `izumi.reflect.Tag`. Neither class is in
+    * the zio jar. A compile that sees `Tag` without izumi-reflect aborts in the compiler.
+    */
   def jars(apiJar: Path): IO[LoadError, List[Path]] =
-    ZIO.attemptBlocking {
-      val libs = List(
-        classOf[scala.collection.immutable.Nil.type],
-        classOf[scala.quoted.Quotes],
-        zioClass,
-        classOf[zio.internal.stacktracer.Tracer],
-        classOf[izumi.reflect.Tag[Any]],
-      ).flatMap(codeSource)
-      (apiJar :: libs).distinct
-    }.mapError(_ => LoadError.Io(IoFailure(apiJar, IoFault.Read)))
+    ZIO
+      .attemptBlocking {
+        val libs = List(
+          classOf[scala.collection.immutable.Nil.type],
+          classOf[scala.quoted.Quotes],
+          zioClass,
+          classOf[zio.internal.stacktracer.Tracer],
+          classOf[izumi.reflect.Tag[Any]],
+        ).flatMap(codeSource)
+        (apiJar :: libs).distinct
+      }
+      .mapError(_ => LoadError.Io(IoFailure(apiJar, IoFault.Read)))
 
   def codeSource(cls: Class[?]): Option[Path] =
-    Option(cls.getProtectionDomain).flatMap(domain => Option(domain.getCodeSource)).flatMap: source =>
-      Option(source.getLocation).flatMap: url =>
-        scala.util.Try(Path.of(url.toURI)).toOption
+    Option(cls.getProtectionDomain)
+      .flatMap(domain => Option(domain.getCodeSource))
+      .flatMap: source =>
+        Option(source.getLocation).flatMap: url =>
+          scala.util.Try(Path.of(url.toURI)).toOption
 
   private def zioClass: Class[?] =
     classOf[zio.ZIO[Any, Any, Any]]
+end Boundary

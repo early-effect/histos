@@ -17,7 +17,7 @@ import histos.{
   RepositoryUrlError,
   Resolver,
   ScalaVersion,
-  module
+  module,
 }
 
 import java.nio.file.{Files, Path}
@@ -33,28 +33,28 @@ object PublishSpec extends ZIOSpecDefault:
     test("a manual library is a jar a second project can compile against"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           repo <- temp
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             write(
               root,
               "core/src/main/scala/demo/Hello.scala",
-              "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n"
+              "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n",
             )
             write(
               root,
               "app/src/main/scala/App.scala",
-              "object App {\n  def text: String = demo.Hello.greet\n}\n"
+              "object App {\n  def text: String = demo.Hello.greet\n}\n",
             )
             write(
               root,
               ".histos/dependencies.lock",
-              "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n"
+              "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n",
             )
           }
-          built <- ZIO.fromEither(library)
-          _ <- histos.ToolFixture.seed(root, built)
+          built     <- ZIO.fromEither(library)
+          _         <- histos.ToolFixture.seed(root, built)
           published <- LocalPublish
             .run(root, built, Nil, jdk, Map.empty)
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -70,45 +70,43 @@ object PublishSpec extends ZIOSpecDefault:
           )
           used <- consume(repo, root.resolve("use"), jdk)
         yield assertTrue(
-          published.modules.map(line =>
-            s"${line.group.value} ${line.artifact} ${line.revision}"
-          ) == List(
+          published.modules.map(line => s"${line.group.value} ${line.artifact} ${line.revision}") == List(
             "com.example app_3 1.0.0",
-            "com.example core_3 1.0.0"
+            "com.example core_3 1.0.0",
           ),
           names.contains("demo/Hello.class"),
           names.contains("demo/Hello.tasty"),
           appPom.contains("<artifactId>core_3</artifactId>"),
           !appPom.contains("zio-test"),
           appPom.contains("<version>1.0.0</version>"),
-          used
+          used,
         )
     ,
     test("a module on Jvm and Js publishes one coordinate per platform"):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
+          jdk  <- GraphCompile.jdkHere
           root <- temp
           repo <- temp
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             write(
               root,
               "core/src/main/scala/demo/Hello.scala",
-              "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n"
+              "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n",
             )
             write(
               root,
               "app/src/main/scala/App.scala",
-              "object App {\n  def text: String = demo.Hello.greet\n}\n"
+              "object App {\n  def text: String = demo.Hello.greet\n}\n",
             )
             write(
               root,
               ".histos/dependencies.lock",
-              "cell core 3.10.0 jvm\ncell core 3.10.0 js\ncell app 3.10.0 jvm\ncell app 3.10.0 js\n"
+              "cell core 3.10.0 jvm\ncell core 3.10.0 js\ncell app 3.10.0 jvm\ncell app 3.10.0 js\n",
             )
           }
-          built <- ZIO.fromEither(crossLibrary)
-          _ <- histos.ToolFixture.seed(root, built)
+          built     <- ZIO.fromEither(crossLibrary)
+          _         <- histos.ToolFixture.seed(root, built)
           published <- LocalPublish
             .run(root, built, Nil, jdk, Map.empty)
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -139,14 +137,14 @@ object PublishSpec extends ZIOSpecDefault:
             "app_3",
             "app_sjs1_3",
             "core_3",
-            "core_sjs1_3"
+            "core_sjs1_3",
           ),
           jvm.contains("demo/Hello.class"),
           !jvm.exists(_.endsWith(".sjsir")),
           js.exists(_.endsWith(".sjsir")),
           jvmPom.contains("<artifactId>core_3</artifactId>"),
           jsPom.contains("<artifactId>core_sjs1_3</artifactId>"),
-          !jsPom.contains("<artifactId>core_3</artifactId>")
+          !jsPom.contains("<artifactId>core_3</artifactId>"),
         )
     ,
     test(
@@ -154,12 +152,12 @@ object PublishSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jdk <- GraphCompile.jdkHere
-          root <- temp
-          repo <- temp
+          jdk     <- GraphCompile.jdkHere
+          root    <- temp
+          repo    <- temp
           develop <- ZIO.fromEither(development)
-          plain <- ZIO.fromEither(unorganized)
-          held <- LocalPublish
+          plain   <- ZIO.fromEither(unorganized)
+          held    <- LocalPublish
             .run(root, develop, Nil, jdk, Map.empty)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(repo)
@@ -181,20 +179,18 @@ object PublishSpec extends ZIOSpecDefault:
             case _ => false
           ,
           missing == Left(LocalPublishError.NoOrganization),
-          wrote.isEmpty
-        )
+          wrote.isEmpty,
+        ),
   )
 
-  /** The second build names the published directory. Resolve and compile use
-    * that list, not Central.
+  /** The second build names the published directory. Resolve and compile use that list, not Central.
     */
   private def consume(repo: Path, work: Path, jdk: JdkRuntime): ZIO[
     Scope & histos.resolve.LockedTools,
-    Throwable | RepositoryUrlError | BuildError | ResolveError |
-      GraphCompileError | histos.workspace.IoFailure,
-    Boolean
+    Throwable | RepositoryUrlError | BuildError | ResolveError | GraphCompileError | histos.workspace.IoFailure,
+    Boolean,
   ] =
-    val version = ScalaVersion("3.10.0")
+    val version    = ScalaVersion("3.10.0")
     val dependency = Dep("com.example::core:1.0.0")
     ZIO
       .fromEither(RepositoryUrl.from(repo.toUri.toASCIIString))
@@ -211,7 +207,7 @@ object PublishSpec extends ZIOSpecDefault:
                 write(
                   work,
                   "src/main/scala/Use.scala",
-                  "object Use {\n  def text: String = demo.Hello.greet\n}\n"
+                  "object Use {\n  def text: String = demo.Hello.greet\n}\n",
                 )
               )
               _ <- Resolve
@@ -220,48 +216,54 @@ object PublishSpec extends ZIOSpecDefault:
                   histos.ToolFixture.resolver
                 )
               cells <- GraphCompile
-                .run(work, graph, Nil, jdk, NativeOrigin.Central)
+                .run(
+                  work,
+                  graph,
+                  Nil,
+                  jdk,
+                  NativeOrigin.Central,
+                  None,
+                  _ => ZIO.unit,
+                )
                 .provideSomeLayer[histos.resolve.LockedTools](
                   histos.ToolFixture.resolver
                 )
-            yield cells.exists(cell =>
-              Files.isRegularFile(cell.classes.resolve("Use.class"))
-            )
+            yield cells.exists(cell => Files.isRegularFile(cell.classes.resolve("Use.class")))
 
   private val library =
     val scalaVersion = ScalaVersion("3.10.0")
-    val core = module("core", Jvm)(scalaVersion)
-    val app = module("app", Jvm)(scalaVersion)
+    val core         = module("core", Jvm)(scalaVersion)
+    val app          = module("app", Jvm)(scalaVersion)
       .dependsOn(core)
       .testDependencies(Dep("dev.zio::zio-test:2.1.27"))
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)),
       core,
-      app
+      app,
     )
 
   private val crossLibrary =
     val scalaVersion = ScalaVersion("3.10.0")
-    val core = module("core", Jvm, Js)(scalaVersion)
-    val app = module("app", Jvm, Js)(scalaVersion).dependsOn(core)
+    val core         = module("core", Jvm, Js)(scalaVersion)
+    val app          = module("app", Jvm, Js)(scalaVersion).dependsOn(core)
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)),
       core,
-      app
+      app,
     )
 
   private val development =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))
     Projects.organization(Organization("com.example"))(
       histos.ships(histos.ship("libs", ShipNumber("1.0.0"))(core)),
-      core
+      core,
     )
 
   private val unorganized =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))
     Projects(
       histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)),
-      core
+      core,
     )
 
   private def zipNames(jar: Path): List[String] =
@@ -280,7 +282,7 @@ object PublishSpec extends ZIOSpecDefault:
     ): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -300,3 +302,4 @@ object PublishSpec extends ZIOSpecDefault:
         )
       )
     ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+end PublishSpec

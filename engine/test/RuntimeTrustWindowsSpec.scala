@@ -4,12 +4,7 @@ import histos.archive.{RuntimeCache, RuntimeCacheError}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.file.Files
-import java.nio.file.attribute.{
-  AclEntry,
-  AclEntryPermission,
-  AclEntryType,
-  AclFileAttributeView
-}
+import java.nio.file.attribute.{AclEntry, AclEntryPermission, AclEntryType, AclFileAttributeView}
 import scala.jdk.CollectionConverters.*
 
 import zio.*
@@ -22,7 +17,7 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-trust-junction")
+          root   <- Workspace.work("histos-trust-junction")
           shared <- Workspace.createDirectories(root.resolve("shared"))
           target = shared.resolve("private")
           _ <- RuntimeCache.prepare(target)
@@ -37,7 +32,7 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
                   "mklink",
                   "/J",
                   alias.toString,
-                  target.toString
+                  target.toString,
                 )
                   .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                   .redirectError(ProcessBuilder.Redirect.DISCARD)
@@ -76,7 +71,7 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
             .setPrincipal(everyone)
             .setPermissions(
               AclEntryPermission.DELETE_CHILD,
-              AclEntryPermission.WRITE_DATA
+              AclEntryPermission.WRITE_DATA,
             )
             .build()
           _ <- ZIO.acquireRelease(
@@ -87,8 +82,8 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
               .mapError(_ => IoFailure(shared, IoFault.Write))
           )(_ => ZIO.attemptBlocking(view.setAcl(original)).ignore)
           cache = alias.resolve("new/cache")
-          runtime <- RuntimeCache.prepare(cache).either
-          updater <- LauncherFiles.privateDirectory(cache).either
+          runtime  <- RuntimeCache.prepare(cache).either
+          updater  <- LauncherFiles.privateDirectory(cache).either
           physical <- ZIO
             .attemptBlocking(shared.toRealPath())
             .mapError(_ => IoFailure(shared, IoFault.Stat))
@@ -98,7 +93,7 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
         yield assertTrue(
           runtime == Left(RuntimeCacheError.Shared(physical)),
           updater == Left(LauncherError.Cache(cache)),
-          !created
+          !created,
         )
   ) @@ TestAspect.windows @@ TestAspect.withLiveSystem @@ TestAspect.timeout(
     30.seconds

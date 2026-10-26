@@ -21,6 +21,7 @@ object MainClass:
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): MainClass = raw
+end MainClass
 
 enum MainClassError:
   case Empty
@@ -29,3 +30,4 @@ enum MainClassError:
   def message: String = this match
     case Empty    => "a main class is not empty"
     case Bad(raw) => s"'$raw' is not a main class"
+end MainClassError

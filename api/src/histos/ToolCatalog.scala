@@ -7,7 +7,7 @@ final case class JsTools(
     browserScala: ScalaVersion,
     node: ToolRevision,
     jsdom: ToolRevision,
-    chekhov: ToolRevision
+    chekhov: ToolRevision,
 )
 final case class NativeTools(revision: NativeVersion, bridgeScala: ScalaVersion)
 
@@ -16,7 +16,7 @@ final case class NativeTools(revision: NativeVersion, bridgeScala: ScalaVersion)
 final case class ToolCatalog(
     compilers: CompilerTools,
     js: JsTools,
-    native: NativeTools
+    native: NativeTools,
 )
 
 object ToolCatalog:
@@ -28,7 +28,7 @@ object ToolCatalog:
       ScalaVersion("3.9.0"),
       ToolRevision("1.6.0"),
       ToolRevision("1.1.1"),
-      ToolRevision("0.1.3")
+      ToolRevision("0.1.3"),
     ),
-    NativeTools(NativeVersion("0.5.12"), ScalaVersion("3.9.0"))
+    NativeTools(NativeVersion("0.5.12"), ScalaVersion("3.9.0")),
   )

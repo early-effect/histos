@@ -9,7 +9,7 @@ object ProviderNoteSpec extends ZIOSpecDefault:
   def spec = suite("provider note")(
     test("a note is that child's environment"):
       for
-        first <- ZIO.fromEither(SuitePattern.from("alpha.*"))
+        first  <- ZIO.fromEither(SuitePattern.from("alpha.*"))
         second <- ZIO.fromEither(SuitePattern.from("beta?"))
       yield
         val env = ProviderNote("zio.test.sbt.ZTestFramework", Path.of("classes"), List(first, second)).environment
@@ -22,10 +22,9 @@ object ProviderNoteSpec extends ZIOSpecDefault:
         )
     ,
     test("two cells keep two notes"):
-      for
-        pattern <- ZIO.fromEither(SuitePattern.from("demo.*"))
+      for pattern <- ZIO.fromEither(SuitePattern.from("demo.*"))
       yield
-        val api = ProviderNote("zio.test.sbt.ZTestFramework", Path.of("api-classes"), List(pattern)).environment
+        val api    = ProviderNote("zio.test.sbt.ZTestFramework", Path.of("api-classes"), List(pattern)).environment
         val engine = ProviderNote("zio.test.sbt.ZTestFramework", Path.of("engine-classes"), Nil).environment
         assertTrue(
           api.get(ProviderRunner.Classes).contains(Path.of("api-classes").toAbsolutePath.toString),
@@ -33,5 +32,5 @@ object ProviderNoteSpec extends ZIOSpecDefault:
           api.get(ProviderRunner.PatternCount).contains("1"),
           engine.get(ProviderRunner.PatternCount).contains("0"),
           api.get(ProviderRunner.Classes) != engine.get(ProviderRunner.Classes),
-        )
+        ),
   )

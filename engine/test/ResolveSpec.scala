@@ -10,7 +10,7 @@ import histos.zinc.{
   GraphCompile,
   GraphCompileError,
   JvmCompile,
-  ScalacFlags
+  ScalacFlags,
 }
 import histos.{
   Dep,
@@ -22,7 +22,7 @@ import histos.{
   ProjectName,
   ScalaVersion,
   ScalaVersions,
-  SourcePos
+  SourcePos,
 }
 
 import java.io.ByteArrayOutputStream
@@ -37,13 +37,13 @@ import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
 object ResolveSpec extends ZIOSpecDefault:
-  private val v390 = ScalaVersion.trusted("3.9.0")
-  private val v213 = ScalaVersion.trusted("2.13.16")
-  private val core = project("core")
-  private val lib = Dep.trusted("dev.histos", "lib", "1.0.0", DepKind.Java)
-  private val base = Dep.trusted("dev.histos", "base", "1.1.0", DepKind.Java)
-  private val binary = Dep.trusted("dev.zio", "zio", "2.1.26", DepKind.Binary)
-  private val full = Dep.trusted("dev.zio", "zio", "2.1.26", DepKind.Full)
+  private val v390    = ScalaVersion.trusted("3.9.0")
+  private val v213    = ScalaVersion.trusted("2.13.16")
+  private val core    = project("core")
+  private val lib     = Dep.trusted("dev.histos", "lib", "1.0.0", DepKind.Java)
+  private val base    = Dep.trusted("dev.histos", "base", "1.1.0", DepKind.Java)
+  private val binary  = Dep.trusted("dev.zio", "zio", "2.1.26", DepKind.Binary)
+  private val full    = Dep.trusted("dev.zio", "zio", "2.1.26", DepKind.Full)
   private val javaDep =
     Dep.trusted("org.scala-lang", "scala-library", "2.13.16", DepKind.Java)
   private val digest =
@@ -61,7 +61,7 @@ object ResolveSpec extends ZIOSpecDefault:
         ArtifactName.of(full, v390, Platform.Native) == "zio_native0.5_3.9.0",
         ArtifactName.of(javaDep, v390, Platform.Jvm) == "scala-library",
         ArtifactName.of(javaDep, v390, Platform.Js) == "scala-library",
-        ArtifactName.of(javaDep, v390, Platform.Native) == "scala-library"
+        ArtifactName.of(javaDep, v390, Platform.Native) == "scala-library",
       )
     ,
     test("declared repositories stay ahead of central"):
@@ -78,18 +78,18 @@ object ResolveSpec extends ZIOSpecDefault:
           assertTrue(
             Repository.serves(
               Repository.Maven(url),
-              "file:/tmp/repo/dev/histos/lib-1.0.0.jar"
+              "file:/tmp/repo/dev/histos/lib-1.0.0.jar",
             ),
             Repository.serves(
               Repository.Central,
-              "https://repo1.maven.org/maven2/org/foo/bar.jar"
+              "https://repo1.maven.org/maven2/org/foo/bar.jar",
             ),
             !Repository.serves(
               Repository.Central,
-              "https://example.test/org/foo/bar.jar"
-            )
+              "https://example.test/org/foo/bar.jar",
+            ),
           )
-        case Left(_) => assertTrue(false)
+        case Left(_) => assertTrue(false),
   )
 
   private val lockFile = suite("dependency lock")(
@@ -108,7 +108,7 @@ object ResolveSpec extends ZIOSpecDefault:
           assertTrue(
             again == Right(lock),
             lock.cells.length == 1,
-            lock.plugins.isEmpty
+            lock.plugins.isEmpty,
           )
         case Left(_) => assertTrue(false)
     ,
@@ -121,8 +121,8 @@ object ResolveSpec extends ZIOSpecDefault:
         Nil,
         List(
           Eviction("org.jline", "jline-native", "", "3.27.1"),
-          Eviction("dev.zio", "zio_3", "2.1.20", "2.1.26")
-        )
+          Eviction("dev.zio", "zio_3", "2.1.20", "2.1.26"),
+        ),
       )
       val text = DependencyLock.render(DependencyLock(List(cell)))
       assertTrue(
@@ -130,12 +130,10 @@ object ResolveSpec extends ZIOSpecDefault:
         DependencyLock.parse(text) == Right(
           DependencyLock(
             List(
-              cell.copy(evictions =
-                List(Eviction("dev.zio", "zio_3", "2.1.20", "2.1.26"))
-              )
+              cell.copy(evictions = List(Eviction("dev.zio", "zio_3", "2.1.20", "2.1.26")))
             )
           )
-        )
+        ),
       )
     ,
     test(
@@ -146,7 +144,7 @@ object ResolveSpec extends ZIOSpecDefault:
         """cell core 3.9.0 jvm
           |cell core 3.9.0 jvm
           |""".stripMargin
-      val sha = s"artifact dev.zio zio_3 2.1.26 zzzz central"
+      val sha  = s"artifact dev.zio zio_3 2.1.26 zzzz central"
       val repo = s"artifact dev.zio zio_3 2.1.26 ${digest.value} nowhere"
       assertTrue(
         DependencyLock.parse("nope") == Left(LockError.BadLine("nope")),
@@ -166,7 +164,7 @@ object ResolveSpec extends ZIOSpecDefault:
         DependencyLock.parse(s"cell core 3.9.0 jvm\n$repo") == Left(
           LockError.BadRepository("nowhere")
         ),
-        DependencyLock.parse("") == Left(LockError.Empty)
+        DependencyLock.parse("") == Left(LockError.Empty),
       )
     ,
     test(
@@ -190,7 +188,7 @@ object ResolveSpec extends ZIOSpecDefault:
             again == Right(lock),
             lock.cells.map(_.scope) == List(
               ClasspathScope.Compile,
-              ClasspathScope.Test
+              ClasspathScope.Test,
             ),
             lock.cells
               .flatMap(_.directs.map(_.name)) == List("lib", "lib", "probe"),
@@ -199,9 +197,9 @@ object ResolveSpec extends ZIOSpecDefault:
                 core,
                 v390,
                 Platform.Jvm,
-                ClasspathScope.Test
+                ClasspathScope.Test,
               )
-            )
+            ),
           )
         case Left(_) => assertTrue(false)
     ,
@@ -211,7 +209,7 @@ object ResolveSpec extends ZIOSpecDefault:
            |direct dev.example echo 1.0.0 binary
            |artifact dev.example echo_3 1.0.0 ${digest.value} central
            |""".stripMargin
-      val exact = DependencyLock.parse(cell("exact-binary"))
+      val exact  = DependencyLock.parse(cell("exact-binary"))
       val source = DependencyLock.parse(cell("source"))
       val either = DependencyLock.parse(cell("binary-or-source"))
       assertTrue(
@@ -227,7 +225,7 @@ object ResolveSpec extends ZIOSpecDefault:
         DependencyLock.parse(cell("api")) == Left(
           LockError.BadLine("plugin dev.example echo 1.0.0 api")
         ),
-        LinkToken.parse("api").isEmpty
+        LinkToken.parse("api").isEmpty,
       )
     ,
     test("a source line belongs to the open plugin"):
@@ -242,9 +240,7 @@ object ResolveSpec extends ZIOSpecDefault:
             (lock.plugins match
               case plugin :: Nil =>
                 plugin.link == LinkStrategy.BinaryOrSource &&
-                plugin.source.exists(artifact =>
-                  artifact.name == "echo_3" && artifact.sha256 == digest
-                )
+                plugin.source.exists(artifact => artifact.name == "echo_3" && artifact.sha256 == digest)
               case _ => false)
         case Left(_) => assertTrue(false)
     ,
@@ -267,8 +263,8 @@ object ResolveSpec extends ZIOSpecDefault:
         DependencyLock.parse(twice) == Left(
           LockError.DuplicatePlugin("dev.example", "echo", "1.0.0")
         ),
-        DependencyLock.parse(bare) == Left(LockError.Missing(LockField.Plugin))
-      )
+        DependencyLock.parse(bare) == Left(LockError.Missing(LockField.Plugin)),
+      ),
   )
 
   private val fetch = suite("file repository")(
@@ -278,9 +274,7 @@ object ResolveSpec extends ZIOSpecDefault:
           open <- opened
           plus <- resolve(
             open,
-            open.cell.copy(dependencies =
-              List(Dep.trusted("dev.histos", "lib", "1.+", DepKind.Java))
-            )
+            open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "lib", "1.+", DepKind.Java))),
           )
           latest <- resolve(
             open,
@@ -288,13 +282,11 @@ object ResolveSpec extends ZIOSpecDefault:
               List(
                 Dep.trusted("dev.histos", "lib", "latest.release", DepKind.Java)
               )
-            )
+            ),
           )
           bracket <- resolve(
             open,
-            open.cell.copy(dependencies =
-              List(Dep.trusted("dev.histos", "lib", "[1.0,2.0]", DepKind.Java))
-            )
+            open.cell.copy(dependencies = List(Dep.trusted("dev.histos", "lib", "[1.0,2.0]", DepKind.Java))),
           )
           milestone <- resolve(
             open,
@@ -302,7 +294,7 @@ object ResolveSpec extends ZIOSpecDefault:
               List(
                 Dep.trusted("dev.histos", "missing", "1.0.0-M1", DepKind.Java)
               )
-            )
+            ),
           )
           snapshot <- resolve(
             open,
@@ -312,10 +304,10 @@ object ResolveSpec extends ZIOSpecDefault:
                   "dev.histos",
                   "missing",
                   "0.5.13-SNAPSHOT",
-                  DepKind.Java
+                  DepKind.Java,
                 )
               )
-            )
+            ),
           )
         yield assertTrue(
           plus == Left(
@@ -338,21 +330,21 @@ object ResolveSpec extends ZIOSpecDefault:
           ),
           snapshot == Left(
             ResolveError.NotFound("dev.histos", "missing", "0.5.13-SNAPSHOT")
-          )
+          ),
         )
     ,
     test("a js cell fetches the sjs1 jar and does not ask the network"):
       ZIO.scoped:
         for
           open <- opened
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             writeMaven(
               open.maven,
               "dev.zio",
               "zio_sjs1_3",
               "2.1.26",
               emptyJar,
-              pom("dev.zio", "zio_sjs1_3", "2.1.26", None)
+              pom("dev.zio", "zio_sjs1_3", "2.1.26", None),
             )
           )
           cell = ResolveCell(
@@ -360,7 +352,7 @@ object ResolveSpec extends ZIOSpecDefault:
             List(binary),
             v390,
             Platform.Js,
-            open.repositories
+            open.repositories,
           )
           classpath <- ZIO
             .serviceWithZIO[Resolve](_.resolve(cell))
@@ -375,14 +367,14 @@ object ResolveSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           open <- opened
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             writeMaven(
               open.maven,
               "dev.zio",
               "zio_native0.5_3",
               "2.1.26",
               emptyJar,
-              pom("dev.zio", "zio_native0.5_3", "2.1.26", None)
+              pom("dev.zio", "zio_native0.5_3", "2.1.26", None),
             )
           )
           cell = ResolveCell(
@@ -390,7 +382,7 @@ object ResolveSpec extends ZIOSpecDefault:
             List(binary),
             v390,
             Platform.Native,
-            open.repositories
+            open.repositories,
           )
           classpath <- ZIO
             .serviceWithZIO[Resolve](_.resolve(cell))
@@ -402,15 +394,13 @@ object ResolveSpec extends ZIOSpecDefault:
     test("one transitive is evicted onto the direct revision"):
       ZIO.scoped:
         for
-          open <- opened
+          open      <- opened
           classpath <- ZIO
             .serviceWithZIO[Resolve](_.resolve(open.cell))
             .provide(Resolve.live(open.cache))
             .either
           names = classpath.map(
-            _.artifacts.map(artifact =>
-              s"${artifact.name}:${artifact.revision}"
-            )
+            _.artifacts.map(artifact => s"${artifact.name}:${artifact.revision}")
           )
           evicted = classpath.map(_.evictions)
         yield assertTrue(
@@ -420,7 +410,7 @@ object ResolveSpec extends ZIOSpecDefault:
           ),
           evicted == Right(
             List(Eviction("dev.histos", "base", "1.0.0", "1.1.0"))
-          )
+          ),
         )
     ,
     test("a changed direct is lock drift and does not fetch"):
@@ -435,7 +425,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 open.cell.platform,
                 List(LockedDirect("dev.histos", "lib", "9.9.9", DepKind.Java)),
                 Nil,
-                Nil
+                Nil,
               )
             )
           )
@@ -450,10 +440,10 @@ object ResolveSpec extends ZIOSpecDefault:
               open.cell.module,
               open.cell.scalaVersion,
               open.cell.platform,
-              ClasspathScope.Compile
+              ClasspathScope.Compile,
             )
           ),
-          !touched
+          !touched,
         )
     ,
     test(
@@ -461,11 +451,11 @@ object ResolveSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          open <- opened
+          open  <- opened
           fresh <- ZIO
             .serviceWithZIO[Resolve](_.resolve(open.cell))
             .provide(Resolve.live(open.cache))
-          held = hold(open.cell, fresh)
+          held    = hold(open.cell, fresh)
           flipped = tamper(held)
           fetched <- Resolve
             .materialize(open.cell, flipped)
@@ -475,7 +465,7 @@ object ResolveSpec extends ZIOSpecDefault:
             .update(
               open.root,
               graph(open.cell.dependencies),
-              open.repositories
+              open.repositories,
             )
             .provideSome[histos.resolve.LockedTools](
               histos.ToolFixture.beside(open.cache)
@@ -492,7 +482,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 .check(
                   open.root,
                   graph(open.cell.dependencies),
-                  open.repositories
+                  open.repositories,
                 )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -510,7 +500,7 @@ object ResolveSpec extends ZIOSpecDefault:
           checked match
             case Left(ResolveError.Checksum(_, expected, actual)) =>
               expected != actual
-            case _ => false
+            case _ => false,
         )
     ,
     test(
@@ -519,14 +509,14 @@ object ResolveSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           open <- opened
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             writeMaven(
               open.maven,
               "dev.histos",
               "probe",
               "1.0.0",
               emptyJar,
-              pom("dev.histos", "probe", "1.0.0", None)
+              pom("dev.histos", "probe", "1.0.0", None),
             )
           )
           probe = Dep.trusted("dev.histos", "probe", "1.0.0", DepKind.Java)
@@ -539,7 +529,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 List(lib),
                 Nil,
                 SourcePos("histos.scala", 1, 1),
-                testDependencies = List(probe)
+                testDependencies = List(probe),
               )
             )
           )
@@ -563,7 +553,7 @@ object ResolveSpec extends ZIOSpecDefault:
           (parsed match
             case Right(lock) =>
               val compile = lock.cells.find(_.scope == ClasspathScope.Compile)
-              val tested = lock.cells.find(_.scope == ClasspathScope.Test)
+              val tested  = lock.cells.find(_.scope == ClasspathScope.Test)
               compile.exists(cell =>
                 cell.directs.map(_.name) == List("lib") && !cell.artifacts
                   .exists(_.name == "probe")
@@ -571,7 +561,7 @@ object ResolveSpec extends ZIOSpecDefault:
               tested.exists(cell =>
                 cell.directs.map(_.name) == List(
                   "lib",
-                  "probe"
+                  "probe",
                 ) && cell.artifacts.exists(_.name == "probe")
               )
             case Left(_) => false)
@@ -584,25 +574,23 @@ object ResolveSpec extends ZIOSpecDefault:
             .update(
               open.root,
               graph(open.cell.dependencies),
-              open.repositories
+              open.repositories,
             )
             .provideSome[histos.resolve.LockedTools](
               histos.ToolFixture.beside(open.cache)
             )
-          file = Resolve.lockPath(open.root)
+          file   = Resolve.lockPath(open.root)
           exists = Files.isRegularFile(file)
           text <- ZIO.attempt(if exists then Files.readString(file) else "")
           parsed = DependencyLock.parse(text)
-          again = parsed.flatMap(lock =>
-            DependencyLock.parse(DependencyLock.render(lock))
-          )
+          again  = parsed.flatMap(lock => DependencyLock.parse(DependencyLock.render(lock)))
           checked <- histos.ToolFixture
             .at(open.root, graph(open.cell.dependencies))(
               Resolve
                 .check(
                   open.root,
                   graph(open.cell.dependencies),
-                  open.repositories
+                  open.repositories,
                 )
             )
             .provideSomeLayer[histos.resolve.LockedTools](
@@ -616,7 +604,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 .either
             case Left(error) => ZIO.succeed(Left(ResolveError.Lock(error)))
           source <- ZIO.attempt(write(open.root, "App.scala", app))
-          jdk <- GraphCompile.jdkHere
+          jdk    <- GraphCompile.jdkHere
           request = materialized match
             case Right(classpath) =>
               CompileRequest(
@@ -624,13 +612,13 @@ object ResolveSpec extends ZIOSpecDefault:
                   histos.ScalaVersion("3.9.0"),
                   Platform.Jvm,
                   jdk,
-                  ScalacFlags.empty
+                  ScalacFlags.empty,
                 ),
                 List(source),
                 classpath.artifacts.map(_.path),
                 open.root.resolve("classes"),
                 open.root.resolve("analysis"),
-                classpath.artifacts.map(_.sha256)
+                classpath.artifacts.map(_.sha256),
               )
             case Left(_) =>
               CompileRequest(
@@ -638,13 +626,13 @@ object ResolveSpec extends ZIOSpecDefault:
                   histos.ScalaVersion("3.9.0"),
                   Platform.Jvm,
                   jdk,
-                  ScalacFlags.empty
+                  ScalacFlags.empty,
                 ),
                 List(source),
                 Nil,
                 open.root.resolve("classes"),
                 open.root.resolve("analysis"),
-                Nil
+                Nil,
               )
           compiled <- JvmCompile.compile(request).either
           classFile = Files.isRegularFile(
@@ -667,7 +655,7 @@ object ResolveSpec extends ZIOSpecDefault:
           materialized.isRight && compiled.isRight && classFile && detail.isEmpty,
           missing == Left(
             ResolveError.NoLock(Resolve.lockPath(open.root.resolve("absent")))
-          )
+          ),
         )
     ,
     test("a module update keeps plugin cells"):
@@ -687,7 +675,7 @@ object ResolveSpec extends ZIOSpecDefault:
             .update(
               open.root,
               graph(open.cell.dependencies),
-              open.repositories
+              open.repositories,
             )
             .provideSome[histos.resolve.LockedTools](
               histos.ToolFixture.beside(open.cache)
@@ -710,27 +698,27 @@ object ResolveSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           open <- opened
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             writeMaven(
               open.maven,
               "dev.example",
               "echo_3",
               "1.0.0",
               emptyJar,
-              pom("dev.example", "echo_3", "1.0.0", None)
+              pom("dev.example", "echo_3", "1.0.0", None),
             )
           )
           dependency = Dep.trusted(
             "dev.example",
             "echo",
             "1.0.0",
-            DepKind.Binary
+            DepKind.Binary,
           )
           _ <- Resolve
             .updatePlugins(
               open.root,
               List(PluginRequest.Dep(dependency, LinkStrategy.ExactBinary)),
-              open.repositories
+              open.repositories,
             )
             .provide(Resolve.live(open.cache))
           text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
@@ -754,14 +742,14 @@ object ResolveSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           open <- opened
-          _ <- ZIO.attempt {
+          _    <- ZIO.attempt {
             writeMaven(
               open.maven,
               "dev.example",
               "echo_3",
               "1.0.0",
               emptyJar,
-              pom("dev.example", "echo_3", "1.0.0", None)
+              pom("dev.example", "echo_3", "1.0.0", None),
             )
             val dir = open.maven
               .resolve("dev")
@@ -776,13 +764,13 @@ object ResolveSpec extends ZIOSpecDefault:
             "dev.example",
             "echo",
             "1.0.0",
-            DepKind.Binary
+            DepKind.Binary,
           )
           _ <- Resolve
             .updatePlugins(
               open.root,
               List(PluginRequest.Dep(dependency, LinkStrategy.BinaryOrSource)),
-              open.repositories
+              open.repositories,
             )
             .provide(Resolve.live(open.cache))
           text <- ZIO.attempt(Files.readString(Resolve.lockPath(open.root)))
@@ -795,7 +783,7 @@ object ResolveSpec extends ZIOSpecDefault:
                   plugin.link == LinkStrategy.BinaryOrSource && plugin.source.isDefined && text
                     .contains("\nsource ")
                 case _ => false
-            case Left(_) => false
+            case Left(_) => false,
   )
 
   private val app =
@@ -817,12 +805,12 @@ object ResolveSpec extends ZIOSpecDefault:
       cell: ResolveCell,
       repositories: Repositories,
       javac: Int,
-      javacText: String
+      javacText: String,
   )
 
   private def resolve(
       open: Opened,
-      cell: ResolveCell
+      cell: ResolveCell,
   ): ZIO[Any, Nothing, Either[ResolveError, Classpath]] =
     ZIO
       .serviceWithZIO[Resolve](_.resolve(cell))
@@ -835,7 +823,7 @@ object ResolveSpec extends ZIOSpecDefault:
       repo <- ZIO.attempt(
         Files.createDirectories(root.resolve("repo")).toRealPath()
       )
-      jdk <- GraphCompile.jdkHere
+      jdk      <- GraphCompile.jdkHere
       compiled <- ZIO.attempt(
         compileGreeting(root, jdk.home.resolve("bin").resolve("javac"))
       )
@@ -851,7 +839,7 @@ object ResolveSpec extends ZIOSpecDefault:
         ResolveCell(core, List(lib, base), v390, Platform.Jvm, repositories),
         repositories,
         compiled.code,
-        compiled.text
+        compiled.text,
       )
 
   private final case class Compiled(code: Int, text: String, bytes: Array[Byte])
@@ -859,17 +847,17 @@ object ResolveSpec extends ZIOSpecDefault:
   private def compileGreeting(root: Path, javac: Path): Compiled =
     val sources = Files.createDirectories(root.resolve("java"))
     val classes = Files.createDirectories(root.resolve("jclasses"))
-    val file = sources.resolve("Greeting.java")
+    val file    = sources.resolve("Greeting.java")
     Files.writeString(file, greetingSource)
     val process = new ProcessBuilder(
       javac.toString,
       "-d",
       classes.toString,
-      file.toString
+      file.toString,
     ).redirectErrorStream(true).start()
     val text =
       new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-    val code = process.waitFor()
+    val code  = process.waitFor()
     val bytes = if code == 0 then jarBytes(classes) else Array.emptyByteArray
     Compiled(code, text, bytes)
 
@@ -880,7 +868,7 @@ object ResolveSpec extends ZIOSpecDefault:
       "base",
       "1.0.0",
       emptyJar,
-      pom("dev.histos", "base", "1.0.0", None)
+      pom("dev.histos", "base", "1.0.0", None),
     )
     writeMaven(
       root,
@@ -888,7 +876,7 @@ object ResolveSpec extends ZIOSpecDefault:
       "base",
       "1.1.0",
       emptyJar,
-      pom("dev.histos", "base", "1.1.0", None)
+      pom("dev.histos", "base", "1.1.0", None),
     )
     writeMaven(
       root,
@@ -896,7 +884,7 @@ object ResolveSpec extends ZIOSpecDefault:
       "lib",
       "1.0.0",
       greeting,
-      pom("dev.histos", "lib", "1.0.0", Some("base", "1.0.0"))
+      pom("dev.histos", "lib", "1.0.0", Some("base", "1.0.0")),
     )
 
   private def writeMaven(
@@ -905,13 +893,13 @@ object ResolveSpec extends ZIOSpecDefault:
       name: String,
       revision: String,
       jar: Array[Byte],
-      pomText: String
+      pomText: String,
   ): Unit =
     val dir = (group.split("\\.").toList :+ name :+ revision)
       .foldLeft(root)(_.resolve(_))
     Files.createDirectories(dir)
-    val jarName = s"$name-$revision.jar"
-    val pomName = s"$name-$revision.pom"
+    val jarName  = s"$name-$revision.jar"
+    val pomName  = s"$name-$revision.pom"
     val pomBytes = pomText.getBytes(StandardCharsets.UTF_8)
     Files.write(dir.resolve(jarName), jar)
     Files.write(dir.resolve(pomName), pomBytes)
@@ -922,7 +910,7 @@ object ResolveSpec extends ZIOSpecDefault:
       group: String,
       name: String,
       revision: String,
-      dependency: Option[(String, String)]
+      dependency: Option[(String, String)],
   ): String =
     val deps = dependency match
       case None                      => ""
@@ -953,7 +941,7 @@ object ResolveSpec extends ZIOSpecDefault:
   private def jarBytes(classes: Path): Array[Byte] =
     val buffer = new ByteArrayOutputStream
     val output = new JarOutputStream(buffer)
-    val walk = Files.walk(classes)
+    val walk   = Files.walk(classes)
     try
       walk.iterator.asScala.foreach: path =>
         if Files.isRegularFile(path) then
@@ -990,7 +978,7 @@ object ResolveSpec extends ZIOSpecDefault:
               dependency.organization,
               dependency.name,
               dependency.revision,
-              dependency.kind
+              dependency.kind,
             )
           ),
           classpath.artifacts.map(artifact =>
@@ -999,10 +987,10 @@ object ResolveSpec extends ZIOSpecDefault:
               artifact.name,
               artifact.revision,
               artifact.sha256,
-              artifact.repository
+              artifact.repository,
             )
           ),
-          classpath.evictions
+          classpath.evictions,
         )
       )
     )
@@ -1018,7 +1006,7 @@ object ResolveSpec extends ZIOSpecDefault:
       case Nil          => Nil
 
   private def flipped(sha: Sha256): Sha256 =
-    val raw = sha.value
+    val raw  = sha.value
     val last = if raw.endsWith("a") then "b" else "a"
     Sha256.from(raw.dropRight(1) + last) match
       case Right(value) => value
@@ -1033,7 +1021,7 @@ object ResolveSpec extends ZIOSpecDefault:
           ScalaVersions(v390, Nil),
           dependencies,
           Nil,
-          SourcePos("histos.scala", 1, 1)
+          SourcePos("histos.scala", 1, 1),
         )
       )
     )
@@ -1058,7 +1046,7 @@ object ResolveSpec extends ZIOSpecDefault:
     ZIO
       .attempt:
         if Files.exists(dir) then
-          val walk = Files.walk(dir)
+          val walk  = Files.walk(dir)
           val paths =
             try walk.iterator.asScala.toList
             finally walk.close()
@@ -1074,5 +1062,6 @@ object ResolveSpec extends ZIOSpecDefault:
     fetch
       .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
         histos.ToolFixture.jvm(ScalaVersion("3.9.0"))
-      )
+      ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+end ResolveSpec

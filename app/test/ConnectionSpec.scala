@@ -35,21 +35,22 @@ object ConnectionSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           repo <- work
-          _ <- Connection.ensure(repo)
+          _    <- Connection.ensure(repo)
           path = repo.resolve(".bsp").resolve("histos.json")
           stamped <- ZIO.attempt(Files.getLastModifiedTime(path))
-          _ <- Connection.ensure(repo)
-          again <- ZIO.attempt(Files.getLastModifiedTime(path))
-        yield assertTrue(stamped == again)
+          _       <- Connection.ensure(repo)
+          again   <- ZIO.attempt(Files.getLastModifiedTime(path))
+        yield assertTrue(stamped == again),
   )
 
   private def written(wrapper: Boolean): ZIO[Scope, Any, String] =
     for
       repo <- work
-      _ <- ZIO.when(wrapper)(ZIO.attempt(Files.writeString(repo.resolve("histos"), "")))
-      _ <- Connection.ensure(repo)
+      _    <- ZIO.when(wrapper)(ZIO.attempt(Files.writeString(repo.resolve("histos"), "")))
+      _    <- Connection.ensure(repo)
       text <- ZIO.attempt(Files.readString(repo.resolve(".bsp").resolve("histos.json")))
     yield text
 
   private def work: ZIO[Scope, Any, Path] =
     ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-bsp")))(path => Workspace.delete(path).ignore)
+end ConnectionSpec

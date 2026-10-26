@@ -38,7 +38,7 @@ object EntryPoints:
   private def hasMain(path: Path): Boolean =
     try
       val reader = new ClassReader(Files.readAllBytes(path))
-      var found = false
+      var found  = false
       reader.accept(
         new ClassVisitor(Opcodes.ASM9):
           override def visitMethod(
@@ -58,3 +58,4 @@ object EntryPoints:
 
   private def publicStatic(access: Int): Boolean =
     (access & Opcodes.ACC_PUBLIC) != 0 && (access & Opcodes.ACC_STATIC) != 0
+end EntryPoints

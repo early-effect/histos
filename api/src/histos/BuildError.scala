@@ -10,46 +10,46 @@ enum BuildError:
   case DuplicatePlatform(
       name: ProjectName,
       platform: Platform,
-      position: SourcePos
+      position: SourcePos,
   )
   case DuplicateScalaVersion(
       name: ProjectName,
       version: ScalaVersion,
-      position: SourcePos
+      position: SourcePos,
   )
   case DuplicateChild(
       name: ProjectName,
       child: ProjectName,
-      position: SourcePos
+      position: SourcePos,
   )
   case AggregateIncludesItself(name: ProjectName, position: SourcePos)
   case AggregateChild(
       aggregate: ProjectName,
       child: ProjectName,
-      position: SourcePos
+      position: SourcePos,
   )
   case MissingProject(name: String, referencedFrom: SourcePos)
   case DependsOnAggregate(
       module: ProjectName,
       aggregate: ProjectName,
-      position: SourcePos
+      position: SourcePos,
   )
   case SelfDependency(name: ProjectName, position: SourcePos)
   case DuplicateDependency(
       module: ProjectName,
       dependency: ProjectName,
-      position: SourcePos
+      position: SourcePos,
   )
   case EdgeWithoutPlatform(
       module: ProjectName,
       platform: Platform,
-      position: SourcePos
+      position: SourcePos,
   )
   case UpstreamMissingPlatform(
       module: ProjectName,
       dependency: ProjectName,
       platform: Platform,
-      position: SourcePos
+      position: SourcePos,
   )
   case Cycle(platform: Platform, path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
@@ -61,18 +61,18 @@ enum BuildError:
   case RepeatedShipMember(
       ship: ShipName,
       member: ProjectName,
-      position: SourcePos
+      position: SourcePos,
   )
   case AggregateShipMember(
       ship: ShipName,
       aggregate: ProjectName,
-      position: SourcePos
+      position: SourcePos,
   )
   case MemberInTwoShips(
       member: ProjectName,
       first: ShipName,
       second: ShipName,
-      position: SourcePos
+      position: SourcePos,
   )
   case MixedScheme(position: SourcePos)
   case DuplicateResolver(token: String)
@@ -80,7 +80,7 @@ enum BuildError:
   case DuplicateDirectory(
       name: ProjectName,
       other: ProjectName,
-      directory: String
+      directory: String,
   )
   case JsVersionWithoutJs(name: ProjectName, position: SourcePos)
   case JsEnvWithoutJs(name: ProjectName, position: SourcePos)
@@ -97,7 +97,7 @@ enum BuildError:
       plugin: PluginId,
       module: ProjectName,
       version: Option[ScalaVersion],
-      platform: Option[Platform]
+      platform: Option[Platform],
   )
   case UnknownPluginTask(plugin: PluginId, name: TaskName)
   case CommandShadow(name: CommandName)
@@ -124,7 +124,7 @@ enum BuildError:
       s"'$name' is referenced but not passed to Projects (${at.line}:${at.column})"
     case DependsOnAggregate(module, aggregate, _) =>
       s"'${module.value}' depends on aggregate '${aggregate.value}'"
-    case SelfDependency(name, _) => s"'${name.value}' depends on itself"
+    case SelfDependency(name, _)                    => s"'${name.value}' depends on itself"
     case DuplicateDependency(module, dependency, _) =>
       s"'${module.value}' depends on '${dependency.value}' twice"
     case EdgeWithoutPlatform(module, platform, _) =>
@@ -164,12 +164,12 @@ enum BuildError:
       s"project '${name.value}' names a js environment and does not target js (${position.line}:${position.column})"
     case JsModuleWithoutJs(name, position) =>
       s"project '${name.value}' names a js module kind and does not target js (${position.line}:${position.column})"
-    case DuplicatePlugin(id) => s"plugin ${id.value} is registered twice"
+    case DuplicatePlugin(id)               => s"plugin ${id.value} is registered twice"
     case DuplicatePluginTask(plugin, name) =>
       s"plugin ${plugin.value} declares task ${name.value} twice"
-    case DuplicateCommand(name) => s"command ${name.value} is declared twice"
-    case DuplicateJob(name)     => s"job ${name.value} is declared twice"
-    case ReservedJob(name)      => s"job ${name.value} is reserved"
+    case DuplicateCommand(name)             => s"command ${name.value} is declared twice"
+    case DuplicateJob(name)                 => s"job ${name.value} is declared twice"
+    case ReservedJob(name)                  => s"job ${name.value} is reserved"
     case DuplicateNote(module, plugin, key) =>
       s"module ${module.value} repeats note ${plugin.value}/${key.value}"
     case MissingNote(module, plugin, key) =>
@@ -189,3 +189,4 @@ enum BuildError:
     case CommandShadow(name)          => s"command ${name.value} is a built-in"
     case PluginDefect(plugin, binary) =>
       s"plugin ${plugin.value} failed while contributing ($binary)"
+end BuildError

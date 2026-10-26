@@ -15,10 +15,8 @@ object SuitePattern:
   def allows(patterns: List[SuitePattern], name: String): Boolean =
     patterns.isEmpty || patterns.exists(pattern => hits(pattern, name))
 
-  /**
-   * The child runners paste this. They do not reimplement the glob.
-   * Each entry is the anchored regex of one pattern.
-   */
+  /** The child runners paste this. They do not reimplement the glob. Each entry is the anchored regex of one pattern.
+    */
   def embed(patterns: List[SuitePattern]): String =
     val items = patterns.map(pattern => "\"" + literal(compiled(pattern)) + "\"").mkString(", ")
     s"""private val suitePatterns = Array[String]($items)
@@ -40,10 +38,10 @@ object SuitePattern:
 
   private def compiled(pattern: String): String =
     val body = pattern.flatMap {
-      case '*' => ".*"
-      case '?' => "."
+      case '*'             => ".*"
+      case '?'             => "."
       case c if special(c) => "\\" + c
-      case c => c.toString
+      case c               => c.toString
     }
     "^" + body + "$"
 
@@ -56,11 +54,13 @@ object SuitePattern:
       case '"'  => "\\\""
       case char => char.toString
     }
+end SuitePattern
 
 enum SuitePatternError:
   case Empty
   case Blank(raw: String)
 
   def message: String = this match
-    case Empty       => "a test pattern is not empty"
-    case Blank(raw)  => s"'$raw' is not a test pattern"
+    case Empty      => "a test pattern is not empty"
+    case Blank(raw) => s"'$raw' is not a test pattern"
+end SuitePatternError

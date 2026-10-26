@@ -20,16 +20,16 @@ object RuntimePolicySpec extends ZIOSpecDefault:
           _ <- ZIO
             .attemptBlocking(Files.createSymbolicLink(alias, home))
             .mapError(_ => IoFailure(alias, IoFault.Create))
-          direct <- RuntimeFiles.identity(home, build)
-          indirect <- RuntimeFiles.identity(alias, build)
-          other <- RuntimeFiles.identity(home, "25.0.5+9-LTS")
+          direct    <- RuntimeFiles.identity(home, build)
+          indirect  <- RuntimeFiles.identity(alias, build)
+          other     <- RuntimeFiles.identity(home, "25.0.5+9-LTS")
           canonical <- ZIO.attemptBlocking(home.toRealPath().normalize)
         yield assertTrue(
           direct == indirect,
           direct != other,
           (direct match
             case RuntimeIdentity.Local(path, _) => path == canonical
-          )
+          ),
         )
     ,
     test("replacing a file inside the home leaves the salt"):
@@ -44,12 +44,13 @@ object RuntimePolicySpec extends ZIOSpecDefault:
               Files.createSymbolicLink(home.resolve("library"), linked)
             )
             .mapError(_ => IoFailure(home.resolve("library"), IoFault.Create))
-          first <- RuntimeFiles.identity(home, build)
-          _ <- Workspace.writeString(linked, "second")
+          first  <- RuntimeFiles.identity(home, build)
+          _      <- Workspace.writeString(linked, "second")
           second <- RuntimeFiles.identity(home, build)
-        yield assertTrue(first == second)
+        yield assertTrue(first == second),
   )
 
   private def directory(home: Path): zio.IO[IoFailure, Path] =
     Workspace.createDirectories(home.resolve("bin")) *>
       Workspace.writeString(home.resolve("bin/javac"), "javac").as(home)
+end RuntimePolicySpec

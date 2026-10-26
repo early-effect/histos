@@ -23,6 +23,7 @@ final case class Dep @publicInBinary private (
     platforms match
       case None         => true
       case Some(chosen) => chosen.contains(platform)
+end Dep
 
 object Dep:
   /** A literal (`Dep("dev.zio::zio:2.1.26")`). A bad shape is a compile error. */
@@ -47,7 +48,7 @@ object Dep:
         rest.split(":", -1) match
           case Array(name, revision) => coordinate(org, name, revision, kind, raw)
           case _                     => Left(DepError.BadShape(raw))
-      case _                => Left(DepError.BadShape(raw))
+      case _ => Left(DepError.BadShape(raw))
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(
@@ -70,6 +71,7 @@ object Dep:
   ): Either[DepError, Dep] =
     if organization.isEmpty || name.isEmpty || revision.isEmpty then Left(DepError.BadShape(raw))
     else Right(trusted(organization, name, revision, kind))
+end Dep
 
 enum DepError:
   case Empty
@@ -78,3 +80,4 @@ enum DepError:
   def message: String = this match
     case Empty         => "a dependency coordinate is not empty"
     case BadShape(raw) => s"'$raw' is not an organization:name:revision coordinate"
+end DepError

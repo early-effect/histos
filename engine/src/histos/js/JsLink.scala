@@ -10,7 +10,7 @@ import histos.zinc.{
   CompileToolchain,
   JvmCompile,
 
-  ScalacFlags
+  ScalacFlags,
 }
 import histos.ScalaVersion
 
@@ -20,8 +20,7 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** One link of `.sjsir` into a script. The engine does not load
-  * `org.scalajs.linker`.
+/** One link of `.sjsir` into a script. The engine does not load `org.scalajs.linker`.
   */
 final case class JsLinkRequest(
     version: ScalaVersion,
@@ -30,7 +29,7 @@ final case class JsLinkRequest(
     work: Path,
     jdk: JdkRuntime,
     kind: histos.JsModuleKind = histos.JsModuleKind.NoModule,
-    revision: Option[histos.JsVersion] = None
+    revision: Option[histos.JsVersion] = None,
 )
 
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
@@ -41,13 +40,13 @@ object JsLink:
   def link(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, Path] =
     val JsLinkRequest(version, main, classpath, work, jdk, kind, revision) =
       request
-    val output = work.resolve("out")
+    val output     = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
-    val classes = bridgeRoot.resolve("classes")
-    val source =
+    val classes    = bridgeRoot.resolve("classes")
+    val source     =
       bridgeRoot.resolve("src").resolve("subprocess").resolve("JsBridge.scala")
     val listed = work.resolve("classpath.txt")
-    val child = work.resolve("child")
+    val child  = work.resolve("child")
     for
       view <- ZIO.service[LockedTools]
       selected = revision.getOrElse(view.catalog.js.revision)
@@ -63,7 +62,7 @@ object JsLink:
         .map(_.artifacts.map(_.path))
       _ <- write(
         listed,
-        (classpath ++ libraries).map(_.toAbsolutePath.toString).mkString("\n")
+        (classpath ++ libraries).map(_.toAbsolutePath.toString).mkString("\n"),
       )
       _ <- write(source, bridge)
       _ <- JvmCompile
@@ -73,18 +72,18 @@ object JsLink:
               view.catalog.js.bridgeScala,
               histos.Platform.Jvm,
               jdk,
-              ScalacFlags.empty
+              ScalacFlags.empty,
             ),
             List(source),
             linker,
             classes,
             bridgeRoot.resolve("analysis"),
-            Nil
+            Nil,
           )
         )
         .mapError(JsLinkError.Library(_))
-      _ <- empty(output)
-      _ <- empty(child)
+      _   <- empty(output)
+      _   <- empty(child)
       ran <- ChildProcess
         .run(
           ChildRequest(
@@ -94,11 +93,11 @@ object JsLink:
             MainClass.trusted(BridgeMain),
             child,
             Map(
-              "JS_OUT" -> output.toAbsolutePath.toString,
-              "JS_MAIN" -> main.binary,
+              "JS_OUT"       -> output.toAbsolutePath.toString,
+              "JS_MAIN"      -> main.binary,
               "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
-              "JS_MODULE" -> kind.token
-            )
+              "JS_MODULE"    -> kind.token,
+            ),
           )
         )
         .mapError(error => JsLinkError.Linker(error.message))
@@ -166,8 +165,7 @@ object JsLink:
   private def readJs(path: Path): IO[JsLinkError, Path] =
     ZIO
       .attemptBlocking {
-        if Files.isRegularFile(path) then
-          Right(Path.of(Files.readString(path).trim))
+        if Files.isRegularFile(path) then Right(Path.of(Files.readString(path).trim))
         else Left(JsLinkError.Linker("the js bridge did not write a script"))
       }
       .mapError(_ => JsLinkError.Linker(s"could not read $path"))
@@ -187,6 +185,7 @@ object JsLink:
   private def shown(out: String, err: String): String =
     val text = List(out, err).filter(_.nonEmpty).mkString("\n")
     if text.isEmpty then "the js linker failed" else text
+end JsLink
 
 enum JsLinkError:
   case Resolved(error: ResolveError)
@@ -199,3 +198,4 @@ enum JsLinkError:
     case Unavailable     => "the Scala.js linker could not be fetched"
     case Library(error)  => error.message
     case Linker(text)    => text
+end JsLinkError

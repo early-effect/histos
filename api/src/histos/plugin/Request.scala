@@ -27,6 +27,7 @@ final case class PluginArgs(texts: List[NamedText], flags: Set[FlagName]):
     get(name) match
       case Some(value) => Right(value)
       case None        => Left(PluginRunError.MissingArg(name))
+end PluginArgs
 
 object PluginArgs:
   val empty: PluginArgs = PluginArgs(Nil, Set.empty)

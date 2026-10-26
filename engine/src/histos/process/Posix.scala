@@ -17,14 +17,19 @@ private[process] object Posix:
       try
         method.invokeWithArguments(Integer.valueOf(a), Integer.valueOf(b)) match
           case code: Integer => Right(code.intValue)
-          case _              => Left(GroupOp.Call)
+          case _             => Left(GroupOp.Call)
       catch case _: Throwable => Left(GroupOp.Call)
 
   private def handle(name: String): Either[GroupOp, MethodHandle] =
     Linker.nativeLinker().defaultLookup().find(name).toScala match
-      case None => Left(GroupOp.Lookup)
+      case None         => Left(GroupOp.Lookup)
       case Some(symbol) =>
-        Right(Linker.nativeLinker().downcallHandle(
-          symbol,
-          FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT),
-        ))
+        Right(
+          Linker
+            .nativeLinker()
+            .downcallHandle(
+              symbol,
+              FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT),
+            )
+        )
+end Posix

@@ -18,3 +18,4 @@ enum PlatformToolError:
     case Native(error)       => error.message
     case NativeSuite(error)  => error.message
     case NativeOrigin(error) => error.message
+end PlatformToolError

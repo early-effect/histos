@@ -12,11 +12,10 @@ def use(plugin: HistosPlugin, rest: HistosPlugin*): Uses =
 /** Starts a compiling project. One platform and one Scala version are required, so omitting either does not compile. */
 inline def module(name: String, platform: Platform, platforms: Platform*)(
     version: ScalaVersion,
-    versions: ScalaVersion*,
+    versions: ScalaVersion*
 ): ModuleDef =
   ${ BuilderMacro.module('name, 'platform, 'platforms, 'version, 'versions) }
 
 /** A root that does not compile. It names the modules it is given. A nested aggregate does not compile. */
 inline def aggregate(name: String, project: ModuleDef, projects: ModuleDef*): AggregateDef =
   ${ BuilderMacro.aggregate('name, 'project, 'projects) }
-

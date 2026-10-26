@@ -15,14 +15,14 @@ object LazyValsSpec extends ZIOSpecDefault:
   private val zioCli = suite("zio-cli lazy vals")(
     test("Args.Both no longer calls getOffsetStatic"):
       jar("zio-cli_3-") match
-        case None => assertTrue(false)
+        case None       => assertTrue(false)
         case Some(path) =>
           val bytes = read(path, "zio/cli/Args$Both.class")
           LazyVals.catalog(List("zio/cli/Args$Both.class" -> bytes)) match
-            case Left(error) => assertTrue(error.message.isEmpty)
+            case Left(error)    => assertTrue(error.message.isEmpty)
             case Right(handles) =>
               LazyVals.rewrite("zio/cli/Args$Both.class", bytes, handles, getClass.getClassLoader) match
-                case Left(error) => assertTrue(handles.size == 5 && error.message.isEmpty)
+                case Left(error)      => assertTrue(handles.size == 5 && error.message.isEmpty)
                 case Right(rewritten) =>
                   assertTrue(
                     !calls(rewritten, "getOffsetStatic"),
@@ -33,8 +33,12 @@ object LazyValsSpec extends ZIOSpecDefault:
 
   private def jar(prefix: String): Option[Path] =
     val separator = java.io.File.pathSeparator
-    java.lang.System.getProperty("java.class.path").split(separator).toList.collectFirst:
-      case entry if Path.of(entry).getFileName.toString.startsWith(prefix) => Path.of(entry)
+    java.lang.System
+      .getProperty("java.class.path")
+      .split(separator)
+      .toList
+      .collectFirst:
+        case entry if Path.of(entry).getFileName.toString.startsWith(prefix) => Path.of(entry)
 
   private def read(path: Path, name: String): Array[Byte] =
     val zip = new ZipFile(path.toFile)
@@ -51,6 +55,7 @@ object LazyValsSpec extends ZIOSpecDefault:
     node.methods.asScala.exists: method =>
       method.instructions.iterator.asScala.exists:
         case call: MethodInsnNode => call.name == name
-        case _ => false
+        case _                    => false
 
   def spec = zioCli
+end LazyValsSpec

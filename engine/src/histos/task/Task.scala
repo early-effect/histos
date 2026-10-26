@@ -9,7 +9,7 @@ import zio.*
 opaque type TaskId = String
 
 object TaskId:
-  val Inspect: TaskId = "inspect"
+  val Inspect: TaskId  = "inspect"
   val Versions: TaskId = "versions"
 
   given CanEqual[TaskId, TaskId] = CanEqual.derived
@@ -18,6 +18,7 @@ object TaskId:
     if raw.isEmpty then Left(TaskError.EmptyId) else Right(raw)
 
   extension (id: TaskId) def value: String = id
+end TaskId
 
 opaque type RunId = String
 
@@ -28,9 +29,10 @@ object RunId:
     if raw.isEmpty then Left(TaskError.EmptyId) else Right(raw)
 
   /** Built from `Random.nextUUID`. Not a parser. */
-  private[task] def trusted(raw: String): RunId = raw
+  private[histos] def trusted(raw: String): RunId = raw
 
   extension (id: RunId) def value: String = id
+end RunId
 
 enum TaskError:
   case EmptyId
@@ -45,6 +47,7 @@ enum TaskError:
     case UnknownRun(id) => s"no run '${id.value}'"
     case Version(error) => error.message
     case Plugin(error)  => error.message
+end TaskError
 
 enum TaskResult:
   case Inspect(projects: List[histos.ProjectName])
@@ -55,6 +58,7 @@ enum TaskResult:
     case Inspect(projects)  => projects.map(_.value).mkString(",")
     case Versions(decision) => Decision.text(decision)
     case Plugin(output)     => output.text
+end TaskResult
 
 /** A started run. `await` is interrupted when the run is cancelled. */
 final case class Run(id: RunId, await: IO[TaskError, TaskResult])
@@ -69,15 +73,13 @@ object Tasks:
 
   def live(
       graph: ProjectGraph,
-      extra: Map[TaskId, IO[TaskError, TaskResult]]
+      extra: Map[TaskId, IO[TaskError, TaskResult]],
   ): ULayer[Tasks] =
     ZLayer.scoped:
       for
         registry <- Ref.make(Map.empty[RunId, Fiber[TaskError, TaskResult]])
-        _ <- ZIO.addFinalizer(
-          registry.get.flatMap(fibers =>
-            ZIO.foreachDiscard(fibers.values)(_.interrupt)
-          )
+        _        <- ZIO.addFinalizer(
+          registry.get.flatMap(fibers => ZIO.foreachDiscard(fibers.values)(_.interrupt))
         )
       yield TasksLive(inspect(graph) ++ extra, registry)
 
@@ -89,10 +91,11 @@ object Tasks:
         TaskResult.Inspect(graph.projects.map(_.name))
       )
     )
+end Tasks
 
 private final class TasksLive(
     runners: Map[TaskId, IO[TaskError, TaskResult]],
-    registry: Ref[Map[RunId, Fiber[TaskError, TaskResult]]]
+    registry: Ref[Map[RunId, Fiber[TaskError, TaskResult]]],
 ) extends Tasks:
   def run(id: TaskId): ZIO[Scope, TaskError, Run] =
     runners.get(id) match
@@ -102,8 +105,8 @@ private final class TasksLive(
           uuid <- Random.nextUUID
           runId = RunId.trusted(uuid.toString)
           fiber <- effect.forkScoped
-          _ <- registry.update(_ + (runId -> fiber))
-          _ <- ZIO.addFinalizer(registry.update(_ - runId))
+          _     <- registry.update(_ + (runId -> fiber))
+          _     <- ZIO.addFinalizer(registry.update(_ - runId))
         yield Run(runId, fiber.join)
 
   def cancel(id: RunId): IO[TaskError, Unit] =
@@ -112,3 +115,4 @@ private final class TasksLive(
       .flatMap:
         case Some(fiber) => fiber.interrupt.unit
         case None        => ZIO.fail(TaskError.UnknownRun(id))
+end TasksLive

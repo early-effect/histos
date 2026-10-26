@@ -14,7 +14,7 @@ import histos.resolve.{
   Repository,
   Resolve,
   ResolveCell,
-  ResolveError
+  ResolveError,
 }
 import histos.program.{EntryPoints, Program, ProgramError}
 import histos.workspace.IoFailure
@@ -32,7 +32,7 @@ import histos.zinc.{
   PositionBase,
 
   ScalaSeries,
-  SemanticDb
+  SemanticDb,
 }
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
@@ -43,12 +43,11 @@ import scala.jdk.CollectionConverters.*
 import zio.json.*
 import zio.{IO, Ref, UIO, ZIO}
 
-/** BSP 2.2 for Metals. JVM targets, a build-file target, and diagnostics. Test
-  * running stays out.
+/** BSP 2.2 for Metals. JVM targets, a build-file target, and diagnostics. Test running stays out.
   */
 object Bsp:
-  val BspVersion: String = "2.2.0"
-  val ServerName: String = "histos"
+  val BspVersion: String    = "2.2.0"
+  val ServerName: String    = "histos"
   val ServerVersion: String = "0.0.1-SNAPSHOT"
 
   enum Answer:
@@ -65,6 +64,7 @@ object Bsp:
     def message: String = this match
       case Missing  => "bsp params are required"
       case Rejected => "bsp params were rejected"
+  end ParamFault
 
   private enum BspError:
     case Machine(error: histos.jdk.ToolchainError)
@@ -95,8 +95,8 @@ object Bsp:
       case UnknownMethod(_)                              => -32601
       case Params(_) | UnknownTarget | NotTest | NotMain => -32602
       case NotInitialized                                => -32002
-      case Machine(_) | Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) |
-          Sources(_) | Tests(_) | Run(_) | Build(_) | Platforms(_) | Mains(_) =>
+      case Machine(_) | Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) | Tests(_) | Run(_) | Build(_) |
+          Platforms(_) | Mains(_) =>
         -32603
 
     def message: String = this match
@@ -121,6 +121,7 @@ object Bsp:
       case NotMain               => "jvmRunEnvironment needs a main target"
       case Platforms(text)       => text
       case Mains(failure)        => failure.message
+  end BspError
 
   def open(
       repo: Path,
@@ -130,17 +131,16 @@ object Bsp:
       buildClasspath: List[Path] = Nil,
       notify: String => UIO[Unit] = _ => ZIO.unit,
       build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
-      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int] = effect =>
-        effect,
-      shared: Option[Ref[ProjectGraph]] = None
+      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int] = effect => effect,
+      shared: Option[Ref[ProjectGraph]] = None,
   ): IO[ResolveError, Session] =
     for
       buildScala <- BuildCompiler.version
-      phase <- Ref.make[Phase](Phase.New)
-      current <- shared match
+      phase      <- Ref.make[Phase](Phase.New)
+      current    <- shared match
         case Some(ref) => ZIO.succeed(ref)
         case None      => Ref.make(graph)
-      request <- Ref.make(graph)
+      request  <- Ref.make(graph)
       captured <- Ref.make(Option.empty[DependencyLock])
     yield Session.start(
       buildScala,
@@ -154,7 +154,7 @@ object Bsp:
       gate,
       current,
       request,
-      captured
+      captured,
     )
 
   object Session:
@@ -170,7 +170,7 @@ object Bsp:
         gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
         current: Ref[ProjectGraph],
         request: Ref[ProjectGraph],
-        captured: Ref[Option[DependencyLock]]
+        captured: Ref[Option[DependencyLock]],
     ): Session =
       new Session(
         buildScala,
@@ -184,7 +184,7 @@ object Bsp:
         gate,
         current,
         request,
-        captured
+        captured,
       )
 
   final class Session private (
@@ -199,22 +199,21 @@ object Bsp:
       gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
       current: Ref[ProjectGraph],
       request: Ref[ProjectGraph],
-      captured: Ref[Option[DependencyLock]]
+      captured: Ref[Option[DependencyLock]],
   ):
-    /** One request sees the graph it started with. A later swap does not
-      * rewrite it. The JDK and Node are the ones captured when the session
-      * opened.
+    /** One request sees the graph it started with. A later swap does not rewrite it. The JDK and Node are the ones
+      * captured when the session opened.
       */
     def answer(payload: String): ZIO[Resolve, Nothing, Answer] =
       current.get.flatMap(graph => answer(graph, payload))
 
     def answer(
         seen: ProjectGraph,
-        payload: String
+        payload: String,
     ): ZIO[Resolve, Nothing, Answer] =
       for
         requested <- Ref.make(seen)
-        lock <- Ref.make(Option.empty[DependencyLock])
+        lock      <- Ref.make(Option.empty[DependencyLock])
         session = Session.start(
           BuildScala,
           repo,
@@ -227,7 +226,7 @@ object Bsp:
           gate,
           current,
           requested,
-          lock
+          lock,
         )
         answer <- session.read(payload)
       yield answer
@@ -235,14 +234,14 @@ object Bsp:
     /** Kinds are BSP's created (1), changed (2), and deleted (3). */
     def changed(
         previous: ProjectGraph,
-        next: ProjectGraph
+        next: ProjectGraph,
     ): ZIO[Resolve, Nothing, Unit] =
       targetUris(previous).either.zip(targetUris(next).either).flatMap {
         case (Right(before), Right(after)) =>
           notify(
             Rpc.note(
               "buildTarget/didChange",
-              Rpc.DidChange(Bsp.events(before, after))
+              Rpc.DidChange(Bsp.events(before, after)),
             )
           )
         case _ => ZIO.unit
@@ -264,16 +263,14 @@ object Bsp:
                 case None =>
                   ZIO.succeed(Answer.Reply(failure(id, BspError.NoMethod)))
                 case Some(name) =>
-                  phase.get.flatMap(current =>
-                    dispatch(current, id, name, incoming, incoming.id.isEmpty)
-                  )
+                  phase.get.flatMap(current => dispatch(current, id, name, incoming, incoming.id.isEmpty))
 
     private def dispatch(
         current: Phase,
         id: Rpc.RpcId,
         name: String,
         incoming: Rpc.Incoming,
-        notification: Boolean
+        notification: Boolean,
     ): ZIO[Resolve, Nothing, Answer] =
       (current, name) match
         case (_, "build/exit") =>
@@ -319,40 +316,34 @@ object Bsp:
 
     private def sources(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(sourceItem).map(Rpc.SourcesResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(sourceItem).map(Rpc.SourcesResult(_))),
       )
 
     private def options(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(scalac).map(Rpc.ScalacOptionsResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(scalac).map(Rpc.ScalacOptionsResult(_))),
       )
 
     private def dependencySources(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(sourceJars).map(Rpc.DependencySourcesResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(sourceJars).map(Rpc.DependencySourcesResult(_))),
       )
 
     private def compile(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       ZIO
         .fromEither(Rpc.compileParams(incoming.params).left.map(fault))
@@ -361,21 +352,20 @@ object Bsp:
           params =>
             request.get.flatMap { graph =>
               val found = params.targets.map(_.uri)
-              val ids = found.flatMap(uri => identify(uri, graph))
-              if ids.length != found.length then
-                ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
+              val ids   = found.flatMap(uri => identify(uri, graph))
+              if ids.length != found.length then ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
               else
                 gate(runCompile(ids)).map(status =>
                   Answer.Reply(
                     Rpc.ok(id, Rpc.CompileResult(status, params.originId))
                   )
                 )
-            }
+            },
         )
 
     private def runCompile(ids: List[Id]): ZIO[Resolve, Nothing, Int] =
-      val mains = ids.collect { case id: Id.Main => id }
-      val tests = ids.collect { case id: Id.Test => id }
+      val mains  = ids.collect { case id: Id.Main => id }
+      val tests  = ids.collect { case id: Id.Test => id }
       val builds = ids.collect { case Id.Build => Id.Build }
       for
         mainStatus <- ZIO
@@ -383,7 +373,7 @@ object Bsp:
             compileMains(platform, group)
           }
           .map(worst)
-        testStatus <- ZIO.foreach(tests)(compileTest).map(worst)
+        testStatus  <- ZIO.foreach(tests)(compileTest).map(worst)
         buildStatus <- ZIO.foreach(builds)(_ => compileBuild).map(worst)
       yield worst(List(mainStatus, testStatus, buildStatus))
 
@@ -392,7 +382,7 @@ object Bsp:
 
     private def compileMains(
         platform: Platform,
-        group: List[Id.Main]
+        group: List[Id.Main],
     ): ZIO[Resolve, Nothing, Int] =
       val cells = group.map(id => id.module.name -> id.version)
       request.get.flatMap { graph =>
@@ -408,10 +398,10 @@ object Bsp:
                         graph,
                         jdk,
                         runtimes.native,
-                        lock
+                        lock,
                       ),
                       cells,
-                      platform
+                      platform,
                     )
                   )
                 )
@@ -424,15 +414,15 @@ object Bsp:
                         module,
                         version,
                         chosen,
-                        problem
+                        problem,
                       ) =>
                     publish(
                       s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
-                      problem
+                      problem,
                     )
                   case histos.zinc.CompileFeed.Began(_, _, _) => ZIO.unit
                   case histos.zinc.CompileFeed.Done(_)        => ZIO.unit
-                  case histos.zinc.CompileFeed.Failed(_) => failed.set(true)
+                  case histos.zinc.CompileFeed.Failed(_)      => failed.set(true)
                 } *> failed.get
           ran.either.flatMap {
             case Left(error)  => statusOf(Left(error))
@@ -445,8 +435,8 @@ object Bsp:
     private def compileTest(id: Id.Test): ZIO[Resolve, Nothing, Int] =
       request.get.flatMap { graph =>
         val modules = modulesOf(graph)
-        val uri = targetUri(id)
-        val heard =
+        val uri     = targetUri(id)
+        val heard   =
           new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
         val cell = CompiledCell(
           id.module.name,
@@ -454,12 +444,16 @@ object Bsp:
           id.platform,
           GraphCompile
             .classesDir(repo, id.module.name, id.version, id.platform),
-          0
+          0,
+          key = None,
+          changed = true,
+          sources = None,
+          classesWritten = None,
         )
         val ran =
           clear(uri) *>
             (for
-              lock <- readLock
+              lock    <- readLock
               sources <- TestCompile
                 .testSources(repo, id.module, modules, id.version, id.platform)
                 .mapError(BspError.Tests(_))
@@ -474,14 +468,12 @@ object Bsp:
                   runtimes.native,
                   lock,
                   BuildResolvers(graph.resolvers),
-                  problem => heard.add(problem)
+                  problem => heard.add(problem),
                 )
                 .mapError(BspError.Tests(_))
             yield ())
         withTools(ran).either.flatMap { result =>
-          ZIO.foreachDiscard(heard.asScala.toList)(problem =>
-            publish(uri, problem)
-          ) *> statusOf(result)
+          ZIO.foreachDiscard(heard.asScala.toList)(problem => publish(uri, problem)) *> statusOf(result)
         }
       }
 
@@ -510,11 +502,11 @@ object Bsp:
 
     private def reply[A: JsonCodec](
         id: Rpc.RpcId,
-        body: ZIO[Resolve, BspError, A]
+        body: ZIO[Resolve, BspError, A],
     ): ZIO[Resolve, Nothing, Answer] =
       body.fold(
         error => Answer.Reply(failure(id, error)),
-        value => Answer.Reply(Rpc.ok(id, value))
+        value => Answer.Reply(Rpc.ok(id, value)),
       )
 
     private def scalac(
@@ -528,7 +520,7 @@ object Bsp:
               Rpc.TargetId(uri),
               SemanticDb.argv(repo, BuildScala),
               buildClasspath.map(fileUri),
-              directoryUri(repo)
+              directoryUri(repo),
             )
           )
         case Some(id: Id.Main) =>
@@ -542,9 +534,9 @@ object Bsp:
                   repo,
                   id.module.name,
                   id.version,
-                  id.platform
+                  id.platform,
                 )
-              )
+              ),
             )
         case Some(id: Id.Test) =>
           testClasspath(id).map: paths =>
@@ -557,9 +549,9 @@ object Bsp:
                   repo,
                   id.module.name,
                   id.version,
-                  id.platform
+                  id.platform,
                 )
-              )
+              ),
             )
 
       }
@@ -577,7 +569,7 @@ object Bsp:
     private def classpath(
         module: Module,
         version: ScalaVersion,
-        platform: Platform
+        platform: Platform,
     ): ZIO[Resolve, BspError, List[Path]] =
       request.get.flatMap { graph =>
         val cell = ResolveCell(
@@ -586,13 +578,11 @@ object Bsp:
           version,
           platform,
           BuildResolvers(graph.resolvers),
-          ClasspathScope.Compile
+          ClasspathScope.Compile,
         )
         val upstream = module
           .upstream(platform)
-          .map(dependency =>
-            GraphCompile.classesDir(repo, dependency, version, platform)
-          )
+          .map(dependency => GraphCompile.classesDir(repo, dependency, version, platform))
         for
           lock <- readLock
           jars <- Resolve
@@ -604,13 +594,12 @@ object Bsp:
         yield (library ++ dropStdlib(jars) ++ upstream).distinct
       }
 
-    /** The `runtimeClasspath` order, naming directories that are not there yet.
-      * Import runs before compile.
+    /** The `runtimeClasspath` order, naming directories that are not there yet. Import runs before compile.
       */
     private def testClasspath(id: Id.Test): ZIO[Resolve, BspError, List[Path]] =
       request.get.flatMap { graph =>
         val modules = modulesOf(graph)
-        val main =
+        val main    =
           GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
         val upstream = Module
           .chain(id.module, modules, id.platform)
@@ -621,11 +610,10 @@ object Bsp:
         val dependencies =
           Dep.select(id.module.dependencies, id.platform) ++ Dep.select(
             id.module.testDependencies,
-            id.platform
+            id.platform,
           )
         val scope =
-          if Dep.select(id.module.testDependencies, id.platform).isEmpty then
-            ClasspathScope.Compile
+          if Dep.select(id.module.testDependencies, id.platform).isEmpty then ClasspathScope.Compile
           else ClasspathScope.Test
         val cell = ResolveCell(
           id.module.name,
@@ -633,7 +621,7 @@ object Bsp:
           id.version,
           id.platform,
           BuildResolvers(graph.resolvers),
-          scope
+          scope,
         )
         for
           lock <- readLock
@@ -671,17 +659,16 @@ object Bsp:
         module: Module,
         version: ScalaVersion,
         platform: Platform,
-        test: Boolean
+        test: Boolean,
     ): ZIO[Resolve, BspError, List[SourceAsk]] =
       for
-        lock <- readLock
+        lock    <- readLock
         library <- withTools(
           JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
         )
       yield
         val scope =
-          if test && Dep.select(module.testDependencies, platform).nonEmpty then
-            ClasspathScope.Test
+          if test && Dep.select(module.testDependencies, platform).nonEmpty then ClasspathScope.Test
           else ClasspathScope.Compile
         val locked = lock.cells
           .collectFirst {
@@ -697,12 +684,12 @@ object Bsp:
         artifact.organization,
         artifact.name,
         artifact.revision,
-        artifact.repository
+        artifact.repository,
       )
 
     private def runtimeAsk(
         version: ScalaVersion,
-        path: Path
+        path: Path,
     ): Option[SourceAsk] =
       Option(path.getFileName).map(_.toString) match
         case Some(name) if name.startsWith("scala3-library") =>
@@ -711,7 +698,7 @@ object Bsp:
               "org.scala-lang",
               "scala3-library_3",
               version.value,
-              Repository.Central
+              Repository.Central,
             )
           )
         case Some(name) if name.startsWith("scala-library") =>
@@ -720,7 +707,7 @@ object Bsp:
               "org.scala-lang",
               "scala-library",
               version.value,
-              Repository.Central
+              Repository.Central,
             )
           )
         case _ => None
@@ -749,46 +736,38 @@ object Bsp:
 
     private def mainClasses(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(mainClassItem).map(Rpc.ScalaMainClassesResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(mainClassItem).map(Rpc.ScalaMainClassesResult(_))),
       )
 
     private def testClasses(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(testClassItem).map(Rpc.ScalaTestClassesResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(testClassItem).map(Rpc.ScalaTestClassesResult(_))),
       )
 
     private def runEnvironment(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(runItem).map(Rpc.JvmEnvironmentResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(runItem).map(Rpc.JvmEnvironmentResult(_))),
       )
 
     private def testEnvironment(
         id: Rpc.RpcId,
-        incoming: Rpc.Incoming
+        incoming: Rpc.Incoming,
     ): ZIO[Resolve, Nothing, Answer] =
       reply(
         id,
-        uris(incoming).flatMap(found =>
-          ZIO.foreach(found)(testItem).map(Rpc.JvmEnvironmentResult(_))
-        )
+        uris(incoming).flatMap(found => ZIO.foreach(found)(testItem).map(Rpc.JvmEnvironmentResult(_))),
       )
 
     private def mainClassItem(
@@ -796,12 +775,12 @@ object Bsp:
     ): ZIO[Resolve, BspError, Rpc.ScalaMainClassesItem] =
       parsed(uri) {
         case Some(id: Id.Main) =>
-          val named = id.module.application.toList.map(_.value)
+          val named   = id.module.application.toList.map(_.value)
           val classes = GraphCompile.classesDir(
             repo,
             id.module.name,
             id.version,
-            id.platform
+            id.platform,
           )
           EntryPoints
             .mains(classes)
@@ -810,7 +789,7 @@ object Bsp:
               val names = (named ++ found).distinct.sorted
               Rpc.ScalaMainClassesItem(
                 Rpc.TargetId(uri),
-                names.map(name => Rpc.ScalaMainClass(name, Nil, Nil))
+                names.map(name => Rpc.ScalaMainClass(name, Nil, Nil)),
               )
         case Some(_) =>
           ZIO.succeed(Rpc.ScalaMainClassesItem(Rpc.TargetId(uri), Nil))
@@ -826,7 +805,7 @@ object Bsp:
             Rpc.ScalaTestClassesItem(
               Rpc.TargetId(uri),
               found.names,
-              found.framework
+              found.framework,
             )
         case Some(_) =>
           ZIO.succeed(Rpc.ScalaTestClassesItem(Rpc.TargetId(uri), Nil, None))
@@ -842,17 +821,26 @@ object Bsp:
             repo,
             id.module.name,
             id.version,
-            id.platform
+            id.platform,
           )
-          val cell =
-            CompiledCell(id.module.name, id.version, id.platform, classes, 0)
+          val cell = CompiledCell(
+            id.module.name,
+            id.version,
+            id.platform,
+            classes,
+            0,
+            key = None,
+            changed = true,
+            sources = None,
+            classesWritten = None,
+          )
           val work =
             Program.workDir(repo, id.module.name, id.version, id.platform)
           for
-            lock <- readLock
+            lock    <- readLock
             modules <- graphModules
-            seen <- request.get
-            paths <- withTools(
+            seen    <- request.get
+            paths   <- withTools(
               Program
                 .classpath(
                   repo,
@@ -860,7 +848,7 @@ object Bsp:
                   id.module,
                   cell,
                   lock,
-                  BuildResolvers(seen.resolvers)
+                  BuildResolvers(seen.resolvers),
                 )
                 .mapError(BspError.Run(_))
             )
@@ -870,7 +858,7 @@ object Bsp:
             paths.map(fileUri),
             Nil,
             work.toAbsolutePath.normalize.toString,
-            TestCompile.suiteEnv(repo, runtimes.env)
+            TestCompile.suiteEnv(repo, runtimes.env),
           )
         case Some(_) => ZIO.fail(BspError.NotMain)
         case None    => ZIO.fail(BspError.UnknownTarget)
@@ -887,7 +875,7 @@ object Bsp:
             repo,
             id.module.name,
             id.version,
-            id.platform
+            id.platform,
           )
           val cell = CompiledCell(
             id.module.name,
@@ -895,16 +883,20 @@ object Bsp:
             id.platform,
             GraphCompile
               .classesDir(repo, id.module.name, id.version, id.platform),
-            0
+            0,
+            key = None,
+            changed = true,
+            sources = None,
+            classesWritten = None,
           )
           for
             _ <- ZIO
               .fromEither(TestCompile.launchProvider(id.module))
               .mapError(BspError.Tests(_))
-            lock <- readLock
+            lock    <- readLock
             modules <- graphModules
-            seen <- request.get
-            linked <- withTools(
+            seen    <- request.get
+            linked  <- withTools(
               TestCompile
                 .runtimeClasspath(
                   repo,
@@ -912,7 +904,7 @@ object Bsp:
                   id.module,
                   cell,
                   lock,
-                  BuildResolvers(seen.resolvers)
+                  BuildResolvers(seen.resolvers),
                 )
                 .mapError(BspError.Tests(_))
             )
@@ -922,7 +914,7 @@ object Bsp:
             (classes :: linked.paths).map(fileUri),
             Nil,
             work.toAbsolutePath.normalize.toString,
-            TestCompile.suiteEnv(repo, runtimes.env)
+            TestCompile.suiteEnv(repo, runtimes.env),
           )
         case Some(_) => ZIO.fail(BspError.NotTest)
         case None    => ZIO.fail(BspError.UnknownTarget)
@@ -930,11 +922,10 @@ object Bsp:
 
     private final case class Suites(
         names: List[String],
-        framework: Option[String]
+        framework: Option[String],
     )
 
-    /** Compiled suites when the classes directory exists. An uncompiled target
-      * is an empty list, not an error.
+    /** Compiled suites when the classes directory exists. An uncompiled target is an empty list, not an error.
       */
     private def suites(id: Id.Test): ZIO[Resolve, BspError, Suites] =
       val classes =
@@ -952,7 +943,11 @@ object Bsp:
                 id.platform,
                 GraphCompile
                   .classesDir(repo, id.module.name, id.version, id.platform),
-                0
+                0,
+                key = None,
+                changed = true,
+                sources = None,
+                classesWritten = None,
               )
               readLock.flatMap { lock =>
                 graphModules.flatMap { modules =>
@@ -965,7 +960,7 @@ object Bsp:
                           id.module,
                           cell,
                           lock,
-                          BuildResolvers(seen.resolvers)
+                          BuildResolvers(seen.resolvers),
                         )
                         .mapError(BspError.Tests(_))
                     ).either
@@ -976,7 +971,7 @@ object Bsp:
                             .discover(
                               classes,
                               linked.paths,
-                              provider.framework.value
+                              provider.framework.value,
                             )
                             .either
                             .map {
@@ -991,8 +986,7 @@ object Bsp:
               }
 
     private def frameworkName(provider: TestProvider): String =
-      if provider.framework.value == TestProvider.Zio.framework.value then
-        "ZIO Test"
+      if provider.framework.value == TestProvider.Zio.framework.value then "ZIO Test"
       else provider.framework.value
 
     private def sourceItem(uri: String): IO[BspError, Rpc.SourcesItem] =
@@ -1002,7 +996,7 @@ object Bsp:
           filesOf(id).map: paths =>
             Rpc.SourcesItem(
               Rpc.TargetId(uri),
-              paths.map(path => Rpc.SourceItem(fileUri(path), 1, false))
+              paths.map(path => Rpc.SourceItem(fileUri(path), 1, false)),
             )
 
       }
@@ -1046,13 +1040,12 @@ object Bsp:
     ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
       for
         extra <- allowed
-        cells = cellsOf(graph, extra)
+        cells    = cellsOf(graph, extra)
         versions = (cells.map(_.version) :+ BuildScala).distinct
         result <- listed(graph, cells, versions)
       yield result
 
-    /** JVM is always published. `js` and `native` are added only when the
-      * allow-list names them.
+    /** JVM is always published. `js` and `native` are added only when the allow-list names them.
       */
     private def allowed: IO[BspError, Set[Platform]] =
       val path = repo.resolve(".histos").resolve("bsp-platforms")
@@ -1072,18 +1065,17 @@ object Bsp:
 
     private def parsePlatforms(text: String): Either[String, Set[Platform]] =
       val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-      lines.foldLeft[Either[String, Set[Platform]]](Right(Set.empty)):
-        (acc, token) =>
-          acc.flatMap: have =>
-            token match
-              case "js"     => Right(have + Platform.Js)
-              case "native" => Right(have + Platform.Native)
-              case other    => Left(s"'$other' is not a bsp platform")
+      lines.foldLeft[Either[String, Set[Platform]]](Right(Set.empty)): (acc, token) =>
+        acc.flatMap: have =>
+          token match
+            case "js"     => Right(have + Platform.Js)
+            case "native" => Right(have + Platform.Native)
+            case other    => Left(s"'$other' is not a bsp platform")
 
     private def listed(
         graph: ProjectGraph,
         cells: List[Cell],
-        versions: List[ScalaVersion]
+        versions: List[ScalaVersion],
     ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
       for
         jars <- ZIO
@@ -1094,7 +1086,7 @@ object Bsp:
           )
           .mapBoth(
             identity,
-            _.toMap
+            _.toMap,
           )
         tests <- ZIO.foreach(cells)(cell =>
           TestCompile
@@ -1103,27 +1095,23 @@ object Bsp:
               cell.module,
               modulesOf(graph),
               cell.version,
-              cell.platform
+              cell.platform,
             )
             .mapBoth(
               BspError.Tests(_),
-              sources => Option.when(sources.nonEmpty)(cell)
+              sources => Option.when(sources.nonEmpty)(cell),
             )
         )
       yield
-        val mains = cells.map(cell =>
-          shown(graph, Id.Main(cell.module, cell.version, cell.platform), jars)
-        )
-        val suites = tests.flatten.map(cell =>
-          shown(graph, Id.Test(cell.module, cell.version, cell.platform), jars)
-        )
-        val file = shown(graph, Id.Build, jars)
+        val mains  = cells.map(cell => shown(graph, Id.Main(cell.module, cell.version, cell.platform), jars))
+        val suites = tests.flatten.map(cell => shown(graph, Id.Test(cell.module, cell.version, cell.platform), jars))
+        val file   = shown(graph, Id.Build, jars)
         Rpc.BuildTargetsResult(mains ++ suites ++ List(file))
 
     private def shown(
         graph: ProjectGraph,
         id: Id,
-        jars: Map[String, List[Path]]
+        jars: Map[String, List[Path]],
     ): Rpc.BuildTarget =
       val (name, base, tags, version, platform, dependencies, canTest, canRun) =
         id match
@@ -1136,7 +1124,7 @@ object Bsp:
               platformCode(platform),
               dependencyUris(graph, module, version, platform),
               false,
-              true
+              true,
             )
           case Id.Test(module, version, platform) =>
             (
@@ -1147,7 +1135,7 @@ object Bsp:
               platformCode(platform),
               List(targetUri(Id.Main(module, version, platform))),
               true,
-              false
+              false,
             )
           case Id.Build =>
             (
@@ -1158,7 +1146,7 @@ object Bsp:
               1,
               Nil,
               false,
-              false
+              false,
             )
       Rpc.BuildTarget(
         Rpc.TargetId(targetUri(id)),
@@ -1170,7 +1158,7 @@ object Bsp:
         Rpc.TargetCapabilities(
           canCompile = true,
           canTest = canTest,
-          canRun = canRun
+          canRun = canRun,
         ),
         "scala",
         Rpc.ScalaBuildTarget(
@@ -1178,13 +1166,13 @@ object Bsp:
           version.value,
           binary(version),
           platform,
-          jars.getOrElse(version.value, Nil).map(fileUri)
-        )
+          jars.getOrElse(version.value, Nil).map(fileUri),
+        ),
       )
 
     private def cellsOf(graph: ProjectGraph, extra: Set[Platform]): List[Cell] =
       val wanted = Set[Platform](Platform.Jvm) ++ extra
-      val order = List(Platform.Jvm, Platform.Js, Platform.Native)
+      val order  = List(Platform.Jvm, Platform.Js, Platform.Native)
       graph.projects
         .collect { case module: Module => module }
         .flatMap: module =>
@@ -1196,15 +1184,13 @@ object Bsp:
               )
               .map: platform =>
                 Cell(module, version, platform)
-        .sortBy(cell =>
-          (cell.module.name.value, cell.version.value, cell.platform.token)
-        )
+        .sortBy(cell => (cell.module.name.value, cell.version.value, cell.platform.token))
 
     private def dependencyUris(
         graph: ProjectGraph,
         module: Module,
         version: ScalaVersion,
-        platform: Platform
+        platform: Platform,
     ): List[String] =
       module
         .upstream(platform)
@@ -1228,8 +1214,8 @@ object Bsp:
         val prefix = directoryUri(repo)
         if !uri.startsWith(prefix) then None
         else
-          val rest = uri.drop(prefix.length)
-          val name = rest.takeWhile(_ != '?')
+          val rest  = uri.drop(prefix.length)
+          val name  = rest.takeWhile(_ != '?')
           val query = rest
             .drop(name.length)
             .drop(1)
@@ -1247,7 +1233,7 @@ object Bsp:
             platform <- query
               .get("platform")
               .flatMap(raw => Platform.from(raw).toOption)
-            scope <- query.get("scope")
+            scope  <- query.get("scope")
             module <- modulesOf(graph).find(_.name.value == name)
           yield (module, version, platform, scope)
           found match
@@ -1284,8 +1270,8 @@ object Bsp:
           dependencySourcesProvider = true,
           jvmRunEnvironmentProvider = true,
           jvmTestEnvironmentProvider = true,
-          buildTargetChangedProvider = true
-        )
+          buildTargetChangedProvider = true,
+        ),
       )
 
     /** Metals rejects a target id as a text document. Reset each source file.
@@ -1303,15 +1289,14 @@ object Bsp:
                     Rpc.TextDocument(fileUri(file)),
                     Rpc.TargetId(target),
                     Nil,
-                    true
-                  )
+                    true,
+                  ),
                 )
               )
 
       }
 
-    /** The compiler library is `JvmCompile.runtime`. A locked copy of either
-      * standard library is a second version.
+    /** The compiler library is `JvmCompile.runtime`. A locked copy of either standard library is a second version.
       */
     private def dropStdlib(jars: List[Path]): List[Path] =
       jars.filterNot(JvmCompile.isStandardLibrary)
@@ -1332,11 +1317,11 @@ object Bsp:
                     range,
                     severityCode(problem.severity),
                     "histos",
-                    problem.message
+                    problem.message,
                   )
                 ),
-                false
-              )
+                false,
+              ),
             )
           )
 
@@ -1344,7 +1329,7 @@ object Bsp:
       notify(
         Rpc.note(
           "build/logMessage",
-          Rpc.LogMessage(severityCode(severity), message)
+          Rpc.LogMessage(severityCode(severity), message),
         )
       )
 
@@ -1356,6 +1341,7 @@ object Bsp:
 
     private def failure(id: Rpc.RpcId, error: BspError): String =
       Rpc.fail(id, error.code, error.message)
+  end Session
 
   private enum Id:
     case Main(module: Module, version: ScalaVersion, platform: Platform)
@@ -1365,14 +1351,14 @@ object Bsp:
   private final case class Cell(
       module: Module,
       version: ScalaVersion,
-      platform: Platform
+      platform: Platform,
   )
 
   private final case class SourceAsk(
       organization: String,
       name: String,
       revision: String,
-      repository: Repository
+      repository: Repository,
   )
 
   private object Ranges:
@@ -1382,19 +1368,17 @@ object Bsp:
           val shift = problem.base match
             case PositionBase.Zinc  => 1
             case PositionBase.Dotty => 0
-          val startLine = math.max(0, line - shift)
+          val startLine   = math.max(0, line - shift)
           val startColumn = math.max(0, column - shift)
-          val endLine0 =
+          val endLine0    =
             problem.endLine.fold(startLine)(value => math.max(0, value - shift))
-          val endColumn0 = problem.endColumn.fold(startColumn)(value =>
-            math.max(0, value - shift)
-          )
-          val samePoint = endLine0 == startLine && endColumn0 <= startColumn
-          val endColumn = if samePoint then startColumn + 1 else endColumn0
+          val endColumn0 = problem.endColumn.fold(startColumn)(value => math.max(0, value - shift))
+          val samePoint  = endLine0 == startLine && endColumn0 <= startColumn
+          val endColumn  = if samePoint then startColumn + 1 else endColumn0
           Some(
             Rpc.Range(
               Rpc.Position(startLine, startColumn),
-              Rpc.Position(endLine0, endColumn)
+              Rpc.Position(endLine0, endColumn),
             )
           )
         case _ => None
@@ -1403,13 +1387,13 @@ object Bsp:
     */
   def events(
       before: List[String],
-      after: List[String]
+      after: List[String],
   ): List[Rpc.BuildTargetEvent] =
     val previous = before.toSet
-    val next = after.toSet
-    val created = (next -- previous).toList.sorted.map(event(_, 1))
-    val changed = previous.intersect(next).toList.sorted.map(event(_, 2))
-    val deleted = (previous -- next).toList.sorted.map(event(_, 3))
+    val next     = after.toSet
+    val created  = (next -- previous).toList.sorted.map(event(_, 1))
+    val changed  = previous.intersect(next).toList.sorted.map(event(_, 2))
+    val deleted  = (previous -- next).toList.sorted.map(event(_, 3))
     created ++ changed ++ deleted
 
   private def event(uri: String, kind: Int): Rpc.BuildTargetEvent =

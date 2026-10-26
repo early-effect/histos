@@ -149,11 +149,11 @@ Load failures nest in LoadError and exit 3. A deliberate task failure or mapped 
 
 ## CLI, server, MCP, and jobs
 
-The grammar is closed before loading. Only an unknown root outside [`CommandName.reserved`](../api/src/histos/plugin/Names.scala) falls through to plugin commands. Built-ins, including launcher, win; acp remains reserved although deleted. Cache subcommand words remain available at the root. A malformed command under a reserved root does not load plugins.
+The grammar is closed before loading. Only an unknown root outside [`CommandName.reserved`](../api/src/histos/plugin/Names.scala) falls through to plugin commands. Built-in roots stay reserved, including `launcher`. `acp` stays reserved although the command is deleted. Cache subcommand words remain available at the root. A malformed command under a reserved root does not load plugins.
 
-[`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch uses the same dispatch. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
+[`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch uses that same parse. The call on the wire is `Call.Watch(Call.Task(id, pluginArgs))`, and the server runs that task. With no server, watch runs the same call. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
 
-`run <plugin>/<task>` uses empty arguments and refuses a platform token. Contributed commands supply their parsed arguments in process, and only when no server is attached. `Call.Task` carries the id only, so an attached CLI, the server, and MCP all run `PluginArgs.empty` (A25). A contributed command is an operation in the M6 parity set, arguments included. Registering another MCP tool that sends today's `Call.Task` would not preserve them. Cancellation through those surfaces still has task-id and serial-request limitations (A8/A23). No plugin-specific MCP tool or BSP task target exists.
+`run <plugin>/<task>` uses empty arguments and refuses a platform token. A contributed command's parsed `PluginArgs` travel on `Call.Task`, including under watch, so an attached CLI, the server, and MCP run those arguments. Cancellation of a running plugin task uses the minted run id, not the task id. A second MCP call can cancel that id while the tool is still held (A8). No plugin-specific MCP tool or BSP task target exists.
 
 Graph text shows plugin binary/source provenance, task seal/needs/declared paths, commands and jobs. Server fingerprints the build, dependency lock and path-plugin files and reloads changed generations. Resource leasing, typed surface reports and current request runtime/lock proof are separate A20/L11/L13 concerns, not plugin-cache guarantees.
 
@@ -173,13 +173,13 @@ A plugin author can call run with ZIO Test and [`PluginFixture`](../api/src/hist
 | Engine system loader reachable to enabled code | Explicit local-user trust boundary |
 | Operation-captured generation/runtime/provenance | Verified under M4 L11/L13/L14 |
 | Compile/Same-only dependencies, separate declared kind, no public typed phase Steps | M7 G16 |
-| String notes/settings and registration/version error flattening | M7 G6/G10/G14/G15 |
+| String notes/settings and registration error flattening | M7 G6/G14/G15 |
 | Empty compiled fixture values and missing complete examples | M7 G17/T14 |
-| Lost remote command arguments, serial cancel/progress and string reports | M6 A1/A2/A8/A23/A25 |
+| No progress stream. Socket faults stay text | M6 A1/A2 |
 | No live remote cache configuration, output bytes never transferred | D10 and future remote cache |
 | No binary compatibility promise before 1.0; Api linking refused | Deliberate prerelease contract |
 
-Explicit enablement replaces automatic triggers; an ordinary library API replaces a second settings language; full lock cells replace single-jar checksums; source fallback replaces premature binary shims. Those decisions remain. M1/M2 isolation/orchestration work is delivered, while M4 acceptance and M7's public phase API remain open.
+Explicit enablement replaces automatic triggers; an ordinary library API replaces a second settings language; full lock cells replace single-jar checksums; source fallback replaces premature binary shims. Those decisions remain. M1 and M2 isolation and orchestration are delivered. M4's catalog, lock cells, floors, and launcher pin are in this tree. M7's public phase API remains open.
 
 ## History
 

@@ -10,7 +10,7 @@ import zio.*
 
 object VersionTaskSpec extends ZIOSpecDefault:
   private val number = ShipNumber("1.4.2")
-  private val sha = CommitSha("1234567890abcdef1234567890abcdef12345678")
+  private val sha    = CommitSha("1234567890abcdef1234567890abcdef12345678")
 
   private enum FixtureError:
     case Ship(error: ShipNameError)
@@ -21,11 +21,12 @@ object VersionTaskSpec extends ZIOSpecDefault:
       case Ship(error)    => error.message
       case Project(error) => error.message
       case Rows(error)    => error.message
+  end FixtureError
 
   private val opened =
     for
-      libs <- ShipName.from("libs").left.map(FixtureError.Ship(_))
-      core <- ProjectName.from("core").left.map(FixtureError.Project(_))
+      libs    <- ShipName.from("libs").left.map(FixtureError.Ship(_))
+      core    <- ProjectName.from("core").left.map(FixtureError.Project(_))
       catalog <- Catalog
         .from(List(Ship.Line(libs, number, ::(core, Nil))))
         .left
@@ -37,7 +38,7 @@ object VersionTaskSpec extends ZIOSpecDefault:
   ): ZIO[Any, Any, TestResult] =
     opened match
       case Right(libs, catalog) => f(libs, catalog)
-      case Left(error) => ZIO.succeed(assertTrue(error.message == "fixture"))
+      case Left(error)          => ZIO.succeed(assertTrue(error.message == "fixture"))
 
   private val task = suite("versions task")(
     test("development names -ci and says whether the registry was read"):
@@ -46,7 +47,7 @@ object VersionTaskSpec extends ZIOSpecDefault:
           checked <- VersionTask.effect(
             catalog,
             Map.empty,
-            Evidence.Checked(Registry.empty)
+            Evidence.Checked(Registry.empty),
           )
           missed <- VersionTask.effect(catalog, Map.empty, Evidence.Unchecked)
         yield assertTrue(
@@ -56,7 +57,7 @@ object VersionTaskSpec extends ZIOSpecDefault:
                 .text(decision)
                 .contains("drift clear")
             case _ => false,
-          missed.render.contains("drift unchecked")
+          missed.render.contains("drift unchecked"),
         )
     ,
     test("a manual ship publishes its stated version without a registry file"):
@@ -77,7 +78,7 @@ object VersionTaskSpec extends ZIOSpecDefault:
               done.render.contains(
                 "compile 1.2.3-SNAPSHOT publish 1.2.3-SNAPSHOT"
               ),
-              !done.render.contains("-ci")
+              !done.render.contains("-ci"),
             )
     ,
     test(
@@ -85,15 +86,15 @@ object VersionTaskSpec extends ZIOSpecDefault:
     ):
       use: (_, catalog) =>
         val env = Map(
-          Session.Key -> "snapshot",
-          Session.ShaKey -> sha.value,
-          Session.BranchKey -> "default"
+          Session.Key       -> "snapshot",
+          Session.ShaKey    -> sha.value,
+          Session.BranchKey -> "default",
         )
         for
           published <- VersionTask.effect(
             catalog,
             env,
-            Evidence.Checked(Registry.empty)
+            Evidence.Checked(Registry.empty),
           )
           refused <- VersionTask.effect(catalog, env, Evidence.Unchecked).either
         yield assertTrue(
@@ -107,14 +108,14 @@ object VersionTaskSpec extends ZIOSpecDefault:
                   )
                 ) =>
               true
-            case other => other.fold(_.message, _.render) == "unchecked"
+            case other => other.fold(_.message, _.render) == "unchecked",
         )
     ,
     test("a moved release refuses the task, and a missing file is unchecked"):
       use: (libs, catalog) =>
         val env = Map(Session.Key -> "release")
         Registry.parse(List(s"${libs.value} moved")) match
-          case Left(error) => ZIO.succeed(assertTrue(error.message == "moved"))
+          case Left(error)     => ZIO.succeed(assertTrue(error.message == "moved"))
           case Right(registry) =>
             val core = module("core", Jvm)(scala"3.9.0")
             Projects(ships(ship("libs", ship"1.4.2")(core)), core) match
@@ -152,8 +153,9 @@ object VersionTaskSpec extends ZIOSpecDefault:
                           ) =>
                         true
                       case other =>
-                        other.fold(_.message, _.render) == "unchecked"
-                  )
+                        other.fold(_.message, _.render) == "unchecked",
+                  ),
   )
 
   def spec = task
+end VersionTaskSpec

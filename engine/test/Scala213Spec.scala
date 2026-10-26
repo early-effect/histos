@@ -20,8 +20,8 @@ object Scala213Spec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(write(root, "src/main/scala/Shared.scala", shared))
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(write(root, "src/main/scala/Shared.scala", shared))
+          _    <- ZIO.attempt(
             write(root, "scala-2.13/Only213.scala", only("Only213"))
           )
           _ <- ZIO.attempt(
@@ -38,40 +38,40 @@ object Scala213Spec extends ZIOSpecDefault:
           _ <- ZIO.attempt(
             write(root, "src/main/java/JavaOnly.java", "class JavaOnly {}\n")
           )
-          _ <- ZIO.attempt(write(root, "js/Skip.java", "class Skip {}\n"))
+          _      <- ZIO.attempt(write(root, "js/Skip.java", "class Skip {}\n"))
           for213 <- Sources.select(root, v213, Platform.Jvm)
-          for3 <- Sources.select(root, v390, Platform.Jvm)
-          forJs <- Sources.select(root, v213, Platform.Js)
+          for3   <- Sources.select(root, v390, Platform.Jvm)
+          forJs  <- Sources.select(root, v213, Platform.Js)
           names213 = for213.map(root.relativize(_).toString)
-          names3 = for3.map(root.relativize(_).toString)
-          namesJs = forJs.map(root.relativize(_).toString)
+          names3   = for3.map(root.relativize(_).toString)
+          namesJs  = forJs.map(root.relativize(_).toString)
         yield assertTrue(
           names213 == List(
             "jvm/OnJvm.scala",
             "scala-2.13.16/Exact.scala",
             "scala-2.13/Only213.scala",
             "src/main/java/JavaOnly.java",
-            "src/main/scala/Shared.scala"
+            "src/main/scala/Shared.scala",
           ),
           names3 == List(
             "jvm/OnJvm.scala",
             "scala-3/Only3.scala",
             "src/main/java/JavaOnly.java",
-            "src/main/scala/Shared.scala"
+            "src/main/scala/Shared.scala",
           ),
           namesJs == List(
             "js/OnJs.scala",
             "scala-2.13.16/Exact.scala",
             "scala-2.13/Only213.scala",
-            "src/main/scala/Shared.scala"
-          )
+            "src/main/scala/Shared.scala",
+          ),
         )
     ,
     test("a package named native is shared, and src/main filters still apply"):
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             write(root, "histos/native/Bridge.scala", only("Bridge"))
           )
           _ <- ZIO.attempt(
@@ -91,21 +91,21 @@ object Scala213Spec extends ZIOSpecDefault:
             write(
               root,
               "src/main/scala-3/Only3.scala",
-              "enum Only3 { case A }\n"
+              "enum Only3 { case A }\n",
             )
           )
           _ <- ZIO.attempt(
             write(root, "src/main/jvm/OnJvm.scala", only("OnJvm"))
           )
-          _ <- ZIO.attempt(write(root, "src/main/js/OnJs.scala", only("OnJs")))
-          for213 <- Sources.select(root, v213, Platform.Jvm)
-          for3 <- Sources.select(root, v390, Platform.Jvm)
+          _         <- ZIO.attempt(write(root, "src/main/js/OnJs.scala", only("OnJs")))
+          for213    <- Sources.select(root, v213, Platform.Jvm)
+          for3      <- Sources.select(root, v390, Platform.Jvm)
           forNative <- Sources.select(root, v390, Platform.Native)
-          forJs <- Sources.select(root, v213, Platform.Js)
-          names213 = for213.map(root.relativize(_).toString)
-          names3 = for3.map(root.relativize(_).toString)
+          forJs     <- Sources.select(root, v213, Platform.Js)
+          names213    = for213.map(root.relativize(_).toString)
+          names3      = for3.map(root.relativize(_).toString)
           namesNative = forNative.map(root.relativize(_).toString)
-          namesJs = forJs.map(root.relativize(_).toString)
+          namesJs     = forJs.map(root.relativize(_).toString)
         yield assertTrue(
           names213 == List(
             "histos/native/Bridge.scala",
@@ -113,21 +113,21 @@ object Scala213Spec extends ZIOSpecDefault:
             "src/histos/native/Nested.scala",
             "src/main/jvm/OnJvm.scala",
             "src/main/scala-2.13/Only213.scala",
-            "src/main/scala/Shared.scala"
+            "src/main/scala/Shared.scala",
           ),
           names3 == List(
             "histos/native/Bridge.scala",
             "src/histos/native/Nested.scala",
             "src/main/jvm/OnJvm.scala",
             "src/main/scala-3/Only3.scala",
-            "src/main/scala/Shared.scala"
+            "src/main/scala/Shared.scala",
           ),
           namesNative == List(
             "histos/native/Bridge.scala",
             "native/OnlyNative.scala",
             "src/histos/native/Nested.scala",
             "src/main/scala-3/Only3.scala",
-            "src/main/scala/Shared.scala"
+            "src/main/scala/Shared.scala",
           ),
           namesJs == List(
             "histos/native/Bridge.scala",
@@ -135,9 +135,9 @@ object Scala213Spec extends ZIOSpecDefault:
             "src/histos/native/Nested.scala",
             "src/main/js/OnJs.scala",
             "src/main/scala-2.13/Only213.scala",
-            "src/main/scala/Shared.scala"
-          )
-        )
+            "src/main/scala/Shared.scala",
+          ),
+        ),
   )
 
   private val compile = suite("scala 2.13.16")(
@@ -145,11 +145,11 @@ object Scala213Spec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             write(
               root,
               "src/main/scala/Shared.scala",
-              "object Shared { def n: Int = 1 }\n"
+              "object Shared { def n: Int = 1 }\n",
             )
           )
           _ <- ZIO.attempt(write(root, "scala-2.13/Hello.scala", hello))
@@ -157,8 +157,8 @@ object Scala213Spec extends ZIOSpecDefault:
             write(root, "scala-3/Later.scala", "enum Later { case A }\n")
           )
           sources <- Sources.select(root, v213, Platform.Jvm)
-          found <- Scala213.jars(v213)
-          jdk <- GraphCompile.jdkHere
+          found   <- Scala213.jars(v213)
+          jdk     <- GraphCompile.jdkHere
           classes = root.resolve("classes")
           compiled <- JvmCompile
             .compile(
@@ -168,7 +168,7 @@ object Scala213Spec extends ZIOSpecDefault:
                 Nil,
                 classes,
                 root.resolve("analysis"),
-                Nil
+                Nil,
               )
             )
             .either
@@ -187,7 +187,7 @@ object Scala213Spec extends ZIOSpecDefault:
                     jdk.home.resolve("bin").resolve("java"),
                     ChildClasspath(classes, found.runtime),
                     name,
-                    work
+                    work,
                   )
                 )
                 .either
@@ -203,15 +203,15 @@ object Scala213Spec extends ZIOSpecDefault:
           compiled.map(_.classes) == Right(classes),
           classFile,
           ran.map(_.map(_.exit.value)) == Some(Right(0)),
-          ran.map(_.map(_.out.text)) == Some(Right("1\nhi\n"))
+          ran.map(_.map(_.out.text)) == Some(Right("1\nhi\n")),
         )
     ,
     test("a declared Scala 2 compiler is a library"):
       ZIO.scoped:
         for
-          root <- temp
+          root  <- temp
           found <- Scala213.jars(v213)
-          jdk <- GraphCompile.jdkHere
+          jdk   <- GraphCompile.jdkHere
           compiler = found.compiler
           out <- JvmCompile
             .compile(
@@ -221,7 +221,7 @@ object Scala213Spec extends ZIOSpecDefault:
                 List(compiler),
                 root.resolve("classes"),
                 root.resolve("analysis"),
-                Nil
+                Nil,
               )
             )
             .either
@@ -232,16 +232,16 @@ object Scala213Spec extends ZIOSpecDefault:
       assertTrue(
         !ClassMarker.NscGlobal.visibleTo(loader),
         !ClassMarker.XsbtBridge.visibleTo(loader),
-        !ClassMarker.JavaUniverse.visibleTo(loader)
+        !ClassMarker.JavaUniverse.visibleTo(loader),
       )
     ,
     test("compiled code cannot see the compiler, reflect, jline, or diffutils"):
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(write(root, "Leak.scala", leak))
-          jdk <- GraphCompile.jdkHere
-          out <- JvmCompile
+          _    <- ZIO.attempt(write(root, "Leak.scala", leak))
+          jdk  <- GraphCompile.jdkHere
+          out  <- JvmCompile
             .compile(
               CompileRequest(
                 CompileToolchain(v213, Platform.Jvm, jdk, ScalacFlags.empty),
@@ -249,7 +249,7 @@ object Scala213Spec extends ZIOSpecDefault:
                 Nil,
                 root.resolve("classes"),
                 root.resolve("analysis"),
-                Nil
+                Nil,
               )
             )
             .either
@@ -267,28 +267,28 @@ object Scala213Spec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _ <- ZIO.attempt(
+          _    <- ZIO.attempt(
             write(
               root,
               "Hello.scala",
-              "object Hello { def greet: String = \"hi\" }\n"
+              "object Hello { def greet: String = \"hi\" }\n",
             )
           )
-          found <- Scala213.jars(ScalaVersion.trusted("2.13.18"))
-          jdk <- GraphCompile.jdkHere
+          found    <- Scala213.jars(ScalaVersion.trusted("2.13.18"))
+          jdk      <- GraphCompile.jdkHere
           compiled <- JvmCompile.compile(
             CompileRequest(
               CompileToolchain(
                 ScalaVersion.trusted("2.13.18"),
                 Platform.Jvm,
                 jdk,
-                ScalacFlags.empty
+                ScalacFlags.empty,
               ),
               List(root.resolve("Hello.scala")),
               Nil,
               root.resolve("classes"),
               root.resolve("analysis"),
-              Nil
+              Nil,
             )
           )
           names <- ZIO.attempt {
@@ -303,8 +303,8 @@ object Scala213Spec extends ZIOSpecDefault:
           }
         yield assertTrue(
           found.runtime == List(found.library),
-          names == List("Hello$.class", "Hello.class")
-        )
+          names == List("Hello$.class", "Hello.class"),
+        ),
   )
 
   private val hello =
@@ -336,25 +336,25 @@ object Scala213Spec extends ZIOSpecDefault:
     path
 
   private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-213"))):
-      dir =>
-        ZIO.attempt {
-          if Files.exists(dir) then
-            val walk = Files.walk(dir)
-            val paths =
-              try walk.iterator.asScala.toList
-              finally walk.close()
-            paths
-              .sortBy(_.getNameCount)
-              .reverse
-              .foreach(path => Files.deleteIfExists(path))
-        }.ignore
+    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-213"))): dir =>
+      ZIO.attempt {
+        if Files.exists(dir) then
+          val walk  = Files.walk(dir)
+          val paths =
+            try walk.iterator.asScala.toList
+            finally walk.close()
+          paths
+            .sortBy(_.getNameCount)
+            .reverse
+            .foreach(path => Files.deleteIfExists(path))
+      }.ignore
 
   def spec = suite("scala 2.13")(layout, compile)
     .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.ToolFixture.jvm(
         histos.ScalaVersion("2.13.16"),
         histos.ScalaVersion("2.13.18"),
-        histos.ScalaVersion("3.9.0")
+        histos.ScalaVersion("3.9.0"),
       )
     ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+end Scala213Spec

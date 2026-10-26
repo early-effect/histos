@@ -18,13 +18,16 @@ object CommitSha:
 
   extension (sha: CommitSha)
     def value: String = sha
+
     /** The 12-character abbreviation registries store. The sha is already lowercase. */
     def abbreviate: AbbrevSha = AbbrevSha.trusted(sha.take(12))
+  end extension
 
   @publicInBinary private[histos] def trusted(raw: String): CommitSha = raw
 
   private def isHex(char: Char): Boolean =
     char.isDigit || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')
+end CommitSha
 
 enum CommitShaError:
   case Empty
@@ -33,6 +36,7 @@ enum CommitShaError:
   def message: String = this match
     case Empty       => "a commit sha is not empty"
     case NotHex(raw) => s"'$raw' is not a 40-hex commit"
+end CommitShaError
 
 /** Exactly 12 lowercase hex characters. This is the stored abbreviation, not a short sha. */
 opaque type AbbrevSha = String
@@ -57,6 +61,7 @@ object AbbrevSha:
 
   private def isHex(char: Char): Boolean =
     lowerHex(char) || (char >= 'A' && char <= 'F')
+end AbbrevSha
 
 enum AbbrevShaError:
   case Empty
@@ -65,7 +70,9 @@ enum AbbrevShaError:
   case NotAbbrev(raw: String)
 
   def message: String = this match
-    case Empty          => "an abbreviated sha is not empty"
-    case TooShort(raw)  => s"'$raw' is shorter than 12 hex characters. A snapshot sha is the 12-character abbreviation of the commit."
+    case Empty         => "an abbreviated sha is not empty"
+    case TooShort(raw) =>
+      s"'$raw' is shorter than 12 hex characters. A snapshot sha is the 12-character abbreviation of the commit."
     case NotLower(raw)  => s"'$raw' is not lowercase. A stored snapshot sha is 12 lowercase hex characters."
     case NotAbbrev(raw) => s"'$raw' is not a 12-hex abbreviation"
+end AbbrevShaError

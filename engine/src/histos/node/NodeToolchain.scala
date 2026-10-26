@@ -1,12 +1,7 @@
 package histos.node
 
 import histos.jdk.{Machine, Os}
-import histos.toolchain.{
-  LocalOverride,
-  LocalOverrideError,
-  RuntimeFiles,
-  RuntimeIdentity
-}
+import histos.toolchain.{LocalOverride, LocalOverrideError, RuntimeFiles, RuntimeIdentity}
 import histos.workspace.IoFailure
 
 import java.nio.file.Path
@@ -17,13 +12,13 @@ import zio.{IO, ZIO}
 final case class NodeSurvey(
     binary: NodeBinary,
     version: NodeVersion,
-    identity: RuntimeIdentity
+    identity: RuntimeIdentity,
 )
 
 final case class NodeRuntime(
     binary: NodeBinary,
     version: NodeVersion,
-    identity: RuntimeIdentity
+    identity: RuntimeIdentity,
 )
 
 object NodeToolchain:
@@ -32,15 +27,13 @@ object NodeToolchain:
     NodeVersion.trusted("25", NodeMajor.trusted(25))
 
   def explain(machine: Machine): IO[NodeMiss, NodeSurvey] =
-    resolve(machine).map(runtime =>
-      NodeSurvey(runtime.binary, runtime.version, runtime.identity)
-    )
+    resolve(machine).map(runtime => NodeSurvey(runtime.binary, runtime.version, runtime.identity))
 
   def text(survey: NodeSurvey): String =
     s"node ${survey.version.value} ${survey.binary.path}"
 
-  /** `node` on `PATH`, or the home in `node.local`. A missing binary or one
-    * older than [[Floor]] fails. Histos does not fetch Node.
+  /** `node` on `PATH`, or the home in `node.local`. A missing binary or one older than [[Floor]] fails. Histos does not
+    * fetch Node.
     */
   def resolve(machine: Machine): IO[NodeMiss, NodeRuntime] =
     readOverride(machine.repo)
@@ -62,18 +55,16 @@ object NodeToolchain:
   private def accept(path: Path): IO[NodeMiss, NodeRuntime] =
     for
       home <- NodeProbe.home(path).mapError(NodeMiss.Unresolved(_))
-      _ <- ZIO
+      _    <- ZIO
         .fail(NodeMiss.Rejected(path, NodeReject.NoBinary))
         .unless(home.hasBinary)
       version <- ZIO
         .fromEither(home.version)
-        .mapError(error =>
-          NodeMiss.Rejected(path, NodeReject.UnreadableVersion(error))
-        )
+        .mapError(error => NodeMiss.Rejected(path, NodeReject.UnreadableVersion(error)))
       _ <- ZIO
         .fail(NodeMiss.TooOld(Floor, version, path))
         .unless(version.atLeast(Floor))
-      binary <- NodeProbe.binary(path).mapError(NodeMiss.Unresolved(_))
+      binary   <- NodeProbe.binary(path).mapError(NodeMiss.Unresolved(_))
       identity <- RuntimeFiles
         .identity(path, version.value)
         .mapError(failure => NodeMiss.Unresolved(NodeError.Io(failure)))
@@ -92,3 +83,4 @@ object NodeToolchain:
           NodeError.Override(NodeOverrideError.Relative(raw))
         case LocalOverrideError.Invalid(raw) =>
           NodeError.Override(NodeOverrideError.Invalid(raw))
+end NodeToolchain

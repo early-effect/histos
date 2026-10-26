@@ -3,23 +3,9 @@ package histos.resolve
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
-import histos.{
-  Aggregate,
-  Dep,
-  DepKind,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion
-}
+import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.{
-  AtomicMoveNotSupportedException,
-  Files,
-  Path,
-  StandardCopyOption
-}
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
 import zio.{IO, ULayer, ZIO, ZLayer}
 
@@ -41,6 +27,7 @@ object RepoUrl:
   private[histos] def trusted(raw: String): RepoUrl = raw
 
   extension (url: RepoUrl) def value: String = url
+end RepoUrl
 
 enum Repository:
   case Central
@@ -71,39 +58,36 @@ object Repository:
         canonical(url).contains("/.ivy2/local/")
       case Maven(root) =>
         val artifact = canonical(url)
-        val base = canonical(root.value)
+        val base     = canonical(root.value)
         artifact == base || artifact.startsWith(base + "/")
 
   def recorded(
       url: String,
-      repositories: List[Repository]
+      repositories: List[Repository],
   ): Option[Repository] =
     repositories.find(repository => serves(repository, url))
 
   private def canonical(raw: String): String =
     val trimmed = raw.stripSuffix("/")
-    if trimmed.startsWith("file:///") then
-      "file:/" + trimmed.drop("file:///".length)
-    else if trimmed.startsWith("file://") then
-      "file:/" + trimmed.drop("file://".length)
+    if trimmed.startsWith("file:///") then "file:/" + trimmed.drop("file:///".length)
+    else if trimmed.startsWith("file://") then "file:/" + trimmed.drop("file://".length)
     else trimmed
+end Repository
 
-/** Declared repositories first. `Central` is last when it is present. Empty is
-  * not representable.
+/** Declared repositories first. `Central` is last when it is present. Empty is not representable.
   */
 final case class Repositories(first: Repository, rest: List[Repository]):
   def all: List[Repository] = first :: rest
 
 object BuildResolvers:
-  /** An empty declaration is Central. A listed `central` is moved last. It is
-    * not added when absent.
+  /** An empty declaration is Central. A listed `central` is moved last. It is not added when absent.
     */
   def apply(declared: List[histos.Resolver]): Repositories =
     declared match
       case Nil           => Repositories.central
       case first :: rest =>
         val mapped = mapOne(first)
-        val tail = rest.map(mapOne)
+        val tail   = rest.map(mapOne)
         pack(Repositories.ordered(Repositories(mapped, tail)))
 
   private def mapOne(resolver: histos.Resolver): Repository =
@@ -116,14 +100,15 @@ object BuildResolvers:
     ordered match
       case first :: rest => Repositories(first, rest)
       case Nil           => Repositories.central
+end BuildResolvers
 
 object Repositories:
   val central: Repositories = Repositories(Repository.Central, Nil)
 
   def ordered(repositories: Repositories): List[Repository] =
-    val all = repositories.all
+    val all      = repositories.all
     val declared = all.filter(_ != Repository.Central)
-    val central = if all.exists(_ == Repository.Central) then
-      List(Repository.Central)
+    val central  = if all.exists(_ == Repository.Central) then List(Repository.Central)
     else Nil
     declared ++ central
+end Repositories

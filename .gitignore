@@ -25,6 +25,7 @@ target/
 .histos/provider
 .mcp.json
 .histos/jars
+.histos/observation.json
 .histos/server.json
 .histos/server.json.tmp
 .histos/server.sock

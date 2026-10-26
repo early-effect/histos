@@ -18,6 +18,7 @@ object NoteText:
   extension (text: NoteText) def value: String = text
 
   @publicInBinary private[histos] def trusted(raw: String): NoteText = raw
+end NoteText
 
 enum NoteTextError:
   case Empty
@@ -26,6 +27,7 @@ enum NoteTextError:
   def message: String = this match
     case Empty  => "note text is not empty"
     case Bad(_) => "note text is one line"
+end NoteTextError
 
 /** The plugin's own non-empty message. It is not an exception message. */
 opaque type PluginDetail = String
@@ -43,6 +45,7 @@ object PluginDetail:
   extension (detail: PluginDetail) def value: String = detail
 
   @publicInBinary private[histos] def trusted(raw: String): PluginDetail = raw
+end PluginDetail
 
 enum PluginDetailError:
   case Empty
@@ -51,6 +54,7 @@ enum PluginDetailError:
   def message: String = this match
     case Empty  => "a plugin detail is not empty"
     case Bad(_) => "a plugin detail is one line"
+end PluginDetailError
 
 /** A declared text input. Non-empty, and it contains no whitespace. */
 opaque type InputKey = String
@@ -68,6 +72,7 @@ object InputKey:
   extension (key: InputKey) def value: String = key
 
   @publicInBinary private[histos] def trusted(raw: String): InputKey = raw
+end InputKey
 
 enum InputKeyError:
   case Empty
@@ -76,6 +81,7 @@ enum InputKeyError:
   def message: String = this match
     case Empty    => "an input key is not empty"
     case Bad(raw) => s"'$raw' is not an input key"
+end InputKeyError
 
 /** An environment variable the task declares. A letter or `_`, then letters, digits, or `_`. */
 opaque type EnvName = String
@@ -93,6 +99,7 @@ object EnvName:
   extension (name: EnvName) def value: String = name
 
   @publicInBinary private[histos] def trusted(raw: String): EnvName = raw
+end EnvName
 
 enum EnvNameError:
   case Empty
@@ -101,3 +108,4 @@ enum EnvNameError:
   def message: String = this match
     case Empty    => "an environment name is not empty"
     case Bad(raw) => s"'$raw' is not an environment name"
+end EnvNameError

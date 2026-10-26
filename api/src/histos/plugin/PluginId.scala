@@ -19,6 +19,7 @@ object PluginId:
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): PluginId = raw
+end PluginId
 
 enum PluginIdError:
   case Empty
@@ -27,3 +28,4 @@ enum PluginIdError:
   def message: String = this match
     case Empty    => "a plugin id is not empty"
     case Bad(raw) => s"'$raw' is not a plugin id"
+end PluginIdError

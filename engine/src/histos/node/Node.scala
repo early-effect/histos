@@ -13,11 +13,12 @@ enum NodeReject:
     case Absent                   => "not a Node home"
     case NoBinary                 => "no node"
     case UnreadableVersion(error) => error.message
+end NodeReject
 
 final case class NodeHome(
     path: Path,
     hasBinary: Boolean,
-    version: Either[NodeVersionError, NodeVersion]
+    version: Either[NodeVersionError, NodeVersion],
 )
 
 object Node:

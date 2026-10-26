@@ -21,6 +21,7 @@ object EntryName:
   extension (name: EntryName) def value: String = name
 
   @publicInBinary private[histos] def trusted(raw: String): EntryName = raw
+end EntryName
 
 enum EntryNameError:
   case Empty
@@ -29,3 +30,4 @@ enum EntryNameError:
   def message: String = this match
     case Empty    => "an entry name is not empty"
     case Bad(raw) => s"'$raw' is not an entry name"
+end EntryNameError

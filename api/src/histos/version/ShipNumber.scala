@@ -32,6 +32,7 @@ object ShipNumber:
     else if raw.length > 1 && raw.charAt(0) == '0' then None
     else if raw.length > 10 || !raw.forall(_.isDigit) then None
     else raw.toLongOption.filter(value => value >= 0 && value <= Int.MaxValue).map(_.toInt)
+end ShipNumber
 
 enum ShipNumberError:
   case Empty
@@ -40,3 +41,4 @@ enum ShipNumberError:
   def message: String = this match
     case Empty         => "a ship number is not empty"
     case NotAShip(raw) => s"'$raw' is not a ship number. A ship number is major.minor.patch with no leading zeros."
+end ShipNumberError

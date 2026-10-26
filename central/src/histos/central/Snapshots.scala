@@ -23,8 +23,9 @@ object SnapshotRepository:
     case Insecure(host: String)
 
     def message: String = this match
-      case Malformed(raw)  => s"'$raw' is not a snapshot repository"
-      case Insecure(host)  => s"http snapshot repository '$host' is not loopback"
+      case Malformed(raw) => s"'$raw' is not a snapshot repository"
+      case Insecure(host) => s"http snapshot repository '$host' is not loopback"
+  end Error
 
   val central: SnapshotRepository =
     trusted(
@@ -39,15 +40,15 @@ object SnapshotRepository:
     val trimmed =
       raw.trim match
         case text if text.endsWith("/") => text.dropRight(1)
-        case text                        => text
+        case text                       => text
     Url.decode(trimmed) match
-      case Left(_)   => Left(Error.Malformed(raw))
+      case Left(_)    => Left(Error.Malformed(raw))
       case Right(url) =>
         (url.scheme, url.host) match
-          case (Some(Scheme.Https), Some(_))              => Right(url)
+          case (Some(Scheme.Https), Some(_))                     => Right(url)
           case (Some(Scheme.Http), Some(host)) if loopback(host) => Right(url)
-          case (Some(Scheme.Http), Some(host))            => Left(Error.Insecure(host))
-          case _                                          => Left(Error.Malformed(raw))
+          case (Some(Scheme.Http), Some(host))                   => Left(Error.Insecure(host))
+          case _                                                 => Left(Error.Malformed(raw))
 
   extension (repo: SnapshotRepository) def root: Url = repo
 
@@ -55,6 +56,7 @@ object SnapshotRepository:
 
   private def loopback(host: String): Boolean =
     host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "::1"
+end SnapshotRepository
 
 /** A repository username. A colon would split the Basic credential. */
 opaque type RepositoryUser = String
@@ -69,6 +71,7 @@ object RepositoryUser:
     def message: String = this match
       case Empty => "a repository user is empty"
       case Colon => "a repository user contains ':'"
+  end Error
 
   def from(raw: String): Either[Error, RepositoryUser] =
     val name = raw.trim
@@ -77,6 +80,7 @@ object RepositoryUser:
     else Right(name)
 
   extension (user: RepositoryUser) def value: String = user
+end RepositoryUser
 
 /** Basic credentials. `password` renders as `Secret(<redacted>)`. */
 final case class RepositorySecret(user: RepositoryUser, password: Config.Secret)
@@ -95,33 +99,35 @@ enum TransportFault:
   case Body
 
   def message: String = this match
-    case Target(raw)                 => s"could not reach the snapshot repository: '$raw' is not a target"
-    case Connect(host, port)         => s"could not connect to the snapshot repository at $host:$port"
-    case ConnectTimeout(host, port)  => s"the snapshot repository at $host:$port did not accept a connection"
-    case Tls(host, port)             => s"tls failed with the snapshot repository at $host:$port"
-    case ReadTimeout(host, port)     => s"the snapshot repository at $host:$port stopped answering"
-    case Io(host, port)              => s"the snapshot repository at $host:$port closed the exchange"
-    case Protocol(host, port)        => s"the snapshot repository at $host:$port sent an invalid response"
-    case Pool(host, port)            => s"no free connection to the snapshot repository at $host:$port"
-    case Trust                       => "the snapshot repository trust material is unusable"
-    case Body                        => "the snapshot repository response body failed"
+    case Target(raw)                => s"could not reach the snapshot repository: '$raw' is not a target"
+    case Connect(host, port)        => s"could not connect to the snapshot repository at $host:$port"
+    case ConnectTimeout(host, port) => s"the snapshot repository at $host:$port did not accept a connection"
+    case Tls(host, port)            => s"tls failed with the snapshot repository at $host:$port"
+    case ReadTimeout(host, port)    => s"the snapshot repository at $host:$port stopped answering"
+    case Io(host, port)             => s"the snapshot repository at $host:$port closed the exchange"
+    case Protocol(host, port)       => s"the snapshot repository at $host:$port sent an invalid response"
+    case Pool(host, port)           => s"no free connection to the snapshot repository at $host:$port"
+    case Trust                      => "the snapshot repository trust material is unusable"
+    case Body                       => "the snapshot repository response body failed"
+end TransportFault
 
 object TransportFault:
   def from(error: ClientError): TransportFault = error match
-    case ClientError.InvalidTarget(target, _) => Target(target)
-    case ClientError.Connect(authority, _)    => at(authority, Connect.apply)
-    case ClientError.ConnectTimeout(authority) => at(authority, ConnectTimeout.apply)
-    case ClientError.Tls(authority, _)        => at(authority, Tls.apply)
-    case ClientError.ReadTimeout(authority)   => at(authority, ReadTimeout.apply)
-    case ClientError.Io(authority, _)         => at(authority, Io.apply)
-    case ClientError.Protocol(authority, _)   => at(authority, Protocol.apply)
-    case ClientError.PoolExhausted(authority) => at(authority, Pool.apply)
+    case ClientError.InvalidTarget(target, _)       => Target(target)
+    case ClientError.Connect(authority, _)          => at(authority, Connect.apply)
+    case ClientError.ConnectTimeout(authority)      => at(authority, ConnectTimeout.apply)
+    case ClientError.Tls(authority, _)              => at(authority, Tls.apply)
+    case ClientError.ReadTimeout(authority)         => at(authority, ReadTimeout.apply)
+    case ClientError.Io(authority, _)               => at(authority, Io.apply)
+    case ClientError.Protocol(authority, _)         => at(authority, Protocol.apply)
+    case ClientError.PoolExhausted(authority)       => at(authority, Pool.apply)
     case ClientError.NotAnEventStream(authority, _) => at(authority, Protocol.apply)
-    case ClientError.InvalidTrust(_)          => Trust
-    case ClientError.BodyFailed(_)            => Body
+    case ClientError.InvalidTrust(_)                => Trust
+    case ClientError.BodyFailed(_)                  => Body
 
   private def at(authority: Authority, make: (String, Int) => TransportFault): TransportFault =
     make(authority.host, authority.port)
+end TransportFault
 
 /** Why snapshot metadata could not name the next build. */
 enum MetadataFault:
@@ -135,6 +141,7 @@ enum MetadataFault:
     case BadBuild     => "snapshot metadata build number is not a positive int"
     case Saturated    => "snapshot metadata build number cannot increase"
     case Unread       => "snapshot metadata was not a complete body"
+end MetadataFault
 
 /** A revision that is not a `-SNAPSHOT`. */
 enum SnapshotRevisionError:
@@ -142,6 +149,7 @@ enum SnapshotRevisionError:
 
   def message: String = this match
     case NotSnapshot(revision) => s"'$revision' is not a snapshot"
+end SnapshotRevisionError
 
 /** The text before `-SNAPSHOT`. */
 opaque type SnapshotBase = String
@@ -150,6 +158,7 @@ object SnapshotBase:
   private[central] def trusted(raw: String): SnapshotBase = raw
 
   extension (base: SnapshotBase) def value: String = base
+end SnapshotBase
 
 /** The `<version>` a snapshot directory is named with, including `-SNAPSHOT`. */
 opaque type SnapshotRevision = String
@@ -158,6 +167,7 @@ object SnapshotRevision:
   private[central] def trusted(raw: String): SnapshotRevision = raw
 
   extension (revision: SnapshotRevision) def value: String = revision
+end SnapshotRevision
 
 final case class SnapshotName(base: SnapshotBase, revision: SnapshotRevision)
 
@@ -170,6 +180,7 @@ object SnapshotStamp:
   extension (value: SnapshotStamp) def value: String = value
 
   private val stamp = DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").withZone(ZoneOffset.UTC)
+end SnapshotStamp
 
 /** `yyyyMMddHHmmss` in UTC. */
 opaque type SnapshotUpdated = String
@@ -180,6 +191,7 @@ object SnapshotUpdated:
   extension (value: SnapshotUpdated) def value: String = value
 
   private val compact = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneOffset.UTC)
+end SnapshotUpdated
 
 /** `<base>-<stamp>-<build>`, the file name Maven resolves a snapshot to. */
 opaque type SnapshotVersion = String
@@ -189,6 +201,7 @@ object SnapshotVersion:
     s"${base.value}-${stamp.value}-$build"
 
   extension (version: SnapshotVersion) def value: String = version
+end SnapshotVersion
 
 /** One `maven-metadata.xml`. */
 final case class SnapshotDocument(
@@ -209,23 +222,23 @@ object SnapshotMetadata:
     else Left(SnapshotRevisionError.NotSnapshot(revision))
 
   def buildNumber(xml: String): Either[MetadataFault, Int] =
-    val open = "<buildNumber>"
+    val open  = "<buildNumber>"
     val close = "</buildNumber>"
     val start = xml.indexOf(open)
-    val end = if start < 0 then -1 else xml.indexOf(close, start + open.length)
+    val end   = if start < 0 then -1 else xml.indexOf(close, start + open.length)
     if start < 0 || end < 0 then Left(MetadataFault.MissingBuild)
     else
       xml.substring(start + open.length, end).trim.toIntOption match
         case Some(number) if number > 0 => Right(number)
-        case _                           => Left(MetadataFault.BadBuild)
+        case _                          => Left(MetadataFault.BadBuild)
 
   def render(document: SnapshotDocument): String =
-    val groupText = xml(document.group.value)
+    val groupText    = xml(document.group.value)
     val artifactText = xml(document.name.value)
     val revisionText = xml(document.revision.value)
-    val uniqueText = xml(document.unique.value)
-    val stamp = document.stamp.value
-    val updated = document.updated.value
+    val uniqueText   = xml(document.unique.value)
+    val stamp        = document.stamp.value
+    val updated      = document.updated.value
     s"""<?xml version="1.0" encoding="UTF-8"?>
        |<metadata modelVersion="1.1.0">
        |  <groupId>$groupText</groupId>
@@ -259,6 +272,7 @@ object SnapshotMetadata:
       case '<'  => "&lt;"
       case '>'  => "&gt;"
       case char => String.valueOf(char)
+end SnapshotMetadata
 
 private[central] final class SnapshotPublisher(
     repository: SnapshotRepository,
@@ -269,42 +283,47 @@ private[central] final class SnapshotPublisher(
     "Basic " + BasicCredentials.render(credentials.user.value, new String(credentials.password.value.toArray))
 
   def publish(artifact: Artifact): IO[PublishError, Published] =
-    ZIO.fromEither(plan(artifact)).flatMap: planned =>
-      for
-        previous <- metadata(planned.metadata)
-        build    <- ZIO.fromEither(nextBuild(previous)).mapError(PublishError.Metadata(_))
-        instant  <- ZIO.clockWith(_.instant)
-        stamp     = SnapshotStamp.from(instant)
-        unique    = SnapshotVersion(planned.base, stamp, build)
-        _        <- ZIO.foreachDiscard(files(planned, unique))(item => put(planned.directory / item.name, item.bytes))
-        body      = SnapshotMetadata.render(
-                      SnapshotDocument(
-                        planned.group,
-                        planned.name,
-                        planned.revision,
-                        stamp,
-                        build,
-                        unique,
-                        SnapshotUpdated.from(instant),
-                      )
-                    )
-        xml       = Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8))
-        _        <- ZIO.foreachDiscard(sidecars("maven-metadata.xml", xml))(item => put(planned.directory / item.name, item.bytes))
-      yield Published.Snapshot(unique, planned.sha256)
+    ZIO
+      .fromEither(plan(artifact))
+      .flatMap: planned =>
+        for
+          previous <- metadata(planned.metadata)
+          build    <- ZIO.fromEither(nextBuild(previous)).mapError(PublishError.Metadata(_))
+          instant  <- ZIO.clockWith(_.instant)
+          stamp  = SnapshotStamp.from(instant)
+          unique = SnapshotVersion(planned.base, stamp, build)
+          _ <- ZIO.foreachDiscard(files(planned, unique))(item => put(planned.directory / item.name, item.bytes))
+          body = SnapshotMetadata.render(
+            SnapshotDocument(
+              planned.group,
+              planned.name,
+              planned.revision,
+              stamp,
+              build,
+              unique,
+              SnapshotUpdated.from(instant),
+            )
+          )
+          xml = Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8))
+          _ <- ZIO
+            .foreachDiscard(sidecars("maven-metadata.xml", xml))(item => put(planned.directory / item.name, item.bytes))
+        yield Published.Snapshot(unique, planned.sha256)
 
   private def nextBuild(previous: Option[String]): Either[MetadataFault, Int] =
     previous match
       case None      => Right(1)
       case Some(xml) =>
-        SnapshotMetadata.buildNumber(xml).flatMap: current =>
-          if current == Int.MaxValue then Left(MetadataFault.Saturated) else Right(current + 1)
+        SnapshotMetadata
+          .buildNumber(xml)
+          .flatMap: current =>
+            if current == Int.MaxValue then Left(MetadataFault.Saturated) else Right(current + 1)
 
   private def plan(artifact: Artifact): Either[PublishError, Planned] =
     for
       jar   <- JarCheck.accept(artifact.jar)
       named <- SnapshotMetadata.parse(artifact.revision.render).left.map(PublishError.NotSnapshot(_))
     yield
-      val tail = artifact.group.segments :+ artifact.name.value :+ named.revision.value
+      val tail      = artifact.group.segments :+ artifact.name.value :+ named.revision.value
       val directory = tail.foldLeft(repository.root)(_ / _)
       Planned(
         artifact.group,
@@ -320,7 +339,7 @@ private[central] final class SnapshotPublisher(
 
   private def files(planned: Planned, unique: SnapshotVersion): List[Upload] =
     val stem = s"${planned.name.value}-${unique.value}"
-    val pom = Chunk.fromArray(planned.pom.getBytes(StandardCharsets.UTF_8))
+    val pom  = Chunk.fromArray(planned.pom.getBytes(StandardCharsets.UTF_8))
     sidecars(s"$stem.jar", planned.jar) ++ sidecars(s"$stem.pom", pom)
 
   private def sidecars(name: String, bytes: Chunk[Byte]): List[Upload] =
@@ -337,8 +356,8 @@ private[central] final class SnapshotPublisher(
   private def metadata(url: Url): IO[PublishError, Option[String]] =
     exchange(Method.GET, url, None).flatMap: response =>
       response.status.code match
-        case 404       => ZIO.succeed(None)
-        case 200       =>
+        case 404 => ZIO.succeed(None)
+        case 200 =>
           response.body.strict match
             case Some(bytes) => ZIO.succeed(Some(new String(bytes.toArray, StandardCharsets.UTF_8)))
             case None        => ZIO.fail(PublishError.Metadata(MetadataFault.Unread))
@@ -377,3 +396,4 @@ private[central] final class SnapshotPublisher(
   )
 
   private final case class Upload(name: String, bytes: Chunk[Byte])
+end SnapshotPublisher

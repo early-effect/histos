@@ -12,6 +12,7 @@ enum Architecture:
     case X86_64           => "x86_64"
     case Aarch64          => "aarch64"
     case Unsupported(raw) => raw
+end Architecture
 
 object Architecture:
   def fromMachine(raw: String): Architecture =
@@ -36,7 +37,8 @@ enum HostPlatform:
 
   def description: String = this match
     case Unsupported(os, architecture) => s"$os/${architecture.label}"
-    case supported => supported.token.getOrElse("unsupported")
+    case supported                     => supported.token.getOrElse("unsupported")
+end HostPlatform
 
 object HostPlatform:
   inline def apply(inline raw: String): HostPlatform = ${
@@ -60,7 +62,8 @@ object HostPlatform:
       case (Os.Linux, Architecture.Aarch64)   => HostPlatform.LinuxAarch64
       case (Os.Windows, Architecture.X86_64)  => HostPlatform.WindowsX86_64
       case (Os.Windows, Architecture.Aarch64) => HostPlatform.WindowsAarch64
-      case _ => HostPlatform.Unsupported(os, architecture)
+      case _                                  => HostPlatform.Unsupported(os, architecture)
+end HostPlatform
 
 enum HostPlatformError:
   case Unknown(raw: String)
@@ -73,7 +76,7 @@ private object HostPlatformLiteral:
       case None =>
         quotes.reflect.report.errorAndAbort(
           "HostPlatform takes a literal. Use HostPlatform.from at runtime.",
-          raw
+          raw,
         )
       case Some(value) =>
         HostPlatform.from(value) match

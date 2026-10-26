@@ -113,13 +113,13 @@ object LoadSpec extends ZIOSpecDefault:
           dir <- ZIO
             .attempt(Files.createTempDirectory("histos-empty"))
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
-          _ <- ZIO.addFinalizer(deleteTree(dir))
+          _   <- ZIO.addFinalizer(deleteTree(dir))
           out <- ZIO.serviceWithZIO[Loader](_.load(dir, jar)).either
         yield assertTrue:
           out match
             case Left(LoadError.MissingFile(path)) =>
               path.endsWith("histos.scala")
-            case _ => false
+            case _ => false,
   )
 
   private val echo = Dep("dev.example::echo:1.0.0")
@@ -161,7 +161,7 @@ object LoadSpec extends ZIOSpecDefault:
               PluginRequest.Dep(echo, LinkStrategy.BinaryOrSource)
             ),
             scanned.source == "\n// note\n\nimport histos.*\n",
-            !scanned.source.contains("plugin(")
+            !scanned.source.contains("plugin("),
           )
         case Left(_) => assertTrue(false)
     ,
@@ -174,7 +174,7 @@ object LoadSpec extends ZIOSpecDefault:
             scanned.requests == List(
               PluginRequest.Dep(echo, LinkStrategy.ExactBinary)
             ),
-            scanned.source == ""
+            scanned.source == "",
           )
         case Left(_) => assertTrue(false)
     ,
@@ -194,18 +194,18 @@ object LoadSpec extends ZIOSpecDefault:
         either == Right(
           ScannedBuild(
             List(PluginRequest.Dep(echo, LinkStrategy.BinaryOrSource)),
-            ""
+            "",
           )
-        )
+        ),
       )
     ,
     test(
       "a path plugin is a path request, and a binary link on a path is refused"
     ):
-      val path = ProjectPath("tools/docs")
-      val bare = HeaderScan.scan("plugin(path\"tools/docs\")")
+      val path    = ProjectPath("tools/docs")
+      val bare    = HeaderScan.scan("plugin(path\"tools/docs\")")
       val sourced = HeaderScan.scan("plugin(path\"tools/docs\").link(Source)")
-      val binary =
+      val binary  =
         HeaderScan.scan("plugin(path\"tools/docs\").link(ExactBinary)")
       val either =
         HeaderScan.scan("plugin(path\"tools/docs\").link(BinaryOrSource)")
@@ -219,7 +219,7 @@ object LoadSpec extends ZIOSpecDefault:
         HeaderScan.paths(
           "plugin(path\"tools/docs\")\nplugin(dep\"dev.example::echo:1.0.0\")"
         ) == List(path),
-        HeaderScan.paths("plugin(dep\"dev.example::echo:1.+\")") == Nil
+        HeaderScan.paths("plugin(dep\"dev.example::echo:1.+\")") == Nil,
       )
     ,
     test(
@@ -228,7 +228,7 @@ object LoadSpec extends ZIOSpecDefault:
       val ranged = HeaderScan.scan("plugin(dep\"dev.example::echo:1.+\")")
       val latest =
         HeaderScan.scan("plugin(dep\"dev.example::echo:latest.release\")")
-      val semi = HeaderScan.scan("plugin(dep\"dev.example::echo:1.0.0\");")
+      val semi  = HeaderScan.scan("plugin(dep\"dev.example::echo:1.0.0\");")
       val moved = HeaderScan.scan(
         "import histos.*\nplugin(dep\"dev.example::echo:1.0.0\")"
       )
@@ -242,8 +242,8 @@ object LoadSpec extends ZIOSpecDefault:
             "plugin(dep\"dev.example::echo:1.0.0\");"
           )
         ),
-        moved == Left(PluginLoadError.Misplaced(2))
-      )
+        moved == Left(PluginLoadError.Misplaced(2)),
+      ),
   )
 
   private val plugins = suite("exact binary plugins")(
@@ -263,7 +263,7 @@ object LoadSpec extends ZIOSpecDefault:
         for loaded <- load(source)
         yield assertTrue(
           loaded.graph.projects.map(_.name.value) == List("core"),
-          loaded.plugins.links.isEmpty
+          loaded.plugins.links.isEmpty,
         )
     ,
     test(
@@ -302,10 +302,10 @@ object LoadSpec extends ZIOSpecDefault:
           |""".stripMargin
       ZIO.scoped:
         for
-          apiDir <- withRepo(api)
+          apiDir  <- withRepo(api)
           pathDir <- withRepo(path)
-          jar <- apiJar
-          apiOut <- ZIO.serviceWithZIO[Loader](_.load(apiDir, jar)).either
+          jar     <- apiJar
+          apiOut  <- ZIO.serviceWithZIO[Loader](_.load(apiDir, jar)).either
           pathOut <- ZIO.serviceWithZIO[Loader](_.load(pathDir, jar)).either
         yield assertTrue(
           apiOut == Left(LoadError.Plugin(PluginLoadError.ApiLink(echo))),
@@ -317,7 +317,7 @@ object LoadSpec extends ZIOSpecDefault:
             )
           ),
           !Files.exists(Resolve.lockPath(apiDir)),
-          !Files.exists(Resolve.lockPath(pathDir))
+          !Files.exists(Resolve.lockPath(pathDir)),
         )
     ,
     test("a digest mismatch names both digests and does not load the class"):
@@ -334,14 +334,14 @@ object LoadSpec extends ZIOSpecDefault:
             dir.resolve("echo.jar"),
             List(
               HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource -> s"$wrong\n",
-              "dev/example/Echo$.class" -> "not a class"
-            )
+              ApiDigest.resource         -> s"$wrong\n",
+              "dev/example/Echo$.class"  -> "not a class",
+            ),
           )
           repo <- withRepo(pluginBuild)
-          sha <- fileSha(packed)
-          _ <- writeLock(repo, sha)
-          out <- loadWith(repo, jar, Holding(packed, sha))
+          sha  <- fileSha(packed)
+          _    <- writeLock(repo, sha)
+          out  <- loadWith(repo, jar, Holding(packed, sha))
         yield assertTrue:
           out match
             case Left(
@@ -365,19 +365,19 @@ object LoadSpec extends ZIOSpecDefault:
           dir <- ZIO
             .attempt(Files.createTempDirectory("histos-leak"))
             .mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
-          _ <- ZIO.addFinalizer(deleteTree(dir))
+          _      <- ZIO.addFinalizer(deleteTree(dir))
           packed <- textJar(
             dir.resolve("echo.jar"),
             List(
-              HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource -> s"$hex\n",
-              "histos/schedule/Sendable.class" -> "not a class"
-            )
+              HistosPlugin.entryResource       -> "dev.example.Echo$\n",
+              ApiDigest.resource               -> s"$hex\n",
+              "histos/schedule/Sendable.class" -> "not a class",
+            ),
           )
           repo <- withRepo(pluginBuild)
-          sha <- fileSha(packed)
-          _ <- writeLock(repo, sha)
-          out <- loadWith(repo, jar, Holding(packed, sha))
+          sha  <- fileSha(packed)
+          _    <- writeLock(repo, sha)
+          out  <- loadWith(repo, jar, Holding(packed, sha))
         yield assertTrue:
           out match
             case Left(
@@ -395,12 +395,12 @@ object LoadSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jar <- apiJar
-          hex <- apiHex(jar)
+          jar    <- apiJar
+          hex    <- apiHex(jar)
           packed <- compilePlugin(jar, hex)
-          repo <- withRepo(usingEcho)
-          sha <- fileSha(packed)
-          _ <- writeLock(repo, sha)
+          repo   <- withRepo(usingEcho)
+          sha    <- fileSha(packed)
+          _      <- writeLock(repo, sha)
           loaded <- loadWith(repo, jar, Holding(packed, sha)).flatMap(
             ZIO.fromEither
           )
@@ -410,12 +410,12 @@ object LoadSpec extends ZIOSpecDefault:
             .provide(
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
-              ZLayer.succeed(IdleResolve)
+              ZLayer.succeed(IdleResolve),
             )
           bound <- loaded.plugins.bind.provide(
             ZLayer.succeed(ActionCache.miss),
             RemoteCache.off,
-            ZLayer.succeed(IdleResolve)
+            ZLayer.succeed(IdleResolve),
           )
         yield assertTrue(
           loaded.graph.projects.map(_.name.value) == List("core"),
@@ -430,7 +430,7 @@ object LoadSpec extends ZIOSpecDefault:
             case PluginLink(
                   id,
                   PluginLinked.FromBinary(digest),
-                  artifacts
+                  artifacts,
                 ) :: Nil =>
               id == PluginId(
                 "dev.example"
@@ -438,19 +438,19 @@ object LoadSpec extends ZIOSpecDefault:
             case _ => false
           ,
           bound.keys.map(_.value).toList == List(task.render),
-          ran == PluginOutput("", Nil)
+          ran == PluginOutput("", Nil),
         )
     ,
     test("a plugin object defined by the build file is a foreign entry"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          hex <- apiHex(jar)
+          jar    <- apiJar
+          hex    <- apiHex(jar)
           packed <- compilePlugin(jar, hex)
-          repo <- withRepo(usingLocal)
-          sha <- fileSha(packed)
-          _ <- writeLock(repo, sha)
-          out <- loadWith(repo, jar, Holding(packed, sha))
+          repo   <- withRepo(usingLocal)
+          sha    <- fileSha(packed)
+          _      <- writeLock(repo, sha)
+          out    <- loadWith(repo, jar, Holding(packed, sha))
         yield assertTrue:
           out match
             case Left(
@@ -464,19 +464,19 @@ object LoadSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jar <- apiJar
+          jar      <- apiJar
           boundary <- Boundary.jars(jar)
-          dir <- ZIO
+          dir      <- ZIO
             .attempt(Files.createTempDirectory("histos-boundary"))
             .mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
-          _ <- ZIO.addFinalizer(deleteTree(dir))
+          _      <- ZIO.addFinalizer(deleteTree(dir))
           vendor <- textJar(
             dir.resolve("vendor.jar"),
             List(
-              "histos/schedule/Sendable.class" -> "not a class",
+              "histos/schedule/Sendable.class"        -> "not a class",
               "scala/collection/immutable/List.class" -> "not a class",
-              "histos/HistosBuild.class" -> "not a class"
-            )
+              "histos/HistosBuild.class"              -> "not a class",
+            ),
           )
           probed <- ZIO.attempt(probe(boundary, vendor))
         yield assertTrue(
@@ -488,12 +488,12 @@ object LoadSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jar <- apiJar
-          hex <- apiHex(jar)
+          jar    <- apiJar
+          hex    <- apiHex(jar)
           packed <- compilePlugin(jar, hex)
-          repo <- withRepo(usingEcho)
-          sha <- fileSha(packed)
-          _ <- writeCell(repo, "binary-or-source", sha, None)
+          repo   <- withRepo(usingEcho)
+          sha    <- fileSha(packed)
+          _      <- writeCell(repo, "binary-or-source", sha, None)
           loaded <- loadWith(repo, jar, Holding(packed, sha)).flatMap(
             ZIO.fromEither
           )
@@ -503,19 +503,19 @@ object LoadSpec extends ZIOSpecDefault:
             .provide(
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
-              ZLayer.succeed(IdleResolve)
+              ZLayer.succeed(IdleResolve),
             )
         yield assertTrue(
           loaded.plugins.links match
             case PluginLink(
                   _,
                   PluginLinked.FromBinary(digest),
-                  artifacts
+                  artifacts,
                 ) :: Nil =>
               digest.value == hex && artifacts == List(packed.toString)
             case _ => false
           ,
-          ran == PluginOutput("", Nil)
+          ran == PluginOutput("", Nil),
         )
     ,
     test(
@@ -534,21 +534,21 @@ object LoadSpec extends ZIOSpecDefault:
             dir.resolve("echo.jar"),
             List(
               HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource -> s"$wrong\n"
-            )
+              ApiDigest.resource         -> s"$wrong\n",
+            ),
           )
           sources <- textJar(
             dir.resolve("echo-sources.jar"),
-            List("Echo.scala" -> echoSource)
+            List("Echo.scala" -> echoSource),
           )
-          repo <- withRepo(usingEcho)
+          repo      <- withRepo(usingEcho)
           binarySha <- fileSha(packed)
           sourceSha <- fileSha(sources)
-          _ <- writeCell(repo, "binary-or-source", binarySha, Some(sourceSha))
-          loaded <- loadWith(
+          _         <- writeCell(repo, "binary-or-source", binarySha, Some(sourceSha))
+          loaded    <- loadWith(
             repo,
             jar,
-            Sourced(packed, binarySha, sources, sourceSha, allowSources = true)
+            Sourced(packed, binarySha, sources, sourceSha, allowSources = true),
           ).flatMap(ZIO.fromEither)
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
           ran <- loaded.plugins
@@ -556,20 +556,20 @@ object LoadSpec extends ZIOSpecDefault:
             .provide(
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
-              ZLayer.succeed(IdleResolve)
+              ZLayer.succeed(IdleResolve),
             )
         yield assertTrue(
           loaded.plugins.links match
             case PluginLink(
                   _,
                   PluginLinked.FromSource(published, running),
-                  artifacts
+                  artifacts,
                 ) :: Nil =>
               published.value == wrong && running.value == hex && artifacts
                 .forall(underPlugins) && !artifacts.contains(packed.toString)
             case _ => false
           ,
-          ran == PluginOutput("", Nil)
+          ran == PluginOutput("", Nil),
         )
     ,
     test("exact-binary does not fall back when a source line is present"):
@@ -585,21 +585,21 @@ object LoadSpec extends ZIOSpecDefault:
             dir.resolve("echo.jar"),
             List(
               HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource -> s"$wrong\n"
-            )
+              ApiDigest.resource         -> s"$wrong\n",
+            ),
           )
           sources <- textJar(
             dir.resolve("echo-sources.jar"),
-            List("Echo.scala" -> echoSource)
+            List("Echo.scala" -> echoSource),
           )
-          repo <- withRepo(pluginBuild)
+          repo      <- withRepo(pluginBuild)
           binarySha <- fileSha(packed)
           sourceSha <- fileSha(sources)
-          _ <- writeCell(repo, "exact-binary", binarySha, Some(sourceSha))
-          out <- loadWith(
+          _         <- writeCell(repo, "exact-binary", binarySha, Some(sourceSha))
+          out       <- loadWith(
             repo,
             jar,
-            Sourced(packed, binarySha, sources, sourceSha, allowSources = false)
+            Sourced(packed, binarySha, sources, sourceSha, allowSources = false),
           )
         yield assertTrue:
           out match
@@ -624,16 +624,16 @@ object LoadSpec extends ZIOSpecDefault:
             dir.resolve("echo.jar"),
             List(
               HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource -> s"$wrong\n"
-            )
+              ApiDigest.resource         -> s"$wrong\n",
+            ),
           )
-          repo <- withRepo(pluginBuild)
+          repo      <- withRepo(pluginBuild)
           binarySha <- fileSha(packed)
-          _ <- writeCell(repo, "binary-or-source", binarySha, None)
-          out <- loadWith(
+          _         <- writeCell(repo, "binary-or-source", binarySha, None)
+          out       <- loadWith(
             repo,
             jar,
-            Sourced(packed, binarySha, packed, binarySha, allowSources = false)
+            Sourced(packed, binarySha, packed, binarySha, allowSources = false),
           )
         yield assertTrue:
           out match
@@ -647,32 +647,32 @@ object LoadSpec extends ZIOSpecDefault:
     test("link Source compiles even when the api digests match"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          hex <- apiHex(jar)
+          jar    <- apiJar
+          hex    <- apiHex(jar)
           packed <- compilePlugin(jar, hex)
-          dir <- ZIO
+          dir    <- ZIO
             .attempt(Files.createTempDirectory("histos-source-link"))
             .mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
-          _ <- ZIO.addFinalizer(deleteTree(dir))
+          _       <- ZIO.addFinalizer(deleteTree(dir))
           sources <- textJar(
             dir.resolve("echo-sources.jar"),
-            List("Echo.scala" -> echoSource)
+            List("Echo.scala" -> echoSource),
           )
-          repo <- withRepo(usingEcho)
+          repo      <- withRepo(usingEcho)
           binarySha <- fileSha(packed)
           sourceSha <- fileSha(sources)
-          _ <- writeCell(repo, "source", binarySha, Some(sourceSha))
-          loaded <- loadWith(
+          _         <- writeCell(repo, "source", binarySha, Some(sourceSha))
+          loaded    <- loadWith(
             repo,
             jar,
-            Sourced(packed, binarySha, sources, sourceSha, allowSources = true)
+            Sourced(packed, binarySha, sources, sourceSha, allowSources = true),
           ).flatMap(ZIO.fromEither)
         yield assertTrue:
           loaded.plugins.links match
             case PluginLink(
                   _,
                   PluginLinked.FromSource(published, running),
-                  artifacts
+                  artifacts,
                 ) :: Nil =>
               published.value == hex && running.value == hex && artifacts
                 .forall(underPlugins) && !artifacts.contains(packed.toString)
@@ -681,10 +681,10 @@ object LoadSpec extends ZIOSpecDefault:
     test("a path plugin compiles from the tree and does not write a lock"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          hex <- apiHex(jar)
-          repo <- withRepo(usingPath)
-          _ <- plant(repo, "tools/docs", echoSource, "dev.example.Echo$")
+          jar    <- apiJar
+          hex    <- apiHex(jar)
+          repo   <- withRepo(usingPath)
+          _      <- plant(repo, "tools/docs", echoSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
           task = PluginTaskId(PluginId("dev.example"), TaskName("echo"))
           ran <- loaded.plugins
@@ -692,7 +692,7 @@ object LoadSpec extends ZIOSpecDefault:
             .provide(
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
-              ZLayer.succeed(IdleResolve)
+              ZLayer.succeed(IdleResolve),
             )
         yield assertTrue(
           !Files.exists(Resolve.lockPath(repo)),
@@ -700,7 +700,7 @@ object LoadSpec extends ZIOSpecDefault:
             case PluginLink(
                   id,
                   PluginLinked.FromSource(published, running),
-                  artifacts
+                  artifacts,
                 ) :: Nil =>
               id == PluginId(
                 "dev.example"
@@ -708,38 +708,38 @@ object LoadSpec extends ZIOSpecDefault:
                 .forall(underPlugins)
             case _ => false
           ,
-          ran == PluginOutput("", Nil)
+          ran == PluginOutput("", Nil),
         )
     ,
     test("a plugin's blocking step has the build loader as its context loader"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          repo <- withRepo(usingPath)
-          _ <- plant(repo, "tools/docs", blockingSource, "dev.example.Echo$")
+          jar    <- apiJar
+          repo   <- withRepo(usingPath)
+          _      <- plant(repo, "tools/docs", blockingSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
           // An idle default blocking thread keeps the context loader of the thread that started it.
-          _ <- ZIO.attemptBlocking(()).ignore
+          _   <- ZIO.attemptBlocking(()).ignore
           ran <- runOf(
             loaded,
-            PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+            PluginTaskId(PluginId("dev.example"), TaskName("echo")),
           ).either
         yield assertTrue(ran == Right(PluginOutput("dev.example.Echo$", Nil)))
     ,
     test("a refused lookup fails only the run that made it"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          repo <- withRepo(usingPath)
-          _ <- plant(repo, "tools/docs", leakSource, "dev.example.Echo$")
+          jar    <- apiJar
+          repo   <- withRepo(usingPath)
+          _      <- plant(repo, "tools/docs", leakSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
           leaked <- runOf(
             loaded,
-            PluginTaskId(PluginId("dev.example"), TaskName("leak"))
+            PluginTaskId(PluginId("dev.example"), TaskName("leak")),
           ).either
           echoed <- runOf(
             loaded,
-            PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+            PluginTaskId(PluginId("dev.example"), TaskName("echo")),
           ).either
         yield assertTrue(
           leaked == Left(
@@ -747,7 +747,7 @@ object LoadSpec extends ZIOSpecDefault:
               PluginRunError.EngineLeak("histos.schedule.Sendable")
             )
           ),
-          echoed == Right(PluginOutput("echo", Nil))
+          echoed == Right(PluginOutput("echo", Nil)),
         )
     ,
     test(
@@ -755,15 +755,15 @@ object LoadSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jar <- apiJar
+          jar  <- apiJar
           repo <- withRepo(pathBuild)
-          _ <- plant(repo, "tools/docs", boomSource, "dev.example.Boom$")
-          out <- ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either
+          _    <- plant(repo, "tools/docs", boomSource, "dev.example.Boom$")
+          out  <- ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either
         yield assertTrue(
           out.is(_.left) == LoadError.Plugin(
             PluginLoadError.Defect(
               PluginCoordinate.Path(ProjectPath("tools/docs")),
-              "java.lang.ExceptionInInitializerError"
+              "java.lang.ExceptionInInitializerError",
             )
           )
         )
@@ -773,16 +773,16 @@ object LoadSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jar <- apiJar
+          jar  <- apiJar
           repo <- withRepo(usingTwo)
-          _ <- plant(repo, "tools/a", quietSource, "dev.a.A$")
-          _ <- plant(repo, "tools/b", askingSource, "dev.b.B$")
-          out <- ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either
+          _    <- plant(repo, "tools/a", quietSource, "dev.a.A$")
+          _    <- plant(repo, "tools/b", askingSource, "dev.b.B$")
+          out  <- ZIO.serviceWithZIO[Loader](_.load(repo, jar)).either
         yield assertTrue(
           out.is(_.left) == LoadError.Plugin(
             PluginLoadError.EngineLeak(
               PluginCoordinate.Path(ProjectPath("tools/b")),
-              "histos.schedule.Sendable"
+              "histos.schedule.Sendable",
             )
           )
         )
@@ -792,35 +792,35 @@ object LoadSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          jar <- apiJar
-          repo <- withRepo(usingPath)
-          _ <- plant(repo, "tools/docs", echoSource, "dev.example.Echo$")
+          jar   <- apiJar
+          repo  <- withRepo(usingPath)
+          _     <- plant(repo, "tools/docs", echoSource, "dev.example.Echo$")
           notes <- ZIO.serviceWithZIO[Loader](_.reportBuild(repo, jar))
         yield assertTrue(notes == BuildNotes(false, Nil))
     ,
     test("a plugin that summons a Tag at run time links izumi-reflect"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          repo <- withRepo(usingPath)
-          _ <- plant(repo, "tools/docs", taggedSource, "dev.example.Echo$")
+          jar    <- apiJar
+          repo   <- withRepo(usingPath)
+          _      <- plant(repo, "tools/docs", taggedSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
-          ran <- runOf(
+          ran    <- runOf(
             loaded,
-            PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+            PluginTaskId(PluginId("dev.example"), TaskName("echo")),
           ).either
         yield assertTrue(ran == Right(PluginOutput("hi", Nil)))
     ,
     test("a run that throws before it returns an effect is a typed defect"):
       ZIO.scoped:
         for
-          jar <- apiJar
-          repo <- withRepo(usingPath)
-          _ <- plant(repo, "tools/docs", eagerSource, "dev.example.Echo$")
+          jar    <- apiJar
+          repo   <- withRepo(usingPath)
+          _      <- plant(repo, "tools/docs", eagerSource, "dev.example.Echo$")
           loaded <- ZIO.serviceWithZIO[Loader](_.load(repo, jar))
-          ran <- runOf(
+          ran    <- runOf(
             loaded,
-            PluginTaskId(PluginId("dev.example"), TaskName("echo"))
+            PluginTaskId(PluginId("dev.example"), TaskName("echo")),
           ).either
         yield assertTrue(
           ran == Left(
@@ -828,14 +828,14 @@ object LoadSpec extends ZIOSpecDefault:
               PluginRunError.Defect("java.lang.IllegalStateException")
             )
           )
-        )
+        ),
   )
 
   private def plant(
       repo: Path,
       path: String,
       source: String,
-      entry: String
+      entry: String,
   ): IO[LoadError, Unit] =
     ZIO
       .attempt {
@@ -844,7 +844,7 @@ object LoadSpec extends ZIOSpecDefault:
         Files.writeString(root.resolve("Plugin.scala"), source)
         Files.writeString(
           root.resolve("META-INF").resolve("histos").resolve("plugin"),
-          s"$entry\n"
+          s"$entry\n",
         )
         ()
       }
@@ -852,14 +852,14 @@ object LoadSpec extends ZIOSpecDefault:
 
   private def runOf(
       loaded: LoadedBuild,
-      task: PluginTaskId
+      task: PluginTaskId,
   ): IO[PluginFault, PluginOutput] =
     loaded.plugins
       .run(task, PluginArgs.empty)
       .provide(
         ZLayer.succeed(ActionCache.miss),
         RemoteCache.off,
-        ZLayer.succeed(IdleResolve)
+        ZLayer.succeed(IdleResolve),
       )
 
   private val echoTask =
@@ -1047,7 +1047,7 @@ object LoadSpec extends ZIOSpecDefault:
   private object IdleResolve extends Resolve:
     def resolveTool(
         request: histos.resolve.ToolRequest
-    ): IO[ResolveError, Classpath] = ZIO.fail(ResolveError.NoTool(request.id))
+    ): IO[ResolveError, Classpath]                              = ZIO.fail(ResolveError.NoTool(request.id))
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -1056,7 +1056,7 @@ object LoadSpec extends ZIOSpecDefault:
 
     def resolvePlugin(
         dependency: Dep,
-        repositories: Repositories
+        repositories: Repositories,
     ): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -1064,14 +1064,15 @@ object LoadSpec extends ZIOSpecDefault:
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ): IO[ResolveError, ResolvedArtifact] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+  end IdleResolve
 
   private final class Holding(jar: Path, sha: Sha256) extends Resolve:
     def resolveTool(
         request: histos.resolve.ToolRequest
-    ): IO[ResolveError, Classpath] = ZIO.fail(ResolveError.NoTool(request.id))
+    ): IO[ResolveError, Classpath]                              = ZIO.fail(ResolveError.NoTool(request.id))
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -1084,14 +1085,14 @@ object LoadSpec extends ZIOSpecDefault:
             artifact.revision,
             jar,
             sha,
-            artifact.repository
+            artifact.repository,
           )
         )
       else ZIO.fail(ResolveError.Checksum(jar, artifact.sha256, sha))
 
     def resolvePlugin(
         dependency: Dep,
-        repositories: Repositories
+        repositories: Repositories,
     ): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -1099,20 +1100,21 @@ object LoadSpec extends ZIOSpecDefault:
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ): IO[ResolveError, ResolvedArtifact] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+  end Holding
 
   private final class Sourced(
       binary: Path,
       binarySha: Sha256,
       sources: Path,
       sourcesSha: Sha256,
-      allowSources: Boolean
+      allowSources: Boolean,
   ) extends Resolve:
     def resolveTool(
         request: histos.resolve.ToolRequest
-    ): IO[ResolveError, Classpath] = ZIO.fail(ResolveError.NoTool(request.id))
+    ): IO[ResolveError, Classpath]                              = ZIO.fail(ResolveError.NoTool(request.id))
     def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -1125,14 +1127,14 @@ object LoadSpec extends ZIOSpecDefault:
             artifact.revision,
             binary,
             binarySha,
-            artifact.repository
+            artifact.repository,
           )
         )
       else ZIO.fail(ResolveError.Checksum(binary, artifact.sha256, binarySha))
 
     def resolvePlugin(
         dependency: Dep,
-        repositories: Repositories
+        repositories: Repositories,
     ): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
 
@@ -1140,7 +1142,7 @@ object LoadSpec extends ZIOSpecDefault:
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ): IO[ResolveError, ResolvedArtifact] =
       if allowSources then
         ZIO.succeed(
@@ -1150,54 +1152,54 @@ object LoadSpec extends ZIOSpecDefault:
             revision,
             sources,
             sourcesSha,
-            repository
+            repository,
           )
         )
       else ZIO.fail(ResolveError.Repository(RepositoryIo.Fetch))
+  end Sourced
 
   private final case class Refused(
       name: Option[String],
       listFromParent: Boolean,
-      buildFromParent: Boolean
+      buildFromParent: Boolean,
   )
 
   private def probe(boundary: List[Path], vendor: Path): Refused =
     val platform = ClassLoader.getPlatformClassLoader
-    val api =
+    val api      =
       new java.net.URLClassLoader(boundary.map(_.toUri.toURL).toArray, platform)
     val parent = new ApiBoundary(api)
-    val build = new BuildLoader(Array(vendor.toUri.toURL), parent)
+    val build  = new BuildLoader(Array(vendor.toUri.toURL), parent)
     try
       val refused =
         try
           build.loadClass("histos.schedule.Sendable")
           None
         catch case _: ClassNotFoundException => build.takeRefused.map(_.binary)
-      val list = build.loadClass("scala.collection.immutable.List")
+      val list       = build.loadClass("scala.collection.immutable.List")
       val buildTrait = build.loadClass("histos.HistosBuild")
       Refused(
         refused,
         list.getClassLoader != build,
-        buildTrait.getClassLoader != build
+        buildTrait.getClassLoader != build,
       )
     finally
       build.close()
       api.close()
 
-  /** The resolver is the one this load was given, not the suite's idle
-    * resolver.
+  /** The resolver is the one this load was given, not the suite's idle resolver.
     */
   private def loadWith(
       repo: Path,
       jar: Path,
-      resolve: Resolve
+      resolve: Resolve,
   ): ZIO[Scope & ContentStore, LoadError, Either[LoadError, LoadedBuild]] =
     ZIO
       .serviceWithZIO[Loader](_.load(repo, jar))
       .either
       .provideSome[Scope & ContentStore](
         ZLayer.succeed(resolve),
-        Loader.live
+        Loader.live,
       )
 
   private def apiHex(jar: Path): IO[LoadError, String] =
@@ -1217,7 +1219,7 @@ object LoadSpec extends ZIOSpecDefault:
       repo: Path,
       link: String,
       binary: Sha256,
-      source: Option[Sha256]
+      source: Option[Sha256],
   ): IO[LoadError, Unit] =
     val sourceLine = source match
       case None      => ""
@@ -1243,15 +1245,15 @@ object LoadSpec extends ZIOSpecDefault:
 
   private def compilePlugin(
       api: Path,
-      hex: String
+      hex: String,
   ): ZIO[Scope, LoadError, Path] =
     for
       boundary <- Boundary.jars(api)
-      dir <- ZIO
+      dir      <- ZIO
         .attempt(Files.createTempDirectory("histos-echo"))
         .mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
       _ <- ZIO.addFinalizer(deleteTree(dir))
-      source = dir.resolve("Echo.scala")
+      source  = dir.resolve("Echo.scala")
       classes = dir.resolve("classes")
       _ <- ZIO
         .attempt {
@@ -1259,21 +1261,21 @@ object LoadSpec extends ZIOSpecDefault:
           Files.createDirectories(classes)
         }
         .mapError(_ => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
-      _ <- compileSource(source, boundary, classes)
+      _      <- compileSource(source, boundary, classes)
       packed <- textJar(
         dir.resolve("echo.jar"),
         List(
           HistosPlugin.entryResource -> "dev.example.Echo$\n",
-          ApiDigest.resource -> s"$hex\n"
+          ApiDigest.resource         -> s"$hex\n",
         ),
-        Some(classes)
+        Some(classes),
       )
     yield packed
 
   private def compileSource(
       source: Path,
       classpath: List[Path],
-      out: Path
+      out: Path,
   ): IO[LoadError, Unit] =
     ZIO
       .attempt {
@@ -1285,17 +1287,14 @@ object LoadSpec extends ZIOSpecDefault:
             "-d",
             out.toString,
             "-color:never",
-            source.toString
+            source.toString,
           ),
-          reporter
+          reporter,
         )
-        if reporter.hasErrors then
-          Left(reporter.allErrors.map(_.message).mkString("\n"))
+        if reporter.hasErrors then Left(reporter.allErrors.map(_.message).mkString("\n"))
         else Right(())
       }
-      .mapError(_ =>
-        LoadError.Io(IoFailure(Path.of("histos.scala"), IoFault.Write))
-      )
+      .mapError(_ => LoadError.Io(IoFailure(Path.of("histos.scala"), IoFault.Write)))
       .flatMap:
         case Left(text) =>
           ZIO.fail(
@@ -1306,7 +1305,7 @@ object LoadSpec extends ZIOSpecDefault:
   private def textJar(
       path: Path,
       entries: List[(String, String)],
-      classes: Option[Path] = None
+      classes: Option[Path] = None,
   ): IO[LoadError, Path] =
     ZIO
       .attempt {
@@ -1346,6 +1345,7 @@ object LoadSpec extends ZIOSpecDefault:
     suite("load")(loads, header, plugins).provide(
       Loader.live,
       ZLayer.succeed(IdleResolve),
-      pluginStore
+      pluginStore,
     ) @@
       TestAspect.withLiveSystem
+end LoadSpec

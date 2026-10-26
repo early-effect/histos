@@ -22,6 +22,7 @@ object ManualVersion:
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): ManualVersion = raw
+end ManualVersion
 
 enum ManualVersionError:
   case Empty
@@ -31,3 +32,4 @@ enum ManualVersionError:
     case Empty            => "a manual version is not empty"
     case NotAVersion(raw) =>
       s"'$raw' is not a manual version. Use letters, digits, and . _ + - without '..'."
+end ManualVersionError

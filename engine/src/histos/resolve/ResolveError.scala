@@ -3,23 +3,9 @@ package histos.resolve
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
-import histos.{
-  Aggregate,
-  Dep,
-  DepKind,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion
-}
+import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.{
-  AtomicMoveNotSupportedException,
-  Files,
-  Path,
-  StandardCopyOption
-}
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
 import zio.{IO, ULayer, ZIO, ZLayer}
 
@@ -36,7 +22,7 @@ enum ResolveError:
       module: ProjectName,
       scalaVersion: ScalaVersion,
       platform: Platform,
-      scope: ClasspathScope
+      scope: ClasspathScope,
   )
   case PluginDrift(dependency: Dep)
   case NoLock(path: Path)
@@ -65,7 +51,7 @@ enum ResolveError:
       s"${scope.header} ${module.value} ${version.value} ${PlatformToken.render(platform)} does not match the dependency lock"
     case ResolveError.PluginDrift(dependency) =>
       s"${shown(dependency)} does not match the dependency lock"
-    case ResolveError.NoLock(path) => s"no dependency lock at $path"
+    case ResolveError.NoLock(path)                  => s"no dependency lock at $path"
     case ResolveError.UnsupportedPlatform(platform) =>
       s"resolve does not fetch ${PlatformToken.render(platform)}"
     case ResolveError.Lock(error)    => error.message
@@ -80,7 +66,7 @@ enum ResolveError:
       case DepKind.Binary => "::"
       case DepKind.Full   => ":::"
     s"${dependency.organization}$separator${dependency.name}:${dependency.revision}"
+end ResolveError
 
-/** The resolution seam. Tests substitute a fixture. The live value is the
-  * Coursier adapter.
+/** The resolution seam. Tests substitute a fixture. The live value is the Coursier adapter.
   */

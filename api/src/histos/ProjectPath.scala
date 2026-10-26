@@ -27,11 +27,13 @@ object ProjectPath:
     part.headOption match
       case Some(head) if head.isLetter => part.forall(c => c.isLetterOrDigit || c == '_' || c == '-')
       case _                           => false
+end ProjectPath
 
 enum ProjectPathError:
   case Empty
   case Escapes(raw: String)
 
   def message: String = this match
-    case Empty         => "a project directory is not empty"
-    case Escapes(raw)  => s"'$raw' is not a directory under the repository"
+    case Empty        => "a project directory is not empty"
+    case Escapes(raw) => s"'$raw' is not a directory under the repository"
+end ProjectPathError

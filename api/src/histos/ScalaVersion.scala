@@ -22,11 +22,13 @@ object ScalaVersion:
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): ScalaVersion = raw
+end ScalaVersion
 
 enum ScalaVersionError:
   case Empty
   case NotFull(raw: String)
 
   def message: String = this match
-    case Empty       => "a Scala version is not empty"
+    case Empty        => "a Scala version is not empty"
     case NotFull(raw) => s"'$raw' is not a full Scala version (major.minor.patch)"
+end ScalaVersionError

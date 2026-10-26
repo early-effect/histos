@@ -19,21 +19,19 @@ object JsVersionSpec extends ZIOSpecDefault:
         JsVersion.from("1.22.1-SNAPSHOT").map(_.value) == Right(
           "1.22.1-SNAPSHOT"
         ),
-        typeCheckErrors("histos.JsVersion(\"1.+\")").nonEmpty
+        typeCheckErrors("histos.JsVersion(\"1.+\")").nonEmpty,
       )
     ,
     test("the build catalog and module overrides remain distinct data"):
-      val defaults = ToolCatalog.default.copy(js =
-        ToolCatalog.default.js.copy(revision = JsVersion("1.21.0"))
-      )
-      val web = module("web", Platform.Js)(ScalaVersion("3.10.0"))
+      val defaults = ToolCatalog.default.copy(js = ToolCatalog.default.js.copy(revision = JsVersion("1.21.0")))
+      val web      = module("web", Platform.Js)(ScalaVersion("3.10.0"))
         .jsVersion(JsVersion("1.22.0"))
       val graph = Projects.tools(defaults)(web)
       assertTrue(
         graph.map(_.tools) == Right(defaults),
         graph.map(_.projects.collect { case module: Module =>
           module.jsVersion.map(_.value)
-        }) == Right(List(Some("1.22.0")))
+        }) == Right(List(Some("1.22.0"))),
       )
     ,
     test("a Js revision on a JVM-only module is a typed graph error"):
@@ -47,5 +45,5 @@ object JsVersionSpec extends ZIOSpecDefault:
               BuildError.JsVersionWithoutJs(name, app.position)
             )
           )
-        )
+        ),
   )

@@ -20,9 +20,11 @@ object ArtifactBase:
 
   /** Spliced by the literal macro. Source code cannot call it. */
   @publicInBinary private[histos] def trusted(raw: String): ArtifactBase = raw
+end ArtifactBase
 
 enum ArtifactBaseError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not an artifact name"
+end ArtifactBaseError

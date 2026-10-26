@@ -18,14 +18,14 @@ object Echo extends HistosPlugin:
     Contribution(
       List(DeclaredTask(TaskName("echo"), Seal.Open, Set.empty, Nil, Nil, Nil)),
       Nil,
-      Nil
+      Nil,
     )
 
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
     ZIO.succeed(PluginOutput("echo", Nil))
+end Echo
 
-/** `run` throws. A graph that includes this plugin proves `Projects` never
-  * called it.
+/** `run` throws. A graph that includes this plugin proves `Projects` never called it.
   */
 object Quiet extends HistosPlugin:
   val id: PluginId = PluginId("test.quiet")
@@ -36,11 +36,12 @@ object Quiet extends HistosPlugin:
         DeclaredTask(TaskName("quiet"), Seal.Open, Set.empty, Nil, Nil, Nil)
       ),
       Nil,
-      Nil
+      Nil,
     )
 
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
     throw new IllegalStateException("run")
+end Quiet
 
 /** `contribute` throws. The message is not the typed error. */
 object Boom extends HistosPlugin:
@@ -51,16 +52,18 @@ object Boom extends HistosPlugin:
 
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
     ZIO.succeed(PluginOutput("boom", Nil))
+end Boom
 
 final class Fixed(val id: PluginId, value: Contribution) extends HistosPlugin:
   def contribute: Contribution = value
 
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
     ZIO.succeed(PluginOutput("fixed", Nil))
+end Fixed
 
 object PluginSpec extends ZIOSpecDefault:
   private val digest = "ab" * 32
-  private val other = "cd" * 32
+  private val other  = "cd" * 32
 
   private def linkName(link: LinkStrategy): String = link match
     case LinkStrategy.ExactBinary    => "exact"
@@ -81,7 +84,7 @@ object PluginSpec extends ZIOSpecDefault:
         PluginId.from(".echo") == Left(PluginIdError.Bad(".echo")),
         PluginId.from("echo.") == Left(PluginIdError.Bad("echo.")),
         PluginId.from("has space") == Left(PluginIdError.Bad("has space")),
-        errors.headOption.is(_.some).message.contains("a/b")
+        errors.headOption.is(_.some).message.contains("a/b"),
       )
     ,
     test("a task name is a token, and inspect still is not a plugin task id"):
@@ -98,10 +101,10 @@ object PluginSpec extends ZIOSpecDefault:
         parsed == Right(
           PluginTaskId(
             PluginId("dev.earlyeffect.specular"),
-            TaskName("versions")
+            TaskName("versions"),
           )
         ),
-        parsed.map(_.render) == Right("dev.earlyeffect.specular/versions")
+        parsed.map(_.render) == Right("dev.earlyeffect.specular/versions"),
       )
     ,
     test("reserved command and job names are the built-in words"):
@@ -128,13 +131,16 @@ object PluginSpec extends ZIOSpecDefault:
           "cache",
           "resolve",
           "workflow",
-          "launcher"
+          "launcher",
+          "cancel",
+          "preview",
+          "observe",
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,
         JobName.reserved
           .map(_.value) == Set("test", "versions", "workflow", "launcher"),
-        JobName("docs").isReserved == false
+        JobName("docs").isReserved == false,
       )
     ,
     test("an entry name is the module class, including the trailing dollar"):
@@ -146,8 +152,8 @@ object PluginSpec extends ZIOSpecDefault:
           "dev.earlyeffect.specular.SpecularPlugin$"
         ).value == "dev.earlyeffect.specular.SpecularPlugin$",
         EntryName.from("") == Left(EntryNameError.Empty),
-        EntryName.from("foo/bar") == Left(EntryNameError.Bad("foo/bar"))
-      )
+        EntryName.from("foo/bar") == Left(EntryNameError.Bad("foo/bar")),
+      ),
   )
 
   private val paths = suite("paths and digests")(
@@ -165,20 +171,20 @@ object PluginSpec extends ZIOSpecDefault:
         RepoPath.from("/etc/passwd") == Left(
           RepoPathError.Escapes("/etc/passwd")
         ),
-        errors.headOption.is(_.some).message.contains("docs/../secret")
+        errors.headOption.is(_.some).message.contains("docs/../secret"),
       )
     ,
     test("an api digest is 64 hex digits, stored lowercase"):
       val parsed = ApiDigest.from(digest)
-      val upper = ApiDigest.from(digest.toUpperCase)
-      val hash = ContentHash.from(digest)
+      val upper  = ApiDigest.from(digest.toUpperCase)
+      val hash   = ContentHash.from(digest)
       assertTrue(
         parsed == upper,
         parsed.map(_.value) == Right(digest),
         ApiDigest.resource == "META-INF/histos/version",
         ApiDigest.from("ab") == Left(ApiDigestError.Bad("ab")),
         ApiDigest.from(digest + " ") == Left(ApiDigestError.Bad(digest + " ")),
-        hash.map(_.value) == Right(digest)
+        hash.map(_.value) == Right(digest),
       )
     ,
     test("a cron expression is five GitHub fields"):
@@ -194,17 +200,17 @@ object PluginSpec extends ZIOSpecDefault:
         Cron.from("0 0 * *") == Left(CronError.Fields(4)),
         Cron.from("60 * * * *") == Left(CronError.Field(0, "60")),
         Cron.from("0 0 * * 7") == Left(CronError.Field(4, "7")),
-        Cron.from("*/0 * * * *") == Left(CronError.Field(0, "*/0"))
-      )
+        Cron.from("*/0 * * * *") == Left(CronError.Field(0, "*/0")),
+      ),
   )
 
   private val contract = suite("contract")(
     test("a load error names the header until the plugin object exists"):
       val dependency = Dep("dev.earlyeffect::specular:0.2.0")
-      val path = ProjectPath("tools/docs-preview")
+      val path       = ProjectPath("tools/docs-preview")
       for
         pluginApi <- ZIO.fromEither(ApiDigest.from(digest))
-        launcher <- ZIO.fromEither(ApiDigest.from(other))
+        launcher  <- ZIO.fromEither(ApiDigest.from(other))
       yield
         val mismatch = PluginLoadError
           .VersionMismatch(dependency, pluginApi, launcher)
@@ -231,25 +237,25 @@ object PluginSpec extends ZIOSpecDefault:
           PluginLoadError
             .EngineLeak(
               PluginCoordinate.Published(dependency),
-              "histos.schedule.Sendable"
+              "histos.schedule.Sendable",
             )
             .message
             .contains("histos.schedule.Sendable"),
           PluginLoadError
             .Defect(
               PluginCoordinate.Path(path),
-              "java.lang.ExceptionInInitializerError"
+              "java.lang.ExceptionInInitializerError",
             )
             .message
             .contains("tools/docs-preview"),
           PluginRunError
             .Defect("java.lang.RuntimeException")
             .message
-            .contains("java.lang.RuntimeException")
+            .contains("java.lang.RuntimeException"),
         )
     ,
     test("a fixture request is the task id and nothing else"):
-      val repo = Path.of("repo")
+      val repo    = Path.of("repo")
       val request =
         PluginFixture.request(PluginId("test.echo"), TaskName("echo"), repo)
       assertTrue(
@@ -261,8 +267,8 @@ object PluginSpec extends ZIOSpecDefault:
         PluginArgs.empty.require(ParamName("out")) == Left(
           PluginRunError.MissingArg(ParamName("out"))
         ),
-        HistosPlugin.entryResource == "META-INF/histos/plugin"
-      )
+        HistosPlugin.entryResource == "META-INF/histos/plugin",
+      ),
   )
 
   private val detail = PluginDetail("runs the task")
@@ -276,7 +282,7 @@ object PluginSpec extends ZIOSpecDefault:
   private def task(
       name: TaskName,
       inputs: List[DeclaredInput] = Nil,
-      dependsOn: List[TaskDep] = Nil
+      dependsOn: List[TaskDep] = Nil,
   ): DeclaredTask =
     DeclaredTask(name, Seal.Open, Set.empty, inputs, Nil, dependsOn)
 
@@ -284,7 +290,7 @@ object PluginSpec extends ZIOSpecDefault:
       id: PluginId,
       tasks: List[DeclaredTask],
       commands: List[CommandSpec] = Nil,
-      jobs: List[CiJob] = Nil
+      jobs: List[CiJob] = Nil,
   ): Fixed =
     Fixed(id, Contribution(tasks, commands, jobs))
 
@@ -297,25 +303,25 @@ object PluginSpec extends ZIOSpecDefault:
   private val registration = suite("registration")(
     test("use copies the contribution and does not call run"):
       val built = Projects(use(Echo, Quiet), jvm("core"))
-      val echo = Contribution(
+      val echo  = Contribution(
         List(
           DeclaredTask(TaskName("echo"), Seal.Open, Set.empty, Nil, Nil, Nil)
         ),
         Nil,
-        Nil
+        Nil,
       )
       val quiet = Contribution(
         List(
           DeclaredTask(TaskName("quiet"), Seal.Open, Set.empty, Nil, Nil, Nil)
         ),
         Nil,
-        Nil
+        Nil,
       )
       assertTrue:
         built.map(_.plugins) == Right(
           List(
             RegisteredPlugin(Echo.id, EntryName("histos.plugin.Echo$"), echo),
-            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet)
+            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet),
           )
         )
     ,
@@ -331,7 +337,7 @@ object PluginSpec extends ZIOSpecDefault:
           Right(
             List(List(ModuleNote(Echo.id, NoteKey("role"), NoteText("site"))))
           ),
-        built.map(_.plugins.map(_.id)) == Right(List(Echo.id))
+        built.map(_.plugins.map(_.id)) == Right(List(Echo.id)),
       )
     ,
     test("use is the first argument"):
@@ -347,7 +353,7 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects.resolvers(central)(use(Echo), jvm("core"))
       assertTrue(
         built.map(_.plugins.map(_.id)) == Right(List(Echo.id)),
-        built.map(_.resolvers) == Right(List(central))
+        built.map(_.resolvers) == Right(List(central)),
       )
     ,
     test("the same plugin id cannot be registered twice"):
@@ -359,12 +365,12 @@ object PluginSpec extends ZIOSpecDefault:
     ):
       val twice = fixed(
         PluginId("test.echo"),
-        List(task(TaskName("echo")), task(TaskName("echo")))
+        List(task(TaskName("echo")), task(TaskName("echo"))),
       )
-      val left = fixed(PluginId("test.one"), List(task(TaskName("echo"))))
-      val right = fixed(PluginId("test.two"), List(task(TaskName("echo"))))
+      val left     = fixed(PluginId("test.one"), List(task(TaskName("echo"))))
+      val right    = fixed(PluginId("test.two"), List(task(TaskName("echo"))))
       val repeated = Projects(use(twice), jvm("core"))
-      val shared = Projects(use(left, right), jvm("core"))
+      val shared   = Projects(use(left, right), jvm("core"))
       assertTrue(
         repeated == Left(
           BuildError
@@ -372,19 +378,19 @@ object PluginSpec extends ZIOSpecDefault:
         ),
         shared.map(_.plugins.map(_.id)) == Right(
           List(PluginId("test.one"), PluginId("test.two"))
-        )
+        ),
       )
     ,
     test("a command name is one flat namespace"):
       val left = fixed(
         PluginId("test.one"),
         List(task(TaskName("echo"))),
-        List(command(CommandName("site"), TaskName("echo")))
+        List(command(CommandName("site"), TaskName("echo"))),
       )
       val right = fixed(
         PluginId("test.two"),
         List(task(TaskName("echo"))),
-        List(command(CommandName("site"), TaskName("echo")))
+        List(command(CommandName("site"), TaskName("echo"))),
       )
       val built = Projects(use(left, right), jvm("core"))
       assertTrue(
@@ -397,23 +403,23 @@ object PluginSpec extends ZIOSpecDefault:
       val shadow = fixed(
         PluginId("test.echo"),
         List(task(TaskName("echo"))),
-        List(command(CommandName("test"), TaskName("echo")))
+        List(command(CommandName("test"), TaskName("echo"))),
       )
       val missing = fixed(
         PluginId("test.echo"),
         List(task(TaskName("echo"))),
-        List(command(CommandName("site"), TaskName("absent")))
+        List(command(CommandName("site"), TaskName("absent"))),
       )
       val shadowed = Projects(use(shadow), jvm("core"))
-      val unknown = Projects(use(missing), jvm("core"))
+      val unknown  = Projects(use(missing), jvm("core"))
       assertTrue(
         shadowed == Left(BuildError.CommandShadow(CommandName("test"))),
         unknown == Left(
           BuildError.UnknownPluginTask(
             PluginId("test.echo"),
-            TaskName("absent")
+            TaskName("absent"),
           )
-        )
+        ),
       )
     ,
     test(
@@ -422,35 +428,35 @@ object PluginSpec extends ZIOSpecDefault:
       val left = fixed(
         PluginId("test.one"),
         List(task(TaskName("echo"))),
-        jobs = List(job(JobName("nightly"), TaskName("echo")))
+        jobs = List(job(JobName("nightly"), TaskName("echo"))),
       )
       val right = fixed(
         PluginId("test.two"),
         List(task(TaskName("echo"))),
-        jobs = List(job(JobName("nightly"), TaskName("echo")))
+        jobs = List(job(JobName("nightly"), TaskName("echo"))),
       )
       val reserved = fixed(
         PluginId("test.echo"),
         List(task(TaskName("echo"))),
-        jobs = List(job(JobName("test"), TaskName("echo")))
+        jobs = List(job(JobName("test"), TaskName("echo"))),
       )
       val missing = fixed(
         PluginId("test.echo"),
         List(task(TaskName("echo"))),
-        jobs = List(job(JobName("nightly"), TaskName("absent")))
+        jobs = List(job(JobName("nightly"), TaskName("absent"))),
       )
       val duplicated = Projects(use(left, right), jvm("core"))
-      val refused = Projects(use(reserved), jvm("core"))
-      val unknown = Projects(use(missing), jvm("core"))
+      val refused    = Projects(use(reserved), jvm("core"))
+      val unknown    = Projects(use(missing), jvm("core"))
       assertTrue(
         duplicated == Left(BuildError.DuplicateJob(JobName("nightly"))),
         refused == Left(BuildError.ReservedJob(JobName("test"))),
         unknown == Left(
           BuildError.UnknownPluginTask(
             PluginId("test.echo"),
-            TaskName("absent")
+            TaskName("absent"),
           )
-        )
+        ),
       )
     ,
     test("a sibling task and an open cell are accepted"):
@@ -462,21 +468,21 @@ object PluginSpec extends ZIOSpecDefault:
               TaskName("echo"),
               inputs = List(
                 DeclaredInput.Text(InputKey("title"), "site"),
-                DeclaredInput.Env(EnvName("PATH"))
-              )
+                DeclaredInput.Env(EnvName("PATH")),
+              ),
             ),
             task(
               TaskName("later"),
               inputs = List(
                 DeclaredInput.Note(docs, NoteKey("role")),
-                DeclaredInput.Module(docs, None, None)
+                DeclaredInput.Module(docs, None, None),
               ),
               dependsOn = List(
                 TaskDep.Same(TaskName("echo")),
-                TaskDep.Compile(docs, None, None)
-              )
-            )
-          )
+                TaskDep.Compile(docs, None, None),
+              ),
+            ),
+          ),
         )
         val docsModule = jvm("docs")
           .note(PluginId("test.echo"), NoteKey("role"), NoteText("site"))
@@ -492,16 +498,16 @@ object PluginSpec extends ZIOSpecDefault:
         List(
           task(
             TaskName("echo"),
-            dependsOn = List(TaskDep.Same(TaskName("absent")))
+            dependsOn = List(TaskDep.Same(TaskName("absent"))),
           )
-        )
+        ),
       )
       val built = Projects(use(plugin), jvm("core"))
       assertTrue(
         built == Left(
           BuildError.UnknownPluginTask(
             PluginId("test.echo"),
-            TaskName("absent")
+            TaskName("absent"),
           )
         )
       )
@@ -509,7 +515,7 @@ object PluginSpec extends ZIOSpecDefault:
     test(
       "a repeated note is refused, and another plugin's note does not count"
     ):
-      val id = PluginId("test.echo")
+      val id       = PluginId("test.echo")
       val repeated = jvm("docs")
         .note(id, NoteKey("role"), NoteText("site"))
         .note(id, NoteKey("role"), NoteText("other"))
@@ -519,9 +525,9 @@ object PluginSpec extends ZIOSpecDefault:
           List(
             task(
               TaskName("echo"),
-              inputs = List(DeclaredInput.Note(docs, NoteKey("role")))
+              inputs = List(DeclaredInput.Note(docs, NoteKey("role"))),
             )
-          )
+          ),
         )
         val docsModule = jvm("docs")
           .note(PluginId("test.other"), NoteKey("role"), NoteText("site"))
@@ -531,7 +537,7 @@ object PluginSpec extends ZIOSpecDefault:
           ),
           Projects(use(plugin), docsModule) == Left(
             BuildError.MissingNote(docs, id, NoteKey("role"))
-          )
+          ),
         )
     ,
     test("a note input that names a missing module is refused"):
@@ -541,9 +547,9 @@ object PluginSpec extends ZIOSpecDefault:
           List(
             task(
               TaskName("echo"),
-              inputs = List(DeclaredInput.Note(missing, NoteKey("role")))
+              inputs = List(DeclaredInput.Note(missing, NoteKey("role"))),
             )
-          )
+          ),
         )
         assertTrue(
           Projects(use(plugin), jvm("core")) == Left(
@@ -553,15 +559,15 @@ object PluginSpec extends ZIOSpecDefault:
     ,
     test("an aggregate is not a module a plugin can compile"):
       projectName("root").map: root =>
-        val core = jvm("core")
+        val core   = jvm("core")
         val plugin = fixed(
           PluginId("test.echo"),
           List(
             task(
               TaskName("echo"),
-              inputs = List(DeclaredInput.Module(root, None, None))
+              inputs = List(DeclaredInput.Module(root, None, None)),
             )
-          )
+          ),
         )
         assertTrue:
           Projects(use(plugin), aggregate("root", core), core) == Left(
@@ -573,15 +579,15 @@ object PluginSpec extends ZIOSpecDefault:
       projectName("core").map: core =>
         def plugin(dep: TaskDep) = fixed(
           PluginId("test.echo"),
-          List(task(TaskName("echo"), dependsOn = List(dep)))
+          List(task(TaskName("echo"), dependsOn = List(dep))),
         )
         val version = Projects(
           use(plugin(TaskDep.Compile(core, Some(scala2), None))),
-          jvm("core")
+          jvm("core"),
         )
         val platform = Projects(
           use(plugin(TaskDep.Compile(core, None, Some(Js)))),
-          jvm("core")
+          jvm("core"),
         )
         assertTrue(
           version == Left(
@@ -589,7 +595,7 @@ object PluginSpec extends ZIOSpecDefault:
               PluginId("test.echo"),
               core,
               Some(scala2),
-              None
+              None,
             )
           ),
           platform == Left(
@@ -597,9 +603,9 @@ object PluginSpec extends ZIOSpecDefault:
               PluginId("test.echo"),
               core,
               None,
-              Some(Js)
+              Some(Js),
             )
-          )
+          ),
         )
     ,
     test(
@@ -611,8 +617,9 @@ object PluginSpec extends ZIOSpecDefault:
           BuildError.PluginDefect(Boom.id, "java.lang.IllegalStateException")
         ),
         built.is(_.left).message.contains("java.lang.IllegalStateException"),
-        !built.is(_.left).message.contains("nope")
-      )
+        !built.is(_.left).message.contains("nope"),
+      ),
   )
 
   def spec = suite("plugins")(ids, paths, contract, registration)
+end PluginSpec

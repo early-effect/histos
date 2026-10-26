@@ -14,10 +14,13 @@ object ScalacFlags:
 
   extension (flags: ScalacFlags)
     def canonical: String =
-      flags.map:
-        case ScalacFlag.EncodingUtf8 => "encoding-utf8"
-      .mkString(",")
+      flags
+        .map:
+          case ScalacFlag.EncodingUtf8 => "encoding-utf8"
+        .mkString(",")
 
     def argv: List[String] =
       flags.flatMap:
         case ScalacFlag.EncodingUtf8 => List("-encoding", "UTF-8")
+  end extension
+end ScalacFlags

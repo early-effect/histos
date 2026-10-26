@@ -9,7 +9,7 @@ import histos.zinc.{
   CompileRequest,
   CompileToolchain,
 
-  ScalacFlags
+  ScalacFlags,
 }
 import java.nio.file.Path
 import histos.workspace.Workspace
@@ -19,12 +19,12 @@ import zio.test.*
 
 object SelectedToolsSpec extends ZIOSpecDefault:
   private val version = ScalaVersion("3.10.0")
-  private val digest = Sha256.of(Chunk.fromArray(Array[Byte](1)))
-  private val other = Sha256.of(Chunk.fromArray(Array[Byte](2)))
-  private val jdk = JdkRuntime(
+  private val digest  = Sha256.of(Chunk.fromArray(Array[Byte](1)))
+  private val other   = Sha256.of(Chunk.fromArray(Array[Byte](2)))
+  private val jdk     = JdkRuntime(
     Path.of("jdk"),
     JdkVersion.trusted("25.0.5", JdkMajor.trusted(25)),
-    RuntimeIdentity.Local(Path.of("jdk"), digest)
+    RuntimeIdentity.Local(Path.of("jdk"), digest),
   )
   private val request = CompileRequest(
     CompileToolchain(version, Platform.Js, jdk, ScalacFlags.empty),
@@ -32,7 +32,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
     Nil,
     Path.of("classes"),
     Path.of("analysis"),
-    Nil
+    Nil,
   )
 
   private def held(request: ToolRequest): LockedTool = LockedTool(
@@ -45,10 +45,10 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         root.name,
         root.revision,
         digest,
-        request.repositories.first
+        request.repositories.first,
       )
     ),
-    Nil
+    Nil,
   )
   private val resolver = new Resolve:
     def resolveTool(request: ToolRequest): IO[ResolveError, Classpath] =
@@ -64,19 +64,19 @@ object SelectedToolsSpec extends ZIOSpecDefault:
           Path.of(artifact.name),
           artifact.sha256,
           artifact.repository,
-          artifact.classifier
+          artifact.classifier,
         )
       )
     def resolvePlugin(
         dependency: Dep,
-        repositories: Repositories
+        repositories: Repositories,
     ): IO[ResolveError, Classpath] =
       ZIO.fail(ResolveError.NoLock(Path.of("unexpected-plugin")))
     def sources(
         organization: String,
         name: String,
         revision: String,
-        repository: Repository
+        repository: Repository,
     ): IO[ResolveError, ResolvedArtifact] =
       ZIO.fail(ResolveError.NotFound(organization, name, revision))
 
@@ -84,13 +84,13 @@ object SelectedToolsSpec extends ZIOSpecDefault:
     test("quick execution context preserves a failed Node selection"):
       ZIO.scoped:
         for
-          root <- Workspace.work("histos-test-context-node")
+          root  <- Workspace.work("histos-test-context-node")
           graph <- ZIO.fromEither(
             Projects(
               module("web", Js)(version).test(TestMain("dev.fixture.Check"))
             )
           )
-          name <- ZIO.fromEither(ProjectName.from("web"))
+          name   <- ZIO.fromEither(ProjectName.from("web"))
           module <- ZIO
             .fromOption(graph.projects.collectFirst { case module: Module =>
               module
@@ -101,7 +101,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             DependencyLock(Nil, Nil, plans.map(held)),
             graph.tools,
             Repositories.central,
-            resolver
+            resolver,
           )
           runtimes <- histos.toolchain.Runtimes.read(
             TestMachine.at(root, Map.empty)
@@ -110,9 +110,19 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             .make(
               module,
               histos.zinc
-                .CompiledCell(name, version, Js, root.resolve("classes"), 0),
+                .CompiledCell(
+                  name,
+                  version,
+                  Js,
+                  root.resolve("classes"),
+                  0,
+                  key = None,
+                  changed = true,
+                  sources = None,
+                  classesWritten = None,
+                ),
               jdk,
-              runtimes
+              runtimes,
             )
             .provide(ZLayer.succeed(view))
             .either
@@ -121,7 +131,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             histos.testrun.ModuleTestError.NoNode(
               name,
               version,
-              histos.node.NodeMiss.Absent(histos.node.NodeToolchain.Floor)
+              histos.node.NodeMiss.Absent(histos.node.NodeToolchain.Floor),
             )
           )
         )
@@ -133,10 +143,10 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         for
           root <- Workspace.work("histos-embedded-boundary")
           support = root.resolve("support.jar")
-          _ <- Workspace.writeString(support, "first boundary bytes")
+          _      <- Workspace.writeString(support, "first boundary bytes")
           before <- histos.toolchain.BuildCompiler.identity(List(support))
-          _ <- Workspace.writeString(support, "different boundary bytes")
-          after <- histos.toolchain.BuildCompiler.identity(List(support))
+          _      <- Workspace.writeString(support, "different boundary bytes")
+          after  <- histos.toolchain.BuildCompiler.identity(List(support))
         yield assertTrue(before != after)
     ,
     test(
@@ -150,7 +160,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
                 .clang(ClangMajor(21)),
               module("two", Native)(ScalaVersion("3.9.0"))
                 .clang(ClangMajor(21))
-                .nativeVersion(NativeVersion("0.5.11"))
+                .nativeVersion(NativeVersion("0.5.11")),
             )
           )
           plans <- LockedTools.plan(graph, NativeOrigin.Central)
@@ -158,12 +168,12 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             DependencyLock(Nil, Nil, plans.map(held)),
             graph.tools,
             Repositories.central,
-            resolver
+            resolver,
           )
           toolchain <- ZIO.fromEither(
             NativeToolchain.of(
               graph.tools.native.revision,
-              NativeOrigin.Central
+              NativeOrigin.Central,
             )
           )
           libraries <- NativeClasspath
@@ -175,13 +185,13 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             ToolId(
               ToolRole.NativeLibraries,
               ScalaVersion("3.10.0"),
-              ToolVariant.Native(NativeVersion("0.5.12"))
+              ToolVariant.Native(NativeVersion("0.5.12")),
             ),
             ToolId(
               ToolRole.NativeLibraries,
               ScalaVersion("3.9.0"),
-              ToolVariant.Native(NativeVersion("0.5.11"))
-            )
+              ToolVariant.Native(NativeVersion("0.5.11")),
+            ),
           ),
           plans
             .filter(_.id.role == ToolRole.NativeLinker)
@@ -195,7 +205,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             )
             .map(_.revision)
             .toSet == Set("3.10.0+0.5.12"),
-          libraries.entries.forall(path => !path.toString.contains("compiler"))
+          libraries.entries.forall(path => !path.toString.contains("compiler")),
         )
     ,
     test(
@@ -209,7 +219,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
           cells = planned.map(held)
           _ <- Workspace.writeString(
             Resolve.lockPath(root),
-            DependencyLock.render(DependencyLock(Nil, Nil, cells))
+            DependencyLock.render(DependencyLock(Nil, Nil, cells)),
           )
           goodVerify <- Resolve
             .verify(root, graph, Repositories.central)
@@ -228,12 +238,12 @@ object SelectedToolsSpec extends ZIOSpecDefault:
                     histos.js.JsRequests.environment(
                       JsEnv.Node,
                       ToolCatalog.default,
-                      Repositories.central
+                      Repositories.central,
                     )
                   )
-                )
+                ),
               )
-            )
+            ),
           )
           missingVerify <- Resolve
             .verify(root, graph, Repositories.central)
@@ -247,7 +257,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             Resolve.lockPath(root),
             DependencyLock.render(
               DependencyLock(Nil, Nil, cells.map(_.copy(artifacts = Nil)))
-            )
+            ),
           )
           incompleteVerify <- Resolve
             .verify(root, graph, Repositories.central)
@@ -260,15 +270,13 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         yield assertTrue(
           goodVerify.isEmpty,
           goodCheck.isEmpty,
-          planned.headOption.exists(request =>
-            missingVerify == Left(ResolveError.NoTool(request.id))
-          ),
+          planned.headOption.exists(request => missingVerify == Left(ResolveError.NoTool(request.id))),
           missingVerify == missingCheck,
           incompleteVerify.left.toOption.exists {
             case ResolveError.ToolRoot(_, _, ToolRootFault.Missing) => true;
             case _                                                  => false
           },
-          incompleteVerify == incompleteCheck
+          incompleteVerify == incompleteCheck,
         )
     ,
     test(
@@ -277,26 +285,24 @@ object SelectedToolsSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- Workspace.work("histos-tool-view-generation")
-          graph = ProjectGraph.trusted(Nil)
+          graph    = ProjectGraph.trusted(Nil)
           compiler = histos.zinc.CompilerRequests
             .compiler(version, Repositories.central)
           before = DependencyLock(Nil, Nil, List(held(compiler)))
           _ <- Workspace.writeString(
             Resolve.lockPath(root),
-            DependencyLock.render(before)
+            DependencyLock.render(before),
           )
           captured <- Resolve.readLock(root)
-          view <- LockedTools
+          view     <- LockedTools
             .make(captured, graph)
             .provide(ZLayer.succeed(resolver))
           after = before.copy(tools =
-            before.tools.map(cell =>
-              cell.copy(artifacts = cell.artifacts.map(_.copy(sha256 = other)))
-            )
+            before.tools.map(cell => cell.copy(artifacts = cell.artifacts.map(_.copy(sha256 = other))))
           )
           _ <- Workspace.writeString(
             Resolve.lockPath(root),
-            DependencyLock.render(after)
+            DependencyLock.render(after),
           )
           inFlight <- view.selected(compiler)
           nextLock <- Resolve.readLock(root)
@@ -307,7 +313,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         yield assertTrue(
           inFlight.artifacts.forall(_.sha256 == digest),
           next.artifacts.forall(_.sha256 == other),
-          inFlight.fingerprint != next.fingerprint
+          inFlight.fingerprint != next.fingerprint,
         )
     ,
 
@@ -320,23 +326,23 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         version,
         JsVersion("1.21.0"),
         Repositories.central,
-        ToolCatalog.default
+        ToolCatalog.default,
       )
       val second = histos.js.JsRequests.libraries(
         version,
         JsVersion("1.22.0"),
         Repositories.central,
-        ToolCatalog.default
+        ToolCatalog.default,
       )
       val view = LockedTools(
         DependencyLock(
           Nil,
           Nil,
-          List(held(compiler), held(first), held(second))
+          List(held(compiler), held(first), held(second)),
         ),
         ToolCatalog.default,
         Repositories.central,
-        resolver
+        resolver,
       )
       for
         name <- ZIO.fromEither(ProjectName.from("web"))
@@ -347,14 +353,14 @@ object SelectedToolsSpec extends ZIOSpecDefault:
           Nil,
           Nil,
           SourcePos("fixture", 1, 1),
-          jsVersion = Some(JsVersion("1.21.0"))
+          jsVersion = Some(JsVersion("1.21.0")),
         )
         one <- view.compilation(module, version, Js, NativeOrigin.Central)
         two <- view.compilation(
           module.copy(jsVersion = Some(JsVersion("1.22.0"))),
           version,
           Js,
-          NativeOrigin.Central
+          NativeOrigin.Central,
         )
       yield assertTrue(
         one.map(_.id).contains(first.id),
@@ -363,8 +369,8 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         !two.map(_.id).contains(first.id),
         CompileKey.of(
           request.copy(compilationTools = one),
-          digest
-        ) != CompileKey.of(request.copy(compilationTools = two), digest)
+          digest,
+        ) != CompileKey.of(request.copy(compilationTools = two), digest),
       )
     ,
     test(
@@ -376,17 +382,17 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         version,
         JsVersion("1.22.0"),
         Repositories.central,
-        ToolCatalog.default
+        ToolCatalog.default,
       )
       val environment = histos.js.JsRequests.environment(
         JsEnv.Firefox,
         ToolCatalog.default,
-        Repositories.central
+        Repositories.central,
       )
       val lock = DependencyLock(
         Nil,
         Nil,
-        List(held(compiler), held(library), held(environment))
+        List(held(compiler), held(library), held(environment)),
       )
       val view =
         LockedTools(lock, ToolCatalog.default, Repositories.central, resolver)
@@ -398,22 +404,19 @@ object SelectedToolsSpec extends ZIOSpecDefault:
           ScalaVersions(version, Nil),
           Nil,
           Nil,
-          SourcePos("fixture", 1, 1)
+          SourcePos("fixture", 1, 1),
         )
         before <- view.compilation(
           module,
           version,
           Platform.Js,
-          histos.native.NativeOrigin.Central
+          histos.native.NativeOrigin.Central,
         )
         after <- view
           .copy(lock =
             lock.copy(tools =
               lock.tools.map(tool =>
-                if tool.id == environment.id then
-                  tool.copy(artifacts =
-                    tool.artifacts.map(_.copy(sha256 = other))
-                  )
+                if tool.id == environment.id then tool.copy(artifacts = tool.artifacts.map(_.copy(sha256 = other)))
                 else tool
               )
             )
@@ -422,7 +425,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             module,
             version,
             Platform.Js,
-            histos.native.NativeOrigin.Central
+            histos.native.NativeOrigin.Central,
           )
       yield assertTrue(before.map(_.fingerprint) == after.map(_.fingerprint))
     ,
@@ -431,20 +434,16 @@ object SelectedToolsSpec extends ZIOSpecDefault:
     ):
       val planned =
         histos.zinc.CompilerRequests.compiler(version, Repositories.central)
-      val valid = held(planned)
-      val root = planned.roots.headOption
+      val valid   = held(planned)
+      val root    = planned.roots.headOption
       val missing = LockedTools.validate(planned, valid.copy(artifacts = Nil))
-      val wrong = LockedTools.validate(
+      val wrong   = LockedTools.validate(
         planned,
-        valid.copy(artifacts =
-          valid.artifacts.map(_.copy(organization = "wrong"))
-        )
+        valid.copy(artifacts = valid.artifacts.map(_.copy(organization = "wrong"))),
       )
       val classified = LockedTools.validate(
         planned,
-        valid.copy(artifacts =
-          valid.artifacts.map(_.copy(classifier = Some(JarClassifier("jdk8"))))
-        )
+        valid.copy(artifacts = valid.artifacts.map(_.copy(classifier = Some(JarClassifier("jdk8"))))),
       )
       assertTrue(
         root.exists(value =>
@@ -457,12 +456,12 @@ object SelectedToolsSpec extends ZIOSpecDefault:
         root.exists(value =>
           LockedTools.validate(
             planned,
-            valid.copy(artifacts = valid.artifacts ++ valid.artifacts)
+            valid.copy(artifacts = valid.artifacts ++ valid.artifacts),
           ) ==
             Left(
               ResolveError.ToolRoot(planned.id, value, ToolRootFault.Duplicated)
             )
-        )
+        ),
       )
     ,
     test(
@@ -471,12 +470,13 @@ object SelectedToolsSpec extends ZIOSpecDefault:
       val one = CompilerIdentity(
         version,
         digest,
-        RuntimeIdentity.Local(Path.of("jdk"), digest)
+        RuntimeIdentity.Local(Path.of("jdk"), digest),
       )
       assertTrue(
         one.fingerprint != one.copy(embedded = other).fingerprint,
         one.fingerprint != one
           .copy(runtime = RuntimeIdentity.Local(Path.of("jdk"), other))
-          .fingerprint
-      )
+          .fingerprint,
+      ),
   )
+end SelectedToolsSpec

@@ -2,11 +2,9 @@ package histos.plugin
 
 import _root_.scala.annotation.publicInBinary
 
-/**
- * A file or directory relative to the repository.
- * A segment matches `[A-Za-z][A-Za-z0-9._-]*`, so `docs/index.html` is a path.
- * `ProjectPath` stays the module-directory grammar and rejects that dot.
- */
+/** A file or directory relative to the repository. A segment matches `[A-Za-z][A-Za-z0-9._-]*`, so `docs/index.html` is
+  * a path. `ProjectPath` stays the module-directory grammar and rejects that dot.
+  */
 opaque type RepoPath = String
 
 object RepoPath:
@@ -25,6 +23,7 @@ object RepoPath:
   extension (path: RepoPath) def value: String = path
 
   @publicInBinary private[histos] def trusted(raw: String): RepoPath = raw
+end RepoPath
 
 enum RepoPathError:
   case Empty
@@ -33,3 +32,4 @@ enum RepoPathError:
   def message: String = this match
     case Empty        => "a repository path is not empty"
     case Escapes(raw) => s"'$raw' is not a path under the repository"
+end RepoPathError

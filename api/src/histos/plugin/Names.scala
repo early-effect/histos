@@ -2,8 +2,7 @@ package histos.plugin
 
 import _root_.scala.annotation.publicInBinary
 
-/** A task's local name. A letter, then letters, digits, or hyphens. No slash
-  * and no dot.
+/** A task's local name. A letter, then letters, digits, or hyphens. No slash and no dot.
   */
 opaque type TaskName = String
 
@@ -22,6 +21,7 @@ object TaskName:
   extension (name: TaskName) def value: String = name
 
   @publicInBinary private[histos] def trusted(raw: String): TaskName = raw
+end TaskName
 
 enum TaskNameError:
   case Empty
@@ -30,17 +30,16 @@ enum TaskNameError:
   def message: String = this match
     case Empty    => "a task name is not empty"
     case Bad(raw) => s"'$raw' is not a task name"
+end TaskNameError
 
-/** A root command a plugin contributes. Same token rule as a task name, and
-  * still a different type.
+/** A root command a plugin contributes. Same token rule as a task name, and still a different type.
   */
 opaque type CommandName = String
 
 object CommandName:
   given CanEqual[CommandName, CommandName] = CanEqual.derived
 
-  /** Root words the built-in grammar owns, plus `acp`, held until ACP returns.
-    * A plugin command cannot use one.
+  /** Root words the built-in grammar owns, plus `acp`, held until ACP returns. A plugin command cannot use one.
     */
   val reserved: Set[CommandName] = Set(
     trusted("version"),
@@ -64,7 +63,10 @@ object CommandName:
     trusted("workflow"),
     trusted("launcher"),
     trusted("reload"),
-    trusted("reboot")
+    trusted("reboot"),
+    trusted("cancel"),
+    trusted("preview"),
+    trusted("observe"),
   )
 
   inline def apply(inline raw: String): CommandName = ${
@@ -77,10 +79,11 @@ object CommandName:
       .map(trusted)
 
   extension (name: CommandName)
-    def value: String = name
+    def value: String       = name
     def isReserved: Boolean = reserved.contains(name)
 
   @publicInBinary private[histos] def trusted(raw: String): CommandName = raw
+end CommandName
 
 enum CommandNameError:
   case Empty
@@ -89,9 +92,9 @@ enum CommandNameError:
   def message: String = this match
     case Empty    => "a command name is not empty"
     case Bad(raw) => s"'$raw' is not a command name"
+end CommandNameError
 
-/** A CI job name. Same token rule as a task name. `test`, `versions`, and
-  * `workflow` are reserved.
+/** A CI job name. Same token rule as a task name. `test`, `versions`, and `workflow` are reserved.
   */
 opaque type JobName = String
 
@@ -102,7 +105,7 @@ object JobName:
     trusted("test"),
     trusted("versions"),
     trusted("workflow"),
-    trusted("launcher")
+    trusted("launcher"),
   )
 
   inline def apply(inline raw: String): JobName = ${
@@ -115,10 +118,11 @@ object JobName:
       .map(trusted)
 
   extension (name: JobName)
-    def value: String = name
+    def value: String       = name
     def isReserved: Boolean = reserved.contains(name)
 
   @publicInBinary private[histos] def trusted(raw: String): JobName = raw
+end JobName
 
 enum JobNameError:
   case Empty
@@ -127,6 +131,7 @@ enum JobNameError:
   def message: String = this match
     case Empty    => "a job name is not empty"
     case Bad(raw) => s"'$raw' is not a job name"
+end JobNameError
 
 /** A declared output's name. Same token rule as a task name. */
 opaque type OutputName = String
@@ -146,6 +151,7 @@ object OutputName:
   extension (name: OutputName) def value: String = name
 
   @publicInBinary private[histos] def trusted(raw: String): OutputName = raw
+end OutputName
 
 enum OutputNameError:
   case Empty
@@ -154,6 +160,7 @@ enum OutputNameError:
   def message: String = this match
     case Empty    => "an output name is not empty"
     case Bad(raw) => s"'$raw' is not an output name"
+end OutputNameError
 
 /** A positional command parameter. Same token rule as a task name. */
 opaque type ParamName = String
@@ -173,6 +180,7 @@ object ParamName:
   extension (name: ParamName) def value: String = name
 
   @publicInBinary private[histos] def trusted(raw: String): ParamName = raw
+end ParamName
 
 enum ParamNameError:
   case Empty
@@ -181,6 +189,7 @@ enum ParamNameError:
   def message: String = this match
     case Empty    => "a parameter name is not empty"
     case Bad(raw) => s"'$raw' is not a parameter name"
+end ParamNameError
 
 /** A boolean flag, without the leading dashes. Same token rule as a task name.
   */
@@ -201,6 +210,7 @@ object FlagName:
   extension (name: FlagName) def value: String = name
 
   @publicInBinary private[histos] def trusted(raw: String): FlagName = raw
+end FlagName
 
 enum FlagNameError:
   case Empty
@@ -209,6 +219,7 @@ enum FlagNameError:
   def message: String = this match
     case Empty    => "a flag name is not empty"
     case Bad(raw) => s"'$raw' is not a flag name"
+end FlagNameError
 
 /** A note key on one module. Same token rule as a task name. */
 opaque type NoteKey = String
@@ -228,6 +239,7 @@ object NoteKey:
   extension (key: NoteKey) def value: String = key
 
   @publicInBinary private[histos] def trusted(raw: String): NoteKey = raw
+end NoteKey
 
 enum NoteKeyError:
   case Empty
@@ -236,3 +248,4 @@ enum NoteKeyError:
   def message: String = this match
     case Empty    => "a note key is not empty"
     case Bad(raw) => s"'$raw' is not a note key"
+end NoteKeyError

@@ -11,3 +11,4 @@ object Parallelism:
     Parallelism(cpu = processors.max(1), io = 16, process = 8)
 
   val live: ULayer[Parallelism] = ZLayer.succeed(default)
+end Parallelism

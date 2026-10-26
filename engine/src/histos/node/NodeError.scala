@@ -15,6 +15,7 @@ enum NodeOverrideError:
     case Multiple      => "node.local has more than one path"
     case Relative(raw) => s"node.local path is not absolute: $raw"
     case Invalid(raw)  => s"node.local path is invalid: $raw"
+end NodeOverrideError
 
 /** The `node` a Js run or test launches. */
 final case class NodeBinary(path: Path)
@@ -34,6 +35,7 @@ enum NodeMiss:
       s"Node ${found.value} at $home is older than ${required.value}"
     case Absent(required) =>
       s"no Node found; Histos needs ${required.value} or newer"
+end NodeMiss
 
 enum NodeError:
   case BadMajor(raw: Int)
@@ -51,3 +53,4 @@ enum NodeError:
       s"could not read the Node version at $path: ${error.message}"
     case Override(error) => error.message
     case Io(failure)     => failure.message
+end NodeError

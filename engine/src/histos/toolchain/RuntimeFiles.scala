@@ -25,11 +25,12 @@ enum RuntimeLocationError:
   def message: String = this match
     case InvalidPath(raw) => s"invalid runtime search path: $raw"
     case Io(failure)      => failure.message
+end RuntimeLocationError
 
 object RuntimeFiles:
   def firstOnPath(
       pathEnv: Option[String],
-      names: List[String]
+      names: List[String],
   ): IO[RuntimeLocationError, Option[Path]] =
     for
       dirs <- ZIO.foreach(
@@ -38,9 +39,7 @@ object RuntimeFiles:
           .filter(_.nonEmpty)
       )(raw =>
         ZIO.fromEither(
-          Try(Path.of(raw)).toEither.left.map(_ =>
-            RuntimeLocationError.InvalidPath(raw)
-          )
+          Try(Path.of(raw)).toEither.left.map(_ => RuntimeLocationError.InvalidPath(raw))
         )
       )
       candidates = dirs.flatMap(dir => names.map(dir.resolve(_)))
@@ -68,7 +67,7 @@ object RuntimeFiles:
             Files.readAttributes(
               path,
               classOf[BasicFileAttributes],
-              LinkOption.NOFOLLOW_LINKS
+              LinkOption.NOFOLLOW_LINKS,
             )
           )
         catch case _: NoSuchFileException => None
@@ -80,7 +79,7 @@ object RuntimeFiles:
   def sha256(path: Path): IO[IoFailure, Sha256] =
     for
       digest <- newDigest(path)
-      _ <- bytes(path).chunks.foreach(chunk =>
+      _      <- bytes(path).chunks.foreach(chunk =>
         ZIO
           .attemptBlocking(digest.update(chunk.toArray))
           .mapError(_ => IoFailure(path, IoFault.Read))
@@ -104,8 +103,7 @@ object RuntimeFiles:
             .mapError(_ => IoFailure(path, IoFault.Read))
         )
 
-  /** Canonical home and the build already read from it. A file replaced
-    * inside the home does not change the salt.
+  /** Canonical home and the build already read from it. A file replaced inside the home does not change the salt.
     */
   def identity(home: Path, build: String): IO[IoFailure, RuntimeIdentity] =
     ZIO
@@ -119,8 +117,7 @@ object RuntimeFiles:
         )
         RuntimeIdentity.Local(canonical, salt)
 
-  /** Regular files under a class directory, streamed into one digest. A JDK
-    * or Node home is [[identity]].
+  /** Regular files under a class directory, streamed into one digest. A JDK or Node home is [[identity]].
     */
   private[toolchain] def fingerprint(root: Path): IO[IoFailure, Sha256] =
     ZIO.scoped:
@@ -150,8 +147,8 @@ object RuntimeFiles:
           )
           .mapError(_ => IoFailure(root, IoFault.Walk))
         digest <- newDigest(root)
-        _ <- mark(digest, root, canonical.toString)
-        _ <- ZIO.foreachDiscard(files): (name, file) =>
+        _      <- mark(digest, root, canonical.toString)
+        _      <- ZIO.foreachDiscard(files): (name, file) =>
           mark(digest, file, name) *> bytes(file).chunks.foreach(chunk =>
             ZIO
               .attemptBlocking(digest.update(chunk.toArray))
@@ -165,7 +162,7 @@ object RuntimeFiles:
   private def mark(
       digest: MessageDigest,
       path: Path,
-      text: String
+      text: String,
   ): IO[IoFailure, Unit] =
     ZIO
       .attemptBlocking:
@@ -177,3 +174,4 @@ object RuntimeFiles:
     ZIO
       .attemptBlocking(MessageDigest.getInstance("SHA-256"))
       .mapError(_ => IoFailure(path, IoFault.Read))
+end RuntimeFiles

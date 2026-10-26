@@ -10,7 +10,7 @@ private[schedule] object ScheduleAspects:
   def cached(
       cache: ActionCache,
       action: Action,
-      digest: Digest
+      digest: Digest,
   ): IO[ScheduleError[Nothing], Option[String]] =
     cache
       .get(digest)
@@ -33,7 +33,7 @@ private[schedule] object ScheduleAspects:
   def remote(
       remote: RemoteCache,
       action: Action,
-      digest: Digest
+      digest: Digest,
   ): IO[ScheduleError[Nothing], Option[String]] =
     remote.mode match
       case RemoteMode.Off                     => ZIO.none
@@ -47,15 +47,13 @@ private[schedule] object ScheduleAspects:
               decode(digest, bytes)
                 .mapError(ScheduleError.Remote(_))
                 .flatMap: text =>
-                  declared(action, text).map(ok =>
-                    if ok then Some(text) else None
-                  )
+                  declared(action, text).map(ok => if ok then Some(text) else None)
 
   def upload(
       remote: RemoteCache,
       verdict: Verdict,
       digest: Digest,
-      value: String
+      value: String,
   ): IO[ScheduleError[Nothing], Unit] =
     (remote.mode, verdict) match
       case (RemoteMode.Write, Verdict.Send) =>
@@ -65,7 +63,7 @@ private[schedule] object ScheduleAspects:
 
   private def decode(
       action: Digest,
-      bytes: Chunk[Byte]
+      bytes: Chunk[Byte],
   ): IO[RemoteError, String] =
     ZIO
       .attempt(decoder.decode(ByteBuffer.wrap(bytes.toArray)).toString)
@@ -75,3 +73,4 @@ private[schedule] object ScheduleAspects:
     StandardCharsets.UTF_8.newDecoder
       .onMalformedInput(CodingErrorAction.REPORT)
       .onUnmappableCharacter(CodingErrorAction.REPORT)
+end ScheduleAspects

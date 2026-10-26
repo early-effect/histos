@@ -10,3 +10,4 @@ enum JsModuleKind:
     case NoModule => "nomodule"
     case ESModule => "esmodule"
     case CommonJS => "commonjs"
+end JsModuleKind

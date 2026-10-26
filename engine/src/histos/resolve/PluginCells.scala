@@ -11,7 +11,7 @@ object PluginCells:
         plugin.name == dependency.name &&
         plugin.revision == dependency.revision
     ) match
-      case None => Left(PluginLoadError.Unlocked(PluginCoordinate.Published(dependency).render))
+      case None         => Left(PluginLoadError.Unlocked(PluginCoordinate.Published(dependency).render))
       case Some(plugin) =>
         plugin.link match
           case LinkStrategy.Api => Left(PluginLoadError.ApiLink(dependency))

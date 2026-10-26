@@ -1,7 +1,7 @@
 package histos.publish
 
 import histos.jdk.JdkRuntime
-import histos.zinc.{CompileFeed}
+import histos.zinc.CompileFeed
 import histos.ProjectGraph
 
 import java.nio.file.Path
@@ -15,7 +15,7 @@ object PublishRun:
       val root = where match
         case PublishWhere.Directory(path) => Some(path)
         case PublishWhere.Snapshots(_, _) => None
-      output.skipped ++ output.modules.map(_.rendered(root))
+      output.skipped ++ output.held ++ output.modules.map(_.rendered(root))
 
   def run(
       repo: Path,
@@ -24,17 +24,18 @@ object PublishRun:
       jdk: JdkRuntime,
       env: Map[String, String],
       repository: String,
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit
+      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[histos.resolve.Resolve, LocalPublishError, Report] =
     ZIO
       .fromEither(PublishWhere.resolve(repo, repository, env))
       .flatMap: where =>
         val body =
           for
-            _ <- ZIO.fromEither(LauncherPublish.ready(repo, graph))
+            _       <- LauncherPublish.ready(repo, graph)
             written <- LocalPublish.run(repo, graph, names, jdk, env, report)
-            done <- LauncherPublish.upload(repo, graph, written)
+            done    <- LauncherPublish.upload(repo, graph, written)
           yield Report(where, done)
         body.provideSome[histos.resolve.Resolve](
           where.layer.mapError(LocalPublishError.Publish(_))
         )
+end PublishRun

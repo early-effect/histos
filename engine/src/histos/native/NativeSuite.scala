@@ -11,7 +11,7 @@ import histos.zinc.{
   CompileToolchain,
   JvmCompile,
 
-  ScalacFlags
+  ScalacFlags,
 }
 import histos.Platform
 import histos.resolve.{LockedTools, ResolveError}
@@ -30,11 +30,10 @@ final case class NativeSuiteRequest(
     work: Path,
     jdk: JdkRuntime,
     processEnv: Map[String, String],
-    patterns: List[SuitePattern] = Nil
+    patterns: List[SuitePattern] = Nil,
 )
 
-/** Run a linked native test binary through
-  * `scala.scalanative.testinterface.adapter.TestAdapter`. The engine does not
+/** Run a linked native test binary through `scala.scalanative.testinterface.adapter.TestAdapter`. The engine does not
   * load `scala.scalanative`.
   */
 object NativeSuite:
@@ -51,19 +50,19 @@ object NativeSuite:
       work,
       jdk,
       processEnv,
-      patterns
-    ) = request
+      patterns,
+    )              = request
     val bridgeRoot = work.resolve("runner")
-    val classes = bridgeRoot.resolve("classes")
-    val source = bridgeRoot
+    val classes    = bridgeRoot.resolve("classes")
+    val source     = bridgeRoot
       .resolve("src")
       .resolve("subprocess")
       .resolve("NativeSuite.scala")
     val shapes = work.resolve("shapes.txt")
-    val child = work.resolve("runner-child")
+    val child  = work.resolve("runner-child")
     for
       found <- ClassShapes.read(classpath).mapError(NativeSuiteError.Shapes(_))
-      view <- ZIO.service[LockedTools]
+      view  <- ZIO.service[LockedTools]
       tools <- view
         .materialize(
           histos.native.NativeRequests
@@ -80,13 +79,13 @@ object NativeSuite:
               view.catalog.native.bridgeScala,
               Platform.Jvm,
               jdk,
-              ScalacFlags.empty
+              ScalacFlags.empty,
             ),
             List(source),
             tools,
             classes,
             bridgeRoot.resolve("analysis"),
-            Nil
+            Nil,
           )
         )
         .mapError(NativeSuiteError.Compile(_))
@@ -98,17 +97,15 @@ object NativeSuite:
       MainClass.trusted(SuiteMain),
       child,
       processEnv ++ Map(
-        "NATIVE_BINARY" -> binary.toAbsolutePath.toString,
+        "NATIVE_BINARY"    -> binary.toAbsolutePath.toString,
         "NATIVE_FRAMEWORK" -> framework,
-        "NATIVE_SHAPES" -> shapes.toAbsolutePath.toString
-      )
+        "NATIVE_SHAPES"    -> shapes.toAbsolutePath.toString,
+      ),
     )
 
   private def encode(shapes: List[ClassShapes.Shape]): String =
     shapes
-      .map(shape =>
-        s"${shape.name}\t${if shape.module then "1" else "0"}\t${shape.parents.mkString(",")}"
-      )
+      .map(shape => s"${shape.name}\t${if shape.module then "1" else "0"}\t${shape.parents.mkString(",")}")
       .mkString("\n")
 
   private def suite(patterns: List[SuitePattern]): String =
@@ -233,6 +230,7 @@ object NativeSuite:
 
   private def empty(path: Path): IO[NativeSuiteError, Unit] =
     Workspace.recreate(path).mapError(_ => NativeSuiteError.Write(path)).unit
+end NativeSuite
 
 enum NativeSuiteError:
   case Resolved(error: ResolveError)
@@ -247,3 +245,4 @@ enum NativeSuiteError:
     case Shapes(error)   => error.message
     case Compile(error)  => error.message
     case Write(path)     => s"could not write $path"
+end NativeSuiteError

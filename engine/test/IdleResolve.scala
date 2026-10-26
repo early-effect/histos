@@ -6,8 +6,7 @@ import java.nio.file.Path
 
 import zio.{ULayer, ZIO, ZLayer}
 
-/** A resolve layer for a test that does not compile. A real compile fails here
-  * instead of fetching.
+/** A resolve layer for a test that does not compile. A real compile fails here instead of fetching.
   */
 object IdleResolve:
   val layer: ULayer[Resolve] =
@@ -26,14 +25,14 @@ object IdleResolve:
 
       def resolvePlugin(
           dependency: Dep,
-          repositories: Repositories
+          repositories: Repositories,
       ): ZIO[Any, ResolveError, Classpath] = stop
 
       def sources(
           organization: String,
           name: String,
           revision: String,
-          repository: Repository
+          repository: Repository,
       ): ZIO[Any, ResolveError, ResolvedArtifact] =
         stop)
 end IdleResolve

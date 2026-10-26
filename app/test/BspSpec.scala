@@ -17,7 +17,7 @@ import histos.{
   Projects,
   ScalaVersion,
   ScalacFlag,
-  module
+  module,
 }
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
@@ -41,6 +41,7 @@ object BspSpec extends ZIOSpecDefault:
     def message: String = this match
       case Shape     => "the bsp result did not have the expected shape"
       case Discovery => "no .bsp/histos.json under HISTOS_REPO"
+  end FixtureFault
 
   private val protocol = suite("protocol")(
     test("bsp is a command"):
@@ -53,7 +54,7 @@ object BspSpec extends ZIOSpecDefault:
           string(json, "version").contains(Bsp.ServerVersion),
           string(json, "bspVersion").contains(Bsp.BspVersion),
           strings(json, "argv") == List("./histos", "bsp"),
-          strings(json, "languages") == List("scala")
+          strings(json, "languages") == List("scala"),
         )
     ,
     test("a swapped target list marks created, changed, and deleted"):
@@ -62,16 +63,16 @@ object BspSpec extends ZIOSpecDefault:
         events.map(event => (event.target.uri, event.kind)) == List(
           ("c", 1),
           ("b", 2),
-          ("a", 3)
+          ("a", 3),
         )
       )
     ,
     test("a frame round-trips payloads, including a newline"):
-      val first = "{\"method\":\"build/initialized\"}\r\n"
+      val first  = "{\"method\":\"build/initialized\"}\r\n"
       val second = "{\"id\":1}"
       for
         bytes <- framed(first, second)
-        back <- readAll(new ByteArrayInputStream(bytes))
+        back  <- readAll(new ByteArrayInputStream(bytes))
       yield assertTrue(back == List(first, second))
     ,
     test(
@@ -79,35 +80,35 @@ object BspSpec extends ZIOSpecDefault:
     ):
       val typed =
         "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n\r\n{}"
-      val bare = "Content-Length: 2\n\n{}"
+      val bare  = "Content-Length: 2\n\n{}"
       val short = "Content-Length: 5\r\n\r\nab"
       for
         missing <- Frame.read(stream(typed)).either
-        lf <- Frame.read(stream(bare)).either
-        cut <- Frame.read(stream(short)).either
-        empty <- Frame.read(new ByteArrayInputStream(Array.emptyByteArray))
+        lf      <- Frame.read(stream(bare)).either
+        cut     <- Frame.read(stream(short)).either
+        empty   <- Frame.read(new ByteArrayInputStream(Array.emptyByteArray))
       yield assertTrue(
         missing == Left(Frame.FrameError.MissingLength),
         lf == Left(Frame.FrameError.Truncated),
         cut == Left(Frame.FrameError.Truncated),
-        empty.isEmpty
+        empty.isEmpty,
       )
     ,
     test("requests wait for initialize, and exit follows shutdown"):
       val run =
         for
-          early <- opened
-          quiet <- early.answer(notify("build/initialized"))
-          denied <- early.answer(request("workspace/buildTargets", 1))
+          early   <- opened
+          quiet   <- early.answer(notify("build/initialized"))
+          denied  <- early.answer(request("workspace/buildTargets", 1))
           stopped <- early.answer(notify("build/exit"))
-          bad <- early.answer("[1]")
-          junk <- opened.flatMap(_.answer("not json"))
+          bad     <- early.answer("[1]")
+          junk    <- opened.flatMap(_.answer("not json"))
           orderly <- opened
-          init <- orderly.answer(request("build/initialize", 1))
-          _ <- orderly.answer(notify("build/initialized"))
+          init    <- orderly.answer(request("build/initialize", 1))
+          _       <- orderly.answer(notify("build/initialized"))
           unknown <- orderly.answer(request("buildTarget/test", 2))
-          down <- orderly.answer(request("build/shutdown", 3))
-          done <- orderly.answer(notify("build/exit"))
+          down    <- orderly.answer(request("build/shutdown", 3))
+          done    <- orderly.answer(notify("build/exit"))
         yield assertTrue(
           quiet == Bsp.Answer.Quiet,
           code(denied).contains(-32002),
@@ -139,13 +140,13 @@ object BspSpec extends ZIOSpecDefault:
           code(unknown).contains(-32601),
           message(unknown).exists(_.contains("buildTarget/test")),
           resultOf(down).contains(Json.Null),
-          done == Bsp.Answer.Stop(0)
+          done == Bsp.Answer.Stop(0),
         )
       ZIO.scoped:
         for
-          cache <- temp
+          cache  <- temp
           result <- run.provide(Resolve.live(cache))
-        yield result
+        yield result,
   )
 
   private val client = suite("client")(
@@ -157,31 +158,31 @@ object BspSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(
                 Projects(
                   module("demo", Jvm)(scala3, scala2),
-                  module("ui", Js)(scala3)
+                  module("ui", Js)(scala3),
                 )
               )
               _ <- ZIO.attempt {
                 write(
                   root,
                   "demo/src/Hello.scala",
-                  "object Hello {\n  def n: Int = 1\n}\n"
+                  "object Hello {\n  def n: Int = 1\n}\n",
                 )
                 write(
                   root,
                   ".histos/dependencies.lock",
-                  "cell demo 3.10.0 jvm\ncell demo 2.13.16 jvm\n"
+                  "cell demo 3.10.0 jvm\ncell demo 2.13.16 jvm\n",
                 )
               }
               demo <- moduleName(built, "demo")
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
+              uri     <- one(listed, "3.10.0")
               sources <- open.answer(targeted("buildTarget/sources", 3, uri))
               options <- open.answer(
                 targeted("buildTarget/scalacOptions", 4, uri)
@@ -190,14 +191,14 @@ object BspSpec extends ZIOSpecDefault:
                 targeted("buildTarget/compile", 5, uri, Some("metals-1"))
               )
               classes = GraphCompile.classesDir(root, demo, scala3)
-              other = GraphCompile.classesDir(root, demo, scala2)
-              source = root
+              other   = GraphCompile.classesDir(root, demo, scala2)
+              source  = root
                 .resolve("demo")
                 .resolve("src")
                 .resolve("Hello.scala")
                 .toAbsolutePath
                 .normalize
-              found <- ZIO.attempt(entries(classes))
+              found     <- ZIO.attempt(entries(classes))
               otherGone <- ZIO.attempt(!Files.exists(other))
               flagsOn = scalacFlags(options)
             yield assertTrue(
@@ -208,7 +209,7 @@ object BspSpec extends ZIOSpecDefault:
               tags(listed) == List(
                 List("library"),
                 List("library"),
-                List("library")
+                List("library"),
               ),
               jars(listed, "3.10.0").exists(_.contains("scala-library")),
               jars(listed, "3.10.0").exists(_.contains("scala3-compiler")),
@@ -233,7 +234,7 @@ object BspSpec extends ZIOSpecDefault:
               found.contains("Hello.class"),
               found.contains("Hello.tasty"),
               found.exists(_.contains("semanticdb")),
-              otherGone
+              otherGone,
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -245,15 +246,15 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-              jdk <- GraphCompile.jdkHere
-              open <- runtimes.flatMap(found =>
+              jdk   <- GraphCompile.jdkHere
+              open  <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
+              uri     <- one(listed, "3.10.0")
               unknown <- open.answer(
                 targeted("buildTarget/sources", 3, "file:///nope")
               )
@@ -267,7 +268,7 @@ object BspSpec extends ZIOSpecDefault:
               code(unknown).contains(-32602),
               message(unknown).exists(_.contains("unknown build target")),
               code(missing).contains(-32603),
-              message(missing).exists(_.contains("no dependency lock"))
+              message(missing).exists(_.contains("no dependency lock")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -279,21 +280,21 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-              _ <- ZIO.attempt {
+              _     <- ZIO.attempt {
                 write(
                   root,
                   "demo/src/Hello.scala",
-                  "object Hello {\n  def n: Int = missing\n}\n"
+                  "object Hello {\n  def n: Int = missing\n}\n",
                 )
                 write(
                   root,
                   ".histos/dependencies.lock",
-                  "cell demo 3.10.0 jvm\n"
+                  "cell demo 3.10.0 jvm\n",
                 )
               }
               notes <- Ref.make(List.empty[String])
-              jdk <- GraphCompile.jdkHere
-              open <- runtimes.flatMap(found =>
+              jdk   <- GraphCompile.jdkHere
+              open  <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(
                     root,
@@ -301,15 +302,15 @@ object BspSpec extends ZIOSpecDefault:
                     jdk,
                     found,
                     Nil,
-                    line => notes.update(_ :+ line)
+                    line => notes.update(_ :+ line),
                   )
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _        <- open.answer(request("build/initialize", 1))
+              listed   <- open.answer(request("workspace/buildTargets", 2))
+              uri      <- one(listed, "3.10.0")
               compiled <- open.answer(targeted("buildTarget/compile", 3, uri))
-              seen <- notes.get
+              seen     <- notes.get
               resetUris = seen
                 .filter(_.contains(""""reset":true"""))
                 .flatMap: line =>
@@ -323,14 +324,12 @@ object BspSpec extends ZIOSpecDefault:
             yield assertTrue(
               status(compiled).contains(2),
               resetUris.nonEmpty,
-              resetUris.forall(uri =>
-                uri.endsWith("Hello.scala") && !uri.contains("?")
-              ),
+              resetUris.forall(uri => uri.endsWith("Hello.scala") && !uri.contains("?")),
               seen.exists(line =>
                 line.contains("build/publishDiagnostics") && line.contains(
                   "missing"
                 ) && line.contains(""""line":1""")
-              )
+              ),
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -344,31 +343,31 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-              _ <- ZIO.attempt {
+              _     <- ZIO.attempt {
                 write(
                   root,
                   ".histos/dependencies.lock",
                   """cell demo 3.10.0 jvm
                          |artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
-                         |""".stripMargin
+                         |""".stripMargin,
                 )
               }
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
+              uri     <- one(listed, "3.10.0")
               options <- open.answer(
                 targeted("buildTarget/scalacOptions", 3, uri)
               )
               paths = classpath(options)
             yield assertTrue(
               paths.exists(_.contains("scala-library-3.10.0")),
-              paths.forall(path => !path.contains("scala-library-2.13.18"))
+              paths.forall(path => !path.contains("scala-library-2.13.18")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -394,20 +393,20 @@ object BspSpec extends ZIOSpecDefault:
                   """cell demo 3.10.0 jvm
                          |test demo 3.10.0 jvm
                          |direct dev.zio zio-test-sbt 2.1.27 binary
-                         |""".stripMargin
+                         |""".stripMargin,
                 )
               }
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
               mainUri <- uriOf(listed, "scope=main")
               testUri <- uriOf(listed, "scope=test")
-              mains <- open.answer(
+              mains   <- open.answer(
                 targeted("buildTarget/scalaMainClasses", 3, mainUri)
               )
               tests <- open.answer(
@@ -419,9 +418,9 @@ object BspSpec extends ZIOSpecDefault:
               env <- open.answer(
                 targeted("buildTarget/jvmTestEnvironment", 6, testUri)
               )
-              runItem = optionItems(run).headOption
+              runItem  = optionItems(run).headOption
               testItem = optionItems(env).headOption
-              classes = mainClasses(mains)
+              classes  = mainClasses(mains)
             yield assertTrue(
               flags(listed, "canRun") == List(true, false, false),
               flags(listed, "canTest") == List(false, true, false),
@@ -448,7 +447,7 @@ object BspSpec extends ZIOSpecDefault:
                 .flatMap(item => strings(item, "jvmOptions"))
                 .isEmpty,
               code(run).isEmpty,
-              code(env).isEmpty
+              code(env).isEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -460,24 +459,24 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-              _ <- ZIO.attempt(
+              _     <- ZIO.attempt(
                 write(root, "demo/test/DemoSpec.scala", "object DemoSpec\n")
               )
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
               testUri <- uriOf(listed, "scope=test")
-              env <- open.answer(
+              env     <- open.answer(
                 targeted("buildTarget/jvmTestEnvironment", 3, testUri)
               )
             yield assertTrue(
               code(env).contains(-32603),
-              message(env).exists(_.contains("zio-test-sbt"))
+              message(env).exists(_.contains("zio-test-sbt")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -489,31 +488,31 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-              _ <- ZIO.attempt {
+              _     <- ZIO.attempt {
                 write(
                   root,
                   "demo/src/Hello.scala",
-                  "object Hello {\n  def n: Int = missing\n}\n"
+                  "object Hello {\n  def n: Int = missing\n}\n",
                 )
                 write(
                   root,
                   ".histos/dependencies.lock",
-                  "cell demo 3.10.0 jvm\n"
+                  "cell demo 3.10.0 jvm\n",
                 )
               }
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _        <- open.answer(request("build/initialize", 1))
+              listed   <- open.answer(request("workspace/buildTargets", 2))
+              uri      <- one(listed, "3.10.0")
               compiled <- open.answer(targeted("buildTarget/compile", 3, uri))
             yield assertTrue(
               status(compiled).contains(2),
-              code(compiled).isEmpty
+              code(compiled).isEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -525,23 +524,23 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("ui", Jvm, Js)(scala3)))
-              _ <- ZIO.attempt {
+              _     <- ZIO.attempt {
                 write(root, ".histos/bsp-platforms", "js\njs\n")
                 write(root, "ui/src/Hello.scala", "object Hello\n")
                 write(root, ".histos/dependencies.lock", "cell ui 3.10.0 js\n")
               }
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              jvm <- uriOf(listed, "platform=jvm&scope=main")
-              js <- uriOf(listed, "platform=js&scope=main")
+              _        <- open.answer(request("build/initialize", 1))
+              listed   <- open.answer(request("workspace/buildTargets", 2))
+              jvm      <- uriOf(listed, "platform=jvm&scope=main")
+              js       <- uriOf(listed, "platform=js&scope=main")
               compiled <- open.answer(targeted("buildTarget/compile", 3, js))
-              linked <- ZIO.attempt(
+              linked   <- ZIO.attempt(
                 Files.exists(root.resolve(".histos").resolve("link"))
               )
             yield assertTrue(
@@ -550,7 +549,7 @@ object BspSpec extends ZIOSpecDefault:
               jvm != js,
               status(compiled).isDefined,
               code(compiled).isEmpty,
-              !linked
+              !linked,
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -562,18 +561,18 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("ui", Js)(scala3)))
-              _ <- ZIO.attempt(write(root, ".histos/bsp-platforms", "jvm\n"))
-              jdk <- GraphCompile.jdkHere
-              open <- runtimes.flatMap(found =>
+              _     <- ZIO.attempt(write(root, ".histos/bsp-platforms", "jvm\n"))
+              jdk   <- GraphCompile.jdkHere
+              open  <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
+              _      <- open.answer(request("build/initialize", 1))
               listed <- open.answer(request("workspace/buildTargets", 2))
             yield assertTrue(
               code(listed).contains(-32603),
-              message(listed).exists(_.contains("'jvm' is not a bsp platform"))
+              message(listed).exists(_.contains("'jvm' is not a bsp platform")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -593,25 +592,25 @@ object BspSpec extends ZIOSpecDefault:
                 write(
                   root,
                   ".histos/dependencies.lock",
-                  "cell demo 3.10.0 jvm\n"
+                  "cell demo 3.10.0 jvm\n",
                 )
               )
-              jdk <- GraphCompile.jdkHere
+              jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
+              uri     <- one(listed, "3.10.0")
               options <- open.answer(
                 targeted("buildTarget/scalacOptions", 3, uri)
               )
               flagsOn = scalacFlags(options)
             yield assertTrue(
               flagsOn.startsWith(List("-encoding", "UTF-8")),
-              flagsOn.contains("-Xsemanticdb")
+              flagsOn.contains("-Xsemanticdb"),
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -623,36 +622,34 @@ object BspSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-              jdk <- GraphCompile.jdkHere
-              open <- runtimes.flatMap(found =>
+              jdk   <- GraphCompile.jdkHere
+              open  <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _ <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
-              uri <- one(listed, "3.10.0")
+              _       <- open.answer(request("build/initialize", 1))
+              listed  <- open.answer(request("workspace/buildTargets", 2))
+              uri     <- one(listed, "3.10.0")
               sources <- open.answer(targeted("buildTarget/sources", 3, uri))
             yield assertTrue(
               sourcePaths(sources).isEmpty,
-              code(sources).isEmpty
+              code(sources).isEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
-          )
+          ),
   )
 
   private def opened: ZIO[
     Any,
     BuildError | histos.zinc.GraphCompileError | histos.resolve.ResolveError,
-    Bsp.Session
+    Bsp.Session,
   ] =
     for
       built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
-      jdk <- GraphCompile.jdkHere
-      open <- runtimes.flatMap(found =>
-        Bsp.open(Path.of("."), built, jdk, found)
-      )
+      jdk   <- GraphCompile.jdkHere
+      open  <- runtimes.flatMap(found => Bsp.open(Path.of("."), built, jdk, found))
     yield open
 
   private val runtimes: UIO[Runtimes] =
@@ -662,7 +659,7 @@ object BspSpec extends ZIOSpecDefault:
 
   private def moduleName(
       graph: ProjectGraph,
-      name: String
+      name: String,
   ): ZIO[Any, FixtureFault, ProjectName] =
     graph.projects.collect {
       case item: Module if item.name.value == name => item.name
@@ -672,7 +669,7 @@ object BspSpec extends ZIOSpecDefault:
 
   private def uriOf(
       answer: Bsp.Answer,
-      token: String
+      token: String,
   ): ZIO[Any, FixtureFault, String] =
     targetUris(answer).filter(_.contains(token)) match
       case uri :: Nil => ZIO.succeed(uri)
@@ -693,7 +690,7 @@ object BspSpec extends ZIOSpecDefault:
 
   private def one(
       answer: Bsp.Answer,
-      version: String
+      version: String,
   ): ZIO[Any, FixtureFault, String] =
     targetUris(answer).filter(_.contains(s"scala=$version")) match
       case uri :: Nil => ZIO.succeed(uri)
@@ -706,9 +703,7 @@ object BspSpec extends ZIOSpecDefault:
       .flatMap: root =>
         root
           .filter(_.nonEmpty)
-          .map(value =>
-            Path.of(value).resolve(".bsp").resolve("histos.json")
-          ) match
+          .map(value => Path.of(value).resolve(".bsp").resolve("histos.json")) match
           case Some(path) =>
             ZIO
               .attempt(Files.readString(path))
@@ -742,14 +737,14 @@ object BspSpec extends ZIOSpecDefault:
   private def request(
       method: String,
       id: Int,
-      params: Json = Json.Obj()
+      params: Json = Json.Obj(),
   ): String =
     Json
       .Obj(
         "jsonrpc" -> Json.Str("2.0"),
-        "id" -> Json.Num(id),
-        "method" -> Json.Str(method),
-        "params" -> params
+        "id"      -> Json.Num(id),
+        "method"  -> Json.Str(method),
+        "params"  -> params,
       )
       .toJson
 
@@ -760,7 +755,7 @@ object BspSpec extends ZIOSpecDefault:
       method: String,
       id: Int,
       uri: String,
-      origin: Option[String] = None
+      origin: Option[String] = None,
   ): String =
     val extra = origin.map(value => "originId" -> Json.Str(value)).toList
     request(
@@ -768,7 +763,7 @@ object BspSpec extends ZIOSpecDefault:
       id,
       Json.Obj(
         (("targets" -> Json.Arr(Json.Obj("uri" -> Json.Str(uri)))) :: extra)*
-      )
+      ),
     )
 
   private def parsed(answer: Bsp.Answer): Option[Json] =
@@ -800,27 +795,19 @@ object BspSpec extends ZIOSpecDefault:
       case _                      => Nil
 
   private def targetUris(answer: Bsp.Answer): List[String] =
-    targets(answer).flatMap(item =>
-      field(item, "id").flatMap(string(_, "uri")).toList
-    )
+    targets(answer).flatMap(item => field(item, "id").flatMap(string(_, "uri")).toList)
 
   private def displayNames(answer: Bsp.Answer): List[String] =
     targets(answer).flatMap(item => string(item, "displayName").toList)
 
   private def versions(answer: Bsp.Answer): List[String] =
-    targets(answer).flatMap(item =>
-      field(item, "data").flatMap(string(_, "scalaVersion")).toList
-    )
+    targets(answer).flatMap(item => field(item, "data").flatMap(string(_, "scalaVersion")).toList)
 
   private def binaries(answer: Bsp.Answer): List[String] =
-    targets(answer).flatMap(item =>
-      field(item, "data").flatMap(string(_, "scalaBinaryVersion")).toList
-    )
+    targets(answer).flatMap(item => field(item, "data").flatMap(string(_, "scalaBinaryVersion")).toList)
 
   private def platforms(answer: Bsp.Answer): List[Int] =
-    targets(answer).flatMap(item =>
-      field(item, "data").flatMap(number(_, "platform")).toList
-    )
+    targets(answer).flatMap(item => field(item, "data").flatMap(number(_, "platform")).toList)
 
   private def languages(answer: Bsp.Answer): List[List[String]] =
     targets(answer).map(item => strings(item, "languageIds"))
@@ -830,9 +817,7 @@ object BspSpec extends ZIOSpecDefault:
 
   private def jars(answer: Bsp.Answer, version: String): List[String] =
     targets(answer)
-      .filter(item =>
-        field(item, "data").flatMap(string(_, "scalaVersion")).contains(version)
-      )
+      .filter(item => field(item, "data").flatMap(string(_, "scalaVersion")).contains(version))
       .flatMap: item =>
         field(item, "data").toList.flatMap(data => strings(data, "jars"))
 
@@ -874,9 +859,7 @@ object BspSpec extends ZIOSpecDefault:
     sourceItems(answer).flatMap(item => number(item, "kind").toList)
 
   private def generated(answer: Bsp.Answer): List[Boolean] =
-    sourceItems(answer).flatMap(item =>
-      field(item, "generated").collect { case Json.Bool(value) => value }.toList
-    )
+    sourceItems(answer).flatMap(item => field(item, "generated").collect { case Json.Bool(value) => value }.toList)
 
   private def pathOf(uri: String): Option[Path] =
     try Some(Path.of(java.net.URI.create(uri)).normalize)
@@ -907,8 +890,7 @@ object BspSpec extends ZIOSpecDefault:
       case _ => None
 
   private def entries(classes: Path): List[String] =
-    if !Files.isDirectory(classes) then
-      List(s"missing:${classes.toAbsolutePath}")
+    if !Files.isDirectory(classes) then List(s"missing:${classes.toAbsolutePath}")
     else
       val walk = Files.walk(classes)
       try
@@ -925,19 +907,18 @@ object BspSpec extends ZIOSpecDefault:
     Files.writeString(path, text)
 
   private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-bsp"))):
-      dir =>
-        ZIO.attempt {
-          if Files.exists(dir) then
-            val walk = Files.walk(dir)
-            val paths =
-              try walk.iterator.asScala.toList
-              finally walk.close()
-            paths
-              .sortBy(_.getNameCount)
-              .reverse
-              .foreach(path => Files.deleteIfExists(path))
-        }.ignore
+    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-bsp"))): dir =>
+      ZIO.attempt {
+        if Files.exists(dir) then
+          val walk  = Files.walk(dir)
+          val paths =
+            try walk.iterator.asScala.toList
+            finally walk.close()
+          paths
+            .sortBy(_.getNameCount)
+            .reverse
+            .foreach(path => Files.deleteIfExists(path))
+      }.ignore
 
   def spec = suite("bsp")(
     protocol,
@@ -946,10 +927,11 @@ object BspSpec extends ZIOSpecDefault:
         histos.Projects(
           histos.module("jvm", histos.Jvm)(
             histos.ScalaVersion("3.10.0"),
-            histos.ScalaVersion("2.13.16")
+            histos.ScalaVersion("2.13.16"),
           ),
-          histos.module("js", histos.Js)(histos.ScalaVersion("3.10.0"))
+          histos.module("js", histos.Js)(histos.ScalaVersion("3.10.0")),
         )
       )
-    )
+    ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)
+end BspSpec

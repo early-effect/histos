@@ -1,13 +1,6 @@
 package histos
 
-import histos.resolve.{
-  BuildResolvers,
-  DependencyLock,
-  LockedTool,
-  LockedTools,
-  Resolve,
-  ResolveError
-}
+import histos.resolve.{BuildResolvers, DependencyLock, LockedTool, LockedTools, Resolve, ResolveError}
 import histos.workspace.{IoFailure, Workspace}
 import java.nio.file.Path
 import zio.{Scope, ULayer, ZIO, ZLayer}
@@ -18,10 +11,10 @@ object AppToolFixture:
   ): ZLayer[Scope, ResolveError | BuildError | IoFailure, LockedTools] =
     ZLayer.scoped:
       for
-        root <- Workspace.work("histos-app-test-tools")
+        root  <- Workspace.work("histos-app-test-tools")
         built <- ZIO.fromEither(graph)
         tools <- (for
-          _ <- Resolve.update(root, built, BuildResolvers(built.resolvers))
+          _    <- Resolve.update(root, built, BuildResolvers(built.resolvers))
           lock <- Resolve.readLock(root)
           view <- LockedTools.make(lock, built)
         yield view).provide(Resolve.coursier)
@@ -38,13 +31,13 @@ object AppToolFixture:
   ): ZIO[R & LockedTools, E | ResolveError | IoFailure, A] =
     for
       tools <- ZIO.service[LockedTools]
-      lock <- Resolve
+      lock  <- Resolve
         .readLock(repo)
         .catchSome:
           case ResolveError.NoLock(_) => ZIO.succeed(DependencyLock(Nil))
       _ <- ZIO.when(lock.tools.isEmpty):
         for
-          planned <- LockedTools.plan(graph, histos.native.NativeOrigin.Central)
+          planned  <- LockedTools.plan(graph, histos.native.NativeOrigin.Central)
           selected <- ZIO.foreach(planned)(request =>
             tools.lock.tools.find(cell =>
               cell.id == request.id && LockedTools
@@ -67,17 +60,18 @@ object AppToolFixture:
                           artifact.revision,
                           artifact.sha256,
                           artifact.repository,
-                          artifact.classifier
+                          artifact.classifier,
                         )
                       ),
-                      classpath.evictions
+                      classpath.evictions,
                     )
                   )
           )
           _ <- Workspace.writeString(
             Resolve.lockPath(repo),
-            DependencyLock.render(lock.copy(tools = selected))
+            DependencyLock.render(lock.copy(tools = selected)),
           )
         yield ()
       result <- effect
     yield result
+end AppToolFixture

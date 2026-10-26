@@ -19,15 +19,17 @@ final case class Connection(
 object Connection:
   def ensure(repo: Path): IO[IoFailure, Unit] =
     val path = repo.resolve(".bsp").resolve("histos.json")
-    ZIO.attemptBlocking {
-      val wanted = here(launch(repo))
-      val present =
-        if Files.isRegularFile(path) then Files.readString(path).fromJson[Connection].toOption
-        else None
-      if !present.contains(wanted) then
-        Files.createDirectories(repo.resolve(".bsp"))
-        Files.writeString(path, wanted.toJson)
-    }.mapError(_ => IoFailure(path, IoFault.Write))
+    ZIO
+      .attemptBlocking {
+        val wanted  = here(launch(repo))
+        val present =
+          if Files.isRegularFile(path) then Files.readString(path).fromJson[Connection].toOption
+          else None
+        if !present.contains(wanted) then
+          Files.createDirectories(repo.resolve(".bsp"))
+          Files.writeString(path, wanted.toJson)
+      }
+      .mapError(_ => IoFailure(path, IoFault.Write))
 
   /** `./histos` when the project ships that wrapper. Otherwise the `histos` on `PATH`. */
   def launch(repo: Path): List[String] =
@@ -36,3 +38,4 @@ object Connection:
 
   def here(argv: List[String]): Connection =
     Connection(Bsp.ServerName, argv, Bsp.ServerVersion, Bsp.BspVersion, List("scala"))
+end Connection

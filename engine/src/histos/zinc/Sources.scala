@@ -31,6 +31,7 @@ object ScalaSeries:
     if name == directory(ScalaSeries.Scala3) then Some(ScalaSeries.Scala3)
     else if name.startsWith(prefix) then name.drop(prefix.length).toIntOption.map(ScalaSeries.Scala2(_))
     else None
+end ScalaSeries
 
 /** A directory name that filters sources. A package directory with the same name does not. */
 enum SourceFilter:
@@ -44,10 +45,10 @@ object SourceFilter:
 
   private def platform(name: String): Option[SourceFilter] =
     name match
-      case "jvm" | "scalajvm"         => Some(SourceFilter.PlatformDir(Platform.Jvm))
-      case "js" | "scalajs"           => Some(SourceFilter.PlatformDir(Platform.Js))
-      case "native" | "scalanative"   => Some(SourceFilter.PlatformDir(Platform.Native))
-      case _                          => None
+      case "jvm" | "scalajvm"       => Some(SourceFilter.PlatformDir(Platform.Jvm))
+      case "js" | "scalajs"         => Some(SourceFilter.PlatformDir(Platform.Js))
+      case "native" | "scalanative" => Some(SourceFilter.PlatformDir(Platform.Native))
+      case _                        => None
 
   private def scalaDir(name: String): Option[SourceFilter] =
     val prefix = "scala-"
@@ -62,6 +63,7 @@ object SourceFilter:
       case PlatformDir(required) => required == platform
       case ExactDir(required)    => required == version
       case SeriesDir(required)   => ScalaSeries.of(version).contains(required)
+end SourceFilter
 
 object Sources:
   /** Main sources. `src/test` is not main. `.scala`, and `.java` on the JVM, whose path filters match. */
@@ -73,9 +75,9 @@ object Sources:
     collect(root, version, platform, Tree.Test)
 
   private def collect(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): IO[CompileError, List[Path]] =
-    ZIO.attemptBlocking(list(root, version, platform, tree)).mapError(_ =>
-      CompileError.Io(IoFailure(root, IoFault.Walk))
-    )
+    ZIO
+      .attemptBlocking(list(root, version, platform, tree))
+      .mapError(_ => CompileError.Io(IoFailure(root, IoFault.Walk)))
 
   private def list(root: Path, version: ScalaVersion, platform: Platform, tree: Tree): List[Path] =
     if !Files.isDirectory(root) then Nil
@@ -92,7 +94,7 @@ object Sources:
     Option(path.getFileName).map(_.toString) match
       case Some(name) if name.endsWith(".scala") => true
       case Some(name) if name.endsWith(".java")  => platform == Platform.Jvm
-      case _                                      => false
+      case _                                     => false
 
   /** Filters apply before the first package directory. `src` and `main` are layout, not packages. */
   private def allows(root: Path, path: Path, version: ScalaVersion, platform: Platform, tree: Tree): Boolean =
@@ -125,3 +127,4 @@ object Sources:
               tree match
                 case Tree.Main => Some(Nil)
                 case Tree.Test => if seenTest then Some(Nil) else None
+end Sources

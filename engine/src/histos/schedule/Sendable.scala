@@ -2,8 +2,7 @@ package histos.schedule
 
 import histos.plugin.{Need, Seal}
 
-/** Who runs the action. A closure is the build file. A plugin is sendable only
-  * when it says so.
+/** Who runs the action. A closure is the build file. A plugin is sendable only when it says so.
   */
 enum Runner:
   case Compile
@@ -28,8 +27,7 @@ enum Verdict:
   case Stay(reason: Hold)
 
 object Sendable:
-  /** Core compile may leave. Everything else stays, and a need vetoes a compile
-    * or a hermetic plugin.
+  /** Core compile may leave. Everything else stays, and a need vetoes a compile or a hermetic plugin.
     */
   def decide(runner: Runner, needs: Set[Need]): Verdict =
     if needs.nonEmpty then Verdict.Stay(Hold.Needs(needs))
@@ -49,3 +47,4 @@ object Sendable:
       case Policy.Core                      => Verdict.Send
       case Policy.Plugin(seal, needs, _, _) =>
         decide(Runner.Plugin(seal), needs)
+end Sendable

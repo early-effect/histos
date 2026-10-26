@@ -3,23 +3,9 @@ package histos.resolve
 import histos.jdk.Sha256
 import histos.workspace.{IoFailure, Workspace}
 import histos.plugin.{LinkStrategy, PluginCoordinate, PluginLoadError}
-import histos.{
-  Aggregate,
-  Dep,
-  DepKind,
-  Module,
-  Platform,
-  ProjectGraph,
-  ProjectName,
-  ScalaVersion
-}
+import histos.{Aggregate, Dep, DepKind, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.{
-  AtomicMoveNotSupportedException,
-  Files,
-  Path,
-  StandardCopyOption
-}
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
 import zio.{IO, ULayer, ZIO, ZLayer}
 
@@ -29,7 +15,7 @@ final case class ResolveCell(
     scalaVersion: ScalaVersion,
     platform: Platform,
     repositories: Repositories,
-    scope: ClasspathScope = ClasspathScope.Compile
+    scope: ClasspathScope = ClasspathScope.Compile,
 )
 
 final case class ResolvedArtifact(
@@ -39,34 +25,34 @@ final case class ResolvedArtifact(
     path: Path,
     sha256: Sha256,
     repository: Repository,
-    classifier: Option[JarClassifier] = None
+    classifier: Option[JarClassifier] = None,
 )
 
 final case class Eviction(
     organization: String,
     name: String,
     requested: String,
-    selected: String
+    selected: String,
 )
 
 object Eviction:
-  /** The lock is whitespace-separated. An empty or spaced field cannot be read
-    * back.
+  /** The lock is whitespace-separated. An empty or spaced field cannot be read back.
     */
   def printable(eviction: Eviction): Boolean =
     List(
       eviction.organization,
       eviction.name,
       eviction.requested,
-      eviction.selected
+      eviction.selected,
     ).forall(token)
 
   private def token(value: String): Boolean =
     value.nonEmpty && !value.exists(_.isWhitespace)
+end Eviction
 
 final case class Classpath(
     artifacts: List[ResolvedArtifact],
-    evictions: List[Eviction]
+    evictions: List[Eviction],
 )
 
 enum RepositoryIo:

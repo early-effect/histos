@@ -34,7 +34,7 @@ object StepSpec extends ZIOSpecDefault:
         step.copy(run = step.run *> ZIO.fail(Extra.Boom))
 
   private given Stored[Int] with
-    def encode(value: Int): Chunk[Byte] = Chunk.fromArray(value.toString.getBytes)
+    def encode(value: Int): Chunk[Byte]                      = Chunk.fromArray(value.toString.getBytes)
     def decode(bytes: Chunk[Byte]): Either[StoredError, Int] =
       new String(bytes.toArray).toIntOption match
         case Some(value) => Right(value)
@@ -43,11 +43,11 @@ object StepSpec extends ZIOSpecDefault:
 
   private final class Opaque
 
-  private val localStep = Step.local[Int](info)(ZIO.succeed(1))
-  private val cachedStep = Step.cached[Int](info)(ZIO.succeed(1))
-  private val hermeticStep = Step.hermetic[Int](info)(ZIO.succeed(1))
+  private val localStep                               = Step.local[Int](info)(ZIO.succeed(1))
+  private val cachedStep                              = Step.cached[Int](info)(ZIO.succeed(1))
+  private val hermeticStep                            = Step.hermetic[Int](info)(ZIO.succeed(1))
   private val opaqueEffect: ZIO[Any, Nothing, Opaque] = ZIO.succeed(new Opaque())
-  private val intEffect: ZIO[Any, Nothing, Int] = ZIO.succeed(1)
+  private val intEffect: ZIO[Any, Nothing, Int]       = ZIO.succeed(1)
 
   private inline def messages(inline code: String): List[String] =
     typeCheckErrors(code).map(_.message).toList
@@ -55,26 +55,29 @@ object StepSpec extends ZIOSpecDefault:
   private val algebra = suite("step algebra")(
     test("a step runs, and map keeps the value derivation off the cache"):
       val step = Step.local[Int](info)(ZIO.succeed(1)).map(_ + 1)
-      for
-        value <- Step.run(step)
+      for value <- Step.run(step)
       yield assertTrue(value == 2, step.mirror == RuntimeKind.Local)
     ,
     test("zip of two hermetic steps stays hermetic, and hermetic with local is mixed"):
       val compile = Step.hermetic[Int](info)(ZIO.succeed(1))
-      val link = Step.hermetic[Int](info)(ZIO.succeed(2))
+      val link    = Step.hermetic[Int](info)(ZIO.succeed(2))
       val publish = Step.local[Int](info)(ZIO.succeed(3))
-      val same = compile.zip(link)
-      val mixed = compile.zip(publish)
+      val same    = compile.zip(link)
+      val mixed   = compile.zip(publish)
       for
         pair <- Step.run(same)
         both <- Step.run(mixed)
-      yield assertTrue(pair == ((1, 2)), both == ((1, 3)), same.mirror == RuntimeKind.Hermetic, mixed.mirror == RuntimeKind.Mixed)
+      yield assertTrue(
+        pair == ((1, 2)),
+        both == ((1, 3)),
+        same.mirror == RuntimeKind.Hermetic,
+        mixed.mirror == RuntimeKind.Mixed,
+      )
     ,
     test("a local value with a codec feeds a hermetic step"):
-      val fetched = Step.local[Int](info)(ZIO.succeed(4))
+      val fetched  = Step.local[Int](info)(ZIO.succeed(4))
       val compiled = fetched.andThenHermetic[Int](info)(sources => ZIO.succeed(sources + 1))
-      for
-        value <- Step.run(compiled)
+      for value <- Step.run(compiled)
       yield assertTrue(value == 5, compiled.mirror == RuntimeKind.Hermetic)
     ,
     test("an aspect error joins the step error"):
@@ -83,8 +86,7 @@ object StepSpec extends ZIOSpecDefault:
     ,
     test("sandboxed lifts a cached step so a hermetic aspect applies"):
       val testStep = Step.cached[Int](info)(ZIO.succeed(1)).sandboxed @@ remote
-      for
-        value <- Step.run(testStep)
+      for value <- Step.run(testStep)
       yield assertTrue(value == 1, testStep.mirror == RuntimeKind.Hermetic)
     ,
     test("lift keeps a ZIO aspect on the effect"):
@@ -94,15 +96,14 @@ object StepSpec extends ZIOSpecDefault:
         )(using _root_.zio.Trace): ZIO[R, E, A] =
           zio.map(value => value)
       val step = Step.local[Int](info)(ZIO.succeed(7)) @@ StepAspect.lift(mark) @@ StepAspect.timed
-      for
-        value <- Step.run(step)
+      for value <- Step.run(step)
       yield assertTrue(value == 7)
     ,
     test("a remote aspect is rejected on a local step, a cached step, a mapped cached step, and a mixed zip"):
-      val local = messages("localStep @@ remote")
+      val local    = messages("localStep @@ remote")
       val testStep = messages("cachedStep @@ remote")
-      val mapped = messages("cachedStep.map(_ + 1) @@ remote")
-      val mixed = messages("hermeticStep.zip(localStep) @@ remote")
+      val mapped   = messages("cachedStep.map(_ + 1) @@ remote")
+      val mixed    = messages("hermeticStep.zip(localStep) @@ remote")
       assertTrue(
         local.exists(_.contains("StepKind.Local")),
         testStep.exists(_.contains("StepKind.Cached")),
@@ -111,7 +112,7 @@ object StepSpec extends ZIOSpecDefault:
       )
     ,
     test("a value without a codec cannot feed a hermetic step or be cached"):
-      val fed = messages("Step.local[Opaque](info)(opaqueEffect).andThenHermetic[Int](info)(_ => intEffect)")
+      val fed    = messages("Step.local[Opaque](info)(opaqueEffect).andThenHermetic[Int](info)(_ => intEffect)")
       val stored = messages("Step.cached[Opaque](info)(opaqueEffect)")
       assertTrue(
         fed.exists(_.contains("has no Stored codec")),
@@ -120,10 +121,10 @@ object StepSpec extends ZIOSpecDefault:
     ,
     test("composing aspects intersects their kinds"):
       val onCompile = messages("hermeticStep @@ (remote @@ StepAspect.timed)")
-      val onTest = messages("cachedStep @@ (StepAspect.timed @@ remote)")
-      val widened = messages("val anyKind: StepAspect[Any, Nothing, StepKind] = remote; hermeticStep @@ anyKind")
-      assertTrue(onCompile.isEmpty, onTest.exists(_.contains("StepKind.Cached")), widened.nonEmpty)
-    ,
+      val onTest    = messages("cachedStep @@ (StepAspect.timed @@ remote)")
+      val widened   = messages("val anyKind: StepAspect[Any, Nothing, StepKind] = remote; hermeticStep @@ anyKind")
+      assertTrue(onCompile.isEmpty, onTest.exists(_.contains("StepKind.Cached")), widened.nonEmpty),
   )
 
   def spec = algebra
+end StepSpec

@@ -7,20 +7,19 @@ import histos.workspace.IoFailure
 
 import java.nio.file.Path
 
-/** A line the Scala 3 compiler produced. It is text because the compiler speaks
-  * text.
+/** A line the Scala 3 compiler produced. It is text because the compiler speaks text.
   */
 opaque type CompilerMessage = String
 
 object CompilerMessage:
-  def fromCompiler(raw: String): CompilerMessage = raw
+  def fromCompiler(raw: String): CompilerMessage        = raw
   extension (message: CompilerMessage) def text: String = message
 
 /** A JVM binary name, as `Class.getName` reports it. */
 opaque type BinaryName = String
 
 object BinaryName:
-  def fromClass(cls: Class[?]): BinaryName = cls.getName
+  def fromClass(cls: Class[?]): BinaryName       = cls.getName
   extension (name: BinaryName) def value: String = name
 
 enum LoadError:
@@ -50,3 +49,4 @@ enum LoadError:
     case MissingApi(path)   => s"$path has no bootstrap api jar"
     case NoHome             => "no user home, so the api jar cannot be cached"
     case Io(failure)        => failure.message
+end LoadError

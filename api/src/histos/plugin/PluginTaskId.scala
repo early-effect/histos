@@ -10,9 +10,10 @@ enum PluginTaskError:
   case Task(error: TaskNameError)
 
   def message: String = this match
-    case Shape(raw)   => s"'$raw' is not a plugin task id"
+    case Shape(raw)    => s"'$raw' is not a plugin task id"
     case Plugin(error) => error.message
     case Task(error)   => error.message
+end PluginTaskError
 
 object PluginTaskId:
   def parse(raw: String): Either[PluginTaskError, PluginTaskId] =

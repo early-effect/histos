@@ -12,7 +12,7 @@ import histos.resolve.{
   Repositories,
   Transitivity,
   Repository,
-  RepoUrl
+  RepoUrl,
 }
 import histos.zinc.JvmCompile
 import histos.{Dep, DepKind, Platform, ScalaVersion, ToolCatalog}
@@ -21,8 +21,7 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** One jar of the Scala Native standard library or the compiler plugin. The
-  * names go through [[ArtifactName]].
+/** One jar of the Scala Native standard library or the compiler plugin. The names go through [[ArtifactName]].
   */
 enum NativeComponent:
   case Nativelib, CLib, PosixLib, WindowsLib, JavaLib, AuxLib, ScalaLib,
@@ -30,7 +29,7 @@ enum NativeComponent:
 
   def artifact(
       toolchain: NativeToolchain,
-      version: ScalaVersion = ToolCatalog.default.native.bridgeScala
+      version: ScalaVersion = ToolCatalog.default.native.bridgeScala,
   ): String = this match
     case Plugin =>
       ArtifactName.of(
@@ -38,10 +37,10 @@ enum NativeComponent:
           "org.scala-native",
           "nscplugin",
           toolchain.revision.value,
-          DepKind.Full
+          DepKind.Full,
         ),
         version,
-        Platform.Jvm
+        Platform.Jvm,
       )
     case other =>
       ArtifactName.of(
@@ -49,15 +48,15 @@ enum NativeComponent:
           "org.scala-native",
           other.base,
           revision(toolchain, version),
-          DepKind.Binary
+          DepKind.Binary,
         ),
         version,
-        Platform.Native
+        Platform.Native,
       )
 
   def revision(
       toolchain: NativeToolchain,
-      version: ScalaVersion = ToolCatalog.default.native.bridgeScala
+      version: ScalaVersion = ToolCatalog.default.native.bridgeScala,
   ): String = this match
     case ScalaLib | Scala3Lib => s"${version.value}+${toolchain.revision.value}"
     case _                    => toolchain.revision.value
@@ -72,6 +71,7 @@ enum NativeComponent:
     case ScalaLib   => "scalalib"
     case Scala3Lib  => "scala3lib"
     case Plugin     => "nscplugin"
+end NativeComponent
 
 enum NativeFetch:
   case Compiler(error: histos.zinc.CompileError)
@@ -86,14 +86,14 @@ enum NativeFetch:
       s"the Scala Native toolchain has no $artifact $revision"
     case Duplicated(artifact) =>
       s"the Scala Native toolchain has more than one $artifact"
+end NativeFetch
 
-/** Plugin jar, then the native libraries a program may see. `tools` is not
-  * here.
+/** Plugin jar, then the native libraries a program may see. `tools` is not here.
   */
 final class NativeClasspath private (
     val plugin: Path,
     val libraries: List[Path],
-    val input: histos.resolve.ToolInput
+    val input: histos.resolve.ToolInput,
 ):
   def entries: List[Path] = libraries
 
@@ -106,13 +106,12 @@ object NativeComponent:
     NativeComponent.JavaLib,
     NativeComponent.AuxLib,
     NativeComponent.ScalaLib,
-    NativeComponent.Scala3Lib
+    NativeComponent.Scala3Lib,
   )
 
   def libraries(version: ScalaVersion): List[NativeComponent] =
-    order.filter(component =>
-      component != NativeComponent.Scala3Lib || version.value.startsWith("3.")
-    )
+    order.filter(component => component != NativeComponent.Scala3Lib || version.value.startsWith("3."))
+end NativeComponent
 
 object NativeClasspath:
 
@@ -134,7 +133,7 @@ object NativeClasspath:
 
   def fetch(
       toolchain: NativeToolchain,
-      named: Option[ScalaVersion] = None
+      named: Option[ScalaVersion] = None,
   ): ZIO[LockedTools, NativeFetch, NativeClasspath] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
       val version = named.getOrElse(tools.catalog.native.bridgeScala)
@@ -142,14 +141,14 @@ object NativeClasspath:
         histos.native.NativeRequests.libraries(
           version,
           toolchain,
-          tools.repositories
+          tools.repositories,
         )
       tools
         .materialize(request)
         .mapError(NativeFetch.Resolved(_))
         .flatMap: classpath =>
           def one(component: NativeComponent): IO[NativeFetch, Path] =
-            val name = component.artifact(toolchain, version)
+            val name     = component.artifact(toolchain, version)
             val revision = component.revision(toolchain, version)
             classpath.artifacts
               .filter(artifact =>
@@ -160,15 +159,16 @@ object NativeClasspath:
               case Nil         => ZIO.fail(NativeFetch.Missing(name, revision))
               case _           => ZIO.fail(NativeFetch.Duplicated(name))
           for
-            plugin <- one(NativeComponent.Plugin)
+            plugin    <- one(NativeComponent.Plugin)
             libraries <- ZIO.foreach(
               NativeComponent.libraries(version)
             )(one)
           yield new NativeClasspath(
             plugin,
             libraries,
-            histos.resolve.ToolInput(request.id, classpath.artifacts)
+            histos.resolve.ToolInput(request.id, classpath.artifacts),
           )
+end NativeClasspath
 
 object NativeRequests:
   private def nativeRepository(source: NativeSource): Repository = source match
@@ -184,41 +184,40 @@ object NativeRequests:
   def libraries(
       version: ScalaVersion,
       toolchain: NativeToolchain,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     val source = nativeOrigin(toolchain.source)
-    val roots =
-      (NativeComponent.Plugin :: NativeComponent.libraries(version)).map(
-        component =>
-          ToolRoot(
-            "org.scala-native",
-            component.artifact(toolchain, version),
-            component.revision(toolchain, version),
-            Transitivity.Single,
-            source
-          )
+    val roots  =
+      (NativeComponent.Plugin :: NativeComponent.libraries(version)).map(component =>
+        ToolRoot(
+          "org.scala-native",
+          component.artifact(toolchain, version),
+          component.revision(toolchain, version),
+          Transitivity.Single,
+          source,
+        )
       )
     ToolRequest(
       ToolId(
         ToolRole.NativeLibraries,
         version,
-        ToolVariant.Native(toolchain.revision)
+        ToolVariant.Native(toolchain.revision),
       ),
       roots,
-      repos
+      repos,
     )
 
   def linker(
       toolchain: NativeToolchain,
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     val version = catalog.native.bridgeScala
     ToolRequest(
       ToolId(
         ToolRole.NativeLinker,
         version,
-        ToolVariant.Native(toolchain.revision)
+        ToolVariant.Native(toolchain.revision),
       ),
       List("tools", "nir", "util").map(name =>
         ToolRoot.of(
@@ -226,28 +225,28 @@ object NativeRequests:
             "org.scala-native",
             name,
             toolchain.revision.value,
-            DepKind.Binary
+            DepKind.Binary,
           ),
           version,
           Platform.Jvm,
           Transitivity.Single,
-          nativeOrigin(toolchain.source)
+          nativeOrigin(toolchain.source),
         )
       ),
-      repos
+      repos,
     )
 
   def suite(
       toolchain: NativeToolchain,
       catalog: ToolCatalog,
-      repos: Repositories
+      repos: Repositories,
   ): ToolRequest =
     val version = catalog.native.bridgeScala
     ToolRequest(
       ToolId(
         ToolRole.NativeSuite,
         version,
-        ToolVariant.Native(toolchain.revision)
+        ToolVariant.Native(toolchain.revision),
       ),
       List(
         ToolRoot.of(
@@ -255,13 +254,14 @@ object NativeRequests:
             "org.scala-native",
             "test-runner",
             toolchain.revision.value,
-            DepKind.Binary
+            DepKind.Binary,
           ),
           version,
           Platform.Jvm,
           Transitivity.Closure,
-          nativeOrigin(toolchain.source)
+          nativeOrigin(toolchain.source),
         )
       ),
-      repos
+      repos,
     )
+end NativeRequests

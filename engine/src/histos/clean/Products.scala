@@ -1,8 +1,7 @@
 package histos.clean
 
 import histos.cache.CacheEntry
-import histos.select.Selection
-import histos.workflow.CiError
+import histos.select.{SelectError, Selection}
 import histos.workspace.{IoFailure, Workspace}
 import histos.{Module, ProjectGraph, ProjectName}
 
@@ -10,7 +9,8 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** Build products under `.histos/`. Locks, the assembly, and the server stay. */
+/** Build products under `.histos/`. Locks, the assembly, and the server stay.
+  */
 object Products:
   val moduleRoots: List[String] = List(
     "classes",
@@ -21,34 +21,36 @@ object Products:
     "test-quick",
     "jars",
     "link",
-    "run"
+    "run",
   )
 
   val sharedRoots: List[String] = List("provider", "provider-src")
 
-  /** Every product root. Does not read the build. */
-  def wipe(repo: Path): IO[IoFailure, Unit] =
-    ZIO.foreachDiscard(moduleRoots ++ sharedRoots)(name =>
-      Workspace.delete(dot(repo).resolve(name))
-    )
+  /** The compile tally `observe` reads. A successful clean deletes it. */
+  def observation(repo: Path): Path =
+    dot(repo).resolve("observation.json")
 
-  /** One module's subtree under each per-module root. Shared roots stay. */
+  /** Every product root, and the stored tally. Does not read the build. */
+  def wipe(repo: Path): IO[IoFailure, Unit] =
+    ZIO.foreachDiscard(moduleRoots ++ sharedRoots)(name => Workspace.delete(dot(repo).resolve(name))) *> Workspace
+      .delete(observation(repo))
+
+  /** One module's subtree under each per-module root. Shared roots stay. The stored tally goes too: it named products
+    * this wipe just removed.
+    */
   def wipe(repo: Path, modules: List[Module]): IO[IoFailure, Unit] =
     ZIO.foreachDiscard(modules)(module =>
-      ZIO.foreachDiscard(moduleRoots)(name =>
-        Workspace.delete(dot(repo).resolve(name).resolve(module.name.value))
-      )
-    )
+      ZIO.foreachDiscard(moduleRoots)(name => Workspace.delete(dot(repo).resolve(name).resolve(module.name.value)))
+    ) *> Workspace.delete(observation(repo))
 
-  /** Empty names are the full wipe, including shared roots. A name selects
-    * modules only: an aggregate expands to its modules, and upstream stays.
-    * A bad name deletes nothing.
+  /** Empty names are the full wipe, including shared roots. A name selects modules only: an aggregate expands to its
+    * modules, and upstream stays. A bad name deletes nothing.
     */
   def named(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String]
-  ): IO[CiError | IoFailure, List[ProjectName]] =
+      names: List[String],
+  ): IO[SelectError | IoFailure, List[ProjectName]] =
     if names.isEmpty then wipe(repo).as(Nil)
     else
       ZIO.fromEither(Selection.select(graph, names)).flatMap { selected =>
@@ -69,9 +71,10 @@ object Products:
           .mkString("\n")
     s"cleaned\n$dropped"
 
-  def fault(error: CiError | IoFailure): String =
+  def fault(error: SelectError | IoFailure): String =
     error match
-      case found: CiError   => found.message
-      case found: IoFailure => found.message
+      case found: SelectError => found.message
+      case found: IoFailure   => found.message
 
   private def dot(repo: Path): Path = repo.resolve(".histos")
+end Products

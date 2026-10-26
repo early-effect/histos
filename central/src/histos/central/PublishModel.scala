@@ -19,12 +19,14 @@ object DependencyVersion:
     if Text.matches(raw) && !raw.contains("..") then Right(raw) else Left(DependencyVersionError.Bad(raw))
 
   extension (version: DependencyVersion) def value: String = version
+end DependencyVersion
 
 enum DependencyVersionError:
   case Bad(raw: String)
 
   def message: String = this match
     case Bad(raw) => s"'$raw' is not a dependency version"
+end DependencyVersionError
 
 /** One pom dependency. The artifact id already includes its Scala suffix. */
 final case class MavenDependency(group: Organization, name: ArtifactId, version: DependencyVersion)
@@ -45,6 +47,7 @@ enum PublishFault:
   def word: String = this match
     case Stat  => "stat"
     case Write => "write"
+end PublishFault
 
 enum PublishError:
   case EmptyJar
@@ -69,6 +72,7 @@ enum PublishError:
     case Status(code)        => s"publish failed with HTTP $code"
     case Transport(reason)   => reason.message
     case Metadata(reason)    => reason.message
+end PublishError
 
 /** A directory publish names the files it wrote. A snapshot publish names the unique version it uploaded. */
 enum Published:
@@ -84,7 +88,7 @@ object Checksum:
   def sha256(bytes: Chunk[Byte]): Checksum = Digest.sha256(bytes)
 
   extension (sum: Checksum) def value: String = sum
+end Checksum
 
 /** Where one artifact lands. Every path is under the repository root. */
 final case class MavenPaths(directory: Path, jar: Path, pom: Path, jarSha256: Path, pomSha256: Path)
-

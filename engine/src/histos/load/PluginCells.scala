@@ -1,46 +1,25 @@
 package histos.load
 
 import histos.jdk.JdkRuntime
-import histos.plugin.{
-  CellClasspath,
-  DeclaredTask,
-  PluginDetail,
-  PluginRunError,
-  TaskDep
-}
+import histos.plugin.{CellClasspath, DeclaredTask, PluginDetail, PluginRunError, TaskDep}
 import histos.resolve.LockedTools
-import histos.resolve.{
-  BuildResolvers,
-  ClasspathScope,
-  DependencyLock,
-  Repositories,
-  Resolve,
-  ResolveCell,
-  ResolveError
-}
+import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.native.NativeOrigin
 import histos.testrun.{ModuleTestError, TestCompile}
-import histos.zinc.{
-  CompileFeed,
-  CompiledCell,
-  GraphCompile,
-  GraphCompileError,
-  JvmCompile
-}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError, JvmCompile}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** Compiles every `TaskDep.Compile` cell before the plugin task is hashed, then
-  * reads the classpath that compile wrote.
+/** Compiles every `TaskDep.Compile` cell before the plugin task is hashed, then reads the classpath that compile wrote.
   */
 private[load] object PluginCells:
   final case class Cell(
       module: Module,
       version: ScalaVersion,
-      platform: Platform
+      platform: Platform,
   )
 
   def id(cell: Cell): String =
@@ -48,7 +27,7 @@ private[load] object PluginCells:
 
   def selected(
       graph: ProjectGraph,
-      task: DeclaredTask
+      task: DeclaredTask,
   ): Either[PluginRunError, List[Cell]] =
     task.dependsOn.foldLeft[Either[PluginRunError, List[Cell]]](Right(Nil)):
       case (Left(error), _)                                       => Left(error)
@@ -60,10 +39,10 @@ private[load] object PluginCells:
       graph: ProjectGraph,
       name: ProjectName,
       version: Option[ScalaVersion],
-      platform: Option[Platform]
+      platform: Option[Platform],
   ): Either[PluginRunError, List[Cell]] =
     module(graph, name) match
-      case None => Left(failed(s"module ${name.value} is not in the graph"))
+      case None        => Left(failed(s"module ${name.value} is not in the graph"))
       case Some(found) =>
         cells(found, version, platform) match
           case Nil =>
@@ -74,20 +53,17 @@ private[load] object PluginCells:
       repo: Path,
       graph: ProjectGraph,
       task: DeclaredTask,
-      lock: IO[PluginFault, DependencyLock]
+      lock: IO[PluginFault, DependencyLock],
   ): ZIO[Resolve, PluginFault, List[CellClasspath]] =
     ZIO
       .fromEither(selected(graph, task).left.map(PluginFault.Task(_)))
       .flatMap: found =>
         if found.isEmpty then ZIO.succeed(Nil)
-        else
-          lock.flatMap(captured =>
-            ZIO.foreach(found.distinct)(paths(repo, graph, _, captured))
-          )
+        else lock.flatMap(captured => ZIO.foreach(found.distinct)(paths(repo, graph, _, captured)))
 
   private[load] def compile(
       session: histos.zinc.CompileSession,
-      cell: Cell
+      cell: Cell,
   ): ZIO[Resolve, PluginFault, Unit] =
     val histos.zinc.CompileSession(repo, graph, jdk, origin, lock) = session
     for
@@ -95,7 +71,7 @@ private[load] object PluginCells:
         .cellFeed(
           session,
           List(cell.module.name -> cell.version),
-          cell.platform
+          cell.platform,
         )
         .runCollect
         .mapError(error => PluginFault.Compiled(error))
@@ -104,7 +80,7 @@ private[load] object PluginCells:
             case Nil        => ZIO.unit
             case error :: _ => ZIO.fail(PluginFault.Compiled(error))
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
-      _ <- ZIO.unless(sources.isEmpty)(
+      _       <- ZIO.unless(sources.isEmpty)(
         compileTests(repo, graph, cell, sources, jdk, origin, lock).mapError(
           PluginFault.Tested(_)
         )
@@ -118,15 +94,19 @@ private[load] object PluginCells:
       sources: List[Path],
       jdk: JdkRuntime,
       origin: NativeOrigin,
-      lock: DependencyLock
+      lock: DependencyLock,
   ): ZIO[Resolve, ModuleTestError, Unit] =
-    val modules = modulesOf(graph)
+    val modules  = modulesOf(graph)
     val compiled = CompiledCell(
       cell.module.name,
       cell.version,
       cell.platform,
       classes(repo, cell),
-      0
+      0,
+      key = None,
+      changed = true,
+      sources = None,
+      classesWritten = None,
     )
     for _ <- TestCompile
         .compiledTests(
@@ -138,7 +118,7 @@ private[load] object PluginCells:
           jdk,
           origin,
           lock,
-          BuildResolvers(graph.resolvers)
+          BuildResolvers(graph.resolvers),
         )
         .provideSome[Resolve](
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
@@ -149,9 +129,9 @@ private[load] object PluginCells:
       repo: Path,
       graph: ProjectGraph,
       cell: Cell,
-      lock: DependencyLock
+      lock: DependencyLock,
   ): ZIO[Resolve, PluginFault, CellClasspath] =
-    val modules = modulesOf(graph)
+    val modules      = modulesOf(graph)
     val repositories = BuildResolvers(graph.resolvers)
     for
       compile <- compileClasspath(repo, cell, modules, lock, repositories)
@@ -159,7 +139,7 @@ private[load] object PluginCells:
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
         )
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
-      test <-
+      test    <-
         if sources.isEmpty then ZIO.succeed(compile)
         else
           testJars(cell, lock, repositories)
@@ -169,7 +149,7 @@ private[load] object PluginCells:
       cell.version,
       cell.platform,
       compile,
-      test
+      test,
     )
 
   private def compileClasspath(
@@ -177,7 +157,7 @@ private[load] object PluginCells:
       cell: Cell,
       modules: List[Module],
       lock: DependencyLock,
-      repositories: Repositories
+      repositories: Repositories,
   ): ZIO[Resolve & LockedTools, PluginFault, List[Path]] =
     val upstream = Module
       .chain(cell.module, modules, cell.platform)
@@ -188,21 +168,19 @@ private[load] object PluginCells:
         lock,
         repositories,
         ClasspathScope.Compile,
-        cell.module.dependencies
+        cell.module.dependencies,
       )
       library <- standardLibrary(cell).mapError(PluginFault.Tested(_))
-      jars = fetched.filterNot(path =>
-        cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path)
-      )
+      jars = fetched.filterNot(path => cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path))
     yield classes(repo, cell) :: (upstream ++ library ++ jars)
 
   private def testJars(
       cell: Cell,
       lock: DependencyLock,
-      repositories: Repositories
+      repositories: Repositories,
   ): ZIO[Resolve, PluginFault, List[Path]] =
     val compileDeps = Dep.select(cell.module.dependencies, cell.platform)
-    val testDeps = Dep.select(cell.module.testDependencies, cell.platform)
+    val testDeps    = Dep.select(cell.module.testDependencies, cell.platform)
     if testDeps.isEmpty then ZIO.succeed(Nil)
     else
       for
@@ -211,14 +189,14 @@ private[load] object PluginCells:
           lock,
           repositories,
           ClasspathScope.Compile,
-          cell.module.dependencies
+          cell.module.dependencies,
         )
         both <- materialize(
           cell,
           lock,
           repositories,
           ClasspathScope.Test,
-          compileDeps ++ testDeps
+          compileDeps ++ testDeps,
         )
       yield both.filterNot(compile.toSet.contains)
 
@@ -227,7 +205,7 @@ private[load] object PluginCells:
       lock: DependencyLock,
       repositories: Repositories,
       scope: ClasspathScope,
-      dependencies: List[Dep]
+      dependencies: List[Dep],
   ): ZIO[Resolve, PluginFault, List[Path]] =
     val request = ResolveCell(
       cell.module.name,
@@ -235,7 +213,7 @@ private[load] object PluginCells:
       cell.version,
       cell.platform,
       repositories,
-      scope
+      scope,
     )
     Resolve
       .materialize(request, lock)
@@ -244,7 +222,7 @@ private[load] object PluginCells:
   private def testSources(
       repo: Path,
       graph: ProjectGraph,
-      cell: Cell
+      cell: Cell,
   ): IO[ModuleTestError, List[Path]] =
     TestCompile
       .testSources(
@@ -252,7 +230,7 @@ private[load] object PluginCells:
         cell.module,
         modulesOf(graph),
         cell.version,
-        cell.platform
+        cell.platform,
       )
 
   private def standardLibrary(
@@ -262,22 +240,18 @@ private[load] object PluginCells:
       case Platform.Jvm =>
         JvmCompile
           .runtime(cell.version)
-          .mapError(error =>
-            ModuleTestError.Sources(cell.module.name, cell.version, error)
-          )
+          .mapError(error => ModuleTestError.Sources(cell.module.name, cell.version, error))
       case Platform.Js | Platform.Native => ZIO.succeed(Nil)
 
   private def cells(
       module: Module,
       version: Option[ScalaVersion],
-      platform: Option[Platform]
+      platform: Option[Platform],
   ): List[Cell] =
-    val versions = version.fold(module.versions.all)(one =>
-      if module.versions.all.contains(one) then List(one) else Nil
-    )
-    val platforms = platform.fold(module.platforms.all)(one =>
-      if module.platforms.all.contains(one) then List(one) else Nil
-    )
+    val versions =
+      version.fold(module.versions.all)(one => if module.versions.all.contains(one) then List(one) else Nil)
+    val platforms =
+      platform.fold(module.platforms.all)(one => if module.platforms.all.contains(one) then List(one) else Nil)
     versions
       .flatMap(item => platforms.map(target => Cell(module, item, target)))
       .sortBy(cell => (cell.version.value, cell.platform.token))

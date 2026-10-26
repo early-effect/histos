@@ -2,16 +2,7 @@ package histos.zinc
 
 import histos.jdk.JdkRuntime
 import histos.schedule.Histos
-import histos.step.{
-  Input,
-  InputName,
-  InputValue,
-  Need,
-  Phase,
-  Step,
-  StepId,
-  StepInfo
-}
+import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepId, StepInfo}
 import histos.{Module, Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
@@ -29,7 +20,7 @@ final case class CompilePlan(
     native: histos.native.NativeOrigin,
     repositories: histos.resolve.Repositories,
     pool: CompilerPool,
-    tools: histos.resolve.LockedTools
+    tools: histos.resolve.LockedTools,
 )
 
 /** One cell, the class directories it may use, and where its feeds go. */
@@ -40,16 +31,15 @@ private[zinc] final case class CellRun(
     platform: Platform,
     upstreams: Map[ScheduleCells.CellKey, Path],
     hold: ProjectName => UIO[Unit],
-    offer: CompileFeed => Unit
+    offer: CompileFeed => Unit,
 )
 
 private[zinc] object ScheduleCells:
   private[zinc] type CellKey = (ProjectName, ScalaVersion, Platform)
-  private type CellStep =
+  private type CellStep      =
     histos.step.HermeticStep[histos.resolve.Resolve, GraphCompileError, String]
 
-  /** One step per cell. A cell's upstreams are the cells it depends on, at its
-    * own version and platform.
+  /** One step per cell. A cell's upstreams are the cells it depends on, at its own version and platform.
     */
   def goal(
       plan: CompilePlan,
@@ -57,13 +47,13 @@ private[zinc] object ScheduleCells:
       only: Option[Set[String]],
       platform: Option[Platform],
       hold: ProjectName => UIO[Unit],
-      offer: CompileFeed => Unit
+      offer: CompileFeed => Unit,
   ): CellStep =
-    val names = selected.map(_.name).toSet
-    val byName = selected.map(module => module.name -> module).toMap
-    val keys = selected.flatMap(module => keysOf(module, only, platform))
-    val declared = keys.toSet
-    val built = scala.collection.mutable.Map.empty[CellKey, CellStep]
+    val names                        = selected.map(_.name).toSet
+    val byName                       = selected.map(module => module.name -> module).toMap
+    val keys                         = selected.flatMap(module => keysOf(module, only, platform))
+    val declared                     = keys.toSet
+    val built                        = scala.collection.mutable.Map.empty[CellKey, CellStep]
     def cell(key: CellKey): CellStep =
       built.get(key) match
         case Some(found) => found
@@ -73,19 +63,19 @@ private[zinc] object ScheduleCells:
           made
     def make(key: CellKey): CellStep =
       val (name, version, chosen) = key
-      val info = StepInfo(
+      val info                    = StepInfo(
         StepId.Cell(name, version, chosen, Phase.Compile),
         Chunk(
           Input(
             InputName("cell"),
-            InputValue.Text(s"${name.value} ${version.value} ${chosen.token}")
+            InputValue.Text(s"${name.value} ${version.value} ${chosen.token}"),
           )
         ) ++ Chunk(
           Input(
             InputName("jdk"),
             InputValue.Text(
               histos.toolchain.Runtimes.identityToken(plan.jdk.identity)
-            )
+            ),
           ),
           Input(
             InputName("tools"),
@@ -98,14 +88,14 @@ private[zinc] object ScheduleCells:
                     .declaredCompilation(module, version, chosen, plan.native)
                 )
                 .mkString("\n")
-            )
-          )
+            ),
+          ),
         ),
-        Set(Need.Cpu)
+        Set(Need.Cpu),
       )
       val body = (packed: String) =>
         byName.get(name) match
-          case None => ZIO.fail(GraphCompileError.UnknownCell(name, version))
+          case None         => ZIO.fail(GraphCompileError.UnknownCell(name, version))
           case Some(module) =>
             GraphCompile.compileCell(
               CellRun(plan, module, version, chosen, parse(packed), hold, offer)
@@ -130,9 +120,7 @@ private[zinc] object ScheduleCells:
           StepInfo(StepId.Work("none"), Chunk.empty, Set(Need.Cpu))
         )(ZIO.succeed(""))
       case head :: tail =>
-        tail.foldLeft(cell(head))((acc, key) =>
-          acc.zip(cell(key)).map { case (left, right) => join(left, right) }
-        )
+        tail.foldLeft(cell(head))((acc, key) => acc.zip(cell(key)).map { case (left, right) => join(left, right) })
 
   /** Class directories accumulated for one cell, one line per upstream. */
   private[zinc] def render(done: Map[CellKey, Path]): String =
@@ -152,14 +140,13 @@ private[zinc] object ScheduleCells:
     else if right.isEmpty then left
     else s"$left\n$right"
 
-  /** A dependency that does not declare this version and platform is not a
-    * step. The cell reports it missing.
+  /** A dependency that does not declare this version and platform is not a step. The cell reports it missing.
     */
   private def dependencies(
       key: CellKey,
       byName: Map[ProjectName, Module],
       names: Set[ProjectName],
-      declared: Set[CellKey]
+      declared: Set[CellKey],
   ): List[CellKey] =
     val (name, version, chosen) = key
     byName
@@ -174,7 +161,7 @@ private[zinc] object ScheduleCells:
   private def keysOf(
       module: Module,
       only: Option[Set[String]],
-      platform: Option[Platform]
+      platform: Option[Platform],
   ): List[CellKey] =
     val versions = only match
       case None       => module.versions.all
@@ -200,9 +187,10 @@ private[zinc] object ScheduleCells:
         (
           ProjectName.from(name),
           ScalaVersion.from(version),
-          Platform.from(token)
+          Platform.from(token),
         ) match
           case (Right(module), Right(scalaVersion), Right(chosen)) =>
             Some(((module, scalaVersion, chosen), Path.of(path)))
           case _ => None
       case _ => None
+end ScheduleCells

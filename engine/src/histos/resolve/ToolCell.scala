@@ -1,14 +1,6 @@
 package histos.resolve
 
-import histos.{
-  Dep,
-  DepKind,
-  JsVersion,
-  NativeVersion,
-  ScalaVersion,
-  JsEnv,
-  Platform
-}
+import histos.{Dep, DepKind, JsVersion, NativeVersion, ScalaVersion, JsEnv, Platform}
 
 enum ToolRole:
   case Compiler, Semanticdb, JsLibraries, JsLinker, JsEnvironment, JsSuite,
@@ -44,7 +36,7 @@ object ToolVariant:
       value.split(":").toList match
         case _ :: revision :: env :: Nil =>
           for
-            version <- JsVersion.from(revision).toOption
+            version     <- JsVersion.from(revision).toOption
             environment <- JsEnv.values.find(_.toString.equalsIgnoreCase(env))
           yield ToolVariant.Suite(version, environment)
         case _ => None
@@ -57,7 +49,7 @@ object ToolVariant:
 final case class ToolId(
     role: ToolRole,
     scalaVersion: ScalaVersion,
-    variant: ToolVariant
+    variant: ToolVariant,
 ):
   def token: String = s"${role.token} ${scalaVersion.value} ${variant.token}"
 
@@ -80,7 +72,7 @@ final case class ToolRoot(
     name: String,
     revision: String,
     transitivity: Transitivity,
-    origin: Option[Repository] = None
+    origin: Option[Repository] = None,
 ):
   def dependency: Dep = Dep.trusted(organization, name, revision, DepKind.Java)
 
@@ -90,26 +82,26 @@ object ToolRoot:
       version: ScalaVersion,
       platform: Platform,
       transitivity: Transitivity,
-      origin: Option[Repository]
+      origin: Option[Repository],
   ): ToolRoot = ToolRoot(
     dependency.organization,
     ArtifactName.of(dependency, version, platform),
     dependency.revision,
     transitivity,
-    origin
+    origin,
   )
 
 final case class ToolRequest(
     id: ToolId,
     roots: List[ToolRoot],
-    repositories: Repositories
+    repositories: Repositories,
 )
 final case class LockedTool(
     id: ToolId,
     roots: List[ToolRoot],
     repositories: List[Repository],
     artifacts: List[LockedArtifact],
-    evictions: List[Eviction]
+    evictions: List[Eviction],
 )
 
 enum ToolRootFault:

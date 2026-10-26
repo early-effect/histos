@@ -2,7 +2,7 @@ package histos.schedule
 
 import histos.step.{Need, Step, StepId, StepInfo, Stored, StoredError}
 
-import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer}
+import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object HistosSpec extends ZIOSpecDefault:
@@ -10,7 +10,7 @@ object HistosSpec extends ZIOSpecDefault:
   private val infoB = StepInfo(StepId.Work("b"), Chunk.empty, Set(Need.Cpu))
 
   private given Stored[Int] with
-    def encode(value: Int): Chunk[Byte] = Chunk.fromArray(value.toString.getBytes)
+    def encode(value: Int): Chunk[Byte]                      = Chunk.fromArray(value.toString.getBytes)
     def decode(bytes: Chunk[Byte]): Either[StoredError, Int] =
       new String(bytes.toArray).toIntOption match
         case Some(value) => Right(value)
@@ -40,7 +40,7 @@ object HistosSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           ran <- Ref.make(false)
-          upstream = Step.local[Int](infoA)(ZIO.fail("boom"))
+          upstream  = Step.local[Int](infoA)(ZIO.fail("boom"))
           dependent = upstream.andThenHermetic[Int](infoB)(_ => ran.set(true) *> ZIO.succeed(1))
           running <- ZIO.serviceWithZIO[Histos](_.start(dependent))
           outcome <- running.outcome
@@ -51,6 +51,24 @@ object HistosSpec extends ZIOSpecDefault:
             case _: Outcome.Done[?, ?]   => false
           assertTrue(!did, failed)
     ,
+    (test("events stay readable after the run completes"):
+      ZIO.scoped:
+        for
+          running <- ZIO.serviceWithZIO[Histos](
+            _.start(Step.local[Unit](infoA)(ZIO.unit))
+          )
+          _     <- running.outcome
+          found <- running.events.take(2).runCollect.timeout(2.seconds)
+        yield
+          val readable = found match
+            case Some(events) =>
+              events.exists:
+                case StepEvent.Finished(_, Source.Ran, _) => true
+                case _                                    => false
+            case None => false
+          assertTrue(readable)
+    ) @@ TestAspect.withLiveClock,
   ).provide(one)
 
   def spec = executor
+end HistosSpec

@@ -26,7 +26,7 @@ object SnapshotSpec extends ZIOSpecDefault:
           named <- SnapshotMetadata.parse("0.0.1-SNAPSHOT")
         yield
           val unique = SnapshotVersion(named.base, SnapshotStamp.from(instant), 4)
-          val xml = SnapshotMetadata.render(
+          val xml    = SnapshotMetadata.render(
             SnapshotDocument(
               Organization("rocks.earlyeffect"),
               name,
@@ -48,7 +48,7 @@ object SnapshotSpec extends ZIOSpecDefault:
     ,
     test("http is only a repository on loopback, and a bad url fails before a publish"):
       val central = "https://central.sonatype.com/repository/maven-snapshots"
-      val trust = TransportFault.from(ClientError.InvalidTrust("s3cret"))
+      val trust   = TransportFault.from(ClientError.InvalidTrust("s3cret"))
       assertTrue(
         SnapshotRepository.from(central) == Right(SnapshotRepository.central),
         SnapshotRepository.from(s"$central/") == Right(SnapshotRepository.central),
@@ -63,7 +63,7 @@ object SnapshotSpec extends ZIOSpecDefault:
     ,
     test("a secret does not render its value"):
       val secret = Config.Secret(Chunk.fromArray("s3cret".toCharArray))
-      val creds = RepositoryUser.from("maven").map(RepositorySecret(_, secret))
+      val creds  = RepositoryUser.from("maven").map(RepositorySecret(_, secret))
       assertTrue(
         !secret.toString.contains("s3cret"),
         creds.forall(shown => !shown.toString.contains("s3cret")),
@@ -74,12 +74,14 @@ object SnapshotSpec extends ZIOSpecDefault:
         for
           open <- depot("maven", "secret")
           (base, store) = open
-          number = ShipNumber("1.4.2")
-          group = Organization("rocks.earlyeffect")
-          name <- ZIO.fromEither(ArtifactId.from("histos"))
+          number        = ShipNumber("1.4.2")
+          group         = Organization("rocks.earlyeffect")
+          name      <- ZIO.fromEither(ArtifactId.from("histos"))
           publisher <- layer(base, "maven", "secret")
-          refused <- ZIO
-            .serviceWithZIO[Publisher](_.publish(Artifact(group, name, Revision.Release(ReleaseVersion(number)), bytes)))
+          refused   <- ZIO
+            .serviceWithZIO[Publisher](
+              _.publish(Artifact(group, name, Revision.Release(ReleaseVersion(number)), bytes))
+            )
             .provide(publisher)
             .either
           files <- store.get
@@ -91,22 +93,24 @@ object SnapshotSpec extends ZIOSpecDefault:
     test("two deploys increment the build and keep the checksum"):
       ZIO.scoped:
         for
-          _ <- TestClock.setTime(instant)
+          _    <- TestClock.setTime(instant)
           open <- depot("maven", "secret")
           (base, store) = open
-          group = Organization("rocks.earlyeffect")
-          name <- ZIO.fromEither(ArtifactId.from("histos"))
+          group         = Organization("rocks.earlyeffect")
+          name      <- ZIO.fromEither(ArtifactId.from("histos"))
           publisher <- layer(base, "maven", "secret")
-          first <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher)
-          second <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher)
-          files <- store.get
-          jar = files.get(path("histos-0.0.1-20261021.140102-1.jar"))
-          sha = text(files, path("histos-0.0.1-20261021.140102-1.jar.sha256"))
-          pom = text(files, path("histos-0.0.1-20261021.140102-1.pom"))
+          first     <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher)
+          second    <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher)
+          files     <- store.get
+          jar  = files.get(path("histos-0.0.1-20261021.140102-1.jar"))
+          sha  = text(files, path("histos-0.0.1-20261021.140102-1.jar.sha256"))
+          pom  = text(files, path("histos-0.0.1-20261021.140102-1.pom"))
           meta = text(files, path("maven-metadata.xml"))
         yield assertTrue(
-          first == Published.Snapshot(SnapshotVersion(baseOf("0.0.1"), SnapshotStamp.from(instant), 1), Checksum.sha256(bytes)),
-          second == Published.Snapshot(SnapshotVersion(baseOf("0.0.1"), SnapshotStamp.from(instant), 2), Checksum.sha256(bytes)),
+          first == Published
+            .Snapshot(SnapshotVersion(baseOf("0.0.1"), SnapshotStamp.from(instant), 1), Checksum.sha256(bytes)),
+          second == Published
+            .Snapshot(SnapshotVersion(baseOf("0.0.1"), SnapshotStamp.from(instant), 2), Checksum.sha256(bytes)),
           jar == Some(bytes),
           sha.stripLineEnd == Checksum.sha256(bytes).value,
           pom.contains("<artifactId>histos</artifactId>"),
@@ -120,27 +124,27 @@ object SnapshotSpec extends ZIOSpecDefault:
     test("a saturated build number is refused and uploads nothing"):
       ZIO.scoped:
         for
-          _ <- TestClock.setTime(instant)
+          _    <- TestClock.setTime(instant)
           open <- depot("maven", "secret")
           (base, store) = open
           named <- ZIO.fromEither(SnapshotMetadata.parse("0.0.1-SNAPSHOT"))
-          name <- ZIO.fromEither(ArtifactId.from("histos"))
+          name  <- ZIO.fromEither(ArtifactId.from("histos"))
           xml = SnapshotMetadata.render(
-                  SnapshotDocument(
-                    Organization("rocks.earlyeffect"),
-                    name,
-                    named.revision,
-                    SnapshotStamp.from(instant),
-                    Int.MaxValue,
-                    SnapshotVersion(named.base, SnapshotStamp.from(instant), Int.MaxValue),
-                    SnapshotUpdated.from(instant),
-                  )
-                )
+            SnapshotDocument(
+              Organization("rocks.earlyeffect"),
+              name,
+              named.revision,
+              SnapshotStamp.from(instant),
+              Int.MaxValue,
+              SnapshotVersion(named.base, SnapshotStamp.from(instant), Int.MaxValue),
+              SnapshotUpdated.from(instant),
+            )
+          )
           _ <- store.set(Map(path("maven-metadata.xml") -> Chunk.fromArray(xml.getBytes(StandardCharsets.UTF_8))))
           publisher <- layer(base, "maven", "secret")
           group = Organization("rocks.earlyeffect")
           refused <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher).either
-          files <- store.get
+          files   <- store.get
         yield assertTrue(
           refused == Left(PublishError.Metadata(MetadataFault.Saturated)),
           !files.keys.exists(_.endsWith(".jar")),
@@ -149,13 +153,13 @@ object SnapshotSpec extends ZIOSpecDefault:
     test("a wrong password is rejected and is not in the error"):
       ZIO.scoped:
         for
-          _ <- TestClock.setTime(instant)
+          _    <- TestClock.setTime(instant)
           open <- depot("maven", "secret")
           (base, _) = open
-          group = Organization("rocks.earlyeffect")
-          name <- ZIO.fromEither(ArtifactId.from("histos"))
+          group     = Organization("rocks.earlyeffect")
+          name      <- ZIO.fromEither(ArtifactId.from("histos"))
           publisher <- layer(base, "maven", "nope")
-          refused <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher).either
+          refused   <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher).either
         yield
           val hidden = refused match
             case Left(error) => !error.message.contains("nope") && !error.message.contains("secret")
@@ -169,17 +173,16 @@ object SnapshotSpec extends ZIOSpecDefault:
         })
         for
           server <- Server.install(routes, Server.Config.default.copy(host = "127.0.0.1", port = Port(0)))
-          port <- server.port
+          port   <- server.port
           group = Organization("rocks.earlyeffect")
-          name <- ZIO.fromEither(ArtifactId.from("histos"))
+          name      <- ZIO.fromEither(ArtifactId.from("histos"))
           publisher <- layer(s"http://127.0.0.1:$port/repo", "maven", "secret")
-          refused <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher).either
+          refused   <- ZIO.serviceWithZIO[Publisher](_.publish(artifact(group, name))).provide(publisher).either
         yield
           val hidden = refused match
             case Left(error) => !error.message.contains("s3cret-body")
             case Right(_)    => false
-          assertTrue(refused == Left(PublishError.Status(500)), hidden)
-    ,
+          assertTrue(refused == Left(PublishError.Status(500)), hidden),
   )
 
   private def artifact(group: Organization, name: ArtifactId): Artifact =
@@ -231,3 +234,4 @@ object SnapshotSpec extends ZIOSpecDefault:
     }
 
   def spec = publish
+end SnapshotSpec

@@ -14,7 +14,7 @@ import histos.plugin.{
   PluginRunError,
   PluginTaskId,
   RunRequest,
-  WrittenFile
+  WrittenFile,
 }
 import histos.schedule.Histos.given
 import histos.schedule.{
@@ -34,7 +34,7 @@ import histos.schedule.{
   ScheduleError,
   Scheduler,
   Sendable,
-  StepFailure
+  StepFailure,
 }
 import histos.step.{Need, Step, StepId, StepInfo}
 import histos.task.{TaskError, TaskId, TaskResult}
@@ -50,26 +50,31 @@ import zio.{Chunk, IO, NonEmptyChunk, Ref, Scope, ZIO, ZLayer}
 final case class PluginLink(
     id: PluginId,
     linked: PluginLinked,
-    artifacts: List[String]
+    artifacts: List[String],
 )
 
-/** Loaded plugin classes. The load `Scope` owns `loader` and `threads` and
-  * closes them when the caller finishes. `run` uses an inner `Scope`, so a
-  * plugin's finalizer runs when the task ends, including on interrupt.
+/** Loaded plugin classes. The load `Scope` owns `loader` and `threads` and closes them when the caller finishes. `run`
+  * uses an inner `Scope`, so a plugin's finalizer runs when the task ends, including on interrupt.
   */
 trait PluginRuntime:
   def run(
       id: PluginTaskId,
-      args: PluginArgs
+      args: PluginArgs,
   ): ZIO[ActionCache & RemoteCache & Resolve, PluginFault, PluginOutput]
   def bind: ZIO[
     ActionCache & RemoteCache & Resolve,
     TaskError,
-    Map[TaskId, IO[TaskError, TaskResult]]
+    Map[TaskId, IO[TaskError, TaskResult]],
   ]
   def links: List[PluginLink]
 
 object PluginRuntime:
+  /** First line of a cache hit. The stored body is the rest of the text. */
+  val CacheHit: String = "histos-cache hit"
+
+  def cacheHit(body: String): String =
+    s"$CacheHit\n$body"
+
   private[histos] def loaded(
       repo: Path,
       graph: ProjectGraph,
@@ -77,7 +82,7 @@ object PluginRuntime:
       threads: PluginThreads,
       instances: List[HistosPlugin],
       links: List[PluginLink],
-      launcher: ApiDigest
+      launcher: ApiDigest,
   ): ZIO[Scope, Nothing, PluginRuntime] =
     (Parallelism.live >>> Histos.live).build.map: environment =>
       Running(
@@ -88,7 +93,7 @@ object PluginRuntime:
         instances,
         links,
         launcher,
-        environment.get[Histos]
+        environment.get[Histos],
       )
 
   private final class Running(
@@ -99,19 +104,19 @@ object PluginRuntime:
       instances: List[HistosPlugin],
       val links: List[PluginLink],
       launcher: ApiDigest,
-      runner: Histos
+      runner: Histos,
   ) extends PluginRuntime:
     def run(
         id: PluginTaskId,
-        args: PluginArgs
+        args: PluginArgs,
     ): ZIO[ActionCache & RemoteCache & Resolve, PluginFault, PluginOutput] =
       taskOf(id) match
         case None    => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(_) =>
           for
-            made <- Ref.make(Map.empty[String, PluginOutput])
-            kept <- ZIO.service[ActionCache]
-            remote <- ZIO.service[RemoteCache]
+            made    <- Ref.make(Map.empty[String, PluginOutput])
+            kept    <- ZIO.service[ActionCache]
+            remote  <- ZIO.service[RemoteCache]
             machine <- Machine
               .load(repo)
               .mapError(error =>
@@ -136,7 +141,7 @@ object PluginRuntime:
                   graph,
                   runtime,
                   machine.native,
-                  captured
+                  captured,
                 )
               )
             scheduler = Scheduler(runner, kept, remote)
@@ -156,12 +161,12 @@ object PluginRuntime:
                     upstream,
                     env,
                     scheduler,
-                    lock
-                  )
+                    lock,
+                  ),
               )
             )
             outcome <- ZIO.scoped(runner.start(step).flatMap(_.outcome))
-            output <- outcome match
+            output  <- outcome match
               case Outcome.Done(text) =>
                 made.get
                   .map(_.get(id.render))
@@ -174,20 +179,20 @@ object PluginRuntime:
     def bind: ZIO[
       ActionCache & RemoteCache & Resolve,
       TaskError,
-      Map[TaskId, IO[TaskError, TaskResult]]
+      Map[TaskId, IO[TaskError, TaskResult]],
     ] =
       for
-        cache <- ZIO.service[ActionCache]
-        remote <- ZIO.service[RemoteCache]
+        cache   <- ZIO.service[ActionCache]
+        remote  <- ZIO.service[RemoteCache]
         resolve <- ZIO.service[Resolve]
-        bound <- ZIO.foreach(tasks): (id, _) =>
+        bound   <- ZIO.foreach(tasks): (id, _) =>
           for
             key <- ZIO.fromEither(TaskId.from(id.render))
             runner = run(id, PluginArgs.empty)
               .provide(
                 ZLayer.succeed(cache),
                 ZLayer.succeed(remote),
-                ZLayer.succeed(resolve)
+                ZLayer.succeed(resolve),
               )
               .map(out => TaskResult.Plugin(out))
               .mapError:
@@ -208,25 +213,23 @@ object PluginRuntime:
         upstream: String,
         env: Map[String, String],
         scheduler: Scheduler,
-        lock: IO[PluginFault, DependencyLock]
+        lock: IO[PluginFault, DependencyLock],
     ): ZIO[Resolve, PluginFault, String] =
       val passed = if id == root then args else PluginArgs.empty
       instance(id.plugin) match
-        case None => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
+        case None         => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(plugin) =>
           for
             hashed <- PluginInputs
               .hash(hashRequest(id, task, env))
               .mapError(error => PluginFault.Task(error))
-            inputs <- withUpstream(hashed.inputs, upstream)
+            inputs   <- withUpstream(hashed.inputs, upstream)
             compiled <- PluginCells.classpath(repo, graph, task, lock)
-            action <- ZIO.fromEither(
-              actionOf(id, task, inputs).left.map(error =>
-                PluginFault.Task(error)
-              )
+            action   <- ZIO.fromEither(
+              actionOf(id, task, inputs).left.map(error => PluginFault.Task(error))
             )
             held <- Ref.make[Option[PluginOutput]](None)
-            info = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
+            info  = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
             local = Step.run(
               Step.hermetic[String](info)(
                 produce(id, task, plugin, passed, made, compiled, held, env)
@@ -239,16 +242,16 @@ object PluginRuntime:
                 action,
                 Digest.of(action, Map.empty),
                 local,
-                Sendable.ofAction
+                Sendable.ofAction,
               )
               .mapError:
                 case ScheduleError.Failed(_, error) => error
-                case other => PluginFault.Scheduled(other)
+                case other                          => PluginFault.Scheduled(other)
           yield text
 
     private def withUpstream(
         inputs: List[Input],
-        upstream: String
+        upstream: String,
     ): IO[PluginFault, List[Input]] =
       if upstream.isEmpty then ZIO.succeed(inputs)
       else
@@ -258,7 +261,7 @@ object PluginRuntime:
           .fromEither(InputName.from("upstream"))
           .mapBoth(
             _ => PluginFault.Task(PluginRunError.Defect("InputName")),
-            name => inputs :+ Input(name, InputValue.Hash(sha))
+            name => inputs :+ Input(name, InputValue.Hash(sha)),
           )
 
     private def failed(
@@ -281,7 +284,7 @@ object PluginRuntime:
         made: Ref[Map[String, PluginOutput]],
         compiled: List[histos.plugin.CellClasspath],
         held: Ref[Option[PluginOutput]],
-        env: Map[String, String]
+        env: Map[String, String],
     ): IO[PluginRunError, String] =
       for
         hashed <- PluginInputs.hash(hashRequest(id, task, env))
@@ -293,18 +296,18 @@ object PluginRuntime:
             views(id.plugin),
             args,
             hashed.material,
-            compiled
-          )
+            compiled,
+          ),
         )
-        _ <- check(task, output)
-        _ <- held.set(Some(output))
+        _    <- check(task, output)
+        _    <- held.set(Some(output))
         text <- record(task, output)
-        _ <- made.update(_ + (id.render -> output))
+        _    <- made.update(_ + (id.render -> output))
       yield text
 
     private def invoke(
         plugin: HistosPlugin,
-        request: RunRequest
+        request: RunRequest,
     ): IO[PluginRunError, PluginOutput] =
       val ran = ZIO
         .suspendSucceed(plugin.run(request))
@@ -323,7 +326,7 @@ object PluginRuntime:
 
     private def check(
         task: DeclaredTask,
-        output: PluginOutput
+        output: PluginOutput,
     ): IO[PluginRunError, Unit] =
       val declared = task.outputs.map(_.path.value).toSet
       output.files.find(file => !declared.contains(file.path.value)) match
@@ -344,7 +347,7 @@ object PluginRuntime:
 
     private def record(
         task: DeclaredTask,
-        output: PluginOutput
+        output: PluginOutput,
     ): IO[PluginRunError, String] =
       if task.outputs.isEmpty then ZIO.succeed(output.text)
       else
@@ -362,7 +365,7 @@ object PluginRuntime:
     private def actionOf(
         id: PluginTaskId,
         task: DeclaredTask,
-        inputs: List[Input]
+        inputs: List[Input],
     ): Either[PluginRunError, Action] =
       for
         actionId <- ActionId
@@ -378,13 +381,13 @@ object PluginRuntime:
           task.seal,
           task.needs,
           Some(repo),
-          task.outputs.map(_.path)
-        )
+          task.outputs.map(_.path),
+        ),
       )
 
     private def dependencies(
         plugin: PluginId,
-        task: DeclaredTask
+        task: DeclaredTask,
     ): Either[PluginRunError, List[ActionId]] =
       task.dependsOn.foldLeft[Either[PluginRunError, List[ActionId]]](
         Right(Nil)
@@ -402,16 +405,14 @@ object PluginRuntime:
       taskOf(id) match
         case Some(task) if task.outputs.nonEmpty =>
           PluginOutput(
-            PluginManifest.text(stored),
-            task.outputs.map(output => WrittenFile(output.name, output.path))
+            cacheHit(PluginManifest.text(stored)),
+            task.outputs.map(output => WrittenFile(output.name, output.path)),
           )
-        case _ => PluginOutput(stored, Nil)
+        case _ => PluginOutput(cacheHit(stored), Nil)
 
     private def tasks: List[(PluginTaskId, DeclaredTask)] =
       graph.plugins.flatMap: plugin =>
-        plugin.contribution.tasks.map(task =>
-          PluginTaskId(plugin.id, task.name) -> task
-        )
+        plugin.contribution.tasks.map(task => PluginTaskId(plugin.id, task.name) -> task)
 
     private def taskOf(id: PluginTaskId): Option[DeclaredTask] =
       tasks.collectFirst:
@@ -423,7 +424,7 @@ object PluginRuntime:
     private def hashRequest(
         id: PluginTaskId,
         task: DeclaredTask,
-        env: Map[String, String]
+        env: Map[String, String],
     ): PluginInputs.HashRequest =
       PluginInputs.HashRequest(
         repo,
@@ -433,7 +434,7 @@ object PluginRuntime:
         id,
         jars(id.plugin),
         launcher,
-        env
+        env,
       )
 
     private def jars(id: PluginId): List[String] =
@@ -449,7 +450,7 @@ object PluginRuntime:
           ModuleView(
             module.name,
             module.baseDirectory,
-            module.notes.filter(_.plugin == plugin)
+            module.notes.filter(_.plugin == plugin),
           )
 
     private def refused: Option[String] =
@@ -465,8 +466,7 @@ object PluginRuntime:
           PluginRunError.Linkage(binary(missing))
         case other => PluginRunError.Defect(other.getClass.getName)
 
-    /** The JDK stores the missing binary name on the exception. The name is
-      * recorded. It is not compared.
+    /** The JDK stores the missing binary name on the exception. The name is recorded. It is not compared.
       */
     private def binary(err: Throwable): String =
       Option(err.getMessage)

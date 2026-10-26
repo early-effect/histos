@@ -12,7 +12,7 @@ import histos.zinc.{
   CompileToolchain,
   JvmCompile,
 
-  ScalacFlags
+  ScalacFlags,
 }
 import histos.{JsEnv, JsModuleKind, ScalaVersion}
 
@@ -22,8 +22,7 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** One Scala.js test-adapter run. The engine does not load the linker or a
-  * `JSEnv`.
+/** One Scala.js test-adapter run. The engine does not load the linker or a `JSEnv`.
   */
 final case class JsSuiteRequest(
     version: ScalaVersion,
@@ -36,12 +35,11 @@ final case class JsSuiteRequest(
     processEnv: Map[String, String],
     node: NodeBinary,
     patterns: List[SuitePattern] = Nil,
-    revision: Option[histos.JsVersion] = None
+    revision: Option[histos.JsVersion] = None,
 )
 
-/** Link the Scala.js test bridge and run
-  * `org.scalajs.testing.adapter.TestAdapter` in a child JVM. The engine does
-  * not load `org.scalajs.linker` or a `JSEnv`.
+/** Link the Scala.js test bridge and run `org.scalajs.testing.adapter.TestAdapter` in a child JVM. The engine does not
+  * load `org.scalajs.linker` or a `JSEnv`.
   */
 object JsSuite:
   private val SuiteMain: String = "subprocess.JsSuite"
@@ -60,15 +58,15 @@ object JsSuite:
       processEnv,
       node,
       patterns,
-      revision
-    ) = request
-    val output = work.resolve("out")
+      revision,
+    )              = request
+    val output     = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
-    val classes = bridgeRoot.resolve("classes")
-    val source =
+    val classes    = bridgeRoot.resolve("classes")
+    val source     =
       bridgeRoot.resolve("src").resolve("subprocess").resolve("JsSuite.scala")
     val listed = work.resolve("classpath.txt")
-    val child = work.resolve("child")
+    val child  = work.resolve("child")
     for
       view <- ZIO.service[LockedTools]
       selected = revision.getOrElse(view.catalog.js.revision)
@@ -93,7 +91,7 @@ object JsSuite:
         listed,
         (classpath ++ libraries ++ bridge)
           .map(_.toAbsolutePath.toString)
-          .mkString("\n")
+          .mkString("\n"),
       )
       _ <- write(source, suite(env, patterns))
       _ <- JvmCompile
@@ -103,13 +101,13 @@ object JsSuite:
               histos.js.JsRequests.compiler(env, view.catalog),
               histos.Platform.Jvm,
               jdk,
-              ScalacFlags.empty
+              ScalacFlags.empty,
             ),
             List(source),
             tools,
             classes,
             bridgeRoot.resolve("analysis"),
-            Nil
+            Nil,
           )
         )
         .mapError(JsSuiteError.Library(_))
@@ -122,15 +120,14 @@ object JsSuite:
       MainClass.trusted(SuiteMain),
       child,
       processEnv ++ JsRun.nodeEnv(env, node) ++ Map(
-        "JS_OUT" -> output.toAbsolutePath.toString,
+        "JS_OUT"       -> output.toAbsolutePath.toString,
         "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
         "JS_FRAMEWORK" -> framework,
-        "JS_MODULE" -> kind.token
-      )
+        "JS_MODULE"    -> kind.token,
+      ),
     )
 
-  /** Chekhov rejects `RunConfig` env. Node and jsdom take the child
-    * environment, which is only `PATH`.
+  /** Chekhov rejects `RunConfig` env. Node and jsdom take the child environment, which is only `PATH`.
     */
   private def useRunEnv(env: JsEnv): Boolean = env match
     case JsEnv.Firefox            => false
@@ -319,6 +316,7 @@ object JsSuite:
       .recreate(path)
       .mapError(_ => JsSuiteError.Run(s"could not prepare $path"))
       .unit
+end JsSuite
 
 enum JsSuiteError:
   case Resolved(error: ResolveError)
@@ -331,3 +329,4 @@ enum JsSuiteError:
     case Unavailable     => "the Scala.js test adapter could not be fetched"
     case Library(error)  => error.message
     case Run(text)       => text
+end JsSuiteError

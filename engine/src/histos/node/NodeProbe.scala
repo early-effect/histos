@@ -22,12 +22,12 @@ object NodeProbe:
           ZIO.fail(
             NodeError.Version(
               home.resolve("bin").resolve("node"),
-              NodeVersionError.Missing
+              NodeVersionError.Missing,
             )
           )
 
   private def launcher(dir: Path): Option[Path] =
-    val binary = dir.resolve("bin").resolve("node")
+    val binary  = dir.resolve("bin").resolve("node")
     val windows = dir.resolve("bin").resolve("node.exe")
     if Files.isRegularFile(binary) then Some(binary)
     else if Files.isRegularFile(windows) then Some(windows)
@@ -47,7 +47,7 @@ object NodeProbe:
             NodeHome(
               dir,
               hasBinary = false,
-              version = Left(NodeVersionError.Missing)
+              version = Left(NodeVersionError.Missing),
             )
           )
         case Some(file) =>
@@ -64,7 +64,7 @@ object NodeProbe:
                   NodeHome(
                     dir,
                     hasBinary = true,
-                    version = Left(NodeVersionError.NotExecutable(file))
+                    version = Left(NodeVersionError.NotExecutable(file)),
                   )
                 )
               case true =>
@@ -79,7 +79,7 @@ object NodeProbe:
                   version =>
                     ZIO.succeed(
                       NodeHome(dir, hasBinary = true, version = Right(version))
-                    )
+                    ),
                 )
 
   private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
@@ -91,9 +91,7 @@ object NodeProbe:
         events <- ChildProcess
           .command(List(binary.toString, "--version"), work, Map.empty)
           .runCollect
-          .mapError(error =>
-            NodeError.Version(binary, NodeVersionError.Process(error))
-          )
+          .mapError(error => NodeError.Version(binary, NodeVersionError.Process(error)))
         code <- ZIO
           .fromOption(events.collect { case ChildEvent.Exited(code) =>
             code
@@ -112,3 +110,4 @@ object NodeProbe:
               NodeError.Version(binary, NodeVersionError.Status(code.value))
             )
       yield version
+end NodeProbe

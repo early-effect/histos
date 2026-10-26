@@ -23,7 +23,7 @@ import histos.plugin.{
   Seal,
   TaskDep,
   TaskName,
-  WrittenFile
+  WrittenFile,
 }
 import histos.resolve.{IdleResolve, Resolve}
 import histos.schedule.{ActionCache, Digest, PluginManifest, RemoteCache}
@@ -39,8 +39,8 @@ import zio.test.*
 
 object PluginRunSpec extends ZIOSpecDefault:
   private val launcher = ApiDigest.trusted("ab" * 32)
-  private val echoId = PluginId("test.echo")
-  private val otherId = PluginId("test.other")
+  private val echoId   = PluginId("test.echo")
+  private val otherId  = PluginId("test.other")
 
   private final class Script(
       val id: PluginId,
@@ -48,7 +48,7 @@ object PluginRunSpec extends ZIOSpecDefault:
       calls: Ref[Int],
       seen: Ref[List[ModuleView]],
       argsSeen: Ref[List[(String, PluginArgs)]],
-      body: RunRequest => ZIO[Scope, PluginRunError, PluginOutput]
+      body: RunRequest => ZIO[Scope, PluginRunError, PluginOutput],
   ) extends HistosPlugin:
     def contribute: Contribution = value
 
@@ -57,12 +57,13 @@ object PluginRunSpec extends ZIOSpecDefault:
         seen.set(request.modules) *>
         argsSeen.update(_ :+ (request.id.render -> request.args)) *>
         body(request)
+  end Script
 
   private def task(
       name: TaskName,
       seal: Seal,
       outputs: List[DeclaredOutput],
-      dependsOn: List[TaskDep]
+      dependsOn: List[TaskDep],
   ): DeclaredTask =
     DeclaredTask(name, seal, Set.empty, Nil, outputs, dependsOn)
 
@@ -72,13 +73,13 @@ object PluginRunSpec extends ZIOSpecDefault:
       calls: Ref[Int],
       seen: Ref[List[ModuleView]],
       argsSeen: Ref[List[(String, PluginArgs)]],
-      body: RunRequest => ZIO[Scope, PluginRunError, PluginOutput]
+      body: RunRequest => ZIO[Scope, PluginRunError, PluginOutput],
   ): Script =
     Script(id, Contribution(tasks, Nil, Nil), calls, seen, argsSeen, body)
 
   private def graph(
       plugin: HistosPlugin,
-      docs: ModuleDef
+      docs: ModuleDef,
   ): ZIO[Any, BuildError, ProjectGraph] =
     ZIO.fromEither(Projects(use(plugin), docs))
 
@@ -86,7 +87,7 @@ object PluginRunSpec extends ZIOSpecDefault:
       repo: Path,
       built: ProjectGraph,
       plugin: HistosPlugin,
-      links: List[PluginLink] = Nil
+      links: List[PluginLink] = Nil,
   ): URIO[Scope, PluginRuntime] =
     val parent = Option(getClass.getClassLoader).getOrElse(
       ClassLoader.getSystemClassLoader
@@ -103,7 +104,7 @@ object PluginRunSpec extends ZIOSpecDefault:
       PluginLink(
         echoId,
         PluginLinked.FromBinary(launcher),
-        jars.map(_.toString)
+        jars.map(_.toString),
       )
     )
 
@@ -126,7 +127,7 @@ object PluginRunSpec extends ZIOSpecDefault:
   private def delete(root: Path): UIO[Unit] =
     ZIO.attempt {
       if Files.exists(root) then
-        val walk = Files.walk(root)
+        val walk  = Files.walk(root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()
@@ -141,7 +142,7 @@ object PluginRunSpec extends ZIOSpecDefault:
       id: PluginTaskId,
       args: PluginArgs,
       cache: ActionCache,
-      resolve: zio.ULayer[Resolve] = IdleResolve.layer
+      resolve: zio.ULayer[Resolve] = IdleResolve.layer,
   ) =
     plugins.flatMap:
       _.run(id, args)
@@ -160,15 +161,15 @@ object PluginRunSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          name <- ZIO.fromEither(ProjectName.from("docs"))
+          name     <- ZIO.fromEither(ProjectName.from("docs"))
           page = task(
             TaskName("echo"),
             Seal.Open,
             Nil,
-            List(TaskDep.Compile(name, None, Some(Jvm)))
+            List(TaskDep.Compile(name, None, Some(Jvm))),
           )
           live = script(
             echoId,
@@ -176,19 +177,19 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("captured generation", Nil))
+            _ => ZIO.succeed(PluginOutput("captured generation", Nil)),
           )
           dependency = Dep("dev.fixture:gate:1.0.0")
           built <- graph(
             live,
-            module("docs", Jvm)(scala"3.9.0").libraryDependencies(dependency)
+            module("docs", Jvm)(scala"3.9.0").libraryDependencies(dependency),
           )
           dir <- directory
-          _ <- ZIO.attempt {
+          _   <- ZIO.attempt {
             Files.createDirectories(dir.resolve("docs/src"))
             Files.writeString(
               dir.resolve("docs/src/Hello.scala"),
-              "object Hello:\n  val value = 1\n"
+              "object Hello:\n  val value = 1\n",
             )
           }
           jar = dir.resolve("gate.jar")
@@ -197,14 +198,14 @@ object PluginRunSpec extends ZIOSpecDefault:
               new java.util.jar.JarOutputStream(Files.newOutputStream(jar))
             stream.close()
           }
-          hash <- histos.toolchain.RuntimeFiles.sha256(jar)
+          hash  <- histos.toolchain.RuntimeFiles.sha256(jar)
           tools <- ZIO.service[histos.resolve.LockedTools]
           artifact = histos.resolve.LockedArtifact(
             "dev.fixture",
             "gate",
             "1.0.0",
             hash,
-            histos.resolve.Repository.Central
+            histos.resolve.Repository.Central,
           )
           before = histos.resolve.DependencyLock(
             List(
@@ -217,22 +218,21 @@ object PluginRunSpec extends ZIOSpecDefault:
                     .LockedDirect("dev.fixture", "gate", "1.0.0", DepKind.Java)
                 ),
                 List(artifact),
-                Nil
+                Nil,
               )
             ),
             Nil,
-            tools.lock.tools.filter(_.id.scalaVersion == ScalaVersion("3.9.0"))
+            tools.lock.tools.filter(_.id.scalaVersion == ScalaVersion("3.9.0")),
           )
           after = before.copy(
-            cells =
-              before.cells.map(_.copy(scalaVersion = ScalaVersion("3.10.0"))),
+            cells = before.cells.map(_.copy(scalaVersion = ScalaVersion("3.10.0"))),
             tools = tools.lock.tools.filter(
               _.id.scalaVersion == ScalaVersion("3.10.0")
-            )
+            ),
           )
           _ <- histos.workspace.Workspace.writeString(
             Resolve.lockPath(dir),
-            histos.resolve.DependencyLock.render(before)
+            histos.resolve.DependencyLock.render(before),
           )
           reached <- Promise.make[Nothing, Unit]
           proceed <- Promise.make[Nothing, Unit]
@@ -251,46 +251,46 @@ object PluginRunSpec extends ZIOSpecDefault:
                       held.revision,
                       jar,
                       hash,
-                      held.repository
+                      held.repository,
                     )
                   )
               else tools.resolve.fetch(held)
             def resolvePlugin(
                 dependency: Dep,
-                repositories: histos.resolve.Repositories
+                repositories: histos.resolve.Repositories,
             ) = tools.resolve.resolvePlugin(dependency, repositories)
             def sources(
                 organization: String,
                 name: String,
                 revision: String,
-                repository: histos.resolve.Repository
+                repository: histos.resolve.Repository,
             ) = tools.resolve.sources(organization, name, revision, repository)
           (_, cache) <- recording
-          running <- run(
+          running    <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
             cache,
-            ZLayer.succeed(resolver)
+            ZLayer.succeed(resolver),
           ).forkScoped
           _ <- reached.await
           _ <- histos.workspace.Workspace.writeString(
             Resolve.lockPath(dir),
-            histos.resolve.DependencyLock.render(after)
+            histos.resolve.DependencyLock.render(after),
           )
-          _ <- proceed.succeed(())
-          result <- running.join
+          _       <- proceed.succeed(())
+          result  <- running.join
           entered <- calls.get
         yield assertTrue(
           result == PluginOutput("captured generation", Nil),
-          entered == 1
+          entered == 1,
         )
     ,
     test("a run sees only the notes of its own plugin"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           page = task(TaskName("echo"), Seal.Open, Nil, Nil)
           live = script(
@@ -299,16 +299,16 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("ok", Nil))
+            _ => ZIO.succeed(PluginOutput("ok", Nil)),
           )
-          built <- graph(live, noted)
-          dir <- directory
+          built      <- graph(live, noted)
+          dir        <- directory
           (_, cache) <- recording
-          out <- run(
+          out        <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
-            cache
+            cache,
           )
           views <- seen.get
         yield
@@ -317,7 +317,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             out.text == "ok",
             notes.map(_.plugin) == List(echoId),
             notes.map(_.value.value) == List("docs"),
-            !notes.exists(_.plugin == otherId)
+            !notes.exists(_.plugin == otherId),
           )
     ,
     test(
@@ -325,14 +325,14 @@ object PluginRunSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           page = task(
             TaskName("echo"),
             Seal.Hermetic,
             List(DeclaredOutput(OutputName("page"), RepoPath("out.txt"))),
-            Nil
+            Nil,
           )
           live = script(
             echoId,
@@ -349,40 +349,77 @@ object PluginRunSpec extends ZIOSpecDefault:
                 .as {
                   PluginOutput(
                     "page",
-                    List(WrittenFile(OutputName("page"), RepoPath("out.txt")))
+                    List(WrittenFile(OutputName("page"), RepoPath("out.txt"))),
                   )
-                }
+                },
           )
-          built <- graph(live, core)
-          dir <- directory
+          built           <- graph(live, core)
+          dir             <- directory
           (values, cache) <- recording
           id = PluginTaskId(echoId, TaskName("echo"))
-          first <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
-          once <- calls.get
+          first  <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
+          once   <- calls.get
           stored <- values.get
           second <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
-          still <- calls.get
-          _ <- ZIO.attempt(Files.delete(dir.resolve("out.txt"))).orDie
-          third <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
-          again <- calls.get
+          still  <- calls.get
+          _      <- ZIO.attempt(Files.delete(dir.resolve("out.txt"))).orDie
+          third  <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
+          again  <- calls.get
         yield
           val blobs = stored.values.toList
           assertTrue(
-            first.text == "page" && second.text == "page" && third.text == "page",
+            first.text == "page" &&
+              second.text == PluginRuntime.cacheHit("page") &&
+              third.text == "page",
             once == 1 && still == 1 && again == 2,
             blobs match
               case only :: Nil =>
                 only.startsWith(PluginManifest.Header) && only.contains(
                   "out.txt"
-                )
-              case _ => false
+                ) && !only.startsWith(PluginRuntime.CacheHit)
+              case _ => false,
           )
+    ,
+    test("a cache hit marks the stored text and a miss prints it"):
+      ZIO.scoped:
+        for
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
+          argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
+          body = "recorded hit stays cached in the task text"
+          page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
+          live = script(
+            echoId,
+            List(page),
+            calls,
+            seen,
+            argsSeen,
+            _ => ZIO.succeed(PluginOutput(body, Nil)),
+          )
+          built      <- graph(live, core)
+          dir        <- directory
+          (_, cache) <- recording
+          id = PluginTaskId(echoId, TaskName("echo"))
+          first  <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
+          once   <- calls.get
+          second <- run(runtime(dir, built, live), id, PluginArgs.empty, cache)
+          still  <- calls.get
+        yield assertTrue(
+          first.text == body,
+          second.text == PluginRuntime.cacheHit(body),
+          second.text.split("\n", 2).toList == List(
+            PluginRuntime.CacheHit,
+            body,
+          ),
+          once == 1 && still == 1,
+          !body.startsWith(PluginRuntime.CacheHit),
+        )
     ,
     test("the same plugin jar at another path keeps the digest"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
           live = script(
@@ -391,16 +428,16 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("ok", Nil))
+            _ => ZIO.succeed(PluginOutput("ok", Nil)),
           )
-          built <- graph(live, core)
-          dir <- directory
-          here <- directory
-          there <- directory
+          built           <- graph(live, core)
+          dir             <- directory
+          here            <- directory
+          there           <- directory
           (first, second) <- ZIO.attempt {
             (
               Files.writeString(here.resolve("echo.jar"), "jar"),
-              Files.writeString(there.resolve("echo.jar"), "jar")
+              Files.writeString(there.resolve("echo.jar"), "jar"),
             )
           }.orDie
           (values, cache) <- recording
@@ -409,16 +446,16 @@ object PluginRunSpec extends ZIOSpecDefault:
             runtime(dir, built, live, jarsAt(List(first))),
             id,
             PluginArgs.empty,
-            cache
+            cache,
           )
           _ <- run(
             runtime(dir, built, live, jarsAt(List(second))),
             id,
             PluginArgs.empty,
-            cache
+            cache,
           )
           entered <- calls.get
-          stored <- values.get
+          stored  <- values.get
         yield assertTrue(entered == 1, stored.size == 1)
     ,
     test(
@@ -426,8 +463,8 @@ object PluginRunSpec extends ZIOSpecDefault:
     ):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
           live = script(
@@ -436,20 +473,20 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("ok", Nil))
+            _ => ZIO.succeed(PluginOutput("ok", Nil)),
           )
-          built <- graph(live, core)
-          dir <- directory
-          here <- directory
-          there <- directory
+          built           <- graph(live, core)
+          dir             <- directory
+          here            <- directory
+          there           <- directory
           (first, second) <- ZIO.attempt {
             (
               Files.writeString(here.resolve("echo.jar"), "one"),
-              Files.writeString(there.resolve("echo.jar"), "two")
+              Files.writeString(there.resolve("echo.jar"), "two"),
             )
           }.orDie
           listed = List(first, second, first)
-          id = PluginTaskId(echoId, TaskName("echo"))
+          id     = PluginTaskId(echoId, TaskName("echo"))
           hashed <- PluginInputs.hash(
             PluginInputs.HashRequest(
               dir,
@@ -459,15 +496,15 @@ object PluginRunSpec extends ZIOSpecDefault:
               id,
               listed.map(_.toString),
               launcher,
-              Map.empty
+              Map.empty,
             )
           )
           (_, cache) <- recording
-          out <- run(
+          out        <- run(
             runtime(dir, built, live, jarsAt(listed)),
             id,
             PluginArgs.empty,
-            cache
+            cache,
           ).either
         yield
           val jars =
@@ -475,20 +512,20 @@ object PluginRunSpec extends ZIOSpecDefault:
           assertTrue(
             jars.size == 2,
             jars.map(_.name).distinct.size == 2,
-            out == Right(PluginOutput("ok", Nil))
+            out == Right(PluginOutput("ok", Nil)),
           )
     ,
     test("a missing declared file is not stored"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           page = task(
             TaskName("echo"),
             Seal.Hermetic,
             List(DeclaredOutput(OutputName("page"), RepoPath("out.txt"))),
-            Nil
+            Nil,
           )
           live = script(
             echoId,
@@ -496,16 +533,16 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("nope", Nil))
+            _ => ZIO.succeed(PluginOutput("nope", Nil)),
           )
-          built <- graph(live, core)
-          dir <- directory
+          built           <- graph(live, core)
+          dir             <- directory
           (values, cache) <- recording
-          out <- run(
+          out             <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
-            cache
+            cache,
           ).either
           stored <- values.get
         yield assertTrue(
@@ -517,27 +554,27 @@ object PluginRunSpec extends ZIOSpecDefault:
     test("an undeclared written path is not stored"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          page = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
+          page  = task(TaskName("echo"), Seal.Hermetic, Nil, Nil)
           extra = WrittenFile(OutputName("page"), RepoPath("extra.txt"))
-          live = script(
+          live  = script(
             echoId,
             List(page),
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("x", List(extra)))
+            _ => ZIO.succeed(PluginOutput("x", List(extra))),
           )
-          built <- graph(live, core)
-          dir <- directory
+          built           <- graph(live, core)
+          dir             <- directory
           (values, cache) <- recording
-          out <- run(
+          out             <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
-            cache
+            cache,
           ).either
           stored <- values.get
         yield assertTrue(
@@ -549,8 +586,8 @@ object PluginRunSpec extends ZIOSpecDefault:
     test("a task that is not in the graph is unknown"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           page = task(TaskName("echo"), Seal.Open, Nil, Nil)
           live = script(
@@ -559,17 +596,17 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("ok", Nil))
+            _ => ZIO.succeed(PluginOutput("ok", Nil)),
           )
-          built <- graph(live, core)
-          dir <- directory
+          built      <- graph(live, core)
+          dir        <- directory
           (_, cache) <- recording
           missing = PluginTaskId(echoId, TaskName("missing"))
           out <- run(
             runtime(dir, built, live),
             missing,
             PluginArgs.empty,
-            cache
+            cache,
           ).either
         yield assertTrue(
           out == Left(PluginFault.Task(PluginRunError.Unknown(missing)))
@@ -578,15 +615,15 @@ object PluginRunSpec extends ZIOSpecDefault:
     test("only the requested root receives the caller's arguments"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
           prep = task(TaskName("prep"), Seal.Open, Nil, Nil)
           echo = task(
             TaskName("echo"),
             Seal.Open,
             Nil,
-            List(TaskDep.Same(TaskName("prep")))
+            List(TaskDep.Same(TaskName("prep"))),
           )
           live = script(
             echoId,
@@ -594,27 +631,27 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            request => ZIO.succeed(PluginOutput(request.id.name.value, Nil))
+            request => ZIO.succeed(PluginOutput(request.id.name.value, Nil)),
           )
-          built <- graph(live, core)
-          dir <- directory
+          built      <- graph(live, core)
+          dir        <- directory
           (_, cache) <- recording
           passed = PluginArgs(
             List(NamedText(ParamName("out"), "docs")),
-            Set.empty
+            Set.empty,
           )
           _ <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             passed,
-            cache
+            cache,
           )
           seenArgs <- argsSeen.get
         yield assertTrue:
           seenArgs match
             case ("test.echo/prep", prepArgs) :: (
                   "test.echo/echo",
-                  echoArgs
+                  echoArgs,
                 ) :: Nil =>
               prepArgs == PluginArgs.empty && echoArgs == passed
             case _ => false
@@ -624,19 +661,19 @@ object PluginRunSpec extends ZIOSpecDefault:
     ):
       ZIO.withSystem(zio.System.SystemLive)(ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          name <- ZIO.fromEither(ProjectName.from("docs"))
+          name     <- ZIO.fromEither(ProjectName.from("docs"))
           out = DeclaredOutput(
             OutputName.trusted("out"),
-            RepoPath.trusted("out.txt")
+            RepoPath.trusted("out.txt"),
           )
           page = task(
             TaskName("echo"),
             Seal.Open,
             List(out),
-            List(TaskDep.Compile(name, None, Some(Jvm)))
+            List(TaskDep.Compile(name, None, Some(Jvm))),
           )
           live = script(
             echoId,
@@ -644,7 +681,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            request => {
+            request =>
               val text = request.compiled
                 .flatMap(_.compile)
                 .map(_.toString)
@@ -656,33 +693,32 @@ object PluginRunSpec extends ZIOSpecDefault:
                 .orDie *>
                 ZIO.succeed(
                   PluginOutput(text, List(WrittenFile(out.name, out.path)))
-                )
-            }
+                ),
           )
           docs = module("docs", Jvm)(scala"3.9.0")
           built <- graph(live, docs)
-          dir <- directory
-          _ <- ZIO.attempt {
+          dir   <- directory
+          _     <- ZIO.attempt {
             Files.createDirectories(dir.resolve(".histos"))
             Files.createDirectories(dir.resolve("docs/src/main/scala"))
             Files.writeString(
               dir.resolve("docs/src/main/scala/Hello.scala"),
-              "object Hello:\n  def greet: String = \"hi\"\n"
+              "object Hello:\n  def greet: String = \"hi\"\n",
             )
             Files.writeString(
               dir.resolve(".histos/dependencies.lock"),
-              "cell docs 3.9.0 jvm\n"
+              "cell docs 3.9.0 jvm\n",
             )
           }.orDie
           (_, cache) <- recording
-          _ <- histos.ToolFixture.seed(dir, built)
-          tools <- ZIO.service[histos.resolve.LockedTools]
-          _ <- run(
+          _          <- histos.ToolFixture.seed(dir, built)
+          tools      <- ZIO.service[histos.resolve.LockedTools]
+          _          <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
             cache,
-            ZLayer.succeed(tools.resolve)
+            ZLayer.succeed(tools.resolve),
           )
           text <- ZIO.attempt(Files.readString(dir.resolve("out.txt"))).orDie
           classes = dir
@@ -702,21 +738,21 @@ object PluginRunSpec extends ZIOSpecDefault:
           }.orDie
         yield assertTrue(
           text.contains(classes.toString),
-          listed.contains("Hello.class")
+          listed.contains("Hello.class"),
         ))
     ,
     test("a compile error does not run the plugin"):
       ZIO.withSystem(zio.System.SystemLive)(ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          name <- ZIO.fromEither(ProjectName.from("docs"))
+          name     <- ZIO.fromEither(ProjectName.from("docs"))
           page = task(
             TaskName("echo"),
             Seal.Open,
             Nil,
-            List(TaskDep.Compile(name, None, Some(Jvm)))
+            List(TaskDep.Compile(name, None, Some(Jvm))),
           )
           live = script(
             echoId,
@@ -724,32 +760,32 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ => ZIO.succeed(PluginOutput("ran", Nil))
+            _ => ZIO.succeed(PluginOutput("ran", Nil)),
           )
           docs = module("docs", Jvm)(scala"3.9.0")
           built <- graph(live, docs)
-          dir <- directory
-          _ <- ZIO.attempt {
+          dir   <- directory
+          _     <- ZIO.attempt {
             Files.createDirectories(dir.resolve(".histos"))
             Files.createDirectories(dir.resolve("docs/src/main/scala"))
             Files.writeString(
               dir.resolve("docs/src/main/scala/Hello.scala"),
-              "object Hello:\n  val n: Int = \"no\"\n"
+              "object Hello:\n  val n: Int = \"no\"\n",
             )
             Files.writeString(
               dir.resolve(".histos/dependencies.lock"),
-              "cell docs 3.9.0 jvm\n"
+              "cell docs 3.9.0 jvm\n",
             )
           }.orDie
           (_, cache) <- recording
-          _ <- histos.ToolFixture.seed(dir, built)
-          tools <- ZIO.service[histos.resolve.LockedTools]
-          ran <- run(
+          _          <- histos.ToolFixture.seed(dir, built)
+          tools      <- ZIO.service[histos.resolve.LockedTools]
+          ran        <- run(
             runtime(dir, built, live),
             PluginTaskId(echoId, TaskName("echo")),
             PluginArgs.empty,
             cache,
-            ZLayer.succeed(tools.resolve)
+            ZLayer.succeed(tools.resolve),
           ).either
           count <- calls.get
         yield
@@ -764,10 +800,10 @@ object PluginRunSpec extends ZIOSpecDefault:
     test("interrupting a parked plugin releases its scope and stores nothing"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          started <- Promise.make[Nothing, Unit]
+          started  <- Promise.make[Nothing, Unit]
           released <- Ref.make(false)
           page = task(TaskName("wait"), Seal.Hermetic, Nil, Nil)
           live = script(
@@ -776,35 +812,32 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ =>
-              ZIO.acquireRelease(started.succeed(()).unit)(_ =>
-                released.set(true)
-              ) *> ZIO.never
+            _ => ZIO.acquireRelease(started.succeed(()).unit)(_ => released.set(true)) *> ZIO.never,
           )
-          built <- graph(live, core)
-          dir <- directory
+          built           <- graph(live, core)
+          dir             <- directory
           (values, cache) <- recording
           id = PluginTaskId(echoId, TaskName("wait"))
           fiber <- run(
             runtime(dir, built, live),
             id,
             PluginArgs.empty,
-            cache
+            cache,
           ).fork
-          _ <- started.await
-          _ <- fiber.interrupt
-          exit <- fiber.await
-          done <- released.get
+          _      <- started.await
+          _      <- fiber.interrupt
+          exit   <- fiber.await
+          done   <- released.get
           stored <- values.get
         yield assertTrue(exit.isInterrupted && done && stored.isEmpty)
     ,
     test("cancelling the bound fiber releases the plugin scope"):
       ZIO.scoped:
         for
-          calls <- Ref.make(0)
-          seen <- Ref.make(List.empty[ModuleView])
+          calls    <- Ref.make(0)
+          seen     <- Ref.make(List.empty[ModuleView])
           argsSeen <- Ref.make(List.empty[(String, PluginArgs)])
-          started <- Promise.make[Nothing, Unit]
+          started  <- Promise.make[Nothing, Unit]
           released <- Ref.make(false)
           page = task(TaskName("wait"), Seal.Hermetic, Nil, Nil)
           live = script(
@@ -813,16 +846,13 @@ object PluginRunSpec extends ZIOSpecDefault:
             calls,
             seen,
             argsSeen,
-            _ =>
-              ZIO.acquireRelease(started.succeed(()).unit)(_ =>
-                released.set(true)
-              ) *> ZIO.never
+            _ => ZIO.acquireRelease(started.succeed(()).unit)(_ => released.set(true)) *> ZIO.never,
           )
-          built <- graph(live, core)
-          dir <- directory
+          built           <- graph(live, core)
+          dir             <- directory
           (values, cache) <- recording
-          running <- runtime(dir, built, live)
-          bound <- running.bind
+          running         <- runtime(dir, built, live)
+          bound           <- running.bind
             .provide(ZLayer.succeed(cache), RemoteCache.off, IdleResolve.layer)
           id = PluginTaskId(echoId, TaskName("wait"))
           result <-
@@ -833,19 +863,20 @@ object PluginRunSpec extends ZIOSpecDefault:
                   .serviceWithZIO[Tasks]: tasks =>
                     for
                       startedRun <- tasks.run(key)
-                      _ <- started.await
-                      _ <- tasks.cancel(startedRun.id)
-                      exit <- startedRun.await.exit
-                      done <- released.get
-                      stored <- values.get
+                      _          <- started.await
+                      _          <- tasks.cancel(startedRun.id)
+                      exit       <- startedRun.await.exit
+                      done       <- released.get
+                      stored     <- values.get
                     yield assertTrue(
                       exit.isInterrupted && done && stored.isEmpty
                     )
                   .provideSome[Scope](Tasks.live(built, bound))
-        yield result
+        yield result,
   )
 
   def spec =
     plugin.provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.ToolFixture.jvm(histos.ScalaVersion("3.9.0"))
     ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(90.seconds)
+end PluginRunSpec

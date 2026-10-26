@@ -2,17 +2,17 @@ import histos.*
 
 object build extends HistosBuild:
   def graph =
-    val scala3 = scala"3.10.0"
-    val zio = dep"dev.zio::zio:2.1.27"
-    val zioTest = dep"dev.zio::zio-test:2.1.27"
+    val scala3     = scala"3.10.0"
+    val zio        = dep"dev.zio::zio:2.1.27"
+    val zioTest    = dep"dev.zio::zio-test:2.1.27"
     val zioTestSbt = dep"dev.zio::zio-test-sbt:2.1.27"
-    val api = module("api", Jvm)(scala3)
+    val api        = module("api", Jvm)(scala3)
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
     val central = module("central", Jvm)(scala3)
       .dependsOn(api)
-      .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.13.0")
+      .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.14.0")
       .testDependencies(zioTest, zioTestSbt)
     val engine = module("engine", Jvm)(scala3)
       .dependsOn(central, api)
@@ -26,23 +26,23 @@ object build extends HistosBuild:
         dep"org.scala-lang.modules::scala-parser-combinators:2.5.0",
         dep"io.get-coursier::coursier:2.1.26",
         dep"org.ow2.asm:asm:9.11.1",
-        dep"org.ow2.asm:asm-tree:9.11.1"
+        dep"org.ow2.asm:asm-tree:9.11.1",
       )
       .testDependencies(zioTest, zioTestSbt)
     val app = module("app", Jvm)(scala3)
       .dependsOn(engine, central, api)
       .libraryDependencies(
         zio,
-        dep"rocks.earlyeffect::heddle-mcp:0.13.0",
+        dep"rocks.earlyeffect::heddle-mcp:0.14.0",
         dep"dev.zio::zio-cli:0.8.2",
         // zio-cli 0.8.2 still requests zio-process 0.7.1, whose lazy vals call Unsafe.
-        dep"dev.zio::zio-process:0.8.1"
+        dep"dev.zio::zio-process:0.8.1",
       )
       .testDependencies(
         zioTest,
         zioTestSbt,
         dep"org.ow2.asm:asm:9.11.1",
-        dep"org.ow2.asm:asm-tree:9.11.1"
+        dep"org.ow2.asm:asm-tree:9.11.1",
       )
     Projects
       .organization(organization"rocks.earlyeffect")
@@ -51,5 +51,5 @@ object build extends HistosBuild:
         api,
         central,
         engine,
-        app
+        app,
       )

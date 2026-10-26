@@ -27,7 +27,7 @@ private[histos] object HeaderScan:
       kept: List[String],
   ): Either[PluginLoadError, ScannedBuild] =
     lines match
-      case Nil => Right(ScannedBuild(requests.reverse, kept.reverse.mkString("\n")))
+      case Nil          => Right(ScannedBuild(requests.reverse, kept.reverse.mkString("\n")))
       case line :: rest =>
         val trimmed = line.trim
         if header && (trimmed.isEmpty || trimmed.startsWith("//")) then
@@ -36,8 +36,8 @@ private[histos] object HeaderScan:
           attempt(trimmed) match
             case Some(Right(request)) if header =>
               walk(rest, number + 1, true, request :: requests, "" :: kept)
-            case Some(Left(error)) if header => Left(error)
-            case Some(_)                      => Left(PluginLoadError.Misplaced(number))
+            case Some(Left(error)) if header                     => Left(error)
+            case Some(_)                                         => Left(PluginLoadError.Misplaced(number))
             case None if header && trimmed.startsWith("plugin(") =>
               Left(PluginLoadError.Misplaced(number))
             case None =>
@@ -50,7 +50,7 @@ private[histos] object HeaderScan:
 
   private def parse(line: String, dependency: Boolean): Either[PluginLoadError, PluginRequest] =
     val prefix = if dependency then "plugin(dep\"" else "plugin(path\""
-    val close = line.indexOf("\")", prefix.length)
+    val close  = line.indexOf("\")", prefix.length)
     if close < 0 then Left(PluginLoadError.BadCoordinate(line))
     else
       val raw = line.substring(prefix.length, close)
@@ -93,3 +93,4 @@ private[histos] object HeaderScan:
         link match
           case None | Some(LinkStrategy.Source) => Right(PluginRequest.Path(path))
           case Some(_)                          => Left(PluginLoadError.PathIsSource(path))
+end HeaderScan

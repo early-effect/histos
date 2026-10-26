@@ -20,3 +20,4 @@ enum PluginFault:
     case Resolved(error)  => error.message
     case Tested(error)    => error.message
     case Scheduled(error) => error.message
+end PluginFault
