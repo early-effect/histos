@@ -126,7 +126,7 @@ Future concerns remain explicit: typed surface errors, cancellation, operator pa
 - [ ] **G6** (typed-errors) EntryName registration failure is flattened as PluginDefect and contributes under a catch boundary. M7 registration owns the actual parser error and total data construction.
 - [ ] **G7** (typed-errors, duplication) Macro helpers retain string errors and copied literal validation. M7 literals owns one typed literal derivation seam without dependency additions disguised as compiler gates.
 - [ ] **G8** (api-shape) Interpolators still accept inline Any arguments. M7 literals owns typed rejection, not hidden conversions.
-- [ ] **G9** (totality) Clang's macro-spliced factory lacks publicInBinary. M7 literal factory visibility owns the correction and compile tests.
+- [x] **G9** (totality) [ClangMajor.trusted](../api/src/histos/Clang.scala) is `@publicInBinary`, so the macro splice is visible in a caller's compilation unit. [ClangMajorSpec](../api/test/ClangMajorSpec.scala) "a positive literal is that major, and zero or negative is NotPositive" compiles `ClangMajor(21)` and locks `from(0)`, `from(-1)`, and `from(21)`.
 - [ ] **G10** (typed-errors) Version session parsing drops ShipNameError and uses raw environment maps. M7 version API owns nested errors/config input.
 - [ ] **G11** (services) App root vocabulary/flag argv and loader concepts live on the API. ClassHome does not yet expose histos.step as the public plugin contract requires. M7 namespace/public phase design owns deliberate boundaries.
 - [ ] **G12** (api-shape) BuildError is a flat enum and graph validation returns only the first failure. M7 accumulation owns NonEmptyChunk errors and useful source positions, without a stale case count.
