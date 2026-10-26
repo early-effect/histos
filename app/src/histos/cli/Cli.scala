@@ -14,6 +14,7 @@ import histos.server.{
   Feed,
   Message,
   Perform,
+  ResolveAction,
   Say,
   ServerError,
   ServerIo,
@@ -78,9 +79,6 @@ enum Command:
   case PreviewRun(id: TaskId, platform: Option[Platform])
   case PreviewPlugin(id: PluginTaskId)
   case Observe
-
-enum ResolveAction:
-  case Verify, Update, Check
 
 enum CliParseError:
   case Help
@@ -612,7 +610,7 @@ object Cli:
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     val call =
       if id == TaskId.Inspect || id == TaskId.Versions then Call.Task(id.value, PluginArgs.empty)
-      else Call.Run(id.value, platform.map(_.token))
+      else Call.Run(id.value, platform)
     attach(repo, call, locally(repo, apiJar, call))
 
   private def compile(
@@ -751,29 +749,22 @@ object Cli:
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
-      Call.PreviewRun(id, platform.map(_.token)),
-      loaded(repo, apiJar)(previewRunLocal(_, id, platform.map(_.token))),
+      Call.PreviewRun(id, platform),
+      loaded(repo, apiJar)(previewRunLocal(_, id, platform)),
     )
 
   private def previewRunLocal(
       loaded: histos.load.LoadedBuild,
       id: String,
-      platform: Option[String],
+      platform: Option[Platform],
   ): UIO[Completed] =
-    val parsed = platform match
-      case None      => Right(None)
-      case Some(raw) => Platform.from(raw).map(Some(_))
     val call = Call.PreviewRun(id, platform)
     ZIO.succeed:
-      parsed match
+      Plan.run(loaded.graph, id, platform) match
         case Left(error) =>
-          held(call, "", CallResult.Fault(BuildFault.Platform(error)))
-        case Right(choice) =>
-          Plan.run(loaded.graph, id, choice) match
-            case Left(error) =>
-              held(call, "", CallResult.Fault(BuildFault.Preview(error)))
-            case Right(plan) =>
-              held(call, Plan.renderRun(plan), CallResult.reported())
+          held(call, "", CallResult.Fault(BuildFault.Preview(error)))
+        case Right(plan) =>
+          held(call, Plan.renderRun(plan), CallResult.reported())
 
   private def assembly(
       repo: Path,
@@ -928,7 +919,7 @@ object Cli:
   ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
     attach(
       repo,
-      Call.Resolve(Operation.resolve(action)),
+      Call.Resolve(action),
       resolveLocal(repo, apiJar, action),
     )
 
@@ -943,11 +934,11 @@ object Cli:
         .fold(
           {
             case error: LoadError =>
-              held(Call.Resolve(Operation.resolve(action)), "", CallResult.Fault(BuildFault.Load(error)))
+              held(Call.Resolve(action), "", CallResult.Fault(BuildFault.Load(error)))
             case error: ResolveError =>
-              held(Call.Resolve(Operation.resolve(action)), "", CallResult.Fault(BuildFault.Resolve(error)))
+              held(Call.Resolve(action), "", CallResult.Fault(BuildFault.Resolve(error)))
           },
-          text => held(Call.Resolve(Operation.resolve(action)), text, CallResult.reported()),
+          text => held(Call.Resolve(action), text, CallResult.reported()),
         )
 
   private def workflow(
@@ -957,7 +948,7 @@ object Cli:
   ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     attach(
       repo,
-      Call.Workflow(Operation.workflow(action)),
+      Call.Workflow(action),
       workflowLocal(repo, apiJar, action),
     )
 
@@ -972,10 +963,10 @@ object Cli:
       .flatMap:
         case Left(error) =>
           ZIO.succeed(
-            held(Call.Workflow(Operation.workflow(action)), "", CallResult.Fault(BuildFault.Load(error)))
+            held(Call.Workflow(action), "", CallResult.Fault(BuildFault.Load(error)))
           )
         case Right(loaded) =>
-          val call = Call.Workflow(Operation.workflow(action))
+          val call = Call.Workflow(action)
           Calls
             .workflowWork(repo, loaded.graph, action)
             .fold(

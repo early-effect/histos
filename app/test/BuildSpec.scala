@@ -3,7 +3,7 @@ package histos.build
 import histos.cli.CliExit
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.ResolveError
-import histos.server.{Call, Perform}
+import histos.server.{Call, Perform, ResolveAction}
 import histos.zinc.GraphCompileError
 
 import zio.Chunk
@@ -57,7 +57,7 @@ object BuildSpec extends ZIOSpecDefault:
         !Perform.needsGraph(Call.Clean(Nil)),
         !Perform.needsGraph(Call.Version),
         !Perform.needsGraph(Call.Cancel("run")),
-        !Perform.needsGraph(Call.Resolve("check")),
+        !Perform.needsGraph(Call.Resolve(ResolveAction.Check)),
         !Perform.needsGraph(Call.Watch(Call.Version)),
         !Perform.needsGraph(Call.Reload),
       ),

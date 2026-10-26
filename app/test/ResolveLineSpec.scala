@@ -1,6 +1,5 @@
 package histos.server
 
-import histos.cli.ResolveAction
 import histos.jdk.Sha256
 import histos.load.{BuildNotes, LoadedBuild, Loader, ScannedBuild}
 import histos.native.NativeOrigin

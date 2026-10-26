@@ -9,7 +9,8 @@ import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.task.RunId
 import histos.toolchain.Runtimes
-import histos.ProjectGraph
+import histos.workflow.WorkflowAction
+import histos.{Platform, ProjectGraph}
 
 import java.io.{InputStream, OutputStream}
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
@@ -23,6 +24,7 @@ import histos.build.BuildEvent
 import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
 import histos.report.WireJson.given JsonCodec[BuildEvent]
+import histos.report.WireJson.given JsonCodec[Platform]
 import zio.stream.ZStream
 import zio.{Chunk, Exit, Fiber, IO, Promise, Queue, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
 
@@ -86,8 +88,18 @@ private object CallJson:
     raw => FlagName.from(raw).left.map(_.message),
     _.value,
   )
-  given JsonCodec[NamedText]  = JsonCodec.derived
-  given JsonCodec[PluginArgs] = JsonCodec.derived
+  given JsonCodec[NamedText]     = JsonCodec.derived
+  given JsonCodec[PluginArgs]    = JsonCodec.derived
+  given JsonCodec[ResolveAction] =
+    JsonCodec.string.transformOrFail(
+      raw => ResolveAction.from(raw).left.map(_.message),
+      _.token,
+    )
+  given JsonCodec[WorkflowAction] =
+    JsonCodec.string.transformOrFail(
+      raw => WorkflowAction.from(raw).left.map(_.message),
+      _.token,
+    )
 
 import CallJson.given
 
@@ -96,12 +108,12 @@ enum Call derives JsonCodec:
   case Test(projects: List[String], patterns: List[String], quick: Boolean)
   case Publish(repository: String, projects: List[String])
   case Graph
-  case Run(id: String, platform: Option[String])
+  case Run(id: String, platform: Option[Platform])
   case Task(id: String, args: PluginArgs)
   case Cancel(id: String)
   case Toolchain
-  case Resolve(action: String)
-  case Workflow(action: String)
+  case Resolve(action: ResolveAction)
+  case Workflow(action: WorkflowAction)
   case Assembly(destination: Option[String])
   case Clean(projects: List[String])
   case CleanFull
@@ -119,7 +131,7 @@ enum Call derives JsonCodec:
   case PreviewPublish(projects: List[String])
   case PreviewClean(projects: List[String])
   case PreviewCleanFull
-  case PreviewRun(id: String, platform: Option[String])
+  case PreviewRun(id: String, platform: Option[Platform])
 
 object Call:
   /** The codec is on [[Call]]. A case value does not carry it. */

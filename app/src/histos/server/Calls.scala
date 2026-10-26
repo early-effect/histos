@@ -19,11 +19,10 @@ import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositorie
 import histos.schedule.RemoteCache
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
-import histos.cli.ResolveAction
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.{Platform, PlatformError, ProjectGraph}
+import histos.{Platform, ProjectGraph}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
@@ -197,71 +196,68 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       id: String,
-      platform: Option[String],
+      platform: Option[Platform],
       say: Say,
   ): ZIO[Resolve, ServerError, Unit] =
-    chosen(platform) match
-      case Left(error)   => fault(say, BuildFault.Platform(error))
-      case Right(choice) =>
-        CompileConsole
-          .open(repo)
-          .flatMap: console =>
-            Ref
-              .make(0)
-              .zip(Runtimes.read(machine))
-              .flatMap: (status, runtimes) =>
-                histos.program.Program
-                  .console(
-                    repo,
-                    graph,
-                    id,
-                    jdk,
-                    runtimes,
-                    choice,
-                    feed => speak(say, console, feed).ignore,
-                    console.announce(text => told(say, text).ignore),
+    CompileConsole
+      .open(repo)
+      .flatMap: console =>
+        Ref
+          .make(0)
+          .zip(Runtimes.read(machine))
+          .flatMap: (status, runtimes) =>
+            histos.program.Program
+              .console(
+                repo,
+                graph,
+                id,
+                jdk,
+                runtimes,
+                platform,
+                feed => speak(say, console, feed).ignore,
+                console.announce(text => told(say, text).ignore),
+              )
+              .foreach:
+                case histos.program.ProgramFeed
+                      .Begin(module, version, target) =>
+                  told(
+                    say,
+                    s"${module.value} ${version.value} ${target.token}",
                   )
-                  .foreach:
-                    case histos.program.ProgramFeed
-                          .Begin(module, version, target) =>
-                      told(
-                        say,
-                        s"${module.value} ${version.value} ${target.token}",
-                      )
-                    case histos.program.ProgramFeed.Out(text) => told(say, text)
-                    case histos.program.ProgramFeed.Err(text) =>
-                      errLine(say, text)
-                    case histos.program.ProgramFeed.Exited(_, _, _, code) =>
-                      ZIO.when(code != 0)(status.set(code)).unit
-                  .foldZIO(
-                    {
-                      case error: histos.program.ProgramError =>
-                        val announced = error match
-                          case histos.program.ProgramError.Compile(_) =>
-                            console.announce(text => told(say, text))
-                          case _ => ZIO.unit
-                        val result = BuildFault.programStopped(error) match
-                          case Some(why) => CallResult.Fault(why)
-                          case None      => CallResult.reported(error.message)
-                        announced *> finishNoted(
-                          repo,
-                          say,
-                          console,
-                          List(console.observation),
-                          result,
-                        )
-                      case error: ServerError => ZIO.fail(error)
-                    },
-                    _ =>
-                      status.get.flatMap: code =>
-                        finishNoted(
-                          repo,
-                          say,
-                          console,
-                          List(console.observation),
-                          CallResult.reported(program = Some(code)),
-                        ),
-                  )
+                case histos.program.ProgramFeed.Out(text) => told(say, text)
+                case histos.program.ProgramFeed.Err(text) =>
+                  errLine(say, text)
+                case histos.program.ProgramFeed.Exited(_, _, _, code) =>
+                  ZIO.when(code != 0)(status.set(code)).unit
+              .foldZIO(
+                {
+                  case error: histos.program.ProgramError =>
+                    val announced = error match
+                      case histos.program.ProgramError.Compile(_) =>
+                        console.announce(text => told(say, text))
+                      case _ => ZIO.unit
+                    val result = BuildFault.programStopped(error) match
+                      case Some(why) => CallResult.Fault(why)
+                      case None      => CallResult.reported(error.message)
+                    announced *> finishNoted(
+                      repo,
+                      say,
+                      console,
+                      List(console.observation),
+                      result,
+                    )
+                  case error: ServerError => ZIO.fail(error)
+                },
+                _ =>
+                  status.get.flatMap: code =>
+                    finishNoted(
+                      repo,
+                      say,
+                      console,
+                      List(console.observation),
+                      CallResult.reported(program = Some(code)),
+                    ),
+              )
 
   def task(
       repo: Path,
@@ -306,20 +302,17 @@ object Calls:
   def resolve(
       repo: Path,
       apiJar: Path,
-      action: String,
+      action: ResolveAction,
       say: Say,
       native: histos.native.NativeOrigin,
   ): ZIO[Resolve & Loader, ServerError, Unit] =
-    resolveAction(action) match
-      case None       => reject(say, Rejection.ResolveAction(action))
-      case Some(kind) =>
-        resolveWork(repo, apiJar, kind, native).foldZIO(
-          {
-            case error: LoadError    => fault(say, BuildFault.Load(error))
-            case error: ResolveError => fault(say, BuildFault.Resolve(error))
-          },
-          text => told(say, text) *> ok(say),
-        )
+    resolveWork(repo, apiJar, action, native).foldZIO(
+      {
+        case error: LoadError    => fault(say, BuildFault.Load(error))
+        case error: ResolveError => fault(say, BuildFault.Resolve(error))
+      },
+      text => told(say, text) *> ok(say),
+    )
 
   /** Stage plugin cells, load that generation, then solve and commit once. Check and verify load the locked generation.
     * The adopted graph is not the update input.
@@ -400,16 +393,13 @@ object Calls:
   def workflow(
       repo: Path,
       graph: ProjectGraph,
-      action: String,
+      action: WorkflowAction,
       say: Say,
   ): IO[ServerError, Unit] =
-    workflowAction(action) match
-      case None       => reject(say, Rejection.WorkflowAction(action))
-      case Some(kind) =>
-        workflowWork(repo, graph, kind).foldZIO(
-          why => fault(say, BuildFault.Workflow(why)),
-          file => told(say, file.toString) *> ok(say),
-        )
+    workflowWork(repo, graph, action).foldZIO(
+      why => fault(say, BuildFault.Workflow(why)),
+      file => told(say, file.toString) *> ok(say),
+    )
 
   /** Workflow files and launcher scripts. The pin is not advanced. */
   def workflowWork(
@@ -639,15 +629,12 @@ object Calls:
   def previewRun(
       graph: ProjectGraph,
       id: String,
-      platform: Option[String],
+      platform: Option[Platform],
       say: Say,
   ): IO[ServerError, Unit] =
-    chosen(platform) match
-      case Left(error)   => fault(say, BuildFault.Platform(error))
-      case Right(choice) =>
-        Plan.run(graph, id, choice) match
-          case Left(error) => fault(say, BuildFault.Preview(error))
-          case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
+    Plan.run(graph, id, platform) match
+      case Left(error) => fault(say, BuildFault.Preview(error))
+      case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
 
   /** No names wipe every product root and do not read `graph`. */
   def clean(
@@ -862,26 +849,6 @@ object Calls:
           result => told(say, result.text) *> ok(say),
         )
     }
-
-  private def chosen(
-      platform: Option[String]
-  ): Either[PlatformError, Option[Platform]] =
-    platform match
-      case None      => Right(None)
-      case Some(raw) => Platform.from(raw).map(Some(_))
-
-  private def resolveAction(raw: String): Option[histos.cli.ResolveAction] =
-    raw match
-      case "verify" => Some(histos.cli.ResolveAction.Verify)
-      case "update" => Some(histos.cli.ResolveAction.Update)
-      case "check"  => Some(histos.cli.ResolveAction.Check)
-      case _        => None
-
-  private def workflowAction(raw: String): Option[WorkflowAction] =
-    raw match
-      case "check"  => Some(WorkflowAction.Check)
-      case "update" => Some(WorkflowAction.Update)
-      case _        => None
 
   private def cleanFault(
       error: histos.select.SelectError | histos.workspace.IoFailure

@@ -112,8 +112,8 @@ object Session:
           Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
         case Some(raw) =>
           Platform.from(raw) match
-            case Left(error) => Left(BuildFault.Platform(error))
-            case Right(_)    => Right(Call.Run(id, platform))
+            case Left(error)  => Left(BuildFault.Platform(error))
+            case Right(found) => Right(Call.Run(id, Some(found)))
         case None if task => Right(Call.Task(id, args))
         case None         => Right(Call.Run(id, None))
 

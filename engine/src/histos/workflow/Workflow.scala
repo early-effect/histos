@@ -41,8 +41,28 @@ enum TestJob:
   case Aggregate(target: TestTarget)
   case Split(module: ModuleRef, platform: PlatformRef, version: VersionRef)
 
+/** What `histos workflow` does. The command token is `check` or `update`. */
 enum WorkflowAction:
   case Check, Update
+
+  def token: String = this match
+    case Check  => "check"
+    case Update => "update"
+end WorkflowAction
+
+object WorkflowAction:
+  private val known: List[WorkflowAction] = List(Check, Update)
+
+  def from(raw: String): Either[WorkflowActionError, WorkflowAction] =
+    known.find(_.token == raw).toRight(WorkflowActionError.Unknown(raw))
+end WorkflowAction
+
+enum WorkflowActionError:
+  case Unknown(raw: String)
+
+  def message: String = this match
+    case Unknown(raw) => s"'$raw' is not a workflow action"
+end WorkflowActionError
 
 /** One file `renderAll` emits. `name` is the file name under `.github/workflows`, not a path. */
 final case class RenderedWorkflow(name: String, body: String)

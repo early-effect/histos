@@ -234,7 +234,7 @@ object PreviewSpec extends ZIOSpecDefault:
           graph   <- ZIO.fromEither(Projects(core, app))
           planned <- ZIO.fromEither(Plan.run(graph, "app", Some(Jvm)))
           text = Plan.renderRun(planned)
-          heard   <- ask(repo)(Calls.previewRun(graph, "app", Some("jvm"), _))
+          heard   <- ask(repo)(Calls.previewRun(graph, "app", Some(Jvm), _))
           missing <- ask(repo)(Calls.previewRun(graph, "missing", None, _))
           kept    <- same(planted)
           missed = CallResult.Fault(BuildFault.Preview(PreviewError.Run(RunMiss.Absent("missing"))))

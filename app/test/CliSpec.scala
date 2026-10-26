@@ -12,7 +12,7 @@ import histos.cache.ContentStore
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
 import histos.build.BuildEvent
 import histos.report.{BuildFault, CallResult, Rejection}
-import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ServerError}
+import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ResolveAction, ServerError}
 import histos.zinc.{CompileFeed, GraphCompile}
 import histos.Dep
 import histos.*

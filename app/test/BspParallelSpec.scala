@@ -2,6 +2,7 @@ package histos.server
 
 import histos.bsp.{Bsp, Rpc}
 import histos.plugin.PluginArgs
+import histos.workflow.WorkflowAction
 
 import zio.json.*
 import zio.json.ast.Json
@@ -71,19 +72,19 @@ object BspParallelSpec extends ZIOSpecDefault:
             heard   <- Ref.make(List.empty[String])
             release <- Promise.make[Nothing, Unit]
             halted  <- Promise.make[Nothing, Unit]
-            offer = (line: String) => replies.offer(line) *> heard.update(_ :+ line).unit
+            offer  = (line: String) => replies.offer(line) *> heard.update(_ :+ line).unit
             answer = (payload: String) =>
               payload.fromJson[Rpc.Incoming] match
                 case Right(incoming) if incoming.method.contains("buildTarget/compile") =>
                   release.await.onInterrupt(halted.succeed(()).unit).as(Bsp.Answer.Reply(CompileDone))
                 case _ =>
                   ZIO.succeed(Bsp.Answer.Reply(payload))
-            idle <- ZIO.unit.forkScoped
-            loop <- Daemon.requests(inbound.take, offer, answer, idle).forkScoped
-            _    <- inbound.offer(Some(compile)) *> inbound.offer(Some(query))
-            during <- replies.take
-            early  <- replies.poll
-            _      <- inbound.offer(Some(cancel(Json.Num(1))))
+            idle          <- ZIO.unit.forkScoped
+            loop          <- Daemon.requests(inbound.take, offer, answer, idle).forkScoped
+            _             <- inbound.offer(Some(compile)) *> inbound.offer(Some(query))
+            during        <- replies.take
+            early         <- replies.poll
+            _             <- inbound.offer(Some(cancel(Json.Num(1))))
             cancelledText <- replies.take
             cancelled     <- failed(cancelledText)
             _             <- halted.await
@@ -133,41 +134,40 @@ object BspParallelSpec extends ZIOSpecDefault:
           outputLaw.forall { case (call, writes) =>
             Daemon.writesOutputs(call) == writes
           }
-        )
-      ,
+        ),
     ) @@ TestAspect.timeout(5.seconds)
 
   private def outputLaw: List[(Call, Boolean)] =
     List(
-      Call.Compile(Nil)                  -> true,
-      Call.Test(Nil, Nil, false)         -> true,
-      Call.Publish("repo", Nil)          -> true,
-      Call.Run("demo", None)             -> true,
-      Call.Assembly(None)                -> true,
-      Call.Clean(Nil)                    -> true,
-      Call.Clean(List("demo"))           -> true,
-      Call.CleanFull                     -> true,
-      Call.Graph                         -> false,
+      Call.Compile(Nil)                      -> true,
+      Call.Test(Nil, Nil, false)             -> true,
+      Call.Publish("repo", Nil)              -> true,
+      Call.Run("demo", None)                 -> true,
+      Call.Assembly(None)                    -> true,
+      Call.Clean(Nil)                        -> true,
+      Call.Clean(List("demo"))               -> true,
+      Call.CleanFull                         -> true,
+      Call.Graph                             -> false,
       Call.Task("inspect", PluginArgs.empty) -> false,
-      Call.Cancel("run")                 -> false,
-      Call.Toolchain                     -> false,
-      Call.Resolve("show")               -> false,
-      Call.Workflow("show")              -> false,
-      Call.Reload                        -> false,
-      Call.Reboot                        -> false,
-      Call.Version                       -> false,
-      Call.CachePath                     -> false,
-      Call.CacheList                     -> false,
-      Call.CacheClean(true)              -> false,
-      Call.LauncherUpdate                -> false,
-      Call.Watch(Call.Graph)             -> false,
-      Call.Bsp                           -> false,
-      Call.PreviewCompile(Nil)           -> false,
-      Call.PreviewTest(Nil)              -> false,
-      Call.PreviewPublish(Nil)           -> false,
-      Call.PreviewClean(Nil)             -> false,
-      Call.PreviewCleanFull              -> false,
-      Call.PreviewRun("demo", None)      -> false,
+      Call.Cancel("run")                     -> false,
+      Call.Toolchain                         -> false,
+      Call.Resolve(ResolveAction.Verify)     -> false,
+      Call.Workflow(WorkflowAction.Check)    -> false,
+      Call.Reload                            -> false,
+      Call.Reboot                            -> false,
+      Call.Version                           -> false,
+      Call.CachePath                         -> false,
+      Call.CacheList                         -> false,
+      Call.CacheClean(true)                  -> false,
+      Call.LauncherUpdate                    -> false,
+      Call.Watch(Call.Graph)                 -> false,
+      Call.Bsp                               -> false,
+      Call.PreviewCompile(Nil)               -> false,
+      Call.PreviewTest(Nil)                  -> false,
+      Call.PreviewPublish(Nil)               -> false,
+      Call.PreviewClean(Nil)                 -> false,
+      Call.PreviewCleanFull                  -> false,
+      Call.PreviewRun("demo", None)          -> false,
     )
 
   private def rpc(id: Int, method: String): String =
