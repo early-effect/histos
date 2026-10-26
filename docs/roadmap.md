@@ -109,7 +109,7 @@ Attach-before-load, reload/reboot and every-splice BSP target changes already ex
 
 **Goal:** Illegal build settings are excluded by types, and plugins extend core phases through typed steps.
 
-- **Early literals/flags:** Validated project/runtime textual literals and a scalac literal checked against supported flags, including BSP fatal-warning rules. Owns G4/G7/G8/G13/G22. Project, ship, pull request, and Sha256 literals are in. `ProviderLibrary` still has no compile-time literal. G22 stays open for HttpsUrl and the runtime version/major facades. G9 is checked: `ClangMajor.trusted` is `@publicInBinary`. This can unblock ascent before the full platform builder redesign.
+- **Early literals/flags:** Validated project/runtime textual literals and a scalac literal checked against supported flags, including BSP fatal-warning rules. Owns G7/G8/G13/G22. G4 is checked: project, ship, pull request, and provider library literals. G22 stays open for HttpsUrl and the runtime version/major facades. G9 is checked: `ClangMajor.trusted` is `@publicInBinary`. This can unblock ascent before the full platform builder redesign.
 - **Module shape:** TestRunner and platform-owned settings, a small builder rather than overload proliferation, accumulated BuildError, reference-based edges/aggregates and positions of referencing calls. Owns G1-G3/G12/G19-G21.
 - **Typed recorded settings:** ModuleAspect ownership/conflicts, NoteKey codecs and decoration data. Owns G14/G15.
 - **Plugin phases and fixtures:** Public typed Step contract with explicit classloader boundary, dependencies on link/test/package, nested registration/version errors, compiled fixture inputs and complete contract examples as tests. Owns G6/G10/G11/G16/G17/T14.
