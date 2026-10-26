@@ -34,7 +34,7 @@ import histos.zinc.{
   ScalaSeries,
   SemanticDb,
 }
-import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Dep, Module, Platform, PlatformError, ProjectGraph, ProjectName, ScalaVersion, ScalaVersionError}
 
 import java.nio.file.{Files, Path}
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -120,6 +120,7 @@ object Bsp:
     case UnknownMethod(method: String)
     case Params(fault: ParamFault)
     case UnknownTarget
+    case Target(fault: TargetFault)
     case Lock(error: ResolveError)
     case LockRead(path: Path)
     case Resolve(error: ResolveError)
@@ -130,16 +131,16 @@ object Bsp:
     case Build(error: LoadError)
     case NotTest
     case NotMain
-    case Platforms(text: String)
+    case Platforms(error: AllowFault)
     case Mains(failure: IoFailure)
     case Io(failure: IoFailure)
 
     def code: Int = this match
-      case Parse                                         => -32700
-      case NotRequest | NoMethod | ShutDown              => -32600
-      case UnknownMethod(_)                              => -32601
-      case Params(_) | UnknownTarget | NotTest | NotMain => -32602
-      case NotInitialized                                => -32002
+      case Parse                                                     => -32700
+      case NotRequest | NoMethod | ShutDown                          => -32600
+      case UnknownMethod(_)                                          => -32601
+      case Params(_) | UnknownTarget | Target(_) | NotTest | NotMain => -32602
+      case NotInitialized                                            => -32002
       case Machine(_) | Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) | Tests(_) | Run(_) | Build(_) |
           Platforms(_) | Mains(_) | Io(_) =>
         -32603
@@ -154,6 +155,7 @@ object Bsp:
       case UnknownMethod(method) => s"bsp does not handle $method"
       case Params(fault)         => fault.message
       case UnknownTarget         => "unknown build target"
+      case Target(fault)         => fault.message
       case Lock(error)           => error.message
       case LockRead(path)        => s"could not read $path"
       case Resolve(error)        => error.message
@@ -164,10 +166,55 @@ object Bsp:
       case Build(error)          => error.message
       case NotTest               => "jvmTestEnvironment needs a test target"
       case NotMain               => "jvmRunEnvironment needs a main target"
-      case Platforms(text)       => text
+      case Platforms(error)      => error.message
       case Mains(failure)        => failure.message
       case Io(failure)           => failure.message
   end BspError
+
+  private[bsp] enum TargetFault:
+    case BadVersion(error: ScalaVersionError)
+    case BadPlatform(error: PlatformError)
+    case BadScope(error: ScopeFault)
+
+    def message: String = this match
+      case BadVersion(error)  => error.message
+      case BadPlatform(error) => error.message
+      case BadScope(error)    => error.message
+  end TargetFault
+
+  private enum Scope:
+    case Main, Test
+
+    def wire: String = this match
+      case Main => "main"
+      case Test => "test"
+  end Scope
+
+  private val scopes: List[Scope] = List(Scope.Main, Scope.Test)
+
+  private[bsp] enum ScopeFault:
+    case Unknown(raw: String)
+
+    def message: String = this match
+      case Unknown(raw) => s"'$raw' is not a bsp scope (main or test)"
+  end ScopeFault
+
+  private[bsp] enum TargetRef:
+    case Build
+    case Main(name: String, version: ScalaVersion, platform: Platform)
+    case Test(name: String, version: ScalaVersion, platform: Platform)
+    case Unknown
+    case BadVersion(error: ScalaVersionError)
+    case BadPlatform(error: PlatformError)
+    case BadScope(error: ScopeFault)
+
+  /** `jvm` is always published and is not a token in the allow-list. */
+  private[bsp] enum AllowFault:
+    case Unknown(token: String)
+
+    def message: String = this match
+      case Unknown(token) => s"'$token' is not a bsp platform"
+  end AllowFault
 
   /** A directory the request needs. A file in the way is a fault, not a defect. */
   private[bsp] def ensureDir(path: Path): IO[BspError, Path] =
@@ -414,14 +461,16 @@ object Bsp:
           params =>
             request.get.flatMap { graph =>
               val found = params.targets.map(_.uri)
-              val ids   = found.flatMap(uri => identify(uri, graph))
-              if ids.length != found.length then ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownTarget)))
-              else
-                gate(runCompile(ids)).map(status =>
-                  Answer.Reply(
-                    Rpc.ok(id, Rpc.CompileResult(status, params.originId))
+              found.foldLeft[Either[BspError, List[Id]]](Right(Nil)) { (acc, uri) =>
+                acc.flatMap(ids => named(uri, graph).map(ids :+ _))
+              } match
+                case Left(error) => ZIO.succeed(Answer.Reply(failure(id, error)))
+                case Right(ids)  =>
+                  gate(runCompile(ids)).map(status =>
+                    Answer.Reply(
+                      Rpc.ok(id, Rpc.CompileResult(status, params.originId))
+                    )
                   )
-                )
             },
         )
 
@@ -479,7 +528,7 @@ object Bsp:
                         problem,
                       ) =>
                     publish(
-                      s"${directoryUri(repo)}${module.value}?scala=${version.value}&platform=${chosen.token}&scope=main",
+                      mainUri(repo, module.value, version, chosen),
                       problem,
                     )
                   case histos.zinc.CompileFeed.Began(_, _, _) => ZIO.unit
@@ -575,8 +624,7 @@ object Bsp:
         uri: String
     ): ZIO[Resolve, BspError, Rpc.ScalacOptionsItem] =
       parsed(uri) {
-        case None           => ZIO.fail(BspError.UnknownTarget)
-        case Some(Id.Build) =>
+        case Id.Build =>
           ZIO.succeed(
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
@@ -585,7 +633,7 @@ object Bsp:
               directoryUri(repo),
             )
           )
-        case Some(id: Id.Main) =>
+        case id: Id.Main =>
           classpath(id.module, id.version, id.platform).map: paths =>
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
@@ -600,7 +648,7 @@ object Bsp:
                 )
               ),
             )
-        case Some(id: Id.Test) =>
+        case id: Id.Test =>
           testClasspath(id).map: paths =>
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
@@ -699,13 +747,11 @@ object Bsp:
     private def sourceJars(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.DependencySourcesItem] =
-      parsed(uri) {
-        case None     => ZIO.fail(BspError.UnknownTarget)
-        case Some(id) =>
-          jarsOf(id)
-            .flatMap(paths => ZIO.foreach(paths)(oneSource).map(_.flatten))
-            .map: sources =>
-              Rpc.DependencySourcesItem(Rpc.TargetId(uri), sources.map(fileUri))
+      parsed(uri) { id =>
+        jarsOf(id)
+          .flatMap(paths => ZIO.foreach(paths)(oneSource).map(_.flatten))
+          .map: sources =>
+            Rpc.DependencySourcesItem(Rpc.TargetId(uri), sources.map(fileUri))
 
       }
     private def jarsOf(id: Id): ZIO[Resolve, BspError, List[SourceAsk]] =
@@ -836,7 +882,7 @@ object Bsp:
         uri: String
     ): ZIO[Resolve, BspError, Rpc.ScalaMainClassesItem] =
       parsed(uri) {
-        case Some(id: Id.Main) =>
+        case id: Id.Main =>
           val named   = id.module.application.toList.map(_.value)
           val classes = GraphCompile.classesDir(
             repo,
@@ -853,32 +899,30 @@ object Bsp:
                 Rpc.TargetId(uri),
                 names.map(name => Rpc.ScalaMainClass(name, Nil, Nil)),
               )
-        case Some(_) =>
+        case _ =>
           ZIO.succeed(Rpc.ScalaMainClassesItem(Rpc.TargetId(uri), Nil))
-        case None => ZIO.fail(BspError.UnknownTarget)
 
       }
     private def testClassItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.ScalaTestClassesItem] =
       parsed(uri) {
-        case Some(id: Id.Test) =>
+        case id: Id.Test =>
           suites(id).map: found =>
             Rpc.ScalaTestClassesItem(
               Rpc.TargetId(uri),
               found.names,
               found.framework,
             )
-        case Some(_) =>
+        case _ =>
           ZIO.succeed(Rpc.ScalaTestClassesItem(Rpc.TargetId(uri), Nil, None))
-        case None => ZIO.fail(BspError.UnknownTarget)
 
       }
     private def runItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
       parsed(uri) {
-        case Some(id: Id.Main) =>
+        case id: Id.Main =>
           val classes = GraphCompile.classesDir(
             repo,
             id.module.name,
@@ -922,15 +966,14 @@ object Bsp:
             work.toAbsolutePath.normalize.toString,
             TestCompile.suiteEnv(repo, runtimes.env),
           )
-        case Some(_) => ZIO.fail(BspError.NotMain)
-        case None    => ZIO.fail(BspError.UnknownTarget)
+        case _ => ZIO.fail(BspError.NotMain)
 
       }
     private def testItem(
         uri: String
     ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
       parsed(uri) {
-        case Some(id: Id.Test) =>
+        case id: Id.Test =>
           val work =
             TestCompile.testWork(repo, id.module.name, id.version, id.platform)
           val classes = TestCompile.testClasses(
@@ -978,8 +1021,7 @@ object Bsp:
             work.toAbsolutePath.normalize.toString,
             TestCompile.suiteEnv(repo, runtimes.env),
           )
-        case Some(_) => ZIO.fail(BspError.NotTest)
-        case None    => ZIO.fail(BspError.UnknownTarget)
+        case _ => ZIO.fail(BspError.NotTest)
       }
 
     private final case class Suites(
@@ -1052,14 +1094,12 @@ object Bsp:
       else provider.framework.value
 
     private def sourceItem(uri: String): IO[BspError, Rpc.SourcesItem] =
-      parsed(uri) {
-        case None     => ZIO.fail(BspError.UnknownTarget)
-        case Some(id) =>
-          filesOf(id).map: paths =>
-            Rpc.SourcesItem(
-              Rpc.TargetId(uri),
-              paths.map(path => Rpc.SourceItem(fileUri(path), 1, false)),
-            )
+      parsed(uri) { id =>
+        filesOf(id).map: paths =>
+          Rpc.SourcesItem(
+            Rpc.TargetId(uri),
+            paths.map(path => Rpc.SourceItem(fileUri(path), 1, false)),
+          )
 
       }
     private def filesOf(id: Id): IO[BspError, List[Path]] =
@@ -1113,26 +1153,14 @@ object Bsp:
       val path = repo.resolve(".histos").resolve("bsp-platforms")
       ZIO
         .attemptBlocking(Files.exists(path))
-        .mapError(_ => BspError.Platforms(s"could not read $path"))
+        .mapError(_ => BspError.Io(IoFailure(path, IoFault.Stat)))
         .flatMap:
           case false => ZIO.succeed(Set.empty)
           case true  =>
-            ZIO
-              .attemptBlocking(Files.readString(path))
-              .mapError(_ => BspError.Platforms(s"could not read $path"))
-              .flatMap: text =>
-                ZIO
-                  .fromEither(parsePlatforms(text))
-                  .mapError(BspError.Platforms(_))
-
-    private def parsePlatforms(text: String): Either[String, Set[Platform]] =
-      val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-      lines.foldLeft[Either[String, Set[Platform]]](Right(Set.empty)): (acc, token) =>
-        acc.flatMap: have =>
-          token match
-            case "js"     => Right(have + Platform.Js)
-            case "native" => Right(have + Platform.Native)
-            case other    => Left(s"'$other' is not a bsp platform")
+            Workspace
+              .readString(path)
+              .mapError(BspError.Io(_))
+              .flatMap(text => ZIO.fromEither(parsePlatforms(text)).mapError(BspError.Platforms(_)))
 
     private def listed(
         graph: ProjectGraph,
@@ -1265,45 +1293,26 @@ object Bsp:
               Some(targetUri(Id.Main(dependency, version, platform)))
             case _ => None
 
-    private def parsed[R, E, A](uri: String)(
-        use: Option[Id] => ZIO[R, E, A]
-    ): ZIO[R, E, A] =
-      request.get.flatMap(graph => use(identify(uri, graph)))
+    private def parsed[R, A](uri: String)(use: Id => ZIO[R, BspError, A]): ZIO[R, BspError, A] =
+      request.get.flatMap(graph => ZIO.fromEither(named(uri, graph)).flatMap(use))
 
-    private def identify(uri: String, graph: ProjectGraph): Option[Id] =
-      if uri == buildUri then Some(Id.Build)
-      else
-        val prefix = directoryUri(repo)
-        if !uri.startsWith(prefix) then None
-        else
-          val rest  = uri.drop(prefix.length)
-          val name  = rest.takeWhile(_ != '?')
-          val query = rest
-            .drop(name.length)
-            .drop(1)
-            .split("&")
-            .toList
-            .flatMap: part =>
-              part.split("=", 2) match
-                case Array(key, value) => Some(key -> value)
-                case _                 => None
-            .toMap
-          val found = for
-            version <- query
-              .get("scala")
-              .flatMap(raw => ScalaVersion.from(raw).toOption)
-            platform <- query
-              .get("platform")
-              .flatMap(raw => Platform.from(raw).toOption)
-            scope  <- query.get("scope")
-            module <- modulesOf(graph).find(_.name.value == name)
-          yield (module, version, platform, scope)
-          found match
-            case Some(module, version, platform, "main") =>
-              Some(Id.Main(module, version, platform))
-            case Some(module, version, platform, "test") =>
-              Some(Id.Test(module, version, platform))
-            case _ => None
+    private def named(uri: String, graph: ProjectGraph): Either[BspError, Id] =
+      val names = modulesOf(graph).map(_.name.value).toSet
+      target(repo, uri, names) match
+        case TargetRef.Build                         => Right(Id.Build)
+        case TargetRef.Main(name, version, platform) =>
+          moduleNamed(graph, name).map(module => Id.Main(module, version, platform))
+        case TargetRef.Test(name, version, platform) =>
+          moduleNamed(graph, name).map(module => Id.Test(module, version, platform))
+        case TargetRef.Unknown            => Left(BspError.UnknownTarget)
+        case TargetRef.BadVersion(error)  => Left(BspError.Target(TargetFault.BadVersion(error)))
+        case TargetRef.BadPlatform(error) => Left(BspError.Target(TargetFault.BadPlatform(error)))
+        case TargetRef.BadScope(error)    => Left(BspError.Target(TargetFault.BadScope(error)))
+
+    private def moduleNamed(graph: ProjectGraph, name: String): Either[BspError, Module] =
+      modulesOf(graph).find(_.name.value == name) match
+        case Some(module) => Right(module)
+        case None         => Left(BspError.UnknownTarget)
 
     private def modulesOf(graph: ProjectGraph): List[Module] =
       graph.projects.collect { case module: Module => module }
@@ -1314,13 +1323,13 @@ object Bsp:
     private def targetUri(id: Id): String =
       id match
         case Id.Main(module, version, platform) =>
-          s"${directoryUri(repo)}${module.name.value}?scala=${version.value}&platform=${platform.token}&scope=main"
+          mainUri(repo, module.name.value, version, platform)
         case Id.Test(module, version, platform) =>
-          s"${directoryUri(repo)}${module.name.value}?scala=${version.value}&platform=${platform.token}&scope=test"
+          testUri(repo, module.name.value, version, platform)
         case Id.Build => buildUri
 
     private def buildUri: String =
-      s"${directoryUri(repo)}?build=histos.scala"
+      Bsp.buildUri(repo)
 
     private def initialize: Rpc.InitializeResult =
       Rpc.InitializeResult(
@@ -1339,23 +1348,24 @@ object Bsp:
     /** Metals rejects a target id as a text document. Reset each source file.
       */
     private def clear(target: String): IO[BspError, Unit] =
-      parsed(target) {
-        case None     => ZIO.unit
-        case Some(id) =>
-          filesOf(id).flatMap: files =>
-            ZIO.foreachDiscard(files): file =>
-              notify(
-                Rpc.note(
-                  "build/publishDiagnostics",
-                  Rpc.PublishDiagnostics(
-                    Rpc.TextDocument(fileUri(file)),
-                    Rpc.TargetId(target),
-                    Nil,
-                    true,
-                  ),
+      request.get.flatMap { graph =>
+        named(target, graph) match
+          case Right(id) =>
+            filesOf(id).flatMap: files =>
+              ZIO.foreachDiscard(files): file =>
+                notify(
+                  Rpc.note(
+                    "build/publishDiagnostics",
+                    Rpc.PublishDiagnostics(
+                      Rpc.TextDocument(fileUri(file)),
+                      Rpc.TargetId(target),
+                      Nil,
+                      true,
+                    ),
+                  )
                 )
-              )
-
+          case Left(BspError.UnknownTarget) => ZIO.unit
+          case Left(error)                  => ZIO.fail(error)
       }
 
     /** The compiler library is `JvmCompile.runtime`. A locked copy of either standard library is a second version.
@@ -1463,6 +1473,73 @@ object Bsp:
 
   private def fileUri(path: Path): String =
     path.toAbsolutePath.normalize.toUri.toString
+
+  private[bsp] def target(repo: Path, uri: String, modules: Set[String]): TargetRef =
+    if uri == buildUri(repo) then TargetRef.Build
+    else
+      val prefix = directoryUri(repo)
+      if !uri.startsWith(prefix) then TargetRef.Unknown
+      else
+        val rest  = uri.drop(prefix.length)
+        val name  = rest.takeWhile(_ != '?')
+        val query = queryOf(rest.drop(name.length))
+        (query.get("scala"), query.get("platform"), query.get("scope")) match
+          case (Some(scalaRaw), Some(platformRaw), Some(scopeRaw)) if modules.contains(name) =>
+            ScalaVersion.from(scalaRaw) match
+              case Left(error)    => TargetRef.BadVersion(error)
+              case Right(version) =>
+                Platform.from(platformRaw) match
+                  case Left(error)     => TargetRef.BadPlatform(error)
+                  case Right(platform) =>
+                    scopeOf(scopeRaw) match
+                      case Left(error)       => TargetRef.BadScope(error)
+                      case Right(Scope.Main) => TargetRef.Main(name, version, platform)
+                      case Right(Scope.Test) => TargetRef.Test(name, version, platform)
+          case _ => TargetRef.Unknown
+
+  private def scopeOf(raw: String): Either[ScopeFault, Scope] =
+    scopes.find(_.wire == raw) match
+      case Some(scope) => Right(scope)
+      case None        => Left(ScopeFault.Unknown(raw))
+
+  private def queryOf(raw: String): Map[String, String] =
+    val text = if raw.startsWith("?") then raw.drop(1) else ""
+    text
+      .split("&")
+      .toList
+      .flatMap: part =>
+        part.split("=", 2) match
+          case Array(key, value) => Some(key -> value)
+          case _                 => None
+      .toMap
+
+  private[bsp] def mainUri(repo: Path, name: String, version: ScalaVersion, platform: Platform): String =
+    cellUri(repo, name, version, platform, Scope.Main)
+
+  private[bsp] def testUri(repo: Path, name: String, version: ScalaVersion, platform: Platform): String =
+    cellUri(repo, name, version, platform, Scope.Test)
+
+  private def cellUri(
+      repo: Path,
+      name: String,
+      version: ScalaVersion,
+      platform: Platform,
+      scope: Scope,
+  ): String =
+    s"${directoryUri(repo)}$name?scala=${version.value}&platform=${platform.token}&scope=${scope.wire}"
+
+  private[bsp] def buildUri(repo: Path): String =
+    s"${directoryUri(repo)}?build=histos.scala"
+
+  /** JVM is always published. The file names only the extra platforms. */
+  private[bsp] def parsePlatforms(text: String): Either[AllowFault, Set[Platform]] =
+    val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+    lines.foldLeft[Either[AllowFault, Set[Platform]]](Right(Set.empty)): (acc, token) =>
+      acc.flatMap: have =>
+        token match
+          case "js"     => Right(have + Platform.Js)
+          case "native" => Right(have + Platform.Native)
+          case other    => Left(AllowFault.Unknown(other))
 
   private def directoryUri(path: Path): String =
     val text = fileUri(path)
