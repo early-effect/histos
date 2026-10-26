@@ -140,7 +140,7 @@ Future concerns remain explicit: typed surface errors, cancellation, operator pa
 - [ ] **G20** (correctness) ShipLink manufactures catalog positions/errors and Catalog repeats validation. M7 catalog model owns honest errors and removal of redundant branches.
 - [ ] **G21** (api-shape) Edges/aggregates recover supplied children by name, permitting identity mismatches. M7 reference-based graph construction owns this invariant.
 - [ ] **T14** (tests) Missing API runner-through-PluginFixture, complete plugin lock-cell and combined dependency/path/strategy header examples remain. M7 contract tests owns each, with plugins.md linking actual fixtures rather than implying they exist.
-- [ ] **G22** (api-shape, totality) Sha256/HttpsUrl and runtime version/major textual APIs lack the required compile-time facade alongside typed from. FileUrl now has one. M7 literals owns the remaining factories and macro visibility; not an M4 security waiver.
+- [ ] **G22** (api-shape, totality) [Sha256](../engine/src/histos/jdk/Sha256.scala) takes a string literal. `from` trims and lowercases, and the splice is that hex. [Sha256Spec](../engine/test/Sha256Spec.scala) "a literal is the trimmed lowercase digest" and "a short or empty digest is rejected" lock the literal, the spaced uppercase form, and a short or empty `from`. HttpsUrl and the runtime version/major facades are still missing. FileUrl already has one.
 
 ## M8 graph-derived CI
 
