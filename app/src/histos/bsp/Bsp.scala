@@ -17,7 +17,7 @@ import histos.resolve.{
   ResolveError,
 }
 import histos.program.{EntryPoints, Program, ProgramError}
-import histos.workspace.IoFailure
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.testrun.{ModuleTest, SuiteNames, TestCompile}
 import histos.toolchain.Runtimes
 import histos.TestProvider
@@ -37,11 +37,12 @@ import histos.zinc.{
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
+import java.util.concurrent.ConcurrentLinkedQueue
 
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
-import zio.{IO, Ref, UIO, ZIO}
+import zio.{Chunk, IO, Ref, UIO, ZIO}
 
 /** BSP 2.2 for Metals. JVM targets, a build-file target, and diagnostics. Test running stays out.
   */
@@ -58,7 +59,7 @@ object Bsp:
   private enum Phase:
     case New, Ready, Shutdown
 
-  private enum ParamFault:
+  private[bsp] enum ParamFault:
     case Missing, Rejected
 
     def message: String = this match
@@ -66,7 +67,7 @@ object Bsp:
       case Rejected => Rpc.ParamsDecode.Rejected.message
   end ParamFault
 
-  private enum BspError:
+  private[bsp] enum BspError:
     case Machine(error: histos.jdk.ToolchainError)
     case Parse
     case NotRequest
@@ -88,6 +89,7 @@ object Bsp:
     case NotMain
     case Platforms(text: String)
     case Mains(failure: IoFailure)
+    case Io(failure: IoFailure)
 
     def code: Int = this match
       case Parse                                         => -32700
@@ -96,7 +98,7 @@ object Bsp:
       case Params(_) | UnknownTarget | NotTest | NotMain => -32602
       case NotInitialized                                => -32002
       case Machine(_) | Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) | Tests(_) | Run(_) | Build(_) |
-          Platforms(_) | Mains(_) =>
+          Platforms(_) | Mains(_) | Io(_) =>
         -32603
 
     def message: String = this match
@@ -121,7 +123,25 @@ object Bsp:
       case NotMain               => "jvmRunEnvironment needs a main target"
       case Platforms(text)       => text
       case Mains(failure)        => failure.message
+      case Io(failure)           => failure.message
   end BspError
+
+  /** A directory the request needs. A file in the way is a fault, not a defect. */
+  private[bsp] def ensureDir(path: Path): IO[BspError, Path] =
+    Workspace.createDirectories(path).mapError(BspError.Io(_))
+
+  /** The compiler calls `hear` on its own thread. The chunk is still there when the effect fails. */
+  private[bsp] def problems[R, E, A](
+      use: (CompileProblem => Unit) => ZIO[R, E, A]
+  ): ZIO[R, Nothing, (Either[E, A], Chunk[CompileProblem])] =
+    ZIO.succeed(new ConcurrentLinkedQueue[CompileProblem]).flatMap { queue =>
+      def hear(problem: CompileProblem): Unit =
+        queue.add(problem)
+        ()
+      use(hear).either.map { result =>
+        (result, Chunk.fromIterable(queue.asScala))
+      }
+    }
 
   def open(
       repo: Path,
@@ -436,9 +456,7 @@ object Bsp:
       request.get.flatMap { graph =>
         val modules = modulesOf(graph)
         val uri     = targetUri(id)
-        val heard   =
-          new java.util.concurrent.ConcurrentLinkedQueue[CompileProblem]()
-        val cell = CompiledCell(
+        val cell    = CompiledCell(
           id.module.name,
           id.version,
           id.platform,
@@ -450,30 +468,32 @@ object Bsp:
           sources = None,
           classesWritten = None,
         )
-        val ran =
-          clear(uri) *>
-            (for
-              lock    <- readLock
-              sources <- TestCompile
-                .testSources(repo, id.module, modules, id.version, id.platform)
-                .mapError(BspError.Tests(_))
-              _ <- TestCompile
-                .compiledTests(
-                  repo,
-                  modules,
-                  id.module,
-                  cell,
-                  sources,
-                  jdk,
-                  runtimes.native,
-                  lock,
-                  BuildResolvers(graph.resolvers),
-                  problem => heard.add(problem),
-                )
-                .mapError(BspError.Tests(_))
-            yield ())
-        withTools(ran).either.flatMap { result =>
-          ZIO.foreachDiscard(heard.asScala.toList)(problem => publish(uri, problem)) *> statusOf(result)
+        problems { hear =>
+          withTools(
+            clear(uri) *>
+              (for
+                lock    <- readLock
+                sources <- TestCompile
+                  .testSources(repo, id.module, modules, id.version, id.platform)
+                  .mapError(BspError.Tests(_))
+                _ <- TestCompile
+                  .compiledTests(
+                    repo,
+                    modules,
+                    id.module,
+                    cell,
+                    sources,
+                    jdk,
+                    runtimes.native,
+                    lock,
+                    BuildResolvers(graph.resolvers),
+                    hear,
+                  )
+                  .mapError(BspError.Tests(_))
+              yield ())
+          )
+        }.flatMap { (result, found) =>
+          ZIO.foreachDiscard(found)(problem => publish(uri, problem)) *> statusOf(result)
         }
       }
 
@@ -852,7 +872,7 @@ object Bsp:
                 )
                 .mapError(BspError.Run(_))
             )
-            _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
+            _ <- ensureDir(work)
           yield Rpc.JvmEnvironmentItem(
             Rpc.TargetId(uri),
             paths.map(fileUri),
@@ -908,7 +928,7 @@ object Bsp:
                 )
                 .mapError(BspError.Tests(_))
             )
-            _ <- ZIO.attemptBlocking(Files.createDirectories(work)).orDie
+            _ <- ensureDir(work)
           yield Rpc.JvmEnvironmentItem(
             Rpc.TargetId(uri),
             (classes :: linked.paths).map(fileUri),
@@ -1006,7 +1026,7 @@ object Bsp:
           val file = repo.resolve("histos.scala")
           ZIO
             .attemptBlocking(Files.isRegularFile(file))
-            .orDie
+            .mapError(_ => BspError.Io(IoFailure(file, IoFault.Stat)))
             .map(present => if present then List(file) else Nil)
         case Id.Main(module, version, platform) =>
           graphModules.flatMap { modules =>
