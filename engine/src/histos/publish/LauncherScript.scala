@@ -10,7 +10,8 @@ import zio.{IO, ZIO}
 
 /** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and
   * runs the pinned launcher jar. Scalac runs in that process, so the thread stack is 4MB: the Linux default overflows
-  * in CrossStageSafety. Histos does not install a JDK.
+  * in CrossStageSafety. A repository `.jvmopts` adds one JVM argument per line after that default. Histos does not
+  * install a JDK.
   */
 object LauncherScript:
   val ThreadStack: String = "-Xss4m"
@@ -237,9 +238,48 @@ else
   [ "$(hash_of "$jar")" = "$expected" ] || fail "launcher checksum mismatch"
 fi
 java_bin=$(command -v java) || fail "java is not on PATH"
+shell_quote() {
+  out="'"
+  rest=$1
+  while :; do
+    case $rest in
+      *\'*)
+        out="$out${rest%%\'*}'\\''"
+        rest=${rest#*\'}
+        ;;
+      *)
+        printf '%s' "$out$rest'"
+        return
+        ;;
+    esac
+  done
+}
+jvm_extra=
+opts=$root/.jvmopts
+if [ -e "$opts" ] || [ -L "$opts" ]; then
+  [ -f "$opts" ] && [ -r "$opts" ] || fail "invalid file path: $opts"
+  cr=$(printf '\r')
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%"$cr"}
+    case $line in
+      ''|\#*) continue ;;
+      -jar|-m|--module) fail "jvm option selects the program: $line" ;;
+      @*) fail "jvm option selects the program: $line" ;;
+    esac
+    jvm_extra="$jvm_extra $(shell_quote "$line")"
+  done < "$opts"
+fi
+quoted_args=
+i=1
+while [ "$i" -le "$#" ]; do
+  eval "one=\${$i}"
+  quoted_args="$quoted_args $(shell_quote "$one")"
+  i=$((i + 1))
+done
+eval "set -- $(shell_quote "__STACK__")${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
 cleanup
 trap - EXIT HUP INT TERM
-exec "$java_bin" __STACK__ --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"
+exec "$java_bin" "$@"
 """
 
   private val Windows: String = """@echo off
@@ -333,7 +373,21 @@ if ($jar) {
   }
   if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
 }
-& $java __STACK__ --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
+$jvmArgs = @('__STACK__')
+$opts = Join-Path $root '.jvmopts'
+if (Test-Path -LiteralPath $opts) {
+  if (-not (Test-Path -LiteralPath $opts -PathType Leaf)) { Fail "invalid file path: $opts" }
+  try { $lines = [IO.File]::ReadAllLines($opts) } catch { Fail "invalid file path: $opts" }
+  foreach ($line in $lines) {
+    $text = $line.TrimEnd([char]13)
+    if ($text -eq '' -or $text.StartsWith('#')) { continue }
+    if ($text -eq '-jar' -or $text -eq '-m' -or $text -eq '--module' -or $text.StartsWith('@')) {
+      Fail "jvm option selects the program: $text"
+    }
+    $jvmArgs += $text
+  }
+}
+& $java @jvmArgs --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE
 """
 end LauncherScript

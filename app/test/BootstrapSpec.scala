@@ -199,6 +199,43 @@ object BootstrapSpec extends ZIOSpecDefault:
           temps.isEmpty,
         )
     ,
+    test(".jvmopts lines follow the default stack and stay one argument each"):
+      ZIO.scoped:
+        for
+          fixture <- layout
+          _       <- write(
+            fixture.root.resolve(".jvmopts"),
+            "# comment\n\n-Xmx1g\r\n-Dname=a b\n-Dname=it's\n-Xss8m",
+          )
+          ran <- run(fixture, List("graph", ""), source(fixture))
+        yield assertTrue(
+          ran.exit.contains(ProcessExit(0)),
+          ran.arguments == List(
+            LauncherScript.ThreadStack,
+            "-Xmx1g",
+            "-Dname=a b",
+            "-Dname=it's",
+            "-Xss8m",
+            "--enable-native-access=ALL-UNNAMED",
+            "-jar",
+            fixture.jar.toString,
+            "graph",
+            "",
+          ),
+        )
+    ,
+    test("a jvm option that selects the program is refused"):
+      ZIO.scoped:
+        for
+          fixture <- layout
+          _       <- write(fixture.root.resolve(".jvmopts"), "-Xmx1g\n-jar\nevil.jar\n")
+          ran     <- run(fixture, extra = source(fixture))
+        yield assertTrue(
+          ran.exit.contains(ProcessExit(1)),
+          ran.output.contains("jvm option selects the program: -jar"),
+          ran.arguments.isEmpty,
+        )
+    ,
     test("source digest mismatch refuses execution"):
       ZIO.scoped:
         for
