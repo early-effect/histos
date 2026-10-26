@@ -7,15 +7,15 @@ object Sha256Spec extends ZIOSpecDefault:
 
   def spec = suite("sha256")(
     test("a literal is the trimmed lowercase digest"):
-      val literal = Sha256("ab" * 32)
+      val literal = Sha256("abababababababababababababababababababababababababababababababab")
       val spaced  = Sha256(" ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB ")
-      val parsed  = Sha256.from(s" ${hex.toUpperCase(java.util.Locale.ROOT)} ")
+      val parsed  = Sha256.from(" ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB ")
       assertTrue(
-        parsed == Right(literal),
+        parsed == Right(spaced),
         spaced == literal,
         literal.value == hex,
         spaced.value == hex,
-        parsed.exists(_.value == hex),
+        Sha256.from(hex) == Right(literal),
       )
     ,
     test("a short or empty digest is rejected"):

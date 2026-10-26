@@ -45,7 +45,7 @@ end Sha256Error
 
 private object Sha256Macro:
   def literal(raw: Expr[String])(using Quotes): Expr[Sha256] =
-    constant(raw) match
+    raw.value match
       case None =>
         quotes.reflect.report.errorAndAbort(
           "Sha256(...) takes a literal. Use Sha256.from at runtime.",
@@ -57,17 +57,3 @@ private object Sha256Macro:
             quotes.reflect.report.errorAndAbort(error.message, raw)
           case Right(digest) =>
             '{ Sha256.trusted(${ Expr(digest.value) }) }
-
-  /** `"ab" * 32` is an `augmentString` call, not a string literal. */
-  private def constant(raw: Expr[String])(using Quotes): Option[String] =
-    import quotes.reflect.*
-    def repeated(term: Term): Option[String] = term match
-      case Inlined(_, _, expansion) => repeated(expansion)
-      case Apply(
-            Select(Apply(Ident("augmentString"), List(Literal(StringConstant(part)))), "*"),
-            List(Literal(IntConstant(count))),
-          ) =>
-        Some(part * count)
-      case _ => None
-    raw.value.orElse(repeated(raw.asTerm))
-end Sha256Macro
