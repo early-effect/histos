@@ -89,5 +89,19 @@ if ($jar) {
   }
   if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
 }
-& $java -Xss4m --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
+$jvmArgs = @()
+$opts = Join-Path $root '.jvmopts'
+if (Test-Path -LiteralPath $opts) {
+  if (-not (Test-Path -LiteralPath $opts -PathType Leaf)) { Fail "invalid file path: $opts" }
+  try { $lines = [IO.File]::ReadAllLines($opts) } catch { Fail "invalid file path: $opts" }
+  foreach ($line in $lines) {
+    $text = $line.TrimEnd([char]13)
+    if ($text -eq '' -or $text.StartsWith('#')) { continue }
+    if ($text -eq '-jar' -or $text -eq '-m' -or $text -eq '--module' -or $text.StartsWith('@')) {
+      Fail "jvm option selects the program: $text"
+    }
+    $jvmArgs += $text
+  }
+}
+& $java @jvmArgs --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE
