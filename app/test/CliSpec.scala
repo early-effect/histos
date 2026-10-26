@@ -10,6 +10,7 @@ import histos.workflow.{Workflow, WorkflowAction}
 import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
 import histos.cache.ContentStore
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
+import histos.report.{BuildFault, CallResult, Rejection}
 import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ServerError}
 import histos.zinc.GraphCompile
 import histos.Dep
@@ -160,15 +161,19 @@ object CliSpec extends ZIOSpecDefault:
       for
         release <- Promise.make[Nothing, Unit]
         started <- Promise.make[Nothing, Unit]
-        fiber   <- Cli.recorded { say =>
-          say(Message.Out("compiling core")) *>
-            say(Message.Err("unused")) *>
-            say(Message.Out("")) *>
-            started.succeed(()) *>
-            release.await *>
-            say(Message.Out("suite passed")) *>
-            say(Message.Exit(1, "failed"))
-        }.fork
+        fiber   <- Cli
+          .recorded(
+            Call.Compile(Nil),
+            say =>
+              say(Message.Out("compiling core")) *>
+                say(Message.Err("unused")) *>
+                say(Message.Out("")) *>
+                started.succeed(()) *>
+                release.await *>
+                say(Message.Out("suite passed")) *>
+                say(Message.Done(CallResult.Fault(BuildFault.Rejected(Rejection.RunFailed)))),
+          )
+          .fork
         _         <- started.await
         duringOut <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
         duringErr <- TestConsole.outputErr.map(
@@ -182,9 +187,9 @@ object CliSpec extends ZIOSpecDefault:
         duringOut == List("compiling core", ""),
         duringErr == List("unused"),
         afterOut == List("compiling core", "", "suite passed"),
-        afterErr == List("unused", "failed"),
+        afterErr == List("unused", "the run failed"),
         done.out == "compiling core\n\nsuite passed",
-        done.err == "unused\nfailed",
+        done.err == "unused\nthe run failed",
         done.exit == CliExit.TaskFailed,
         done.playback == Playback.Heard,
       )
@@ -1333,8 +1338,8 @@ object CliSpec extends ZIOSpecDefault:
               case _              => false
             },
             heard.exists {
-              case Feed.Exit(code, err) =>
-                code == CliExit.Success.code && err.isEmpty
+              case Feed.Done(result) =>
+                CliExit.from(Call.Reboot, result) == CliExit.Success && result.message.isEmpty
               case _ => false
             },
           )

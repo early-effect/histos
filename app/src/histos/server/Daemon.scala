@@ -2,10 +2,11 @@ package histos.server
 
 import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame}
-import histos.cli.{CliExit, Operation}
+import histos.cli.Operation
 import histos.jdk.Sha256
-import histos.load.HeaderScan
+import histos.load.{HeaderScan, LoadError}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
+import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.task.RunId
 import histos.toolchain.Runtimes
 import histos.ProjectGraph
@@ -19,6 +20,7 @@ import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
+import histos.report.WireJson.given JsonCodec[CallResult]
 import zio.stream.ZStream
 import zio.{Chunk, Exit, Fiber, IO, Promise, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
 
@@ -72,7 +74,7 @@ end ServerIo
 enum Feed:
   case Out(text: String)
   case Err(text: String)
-  case Exit(code: Int, err: String)
+  case Done(result: CallResult)
 
 private object CallJson:
   given JsonCodec[ParamName] = JsonCodec.string.transformOrFail(
@@ -127,7 +129,7 @@ enum Message derives JsonCodec:
   case Ready
   case Out(text: String)
   case Err(text: String)
-  case Exit(code: Int, err: String)
+  case Done(result: CallResult)
   case Marker(histosExit: Int)
 
 opaque type Fingerprint = String
@@ -325,8 +327,8 @@ object Client:
               ZStream.succeed(Feed.Out(text)) ++ frames(input, socket)
             case Right(Message.Err(text)) =>
               ZStream.succeed(Feed.Err(text)) ++ frames(input, socket)
-            case Right(Message.Exit(code, err)) =>
-              ZStream.succeed(Feed.Exit(code, err))
+            case Right(Message.Done(result)) =>
+              ZStream.succeed(Feed.Done(result))
             case _ => ZStream.fail(ServerError.Protocol)
 
   private def copyStdin(
@@ -680,7 +682,7 @@ object Daemon:
               ] =
                 Operation.underWatch(inner) match
                   case Left(error) =>
-                    Calls.finish(out, CliExit.Usage.code, error.message)
+                    Calls.finish(out, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))
                   case Right(call) =>
                     Watching.session(
                       repo,
@@ -718,8 +720,8 @@ object Daemon:
                       force(repo, apiJar, version, bound, warm)
                     case _ => adopt(repo, apiJar, version, bound, warm)
                 loaded.flatMap:
-                  case Left(message) =>
-                    out(Message.Exit(CliExit.LoadFailed.code, message))
+                  case Left(error) =>
+                    out(Message.Done(CallResult.Fault(BuildFault.Load(error))))
                   case Right(held) =>
                     histos.jdk.Machine
                       .load(repo)
@@ -837,7 +839,7 @@ object Daemon:
                                     )
                                   )
                                 case Call.Reload =>
-                                  out(Message.Exit(CliExit.Success.code, ""))
+                                  out(Message.Done(CallResult.Reported(Report.empty)))
                                 case Call.Reboot =>
                                   reboot(repo, bound, server, life, output)
                                 case Call.Bsp =>
@@ -926,7 +928,7 @@ object Daemon:
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
-    Either[String, Generation],
+    Either[LoadError, Generation],
   ] =
     warm.reloading.withPermit {
       for
@@ -947,7 +949,7 @@ object Daemon:
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
-    Either[String, Generation],
+    Either[LoadError, Generation],
   ] =
     warm.reloading.withPermit {
       Fingerprint
@@ -965,7 +967,7 @@ object Daemon:
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
-    Either[String, Generation],
+    Either[LoadError, Generation],
   ] =
     for
       scope  <- Scope.make
@@ -973,7 +975,7 @@ object Daemon:
         .extend(ZIO.serviceWithZIO[histos.load.Loader](_.load(repo, apiJar)))
         .either
       result <- loaded match
-        case Left(error)  => scope.close(Exit.unit).as(Left(error.message))
+        case Left(error)  => scope.close(Exit.unit).as(Left(error))
         case Right(found) =>
           for
             _    <- Record.write(repo, version, now, bound)
@@ -1038,7 +1040,7 @@ object Daemon:
       _ <- life.relaunch
       _ <- write(
         output,
-        wire(Message.Exit(histos.cli.CliExit.Success.code, "")),
+        wire(Message.Done(CallResult.Reported(Report.empty))),
         bound,
       )
       _ <- life.stopping.succeed(())

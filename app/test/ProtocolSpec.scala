@@ -4,14 +4,17 @@ import heddle.LinePipe
 import heddle.mcp.protocol.{CallToolResult, ClientRequest, ContentBlock, ListToolsResult, Message, RequestId, ToolName}
 import histos.workspace.{IoFailure, IoFault}
 import histos.cli.{Cli, CliExit, CliParseError, Command}
-import histos.client.Session
+import histos.client.{ClientJson, Session}
+import histos.client.Session.CallProblem
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs, PluginOutput, PluginTaskId}
+import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.server.Call
+
+import ClientJson.given
 import histos.cache.ContentStore
 import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{ApiJar, LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
-import histos.report.Report
 import HistosMcp.{CancelArgs, NoArgs, RunArgs, WatchArgs}
 import histos.resolve.{
   Classpath,
@@ -137,7 +140,7 @@ object ProtocolSpec extends ZIOSpecDefault:
         call.toJson.fromJson[Call] == Right(call),
         Session.runCall("dev.example/echo", None, args) == Right(call),
         Session.runCall("dev.example/echo", Some("jvm"), args) == Left(
-          CliParseError.TaskPlatform("dev.example/echo").message
+          BuildFault.Rejected(Rejection.TaskPlatform("dev.example/echo"))
         ),
         Session.runCall("inspect", None, PluginArgs.empty) == Right(
           Call.Task("inspect", PluginArgs.empty)
@@ -192,12 +195,15 @@ object ProtocolSpec extends ZIOSpecDefault:
           _       <- done.join
           heard   <- readUntil(client, Set(2, 4))
           graph   <- report(heard, 2)
-          missing <- report(heard, 4)
+          missing <- problem(heard, 4)
         yield assertTrue(
-          graph.exit == CliExit.Success.code,
+          CliExit.from(Call.Graph, CallResult.Reported(graph)) == CliExit.Success,
           graph.out.exists(_.contains("core jvm 3.9.0")),
-          missing.exit == CliExit.TaskFailed.code,
-          missing.err.contains("no run 'missing'"),
+          missing match
+            case CallProblem.Fault(fault) =>
+              fault.message.contains("no run 'missing'") &&
+              CliExit.from(Call.Cancel("missing"), CallResult.Fault(fault)) == CliExit.TaskFailed
+            case CallProblem.Transport(_) => false,
         )
     ,
     test("toolchain returns the chosen jdk"):
@@ -226,7 +232,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           heard <- readUntil(client, Set(2))
           found <- report(heard, 2)
         yield assertTrue(
-          found.exit == CliExit.Success.code,
+          CliExit.from(Call.Toolchain, CallResult.Reported(found)) == CliExit.Success,
           found.out.exists(_.contains("21.0.2")),
           found.out.exists(_.contains(dir.resolve("jdk").toString)),
         )
@@ -247,10 +253,13 @@ object ProtocolSpec extends ZIOSpecDefault:
           _     <- client.close
           _     <- done.join
           heard <- readUntil(client, Set(2))
-          found <- report(heard, 2)
+          found <- problem(heard, 2)
         yield assertTrue(
-          found.exit == CliExit.ToolchainFailed.code,
-          found.err.exists(_.contains("21")),
+          found match
+            case CallProblem.Fault(fault) =>
+              fault.message.contains("21") &&
+              CliExit.from(Call.Toolchain, CallResult.Fault(fault)) == CliExit.ToolchainFailed
+            case CallProblem.Transport(_) => false
         )
     ,
     test("a js graph without Node keeps the jdk decision"):
@@ -288,11 +297,16 @@ object ProtocolSpec extends ZIOSpecDefault:
           _     <- client.close
           _     <- done.join
           heard <- readUntil(client, Set(2))
-          found <- report(heard, 2)
+          found <- problem(heard, 2)
+          notes <- ZIO.fromEither(noticeLines(heard))
         yield assertTrue(
-          found.exit == CliExit.ToolchainFailed.code,
-          found.out.exists(_.contains("21.0.2")),
-          found.err.exists(_.contains("25")),
+          found match
+            case CallProblem.Fault(fault) =>
+              fault.message.contains("25") &&
+              CliExit.from(Call.Toolchain, CallResult.Fault(fault)) == CliExit.ToolchainFailed
+            case CallProblem.Transport(_) => false
+          ,
+          notes.exists(_.data.contains("21.0.2")),
         )
     ,
     test("an unknown plugin task says it is not in the graph"):
@@ -311,10 +325,16 @@ object ProtocolSpec extends ZIOSpecDefault:
           _     <- client.close
           _     <- done.join
           heard <- readUntil(client, Set(2))
-          found <- report(heard, 2)
+          found <- problem(heard, 2)
         yield assertTrue(
-          found.exit == CliExit.TaskFailed.code,
-          found.err.contains("plugin task dev.example/echo is not in the graph"),
+          found match
+            case CallProblem.Fault(fault) =>
+              fault.message.contains("plugin task dev.example/echo is not in the graph") &&
+              CliExit.from(
+                Call.Task("dev.example/echo", PluginArgs.empty),
+                CallResult.Fault(fault),
+              ) == CliExit.TaskFailed
+            case CallProblem.Transport(_) => false
         )
     ,
     test("version, cache path, and a rejected watch answer on the pipe"):
@@ -344,9 +364,9 @@ object ProtocolSpec extends ZIOSpecDefault:
           needs   <- tool(heard, 4)
           usage   <- tool(heard, 5)
         yield assertTrue(
-          printed.exit == CliExit.Success.code,
+          CliExit.from(Call.Version, CallResult.Reported(printed)) == CliExit.Success,
           printed.out == Chunk(Cli.VersionText),
-          stored.exit == CliExit.Success.code,
+          CliExit.from(Call.CachePath, CallResult.Reported(stored)) == CliExit.Success,
           stored.out == Chunk(dir.resolve("cache").toString),
           needs.failed,
           texts(needs).exists(_.contains("watch needs a command")),
@@ -376,7 +396,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           stopOn  <- invoke(3, ToolName("cancel"), CancelArgs(id))
           _       <- client.writeLine(stopOn)
           heard   <- readUntil(client, Set(2, 3))
-          held    <- report(heard, 2)
+          held    <- problem(heard, 2)
           stopped <- report(heard, 3)
           _       <- done.interrupt
         yield assertTrue(
@@ -385,8 +405,12 @@ object ProtocolSpec extends ZIOSpecDefault:
           note.logger == Notice.Logger,
           note.data == s"run $id",
           id != heldTask,
-          held.exit == CliExit.Interrupted.code,
-          stopped.exit == CliExit.Success.code,
+          held == CallProblem.Fault(BuildFault.Interrupted),
+          CliExit.from(
+            Call.Task(heldTask, PluginArgs.empty),
+            CallResult.Fault(BuildFault.Interrupted),
+          ) == CliExit.Interrupted,
+          CliExit.from(Call.Cancel(id), CallResult.Reported(stopped)) == CliExit.Success,
           stopped.out.contains("cancelled"),
         ),
   ) @@ TestAspect.timeout(15.seconds)
@@ -510,6 +534,9 @@ object ProtocolSpec extends ZIOSpecDefault:
   private def report(messages: List[Message], id: Long): IO[WireFault, Report] =
     tool(messages, id).flatMap(result => ZIO.fromEither(reportOf(result)))
 
+  private def problem(messages: List[Message], id: Long): IO[WireFault, CallProblem] =
+    tool(messages, id).flatMap(result => ZIO.fromEither(problemOf(result)))
+
   private def callResult(messages: List[Message], id: Long): Either[WireFault, CallToolResult] =
     resultAs(messages, id)
 
@@ -519,12 +546,21 @@ object ProtocolSpec extends ZIOSpecDefault:
       case Some(body) => body.as[A].left.map(WireFault.BadResult(id, _))
 
   private def reportOf(result: CallToolResult): Either[WireFault, Report] =
-    result.structuredContent match
-      case Some(obj) => obj.as[Report].left.map(WireFault.BadReport(_))
-      case None      =>
-        result.content.collectFirst { case ContentBlock.Text(text, _) => text } match
-          case None       => Left(WireFault.BadReport("tool result has no report"))
-          case Some(text) => text.fromJson[Report].left.map(WireFault.BadReport(_))
+    if result.failed then Left(WireFault.BadReport("a report is not a tool error"))
+    else
+      result.structuredContent match
+        case Some(obj) => obj.as[Report].left.map(WireFault.BadReport(_))
+        case None      =>
+          result.content.collectFirst { case ContentBlock.Text(text, _) => text } match
+            case None       => Left(WireFault.BadReport("tool result has no report"))
+            case Some(text) => text.fromJson[Report].left.map(WireFault.BadReport(_))
+
+  private def problemOf(result: CallToolResult): Either[WireFault, CallProblem] =
+    if !result.failed then Left(WireFault.BadReport("expected a tool error"))
+    else
+      result.content.collectFirst { case ContentBlock.Text(text, _) => text } match
+        case None       => Left(WireFault.BadReport("tool error has no text"))
+        case Some(text) => text.fromJson[CallProblem].left.map(WireFault.BadReport(_))
 
   private def texts(result: CallToolResult): Chunk[String] =
     result.content.collect { case ContentBlock.Text(text, _) => text }

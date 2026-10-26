@@ -1,13 +1,11 @@
 package histos.client
 
-import histos.jdk.JdkRuntime
-import histos.cli.{Cli, CliExit, Operation}
-import histos.mcp.Notice
-import histos.report.{Diagnostic, Observation, Report}
+import histos.cli.{Cli, Operation}
+import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.jdk.Machine
-import histos.load.{LoadedBuild, Loader}
+import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.plugin.PluginArgs
-import histos.server.{Attach, Call, Calls, Decision, Feed, Fingerprint, Message, Say, ServerError, Watching}
+import histos.server.{Attach, Call, Calls, Decision, Feed, Fingerprint, Say, ServerError, Watching}
 import histos.task.{RunId, TaskId}
 import histos.testrun.ModuleTestError
 import histos.zinc.{GraphCompile, GraphCompileError}
@@ -15,7 +13,6 @@ import histos.Platform
 
 import java.nio.file.Path
 
-import zio.json.*
 import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO, ZLayer}
 
 /** One MCP process. It sends [[Call]] while the server matches, and keeps a single graph otherwise.
@@ -31,6 +28,11 @@ object Session:
       case Remote(error)    => error.message
       case DidNotFinish     => "the call did not finish"
   end SessionError
+
+  /** A tool failed. A fault is a request that never became a report. Transport never started the call. */
+  enum CallProblem:
+    case Fault(fault: BuildFault)
+    case Transport(error: SessionError)
 
   final case class Held(
       fingerprint: Fingerprint,
@@ -58,7 +60,7 @@ object Session:
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     SessionError,
-    Report,
+    CallResult,
   ] =
     Attach.decide(repo, Cli.VersionText).flatMap {
       case Decision.DifferentVersion =>
@@ -72,26 +74,19 @@ object Session:
                 locally(repo, apiJar, machine, desk, call)
               case other => ZIO.fail(SessionError.Remote(other))
             },
-            heard =>
-              ZIO.fromEither(
-                spoken(
-                  heard.feeds.toList,
-                  heard.run,
-                  heard.observation,
-                  heard.diagnostics,
-                )
-              ),
+            heard => ZIO.fromEither(spoken(heard.feeds.toList)),
           )
       case Decision.Absent =>
         locally(repo, apiJar, machine, desk, call)
     }
 
-  /** Exit 0 is the tool value. A non-zero exit is that report's JSON text. */
-  def deliver[R](call: ZIO[R, SessionError, Report]): ZIO[R, String, Report] =
-    call.mapError(_.message).flatMap { report =>
-      if report.exit == 0 then ZIO.succeed(report)
-      else ZIO.fail(report.toJson)
-    }
+  /** A report is the tool value, including a compile or test that ran and failed. A fault fails the tool. */
+  def deliver[R](call: ZIO[R, SessionError, CallResult]): ZIO[R, CallProblem, Report] =
+    call
+      .mapError(CallProblem.Transport(_))
+      .flatMap:
+        case CallResult.Reported(report) => ZIO.succeed(report)
+        case CallResult.Fault(fault)     => ZIO.fail(CallProblem.Fault(fault))
 
   /** `inspect`, `versions`, and a plugin task reject a platform. A main may name one.
     */
@@ -99,41 +94,40 @@ object Session:
       id: String,
       platform: Option[String],
       args: PluginArgs,
-  ): Either[String, Call] =
+  ): Either[BuildFault, Call] =
     val task =
       id.contains("/") || TaskId
         .from(id)
         .toOption
         .exists(found => found == TaskId.Inspect || found == TaskId.Versions)
-    if !task && args != PluginArgs.empty then Left(s"run $id does not take arguments")
+    if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
     else
       platform match
         case Some(_) if task =>
-          Left(histos.cli.CliParseError.TaskPlatform(id).message)
+          Left(BuildFault.Rejected(Rejection.TaskPlatform(id)))
         case Some(raw) =>
           Platform.from(raw) match
-            case Left(error) => Left(error.message)
+            case Left(error) => Left(BuildFault.Platform(error))
             case Right(_)    => Right(Call.Run(id, platform))
         case None if task => Right(Call.Task(id, args))
         case None         => Right(Call.Run(id, None))
 
-  def spoken(
-      feeds: List[Feed],
-      run: Option[String],
-      observation: Option[Observation],
-      diagnostics: Chunk[Diagnostic],
-  ): Either[SessionError, Report] =
+  /** The terminal frame is the result. Live lines already on that report are not copied again. */
+  def spoken(feeds: List[Feed]): Either[SessionError, CallResult] =
     val out      = Chunk.fromIterable(feeds.collect { case Feed.Out(text) => text })
-    val errLines = feeds.collect { case Feed.Err(text) => text }
-    feeds.reverse.collectFirst { case Feed.Exit(code, message) =>
-      (code, message)
-    } match
-      case None                  => Left(SessionError.DidNotFinish)
-      case Some((code, message)) =>
-        val err =
-          if message.isEmpty || errLines.contains(message) then Chunk.fromIterable(errLines)
-          else Chunk.fromIterable(errLines) :+ message
-        Right(Report(code, out, err, run, observation, diagnostics))
+    val errLines = Chunk.fromIterable(feeds.collect { case Feed.Err(text) => text })
+    feeds.reverse.collectFirst { case Feed.Done(result) => result } match
+      case None                              => Left(SessionError.DidNotFinish)
+      case Some(fault @ CallResult.Fault(_)) => Right(fault)
+      case Some(CallResult.Reported(report)) =>
+        Right(
+          CallResult.Reported(
+            report.copy(
+              out = mergeLines(report.out, out),
+              err = report.err ++ errLines.filterNot(report.err.contains),
+            )
+          )
+        )
 
   private def locally(
       repo: Path,
@@ -144,41 +138,25 @@ object Session:
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     SessionError,
-    Report,
+    CallResult,
   ] =
     call match
       case Call.Reboot =>
         Cli
-          .reboot(repo, apiJar)
+          .bootCall(repo, apiJar)
           .provideSomeLayer(ZLayer.succeed(machine))
-          .flatMap: done =>
-            val out = lines(done.out)
-            val err = lines(done.err)
-            ZIO.foreachDiscard(out)(Notice.out) *>
-              ZIO
-                .foreachDiscard(err)(Notice.err)
-                .as(
-                  Report(done.exit.code, out, err, None, None, Chunk.empty)
-                )
+          .mapError(SessionError.Remote(_))
       case other =>
         for
           feeds <- Ref.make(Chunk.empty[Feed])
           say = Say.record(feeds)
-          _ <- answer(repo, apiJar, machine, desk, other, say).mapError(
-            SessionError.Remote(_)
-          )
-          spokenFeeds <- feeds.get
-          run         <- say.run
-          observation <- say.observation
-          diagnostics <- say.diagnostics
-          report      <- ZIO.fromEither(
-            spoken(spokenFeeds.toList, run, observation, diagnostics)
-          )
-        yield report
+          _      <- answer(repo, apiJar, machine, desk, other, say).mapError(SessionError.Remote(_))
+          chunk  <- feeds.get
+          result <- ZIO.fromEither(spoken(chunk.toList))
+        yield result
 
-  private def lines(text: String): Chunk[String] =
-    if text.isEmpty then Chunk.empty
-    else Chunk.fromArray(text.split("\n", -1))
+  private def mergeLines(have: Chunk[String], more: Chunk[String]): Chunk[String] =
+    if have.isEmpty then more else have ++ more.filterNot(have.contains)
 
   /** Commands that do not use the adopted graph. */
   private def answer(
@@ -215,22 +193,21 @@ object Session:
       case Call.Resolve(action) =>
         Calls.resolve(repo, apiJar, action, say, machine.native)
       case Call.Reload =>
-        say(Message.Exit(CliExit.LoadFailed.code, ServerError.NoServer.message))
+        ZIO.fail(ServerError.NoServer)
       case Call.Reboot =>
-        Cli
-          .reboot(repo, apiJar)
-          .provideSomeLayer(ZLayer.succeed(machine))
-          .flatMap(done => say(Message.Exit(done.exit.code, done.err)))
+        Cli.bootCall(repo, apiJar).provideSomeLayer(ZLayer.succeed(machine)).flatMap(Calls.finish(say, _))
       case Call.Bsp =>
-        say(Message.Exit(CliExit.Usage.code, "not a tool"))
+        Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool)))
       case Call.Watch(inner) =>
         watch(repo, apiJar, machine, desk, inner, say)
       case other =>
-        fresh(repo, apiJar, desk).either.flatMap:
-          case Left(message) =>
-            say(Message.Exit(CliExit.LoadFailed.code, message))
-          case Right(loaded) =>
-            dispatch(repo, apiJar, loaded, machine, desk, other, say)
+        fresh(repo, apiJar, desk).foldZIO(
+          {
+            case error: LoadError   => Calls.finish(say, CallResult.Fault(BuildFault.Load(error)))
+            case error: ServerError => ZIO.fail(error)
+          },
+          loaded => dispatch(repo, apiJar, loaded, machine, desk, other, say),
+        )
 
   private def watch(
       repo: Path,
@@ -246,15 +223,19 @@ object Session:
   ] =
     Operation.underWatch(inner) match
       case Left(error) =>
-        Calls.finish(say, CliExit.Usage.code, error.message)
+        Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))
       case Right(call) =>
         Watching.session(
           repo,
           say,
           answer(repo, apiJar, machine, desk, call, say.dropExit),
-          fresh(repo, apiJar, desk).either.map:
-            case Left(_)       => List(repo.resolve("histos.scala"))
-            case Right(loaded) => Watching.roots(repo, call, loaded.graph),
+          fresh(repo, apiJar, desk).foldZIO(
+            {
+              case _: LoadError       => ZIO.succeed(List(repo.resolve("histos.scala")))
+              case error: ServerError => ZIO.fail(error)
+            },
+            loaded => ZIO.succeed(Watching.roots(repo, call, loaded.graph)),
+          ),
         )
 
   private def dispatch(
@@ -280,58 +261,27 @@ object Session:
         histos.server.Calls.cancel(desk.runs, id, say)
       case Call.Compile(projects) =>
         Calls.tracked(desk.runs, say)(
-          withJdk(machine, say, CliExit.CompileFailed)(jdk =>
-            histos.server.Calls
-              .compile(repo, graph, projects, jdk, machine, say)
-          )
+          withJdk(machine, say, call)(jdk => histos.server.Calls.compile(repo, graph, projects, jdk, machine, say))
         )
       case Call.Test(projects, patterns, quick) =>
         Calls.tracked(desk.runs, say)(
-          GraphCompile
-            .jdk(machine)
-            .foldZIO(
-              error =>
-                val (code, message) =
-                  Cli.testFailure(ModuleTestError.Compile(error))
-                say(histos.server.Message.Exit(code, message))
-              ,
-              jdk =>
-                histos.server.Calls.test(
-                  repo,
-                  graph,
-                  projects,
-                  patterns,
-                  quick,
-                  jdk,
-                  machine,
-                  say,
-                ),
-            )
+          withJdk(machine, say, call)(jdk =>
+            histos.server.Calls.test(repo, graph, projects, patterns, quick, jdk, machine, say)
+          )
         )
       case Call.Publish(repository, projects) =>
         Calls.tracked(desk.runs, say)(
-          withJdk(machine, say, CliExit.PublishFailed)(jdk =>
-            histos.server.Calls
-              .publish(repo, graph, machine, jdk, repository, projects, say)
+          withJdk(machine, say, call)(jdk =>
+            histos.server.Calls.publish(repo, graph, machine, jdk, repository, projects, say)
           )
         )
       case Call.Assembly(destination) =>
         Calls.tracked(desk.runs, say)(
-          withJdk(machine, say, CliExit.CompileFailed)(jdk =>
-            histos.server.Calls
-              .assembly(repo, graph, jdk, machine, destination, say)
-          )
+          withJdk(machine, say, call)(jdk => histos.server.Calls.assembly(repo, graph, jdk, machine, destination, say))
         )
       case Call.Run(id, platform) =>
         Calls.tracked(desk.runs, say)(
-          GraphCompile
-            .jdk(machine)
-            .foldZIO(
-              error => say(histos.server.Message.Exit(jdkCode(error), error.message)),
-              jdk =>
-                histos.server.Calls
-                  .run(repo, graph, jdk, machine, id, platform, say),
-            )
+          withJdk(machine, say, call)(jdk => histos.server.Calls.run(repo, graph, jdk, machine, id, platform, say))
         )
       case Call.Task(id, args) =>
         Calls.tracked(desk.runs, say)(
@@ -356,14 +306,11 @@ object Session:
       case Call.LauncherUpdate =>
         Calls.launcherUpdate(repo, say)
       case Call.Reload =>
-        say(Message.Exit(CliExit.LoadFailed.code, ServerError.NoServer.message))
+        ZIO.fail(ServerError.NoServer)
       case Call.Reboot =>
-        Cli
-          .reboot(repo, apiJar)
-          .provideSomeLayer(ZLayer.succeed(machine))
-          .flatMap(done => say(Message.Exit(done.exit.code, done.err)))
+        Cli.bootCall(repo, apiJar).provideSomeLayer(ZLayer.succeed(machine)).flatMap(Calls.finish(say, _))
       case Call.Bsp =>
-        say(Message.Exit(CliExit.Usage.code, "not a tool"))
+        Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool)))
       case Call.Watch(inner) =>
         watch(repo, apiJar, machine, desk, inner, say)
       case Call.PreviewCompile(projects) =>
@@ -380,21 +327,29 @@ object Session:
       case Call.PreviewRun(id, platform) =>
         histos.server.Calls.previewRun(graph, id, platform, say)
 
-  private def withJdk(machine: Machine, say: Say, exit: CliExit)(
-      use: JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]
+  private def withJdk(machine: Machine, say: Say, call: Call)(
+      use: histos.jdk.JdkRuntime => ZIO[histos.resolve.Resolve, ServerError, Unit]
   ): ZIO[histos.resolve.Resolve, ServerError, Unit] =
     GraphCompile
       .jdk(machine)
       .foldZIO(
-        error => say(histos.server.Message.Exit(exit.code, error.message)),
+        error => Calls.finish(say, jdkMissed(call, error)),
         use,
       )
 
-  private def jdkCode(error: GraphCompileError): Int =
-    error match
-      case GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) =>
-        CliExit.ResolveFailed.code
-      case _ => CliExit.CompileFailed.code
+  /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
+  private def jdkMissed(call: Call, error: GraphCompileError): CallResult =
+    call match
+      case Call.Publish(_, _) | Call.PreviewPublish(_) =>
+        CallResult.Fault(BuildFault.Compile(error))
+      case Call.Test(_, _, _) | Call.PreviewTest(_) =>
+        BuildFault.testStopped(ModuleTestError.Compile(error)) match
+          case Some(why) => CallResult.Fault(why)
+          case None      => CallResult.reported(error.message)
+      case _ =>
+        BuildFault.compileStopped(error) match
+          case Some(why) => CallResult.Fault(why)
+          case None      => CallResult.reported(error.message)
 
   private def fresh(
       repo: Path,
@@ -402,11 +357,11 @@ object Session:
       desk: Desk,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore,
-    String,
+    LoadError | ServerError,
     LoadedBuild,
   ] =
     for
-      now     <- Fingerprint.read(repo).mapError(_.message)
+      now     <- Fingerprint.read(repo)
       current <- desk.held.get
       loaded  <- current match
         case Some(held) if held.fingerprint == now => ZIO.succeed(held.loaded)
@@ -422,14 +377,13 @@ object Session:
       desk: Desk,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore,
-    String,
+    LoadError,
     LoadedBuild,
   ] =
     for
       scope  <- Scope.make
       loaded <- scope
         .extend(ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)))
-        .mapError(_.message)
         .tapError(_ => scope.close(Exit.unit))
       _ <- desk.held.set(Some(Held(now, loaded, scope)))
     yield loaded

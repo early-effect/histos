@@ -1,7 +1,8 @@
 package histos.cli
 
 import histos.preview.PreviewError
-import histos.server.Calls
+import histos.report.{BuildFault, CallResult}
+import histos.server.{Call, Calls}
 import histos.testrun.{ModuleTestError, SuitePatternError}
 
 import zio.test.*
@@ -25,17 +26,21 @@ object SuitePatternCallSpec extends ZIOSpecDefault:
       )
     ,
     test("an empty pattern exits as usage"):
-      val (code, message) = Cli.testFailure(ModuleTestError.Pattern(SuitePatternError.Empty))
+      val error  = SuitePatternError.Empty
+      val result = CallResult.Fault(BuildFault.Pattern(error))
       assertTrue(
-        (code, message) == (CliExit.Usage.code, "a test pattern is not empty"),
-        !message.contains("is not a project name"),
+        CliExit.from(Call.Test(Nil, Nil, false), result) == CliExit.Usage,
+        error.message == "a test pattern is not empty",
+        !error.message.contains("is not a project name"),
       )
     ,
     test("a blank pattern exits as usage"):
-      val (code, message) = Cli.testFailure(ModuleTestError.Pattern(SuitePatternError.Blank("foo bar")))
+      val error  = SuitePatternError.Blank("foo bar")
+      val result = CallResult.Fault(BuildFault.Pattern(error))
       assertTrue(
-        (code, message) == (CliExit.Usage.code, "'foo bar' is not a test pattern"),
-        !message.contains("is not a project name"),
+        CliExit.from(Call.Test(Nil, Nil, false), result) == CliExit.Usage,
+        error.message == "'foo bar' is not a test pattern",
+        !error.message.contains("is not a project name"),
       )
     ,
     test("a preview pattern keeps the suite-selection message"):

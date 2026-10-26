@@ -2,6 +2,7 @@ package histos.server
 
 import histos.cli.{Cli, CliExit}
 import histos.load.{BuildNotes, PluginLink, PluginRuntime}
+import histos.report.{BuildFault, CallResult}
 import histos.plugin.{PluginArgs, PluginOutput, PluginTaskId}
 import histos.task.{TaskError, TaskId, TaskResult}
 import histos.zinc.GraphCompile
@@ -39,9 +40,9 @@ object RunSpec extends ZIOSpecDefault:
               idA = feedA.flatMap(runText)
               idB = feedB.flatMap(runText)
               stopped  <- cancel(socket, idA)
-              afterA   <- untilExit(first).timeout(5.seconds)
+              afterA   <- untilDone(first).timeout(5.seconds)
               _        <- ZIO.foreachDiscard(gateB)(_.succeed("beta"))
-              afterB   <- untilExit(second).timeout(5.seconds)
+              afterB   <- untilDone(second).timeout(5.seconds)
               finished <- cancel(socket, idB)
             yield assertTrue(
               gateA.isDefined,
@@ -51,12 +52,12 @@ object RunSpec extends ZIOSpecDefault:
               idA != idB,
               idA != Some(task),
               told(stopped, "cancelled"),
-              exited(stopped, CliExit.Success.code),
-              afterA.exists(exited(_, CliExit.Interrupted.code)),
+              idA.exists(id => endedQuiet(stopped, Call.Cancel(id), CliExit.Success)),
+              afterA.exists(interrupted),
               !afterA.exists(said(_, "beta")),
               afterB.exists(said(_, "beta")),
-              afterB.exists(exited(_, CliExit.Success.code)),
-              idB.exists(id => failed(finished, s"no run '$id'")),
+              afterB.exists(endedQuiet(_, call, CliExit.Success)),
+              idB.exists(id => failed(finished, Call.Cancel(id), s"no run '$id'")),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
@@ -77,14 +78,14 @@ object RunSpec extends ZIOSpecDefault:
               gate <- gates.take.timeout(15.seconds)
               id = feed.flatMap(runText)
               stopped <- cancel(socket, id)
-              after   <- untilExit(open).timeout(5.seconds)
+              after   <- untilDone(open).timeout(5.seconds)
             yield assertTrue(
               id.isDefined,
               id != Some(task),
               gate.isDefined,
               told(stopped, "cancelled"),
-              exited(stopped, CliExit.Success.code),
-              after.exists(exited(_, CliExit.Interrupted.code)),
+              id.exists(found => endedQuiet(stopped, Call.Cancel(found), CliExit.Success)),
+              after.exists(interrupted),
               !after.exists(said(_, "still")),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
@@ -105,13 +106,13 @@ object RunSpec extends ZIOSpecDefault:
               id = feed.flatMap(runText)
               missing <- Client.talk(socket, Call.Cancel(task)).runCollect
               _       <- ZIO.foreachDiscard(gate)(_.succeed("lived"))
-              after   <- untilExit(open).timeout(5.seconds)
+              after   <- untilDone(open).timeout(5.seconds)
             yield assertTrue(
               id.isDefined,
               id != Some(task),
-              failed(missing, s"no run '$task'"),
+              failed(missing, Call.Cancel(task), s"no run '$task'"),
               after.exists(said(_, "lived")),
-              after.exists(exited(_, CliExit.Success.code)),
+              after.exists(endedQuiet(_, call, CliExit.Success)),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
@@ -166,13 +167,20 @@ object RunSpec extends ZIOSpecDefault:
       pending <- Ref.make(Chunk.empty[Feed])
     yield Live(queue, pending)
 
-  private def untilExit(open: Live): IO[ServerError, Chunk[Feed]] =
+  private def untilDone(open: Live): IO[ServerError, Chunk[Feed]] =
     def loop(seen: Chunk[Feed]): IO[ServerError, Chunk[Feed]] =
       open.next.flatMap {
-        case exit @ Feed.Exit(_, _) => ZIO.succeed(seen :+ exit)
-        case other                  => loop(seen :+ other)
+        case done @ Feed.Done(_) => ZIO.succeed(seen :+ done)
+        case other               => loop(seen :+ other)
       }
     loop(Chunk.empty)
+
+  private def interrupted(feeds: Chunk[Feed]): Boolean =
+    feeds.exists {
+      case Feed.Done(CallResult.Fault(BuildFault.Interrupted)) =>
+        CliExit.from(call, CallResult.Fault(BuildFault.Interrupted)) == CliExit.Interrupted
+      case _ => false
+    }
 
   private def cancel(
       socket: Path,
@@ -205,16 +213,17 @@ object RunSpec extends ZIOSpecDefault:
   private def told(feeds: Chunk[Feed], text: String): Boolean =
     said(feeds, text)
 
-  private def exited(feeds: Chunk[Feed], code: Int): Boolean =
+  private def endedQuiet(feeds: Chunk[Feed], asked: Call, code: CliExit): Boolean =
     feeds.exists {
-      case Feed.Exit(found, err) => found == code && err.isEmpty
-      case _                     => false
+      case Feed.Done(result) =>
+        CliExit.from(asked, result) == code && result.message.isEmpty
+      case _ => false
     }
 
-  private def failed(feeds: Chunk[Feed], err: String): Boolean =
+  private def failed(feeds: Chunk[Feed], asked: Call, err: String): Boolean =
     feeds.exists {
-      case Feed.Exit(code, found) =>
-        code == CliExit.TaskFailed.code && found == err
+      case Feed.Done(result) =>
+        CliExit.from(asked, result) == CliExit.TaskFailed && result.message == err
       case _ => false
     }
 
