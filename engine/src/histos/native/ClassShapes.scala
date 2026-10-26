@@ -52,7 +52,7 @@ object ClassShapes:
     walk(root, List.empty[Shape]): opened =>
       ZIO
         .attemptBlocking(opened.iterator.asScala)
-        .foldZIO(ioMiss(root, Nil), paths => step(root, paths, Nil))
+        .foldZIO(walkFailed(root), paths => step(root, paths, Nil))
         .map(_.reverse)
 
   private def walk[A](root: Path, missing: A)(
@@ -71,7 +71,7 @@ object ClassShapes:
     ZIO
       .attemptBlocking(Option.when(paths.hasNext)(paths.next()))
       .foldZIO(
-        ioMiss(root, acc),
+        walkFailed(root),
         {
           case None       => ZIO.succeed(acc)
           case Some(path) =>
@@ -162,6 +162,12 @@ object ClassShapes:
       case _: IllegalArgumentException | _: IndexOutOfBoundsException =>
         ZIO.fail(ClassShapeError.ClassFile(label))
       case _ => ZIO.die(thrown)
+
+  /** The walk is already open. A vanished entry is a read failure, not a short success. */
+  private def walkFailed[A](root: Path)(thrown: Throwable): IO[ClassShapeError, A] =
+    cause(thrown) match
+      case _: IOException => ZIO.fail(ClassShapeError.Read(root))
+      case _              => ZIO.die(thrown)
 
   private def ioMiss[A](path: Path, missing: A)(thrown: Throwable): IO[ClassShapeError, A] =
     ioKind(thrown) match
