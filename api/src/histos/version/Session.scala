@@ -3,6 +3,8 @@ package histos.version
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
+import zio.Config
+
 /** Where this build is publishing from. A pull request has no branch: it cannot move the pointer. */
 enum Session:
   case Development
@@ -77,37 +79,52 @@ private object PullRequestNumberMacro:
             quotes.reflect.report.errorAndAbort(error.message, raw)
           case Right(number) => '{ PullRequestNumber.trusted(${ Expr(number.value) }) }
 
+/** The four session fields. `Session.from` parses them. A provider loads `config`. */
+final case class SessionSource(
+    session: Option[String],
+    sha: Option[String],
+    branch: Option[String],
+    pullRequest: Option[String],
+)
+
+object SessionSource:
+  /** One segment per key. `ConfigProvider.fromMap` splits on `.`, and these keys have no dot. */
+  val config: Config[SessionSource] =
+    (
+      Config.string(Session.Key).optional ++
+        Config.string(Session.ShaKey).optional ++
+        Config.string(Session.BranchKey).optional ++
+        Config.string(Session.PullRequestKey).optional
+    ).map:
+      case (session, sha, branch, pullRequest) =>
+        SessionSource(session, sha, branch, pullRequest)
+
 object Session:
   val Key: String            = "HISTOS_SESSION"
   val ShaKey: String         = "HISTOS_SHA"
   val BranchKey: String      = "HISTOS_BRANCH"
   val PullRequestKey: String = "HISTOS_PR"
 
-  /** Absent means development. A snapshot or pull request without its commit is refused. */
-  def from(env: Map[String, String]): Either[SessionError, Session] =
-    env.get(Key) match
+  /** Absent or `development` is development. A snapshot or pull request missing a field is refused. */
+  def from(source: SessionSource): Either[SessionError, Session] =
+    source.session match
       case None | Some("development") => Right(Session.Development)
-      case Some("snapshot")           => snapshot(env)
-      case Some("pr")                 => pullRequest(env)
+      case Some("snapshot")           => snapshot(source)
+      case Some("pr")                 => pullRequest(source)
       case Some("release")            => Right(Session.Release)
       case Some(other)                => Left(SessionError.Unknown(other))
 
-  private def snapshot(env: Map[String, String]): Either[SessionError, Session] =
+  private def snapshot(source: SessionSource): Either[SessionError, Session] =
     for
-      sha    <- field(env, ShaKey, SessionError.MissingSha).flatMap(parseSha)
-      branch <- field(env, BranchKey, SessionError.MissingBranch).flatMap(parseBranchName)
+      sha    <- source.sha.toRight(SessionError.MissingSha).flatMap(parseSha)
+      branch <- source.branch.toRight(SessionError.MissingBranch).flatMap(parseBranchName)
     yield Session.Snapshot(sha, branch)
 
-  private def pullRequest(env: Map[String, String]): Either[SessionError, Session] =
+  private def pullRequest(source: SessionSource): Either[SessionError, Session] =
     for
-      number <- field(env, PullRequestKey, SessionError.MissingPullRequest).flatMap(parsePullRequest)
-      sha    <- field(env, ShaKey, SessionError.MissingSha).flatMap(parseSha)
+      number <- source.pullRequest.toRight(SessionError.MissingPullRequest).flatMap(parsePullRequest)
+      sha    <- source.sha.toRight(SessionError.MissingSha).flatMap(parseSha)
     yield Session.PullRequest(number, sha)
-
-  private def field(env: Map[String, String], key: String, missing: SessionError): Either[SessionError, String] =
-    env.get(key) match
-      case Some(raw) => Right(raw)
-      case None      => Left(missing)
 
   private def parseSha(raw: String): Either[SessionError, CommitSha] =
     CommitSha.from(raw).left.map(SessionError.Sha(_))
