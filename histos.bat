@@ -89,5 +89,5 @@ if ($jar) {
   }
   if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
 }
-& $java --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
+& $java -Xss4m --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE

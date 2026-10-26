@@ -3,7 +3,8 @@ package histos.server
 import histos.jdk.JdkRuntime
 import histos.assembly.Assemble
 import histos.cache.ContentStore
-import histos.cli.{Cli, CompileConsole, GraphText, Lines}
+import histos.build.BuildEvent
+import histos.cli.{Cli, CompileConsole, GraphText}
 import histos.report.{BuildFault, CallResult, Diagnostic, Observation, Rejection, Report, Stored, WorkflowFault}
 import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestRun, TestStatus, TestedCell}
 import histos.preview.Plan
@@ -18,11 +19,10 @@ import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositorie
 import histos.schedule.RemoteCache
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
-import histos.cli.ResolveAction
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.{Platform, PlatformError, ProjectGraph}
+import histos.{Platform, ProjectGraph}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
@@ -89,7 +89,7 @@ final class Say private (
       {
         case Message.Done(CallResult.Fault(fault)) =>
           val err = fault.message
-          if err.isEmpty then ZIO.unit else send(Message.Err(err))
+          if err.isEmpty then ZIO.unit else send(Message.Event(BuildEvent.Err(err)))
         case Message.Done(CallResult.Reported(_)) => ZIO.unit
         case other                                => send(other)
       },
@@ -114,12 +114,10 @@ object Say:
       noted,
     )
 
-  def record(feeds: Ref[Chunk[Feed]]): Say =
+  def record(repo: Path, feeds: Ref[Chunk[Feed]]): Say =
     new Say({
-      case Message.Out(text) =>
-        feeds.update(_ :+ Feed.Out(text)) *> histos.mcp.Notice.out(text)
-      case Message.Err(text) =>
-        feeds.update(_ :+ Feed.Err(text)) *> histos.mcp.Notice.err(text)
+      case Message.Event(event) =>
+        feeds.update(_ :+ Feed.Event(event)) *> histos.mcp.Notice.show(repo, event)
       case Message.Done(result) => feeds.update(_ :+ Feed.Done(result))
       case _                    => ZIO.unit
     })
@@ -172,7 +170,7 @@ object Calls:
         )
         .foldZIO(
           failure =>
-            console.announce(text => say(Message.Out(text))) *>
+            console.announce(text => told(say, text)) *>
               finishNoted(
                 repo,
                 say,
@@ -181,7 +179,7 @@ object Calls:
                 CallResult.Fault(BuildFault.Publish(failure)),
               ),
           report =>
-            console.announce(text => say(Message.Out(text))) *>
+            console.announce(text => told(say, text)) *>
               told(say, report.lines.mkString("\n")) *> finishNoted(
                 repo,
                 say,
@@ -198,71 +196,68 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       id: String,
-      platform: Option[String],
+      platform: Option[Platform],
       say: Say,
   ): ZIO[Resolve, ServerError, Unit] =
-    chosen(platform) match
-      case Left(error)   => fault(say, BuildFault.Platform(error))
-      case Right(choice) =>
-        CompileConsole
-          .open(repo)
-          .flatMap: console =>
-            Ref
-              .make(0)
-              .zip(Runtimes.read(machine))
-              .flatMap: (status, runtimes) =>
-                histos.program.Program
-                  .console(
-                    repo,
-                    graph,
-                    id,
-                    jdk,
-                    runtimes,
-                    choice,
-                    feed => speak(say, console, feed).ignore,
-                    console.announce(text => say(Message.Out(text)).ignore),
+    CompileConsole
+      .open(repo)
+      .flatMap: console =>
+        Ref
+          .make(0)
+          .zip(Runtimes.read(machine))
+          .flatMap: (status, runtimes) =>
+            histos.program.Program
+              .console(
+                repo,
+                graph,
+                id,
+                jdk,
+                runtimes,
+                platform,
+                feed => speak(say, console, feed).ignore,
+                console.announce(text => told(say, text).ignore),
+              )
+              .foreach:
+                case histos.program.ProgramFeed
+                      .Begin(module, version, target) =>
+                  told(
+                    say,
+                    s"${module.value} ${version.value} ${target.token}",
                   )
-                  .foreach:
-                    case histos.program.ProgramFeed
-                          .Begin(module, version, target) =>
-                      told(
-                        say,
-                        s"${module.value} ${version.value} ${target.token}",
-                      )
-                    case histos.program.ProgramFeed.Out(text) => told(say, text)
-                    case histos.program.ProgramFeed.Err(text) =>
-                      emit(say, Message.Err(text))
-                    case histos.program.ProgramFeed.Exited(_, _, _, code) =>
-                      ZIO.when(code != 0)(status.set(code)).unit
-                  .foldZIO(
-                    {
-                      case error: histos.program.ProgramError =>
-                        val announced = error match
-                          case histos.program.ProgramError.Compile(_) =>
-                            console.announce(text => say(Message.Out(text)))
-                          case _ => ZIO.unit
-                        val result = BuildFault.programStopped(error) match
-                          case Some(why) => CallResult.Fault(why)
-                          case None      => CallResult.reported(error.message)
-                        announced *> finishNoted(
-                          repo,
-                          say,
-                          console,
-                          List(console.observation),
-                          result,
-                        )
-                      case error: ServerError => ZIO.fail(error)
-                    },
-                    _ =>
-                      status.get.flatMap: code =>
-                        finishNoted(
-                          repo,
-                          say,
-                          console,
-                          List(console.observation),
-                          CallResult.reported(program = Some(code)),
-                        ),
-                  )
+                case histos.program.ProgramFeed.Out(text) => told(say, text)
+                case histos.program.ProgramFeed.Err(text) =>
+                  errLine(say, text)
+                case histos.program.ProgramFeed.Exited(_, _, _, code) =>
+                  ZIO.when(code != 0)(status.set(code)).unit
+              .foldZIO(
+                {
+                  case error: histos.program.ProgramError =>
+                    val announced = error match
+                      case histos.program.ProgramError.Compile(_) =>
+                        console.announce(text => told(say, text))
+                      case _ => ZIO.unit
+                    val result = BuildFault.programStopped(error) match
+                      case Some(why) => CallResult.Fault(why)
+                      case None      => CallResult.reported(error.message)
+                    announced *> finishNoted(
+                      repo,
+                      say,
+                      console,
+                      List(console.observation),
+                      result,
+                    )
+                  case error: ServerError => ZIO.fail(error)
+                },
+                _ =>
+                  status.get.flatMap: code =>
+                    finishNoted(
+                      repo,
+                      say,
+                      console,
+                      List(console.observation),
+                      CallResult.reported(program = Some(code)),
+                    ),
+              )
 
   def task(
       repo: Path,
@@ -307,20 +302,17 @@ object Calls:
   def resolve(
       repo: Path,
       apiJar: Path,
-      action: String,
+      action: ResolveAction,
       say: Say,
       native: histos.native.NativeOrigin,
   ): ZIO[Resolve & Loader, ServerError, Unit] =
-    resolveAction(action) match
-      case None       => reject(say, Rejection.ResolveAction(action))
-      case Some(kind) =>
-        resolveWork(repo, apiJar, kind, native).foldZIO(
-          {
-            case error: LoadError    => fault(say, BuildFault.Load(error))
-            case error: ResolveError => fault(say, BuildFault.Resolve(error))
-          },
-          text => told(say, text) *> ok(say),
-        )
+    resolveWork(repo, apiJar, action, native).foldZIO(
+      {
+        case error: LoadError    => fault(say, BuildFault.Load(error))
+        case error: ResolveError => fault(say, BuildFault.Resolve(error))
+      },
+      text => told(say, text) *> ok(say),
+    )
 
   /** Stage plugin cells, load that generation, then solve and commit once. Check and verify load the locked generation.
     * The adopted graph is not the update input.
@@ -401,16 +393,13 @@ object Calls:
   def workflow(
       repo: Path,
       graph: ProjectGraph,
-      action: String,
+      action: WorkflowAction,
       say: Say,
   ): IO[ServerError, Unit] =
-    workflowAction(action) match
-      case None       => reject(say, Rejection.WorkflowAction(action))
-      case Some(kind) =>
-        workflowWork(repo, graph, kind).foldZIO(
-          why => fault(say, BuildFault.Workflow(why)),
-          file => told(say, file.toString) *> ok(say),
-        )
+    workflowWork(repo, graph, action).foldZIO(
+      why => fault(say, BuildFault.Workflow(why)),
+      file => told(say, file.toString) *> ok(say),
+    )
 
   /** Workflow files and launcher scripts. The pin is not advanced. */
   def workflowWork(
@@ -509,11 +498,11 @@ object Calls:
                 val result = BuildFault.assembleStopped(error) match
                   case Some(why) => CallResult.Fault(why)
                   case None      => CallResult.reported(error.message)
-                console.announce(text => say(Message.Out(text))) *>
+                console.announce(text => told(say, text)) *>
                   finishNoted(repo, say, console, List(console.observation), result)
               ,
               assembled =>
-                console.announce(text => say(Message.Out(text))) *>
+                console.announce(text => told(say, text)) *>
                   pin(repo, assembled.path).foldZIO(
                     failure =>
                       finishNoted(
@@ -565,12 +554,12 @@ object Calls:
               val result = BuildFault.compileStopped(error) match
                 case Some(why) => CallResult.Fault(why)
                 case None      => CallResult.reported(Cli.compileFailure(error))
-              console.announce(text => say(Message.Out(text))) *>
+              console.announce(text => told(say, text)) *>
                 finishNoted(repo, say, console, List(console.observation), result)
             case error: ServerError => ZIO.fail(error)
           },
           _ =>
-            console.announce(text => say(Message.Out(text))) *>
+            console.announce(text => told(say, text)) *>
               finishNoted(repo, say, console, List(console.observation), CallResult.reported()),
         )
     }
@@ -640,15 +629,12 @@ object Calls:
   def previewRun(
       graph: ProjectGraph,
       id: String,
-      platform: Option[String],
+      platform: Option[Platform],
       say: Say,
   ): IO[ServerError, Unit] =
-    chosen(platform) match
-      case Left(error)   => fault(say, BuildFault.Platform(error))
-      case Right(choice) =>
-        Plan.run(graph, id, choice) match
-          case Left(error) => fault(say, BuildFault.Preview(error))
-          case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
+    Plan.run(graph, id, platform) match
+      case Left(error) => fault(say, BuildFault.Preview(error))
+      case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
 
   /** No names wipe every product root and do not read `graph`. */
   def clean(
@@ -733,7 +719,7 @@ object Calls:
                   }
                   .collectSome
                   .runCollect
-                _ <- console.announce(text => say(Message.Out(text)))
+                _ <- console.announce(text => told(say, text))
                 _ <- ModuleTest
                   .suitesLocked(
                     TestRun(
@@ -746,25 +732,17 @@ object Calls:
                       quick,
                       (module, version, platform, facts) =>
                         notes(module, version, platform, facts)
-                          .flatMap(line => say(Message.Out(line)).ignore),
+                          .flatMap(line => told(say, line).ignore),
                     ),
                     cells.toList,
                     lock,
                   )
-                  .foreach {
-                    case TestFeed.Begin(module, version, platform) =>
-                      say(Message.Out(Lines.begin(module, version, platform)))
-                    case TestFeed.Out(text)                                => say(Message.Out(text))
-                    case TestFeed.Err(text)                                => say(Message.Err(text))
-                    case TestFeed.Cached(module, version, platform, suite) =>
-                      say(
-                        Message
-                          .Out(Lines.cached(module, version, platform, suite))
-                      )
-                    case TestFeed.Done(cell) =>
-                      ranCells.update(_ :+ cell) *>
-                        say(Message.Out(Lines.tested(cell))) *>
-                        say(Message.Out(""))
+                  .foreach { feed =>
+                    val sent = say(Message.Event(BuildEvent.Test(feed)))
+                    feed match
+                      case TestFeed.Done(cell) => ranCells.update(_ :+ cell) *> sent
+                      case TestFeed.Begin(_, _, _) | TestFeed.Out(_) | TestFeed.Err(_) | TestFeed.Cached(_, _, _, _) =>
+                        sent
                   }
                 compileErrors <- missed.get
                 cells         <- ranCells.get
@@ -773,8 +751,8 @@ object Calls:
               {
                 case error: ServerError     => ZIO.fail(error)
                 case error: ModuleTestError =>
-                  console.announce(text => say(Message.Out(text))) *>
-                    notes.announce(text => say(Message.Out(text))) *>
+                  console.announce(text => told(say, text)) *>
+                    notes.announce(text => told(say, text)) *>
                     missed.get.flatMap { compileErrors =>
                       val summary = error match
                         case ModuleTestError.NoneMatched(_) if compileErrors.nonEmpty =>
@@ -793,7 +771,7 @@ object Calls:
                     }
               },
               result =>
-                notes.announce(text => say(Message.Out(text))) *>
+                notes.announce(text => told(say, text)) *>
                   finishNoted(
                     repo,
                     say,
@@ -872,26 +850,6 @@ object Calls:
         )
     }
 
-  private def chosen(
-      platform: Option[String]
-  ): Either[PlatformError, Option[Platform]] =
-    platform match
-      case None      => Right(None)
-      case Some(raw) => Platform.from(raw).map(Some(_))
-
-  private def resolveAction(raw: String): Option[histos.cli.ResolveAction] =
-    raw match
-      case "verify" => Some(histos.cli.ResolveAction.Verify)
-      case "update" => Some(histos.cli.ResolveAction.Update)
-      case "check"  => Some(histos.cli.ResolveAction.Check)
-      case _        => None
-
-  private def workflowAction(raw: String): Option[WorkflowAction] =
-    raw match
-      case "check"  => Some(WorkflowAction.Check)
-      case "update" => Some(WorkflowAction.Update)
-      case _        => None
-
   private def cleanFault(
       error: histos.select.SelectError | histos.workspace.IoFailure
   ): BuildFault =
@@ -937,13 +895,7 @@ object Calls:
       console: CompileConsole.Session,
       feed: CompileFeed,
   ): IO[ServerError, Unit] =
-    console.hear(feed).flatMap { lines =>
-      CompileConsole.show(
-        lines,
-        text => say(Message.Out(text)),
-        text => say(Message.Err(text)),
-      )
-    }
+    console.hear(feed) *> say(Message.Event(BuildEvent.Compile(feed)))
 
   private def compiled(feed: CompileFeed): Option[histos.zinc.CompiledCell] =
     feed match
@@ -974,15 +926,18 @@ object Calls:
     done(say, result)
 
   private def told(say: Say, text: String): IO[ServerError, Unit] =
-    if text.isEmpty then ZIO.unit else emit(say, Message.Out(text))
+    if text.isEmpty then ZIO.unit else say(Message.Event(BuildEvent.Out(text)))
+
+  private def errLine(say: Say, text: String): IO[ServerError, Unit] =
+    say(Message.Event(BuildEvent.Err(text)))
 
   /** A reported summary is a live line. A fault is only the terminal frame. */
   private def done(say: Say, result: CallResult): IO[ServerError, Unit] =
     val live = result match
       case CallResult.Reported(report) =>
-        ZIO.foreachDiscard(report.err)(line => emit(say, Message.Err(line)))
+        ZIO.foreachDiscard(report.err)(line => errLine(say, line))
       case CallResult.Fault(_) => ZIO.unit
-    live *> emit(say, Message.Done(result))
+    live *> say(Message.Done(result))
 
   private def ok(say: Say): IO[ServerError, Unit] =
     done(say, CallResult.reported())
@@ -1050,12 +1005,6 @@ object Calls:
     result match
       case CallResult.Reported(report) => CallResult.Reported(report.copy(err = report.err :+ line))
       case fault                       => fault
-
-  private def emit(
-      say: Say,
-      message: Message,
-  ): IO[ServerError, Unit] =
-    say(message)
 
   private object Quiet extends PluginRuntime:
     def run(

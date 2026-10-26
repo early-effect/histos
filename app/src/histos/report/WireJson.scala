@@ -112,6 +112,7 @@ import histos.schedule.{
 }
 import histos.select.SelectError
 import histos.task.{RunId, TaskError, TaskId}
+import histos.build.BuildEvent
 import histos.testrun.{
   ModuleTestError,
   QuickError,
@@ -120,6 +121,7 @@ import histos.testrun.{
   SuiteNameError,
   SuitePattern,
   SuitePatternError,
+  TestFeed,
   TestStatus,
   TestedCell,
 }
@@ -148,9 +150,15 @@ import histos.zinc.{
   ClasspathBan,
   CompileDiagnostic,
   CompileError,
+  CompileFeed,
+  CompileProblem,
+  CompileSeverity,
+  CompiledCell,
   CompilerPart,
   GraphCompileError,
   JsLibraryMiss,
+  PositionBase,
+  SourceCount,
   ToolchainMiss,
 }
 import histos.{
@@ -1102,7 +1110,37 @@ private object WireCall extends WireSupport:
   private given JsonCodec[WireProvider] = JsonCodec.derived
 end WireCall
 
+private object WireEvent extends WireSupport:
+  import WireLeaves.given
+  import WireBuild.given
+
+  given JsonCodec[CompileSeverity] = JsonCodec.derived
+  given Schema[CompileSeverity]    = Schema.derived
+
+  given JsonCodec[PositionBase] = JsonCodec.derived
+  given Schema[PositionBase]    = Schema.derived
+
+  given JsonCodec[SourceCount] = JsonCodec.derived
+  given Schema[SourceCount]    = Schema.derived
+
+  given JsonCodec[CompileProblem] = JsonCodec.derived
+  given Schema[CompileProblem]    = Schema.derived
+
+  given JsonCodec[CompiledCell] = JsonCodec.derived
+  given Schema[CompiledCell]    = Schema.derived
+
+  given JsonCodec[CompileFeed] = JsonCodec.derived
+  given Schema[CompileFeed]    = Schema.derived
+
+  given JsonCodec[TestFeed] = JsonCodec.derived
+  given Schema[TestFeed]    = Schema.derived
+
+  given JsonCodec[BuildEvent] = JsonCodec.derived
+  given Schema[BuildEvent]    = Schema.derived
+end WireEvent
+
 object WireJson:
   export WireLeaves.given
   export WireBuild.given
   export WireCall.given
+  export WireEvent.given

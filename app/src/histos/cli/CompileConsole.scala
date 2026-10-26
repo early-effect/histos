@@ -15,6 +15,26 @@ object CompileConsole:
     case Out(text: String)
     case Err(text: String)
 
+  def lines(repo: Path, feed: CompileFeed): Chunk[Line] =
+    feed match
+      case CompileFeed.Began(module, version, platform) =>
+        Chunk(Line.Out(Lines.compiling(module, version, platform)))
+      case CompileFeed.Diagnostic(_, _, _, problem) =>
+        Chunk(Line.Err(Lines.diagnostic(repo, problem)))
+      case CompileFeed.Done(cell) =>
+        Lines
+          .outcome(
+            cell.module,
+            cell.version,
+            cell.platform,
+            cell.changed,
+            cell.sources,
+            cell.classesWritten,
+          )
+          .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
+      case CompileFeed.Failed(error) =>
+        Chunk(Line.Err(error.message))
+
   def open(repo: Path): UIO[Session] =
     Ref.make(Counts.empty).map(counts => new Session(repo, counts))
 
@@ -32,14 +52,13 @@ object CompileConsole:
 
   final class Session private[CompileConsole] (repo: Path, counts: Ref[Counts]):
     def hear(feed: CompileFeed): UIO[Chunk[Line]] =
+      val shown = lines(repo, feed)
       feed match
-        case CompileFeed.Began(module, version, platform) =>
-          ZIO.succeed(
-            Chunk(Line.Out(Lines.compiling(module, version, platform)))
-          )
+        case CompileFeed.Began(_, _, _) =>
+          ZIO.succeed(shown)
         case CompileFeed.Diagnostic(_, _, _, problem) =>
-          val (found, text) = Lines.heard(repo, problem)
-          counts.update(_.add(found)).as(Chunk(Line.Err(text)))
+          val (found, _) = Lines.heard(repo, problem)
+          counts.update(_.add(found)).as(shown)
         case CompileFeed.Done(cell) =>
           counts
             .update(
@@ -51,22 +70,9 @@ object CompileConsole:
                 cell.classesWritten,
               )
             )
-            .as {
-              Lines
-                .outcome(
-                  cell.module,
-                  cell.version,
-                  cell.platform,
-                  cell.changed,
-                  cell.sources,
-                  cell.classesWritten,
-                )
-                .fold(Chunk.empty)(text => Chunk(Line.Out(text)))
-            }
+            .as(shown)
         case CompileFeed.Failed(error) =>
-          counts
-            .update(_.fail(Observation.failed(error)))
-            .as(Chunk(Line.Err(error.message)))
+          counts.update(_.fail(Observation.failed(error))).as(shown)
 
     /** The spelled tally. A later read is the same line. */
     def tally: UIO[Option[String]] =

@@ -1,5 +1,6 @@
 package histos.server
 
+import histos.build.BuildEvent
 import histos.cli.{Cli, CliExit}
 import histos.load.{BuildNotes, PluginLink, PluginRuntime}
 import histos.report.{BuildFault, CallResult}
@@ -192,7 +193,7 @@ object RunSpec extends ZIOSpecDefault:
 
   private def runText(feed: Feed): Option[String] =
     feed match
-      case Feed.Out(text) =>
+      case Feed.Event(BuildEvent.Out(text)) =>
         val prefix = "run "
         if text.startsWith(prefix) then
           val raw = text.drop(prefix.length)
@@ -206,8 +207,8 @@ object RunSpec extends ZIOSpecDefault:
 
   private def said(feeds: Chunk[Feed], text: String): Boolean =
     feeds.exists {
-      case Feed.Out(line) => line == text
-      case _              => false
+      case Feed.Event(BuildEvent.Out(line)) => line == text
+      case _                                => false
     }
 
   private def told(feeds: Chunk[Feed], text: String): Boolean =

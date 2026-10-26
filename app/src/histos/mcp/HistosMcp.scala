@@ -12,7 +12,8 @@ import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.resolve.Resolve
-import histos.server.Call
+import histos.server.{Call, ResolveAction}
+import histos.workflow.WorkflowAction
 
 import ClientJson.given
 
@@ -197,11 +198,29 @@ object HistosMcp:
       resolving <- cleaned.tool[ResolveArgs](
         Names.resolve,
         "verify, update, or check dependencies. update stages plugin cells, loads that generation, then commits once.",
-      )(args => ask(Call.Resolve(args.action)))
+      )(args =>
+        ZIO
+          .fromEither(
+            ResolveAction
+              .from(args.action)
+              .left
+              .map(_ => Session.CallProblem.Fault(BuildFault.Rejected(Rejection.ResolveAction(args.action))))
+          )
+          .flatMap(action => ask(Call.Resolve(action)))
+      )
       flowing <- resolving.tool[WorkflowArgs](
         Names.workflow,
         "check or update workflow files and launcher scripts. The launcher pin is not advanced.",
-      )(args => ask(Call.Workflow(args.action)))
+      )(args =>
+        ZIO
+          .fromEither(
+            WorkflowAction
+              .from(args.action)
+              .left
+              .map(_ => Session.CallProblem.Fault(BuildFault.Rejected(Rejection.WorkflowAction(args.action))))
+          )
+          .flatMap(action => ask(Call.Workflow(action)))
+      )
       reloading <- flowing.tool[NoArgs](
         Names.reload,
         "Reload the build the running server holds.",

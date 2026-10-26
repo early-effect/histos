@@ -1,15 +1,16 @@
 package histos.server
 
 import histos.jdk.JdkRuntime
-import histos.bsp.{Bsp, Frame}
+import histos.bsp.{Bsp, Frame, Rpc}
 import histos.cli.Operation
 import histos.jdk.Sha256
-import histos.load.{HeaderScan, LoadError}
+import histos.load.{HeaderScan, LoadError, LoadedBuild}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.task.RunId
 import histos.toolchain.Runtimes
-import histos.ProjectGraph
+import histos.workflow.WorkflowAction
+import histos.{Platform, ProjectGraph}
 
 import java.io.{InputStream, OutputStream}
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
@@ -19,10 +20,13 @@ import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
 
 import scala.jdk.CollectionConverters.*
 
+import histos.build.BuildEvent
 import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
+import histos.report.WireJson.given JsonCodec[BuildEvent]
+import histos.report.WireJson.given JsonCodec[Platform]
 import zio.stream.ZStream
-import zio.{Chunk, Exit, Fiber, IO, Promise, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
+import zio.{Chunk, Exit, Fiber, IO, Promise, Queue, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
 
 /** What a batch command found in `.histos/server.json`. */
 enum Decision:
@@ -72,8 +76,7 @@ end ServerIo
 
 /** One event from a command running in the daemon. */
 enum Feed:
-  case Out(text: String)
-  case Err(text: String)
+  case Event(event: BuildEvent)
   case Done(result: CallResult)
 
 private object CallJson:
@@ -85,8 +88,18 @@ private object CallJson:
     raw => FlagName.from(raw).left.map(_.message),
     _.value,
   )
-  given JsonCodec[NamedText]  = JsonCodec.derived
-  given JsonCodec[PluginArgs] = JsonCodec.derived
+  given JsonCodec[NamedText]     = JsonCodec.derived
+  given JsonCodec[PluginArgs]    = JsonCodec.derived
+  given JsonCodec[ResolveAction] =
+    JsonCodec.string.transformOrFail(
+      raw => ResolveAction.from(raw).left.map(_.message),
+      _.token,
+    )
+  given JsonCodec[WorkflowAction] =
+    JsonCodec.string.transformOrFail(
+      raw => WorkflowAction.from(raw).left.map(_.message),
+      _.token,
+    )
 
 import CallJson.given
 
@@ -95,12 +108,12 @@ enum Call derives JsonCodec:
   case Test(projects: List[String], patterns: List[String], quick: Boolean)
   case Publish(repository: String, projects: List[String])
   case Graph
-  case Run(id: String, platform: Option[String])
+  case Run(id: String, platform: Option[Platform])
   case Task(id: String, args: PluginArgs)
   case Cancel(id: String)
   case Toolchain
-  case Resolve(action: String)
-  case Workflow(action: String)
+  case Resolve(action: ResolveAction)
+  case Workflow(action: WorkflowAction)
   case Assembly(destination: Option[String])
   case Clean(projects: List[String])
   case CleanFull
@@ -118,7 +131,7 @@ enum Call derives JsonCodec:
   case PreviewPublish(projects: List[String])
   case PreviewClean(projects: List[String])
   case PreviewCleanFull
-  case PreviewRun(id: String, platform: Option[String])
+  case PreviewRun(id: String, platform: Option[Platform])
 
 object Call:
   /** The codec is on [[Call]]. A case value does not carry it. */
@@ -127,8 +140,7 @@ object Call:
 
 enum Message derives JsonCodec:
   case Ready
-  case Out(text: String)
-  case Err(text: String)
+  case Event(event: BuildEvent)
   case Done(result: CallResult)
   case Marker(histosExit: Int)
 
@@ -323,10 +335,8 @@ object Client:
         case None          => ZStream.fail(ServerError.Protocol)
         case Some(payload) =>
           payload.fromJson[Message] match
-            case Right(Message.Out(text)) =>
-              ZStream.succeed(Feed.Out(text)) ++ frames(input, socket)
-            case Right(Message.Err(text)) =>
-              ZStream.succeed(Feed.Err(text)) ++ frames(input, socket)
+            case Right(Message.Event(event)) =>
+              ZStream.succeed(Feed.Event(event)) ++ frames(input, socket)
             case Right(Message.Done(result)) =>
               ZStream.succeed(Feed.Done(result))
             case _ => ZStream.fail(ServerError.Protocol)
@@ -628,6 +638,61 @@ object Daemon:
             case None        => ZIO.unit
             case Some(asked) =>
               val say = Say.frames(output, bound)
+
+              /** Reload, reboot, and bsp own the process. Everything else that reads the graph adopts one. */
+              def adopts(target: Call): Boolean =
+                Perform.needsGraph(target) || (target match
+                  case Call.Reload | Call.Reboot | Call.Bsp => true
+                  case _                                    => false)
+
+              def edges(
+                  out: Say
+              ): Perform.Edges[
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore
+              ] =
+                Perform.Edges(
+                  watch = (inner, edge) => watched(inner, edge),
+                  reload = Calls.finish(out, CallResult.Reported(Report.empty)),
+                  reboot = reboot(repo, bound, server, life, output),
+                  bsp = bsp(
+                    repo,
+                    apiJar,
+                    version,
+                    bound,
+                    jdk,
+                    machine,
+                    warm,
+                    permit,
+                    buildClasspath,
+                    build,
+                    input,
+                    output,
+                  ),
+                )
+
+              def execute(
+                  target: Call,
+                  out: Say,
+                  loaded: Either[BuildFault, Option[LoadedBuild]],
+                  chosen: histos.jdk.Machine,
+              ): ZIO[
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+                ServerError,
+                Unit,
+              ] =
+                Perform.run(
+                  repo,
+                  apiJar,
+                  loaded,
+                  chosen,
+                  runs,
+                  track = true,
+                  version,
+                  target,
+                  out,
+                  edges(out),
+                )
+
               def run(
                   target: Call,
                   out: Say,
@@ -636,41 +701,17 @@ object Daemon:
                 ServerError,
                 Unit,
               ] =
-                target match
-                  case Call.Version =>
-                    Calls.version(version, out)
-                  case Call.CachePath =>
-                    Calls.cachePath(out)
-                  case Call.CacheList =>
-                    Calls.cacheList(out)
-                  case Call.CacheClean(dryRun) =>
-                    Calls.cacheClean(dryRun, out)
-                  case Call.LauncherUpdate =>
-                    Calls.launcherUpdate(repo, out)
-                  case Call.Clean(Nil) =>
-                    occupy(permit, target)(Calls.wipe(repo, out))
-                  case Call.CleanFull =>
-                    occupy(permit, target)(Calls.cleanFull(repo, out))
-                  case Call.PreviewClean(Nil) =>
-                    Calls.previewCleanAll(repo, out)
-                  case Call.PreviewCleanFull =>
-                    Calls.previewCleanFull(repo, out)
-                  case Call.Resolve(action) =>
-                    histos.jdk.Machine
-                      .load(repo)
-                      .mapError(ServerError.Toolchain(_))
-                      .flatMap: loaded =>
-                        Calls.resolve(
-                          repo,
-                          apiJar,
-                          action,
-                          out,
-                          loaded.native,
-                        )
-                  case Call.Watch(inner) =>
-                    watched(inner, out)
-                  case other =>
-                    withGraph(other, out)
+                if adopts(target) then withGraph(target, out)
+                else
+                  val chosen =
+                    target match
+                      case Call.Resolve(_) =>
+                        histos.jdk.Machine.load(repo).mapError(ServerError.Toolchain(_))
+                      case _ =>
+                        ZIO.succeed(machine)
+                  chosen.flatMap { fresh =>
+                    occupy(permit, target)(execute(target, out, Right(None), fresh))
+                  }
 
               def watched(
                   inner: Call,
@@ -704,7 +745,8 @@ object Daemon:
                       .succeed(Watching.roots(repo, call, held.graph))
                       .ensuring(release(held))
 
-              /** Early cases in `run` skip this load. The arms stay so the match is exhaustive.
+              /** A graph command adopts a generation. Reload forces one. Bsp drops that lease before the session, which
+                * adopts its own. A missing machine finishes as a fault and still releases the lease.
                 */
               def withGraph(
                   target: Call,
@@ -721,199 +763,26 @@ object Daemon:
                     case _ => adopt(repo, apiJar, version, bound, warm)
                 loaded.flatMap:
                   case Left(error) =>
-                    out(Message.Done(CallResult.Fault(BuildFault.Load(error))))
+                    Calls.finish(out, CallResult.Fault(BuildFault.Load(error)))
                   case Right(held) =>
-                    histos.jdk.Machine
-                      .load(repo)
-                      .mapError(ServerError.Toolchain(_))
-                      .flatMap: commandMachine =>
-                        histos.zinc.GraphCompile
-                          .jdk(commandMachine)
-                          .mapError(ServerError.Compiled(_))
-                          .flatMap: selectedJdk =>
-                            val machine = commandMachine
-                            val jdk     = selectedJdk
-                            val ran     =
-                              target match
-                                case Call.Clean(Nil) =>
-                                  Calls.wipe(repo, out)
-                                case Call.Clean(projects) =>
-                                  Calls.clean(repo, held.graph, projects, out)
-                                case Call.CleanFull =>
-                                  Calls.cleanFull(repo, out)
-                                case Call.Compile(projects) =>
-                                  Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.compile(
-                                        repo,
-                                        held.graph,
-                                        projects,
-                                        jdk,
-                                        machine,
-                                        out,
-                                      )
-                                    )
-                                  )
-                                case Call.Test(projects, patterns, quick) =>
-                                  Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.test(
-                                        repo,
-                                        held.graph,
-                                        projects,
-                                        patterns,
-                                        quick,
-                                        jdk,
-                                        machine,
-                                        out,
-                                      )
-                                    )
-                                  )
-                                case Call.Publish(repository, projects) =>
-                                  Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.publish(
-                                        repo,
-                                        held.graph,
-                                        machine,
-                                        jdk,
-                                        repository,
-                                        projects,
-                                        out,
-                                      )
-                                    )
-                                  )
-                                case Call.Graph =>
-                                  Calls.graph(held.graph, held.plugins, out)
-                                case Call.Run(id, platform) =>
-                                  Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.run(
-                                        repo,
-                                        held.graph,
-                                        jdk,
-                                        machine,
-                                        id,
-                                        platform,
-                                        out,
-                                      )
-                                    )
-                                  )
-                                case Call.Task(id, taskArgs) =>
-                                  Calls.tracked(runs, out)(
-                                    Calls.task(
-                                      repo,
-                                      held.graph,
-                                      held.plugins,
-                                      machine,
-                                      id,
-                                      taskArgs,
-                                      out,
-                                    )
-                                  )
-                                case Call.Cancel(id) =>
-                                  Calls.cancel(runs, id, out)
-                                case Call.Toolchain =>
-                                  Calls.toolchain(machine, held.graph, out)
-                                case Call.Resolve(action) =>
-                                  Calls.resolve(
-                                    repo,
-                                    apiJar,
-                                    action,
-                                    out,
-                                    machine.native,
-                                  )
-                                case Call.Workflow(action) =>
-                                  Calls.workflow(repo, held.graph, action, out)
-                                case Call.Assembly(destination) =>
-                                  Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.assembly(
-                                        repo,
-                                        held.graph,
-                                        jdk,
-                                        machine,
-                                        destination,
-                                        out,
-                                      )
-                                    )
-                                  )
-                                case Call.Reload =>
-                                  out(Message.Done(CallResult.Reported(Report.empty)))
-                                case Call.Reboot =>
-                                  reboot(repo, bound, server, life, output)
-                                case Call.Bsp =>
-                                  bsp(
-                                    repo,
-                                    apiJar,
-                                    version,
-                                    bound,
-                                    jdk,
-                                    machine,
-                                    warm,
-                                    permit,
-                                    buildClasspath,
-                                    build,
-                                    input,
-                                    output,
-                                  )
-                                case Call.Version =>
-                                  Calls.version(version, out)
-                                case Call.CachePath =>
-                                  Calls.cachePath(out)
-                                case Call.CacheList =>
-                                  Calls.cacheList(out)
-                                case Call.CacheClean(dryRun) =>
-                                  Calls.cacheClean(dryRun, out)
-                                case Call.LauncherUpdate =>
-                                  Calls.launcherUpdate(repo, out)
-                                case Call.Watch(nested) =>
-                                  watched(nested, out)
-                                case Call.PreviewCompile(projects) =>
-                                  Calls.previewCompile(
-                                    repo,
-                                    held.graph,
-                                    projects,
-                                    out,
-                                  )
-                                case Call.PreviewTest(projects) =>
-                                  Calls.previewTest(
-                                    repo,
-                                    held.graph,
-                                    projects,
-                                    out,
-                                  )
-                                case Call.PreviewPublish(projects) =>
-                                  Calls.previewPublish(
-                                    repo,
-                                    held.graph,
-                                    projects,
-                                    machine.env,
-                                    out,
-                                  )
-                                case Call.PreviewClean(Nil) =>
-                                  Calls.previewCleanAll(repo, out)
-                                case Call.PreviewClean(projects) =>
-                                  Calls.previewClean(
-                                    repo,
-                                    held.graph,
-                                    projects,
-                                    out,
-                                  )
-                                case Call.PreviewCleanFull =>
-                                  Calls.previewCleanFull(repo, out)
-                                case Call.PreviewRun(id, platform) =>
-                                  Calls.previewRun(
-                                    held.graph,
-                                    id,
-                                    platform,
-                                    out,
-                                  )
-                            val leased =
-                              target match
-                                case Call.Bsp => release(held) *> ran
-                                case _        => ran.ensuring(release(held))
-                            occupy(permit, target)(leased)
+                    val have = Right(Some(LoadedBuild(held.graph, held.plugins)))
+                    val ran  =
+                      target match
+                        case Call.Bsp | Call.Reboot | Call.Reload =>
+                          execute(target, out, have, machine)
+                        case _ =>
+                          histos.jdk.Machine
+                            .load(repo)
+                            .foldZIO(
+                              error => Calls.finish(out, CallResult.Fault(BuildFault.Toolchain(error))),
+                              fresh => execute(target, out, have, fresh),
+                            )
+                    val leased =
+                      target match
+                        case Call.Bsp => release(held) *> ran
+                        case _        => ran.ensuring(release(held))
+                    occupy(permit, target)(leased)
+
               write(output, wire(Message.Ready), bound) *> run(asked, say)
   end handle
 
@@ -1020,12 +889,22 @@ object Daemon:
         ZIO.when(close)(generation.scope.close(Exit.unit)).unit
       }
 
+  /** Class-directory writers. Queries, preview, cache, and `Call.Task` stay out. */
+  private[server] def writesOutputs(call: Call): Boolean =
+    call match
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.Publish(_, _) | Call.Run(_, _) | Call.Assembly(_) |
+          Call.Clean(_) | Call.CleanFull =>
+        true
+      case Call.Graph | Call.Task(_, _) | Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) |
+          Call.Reload | Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) |
+          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
+          Call.PreviewPublish(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
+        false
+
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(
       body: ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
-    call match
-      case Call.Clean(_) | Call.CleanFull => permit.withPermit(body)
-      case _                              => body
+    if writesOutputs(call) then permit.withPermit(body) else body
 
   private def reboot(
       repo: Path,
@@ -1065,64 +944,243 @@ object Daemon:
     ServerError,
     Unit,
   ] =
-    Semaphore.make(1).flatMap { writer =>
-      def send(payload: String): IO[ServerError, Unit] =
-        writer.withPermit(
-          Frame
-            .write(output, payload)
-            .mapError(_ => ServerError.Io(ServerIo.Write(bound)))
-        )
-      val notify = (line: String) => send(line).ignore
-      warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
-        Bsp
-          .open(
-            repo,
-            generation.graph,
-            jdk,
-            runtimes,
-            buildClasspath,
-            notify,
-            build,
-            effect => permit.withPermit(effect),
-            Some(warm.graphs),
-          )
-          .mapError(ServerError.Resolve(_))
-          .flatMap { session =>
-            def loop: ZIO[
-              histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
-              ServerError,
-              Int,
-            ] =
-              Frame
-                .read(input)
-                .mapError(_ => ServerError.Io(ServerIo.Read(bound)))
-                .flatMap:
-                  case None          => ZIO.succeed(1)
-                  case Some(payload) =>
-                    adopt(repo, apiJar, version, bound, warm)
-                      .flatMap {
-                        case Right(gen) => ZIO.succeed(gen)
-                        case Left(_)    =>
-                          warm.reloading.withPermit(
-                            warm.live.get.flatMap(gen => acquire(gen).as(gen))
-                          )
-                      }
-                      .flatMap { gen =>
-                        session
-                          .answer(gen.graph, payload)
-                          .ensuring(release(gen))
-                      }
-                      .flatMap:
-                        case Bsp.Answer.Reply(text) => send(text) *> loop
-                        case Bsp.Answer.Quiet       => loop
-                        case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
-            warm.spliced.update(_ + session) *>
-              loop
-                .ensuring(warm.spliced.update(_ - session))
-                .flatMap(code => send(wire(Message.Marker(code))))
-          }
+    val send = (line: String) => Frame.write(output, line).mapError(_ => ServerError.Io(ServerIo.Write(bound)))
+    val next = Frame.read(input).mapError(_ => ServerError.Io(ServerIo.Read(bound)))
+    ZIO.scoped {
+      outbox(send).flatMap { box =>
+        warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
+          Bsp
+            .open(
+              repo,
+              generation.graph,
+              jdk,
+              runtimes,
+              buildClasspath,
+              box.offer,
+              build,
+              effect => permit.withPermit(effect),
+              Some(warm.graphs),
+            )
+            .mapError(ServerError.Resolve(_))
+            .flatMap { session =>
+              def adopted(payload: String) =
+                adopt(repo, apiJar, version, bound, warm)
+                  .flatMap {
+                    case Right(gen) => ZIO.succeed(gen)
+                    case Left(_)    =>
+                      warm.reloading.withPermit(
+                        warm.live.get.flatMap(gen => acquire(gen).as(gen))
+                      )
+                  }
+                  .flatMap { gen =>
+                    session.answer(gen.graph, payload).ensuring(release(gen))
+                  }
+              warm.spliced.update(_ + session) *>
+                requests(next, box.offer, adopted, box.done)
+                  .flatMap(code => box.offer(wire(Message.Marker(code))) *> box.close)
+                  .ensuring(warm.spliced.update(_ - session))
+            }
+        }
       }
     }
+
+  /** One consumer writes the socket. Producers only `offer`. */
+  private[histos] final case class Outbox(
+      offer: String => UIO[Unit],
+      close: IO[ServerError, Unit],
+      done: Fiber[ServerError, Unit],
+  )
+
+  private[histos] def outbox(send: String => IO[ServerError, Unit]): ZIO[Scope, Nothing, Outbox] =
+    for
+      outbound <- Queue.unbounded[String]
+      fiber    <- ZStream.fromQueueWithShutdown(outbound).foreach(send).forkScoped
+    yield Outbox(line => outbound.offer(line).unit, outbound.shutdown *> fiber.join, fiber)
+
+  private final case class BspFlight(
+      id: Rpc.RpcId,
+      fiber: Fiber[ServerError, Unit],
+      settled: Promise[Nothing, Unit],
+  )
+
+  /** Read the next frame while a request runs. Cancel interrupts that fiber. */
+  private[histos] def requests[R](
+      next: IO[ServerError, Option[String]],
+      offer: String => UIO[Unit],
+      answer: String => ZIO[R, ServerError, Bsp.Answer],
+      also: Fiber[ServerError, Unit],
+  ): ZIO[R & Scope, ServerError, Int] =
+    val InvalidRequest   = -32600
+    val InvalidParams    = -32602
+    val RequestCancelled = -32800
+
+    def read(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+    ): ZIO[R & Scope, ServerError, Int] =
+      next.flatMap:
+        case None          => silence(flights).as(1)
+        case Some(payload) => route(flights, crashed, payload)
+
+    def route(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+        payload: String,
+    ): ZIO[R & Scope, ServerError, Int] =
+      payload.fromJson[Rpc.Incoming] match
+        case Left(_)         => answerNow(flights, crashed, payload)
+        case Right(incoming) =>
+          incoming.method match
+            case Some("$/cancelRequest") =>
+              cancelIncoming(flights, incoming) *> read(flights, crashed)
+            case Some("build/exit") =>
+              finishExit(flights, payload)
+            case Some("build/shutdown") if incoming.id.nonEmpty =>
+              finishShutdown(flights, payload)
+            case Some("build/initialize") =>
+              answerNow(flights, crashed, payload)
+            case Some(_) =>
+              incoming.id match
+                case Some(id) => launch(flights, crashed, id, payload) *> read(flights, crashed)
+                case None     => answerNow(flights, crashed, payload)
+            case None =>
+              answerNow(flights, crashed, payload)
+
+    def answerNow(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+        payload: String,
+    ): ZIO[R & Scope, ServerError, Int] =
+      answer(payload).flatMap:
+        case Bsp.Answer.Reply(text) => offer(text) *> read(flights, crashed)
+        case Bsp.Answer.Quiet       => read(flights, crashed)
+        case Bsp.Answer.Stop(code)  => silence(flights).as(code)
+
+    def finishExit(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        payload: String,
+    ): ZIO[R, ServerError, Int] =
+      silence(flights) *>
+        answer(payload).flatMap:
+          case Bsp.Answer.Stop(code) => ZIO.succeed(code)
+          case _                     => ZIO.succeed(1)
+
+    def finishShutdown(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        payload: String,
+    ): ZIO[R, ServerError, Int] =
+      answer(payload).flatMap: result =>
+        silence(flights) *>
+          (result match
+            case Bsp.Answer.Reply(text) => offer(text).as(0)
+            case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
+            case Bsp.Answer.Quiet       => ZIO.succeed(0))
+
+    def launch(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+        id: Rpc.RpcId,
+        payload: String,
+    ): ZIO[R & Scope, ServerError, Unit] =
+      for
+        settled <- Promise.make[Nothing, Unit]
+        started <- Promise.make[Nothing, Unit]
+        fiber   <- (started.await *> answer(payload).flatMap:
+          case Bsp.Answer.Reply(text) => settle(settled, Some(text))
+          case Bsp.Answer.Quiet       => settle(settled, None)
+          case Bsp.Answer.Stop(_)     => settle(settled, None)
+        ).forkScoped
+        flight = BspFlight(id, fiber, settled)
+        duplicate <- flights.modify { map =>
+          if map.contains(id) then (true, map) else (false, map.updated(id, flight))
+        }
+        _ <-
+          if duplicate then fiber.interrupt *> offer(Rpc.fail(id, InvalidRequest, "duplicate request"))
+          else watch(flights, flight, crashed) *> started.succeed(()).unit
+      yield ()
+
+    def settle(settled: Promise[Nothing, Unit], reply: Option[String]): UIO[Unit] =
+      ZIO.uninterruptible {
+        settled.succeed(()).flatMap { won =>
+          reply match
+            case Some(text) if won => offer(text)
+            case _                 => ZIO.unit
+        }
+      }
+
+    def cancelIncoming(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        incoming: Rpc.Incoming,
+    ): UIO[Unit] =
+      Rpc.cancelId(incoming.params) match
+        case Left(fault) => offer(Rpc.fail(Rpc.idOf(incoming), InvalidParams, fault.message))
+        case Right(id)   => cancel(flights, id)
+
+    def cancel(flights: Ref[Map[Rpc.RpcId, BspFlight]], id: Rpc.RpcId): UIO[Unit] =
+      flights
+        .modify { map =>
+          map.get(id) match
+            case Some(flight) => (Some(flight), map - id)
+            case None         => (None, map)
+        }
+        .flatMap:
+          case Some(flight) =>
+            ZIO.uninterruptible {
+              flight.settled.succeed(()).flatMap { won =>
+                ZIO.when(won)(offer(Rpc.fail(id, RequestCancelled, "cancelled"))).unit
+              }
+            } *> fiberInterrupt(flight)
+          case None =>
+            offer(Rpc.fail(id, InvalidParams, "unknown request"))
+
+    def watch(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        flight: BspFlight,
+        crashed: Promise[ServerError, Nothing],
+    ): ZIO[Scope, Nothing, Unit] =
+      flight.fiber.await
+        .flatMap:
+          case Exit.Success(_)                                => drop(flights, flight)
+          case Exit.Failure(cause) if cause.isInterruptedOnly => drop(flights, flight)
+          case Exit.Failure(cause)                            => crashed.failCause(cause).unit
+        .forkScoped
+        .unit
+
+    def drop(flights: Ref[Map[Rpc.RpcId, BspFlight]], flight: BspFlight): UIO[Unit] =
+      flights.update { map =>
+        map.get(flight.id) match
+          case Some(found) if found.settled == flight.settled => map - flight.id
+          case _                                              => map
+      }
+
+    def silence(flights: Ref[Map[Rpc.RpcId, BspFlight]]): UIO[Unit] =
+      flights.modify(map => (map.values.toList, Map.empty)).flatMap { live =>
+        ZIO.foreachDiscard(live) { flight =>
+          ZIO.uninterruptible(flight.settled.succeed(()).unit) *> fiberInterrupt(flight)
+        }
+      }
+
+    def fiberInterrupt(flight: BspFlight): UIO[Unit] =
+      flight.fiber.interrupt.unit
+
+    def watchFiber(
+        fiber: Fiber[ServerError, Unit],
+        crashed: Promise[ServerError, Nothing],
+    ): ZIO[Scope, Nothing, Unit] =
+      fiber.await
+        .flatMap:
+          case Exit.Failure(cause) if !cause.isInterruptedOnly => crashed.failCause(cause).unit
+          case _                                               => ZIO.unit
+        .forkScoped
+        .unit
+
+    for
+      crashed <- Promise.make[ServerError, Nothing]
+      flights <- Ref.make(Map.empty[Rpc.RpcId, BspFlight])
+      _       <- watchFiber(also, crashed)
+      code    <- read(flights, crashed).race(crashed.await).ensuring(silence(flights))
+    yield code
+  end requests
 
   private def wire(message: Message): String =
     message.toJson

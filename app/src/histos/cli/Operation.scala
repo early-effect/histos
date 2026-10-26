@@ -3,7 +3,6 @@ package histos.cli
 import histos.plugin.PluginArgs
 import histos.server.Call
 import histos.task.TaskId
-import histos.workflow.WorkflowAction
 
 /** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not operations.
   */
@@ -32,7 +31,7 @@ object Operation:
       case Command.Graph             => Right(Call.Graph)
       case Command.Run(id, platform) =>
         if id == TaskId.Inspect || id == TaskId.Versions then Right(Call.Task(id.value, PluginArgs.empty))
-        else Right(Call.Run(id.value, platform.map(_.token)))
+        else Right(Call.Run(id.value, platform))
       case Command.Plugin(id, args) => Right(Call.Task(id.render, args))
       case Command.Test(projects)   =>
         Right(Call.Test(projects, Nil, quick = false))
@@ -51,8 +50,8 @@ object Operation:
       case Command.CachePath                => Right(Call.CachePath)
       case Command.CacheList                => Right(Call.CacheList)
       case Command.CacheClean(dryRun)       => Right(Call.CacheClean(dryRun))
-      case Command.Resolve(action)          => Right(Call.Resolve(resolve(action)))
-      case Command.Workflow(action)         => Right(Call.Workflow(workflow(action)))
+      case Command.Resolve(action)          => Right(Call.Resolve(action))
+      case Command.Workflow(action)         => Right(Call.Workflow(action))
       case Command.LauncherUpdate           => Right(Call.LauncherUpdate)
       case Command.Reload                   => Right(Call.Reload)
       case Command.Reboot                   => Right(Call.Reboot)
@@ -68,18 +67,7 @@ object Operation:
       case Command.PreviewCleanFull =>
         Right(Call.PreviewCleanFull)
       case Command.PreviewRun(id, platform) =>
-        Right(Call.PreviewRun(id.value, platform.map(_.token)))
+        Right(Call.PreviewRun(id.value, platform))
       case Command.PreviewPlugin(id) =>
         Right(Call.PreviewRun(id.render, None))
-
-  def resolve(action: ResolveAction): String =
-    action match
-      case ResolveAction.Verify => "verify"
-      case ResolveAction.Update => "update"
-      case ResolveAction.Check  => "check"
-
-  def workflow(action: WorkflowAction): String =
-    action match
-      case WorkflowAction.Check  => "check"
-      case WorkflowAction.Update => "update"
 end Operation

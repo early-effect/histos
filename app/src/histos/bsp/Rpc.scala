@@ -127,17 +127,22 @@ object Rpc:
   final case class ScalaMainClass(className: String, arguments: List[String], jvmOptions: List[String])
 
   object ScalaMainClass:
+    private[bsp] enum FieldFault:
+      case Required(name: String)
+      case NotObject
+      case NotStrings(name: String)
+
+      def message: String = this match
+        case Required(name)   => s"$name is required"
+        case NotObject        => "a main class is an object"
+        case NotStrings(name) => s"$name is a list of strings"
+    end FieldFault
+
     given JsonCodec[ScalaMainClass] =
       JsonCodec[Json].transformOrFail(
         {
-          case Json.Obj(fields) =>
-            val map = fields.toMap
-            for
-              name      <- text(map, "class")
-              arguments <- texts(map, "arguments")
-              options   <- texts(map, "jvmOptions")
-            yield ScalaMainClass(name, arguments, options)
-          case _ => Left("a main class is an object")
+          case Json.Obj(fields) => read(fields.toMap).left.map(_.message)
+          case _                => Left(FieldFault.NotObject.message)
         },
         main =>
           Json.Obj(
@@ -147,19 +152,26 @@ object Rpc:
           ),
       )
 
-    private def text(map: Map[String, Json], name: String): Either[String, String] =
+    private def read(map: Map[String, Json]): Either[FieldFault, ScalaMainClass] =
+      for
+        name      <- text(map, "class")
+        arguments <- texts(map, "arguments")
+        options   <- texts(map, "jvmOptions")
+      yield ScalaMainClass(name, arguments, options)
+
+    private def text(map: Map[String, Json], name: String): Either[FieldFault, String] =
       map.get(name) match
         case Some(Json.Str(value)) => Right(value)
-        case _                     => Left(s"$name is required")
+        case _                     => Left(FieldFault.Required(name))
 
-    private def texts(map: Map[String, Json], name: String): Either[String, List[String]] =
+    private def texts(map: Map[String, Json], name: String): Either[FieldFault, List[String]] =
       map.get(name) match
         case Some(Json.Arr(values)) =>
-          values.toList.foldLeft[Either[String, List[String]]](Right(Nil)):
+          values.toList.foldLeft[Either[FieldFault, List[String]]](Right(Nil)):
             case (Left(error), _)              => Left(error)
             case (Right(acc), Json.Str(value)) => Right(acc :+ value)
-            case (Right(_), _)                 => Left(s"$name is a list of strings")
-        case _ => Left(s"$name is required")
+            case (Right(_), _)                 => Left(FieldFault.NotStrings(name))
+        case _ => Left(FieldFault.Required(name))
   end ScalaMainClass
 
   final case class ScalaMainClassesItem(target: TargetId, classes: List[ScalaMainClass]) derives JsonCodec
@@ -194,6 +206,11 @@ object Rpc:
     case Missing
     case Rejected
 
+    def message: String = this match
+      case Missing  => "bsp params are required"
+      case Rejected => "bsp params were rejected"
+  end ParamsDecode
+
   def idOf(incoming: Incoming): RpcId =
     incoming.id.getOrElse(RpcId.Absent)
 
@@ -207,4 +224,16 @@ object Rpc:
     params match
       case None       => Left(ParamsDecode.Missing)
       case Some(json) => json.as[CompileParams].left.map(_ => ParamsDecode.Rejected)
+
+  final case class CancelParams(id: RpcId) derives JsonCodec
+
+  /** `$/cancelRequest` names a string or number id. Null and a missing object are rejected. */
+  def cancelId(params: Option[Json]): Either[ParamsDecode, RpcId] =
+    params match
+      case None       => Left(ParamsDecode.Missing)
+      case Some(json) =>
+        json.as[CancelParams] match
+          case Right(CancelParams(id: RpcId.Num))  => Right(id)
+          case Right(CancelParams(id: RpcId.Text)) => Right(id)
+          case _                                   => Left(ParamsDecode.Rejected)
 end Rpc

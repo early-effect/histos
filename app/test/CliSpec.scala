@@ -10,9 +10,10 @@ import histos.workflow.{Workflow, WorkflowAction}
 import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
 import histos.cache.ContentStore
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
+import histos.build.BuildEvent
 import histos.report.{BuildFault, CallResult, Rejection}
-import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ServerError}
-import histos.zinc.GraphCompile
+import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ResolveAction, ServerError}
+import histos.zinc.{CompileFeed, GraphCompile}
 import histos.Dep
 import histos.*
 
@@ -163,14 +164,15 @@ object CliSpec extends ZIOSpecDefault:
         started <- Promise.make[Nothing, Unit]
         fiber   <- Cli
           .recorded(
+            Path.of("."),
             Call.Compile(Nil),
             say =>
-              say(Message.Out("compiling core")) *>
-                say(Message.Err("unused")) *>
-                say(Message.Out("")) *>
+              say(Message.Event(BuildEvent.Out("compiling core"))) *>
+                say(Message.Event(BuildEvent.Err("unused"))) *>
+                say(Message.Event(BuildEvent.Out(""))) *>
                 started.succeed(()) *>
                 release.await *>
-                say(Message.Out("suite passed")) *>
+                say(Message.Event(BuildEvent.Out("suite passed"))) *>
                 say(Message.Done(CallResult.Fault(BuildFault.Rejected(Rejection.RunFailed)))),
           )
           .fork
@@ -191,6 +193,29 @@ object CliSpec extends ZIOSpecDefault:
         done.out == "compiling core\n\nsuite passed",
         done.err == "unused\nthe run failed",
         done.exit == CliExit.TaskFailed,
+        done.playback == Playback.Heard,
+      )
+    ,
+    test("a compile began event prints the compiling line"):
+      for
+        name <- ZIO.fromEither(ProjectName.from("core"))
+        version = ScalaVersion("3.10.0")
+        feed    = CompileFeed.Began(name, version, Jvm)
+        line    = Lines.compiling(name, version, Jvm)
+        done <- Cli.recorded(
+          Path.of("."),
+          Call.Compile(Nil),
+          say =>
+            say(Message.Event(BuildEvent.Compile(feed))) *>
+              say(Message.Done(CallResult.reported())),
+        )
+        out <- TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
+      yield assertTrue(
+        out == List(line),
+        line == "compiling core 3.10.0 jvm",
+        done.out == line,
+        done.err.isEmpty,
+        done.exit == CliExit.Success,
         done.playback == Playback.Heard,
       )
     ,
@@ -1334,8 +1359,8 @@ object CliSpec extends ZIOSpecDefault:
             absent == Decision.Absent,
             detail.isEmpty,
             heard.exists {
-              case Feed.Out(text) => text == Cli.VersionText
-              case _              => false
+              case Feed.Event(BuildEvent.Out(text)) => text == Cli.VersionText
+              case _                                => false
             },
             heard.exists {
               case Feed.Done(result) =>

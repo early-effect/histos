@@ -2,6 +2,7 @@ package histos.mcp
 
 import heddle.LinePipe
 import heddle.mcp.protocol.{CallToolResult, ClientRequest, ContentBlock, ListToolsResult, Message, RequestId, ToolName}
+import histos.build.BuildEvent
 import histos.workspace.{IoFailure, IoFault}
 import histos.cli.{Cli, CliExit, CliParseError, Command}
 import histos.client.{ClientJson, Session}
@@ -36,6 +37,7 @@ import scala.jdk.CollectionConverters.*
 import zio.*
 import zio.json.*
 import zio.json.ast.Json
+import histos.report.WireJson.given JsonCodec[BuildEvent]
 import zio.test.*
 
 object ProtocolSpec extends ZIOSpecDefault:
@@ -412,6 +414,31 @@ object ProtocolSpec extends ZIOSpecDefault:
           ) == CliExit.Interrupted,
           CliExit.from(Call.Cancel(id), CallResult.Reported(stopped)) == CliExit.Success,
           stopped.out.contains("cancelled"),
+        )
+    ,
+    test("version publishes the rendered line and the same build event"):
+      ZIO.scoped:
+        for
+          jar              <- apiJar
+          dir              <- repo
+          (client, server) <- LinePipe.connected
+          done             <- HistosMcp
+            .serve(dir, jar, server, machine(dir))
+            .provideSome[Scope](loading(dir))
+            .forkScoped
+          _       <- client.writeLine(discover(1))
+          version <- invoke(2, ToolName("version"), NoArgs())
+          _       <- client.writeLine(version)
+          _       <- client.close
+          _       <- done.join
+          heard   <- readUntil(client, Set(2))
+          notes   <- ZIO.fromEither(noticeLines(heard))
+          events  <- ZIO.fromEither(eventNotes(heard))
+          printed <- report(heard, 2)
+        yield assertTrue(
+          notes == List(Notice.LogLine(Notice.Level.Info, Notice.Logger, Cli.VersionText)),
+          events == List(BuildEvent.Out(Cli.VersionText)),
+          printed.out == Chunk(Cli.VersionText),
         ),
   ) @@ TestAspect.timeout(15.seconds)
 
@@ -505,6 +532,16 @@ object ProtocolSpec extends ZIOSpecDefault:
             case Right(line)  => Right(lines :+ line)
             case Left(detail) => Left(WireFault.BadNotice(detail))
         case (Right(lines), _) => Right(lines)
+
+  private def eventNotes(messages: List[Message]): Either[WireFault, List[BuildEvent]] =
+    messages.foldLeft(Right(Nil): Either[WireFault, List[BuildEvent]]): (acc, message) =>
+      (acc, message) match
+        case (Left(fault), _)                                                                      => Left(fault)
+        case (Right(events), Message.Notification(method, params)) if method == Notice.EventMethod =>
+          params.as[BuildEvent] match
+            case Right(event) => Right(events :+ event)
+            case Left(detail) => Left(WireFault.BadNotice(detail))
+        case (Right(events), _) => Right(events)
 
   private def minted(line: Notice.LogLine): Option[String] =
     val id = line.data.drop(runPrefix.length)

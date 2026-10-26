@@ -1,6 +1,7 @@
 package histos.cli
 
 import histos.plugin.{CommandName, PluginTaskId}
+import histos.server.ResolveAction
 import histos.task.TaskId
 import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction

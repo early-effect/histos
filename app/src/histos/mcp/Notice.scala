@@ -2,15 +2,21 @@ package histos.mcp
 
 import heddle.mcp.Session
 import heddle.mcp.protocol.Message
+import histos.build.BuildEvent
+import histos.cli.{CompileConsole, Show}
+
+import java.nio.file.Path
 
 import zio.{UIO, ZIO}
 import zio.json.*
 import zio.json.ast.Json
+import histos.report.WireJson.given JsonCodec[BuildEvent]
 
 /** One CLI line, on the request that is running the tool. Outside a request this sends nothing. */
 object Notice:
-  val Method = "notifications/message"
-  val Logger = "histos"
+  val Method      = "notifications/message"
+  val EventMethod = "notifications/histos/event"
+  val Logger      = "histos"
 
   /** MCP logging level. The wire token is `info` or `error`, not a derived object. */
   enum Level:
@@ -38,6 +44,10 @@ object Notice:
 
   def err(text: String): UIO[Unit] = line(Level.Error, text)
 
+  /** The rendered line, when it is not empty, then the event itself. */
+  def show(repo: Path, event: BuildEvent): UIO[Unit] =
+    CompileConsole.show(Show(repo, event), out, err) *> eventNote(event)
+
   private def line(level: Level, text: String): UIO[Unit] =
     if text.isEmpty then ZIO.unit
     else publish(LogLine(level, Logger, text))
@@ -47,4 +57,9 @@ object Notice:
     note.toJsonAST match
       case Right(obj: Json.Obj) => Session.publish(Message.Notification(Method, obj))
       case other                => ZIO.dieMessage(s"a log line encodes as an object, got $other")
+
+  private def eventNote(event: BuildEvent): UIO[Unit] =
+    event.toJsonAST match
+      case Right(obj: Json.Obj) => Session.publish(Message.Notification(EventMethod, obj))
+      case other                => ZIO.dieMessage(s"a build event encodes as an object, got $other")
 end Notice
