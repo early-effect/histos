@@ -1,5 +1,8 @@
 package histos.version
 
+import _root_.scala.annotation.publicInBinary
+import _root_.scala.quoted.*
+
 /** Where this build is publishing from. A pull request has no branch: it cannot move the pointer. */
 enum Session:
   case Development
@@ -32,8 +35,12 @@ opaque type PullRequestNumber = Int
 object PullRequestNumber:
   given CanEqual[PullRequestNumber, PullRequestNumber] = CanEqual.derived
 
+  inline def apply(inline raw: String): PullRequestNumber = ${
+    PullRequestNumberMacro.literal('raw)
+  }
+
   def from(raw: Int): Either[PullRequestError, PullRequestNumber] =
-    if raw > 0 then Right(raw) else Left(PullRequestError.NotPositive(raw))
+    if raw > 0 then Right(trusted(raw)) else Left(PullRequestError.NotPositive(raw))
 
   def parse(raw: String): Either[PullRequestError, PullRequestNumber] =
     if raw.nonEmpty && raw.forall(_.isDigit) && !(raw.length > 1 && raw.charAt(0) == '0') then
@@ -43,6 +50,8 @@ object PullRequestNumber:
     else Left(PullRequestError.NotANumber(raw))
 
   extension (number: PullRequestNumber) def value: Int = number
+
+  @publicInBinary private[histos] def trusted(raw: Int): PullRequestNumber = raw
 end PullRequestNumber
 
 enum PullRequestError:
@@ -53,6 +62,20 @@ enum PullRequestError:
     case NotANumber(raw)    => s"'$raw' is not a pull request number"
     case NotPositive(value) => s"$value is not a positive pull request number"
 end PullRequestError
+
+private object PullRequestNumberMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[PullRequestNumber] =
+    raw.value match
+      case None =>
+        quotes.reflect.report.errorAndAbort(
+          "PullRequestNumber(...) takes a literal. Use PullRequestNumber.parse at runtime.",
+          raw,
+        )
+      case Some(text) =>
+        PullRequestNumber.parse(text) match
+          case Left(error) =>
+            quotes.reflect.report.errorAndAbort(error.message, raw)
+          case Right(number) => '{ PullRequestNumber.trusted(${ Expr(number.value) }) }
 
 object Session:
   val Key: String            = "HISTOS_SESSION"

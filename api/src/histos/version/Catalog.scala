@@ -1,5 +1,8 @@
 package histos.version
 
+import _root_.scala.annotation.publicInBinary
+import _root_.scala.quoted.*
+
 import histos.ProjectName
 
 /** The catalog identity of a ship. A letter, then letters, digits, `_`, or `-`. Not a project name. */
@@ -8,13 +11,19 @@ opaque type ShipName = String
 object ShipName:
   given CanEqual[ShipName, ShipName] = CanEqual.derived
 
+  inline def apply(inline raw: String): ShipName = ${
+    ShipNameMacro.literal('raw)
+  }
+
   def from(raw: String): Either[ShipNameError, ShipName] =
     raw.headOption match
       case None                           => Left(ShipNameError.Empty)
-      case Some(head) if valid(head, raw) => Right(raw)
+      case Some(head) if valid(head, raw) => Right(trusted(raw))
       case Some(_)                        => Left(ShipNameError.Bad(raw))
 
   extension (name: ShipName) def value: String = name
+
+  @publicInBinary private[histos] def trusted(raw: String): ShipName = raw
 
   private def valid(head: Char, raw: String): Boolean =
     head.isLetter && raw.forall(char => char.isLetterOrDigit || char == '_' || char == '-')
@@ -28,6 +37,20 @@ enum ShipNameError:
     case Empty    => "a ship name is not empty"
     case Bad(raw) => s"'$raw' is not a ship name"
 end ShipNameError
+
+private object ShipNameMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ShipName] =
+    raw.value match
+      case None =>
+        quotes.reflect.report.errorAndAbort(
+          "ShipName(...) takes a literal. Use ShipName.from at runtime.",
+          raw,
+        )
+      case Some(value) =>
+        ShipName.from(value) match
+          case Left(error) =>
+            quotes.reflect.report.errorAndAbort(error.message, raw)
+          case Right(_) => '{ ShipName.trusted(${ Expr(value) }) }
 
 /** One catalog row. A line derives coordinates from a ship number. A manual row publishes the version it states. */
 enum Ship:
