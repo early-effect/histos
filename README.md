@@ -1,10 +1,10 @@
 # Histos
 
-A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI and MCP send one request per operation. The CLI renders a report and an exit. MCP publishes each CLI line while the tool runs and returns that report as JSON. BSP is the editor protocol.
+A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI and MCP send one request per operation. The CLI renders a finished call and derives an exit. MCP publishes each CLI line while the tool runs. A run that happened returns its report as JSON. A request that never became a report fails the tool. BSP is the editor protocol.
 
 Pre-release. Histos does not install a JDK or Node. If JDK 21 or Node 25 is not already there, it explains what it found and fails. The roadmap and audit describe delivered work and remaining capabilities.
 
-`histos preview` says what compile, test, publish, clean, cleanFull, or run would do. It writes nothing, and it says file-level staleness is unknown. The tally a person reads is source files, class files written this round, and modules. `histos observe` reads `.histos/observation.json` and does not compile. `histos cancel` names the run id the command minted. Socket faults stay text, and progress is not a typed event. The [roadmap](docs/roadmap.md) owns what is still open.
+`histos preview` says what compile, test, publish, clean, cleanFull, or run would do. It writes nothing, and it says file-level staleness is unknown. The tally a person reads is source files, class files written this round, and modules. `histos observe` reads `.histos/observation.json` and does not compile. `histos cancel` names the run id the command minted. A finished call is a report or a fault. Progress is not a typed event. The [roadmap](docs/roadmap.md) owns what is still open.
 
 - [Roadmap](docs/roadmap.md): delivered foundations, current acceptance gates, and remaining milestones.
 - [Architecture](docs/architecture.md): current types, resource ownership, command behavior, and trust boundaries.

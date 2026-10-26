@@ -185,10 +185,7 @@ object ServerSpec extends ZIOSpecDefault:
               changed.exists {
                 case Feed.Out(text) => text == "changed"; case _ => false
               },
-              List(first, second, changed).forall(_.exists {
-                case Feed.Exit(code, error) => code == 0 && error.isEmpty;
-                case _                      => false
-              }),
+              List(first, second, changed).forall(_.exists(succeeded(Call.Run("demo", None)))),
               secondIdentity.version == changedIdentity.version,
               secondIdentity.identity == changedIdentity.identity,
               secondIdentity.home == root.resolve("second-jdk"),
@@ -260,14 +257,12 @@ object ServerSpec extends ZIOSpecDefault:
                   text.contains("demo") && text.contains("jvm")
                 case _ => false
               },
-              feeds.exists {
-                case Feed.Exit(code, err) => code == 0 && err.isEmpty
-                case _                    => false
-              },
+              feeds.exists(succeeded(Call.Compile(Nil))),
               classFile,
               refused.exists {
-                case Feed.Exit(code, err) =>
-                  code == histos.cli.CliExit.LoadFailed.code && err.nonEmpty
+                case Feed.Done(result) =>
+                  CliExit.from(Call.Compile(Nil), result) == CliExit.LoadFailed &&
+                  result.message.nonEmpty
                 case _ => false
               },
             )
@@ -318,16 +313,8 @@ object ServerSpec extends ZIOSpecDefault:
                 .talk(running.record.socket, Call.Compile(Nil))
                 .runCollect
             yield assertTrue(
-              first.exists {
-                case Feed.Exit(code, _) =>
-                  code == histos.cli.CliExit.LoadFailed.code
-                case _ => false
-              },
-              second.exists {
-                case Feed.Exit(code, _) =>
-                  code == histos.cli.CliExit.LoadFailed.code
-                case _ => false
-              },
+              first.exists(ended(Call.Compile(Nil), CliExit.LoadFailed)),
+              second.exists(ended(Call.Compile(Nil), CliExit.LoadFailed)),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
@@ -395,13 +382,11 @@ object ServerSpec extends ZIOSpecDefault:
                 case Feed.Out(text) => text.contains("demo")
                 case _              => false
               },
-              shown.exists {
-                case Feed.Exit(code, err) => code == 0 && err.isEmpty
-                case _                    => false
-              },
+              shown.exists(succeeded(Call.Graph)),
               missing.exists {
-                case Feed.Exit(code, err) =>
-                  code == CliExit.TaskFailed.code && err.contains("no run")
+                case Feed.Done(result) =>
+                  CliExit.from(Call.Cancel("missing"), result) == CliExit.TaskFailed &&
+                  result.message.contains("no run")
                 case _ => false
               },
             )
@@ -469,10 +454,7 @@ object ServerSpec extends ZIOSpecDefault:
               feeds   <- Client
                 .talk(running.record.socket, Call.Compile(Nil))
                 .runCollect
-            yield assertTrue(feeds.exists {
-              case Feed.Exit(code, _) => code == CliExit.CompileFailed.code
-              case _                  => false
-            })
+            yield assertTrue(feeds.exists(ended(Call.Compile(Nil), CliExit.CompileFailed)))
           program
             .provideSome[Scope & histos.resolve.LockedTools](liveLayers(root))
     ,
@@ -524,7 +506,7 @@ object ServerSpec extends ZIOSpecDefault:
               relaunched <- launched.isDone
               record     <- ZIO.attempt(Files.exists(Record.file(root)))
             yield assertTrue(
-              feeds.contains(Feed.Exit(CliExit.Success.code, "")),
+              feeds.exists(succeeded(Call.Reboot)),
               stopped == Some(()),
               relaunched,
               !record,
@@ -576,7 +558,7 @@ object ServerSpec extends ZIOSpecDefault:
                 firstNote  <- first.next.timeout(30.seconds)
                 secondNote <- second.next.timeout(30.seconds)
               yield assertTrue(
-                reloaded.contains(Feed.Exit(CliExit.Success.code, "")),
+                reloaded.exists(succeeded(Call.Reload)),
                 firstNote == Some("buildTarget/didChange"),
                 secondNote == Some("buildTarget/didChange"),
               )
@@ -672,16 +654,23 @@ object ServerSpec extends ZIOSpecDefault:
               spoken.contains("alpha"),
               !spoken.contains("beta"),
               spoken.contains("demo 3.10.0 jvm passed"),
-              feeds.exists {
-                case Feed.Exit(code, err) =>
-                  code == CliExit.Success.code && err.isEmpty
-                case _ => false
-              },
+              feeds.exists(succeeded(Call.Test(Nil, List("demo.FooA"), false))),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
           ),
   ) @@ TestAspect.withLiveClock
+
+  private def succeeded(call: Call)(feed: Feed): Boolean =
+    ended(call, CliExit.Success)(feed) &&
+      (feed match
+        case Feed.Done(result) => result.message.isEmpty
+        case _                 => false)
+
+  private def ended(call: Call, exit: CliExit)(feed: Feed): Boolean =
+    feed match
+      case Feed.Done(result) => CliExit.from(call, result) == exit
+      case _                 => false
 
   private val demo =
     ZIO.fromEither(Projects(module("demo", Jvm)(ScalaVersion("3.10.0"))))

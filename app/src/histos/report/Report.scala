@@ -2,6 +2,7 @@ package histos.report
 
 import heddle.endpoint.{Schema, SchemaDoc}
 import histos.clean.Products
+import histos.testrun.TestedCell
 import histos.workspace.Workspace
 import histos.zinc.{GraphCompileError, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
@@ -10,6 +11,8 @@ import java.nio.file.Path
 
 import zio.json.*
 import zio.{Chunk, IO, ZIO}
+
+import WireJson.given
 
 /** One module that entered a compile. An unknown source set has no class count.
   */
@@ -71,16 +74,21 @@ final case class Diagnostic(
 ) derives JsonCodec,
       Schema
 
-/** A finished call. Transport failures are not a report. */
+/** A finished call. Transport failures are not a report, and Histos's own exit is not stored here. */
 final case class Report(
-    exit: Int,
     out: Chunk[String],
     err: Chunk[String],
     run: Option[String],
     observation: Option[Observation],
     diagnostics: Chunk[Diagnostic],
+    tests: Chunk[TestedCell],
+    program: Option[Int],
 ) derives JsonCodec,
       Schema
+
+object Report:
+  def empty: Report =
+    Report(Chunk.empty, Chunk.empty, None, None, Chunk.empty, Chunk.empty, None)
 
 enum ObserveError derives Schema, JsonCodec:
   case Missing(path: String)

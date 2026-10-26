@@ -1,18 +1,20 @@
 package histos.mcp
 
 import heddle.LinePipe
-import heddle.endpoint.{Schema, SchemaJson}
-import heddle.mcp.{Mcp, McpBuildError, ToolError}
-import heddle.mcp.protocol.{Structured, ToolName}
+import heddle.endpoint.Schema
+import heddle.mcp.{Mcp, McpBuildError}
+import heddle.mcp.protocol.ToolName
 import histos.cache.ContentStore
 import histos.cli.Cli
-import histos.client.Session
-import histos.report.{Report, Stored}
+import histos.client.{ClientJson, Session}
+import histos.report.{BuildFault, Rejection, Stored}
 import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.resolve.Resolve
 import histos.server.Call
+
+import ClientJson.given
 
 import java.nio.file.Path
 
@@ -22,13 +24,6 @@ import zio.json.JsonCodec
 /** MCP tools. Each call reads `.histos/server.json` and sends [[Call]] when it matches.
   */
 object HistosMcp:
-  /** A sentence stays text. Report JSON stays one structured body, not a quoted string.
-    */
-  given ToolError[String] with
-    val shape: Structured =
-      Structured.of(SchemaJson.render(summon[Schema[Report]].doc))
-    def json(text: String): String = text
-
   final case class NoArgs() derives Schema, JsonCodec
   final case class NamedArg(name: String, value: String) derives Schema, JsonCodec
   final case class RunArgs(
@@ -162,8 +157,11 @@ object HistosMcp:
       )(args =>
         ZIO
           .fromEither(
-            arguments(args.texts, args.flags).flatMap(parsed => Session.runCall(args.id, args.platform, parsed))
+            arguments(args.texts, args.flags).left
+              .map(BuildFault.Rejected(_))
+              .flatMap(parsed => Session.runCall(args.id, args.platform, parsed))
           )
+          .mapError(Session.CallProblem.Fault(_))
           .flatMap(ask)
       )
       stopped   <- running.tool[CancelArgs](Names.cancel, "Cancel a run")(args => ask(Call.Cancel(args.id)))
@@ -231,55 +229,60 @@ object HistosMcp:
       ready <- launcher.tool[WatchArgs](
         Names.watch,
         "Run a command again after a source save. args are the histos command, without the tilde.",
-      )(args => Cli.watchCall(args.args, repo, apiJar).flatMap(ask))
+      )(args => Cli.watchCall(args.args, repo, apiJar).mapError(Session.CallProblem.Fault(_)).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
         Names.preview,
         "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. File-level staleness is unknown.",
-      )(args => ZIO.fromEither(previewCall(args)).flatMap(ask))
+      )(args =>
+        ZIO
+          .fromEither(previewCall(args))
+          .mapError(reason => Session.CallProblem.Fault(BuildFault.Rejected(reason)))
+          .flatMap(ask)
+      )
       observed <- previewed.tool[NoArgs](
         Names.observe,
         "Read the stored compile tally. Does not compile.",
       )(_ => Stored.read(repo))
     yield observed
 
-  def previewCall(args: PreviewArgs): Either[String, Call] =
+  def previewCall(args: PreviewArgs): Either[Rejection, Call] =
     args.operation match
       case "compile"   => Right(Call.PreviewCompile(args.projects))
       case "test"      => Right(Call.PreviewTest(args.projects))
       case "publish"   => Right(Call.PreviewPublish(args.projects))
       case "clean"     => Right(Call.PreviewClean(args.projects))
       case "cleanFull" =>
-        if args.projects.nonEmpty then Left("cleanFull does not take a project")
+        if args.projects.nonEmpty then Left(Rejection.PreviewProjects)
         else Right(Call.PreviewCleanFull)
       case "run" =>
-        if args.id.isEmpty then Left("run needs one name")
+        if args.id.isEmpty then Left(Rejection.MissingRunName)
         else Right(Call.PreviewRun(args.id, None))
-      case other => Left(s"preview does not run $other")
+      case other => Left(Rejection.PreviewOperation(other))
 
   private def arguments(
       texts: List[NamedArg],
       flags: List[String],
-  ): Either[String, PluginArgs] =
+  ): Either[Rejection, PluginArgs] =
     def named(
         rest: List[NamedArg],
         acc: List[NamedText],
-    ): Either[String, List[NamedText]] =
+    ): Either[Rejection, List[NamedText]] =
       rest match
         case Nil                           => Right(acc.reverse)
         case NamedArg(name, value) :: tail =>
           ParamName.from(name) match
-            case Left(error)  => Left(error.message)
+            case Left(error)  => Left(Rejection.Parameter(error))
             case Right(found) =>
               named(tail, NamedText(found, value) :: acc)
     def marked(
         rest: List[String],
         acc: Set[FlagName],
-    ): Either[String, Set[FlagName]] =
+    ): Either[Rejection, Set[FlagName]] =
       rest match
         case Nil          => Right(acc)
         case name :: tail =>
           FlagName.from(name) match
-            case Left(error)  => Left(error.message)
+            case Left(error)  => Left(Rejection.Flag(error))
             case Right(found) => marked(tail, acc + found)
     for
       parsedTexts <- named(texts, Nil)

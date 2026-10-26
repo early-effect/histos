@@ -38,12 +38,13 @@ object ReportSpec extends ZIOSpecDefault:
   def spec = suite("report")(
     test("a report is the tally json, and a chunk is an array"):
       val report = Report(
-        0,
         Chunk("compiled", "done"),
         Chunk.empty,
         Some("run-1"),
         Some(sample),
         Chunk(warned),
+        Chunk.empty,
+        None,
       )
       val json    = report.toJson
       val missing =
@@ -55,59 +56,57 @@ object ReportSpec extends ZIOSpecDefault:
         json.contains(""""run":"run-1""""),
         json.contains(""""severity":"warn""""),
         !json.contains(""""Warn""""),
+        !json.contains(""""exit""""),
         missing.fromJson[Report].isLeft,
         severityTokens,
       )
     ,
     test("spoken keeps the minted id when the transcript names another"):
-      val found = Session.spoken(
-        List(Feed.Out("run other"), Feed.Exit(0, "")),
-        Some("minted"),
-        None,
-        Chunk.empty,
+      val carried = Report.empty.copy(run = Some("minted"))
+      val found   = Session.spoken(
+        List(Feed.Out("run other"), Feed.Done(CallResult.Reported(carried)))
       )
       assertTrue(
-        found == Right(
-          Report(
-            0,
-            Chunk("run other"),
-            Chunk.empty,
-            Some("minted"),
-            None,
-            Chunk.empty,
-          )
-        )
+        found == Right(CallResult.Reported(carried.copy(out = Chunk("run other"))))
       )
     ,
-    test("a warning stays in the report when the exit is 0"):
+    test("a warning stays on the report and the terminal frame is success"):
       val warning = "core/src/Core.scala:4:2: warn: unused"
+      val carried = Report.empty.copy(diagnostics = Chunk(warned))
       val spoken  = Session.spoken(
-        List(Feed.Out("ok"), Feed.Err(warning), Feed.Exit(0, "")),
-        None,
-        None,
-        Chunk(warned),
+        List(Feed.Out("ok"), Feed.Err(warning), Feed.Done(CallResult.Reported(carried)))
       )
       for
-        report    <- ZIO.fromEither(spoken)
-        delivered <- Session.deliver(ZIO.succeed(report))
+        result    <- ZIO.fromEither(spoken)
+        delivered <- Session.deliver(ZIO.succeed(result))
       yield assertTrue(
-        delivered.exit == 0,
+        CliExit.from(Call.Compile(Nil), CallResult.Reported(carried)) == CliExit.Success,
         delivered.out == Chunk("ok"),
         delivered.err == Chunk(warning),
         delivered.diagnostics == Chunk(warned),
       )
     ,
-    test("a failed report keeps stderr and the tool error is that json"):
+    test("a reported failure is the tool value, and a fault fails the tool"):
       val line   = "core/src/Core.scala:4:1: error: missing"
-      val report = Report(8, Chunk("out"), Chunk(line), None, Some(sample), Chunk.empty)
-      Session.deliver(ZIO.succeed(report)).either.map {
-        case Left(text) =>
-          assertTrue(
-            text.fromJson[Report] == Right(report),
-            text.contains(line),
-          )
-        case Right(_) => assertTrue(false)
-      }
+      val report = Report(
+        Chunk("out"),
+        Chunk(line),
+        None,
+        Some(sample),
+        Chunk.empty,
+        Chunk.empty,
+        None,
+      )
+      val fault = BuildFault.Interrupted
+      for
+        kept    <- Session.deliver(ZIO.succeed(CallResult.Reported(report))).either
+        failed  <- Session.deliver(ZIO.succeed(CallResult.Fault(fault))).either
+        dropped <- Session.deliver(ZIO.fail(SessionError.DidNotFinish)).either
+      yield assertTrue(
+        kept == Right(report),
+        failed == Left(Session.CallProblem.Fault(fault)),
+        dropped == Left(Session.CallProblem.Transport(SessionError.DidNotFinish)),
+      )
     ,
     test("tracked passes the minted id and does not read it from the line"):
       for
@@ -116,47 +115,52 @@ object ReportSpec extends ZIOSpecDefault:
         say = Say.record(feeds)
         held <- Ref.make(Option.empty[String])
         _    <- Calls.tracked(runs, say)(
-          say.run.flatMap(id => held.set(id) *> say(Message.Exit(0, "")))
+          say.run.flatMap(id => held.set(id) *> Calls.finish(say, CallResult.reported()))
         )
         id    <- held.get
         run   <- say.run
         chunk <- feeds.get
-        found = Session.spoken(chunk.toList, run, None, Chunk.empty)
+        found = Session.spoken(chunk.toList)
       yield assertTrue(
         id == run,
         (id, found) match
-          case (Some(value), Right(report)) =>
-            report == Report(
-              0,
-              Chunk(s"run $value"),
-              Chunk.empty,
-              Some(value),
-              None,
-              Chunk.empty,
+          case (Some(value), Right(result)) =>
+            result == CallResult.Reported(
+              Report(
+                Chunk(s"run $value"),
+                Chunk.empty,
+                Some(value),
+                None,
+                Chunk.empty,
+                Chunk.empty,
+                None,
+              )
             )
           case _ => false,
       )
     ,
-    test(
-      "an exit frame keeps the run id and the tally, and still decodes as Exit"
-    ):
-      val json  = Say.wire(Message.Exit(0, ""), Some("minted"), Some(sample), Chunk(warned))
-      val plain = Say.wire(Message.Exit(7, "boom"), None, None, Chunk.empty)
-      val out   = Say.wire(Message.Out("hi"), None, None, Chunk.empty)
+    test("a done frame keeps the run id and the tally"):
+      val reported = CallResult.Reported(
+        Report(
+          Chunk.empty,
+          Chunk.empty,
+          Some("minted"),
+          Some(sample),
+          Chunk(warned),
+          Chunk.empty,
+          None,
+        )
+      )
+      val fault = CallResult.Fault(BuildFault.Interrupted)
+      val json  = Say.wire(Message.Done(reported))
+      val plain = Say.wire(Message.Done(fault))
+      val out   = Say.wire(Message.Out("hi"))
       assertTrue(
-        json.fromJson[Message] == Right(Message.Exit(0, "")),
+        json.fromJson[Message] == Right(Message.Done(reported)),
         json.contains(""""severity":"warn""""),
-        Remote.event(json) == Right(
-          Remote.Event.Stop(
-            Feed.Exit(0, ""),
-            Some("minted"),
-            Some(sample),
-            Chunk(warned),
-          )
-        ),
-        Remote.event(plain) == Right(
-          Remote.Event.Stop(Feed.Exit(7, "boom"), None, None, Chunk.empty)
-        ),
+        !json.contains(""""Exit""""),
+        Remote.event(json) == Right(Remote.Event.Stop(Feed.Done(reported))),
+        Remote.event(plain) == Right(Remote.Event.Stop(Feed.Done(fault))),
         Remote.event(out) == Right(Remote.Event.More(Feed.Out("hi"))),
       )
     ,
@@ -204,12 +208,18 @@ object ReportSpec extends ZIOSpecDefault:
             .provideSome[Scope](observeLayers(repo, loads))
           seen <- loads.get
         yield assertTrue(
-          result.exit == 0,
-          result.run.isEmpty,
-          result.observation.isEmpty,
-          result.diagnostics == Chunk.empty,
-          result.out == Chunk(Cli.VersionText),
-          result.err.isEmpty,
+          result match
+            case CallResult.Reported(report) =>
+              CliExit.from(Call.Version, result) == CliExit.Success &&
+              report.run.isEmpty &&
+              report.observation.isEmpty &&
+              report.diagnostics.isEmpty &&
+              report.tests.isEmpty &&
+              report.program.isEmpty &&
+              report.out == Chunk(Cli.VersionText) &&
+              report.err.isEmpty
+            case CallResult.Fault(_) => false
+          ,
           seen == 0,
         )
       }
@@ -268,8 +278,9 @@ object ReportSpec extends ZIOSpecDefault:
           ),
           observation.isEmpty,
           chunk.exists {
-            case Feed.Exit(code, _) => code != 0
-            case _                  => false
+            case Feed.Done(result) =>
+              CliExit.from(Call.Compile(Nil), result) != CliExit.Success
+            case _ => false
           },
         )
       }

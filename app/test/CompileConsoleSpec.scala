@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.client.{Remote, Session}
-import histos.report.{Diagnostic, ModuleTally, Observation, Report, Severity}
+import histos.report.{CallResult, Diagnostic, ModuleTally, Observation, Report, Severity}
 import histos.server.{Calls, Feed, Message, Say}
 import histos.workspace.Workspace
 import histos.zinc.{
@@ -406,19 +406,19 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           lines <- ZIO.foldLeft(problems)(Chunk.empty[CompileConsole.Line]) { (acc, problem) =>
             speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, problem)).map(acc ++ _)
           }
-          found       <- console.diagnostics
-          _           <- say.note(found)
-          _           <- say(Message.Exit(0, ""))
-          chunk       <- feeds.get
-          run         <- say.run
-          observation <- say.observation
-          carried     <- say.diagnostics
-          local  = Session.spoken(chunk.toList, run, observation, carried)
-          wired  = Say.wire(Message.Exit(0, ""), run, observation, carried)
+          found   <- console.diagnostics
+          _       <- say.note(found)
+          _       <- say(Message.Done(CallResult.reported()))
+          chunk   <- feeds.get
+          carried <- say.diagnostics
+          local = Session.spoken(chunk.toList)
+          wired = chunk.reverse.collectFirst { case Feed.Done(result) => result } match
+            case Some(result) => Say.wire(Message.Done(result))
+            case None         => ""
           remote = Remote.event(wired) match
-            case Right(Remote.Event.Stop(exit, id, tally, diags)) =>
+            case Right(Remote.Event.Stop(done)) =>
               val errs = chunk.collect { case feed @ Feed.Err(_) => feed }
-              Session.spoken(errs.toList :+ exit, id, tally, diags)
+              Session.spoken(errs.toList :+ done)
             case _ => Left(Session.SessionError.DidNotFinish)
           parallel <- CompileConsole.open(repo)
           _        <- ZIO.foreachParDiscard(problems) { problem =>
@@ -427,7 +427,6 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           kept <- parallel.diagnostics
         yield
           val report = Report(
-            0,
             Chunk.empty,
             Chunk(
               Lines.diagnostic(repo, warn),
@@ -437,6 +436,8 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             None,
             None,
             expected,
+            Chunk.empty,
+            None,
           )
           assertTrue(
             lines == Chunk(
@@ -449,8 +450,8 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             Lines.diagnostic(repo, bare) == "info: no file",
             found == expected,
             carried == expected,
-            local == Right(report),
-            remote == Right(report),
+            local == Right(CallResult.Reported(report)),
+            remote == Right(CallResult.Reported(report)),
             kept.length == 3,
             kept.exists(_.message == "unused"),
             kept.exists(_.message == "missing"),
@@ -488,20 +489,17 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             console <- CompileConsole.open(home)
             feeds   <- Ref.make(Chunk.empty[Feed])
             say = Say.record(feeds)
-            _           <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, warn))
-            _           <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, bare))
-            _           <- Calls.finishNoted(home, say, console, List(console.observation), 0, "")
-            chunk       <- feeds.get
-            run         <- say.run
-            observation <- say.observation
-            carried     <- say.diagnostics
-            found = Session.spoken(chunk.toList, run, observation, carried)
+            _     <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, warn))
+            _     <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, bare))
+            _     <- Calls.finishNoted(home, say, console, List(console.observation), CallResult.reported())
+            chunk <- feeds.get
+            found = Session.spoken(chunk.toList)
           yield
             val zinc    = Lines.diagnostic(home, warn)
             val missing = Lines.diagnostic(home, bare)
             val heard   = found match
-              case Right(report) => report.diagnostics
-              case Left(_)       => Chunk.empty
+              case Right(CallResult.Reported(report)) => report.diagnostics
+              case _                                  => Chunk.empty
             val expected = Chunk(
               Diagnostic(
                 Some("core/src/Core.scala"),
@@ -515,7 +513,11 @@ object CompileConsoleSpec extends ZIOSpecDefault:
               Diagnostic(None, None, None, None, None, Severity.Info, "no file"),
             )
             assertTrue(
-              found == Right(Report(0, Chunk.empty, Chunk(zinc, missing), None, None, expected)),
+              found == Right(
+                CallResult.Reported(
+                  Report(Chunk.empty, Chunk(zinc, missing), None, None, expected, Chunk.empty, None)
+                )
+              ),
               zinc == "core/src/Core.scala:4:2: warn: unused",
               missing == "info: no file",
               heard.exists(diag =>

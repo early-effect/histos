@@ -1,6 +1,7 @@
 package histos.server
 
-import histos.cli.{CliExit, Lines}
+import histos.cli.Lines
+import histos.report.{BuildFault, CallResult, Rejection}
 import histos.watch.SourceWatch
 import histos.{Module, ProjectGraph}
 
@@ -27,7 +28,7 @@ object Watching:
             SourceWatch
               .changed(paths)
               .foldZIO(
-                error => Calls.finish(say, CliExit.TaskFailed.code, error.message),
+                error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
                 woke =>
                   ZIO.foreachDiscard(woke)(path =>
                     Calls.tell(
@@ -43,15 +44,14 @@ object Watching:
             running.get.flatMap { on =>
               Calls.finish(
                 say,
-                if on then CliExit.Interrupted.code else CliExit.Success.code,
-                "",
+                if on then CallResult.Fault(BuildFault.Interrupted) else CallResult.reported(),
               )
             }
           else
             cause.failureOrCause match
               case Left(error) => ZIO.fail(error)
               case Right(_)    =>
-                Calls.finish(say, CliExit.TaskFailed.code, "watch stopped"),
+                Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.WatchStopped))),
         _ => ZIO.unit,
       )
     }

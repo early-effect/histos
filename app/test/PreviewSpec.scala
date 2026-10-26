@@ -2,7 +2,8 @@ package histos.cli
 
 import histos.mcp.HistosMcp
 import histos.plugin.{PluginId, PluginTaskId, TaskName}
-import histos.preview.Plan
+import histos.preview.{Plan, PreviewError, RunMiss}
+import histos.report.{BuildFault, CallResult, Rejection}
 import histos.server.{Call, Calls, Feed, Say}
 import histos.task.TaskId
 import histos.version.ManualVersion
@@ -85,14 +86,14 @@ object PreviewSpec extends ZIOSpecDefault:
           Call.PreviewCleanFull
         ),
         HistosMcp.previewCall(args("cleanFull", "x", List("app"))) == Left(
-          "cleanFull does not take a project"
+          Rejection.PreviewProjects
         ),
-        HistosMcp.previewCall(args("run", "")) == Left("run needs one name"),
+        HistosMcp.previewCall(args("run", "")) == Left(Rejection.MissingRunName),
         HistosMcp.previewCall(args("run", "app")) == Right(
           Call.PreviewRun("app", None)
         ),
         HistosMcp.previewCall(args("nope", "x")) == Left(
-          "preview does not run nope"
+          Rejection.PreviewOperation("nope")
         ),
       ),
   )
@@ -115,7 +116,7 @@ object PreviewSpec extends ZIOSpecDefault:
           kept  <- same(planted)
         yield assertTrue(
           heard.outs == Chunk(text),
-          heard.exit == Chunk((CliExit.Success.code, "")),
+          heard.done == Chunk(CallResult.reported()),
           text.startsWith("file-level staleness: unknown"),
           text.contains("core 3.10.0 jvm upstream"),
           text.contains("sources core/src/test/scala/CoreSpec.scala"),
@@ -155,7 +156,7 @@ object PreviewSpec extends ZIOSpecDefault:
           kept <- same(planted)
         yield assertTrue(
           heard.outs == Chunk(text),
-          heard.exit == Chunk((CliExit.Success.code, "")),
+          heard.done == Chunk(CallResult.reported()),
           text ==
             """file-level staleness: unknown
               |core libs 1.0.0 upstream
@@ -185,7 +186,7 @@ object PreviewSpec extends ZIOSpecDefault:
           lockLeft   <- ZIO.attempt(Files.isRegularFile(lock))
         yield assertTrue(
           heard.outs == Chunk(named),
-          heard.exit == Chunk((CliExit.Success.code, "")),
+          heard.done == Chunk(CallResult.reported()),
           named.contains(".histos/classes/app"),
           !named.contains("provider"),
           !named.contains("server.json"),
@@ -211,7 +212,7 @@ object PreviewSpec extends ZIOSpecDefault:
           sentence = "content-store entries for this repo would be forgotten"
         yield assertTrue(
           heard.outs == Chunk(text),
-          heard.exit == Chunk((CliExit.Success.code, "")),
+          heard.done == Chunk(CallResult.reported()),
           text.startsWith("file-level staleness: unknown"),
           text.contains(".histos/classes"),
           text.endsWith(sentence),
@@ -235,23 +236,24 @@ object PreviewSpec extends ZIOSpecDefault:
           heard   <- ask(Calls.previewRun(graph, "app", Some("jvm"), _))
           missing <- ask(Calls.previewRun(graph, "missing", None, _))
           kept    <- same(planted)
+          missed = CallResult.Fault(BuildFault.Preview(PreviewError.Run(RunMiss.Absent("missing"))))
         yield assertTrue(
           heard.outs == Chunk(text),
-          heard.exit == Chunk((CliExit.Success.code, "")),
+          heard.done == Chunk(CallResult.reported()),
           text ==
             """file-level staleness: unknown
               |app jvm
               |upstreams core""".stripMargin,
           missing.outs.isEmpty,
-          missing.exit == Chunk(
-            (CliExit.TaskFailed.code, "'missing' is not a module")
-          ),
+          missing.done == Chunk(missed),
+          CliExit.from(Call.PreviewRun("missing", None), missed) == CliExit.TaskFailed,
+          missed.message == "'missing' is not a module",
           kept,
         )
       },
   )
 
-  private final case class Heard(outs: Chunk[String], exit: Chunk[(Int, String)])
+  private final case class Heard(outs: Chunk[String], done: Chunk[CallResult])
 
   private def ask[E](
       call: Say => ZIO[Any, E, Unit]
@@ -262,7 +264,7 @@ object PreviewSpec extends ZIOSpecDefault:
       heard <- feeds.get
     yield Heard(
       heard.collect { case Feed.Out(line) => line },
-      heard.collect { case Feed.Exit(code, err) => (code, err) },
+      heard.collect { case Feed.Done(result) => result },
     )
 
   private final case class Planted(

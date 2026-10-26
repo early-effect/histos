@@ -7,6 +7,8 @@ import histos.workspace.IoFailure
 
 import java.nio.file.Path
 
+import _root_.scala.annotation.publicInBinary
+
 /** A line the Scala 3 compiler produced. It is text because the compiler speaks text.
   */
 opaque type CompilerMessage = String
@@ -21,6 +23,10 @@ opaque type BinaryName = String
 object BinaryName:
   def fromClass(cls: Class[?]): BinaryName       = cls.getName
   extension (name: BinaryName) def value: String = name
+
+  /** The wire decoder rebuilds a name the compiler already produced. */
+  @publicInBinary private[histos] def trusted(raw: String): BinaryName = raw
+end BinaryName
 
 enum LoadError:
   case Runtime(error: histos.zinc.GraphCompileError)

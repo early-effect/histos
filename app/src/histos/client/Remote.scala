@@ -2,7 +2,6 @@ package histos.client
 
 import histos.bsp.Frame
 import histos.mcp.Notice
-import histos.report.{Diagnostic, Observation}
 import histos.server.{Call, Feed, Message, ServerError, ServerIo}
 
 import java.io.InputStream
@@ -11,27 +10,16 @@ import java.nio.channels.{Channels, SocketChannel}
 import java.nio.file.Path
 
 import zio.json.*
-import zio.json.ast.Json
 import zio.{Chunk, IO, UIO, ZIO}
 
-/** The exit frame carries the minted run id, the observation, and any diagnostics.
+/** Frames from one call. The terminal frame is [[Feed.Done]]. Run, observation, and diagnostics ride on that result.
   */
 object Remote:
-  final case class Heard(
-      feeds: Chunk[Feed],
-      run: Option[String],
-      observation: Option[Observation],
-      diagnostics: Chunk[Diagnostic],
-  )
+  final case class Heard(feeds: Chunk[Feed])
 
   enum Event:
     case More(feed: Feed)
-    case Stop(
-        feed: Feed,
-        run: Option[String],
-        observation: Option[Observation],
-        diagnostics: Chunk[Diagnostic],
-    )
+    case Stop(feed: Feed)
 
   def hear(socket: Path, call: Call): IO[ServerError, Heard] =
     ZIO.scoped {
@@ -47,67 +35,11 @@ object Remote:
     }
 
   private[histos] def event(payload: String): Either[ServerError, Event] =
-    payload.fromJson[Json] match
-      case Right(Json.Obj(fields)) =>
-        fields.toMap.get("Exit") match
-          case Some(Json.Obj(body)) => stop(body.toMap)
-          case Some(_)              => Left(ServerError.Protocol)
-          case None                 => message(payload)
-      case _ => message(payload)
-
-  private def stop(body: Map[String, Json]): Either[ServerError, Event] =
-    (body.get("code"), body.get("err")) match
-      case (Some(code), Some(Json.Str(err))) =>
-        for
-          n           <- whole(code)
-          run         <- text(body.get("run"))
-          observation <- tally(body.get("observation"))
-          diagnostics <- problems(body.get("diagnostics"))
-        yield Event.Stop(Feed.Exit(n, err), run, observation, diagnostics)
-      case _ => Left(ServerError.Protocol)
-
-  private def whole(json: Json): Either[ServerError, Int] =
-    json match
-      case Json.Num(value) =>
-        value.toString.toIntOption match
-          case Some(n) => Right(n)
-          case None    => Left(ServerError.Protocol)
-      case _ => Left(ServerError.Protocol)
-
-  private def text(json: Option[Json]): Either[ServerError, Option[String]] =
-    json match
-      case None                  => Right(None)
-      case Some(Json.Str(value)) => Right(Some(value))
-      case Some(_)               => Left(ServerError.Protocol)
-
-  private def tally(
-      json: Option[Json]
-  ): Either[ServerError, Option[Observation]] =
-    json match
-      case None        => Right(None)
-      case Some(value) =>
-        value.toJson.fromJson[Observation] match
-          case Right(found) => Right(Some(found))
-          case Left(_)      => Left(ServerError.Protocol)
-
-  /** Absent on a plain exit. The report field is still required, and empty. */
-  private def problems(
-      json: Option[Json]
-  ): Either[ServerError, Chunk[Diagnostic]] =
-    json match
-      case None        => Right(Chunk.empty)
-      case Some(value) =>
-        value.toJson.fromJson[Chunk[Diagnostic]] match
-          case Right(found) => Right(found)
-          case Left(_)      => Left(ServerError.Protocol)
-
-  private def message(payload: String): Either[ServerError, Event] =
     payload.fromJson[Message] match
-      case Right(Message.Out(text))       => Right(Event.More(Feed.Out(text)))
-      case Right(Message.Err(text))       => Right(Event.More(Feed.Err(text)))
-      case Right(Message.Exit(code, err)) =>
-        Right(Event.Stop(Feed.Exit(code, err), None, None, Chunk.empty))
-      case _ => Left(ServerError.Protocol)
+      case Right(Message.Out(text))    => Right(Event.More(Feed.Out(text)))
+      case Right(Message.Err(text))    => Right(Event.More(Feed.Err(text)))
+      case Right(Message.Done(result)) => Right(Event.Stop(Feed.Done(result)))
+      case _                           => Left(ServerError.Protocol)
 
   private def collect(
       input: InputStream,
@@ -121,15 +53,15 @@ object Remote:
           case Left(error)             => ZIO.fail(error)
           case Right(Event.More(feed)) =>
             note(feed) *> collect(input, socket, acc :+ feed)
-          case Right(Event.Stop(feed, run, observation, diagnostics)) =>
-            ZIO.succeed(Heard(acc :+ feed, run, observation, diagnostics))
+          case Right(Event.Stop(feed)) =>
+            ZIO.succeed(Heard(acc :+ feed))
     }
 
   private def note(feed: Feed): UIO[Unit] =
     feed match
-      case Feed.Out(text)  => Notice.out(text)
-      case Feed.Err(text)  => Notice.err(text)
-      case Feed.Exit(_, _) => ZIO.unit
+      case Feed.Out(text) => Notice.out(text)
+      case Feed.Err(text) => Notice.err(text)
+      case Feed.Done(_)   => ZIO.unit
 
   private def connect(socket: Path): IO[ServerError, SocketChannel] =
     ZIO
