@@ -107,8 +107,10 @@ object VersionSpec extends ZIOSpecDefault:
           Registry.parse(List("libs matches", "# note", "", "libs moved")) == Left(
             RegistryError.Duplicate(fixture.libs)
           ),
-          Registry.parse(List("libs sideways")) == Left(RegistryError.BadRelation("sideways")),
-          Registry.parse(List("1.4.2 matches")) == Left(RegistryError.BadName("1.4.2")),
+          Registry.parse(List("libs sideways")) == Left(
+            RegistryError.Relation(TagRelationError.Unknown("sideways"))
+          ),
+          Registry.parse(List("1.4.2 matches")) == Left(RegistryError.Name(ShipNameError.Bad("1.4.2"))),
         ),
   )
 

@@ -182,29 +182,29 @@ object Registry:
           entry(line).flatMap: parsed =>
             val (name, _) = parsed
             if seen.exists((found, _) => found == name) then Left(RegistryError.Duplicate(name))
-            else Right(seen :+ parsed)
-      .map(parsed => new Registry(parsed))
+            else Right(parsed :: seen)
+      .map(parsed => new Registry(parsed.reverse))
 
   private def entry(line: String): Either[RegistryError, (ShipName, TagRelation)] =
     line.split("\\s+").toList match
       case name :: relation :: Nil =>
         for
-          ship <- ShipName.from(name).left.map(_ => RegistryError.BadName(name))
-          tag  <- TagRelation.from(relation).left.map(_ => RegistryError.BadRelation(relation))
+          ship <- ShipName.from(name).left.map(RegistryError.Name(_))
+          tag  <- TagRelation.from(relation).left.map(RegistryError.Relation(_))
         yield (ship, tag)
       case _ => Left(RegistryError.BadLine(line))
 end Registry
 
 enum RegistryError:
   case BadLine(line: String)
-  case BadName(raw: String)
-  case BadRelation(raw: String)
+  case Name(error: ShipNameError)
+  case Relation(error: TagRelationError)
   case Duplicate(name: ShipName)
 
   def message: String = this match
     case BadLine(line) =>
       s"'$line' is not a registry line. A line is '<ship> matches', '<ship> moved', or '<ship> unknown'."
-    case BadName(raw)     => s"'$raw' is not a ship name"
-    case BadRelation(raw) => s"'$raw' is not a tag relation. A relation is matches, moved, or unknown."
-    case Duplicate(name)  => s"ship '${name.value}' is listed twice in .histos/releases"
+    case Name(error)     => error.message
+    case Relation(error) => error.message
+    case Duplicate(name) => s"ship '${name.value}' is listed twice in .histos/releases"
 end RegistryError
