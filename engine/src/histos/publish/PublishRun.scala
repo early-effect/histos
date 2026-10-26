@@ -31,7 +31,7 @@ object PublishRun:
       .flatMap: where =>
         val body =
           for
-            _       <- ZIO.fromEither(LauncherPublish.ready(repo, graph))
+            _       <- LauncherPublish.ready(repo, graph)
             written <- LocalPublish.run(repo, graph, names, jdk, env, report)
             done    <- LauncherPublish.upload(repo, graph, written)
           yield Report(where, done)

@@ -4,19 +4,20 @@ import histos.central.{Artifact, ArtifactId, Published, Publisher, Revision}
 import histos.version.{Catalog, ManualVersion}
 import histos.{Organization, ProjectGraph}
 
+import java.io.IOException
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, ZIO}
+import zio.{Chunk, IO, ZIO}
 
 /** The assembly jar, published beside the ship with an empty pom and no Scala suffix. */
 object LauncherPublish:
-  def ready(repo: Path, graph: ProjectGraph): Either[LocalPublishError, Unit] =
+  def ready(repo: Path, graph: ProjectGraph): IO[LocalPublishError, Unit] =
     graph.assembly match
-      case None    => Right(())
+      case None    => ZIO.unit
       case Some(_) =>
         for
-          _ <- organization(graph)
-          _ <- manual(graph)
+          _ <- ZIO.fromEither(organization(graph))
+          _ <- ZIO.fromEither(manual(graph))
           _ <- present(jar(repo))
         yield ()
 
@@ -61,8 +62,13 @@ object LauncherPublish:
           case _             => Left(LocalPublishError.LauncherRevision)
       case _ => Left(LocalPublishError.LauncherRevision)
 
-  private def present(path: Path): Either[LocalPublishError, Unit] =
-    if Files.isRegularFile(path) then Right(()) else Left(LocalPublishError.NoAssembly(path))
+  private def present(path: Path): IO[LocalPublishError, Unit] =
+    ZIO
+      .attemptBlocking(Files.isRegularFile(path))
+      .refineOrDie:
+        case _: IOException | _: SecurityException => LocalPublishError.Read(path)
+      .flatMap: regular =>
+        if regular then ZIO.unit else ZIO.fail(LocalPublishError.NoAssembly(path))
 
   private def revisions(written: PublishOutput, version: String): Either[LocalPublishError, Unit] =
     written.modules.map(_.revision).distinct match
