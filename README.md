@@ -1,27 +1,32 @@
 # Histos
 
-A Scala build tool whose graph is data and whose build steps are ZIO effects. The CLI and MCP send one request per operation. The CLI renders a finished call and derives an exit. MCP publishes each CLI line while the tool runs. A run that happened returns its report as JSON. A request that never became a report fails the tool. BSP is the editor protocol.
+Histos is a Scala build tool. The build is data. The work is a ZIO effect. A person and an agent ask for the same operation and read the same result.
 
-Pre-release. Histos does not install a JDK or Node. If JDK 21 or Node 25 is not already there, it explains what it found and fails. The roadmap and audit describe delivered work and remaining capabilities.
+The terminal prints that result and chooses an exit. An agent receives the result as data and sees each line as it is printed. An editor uses BSP. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault.
 
-`histos preview` says what compile, test, publish, clean, cleanFull, or run would do. It writes nothing, and it says file-level staleness is unknown. The tally a person reads is source files, class files written this round, and modules. `histos observe` reads `.histos/observation.json` and does not compile. `histos cancel` names the run id the command minted. A finished call is a report or a fault. Progress is a BuildEvent on the socket and on notifications/histos/event. The terminal line is that event rendered once. The [roadmap](docs/roadmap.md) owns what is still open.
+This is pre-release. The API may break when that makes it more honest. Other repositories take snapshots.
 
-- [Roadmap](docs/roadmap.md): delivered foundations, current acceptance gates, and remaining milestones.
-- [Architecture](docs/architecture.md): current types, resource ownership, command behavior, and trust boundaries.
-- [Plugins](docs/plugins.md): enablement, linking, execution, and cache contracts.
-- [Audit](docs/audit.md): historical findings and current remaining work, each with an owner.
+What we still intend is [next](docs/next.md).
 
-## Locked builds
+## A build
 
-[`Projects.tools`](api/src/histos/Graph.scala) selects a typed [`ToolCatalog`](api/src/histos/ToolCatalog.scala). Modules may override their Scala.js and Scala Native revisions with `jsVersion` and `nativeVersion`.
+A build file is a Scala program that returns a graph. A module names its platforms (`jvm`, `js`, `native`), its Scala versions, and its dependencies. A literal that is not a version, a dependency, or a name does not compile. This repository is built by [histos.scala](histos.scala). The literals are [Literals.scala](api/src/histos/Literals.scala).
 
-`histos resolve --update` explicitly solves module, plugin, and tool dependencies, then commits them together in `.histos/dependencies.lock`. Ordinary execution fetches recorded artifacts and checks their SHA-256 values. Missing, changed, or corrupt tool cells fail with typed errors rather than an implicit solve. Classifier identity is part of the lock.
+## An operation
 
-The running JVM is the JDK. A Js module also needs `node` on `PATH`. Both are floors: JDK 21 or newer, and Node 25 or newer. A newer install satisfies the floor. `.histos/toolchain.local` and `.histos/node.local` name a home the user already chose. A present file that is missing, unreadable, or below the floor is rejected. Histos does not create that home and does not fall through to another install.
+You ask for one thing: compile, test, run, publish, assembly, clean, resolve, or a contributed plugin command. `testOnly` and `testQuick` are that same test operation. `preview` of compile, test, publish, clean, cleanFull, or run writes nothing, and it says file-level staleness is unknown. `observe` reads the last tally and does not compile. `cancel` names the run id the command minted. `server` keeps a warm process. `mcp` and `bsp` open a transport. They are not operations.
 
-The remote launcher has an immutable timestamped revision and SHA-256 in `.histos/launcher.lock`. Only `histos launcher --update` advances it. Workflow generation consumes the existing pin without refreshing metadata. See [the committed launcher pin](.histos/launcher.lock).
+The tally is source files, class files written this round, and modules.
 
-These locks do not make arbitrary plugin code, clang, browsers, or system packages hermetic. See the [architecture and migration rules](docs/architecture.md) and the [audit ledger](docs/audit.md).
+## Tools already on the machine
+
+Histos does not install a JDK or Node. The running JVM must be JDK 21 or newer. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one.
+
+`resolve --update` solves dependencies and writes `.histos/dependencies.lock`. Later runs fetch what the lock recorded and check the checksums. `launcher --update` is the only command that moves [.histos/launcher.lock](.histos/launcher.lock).
+
+## Plugins
+
+A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
 
 ## License
 
