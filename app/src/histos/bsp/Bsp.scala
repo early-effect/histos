@@ -59,6 +59,49 @@ object Bsp:
   private enum Phase:
     case New, Ready, Shutdown
 
+  /** One BSP method. The wire token stays the protocol string. */
+  private[bsp] enum Method:
+    case Exit, Initialize, Initialized, Shutdown, Targets, Sources, ScalacOptions, DependencySources, Compile,
+      MainClasses, TestClasses, RunEnvironment, TestEnvironment
+
+    def wire: String = this match
+      case Exit              => "build/exit"
+      case Initialize        => "build/initialize"
+      case Initialized       => "build/initialized"
+      case Shutdown          => "build/shutdown"
+      case Targets           => "workspace/buildTargets"
+      case Sources           => "buildTarget/sources"
+      case ScalacOptions     => "buildTarget/scalacOptions"
+      case DependencySources => "buildTarget/dependencySources"
+      case Compile           => "buildTarget/compile"
+      case MainClasses       => "buildTarget/scalaMainClasses"
+      case TestClasses       => "buildTarget/scalaTestClasses"
+      case RunEnvironment    => "buildTarget/jvmRunEnvironment"
+      case TestEnvironment   => "buildTarget/jvmTestEnvironment"
+  end Method
+
+  private[bsp] object Method:
+    val all: List[Method] =
+      List(
+        Method.Exit,
+        Method.Initialize,
+        Method.Initialized,
+        Method.Shutdown,
+        Method.Targets,
+        Method.Sources,
+        Method.ScalacOptions,
+        Method.DependencySources,
+        Method.Compile,
+        Method.MainClasses,
+        Method.TestClasses,
+        Method.RunEnvironment,
+        Method.TestEnvironment,
+      )
+
+    def from(raw: String): Option[Method] =
+      all.find(_.wire == raw)
+  end Method
+
   private[bsp] enum ParamFault:
     case Missing, Rejected
 
@@ -292,47 +335,46 @@ object Bsp:
         incoming: Rpc.Incoming,
         notification: Boolean,
     ): ZIO[Resolve, Nothing, Answer] =
-      (current, name) match
-        case (_, "build/exit") =>
+      val asked = Method.from(name)
+      (current, asked, notification) match
+        case (_, Some(Method.Exit), _) =>
           ZIO.succeed(Answer.Stop(if current == Phase.Shutdown then 0 else 1))
-        case (Phase.New, "build/initialize") if !notification =>
+        case (Phase.New, Some(Method.Initialize), false) =>
           phase.set(Phase.Ready).as(Answer.Reply(Rpc.ok(id, initialize)))
-        case (Phase.New, _) if notification =>
+        case (Phase.New, _, true) =>
           ZIO.succeed(Answer.Quiet)
-        case (Phase.New, _) =>
+        case (Phase.New, _, _) =>
           ZIO.succeed(Answer.Reply(failure(id, BspError.NotInitialized)))
-        case (Phase.Shutdown, _) if notification =>
+        case (Phase.Shutdown, _, true) =>
           ZIO.succeed(Answer.Quiet)
-        case (Phase.Shutdown, _) =>
+        case (Phase.Shutdown, _, _) =>
           ZIO.succeed(Answer.Reply(failure(id, BspError.ShutDown)))
-        case (Phase.Ready, "build/initialized") =>
+        case (Phase.Ready, Some(Method.Initialized), _) =>
           ZIO.succeed(Answer.Quiet)
-        case (Phase.Ready, "build/shutdown") if !notification =>
-          phase
-            .set(Phase.Shutdown)
-            .as(Answer.Reply(Rpc.ok(id, Rpc.NullResult())))
-        case (Phase.Ready, "workspace/buildTargets") if !notification =>
+        case (Phase.Ready, Some(Method.Shutdown), false) =>
+          phase.set(Phase.Shutdown).as(Answer.Reply(Rpc.ok(id, Rpc.NullResult())))
+        case (Phase.Ready, Some(Method.Targets), false) =>
           reply(id, targets)
-        case (Phase.Ready, "buildTarget/sources") if !notification =>
+        case (Phase.Ready, Some(Method.Sources), false) =>
           sources(id, incoming)
-        case (Phase.Ready, "buildTarget/scalacOptions") if !notification =>
+        case (Phase.Ready, Some(Method.ScalacOptions), false) =>
           options(id, incoming)
-        case (Phase.Ready, "buildTarget/dependencySources") if !notification =>
+        case (Phase.Ready, Some(Method.DependencySources), false) =>
           dependencySources(id, incoming)
-        case (Phase.Ready, "buildTarget/compile") if !notification =>
+        case (Phase.Ready, Some(Method.Compile), false) =>
           compile(id, incoming)
-        case (Phase.Ready, "buildTarget/scalaMainClasses") if !notification =>
+        case (Phase.Ready, Some(Method.MainClasses), false) =>
           mainClasses(id, incoming)
-        case (Phase.Ready, "buildTarget/scalaTestClasses") if !notification =>
+        case (Phase.Ready, Some(Method.TestClasses), false) =>
           testClasses(id, incoming)
-        case (Phase.Ready, "buildTarget/jvmRunEnvironment") if !notification =>
+        case (Phase.Ready, Some(Method.RunEnvironment), false) =>
           runEnvironment(id, incoming)
-        case (Phase.Ready, "buildTarget/jvmTestEnvironment") if !notification =>
+        case (Phase.Ready, Some(Method.TestEnvironment), false) =>
           testEnvironment(id, incoming)
-        case (Phase.Ready, _) if notification =>
+        case (Phase.Ready, _, true) =>
           ZIO.succeed(Answer.Quiet)
-        case (Phase.Ready, other) =>
-          ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownMethod(other))))
+        case (Phase.Ready, _, false) =>
+          ZIO.succeed(Answer.Reply(failure(id, BspError.UnknownMethod(name))))
 
     private def sources(
         id: Rpc.RpcId,
