@@ -135,6 +135,7 @@ enum VersionError:
   case UnknownShip(name: ShipName)
   case Refused(refusals: ::[Refusal])
   case Unreadable
+  case Config(error: zio.Config.Error)
 
   def message: String = this match
     case Session(error)    => error.message
@@ -143,15 +144,27 @@ enum VersionError:
       s"ship '${name.value}' is in .histos/releases and not in the catalog"
     case Refused(refusals) => Decision.refusalText(refusals)
     case Unreadable        => "could not read .histos/releases"
+    case Config(error)     => s"configuration: ${configText(error)}"
+
+  private def configText(error: zio.Config.Error): String =
+    error.fold(
+      (path, message) => s"${place(path)} $message",
+      (path, message) => s"${place(path)} $message",
+      (path, message, _) => s"${place(path)} $message",
+      (path, message) => s"${place(path)} $message",
+    )((left, right) => s"$left; $right", (left, right) => s"$left or $right")
+
+  private def place(path: zio.Chunk[String]): String =
+    if path.isEmpty then "config" else path.mkString(".")
 end VersionError
 
 object Versions:
-  def assess(catalog: Catalog, env: Map[String, String], evidence: Evidence): Either[VersionError, Decision] =
+  def assess(catalog: Catalog, source: SessionSource, evidence: Evidence): Either[VersionError, Decision] =
     catalog match
       case Catalog.Empty | Catalog.Manual(_) => Right(decide(catalog, Session.Development, Evidence.Unchecked))
       case Catalog.Lines(_)                  =>
         Session
-          .from(env)
+          .from(source)
           .left
           .map(VersionError.Session(_))
           .flatMap: session =>

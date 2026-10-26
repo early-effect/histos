@@ -2,7 +2,7 @@ package histos.version
 
 import histos.{ProjectName, ProjectNameError}
 
-import zio.{IO, ZIO}
+import zio.{ConfigProvider, IO, ZIO}
 import zio.test.*
 
 object VersionSpec extends ZIOSpecDefault:
@@ -85,18 +85,39 @@ object VersionSpec extends ZIOSpecDefault:
 
   private val edge = suite("edge")(
     test("development is the absent session, and a snapshot without a commit is refused"):
-      val snapshot = Map(Session.Key -> "snapshot", Session.ShaKey -> sha.value, Session.BranchKey -> "default")
+      val snapshot = SessionSource(Some("snapshot"), Some(sha.value), Some("default"), None)
       assertTrue(
-        Session.from(Map.empty) == Right(Session.Development),
-        Session.from(Map(Session.Key -> "snapshot")) == Left(SessionError.MissingSha),
-        Session.from(Map(Session.Key -> "snapshot", Session.ShaKey -> "abc")) == Left(
+        Session.from(SessionSource(None, None, None, None)) == Right(Session.Development),
+        Session.from(SessionSource(Some("development"), None, None, None)) == Right(Session.Development),
+        Session.from(SessionSource(Some("snapshot"), None, None, None)) == Left(SessionError.MissingSha),
+        Session.from(SessionSource(Some("snapshot"), Some("abc"), None, None)) == Left(
           SessionError.Sha(CommitShaError.NotHex("abc"))
         ),
         Session.from(snapshot) == Right(Session.Snapshot(sha, Branch.Default)),
-        Session.from(Map(Session.Key -> "pr", Session.ShaKey -> sha.value)) == Left(SessionError.MissingPullRequest),
-        Session.from(Map(Session.Key -> "nope")) == Left(SessionError.Unknown("nope")),
+        Session.from(SessionSource(Some("pr"), Some(sha.value), None, None)) == Left(SessionError.MissingPullRequest),
+        Session.from(SessionSource(Some("release"), None, None, None)) == Right(Session.Release),
+        Session.from(SessionSource(Some("nope"), None, None, None)) == Left(SessionError.Unknown("nope")),
         PullRequestNumber.parse("01") == Left(PullRequestError.NotANumber("01")),
         PullRequestNumber.from(0) == Left(PullRequestError.NotPositive(0)),
+      )
+    ,
+    test("a map provider loads the four session keys and leaves a missing key absent"):
+      val env = Map(
+        Session.Key            -> "snapshot",
+        Session.ShaKey         -> sha.value,
+        Session.BranchKey      -> "default",
+        Session.PullRequestKey -> "7",
+        "PATH"                 -> "/usr/bin",
+      )
+      val blank = Map(Session.Key -> "", Session.ShaKey -> "", Session.BranchKey -> "", Session.PullRequestKey -> "")
+      for
+        loaded <- ConfigProvider.fromMap(env).load(SessionSource.config)
+        absent <- ConfigProvider.fromMap(Map.empty).load(SessionSource.config)
+        empty  <- ConfigProvider.fromMap(blank).load(SessionSource.config)
+      yield assertTrue(
+        loaded == SessionSource(Some("snapshot"), Some(sha.value), Some("default"), Some("7")),
+        absent == SessionSource(None, None, None, None),
+        empty == SessionSource(Some(""), Some(""), Some(""), Some("")),
       )
     ,
     test("a registry line names a ship and a relation, and a duplicate is refused"):
@@ -195,8 +216,10 @@ object VersionSpec extends ZIOSpecDefault:
         val stated   = ManualVersion("1.2.3-SNAPSHOT")
         val catalog  = Catalog.from(List(Ship.Manual(fixture.libs, stated, ::(fixture.core, Nil))))
         val decided  = catalog.map(Versions.decide(_, Session.Snapshot(sha, Branch.Default), Evidence.Unchecked))
-        val assessed = catalog.map(Versions.assess(_, Map(Session.Key -> "snapshot"), Evidence.Unchecked))
-        val manual   = Decision.Manual(::(ManualLine(fixture.libs, stated), Nil))
+        val assessed = catalog.map(
+          Versions.assess(_, SessionSource(Some("snapshot"), None, None, None), Evidence.Unchecked)
+        )
+        val manual = Decision.Manual(::(ManualLine(fixture.libs, stated), Nil))
         assertTrue(
           decided == Right(manual),
           assessed == Right(Right(manual)),
@@ -246,7 +269,8 @@ object VersionSpec extends ZIOSpecDefault:
     ,
     test("a ship named by the registry and missing from the catalog is not a scheme refusal"):
       use: fixture =>
-        val assessed = registry("client matches").map(Versions.assess(fixture.one, Map.empty, _))
+        val assessed =
+          registry("client matches").map(Versions.assess(fixture.one, SessionSource(None, None, None, None), _))
         assertTrue(assessed == Right(Left(VersionError.UnknownShip(fixture.client)))),
   )
 
