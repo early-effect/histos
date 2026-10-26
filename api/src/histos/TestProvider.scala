@@ -1,6 +1,7 @@
 package histos
 
 import _root_.scala.annotation.publicInBinary
+import _root_.scala.quoted.*
 
 /** The binary name of an sbt test framework. The engine does not load it. */
 opaque type FrameworkClass = String
@@ -35,6 +36,10 @@ end FrameworkClassError
 final case class ProviderLibrary private (organization: String, name: String)
 
 object ProviderLibrary:
+  inline def apply(inline organization: String, inline name: String): ProviderLibrary = ${
+    ProviderLibraryMacro.literal('organization, 'name)
+  }
+
   def from(organization: String, name: String): Either[ProviderLibraryError, ProviderLibrary] =
     if organization.isEmpty || name.isEmpty then Left(ProviderLibraryError.Empty)
     else if organization.exists(_.isWhitespace) || name.exists(_.isWhitespace) then
@@ -53,6 +58,30 @@ enum ProviderLibraryError:
     case Empty                   => "a test provider library is not empty"
     case Bad(organization, name) => s"'$organization' '$name' is not a test provider library"
 end ProviderLibraryError
+
+private object ProviderLibraryMacro:
+  def literal(organization: Expr[String], name: Expr[String])(using Quotes): Expr[ProviderLibrary] =
+    import quotes.reflect.report
+    def notLiteral(expr: Expr[String]): Nothing =
+      report.errorAndAbort(
+        "ProviderLibrary(...) takes literals. Use ProviderLibrary.from at runtime.",
+        expr,
+      )
+
+    (organization.value, name.value) match
+      case (None, _)                                => notLiteral(organization)
+      case (_, None)                                => notLiteral(name)
+      case (Some(organizationText), Some(nameText)) =>
+        ProviderLibrary.from(organizationText, nameText) match
+          case Left(error) =>
+            val at =
+              if organizationText.isEmpty || organizationText.exists(_.isWhitespace) then organization
+              else name
+            report.errorAndAbort(error.message, at)
+          case Right(library) =>
+            '{ ProviderLibrary.trusted(${ Expr(library.organization) }, ${ Expr(library.name) }) }
+  end literal
+end ProviderLibraryMacro
 
 /** A framework the child process runs. `Zio` is the provider `histos test` uses when a module does not name another one
   * and does not name a main.
