@@ -187,6 +187,7 @@ object BootstrapSpec extends ZIOSpecDefault:
         yield assertTrue(
           ran.exit.contains(ProcessExit(0)),
           ran.arguments == List(
+            LauncherScript.ThreadStack,
             "--enable-native-access=ALL-UNNAMED",
             "-jar",
             fixture.jar.toString,

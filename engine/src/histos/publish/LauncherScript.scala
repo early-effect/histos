@@ -9,9 +9,12 @@ import java.nio.file.{Files, Path}
 import zio.{IO, ZIO}
 
 /** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and
-  * runs the pinned launcher jar. Histos does not install a JDK.
+  * runs the pinned launcher jar. Scalac runs in that process, so the thread stack is 4MB: the Linux default overflows
+  * in CrossStageSafety. Histos does not install a JDK.
   */
 object LauncherScript:
+  val ThreadStack: String = "-Xss4m"
+
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
     ZIO
       .fromEither(ship(graph))
@@ -51,10 +54,13 @@ object LauncherScript:
                   )
 
   def posix(version: String): String =
-    Posix.replace("__VERSION__", version)
+    render(Posix, version)
 
   def windows(version: String): String =
-    Windows.replace("__VERSION__", version)
+    render(Windows, version)
+
+  private def render(template: String, version: String): String =
+    template.replace("__VERSION__", version).replace("__STACK__", ThreadStack)
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     graph.assembly match
@@ -233,7 +239,7 @@ fi
 java_bin=$(command -v java) || fail "java is not on PATH"
 cleanup
 trap - EXIT HUP INT TERM
-exec "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"
+exec "$java_bin" __STACK__ --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"
 """
 
   private val Windows: String = """@echo off
@@ -327,7 +333,7 @@ if ($jar) {
   }
   if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
 }
-& $java --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
+& $java __STACK__ --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE
 """
 end LauncherScript

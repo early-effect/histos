@@ -141,4 +141,4 @@ fi
 java_bin=$(command -v java) || fail "java is not on PATH"
 cleanup
 trap - EXIT HUP INT TERM
-exec "$java_bin" --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"
+exec "$java_bin" -Xss4m --enable-native-access=ALL-UNNAMED -jar "$jar" "$@"
