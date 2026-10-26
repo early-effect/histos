@@ -4,6 +4,8 @@ A Scala build tool whose graph is data and whose build steps are ZIO effects. Th
 
 Pre-release. Histos does not install a JDK or Node. If JDK 21 or Node 25 is not already there, it explains what it found and fails. The roadmap and audit describe delivered work and remaining capabilities.
 
+`histos preview` says what compile, test, publish, clean, cleanFull, or run would do. It writes nothing, and it says file-level staleness is unknown. The tally a person reads is source files, class files written this round, and modules. `histos observe` reads `.histos/observation.json` and does not compile. `histos cancel` names the run id the command minted. Socket faults stay text, and progress is not a typed event. The [roadmap](docs/roadmap.md) owns what is still open.
+
 - [Roadmap](docs/roadmap.md): delivered foundations, current acceptance gates, and remaining milestones.
 - [Architecture](docs/architecture.md): current types, resource ownership, command behavior, and trust boundaries.
 - [Plugins](docs/plugins.md): enablement, linking, execution, and cache contracts.

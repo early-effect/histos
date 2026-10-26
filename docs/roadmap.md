@@ -25,7 +25,10 @@ The lock is authoritative for the dependency and tool artifacts it records. A JD
 | M2 | Delivered | Step kinds/composition/aspects, Histos executor, compile dependencies without layer barriers, real plugin compile steps, test/run/publish orchestration |
 | M3 | Delivered | Captured Machine/config, path-bearing IO and Workspace scopes, shared ChildProcess, incremental Zinc and scoped batch compiler reuse, provider installation reuse, service/package separation |
 | M4 | Implementation delivered | Typed tool catalog and lock cells, classifiers, selected byte identities, staged updates, JDK 21 and Node 25 floors, immutable launcher pin and update transaction |
-| M5-M8 | Partly enabled, not delivered | M4 supplies tool/runtime data and verification seams. Backend, application, public plugin/API and graph-derived CI contracts remain |
+| M5 | Not delivered | Test outcomes, compiled bridges, and backend contracts remain |
+| M6 | Operator contract in this tree | One request for the CLI and MCP, the file and module tally, a preview that writes nothing, and cancel by run id. Wire types, BSP, and the Build service remain |
+| M7 | Not delivered | G4 and G8-G10 are in this tree. Module shape and the public plugin phases remain |
+| M8 | Not delivered | Graph-derived CI needs and caches remain |
 | M9 | Future | Real second-repository adoption, real plugins and measured performance |
 
 The core is linked rather than recopied: [Step](../api/src/histos/step/Step.scala), [StepKind](../api/src/histos/step/StepKind.scala), [Fits](../api/src/histos/step/Fits.scala), [Stored](../api/src/histos/step/Model.scala), [StepAspect](../api/src/histos/step/StepAspect.scala), [StepSpec](../api/test/StepSpec.scala), [Histos](../engine/src/histos/schedule/Histos.scala), and [ScheduleAspects](../engine/src/histos/schedule/ScheduleAspects.scala). Mixed-kind composition already exists. Public plugin submission of arbitrary typed Steps does not: its SPI remains descriptions plus run (G16).
@@ -44,7 +47,7 @@ M3 compiler reuse is scoped to a compile batch. Server-lifetime pool reuse and c
 - **Embedded provenance is separate.** Running Dotty compiles the build/source plugins; module and auxiliary bridge compilers come from tool cells. Source cache keys need actual embedded support/runtime bytes, not only the API digest and version text.
 - **Installed platform floors.** Histos does not install a JDK or Node. The running JVM, or `toolchain.local`, must be JDK 21 or newer. A Js module needs `node` on `PATH`, or `node.local`, at Node 25 or newer. A newer version satisfies the floor. A present override that is missing or too old is rejected.
 - **Immutable launcher pin.** Startup consumes exact revision and hash, never latest metadata. Only dedicated launcher update reads metadata, streams bounded bytes, serializes commit across processes, checks for concurrent pin changes, and replaces the pin last. Workflow rendering consumes the existing pin offline. The script finds `java` and runs that jar.
-- **One current PR.** The M3 resource follow-ups and M4 concerns stay together by explicit approval. The prior M3 merge remains historical; no extra stack is required for this integration.
+- **One integration.** M3 resource follow-ups and M4 concerns shipped together. The prior M3 merge stays historical.
 
 See [ToolCatalog](../api/src/histos/ToolCatalog.scala), [LockedTools](../engine/src/histos/resolve/LockedTools.scala), [ToolInput](../engine/src/histos/resolve/ToolInput.scala), [BuildCompiler](../engine/src/histos/toolchain/BuildCompiler.scala), [Toolchain](../engine/src/histos/jdk/Toolchain.scala), [NodeToolchain](../engine/src/histos/node/NodeToolchain.scala), and [LauncherPin](../engine/src/histos/publish/LauncherPin.scala).
 
@@ -92,7 +95,7 @@ Tool request namespace/component duplication remains current integration work (L
 
 **Goal:** A human and an agent request the same operation, see the same decisions, and can read what the operation will do before it runs. Reports, progress, and cancellation are that operation, not a separate channel per surface.
 
-Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service. Parking this work after M9 would make the agent an afterthought. P6 and P15 are delivered. The preview still does not say which suites testQuick would skip. A compile preview does not.
+Attach-before-load, reload/reboot and every-splice BSP target changes already exist. Source request-lock/runtime work in M4 is a prerequisite, not completion of this service. Parking this work after M9 would make the agent an afterthought. P6 and P15 are delivered. The preview still does not say which suites testQuick would skip. A compile preview does not name the sources Zinc would recompile.
 
 - **Wire types:** Typed selections, test modes, targets, events, reports, faults and run ids; preserve plugin command arguments. Owns A1/A3/A12/A19/A21/A25. A4 is checked: a bad suite pattern is `ModuleTestError.Pattern` and exits usage.
 - **Build local/remote/attached:** Delete duplicated continuations/renderers and package cycles; centralize exit mapping, generation leasing and resource construction. Owns A5/A16-A18/A20 and P19's session reuse/measurements. A24 is checked: a bad selection is `SelectError`, and workflow `CiError` stays on workflow.

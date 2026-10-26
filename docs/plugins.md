@@ -149,7 +149,7 @@ Load failures nest in LoadError and exit 3. A deliberate task failure or mapped 
 
 ## CLI, server, MCP, and jobs
 
-The grammar is closed before loading. Only an unknown root outside [`CommandName.reserved`](../api/src/histos/plugin/Names.scala) falls through to plugin commands. Built-ins, including launcher, win; acp remains reserved although deleted. Cache subcommand words remain available at the root. A malformed command under a reserved root does not load plugins.
+The grammar is closed before loading. Only an unknown root outside [`CommandName.reserved`](../api/src/histos/plugin/Names.scala) falls through to plugin commands. Built-in roots stay reserved, including `launcher`. `acp` stays reserved although the command is deleted. Cache subcommand words remain available at the root. A malformed command under a reserved root does not load plugins.
 
 [`PluginCommands`](../app/src/histos/cli/PluginCommands.scala) interprets required texts, at most one optional text, and typed flag names. Unknown flags, too many/few positionals and invalid specs fail with usage. Watch uses that same parse. The call on the wire is `Call.Watch(Call.Task(id, pluginArgs))`, and the server runs that task. With no server, watch runs the same call. A root typo can require loading before usage and thus fail with LoadError if the build is broken.
 
@@ -179,7 +179,7 @@ A plugin author can call run with ZIO Test and [`PluginFixture`](../api/src/hist
 | No live remote cache configuration, output bytes never transferred | D10 and future remote cache |
 | No binary compatibility promise before 1.0; Api linking refused | Deliberate prerelease contract |
 
-Explicit enablement replaces automatic triggers; an ordinary library API replaces a second settings language; full lock cells replace single-jar checksums; source fallback replaces premature binary shims. Those decisions remain. M1/M2 isolation/orchestration work is delivered, while M4 acceptance and M7's public phase API remain open.
+Explicit enablement replaces automatic triggers; an ordinary library API replaces a second settings language; full lock cells replace single-jar checksums; source fallback replaces premature binary shims. Those decisions remain. M1 and M2 isolation and orchestration are delivered. M4's catalog, lock cells, floors, and launcher pin are in this tree. M7's public phase API remains open.
 
 ## History
 

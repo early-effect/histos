@@ -47,7 +47,7 @@ The rows below track the delivered contracts, regression coverage and remaining 
 
 The general, security and simplicity discoveries remain represented by the rows above. The integrated suite verifies selected JS/Native consumers, relevant fingerprints, quick-success trust, immutable lock barriers, fresh runtime choices, embedded provenance, direct-root/classifier coverage, isolated fixtures and partial-construction cleanup. JDK and Node archive edges are superseded: Histos does not install a JDK or Node. The launcher URL corpus stays in [LauncherPinSpec](../engine/test/LauncherPinSpec.scala).
 
-Future concerns remain explicit: typed surface errors, cancellation, operator parity, observation units, and preview in M6, bridge, backend, and test-cache design in M5, literal and public plugin contracts in M7, and graph-derived cached tool installs in M8. Compiler source-root portability and denied cleanup observability remain their own rows.
+Cancellation, operator parity, observation, and preview are in this tree (A8, A23-A27, A29-A34). Still open: typed surface errors and progress events (A1, A2), BSP and the Build service, bridge and backend contracts in M5, the remaining public plugin and literal contracts in M7, and graph-derived cached tool installs in M8. Compiler source-root portability and denied cleanup observability remain their own rows.
 
 ## M5 execution, backends, and packaging
 
@@ -140,7 +140,7 @@ Future concerns remain explicit: typed surface errors, cancellation, operator pa
 - [ ] **G20** (correctness) ShipLink manufactures catalog positions/errors and Catalog repeats validation. M7 catalog model owns honest errors and removal of redundant branches.
 - [ ] **G21** (api-shape) Edges/aggregates recover supplied children by name, permitting identity mismatches. M7 reference-based graph construction owns this invariant.
 - [ ] **T14** (tests) Missing API runner-through-PluginFixture, complete plugin lock-cell and combined dependency/path/strategy header examples remain. M7 contract tests owns each, with plugins.md linking actual fixtures rather than implying they exist.
-- [ ] **G22** (api-shape, totality) [Sha256](../engine/src/histos/jdk/Sha256.scala) takes a string literal. `from` trims and lowercases, and the splice is that hex. [Sha256Spec](../engine/test/Sha256Spec.scala) "a literal is the trimmed lowercase digest" and "a short or empty digest is rejected" lock the literal, the spaced uppercase form, and a short or empty `from`. HttpsUrl and the runtime version/major facades are still missing. FileUrl already has one.
+- [ ] **G22** (api-shape, totality) [Sha256](../engine/src/histos/jdk/Sha256.scala) takes a string literal. `from` trims and lowercases, and the splice is that hex. [Sha256Spec](../engine/test/Sha256Spec.scala) "a literal is the trimmed lowercase digest" and "a short or empty digest is rejected" lock the literal, the spaced uppercase form, and a short or empty `from`. HttpsUrl and the runtime version/major facades are still missing.
 
 ## M8 graph-derived CI
 
