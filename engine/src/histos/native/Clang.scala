@@ -2,8 +2,11 @@ package histos.native
 
 import histos.ClangMajor
 
+import java.io.IOException
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, InvalidPathException, Path}
+
+import scala.annotation.tailrec
 
 import zio.{IO, ZIO}
 
@@ -94,6 +97,7 @@ final case class Clang(clang: Path, clangpp: Path, version: ClangVersion, target
 enum ClangMiss:
   case Absent
   case NotOnPath(wanted: ClangMajor)
+  case BadPath(entry: String)
   case NoClangPP(clang: Path)
   case Unreadable(path: Path)
   case Status(path: Path, code: Int)
@@ -106,6 +110,8 @@ enum ClangMiss:
       "clang is not on PATH"
     case NotOnPath(wanted) =>
       s"clang is not on PATH. Install clang ${wanted.value}"
+    case BadPath(entry) =>
+      s"'$entry' is not a path"
     case NoClangPP(clang) =>
       s"clang++ is not beside $clang"
     case Unreadable(path) =>
@@ -123,21 +129,22 @@ end ClangMiss
 object ClangProbe:
   /** The clang on `PATH`, with no major check. */
   def found(env: Map[String, String]): IO[ClangMiss, Clang] =
-    binary(env, "clang") match
+    binary(env, "clang").flatMap:
       case None        => ZIO.fail(ClangMiss.Absent)
       case Some(clang) =>
         cxxBeside(clang) match
           case None          => ZIO.fail(ClangMiss.NoClangPP(clang))
           case Some(clangpp) =>
-            if !Files.isRegularFile(clangpp) then ZIO.fail(ClangMiss.NoClangPP(clang))
-            else
-              for
-                cc  <- report(clang)
-                cxx <- report(clangpp)
-                _   <-
-                  if cc.version != cxx.version then ZIO.fail(ClangMiss.Mismatched(cc.version, cxx.version))
-                  else ZIO.unit
-              yield Clang(clang, clangpp, cc.version, cc.target)
+            regular(clangpp).flatMap:
+              case false => ZIO.fail(ClangMiss.NoClangPP(clang))
+              case true  =>
+                for
+                  cc  <- report(clang)
+                  cxx <- report(clangpp)
+                  _   <-
+                    if cc.version != cxx.version then ZIO.fail(ClangMiss.Mismatched(cc.version, cxx.version))
+                    else ZIO.unit
+                yield Clang(clang, clangpp, cc.version, cc.target)
 
   def resolve(wanted: ClangMajor, env: Map[String, String]): IO[ClangMiss, Clang] =
     found(env)
@@ -163,13 +170,43 @@ object ClangProbe:
         case (0, text) => ZIO.fromEither(ClangReport.parse(text)).mapError(ClangMiss.Text(binary, _))
         case (code, _) => ZIO.fail(ClangMiss.Status(binary, code))
 
-  private def binary(env: Map[String, String], name: String): Option[Path] =
-    val entries =
-      env.get("PATH").filter(_.nonEmpty).toList.flatMap(_.split(java.io.File.pathSeparator).toList.filter(_.nonEmpty))
-    entries
-      .map(Path.of(_))
-      .collectFirst:
-        case dir if Files.isRegularFile(dir.resolve(name)) => dir.resolve(name)
+  private def binary(env: Map[String, String], name: String): IO[ClangMiss, Option[Path]] =
+    checked(scan(entries(env), name))
+
+  private def regular(path: Path): IO[ClangMiss, Boolean] =
+    checked(isRegular(path))
+
+  private def checked[A](body: => Either[ClangMiss, A]): IO[ClangMiss, A] =
+    ZIO.attemptBlocking(body).orDie.flatMap(ZIO.fromEither)
+
+  private def entries(env: Map[String, String]): List[String] =
+    env
+      .get("PATH")
+      .filter(_.nonEmpty)
+      .toList
+      .flatMap(_.split(java.io.File.pathSeparator).toList.filter(_.nonEmpty))
+
+  @tailrec
+  private def scan(rest: List[String], name: String): Either[ClangMiss, Option[Path]] =
+    rest match
+      case Nil           => Right(None)
+      case entry :: more =>
+        look(entry, name) match
+          case Right(None) => scan(more, name)
+          case located     => located
+
+  private def look(entry: String, name: String): Either[ClangMiss, Option[Path]] =
+    pathOf(entry).flatMap: dir =>
+      val file = dir.resolve(name)
+      isRegular(file).map(hit => if hit then Some(file) else None)
+
+  private def pathOf(entry: String): Either[ClangMiss, Path] =
+    try Right(Path.of(entry))
+    catch case _: InvalidPathException => Left(ClangMiss.BadPath(entry))
+
+  private def isRegular(path: Path): Either[ClangMiss, Boolean] =
+    try Right(Files.isRegularFile(path))
+    catch case _: IOException => Left(ClangMiss.Unreadable(path))
 
   private def cxxBeside(clang: Path): Option[Path] =
     Option(clang.getFileName).flatMap: file =>

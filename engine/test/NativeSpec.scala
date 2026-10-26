@@ -122,7 +122,24 @@ object NativeSpec extends ZIOSpecDefault:
         .resolve(major21, Map("PATH" -> ""))
         .either
         .map: out =>
-          assertTrue(out == Left(ClangMiss.NotOnPath(major21))),
+          assertTrue(out == Left(ClangMiss.NotOnPath(major21)))
+    ,
+    test("a NUL PATH entry is not a path"):
+      ClangProbe
+        .resolve(major21, Map("PATH" -> "\u0000"))
+        .either
+        .map: out =>
+          assertTrue(out == Left(ClangMiss.BadPath("\u0000")))
+    ,
+    test("clang with no clang++ beside it is a miss"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(script(root, "clang", "21.0.0"))
+          out  <- ClangProbe
+            .resolve(major21, Map("PATH" -> root.toString))
+            .either
+        yield assertTrue(out == Left(ClangMiss.NoClangPP(root.resolve("clang")))),
   )
 
   private val declare = suite("declaration")(
