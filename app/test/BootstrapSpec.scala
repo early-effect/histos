@@ -187,7 +187,6 @@ object BootstrapSpec extends ZIOSpecDefault:
         yield assertTrue(
           ran.exit.contains(ProcessExit(0)),
           ran.arguments == List(
-            LauncherScript.ThreadStack,
             "--enable-native-access=ALL-UNNAMED",
             "-jar",
             fixture.jar.toString,
@@ -199,7 +198,7 @@ object BootstrapSpec extends ZIOSpecDefault:
           temps.isEmpty,
         )
     ,
-    test(".jvmopts lines follow the default stack and stay one argument each"):
+    test(".jvmopts lines are the JVM arguments, one per line"):
       ZIO.scoped:
         for
           fixture <- layout
@@ -211,7 +210,6 @@ object BootstrapSpec extends ZIOSpecDefault:
         yield assertTrue(
           ran.exit.contains(ProcessExit(0)),
           ran.arguments == List(
-            LauncherScript.ThreadStack,
             "-Xmx1g",
             "-Dname=a b",
             "-Dname=it's",

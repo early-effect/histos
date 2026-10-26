@@ -1,0 +1,2 @@
+# Scalac runs in this process. The Linux default thread stack overflows in CrossStageSafety.
+-Xss4m

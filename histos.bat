@@ -89,7 +89,7 @@ if ($jar) {
   }
   if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
 }
-$jvmArgs = @('-Xss4m')
+$jvmArgs = @()
 $opts = Join-Path $root '.jvmopts'
 if (Test-Path -LiteralPath $opts) {
   if (-not (Test-Path -LiteralPath $opts -PathType Leaf)) { Fail "invalid file path: $opts" }

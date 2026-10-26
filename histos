@@ -177,7 +177,7 @@ while [ "$i" -le "$#" ]; do
   quoted_args="$quoted_args $(shell_quote "$one")"
   i=$((i + 1))
 done
-eval "set -- $(shell_quote "-Xss4m")${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
+eval "set -- ${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
 cleanup
 trap - EXIT HUP INT TERM
 exec "$java_bin" "$@"

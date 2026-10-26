@@ -9,13 +9,10 @@ import java.nio.file.{Files, Path}
 import zio.{IO, ZIO}
 
 /** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and
-  * runs the pinned launcher jar. Scalac runs in that process, so the thread stack is 4MB: the Linux default overflows
-  * in CrossStageSafety. A repository `.jvmopts` adds one JVM argument per line after that default. Histos does not
-  * install a JDK.
+  * runs the pinned launcher jar. JVM arguments come from a repository `.jvmopts`, one per line. Histos does not install
+  * a JDK.
   */
 object LauncherScript:
-  val ThreadStack: String = "-Xss4m"
-
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
     ZIO
       .fromEither(ship(graph))
@@ -55,13 +52,10 @@ object LauncherScript:
                   )
 
   def posix(version: String): String =
-    render(Posix, version)
+    Posix.replace("__VERSION__", version)
 
   def windows(version: String): String =
-    render(Windows, version)
-
-  private def render(template: String, version: String): String =
-    template.replace("__VERSION__", version).replace("__STACK__", ThreadStack)
+    Windows.replace("__VERSION__", version)
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     graph.assembly match
@@ -276,7 +270,7 @@ while [ "$i" -le "$#" ]; do
   quoted_args="$quoted_args $(shell_quote "$one")"
   i=$((i + 1))
 done
-eval "set -- $(shell_quote "__STACK__")${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
+eval "set -- ${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
 cleanup
 trap - EXIT HUP INT TERM
 exec "$java_bin" "$@"
@@ -373,7 +367,7 @@ if ($jar) {
   }
   if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
 }
-$jvmArgs = @('__STACK__')
+$jvmArgs = @()
 $opts = Join-Path $root '.jvmopts'
 if (Test-Path -LiteralPath $opts) {
   if (-not (Test-Path -LiteralPath $opts -PathType Leaf)) { Fail "invalid file path: $opts" }
