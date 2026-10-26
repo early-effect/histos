@@ -93,7 +93,29 @@ object LiteralSpec extends ZIOSpecDefault:
       assertTrue:
         errors match
           case e :: _ => e.message.contains("nope")
+          case Nil    => false
+    ,
+    test("a non-string hole does not typecheck, and a string hole takes no arguments"):
+      val scalaHole = typeCheckErrors("""scala"${1}"""")
+      val depHole   = typeCheckErrors("""dep"${1}"""")
+      val scalaText = typeCheckErrors("""scala"${"3.9.0"}"""")
+      val depText   = typeCheckErrors("""dep"${"dev.zio::zio:2.1.26"}"""")
+      assertTrue(
+        scala"3.9.0".value == "3.9.0",
+        dep"dev.zio::zio:2.1.26" == Dep("dev.zio::zio:2.1.26"),
+        scalaHole match
+          case e :: _ => e.message.nonEmpty && !e.message.contains("takes no arguments")
           case Nil    => false,
+        depHole match
+          case e :: _ => e.message.nonEmpty && !e.message.contains("takes no arguments")
+          case Nil    => false,
+        scalaText match
+          case e :: _ => e.message.contains("takes no arguments")
+          case Nil    => false,
+        depText match
+          case e :: _ => e.message.contains("takes no arguments")
+          case Nil    => false,
+      ),
   )
 
   def spec = literals
