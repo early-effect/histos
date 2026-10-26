@@ -1336,7 +1336,7 @@ object Bsp:
                   Rpc.Diagnostic(
                     range,
                     severityCode(problem.severity),
-                    "histos",
+                    ServerName,
                     problem.message,
                   )
                 ),

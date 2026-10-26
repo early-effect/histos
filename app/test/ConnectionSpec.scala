@@ -10,14 +10,14 @@ import zio.test.*
 
 object ConnectionSpec extends ZIOSpecDefault:
   private val committed =
-    """{
-      |  "name": "histos",
-      |  "argv": ["./histos", "bsp"],
-      |  "version": "0.0.1-SNAPSHOT",
-      |  "bspVersion": "2.2.0",
-      |  "languages": ["scala"]
-      |}
-      |""".stripMargin
+    s"""{
+       |  "name": "${Bsp.ServerName}",
+       |  "argv": ["./histos", "bsp"],
+       |  "version": "${Bsp.ServerVersion}",
+       |  "bspVersion": "${Bsp.BspVersion}",
+       |  "languages": ["scala"]
+       |}
+       |""".stripMargin
 
   def spec = suite("bsp connection")(
     test("the committed file is the connection for this repository's wrapper"):
