@@ -1,7 +1,7 @@
 package histos.server
 
 import histos.jdk.JdkRuntime
-import histos.bsp.{Bsp, Frame}
+import histos.bsp.{Bsp, Frame, Rpc}
 import histos.cli.Operation
 import histos.jdk.Sha256
 import histos.load.{HeaderScan, LoadError}
@@ -24,7 +24,7 @@ import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
 import histos.report.WireJson.given JsonCodec[BuildEvent]
 import zio.stream.ZStream
-import zio.{Chunk, Exit, Fiber, IO, Promise, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
+import zio.{Chunk, Exit, Fiber, IO, Promise, Queue, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
 
 /** What a batch command found in `.histos/server.json`. */
 enum Decision:
@@ -741,60 +741,52 @@ object Daemon:
                                   Calls.cleanFull(repo, out)
                                 case Call.Compile(projects) =>
                                   Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.compile(
-                                        repo,
-                                        held.graph,
-                                        projects,
-                                        jdk,
-                                        machine,
-                                        out,
-                                      )
+                                    Calls.compile(
+                                      repo,
+                                      held.graph,
+                                      projects,
+                                      jdk,
+                                      machine,
+                                      out,
                                     )
                                   )
                                 case Call.Test(projects, patterns, quick) =>
                                   Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.test(
-                                        repo,
-                                        held.graph,
-                                        projects,
-                                        patterns,
-                                        quick,
-                                        jdk,
-                                        machine,
-                                        out,
-                                      )
+                                    Calls.test(
+                                      repo,
+                                      held.graph,
+                                      projects,
+                                      patterns,
+                                      quick,
+                                      jdk,
+                                      machine,
+                                      out,
                                     )
                                   )
                                 case Call.Publish(repository, projects) =>
                                   Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.publish(
-                                        repo,
-                                        held.graph,
-                                        machine,
-                                        jdk,
-                                        repository,
-                                        projects,
-                                        out,
-                                      )
+                                    Calls.publish(
+                                      repo,
+                                      held.graph,
+                                      machine,
+                                      jdk,
+                                      repository,
+                                      projects,
+                                      out,
                                     )
                                   )
                                 case Call.Graph =>
                                   Calls.graph(held.graph, held.plugins, out)
                                 case Call.Run(id, platform) =>
                                   Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.run(
-                                        repo,
-                                        held.graph,
-                                        jdk,
-                                        machine,
-                                        id,
-                                        platform,
-                                        out,
-                                      )
+                                    Calls.run(
+                                      repo,
+                                      held.graph,
+                                      jdk,
+                                      machine,
+                                      id,
+                                      platform,
+                                      out,
                                     )
                                   )
                                 case Call.Task(id, taskArgs) =>
@@ -825,15 +817,13 @@ object Daemon:
                                   Calls.workflow(repo, held.graph, action, out)
                                 case Call.Assembly(destination) =>
                                   Calls.tracked(runs, out)(
-                                    permit.withPermit(
-                                      Calls.assembly(
-                                        repo,
-                                        held.graph,
-                                        jdk,
-                                        machine,
-                                        destination,
-                                        out,
-                                      )
+                                    Calls.assembly(
+                                      repo,
+                                      held.graph,
+                                      jdk,
+                                      machine,
+                                      destination,
+                                      out,
                                     )
                                   )
                                 case Call.Reload =>
@@ -1018,12 +1008,22 @@ object Daemon:
         ZIO.when(close)(generation.scope.close(Exit.unit)).unit
       }
 
+  /** Class-directory writers. Queries, preview, cache, and `Call.Task` stay out. */
+  private[server] def writesOutputs(call: Call): Boolean =
+    call match
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.Publish(_, _) | Call.Run(_, _) | Call.Assembly(_) |
+          Call.Clean(_) | Call.CleanFull =>
+        true
+      case Call.Graph | Call.Task(_, _) | Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) |
+          Call.Reload | Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) |
+          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
+          Call.PreviewPublish(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
+        false
+
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(
       body: ZIO[R, E, Unit]
   ): ZIO[R, E, Unit] =
-    call match
-      case Call.Clean(_) | Call.CleanFull => permit.withPermit(body)
-      case _                              => body
+    if writesOutputs(call) then permit.withPermit(body) else body
 
   private def reboot(
       repo: Path,
@@ -1063,64 +1063,243 @@ object Daemon:
     ServerError,
     Unit,
   ] =
-    Semaphore.make(1).flatMap { writer =>
-      def send(payload: String): IO[ServerError, Unit] =
-        writer.withPermit(
-          Frame
-            .write(output, payload)
-            .mapError(_ => ServerError.Io(ServerIo.Write(bound)))
-        )
-      val notify = (line: String) => send(line).ignore
-      warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
-        Bsp
-          .open(
-            repo,
-            generation.graph,
-            jdk,
-            runtimes,
-            buildClasspath,
-            notify,
-            build,
-            effect => permit.withPermit(effect),
-            Some(warm.graphs),
-          )
-          .mapError(ServerError.Resolve(_))
-          .flatMap { session =>
-            def loop: ZIO[
-              histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
-              ServerError,
-              Int,
-            ] =
-              Frame
-                .read(input)
-                .mapError(_ => ServerError.Io(ServerIo.Read(bound)))
-                .flatMap:
-                  case None          => ZIO.succeed(1)
-                  case Some(payload) =>
-                    adopt(repo, apiJar, version, bound, warm)
-                      .flatMap {
-                        case Right(gen) => ZIO.succeed(gen)
-                        case Left(_)    =>
-                          warm.reloading.withPermit(
-                            warm.live.get.flatMap(gen => acquire(gen).as(gen))
-                          )
-                      }
-                      .flatMap { gen =>
-                        session
-                          .answer(gen.graph, payload)
-                          .ensuring(release(gen))
-                      }
-                      .flatMap:
-                        case Bsp.Answer.Reply(text) => send(text) *> loop
-                        case Bsp.Answer.Quiet       => loop
-                        case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
-            warm.spliced.update(_ + session) *>
-              loop
-                .ensuring(warm.spliced.update(_ - session))
-                .flatMap(code => send(wire(Message.Marker(code))))
-          }
+    val send = (line: String) => Frame.write(output, line).mapError(_ => ServerError.Io(ServerIo.Write(bound)))
+    val next = Frame.read(input).mapError(_ => ServerError.Io(ServerIo.Read(bound)))
+    ZIO.scoped {
+      outbox(send).flatMap { box =>
+        warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
+          Bsp
+            .open(
+              repo,
+              generation.graph,
+              jdk,
+              runtimes,
+              buildClasspath,
+              box.offer,
+              build,
+              effect => permit.withPermit(effect),
+              Some(warm.graphs),
+            )
+            .mapError(ServerError.Resolve(_))
+            .flatMap { session =>
+              def adopted(payload: String) =
+                adopt(repo, apiJar, version, bound, warm)
+                  .flatMap {
+                    case Right(gen) => ZIO.succeed(gen)
+                    case Left(_)    =>
+                      warm.reloading.withPermit(
+                        warm.live.get.flatMap(gen => acquire(gen).as(gen))
+                      )
+                  }
+                  .flatMap { gen =>
+                    session.answer(gen.graph, payload).ensuring(release(gen))
+                  }
+              warm.spliced.update(_ + session) *>
+                requests(next, box.offer, adopted, box.done)
+                  .flatMap(code => box.offer(wire(Message.Marker(code))) *> box.close)
+                  .ensuring(warm.spliced.update(_ - session))
+            }
+        }
       }
     }
+
+  /** One consumer writes the socket. Producers only `offer`. */
+  private[server] final case class Outbox(
+      offer: String => UIO[Unit],
+      close: IO[ServerError, Unit],
+      done: Fiber[ServerError, Unit],
+  )
+
+  private[server] def outbox(send: String => IO[ServerError, Unit]): ZIO[Scope, Nothing, Outbox] =
+    for
+      outbound <- Queue.unbounded[String]
+      fiber    <- ZStream.fromQueueWithShutdown(outbound).foreach(send).forkScoped
+    yield Outbox(line => outbound.offer(line).unit, outbound.shutdown *> fiber.join, fiber)
+
+  private final case class BspFlight(
+      id: Rpc.RpcId,
+      fiber: Fiber[ServerError, Unit],
+      settled: Promise[Nothing, Unit],
+  )
+
+  /** Read the next frame while a request runs. Cancel interrupts that fiber. */
+  private[server] def requests[R](
+      next: IO[ServerError, Option[String]],
+      offer: String => UIO[Unit],
+      answer: String => ZIO[R, ServerError, Bsp.Answer],
+      also: Fiber[ServerError, Unit],
+  ): ZIO[R & Scope, ServerError, Int] =
+    val InvalidRequest   = -32600
+    val InvalidParams    = -32602
+    val RequestCancelled = -32800
+
+    def read(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+    ): ZIO[R & Scope, ServerError, Int] =
+      next.flatMap:
+        case None          => silence(flights).as(1)
+        case Some(payload) => route(flights, crashed, payload)
+
+    def route(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+        payload: String,
+    ): ZIO[R & Scope, ServerError, Int] =
+      payload.fromJson[Rpc.Incoming] match
+        case Left(_)         => answerNow(flights, crashed, payload)
+        case Right(incoming) =>
+          incoming.method match
+            case Some("$/cancelRequest") =>
+              cancelIncoming(flights, incoming) *> read(flights, crashed)
+            case Some("build/exit") =>
+              finishExit(flights, payload)
+            case Some("build/shutdown") if incoming.id.nonEmpty =>
+              finishShutdown(flights, payload)
+            case Some("build/initialize") =>
+              answerNow(flights, crashed, payload)
+            case Some(_) =>
+              incoming.id match
+                case Some(id) => launch(flights, crashed, id, payload) *> read(flights, crashed)
+                case None     => answerNow(flights, crashed, payload)
+            case None =>
+              answerNow(flights, crashed, payload)
+
+    def answerNow(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+        payload: String,
+    ): ZIO[R & Scope, ServerError, Int] =
+      answer(payload).flatMap:
+        case Bsp.Answer.Reply(text) => offer(text) *> read(flights, crashed)
+        case Bsp.Answer.Quiet       => read(flights, crashed)
+        case Bsp.Answer.Stop(code)  => silence(flights).as(code)
+
+    def finishExit(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        payload: String,
+    ): ZIO[R, ServerError, Int] =
+      silence(flights) *>
+        answer(payload).flatMap:
+          case Bsp.Answer.Stop(code) => ZIO.succeed(code)
+          case _                     => ZIO.succeed(1)
+
+    def finishShutdown(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        payload: String,
+    ): ZIO[R, ServerError, Int] =
+      answer(payload).flatMap: result =>
+        silence(flights) *>
+          (result match
+            case Bsp.Answer.Reply(text) => offer(text).as(0)
+            case Bsp.Answer.Stop(code)  => ZIO.succeed(code)
+            case Bsp.Answer.Quiet       => ZIO.succeed(0))
+
+    def launch(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        crashed: Promise[ServerError, Nothing],
+        id: Rpc.RpcId,
+        payload: String,
+    ): ZIO[R & Scope, ServerError, Unit] =
+      for
+        settled <- Promise.make[Nothing, Unit]
+        started <- Promise.make[Nothing, Unit]
+        fiber   <- (started.await *> answer(payload).flatMap:
+          case Bsp.Answer.Reply(text) => settle(settled, Some(text))
+          case Bsp.Answer.Quiet       => settle(settled, None)
+          case Bsp.Answer.Stop(_)     => settle(settled, None)
+        ).forkScoped
+        flight = BspFlight(id, fiber, settled)
+        duplicate <- flights.modify { map =>
+          if map.contains(id) then (true, map) else (false, map.updated(id, flight))
+        }
+        _ <-
+          if duplicate then fiber.interrupt *> offer(Rpc.fail(id, InvalidRequest, "duplicate request"))
+          else watch(flights, flight, crashed) *> started.succeed(()).unit
+      yield ()
+
+    def settle(settled: Promise[Nothing, Unit], reply: Option[String]): UIO[Unit] =
+      ZIO.uninterruptible {
+        settled.succeed(()).flatMap { won =>
+          reply match
+            case Some(text) if won => offer(text)
+            case _                 => ZIO.unit
+        }
+      }
+
+    def cancelIncoming(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        incoming: Rpc.Incoming,
+    ): UIO[Unit] =
+      Rpc.cancelId(incoming.params) match
+        case Left(fault) => offer(Rpc.fail(Rpc.idOf(incoming), InvalidParams, fault.message))
+        case Right(id)   => cancel(flights, id)
+
+    def cancel(flights: Ref[Map[Rpc.RpcId, BspFlight]], id: Rpc.RpcId): UIO[Unit] =
+      flights
+        .modify { map =>
+          map.get(id) match
+            case Some(flight) => (Some(flight), map - id)
+            case None         => (None, map)
+        }
+        .flatMap:
+          case Some(flight) =>
+            ZIO.uninterruptible {
+              flight.settled.succeed(()).flatMap { won =>
+                ZIO.when(won)(offer(Rpc.fail(id, RequestCancelled, "cancelled"))).unit
+              }
+            } *> fiberInterrupt(flight)
+          case None =>
+            offer(Rpc.fail(id, InvalidParams, "unknown request"))
+
+    def watch(
+        flights: Ref[Map[Rpc.RpcId, BspFlight]],
+        flight: BspFlight,
+        crashed: Promise[ServerError, Nothing],
+    ): ZIO[Scope, Nothing, Unit] =
+      flight.fiber.await
+        .flatMap:
+          case Exit.Success(_)                                => drop(flights, flight)
+          case Exit.Failure(cause) if cause.isInterruptedOnly => drop(flights, flight)
+          case Exit.Failure(cause)                            => crashed.failCause(cause).unit
+        .forkScoped
+        .unit
+
+    def drop(flights: Ref[Map[Rpc.RpcId, BspFlight]], flight: BspFlight): UIO[Unit] =
+      flights.update { map =>
+        map.get(flight.id) match
+          case Some(found) if found.settled == flight.settled => map - flight.id
+          case _                                              => map
+      }
+
+    def silence(flights: Ref[Map[Rpc.RpcId, BspFlight]]): UIO[Unit] =
+      flights.modify(map => (map.values.toList, Map.empty)).flatMap { live =>
+        ZIO.foreachDiscard(live) { flight =>
+          ZIO.uninterruptible(flight.settled.succeed(()).unit) *> fiberInterrupt(flight)
+        }
+      }
+
+    def fiberInterrupt(flight: BspFlight): UIO[Unit] =
+      flight.fiber.interrupt.unit
+
+    def watchFiber(
+        fiber: Fiber[ServerError, Unit],
+        crashed: Promise[ServerError, Nothing],
+    ): ZIO[Scope, Nothing, Unit] =
+      fiber.await
+        .flatMap:
+          case Exit.Failure(cause) if !cause.isInterruptedOnly => crashed.failCause(cause).unit
+          case _                                               => ZIO.unit
+        .forkScoped
+        .unit
+
+    for
+      crashed <- Promise.make[ServerError, Nothing]
+      flights <- Ref.make(Map.empty[Rpc.RpcId, BspFlight])
+      _       <- watchFiber(also, crashed)
+      code    <- read(flights, crashed).race(crashed.await).ensuring(silence(flights))
+    yield code
+  end requests
 
   private def wire(message: Message): String =
     message.toJson

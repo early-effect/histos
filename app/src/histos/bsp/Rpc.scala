@@ -194,6 +194,11 @@ object Rpc:
     case Missing
     case Rejected
 
+    def message: String = this match
+      case Missing  => "bsp params are required"
+      case Rejected => "bsp params were rejected"
+  end ParamsDecode
+
   def idOf(incoming: Incoming): RpcId =
     incoming.id.getOrElse(RpcId.Absent)
 
@@ -207,4 +212,16 @@ object Rpc:
     params match
       case None       => Left(ParamsDecode.Missing)
       case Some(json) => json.as[CompileParams].left.map(_ => ParamsDecode.Rejected)
+
+  final case class CancelParams(id: RpcId) derives JsonCodec
+
+  /** `$/cancelRequest` names a string or number id. Null and a missing object are rejected. */
+  def cancelId(params: Option[Json]): Either[ParamsDecode, RpcId] =
+    params match
+      case None       => Left(ParamsDecode.Missing)
+      case Some(json) =>
+        json.as[CancelParams] match
+          case Right(CancelParams(id: RpcId.Num))  => Right(id)
+          case Right(CancelParams(id: RpcId.Text)) => Right(id)
+          case _                                   => Left(ParamsDecode.Rejected)
 end Rpc
