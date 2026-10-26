@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.build.BuildEvent
 import histos.mcp.HistosMcp
 import histos.plugin.{PluginId, PluginTaskId, TaskName}
 import histos.preview.{Plan, PreviewError, RunMiss}
@@ -112,7 +113,7 @@ object PreviewSpec extends ZIOSpecDefault:
           app  = module("app", Jvm)(scala3).dependsOn(core)
           graph <- ZIO.fromEither(Projects(core, app))
           text  <- Plan.test(repo, graph, List("app")).map(Plan.renderTest(repo, _))
-          heard <- ask(Calls.previewTest(repo, graph, List("app"), _))
+          heard <- ask(repo)(Calls.previewTest(repo, graph, List("app"), _))
           kept  <- same(planted)
         yield assertTrue(
           heard.outs == Chunk(text),
@@ -150,7 +151,7 @@ object PreviewSpec extends ZIOSpecDefault:
           text <- Plan
             .publish(repo, graph, List("app"), Map.empty)
             .map(Plan.renderPublish)
-          heard <- ask(
+          heard <- ask(repo)(
             Calls.previewPublish(repo, graph, List("app"), Map.empty, _)
           )
           kept <- same(planted)
@@ -178,9 +179,9 @@ object PreviewSpec extends ZIOSpecDefault:
           server = repo.resolve(".histos").resolve("server.json")
           lock   = repo.resolve(".histos").resolve("dependencies.lock")
           named <- Plan.clean(repo, graph, List("app")).map(Plan.renderClean(repo, _))
-          heard <- ask(Calls.previewClean(repo, graph, List("app"), _))
+          heard <- ask(repo)(Calls.previewClean(repo, graph, List("app"), _))
           all = Plan.renderClean(repo, Plan.cleanAll(repo))
-          wiped      <- ask(Calls.previewCleanAll(repo, _))
+          wiped      <- ask(repo)(Calls.previewCleanAll(repo, _))
           kept       <- same(planted)
           serverLeft <- ZIO.attempt(Files.isRegularFile(server))
           lockLeft   <- ZIO.attempt(Files.isRegularFile(lock))
@@ -207,7 +208,7 @@ object PreviewSpec extends ZIOSpecDefault:
           repo    <- keep
           planted <- plant(repo)
           text = Plan.renderClean(repo, Plan.cleanFull(repo))
-          heard <- ask(Calls.previewCleanFull(repo, _))
+          heard <- ask(repo)(Calls.previewCleanFull(repo, _))
           kept  <- same(planted)
           sentence = "content-store entries for this repo would be forgotten"
         yield assertTrue(
@@ -233,8 +234,8 @@ object PreviewSpec extends ZIOSpecDefault:
           graph   <- ZIO.fromEither(Projects(core, app))
           planned <- ZIO.fromEither(Plan.run(graph, "app", Some(Jvm)))
           text = Plan.renderRun(planned)
-          heard   <- ask(Calls.previewRun(graph, "app", Some("jvm"), _))
-          missing <- ask(Calls.previewRun(graph, "missing", None, _))
+          heard   <- ask(repo)(Calls.previewRun(graph, "app", Some("jvm"), _))
+          missing <- ask(repo)(Calls.previewRun(graph, "missing", None, _))
           kept    <- same(planted)
           missed = CallResult.Fault(BuildFault.Preview(PreviewError.Run(RunMiss.Absent("missing"))))
         yield assertTrue(
@@ -256,14 +257,16 @@ object PreviewSpec extends ZIOSpecDefault:
   private final case class Heard(outs: Chunk[String], done: Chunk[CallResult])
 
   private def ask[E](
+      repo: Path
+  )(
       call: Say => ZIO[Any, E, Unit]
   ): ZIO[Any, E, Heard] =
     for
       feeds <- Ref.make(Chunk.empty[Feed])
-      _     <- call(Say.record(feeds))
+      _     <- call(Say.record(repo, feeds))
       heard <- feeds.get
     yield Heard(
-      heard.collect { case Feed.Out(line) => line },
+      heard.collect { case Feed.Event(BuildEvent.Out(line)) => line },
       heard.collect { case Feed.Done(result) => result },
     )
 

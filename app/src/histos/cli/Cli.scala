@@ -2,6 +2,7 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.bsp.{Bsp, Connection, Frame}
+import histos.build.BuildEvent
 import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Say, ServerError, Watching}
 import histos.load.BuildClasspath
 import histos.cache.ContentStore
@@ -389,8 +390,8 @@ object Cli:
   ): URIO[Local, Completed] =
     Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap { result =>
       val printing = new Say({
-        case Message.Out(text)  => say(text)
-        case Message.Err(text)  => sayError(text)
+        case Message.Event(event) =>
+          CompileConsole.show(Show(repo, event), say, sayError)
         case Message.Done(done) =>
           val finished = done match
             case CallResult.Reported(_) =>
@@ -427,7 +428,7 @@ object Cli:
       apiJar: Path,
       call: Call,
   ): URIO[Local, Completed] =
-    recorded(call, operate(repo, apiJar, call, _))
+    recorded(repo, call, operate(repo, apiJar, call, _))
 
   private def operate(
       repo: Path,
@@ -1188,7 +1189,7 @@ object Cli:
             )
           )
         case Decision.Open(socket) =>
-          remote(socket, Call.Reload).foldZIO(
+          remote(repo, socket, Call.Reload).foldZIO(
             {
               case ServerError.Unreachable(_) =>
                 ZIO.succeed(
@@ -1227,15 +1228,16 @@ object Cli:
       Call.Cancel(id),
       Ref
         .make(Map.empty[RunId, Fiber[ServerError, Unit]])
-        .flatMap(runs => recorded(Call.Cancel(id), Calls.cancel(runs, id, _))),
+        .flatMap(runs => recorded(repo, Call.Cancel(id), Calls.cancel(runs, id, _))),
     )
 
   private[cli] def recorded[R](
+      repo: Path,
       call: Call,
       run: Say => ZIO[R, ServerError, Unit],
   ): URIO[R, Completed] =
     Ref.make(Chunk.empty[Feed]).flatMap { feeds =>
-      run(speaking(feeds)).foldCauseZIO(
+      run(speaking(repo, feeds)).foldCauseZIO(
         cause =>
           if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Interrupted, "", "", Playback.Heard))
           else
@@ -1245,7 +1247,7 @@ object Cli:
               case Right(rest) => ZIO.failCause(rest),
         _ =>
           feeds.get.flatMap: chunk =>
-            val done = completed(call, chunk)
+            val done = completed(repo, call, chunk)
             if finished(chunk) then ZIO.succeed(done)
             else sayError("the call did not finish").as(done),
       )
@@ -1259,27 +1261,28 @@ object Cli:
   /** Print, then append, so the line is on the console before the next message. A fault is printed here and marked
     * heard, so finish does not print it again.
     */
-  private def speaking(feeds: Ref[Chunk[Feed]]): Say =
+  private def speaking(repo: Path, feeds: Ref[Chunk[Feed]]): Say =
     new Say({
-      case Message.Out(text) =>
-        say(text) *> feeds.update(_ :+ Feed.Out(text))
-      case Message.Err(text) =>
-        sayError(text) *> feeds.update(_ :+ Feed.Err(text))
+      case Message.Event(event) =>
+        CompileConsole.show(Show(repo, event), say, sayError) *>
+          feeds.update(_ :+ Feed.Event(event))
       case Message.Done(CallResult.Fault(fault)) =>
         val text  = fault.message
         val shown = if text.isEmpty then ZIO.unit else sayError(text)
-        val next  =
-          if text.isEmpty then Chunk(Feed.Done(CallResult.Fault(fault)))
-          else Chunk(Feed.Err(text), Feed.Done(CallResult.Fault(fault)))
-        shown *> feeds.update(_ ++ next)
+        shown *> feeds.update(_ :+ Feed.Done(CallResult.Fault(fault)))
       case Message.Done(result) =>
         feeds.update(_ :+ Feed.Done(result))
       case _ => ZIO.unit
     })
 
-  private def completed(call: Call, feeds: Chunk[Feed]): Completed =
-    val out = feeds.collect { case Feed.Out(text) => text }.mkString("\n")
-    val err = feeds.collect { case Feed.Err(text) => text }.mkString("\n")
+  private def completed(repo: Path, call: Call, feeds: Chunk[Feed]): Completed =
+    val events               = feeds.collect { case Feed.Event(event) => event }
+    val (outLines, errLines) = Show.transcript(repo, events)
+    val faults               = feeds.collect {
+      case Feed.Done(CallResult.Fault(fault)) if fault.message.nonEmpty => fault.message
+    }
+    val out = outLines.mkString("\n")
+    val err = (errLines ++ faults).mkString("\n")
     feeds.reverse.collectFirst { case Feed.Done(result) => result } match
       case Some(result) =>
         Completed(CliExit.from(call, result), out, err, Playback.Heard)
@@ -1295,7 +1298,7 @@ object Cli:
       .decide(repo, VersionText)
       .flatMap:
         case Decision.Open(socket) =>
-          remote(socket, Call.Reboot).foldZIO(
+          remote(repo, socket, Call.Reboot).foldZIO(
             {
               case ServerError.Unreachable(_) | ServerError.DifferentVersion =>
                 serve(repo, apiJar)
@@ -1404,7 +1407,7 @@ object Cli:
       .decide(repo, VersionText)
       .flatMap:
         case Decision.Open(socket) =>
-          remote(socket, call).foldZIO(
+          remote(repo, socket, call).foldZIO(
             {
               case ServerError.Unreachable(_) => local
               case error                      =>
@@ -1431,13 +1434,14 @@ object Cli:
         case Decision.Absent => local
 
   private def remote(
+      repo: Path,
       socket: java.nio.file.Path,
       call: Call,
   ): ZIO[Any, ServerError, Completed] =
     zio.Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap { result =>
       Client.talk(socket, call).foreach {
-        case Feed.Out(text)  => say(text)
-        case Feed.Err(text)  => sayError(text)
+        case Feed.Event(event) =>
+          CompileConsole.show(Show(repo, event), say, sayError)
         case Feed.Done(done) =>
           val finished = done match
             case CallResult.Reported(_) =>

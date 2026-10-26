@@ -1,6 +1,7 @@
 package histos.report
 
 import heddle.endpoint.{Schema, SchemaDoc, SchemaField}
+import histos.build.BuildEvent
 import histos.clean.Products
 import histos.cli.{Cli, CliExit, CliParseError, CompileConsole}
 import histos.client.{Remote, Session}
@@ -9,6 +10,7 @@ import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
 import histos.load.{LoadError, Loader}
 import histos.server.{Call, Calls, Feed, Message, Say, ServerError}
 import histos.task.RunId
+import histos.testrun.TestFeed
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, CompiledCell}
@@ -28,6 +30,7 @@ import histos.resolve.{
 import java.nio.file.Path
 
 import zio.json.*
+import WireJson.given JsonCodec[BuildEvent]
 import zio.test.*
 import zio.{Chunk, Fiber, Ref, Scope, ZIO, ZLayer}
 
@@ -64,7 +67,8 @@ object ReportSpec extends ZIOSpecDefault:
     test("spoken keeps the minted id when the transcript names another"):
       val carried = Report.empty.copy(run = Some("minted"))
       val found   = Session.spoken(
-        List(Feed.Out("run other"), Feed.Done(CallResult.Reported(carried)))
+        repoRoot,
+        List(Feed.Event(BuildEvent.Out("run other")), Feed.Done(CallResult.Reported(carried))),
       )
       assertTrue(
         found == Right(CallResult.Reported(carried.copy(out = Chunk("run other"))))
@@ -74,7 +78,12 @@ object ReportSpec extends ZIOSpecDefault:
       val warning = "core/src/Core.scala:4:2: warn: unused"
       val carried = Report.empty.copy(diagnostics = Chunk(warned))
       val spoken  = Session.spoken(
-        List(Feed.Out("ok"), Feed.Err(warning), Feed.Done(CallResult.Reported(carried)))
+        repoRoot,
+        List(
+          Feed.Event(BuildEvent.Out("ok")),
+          Feed.Event(BuildEvent.Err(warning)),
+          Feed.Done(CallResult.Reported(carried)),
+        ),
       )
       for
         result    <- ZIO.fromEither(spoken)
@@ -112,7 +121,7 @@ object ReportSpec extends ZIOSpecDefault:
       for
         runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
         feeds <- Ref.make(Chunk.empty[Feed])
-        say = Say.record(feeds)
+        say = Say.record(repoRoot, feeds)
         held <- Ref.make(Option.empty[String])
         _    <- Calls.tracked(runs, say)(
           say.run.flatMap(id => held.set(id) *> Calls.finish(say, CallResult.reported()))
@@ -120,7 +129,7 @@ object ReportSpec extends ZIOSpecDefault:
         id    <- held.get
         run   <- say.run
         chunk <- feeds.get
-        found = Session.spoken(chunk.toList)
+        found = Session.spoken(repoRoot, chunk.toList)
       yield assertTrue(
         id == run,
         (id, found) match
@@ -154,15 +163,28 @@ object ReportSpec extends ZIOSpecDefault:
       val fault = CallResult.Fault(BuildFault.Interrupted)
       val json  = Say.wire(Message.Done(reported))
       val plain = Say.wire(Message.Done(fault))
-      val out   = Say.wire(Message.Out("hi"))
+      val event = BuildEvent.Out("hi")
+      val out   = Say.wire(Message.Event(event))
       assertTrue(
         json.fromJson[Message] == Right(Message.Done(reported)),
         json.contains(""""severity":"warn""""),
         !json.contains(""""Exit""""),
         Remote.event(json) == Right(Remote.Event.Stop(Feed.Done(reported))),
         Remote.event(plain) == Right(Remote.Event.Stop(Feed.Done(fault))),
-        Remote.event(out) == Right(Remote.Event.More(Feed.Out("hi"))),
+        Remote.event(out) == Right(Remote.Event.More(Feed.Event(event))),
+        """{"Out":"hi"}""".fromJson[Message].isLeft,
+        """{"Err":"hi"}""".fromJson[Message].isLeft,
       )
+    ,
+    test("a compile began and a test begin round-trip as a build event"):
+      for name <- ZIO.fromEither(ProjectName.from("core"))
+      yield
+        val began = BuildEvent.Compile(CompileFeed.Began(name, version, Jvm))
+        val begin = BuildEvent.Test(TestFeed.Begin(name, version, Jvm))
+        assertTrue(
+          began.toJson.fromJson[BuildEvent] == Right(began),
+          begin.toJson.fromJson[BuildEvent] == Right(begin),
+        )
     ,
     test("a different server version is not a report"):
       ZIO.scoped {
@@ -265,7 +287,7 @@ object ReportSpec extends ZIOSpecDefault:
           _     <- Stored.keep(repo, Some(sample))
           built <- ZIO.fromEither(Projects(module("core", Jvm)(version)))
           feeds <- Ref.make(Chunk.empty[Feed])
-          say = Say.record(feeds)
+          say = Say.record(repo, feeds)
           _ <- Calls
             .compile(repo, built, Nil, jdk, Calls.idleMachine, say)
             .provide(ZLayer.succeed(DeadResolve))

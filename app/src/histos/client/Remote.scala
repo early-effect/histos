@@ -21,7 +21,7 @@ object Remote:
     case More(feed: Feed)
     case Stop(feed: Feed)
 
-  def hear(socket: Path, call: Call): IO[ServerError, Heard] =
+  def hear(repo: Path, socket: Path, call: Call): IO[ServerError, Heard] =
     ZIO.scoped {
       for
         channel <- ZIO.acquireRelease(connect(socket))(channel => ZIO.attempt(channel.close()).ignore)
@@ -30,18 +30,18 @@ object Remote:
         _     <- Frame.write(output, call.toJson).mapError(written(socket))
         first <- Frame.read(input).mapError(read(socket))
         _     <- ZIO.fromEither(ready(first))
-        heard <- collect(input, socket, Chunk.empty)
+        heard <- collect(repo, input, socket, Chunk.empty)
       yield heard
     }
 
   private[histos] def event(payload: String): Either[ServerError, Event] =
     payload.fromJson[Message] match
-      case Right(Message.Out(text))    => Right(Event.More(Feed.Out(text)))
-      case Right(Message.Err(text))    => Right(Event.More(Feed.Err(text)))
+      case Right(Message.Event(event)) => Right(Event.More(Feed.Event(event)))
       case Right(Message.Done(result)) => Right(Event.Stop(Feed.Done(result)))
       case _                           => Left(ServerError.Protocol)
 
   private def collect(
+      repo: Path,
       input: InputStream,
       socket: Path,
       acc: Chunk[Feed],
@@ -52,16 +52,15 @@ object Remote:
         event(payload) match
           case Left(error)             => ZIO.fail(error)
           case Right(Event.More(feed)) =>
-            note(feed) *> collect(input, socket, acc :+ feed)
+            note(repo, feed) *> collect(repo, input, socket, acc :+ feed)
           case Right(Event.Stop(feed)) =>
             ZIO.succeed(Heard(acc :+ feed))
     }
 
-  private def note(feed: Feed): UIO[Unit] =
+  private def note(repo: Path, feed: Feed): UIO[Unit] =
     feed match
-      case Feed.Out(text) => Notice.out(text)
-      case Feed.Err(text) => Notice.err(text)
-      case Feed.Done(_)   => ZIO.unit
+      case Feed.Event(event) => Notice.show(repo, event)
+      case Feed.Done(_)      => ZIO.unit
 
   private def connect(socket: Path): IO[ServerError, SocketChannel] =
     ZIO

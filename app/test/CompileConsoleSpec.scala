@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.build.BuildEvent
 import histos.client.{Remote, Session}
 import histos.report.{CallResult, Diagnostic, ModuleTally, Observation, Report, Severity}
 import histos.server.{Calls, Feed, Message, Say}
@@ -402,7 +403,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
         for
           console <- CompileConsole.open(repo)
           feeds   <- Ref.make(Chunk.empty[Feed])
-          say = Say.record(feeds)
+          say = Say.record(repo, feeds)
           lines <- ZIO.foldLeft(problems)(Chunk.empty[CompileConsole.Line]) { (acc, problem) =>
             speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, problem)).map(acc ++ _)
           }
@@ -411,14 +412,14 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           _       <- say(Message.Done(CallResult.reported()))
           chunk   <- feeds.get
           carried <- say.diagnostics
-          local = Session.spoken(chunk.toList)
+          local = Session.spoken(repo, chunk.toList)
           wired = chunk.reverse.collectFirst { case Feed.Done(result) => result } match
             case Some(result) => Say.wire(Message.Done(result))
             case None         => ""
           remote = Remote.event(wired) match
             case Right(Remote.Event.Stop(done)) =>
-              val errs = chunk.collect { case feed @ Feed.Err(_) => feed }
-              Session.spoken(errs.toList :+ done)
+              val events = chunk.collect { case feed @ Feed.Event(_) => feed }
+              Session.spoken(repo, (events :+ done).toList)
             case _ => Left(Session.SessionError.DidNotFinish)
           parallel <- CompileConsole.open(repo)
           _        <- ZIO.foreachParDiscard(problems) { problem =>
@@ -488,12 +489,12 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             )
             console <- CompileConsole.open(home)
             feeds   <- Ref.make(Chunk.empty[Feed])
-            say = Say.record(feeds)
+            say = Say.record(home, feeds)
             _     <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, warn))
             _     <- speak(console, say, CompileFeed.Diagnostic(core, version, Platform.Jvm, bare))
             _     <- Calls.finishNoted(home, say, console, List(console.observation), CallResult.reported())
             chunk <- feeds.get
-            found = Session.spoken(chunk.toList)
+            found = Session.spoken(home, chunk.toList)
           yield
             val zinc    = Lines.diagnostic(home, warn)
             val missing = Lines.diagnostic(home, bare)
@@ -555,13 +556,7 @@ object CompileConsoleSpec extends ZIOSpecDefault:
       feed: CompileFeed,
   ): IO[histos.server.ServerError, Chunk[CompileConsole.Line]] =
     console.hear(feed).flatMap { lines =>
-      CompileConsole
-        .show(
-          lines,
-          text => say(Message.Out(text)),
-          text => say(Message.Err(text)),
-        )
-        .as(lines)
+      say(Message.Event(BuildEvent.Compile(feed))).as(lines)
     }
 
   private def play(

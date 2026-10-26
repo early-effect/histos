@@ -1,6 +1,6 @@
 package histos.client
 
-import histos.cli.{Cli, Operation}
+import histos.cli.{Cli, Operation, Show}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.jdk.Machine
 import histos.load.{LoadError, LoadedBuild, Loader}
@@ -67,14 +67,14 @@ object Session:
         drop(desk) *> ZIO.fail(SessionError.DifferentVersion)
       case Decision.Open(socket) =>
         drop(desk) *> Remote
-          .hear(socket, call)
+          .hear(repo, socket, call)
           .foldZIO(
             {
               case ServerError.Unreachable(_) =>
                 locally(repo, apiJar, machine, desk, call)
               case other => ZIO.fail(SessionError.Remote(other))
             },
-            heard => ZIO.fromEither(spoken(heard.feeds.toList)),
+            heard => ZIO.fromEither(spoken(repo, heard.feeds.toList)),
           )
       case Decision.Absent =>
         locally(repo, apiJar, machine, desk, call)
@@ -113,9 +113,9 @@ object Session:
         case None         => Right(Call.Run(id, None))
 
   /** The terminal frame is the result. Live lines already on that report are not copied again. */
-  def spoken(feeds: List[Feed]): Either[SessionError, CallResult] =
-    val out      = Chunk.fromIterable(feeds.collect { case Feed.Out(text) => text })
-    val errLines = Chunk.fromIterable(feeds.collect { case Feed.Err(text) => text })
+  def spoken(repo: Path, feeds: List[Feed]): Either[SessionError, CallResult] =
+    val events          = Chunk.fromIterable(feeds.collect { case Feed.Event(event) => event })
+    val (out, errLines) = Show.transcript(repo, events)
     feeds.reverse.collectFirst { case Feed.Done(result) => result } match
       case None                              => Left(SessionError.DidNotFinish)
       case Some(fault @ CallResult.Fault(_)) => Right(fault)
@@ -149,10 +149,10 @@ object Session:
       case other =>
         for
           feeds <- Ref.make(Chunk.empty[Feed])
-          say = Say.record(feeds)
+          say = Say.record(repo, feeds)
           _      <- answer(repo, apiJar, machine, desk, other, say).mapError(SessionError.Remote(_))
           chunk  <- feeds.get
-          result <- ZIO.fromEither(spoken(chunk.toList))
+          result <- ZIO.fromEither(spoken(repo, chunk.toList))
         yield result
 
   private def mergeLines(have: Chunk[String], more: Chunk[String]): Chunk[String] =

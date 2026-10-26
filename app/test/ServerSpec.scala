@@ -1,12 +1,14 @@
 package histos.server
 
 import histos.bsp.{Frame, Rpc}
-import histos.cli.{Cli, CliExit, Command}
+import histos.build.BuildEvent
+import histos.cli.{Cli, CliExit, Command, CompileConsole, Lines, Show}
 import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
+import histos.testrun.{TestFeed, TestStatus}
 import histos.workspace.Workspace
-import histos.zinc.GraphCompile
+import histos.zinc.{CompileFeed, GraphCompile}
 import histos.{Dep, Jvm, ProjectGraph, Projects, ScalaVersion, module}
 
 import java.net.UnixDomainSocketAddress
@@ -16,7 +18,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 import zio.json.*
-import zio.{Promise, Ref, Scope, Semaphore, ZIO, ZLayer, durationInt}
+import zio.{Chunk, Promise, Ref, Scope, Semaphore, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object ServerSpec extends ZIOSpecDefault:
@@ -177,13 +179,16 @@ object ServerSpec extends ZIOSpecDefault:
                 .runCollect
             yield assertTrue(
               first.exists {
-                case Feed.Out(text) => text == "first"; case _ => false
+                case Feed.Event(BuildEvent.Out(text)) => text == "first"
+                case _                                => false
               },
               second.exists {
-                case Feed.Out(text) => text == "second"; case _ => false
+                case Feed.Event(BuildEvent.Out(text)) => text == "second"
+                case _                                => false
               },
               changed.exists {
-                case Feed.Out(text) => text == "changed"; case _ => false
+                case Feed.Event(BuildEvent.Out(text)) => text == "changed"
+                case _                                => false
               },
               List(first, second, changed).forall(_.exists(succeeded(Call.Run("demo", None)))),
               secondIdentity.version == changedIdentity.version,
@@ -251,10 +256,14 @@ object ServerSpec extends ZIOSpecDefault:
               refused <- Client
                 .talk(running.record.socket, Call.Compile(Nil))
                 .runCollect
+              began = CompileFeed.Began(name, ScalaVersion("3.10.0"), Jvm)
+              line  = Lines.compiling(name, ScalaVersion("3.10.0"), Jvm)
             yield assertTrue(
               feeds.exists {
-                case Feed.Out(text) =>
-                  text.contains("demo") && text.contains("jvm")
+                case Feed.Event(event @ BuildEvent.Compile(CompileFeed.Began(_, _, _))) =>
+                  event == BuildEvent.Compile(began) &&
+                  Show(root, event) == Chunk(CompileConsole.Line.Out(line)) &&
+                  line == "compiling demo 3.10.0 jvm"
                 case _ => false
               },
               feeds.exists(succeeded(Call.Compile(Nil))),
@@ -379,8 +388,8 @@ object ServerSpec extends ZIOSpecDefault:
                 .runCollect
             yield assertTrue(
               shown.exists {
-                case Feed.Out(text) => text.contains("demo")
-                case _              => false
+                case Feed.Event(BuildEvent.Out(text)) => text.contains("demo")
+                case _                                => false
               },
               shown.exists(succeeded(Call.Graph)),
               missing.exists {
@@ -643,17 +652,28 @@ object ServerSpec extends ZIOSpecDefault:
                 .runCollect
               alphaRan <- ZIO.attempt(Files.isRegularFile(alpha))
               betaRan  <- ZIO.attempt(Files.isRegularFile(beta))
-              spoken = feeds
-                .collect { case Feed.Out(text) => text }
-                .mkString(
-                  "\n"
-                )
+              events = feeds.collect { case Feed.Event(event) => event }
+              outs   = Show.transcript(root, events)._1
+              tests  = events.collect { case BuildEvent.Test(feed) => feed }
             yield assertTrue(
               alphaRan,
               !betaRan,
-              spoken.contains("alpha"),
-              !spoken.contains("beta"),
-              spoken.contains("demo 3.10.0 jvm passed"),
+              tests.exists {
+                case TestFeed.Out(text) => text.contains("alpha")
+                case _                  => false
+              },
+              !tests.exists {
+                case TestFeed.Out(text) => text.contains("beta")
+                case TestFeed.Err(text) => text.contains("beta")
+                case _                  => false
+              },
+              !outs.exists(_.contains("beta")),
+              events.exists {
+                case BuildEvent.Test(TestFeed.Done(cell)) =>
+                  cell.status == TestStatus.Passed && Lines.tested(cell) == "demo 3.10.0 jvm passed"
+                case _ => false
+              },
+              outs.contains("demo 3.10.0 jvm passed"),
               feeds.exists(succeeded(Call.Test(Nil, List("demo.FooA"), false))),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](

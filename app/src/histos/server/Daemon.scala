@@ -19,8 +19,10 @@ import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
 
 import scala.jdk.CollectionConverters.*
 
+import histos.build.BuildEvent
 import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
+import histos.report.WireJson.given JsonCodec[BuildEvent]
 import zio.stream.ZStream
 import zio.{Chunk, Exit, Fiber, IO, Promise, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
 
@@ -72,8 +74,7 @@ end ServerIo
 
 /** One event from a command running in the daemon. */
 enum Feed:
-  case Out(text: String)
-  case Err(text: String)
+  case Event(event: BuildEvent)
   case Done(result: CallResult)
 
 private object CallJson:
@@ -127,8 +128,7 @@ object Call:
 
 enum Message derives JsonCodec:
   case Ready
-  case Out(text: String)
-  case Err(text: String)
+  case Event(event: BuildEvent)
   case Done(result: CallResult)
   case Marker(histosExit: Int)
 
@@ -323,10 +323,8 @@ object Client:
         case None          => ZStream.fail(ServerError.Protocol)
         case Some(payload) =>
           payload.fromJson[Message] match
-            case Right(Message.Out(text)) =>
-              ZStream.succeed(Feed.Out(text)) ++ frames(input, socket)
-            case Right(Message.Err(text)) =>
-              ZStream.succeed(Feed.Err(text)) ++ frames(input, socket)
+            case Right(Message.Event(event)) =>
+              ZStream.succeed(Feed.Event(event)) ++ frames(input, socket)
             case Right(Message.Done(result)) =>
               ZStream.succeed(Feed.Done(result))
             case _ => ZStream.fail(ServerError.Protocol)
