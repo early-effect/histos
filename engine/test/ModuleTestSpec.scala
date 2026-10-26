@@ -77,7 +77,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -85,7 +85,7 @@ private[testrun] object ModuleTestSupport:
           named <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, List("app"), jdk, here))
+                .run(TestRun(root, built, List(ProjectName("app")), jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -123,7 +123,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -173,7 +173,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -240,7 +240,7 @@ private[testrun] object ModuleTestSupport:
                 repository: histos.resolve.Repository,
             ) = tools.resolve.sources(organization, name, revision, repository)
           coexisting <- ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
+            .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             .provide(zio.ZLayer.succeed(resolver))
           consumed <- fetched.get
           ran      <- TestMachine.launches(chosen)
@@ -288,7 +288,7 @@ private[testrun] object ModuleTestSupport:
           out  <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -328,7 +328,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -365,7 +365,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -400,7 +400,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -448,7 +448,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -497,7 +497,7 @@ private[testrun] object ModuleTestSupport:
           cells   <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here, List(pattern)))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run, List(pattern)))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -542,7 +542,7 @@ private[testrun] object ModuleTestSupport:
           cells  <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -594,7 +594,7 @@ private[testrun] object ModuleTestSupport:
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -628,7 +628,7 @@ private[testrun] object ModuleTestSupport:
           out   <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -671,7 +671,7 @@ private[testrun] object ModuleTestSupport:
           both        <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here, List(bothPattern)))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run, List(bothPattern)))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -679,7 +679,7 @@ private[testrun] object ModuleTestSupport:
           one <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here, List(onePattern)))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run, List(onePattern)))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -713,7 +713,7 @@ private[testrun] object ModuleTestSupport:
           out     <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here, List(pattern)))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run, List(pattern)))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -745,7 +745,7 @@ private[testrun] object ModuleTestSupport:
           out  <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
-                .run(TestRun(root, built, Nil, jdk, here))
+                .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
             )
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
@@ -793,7 +793,7 @@ private[testrun] object ModuleTestSupport:
       cells  <- histos.ToolFixture
         .at(root, built)(
           ModuleTest
-            .run(TestRun(root, built, Nil, jdk, here))
+            .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
         )
         .provideSomeLayer[histos.resolve.LockedTools](
           histos.ToolFixture.resolver
@@ -1141,7 +1141,7 @@ private[testrun] object ModuleTestSupport:
           name     <- ZIO.fromEither(ProjectName.from(app.name))
           result   <- ModuleTest
             .suites(
-              TestRun(root, built, Nil, jdk, runtimes, Nil, quick = true),
+              TestRun(root, built, Nil, jdk, runtimes, TestMode.Quick),
               List(
                 histos.zinc.CompiledCell(
                   name,
@@ -1223,7 +1223,7 @@ private[testrun] object ModuleTestSupport:
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
             write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
           }
-          first  <- feeds(root, built, quick = false)
+          first  <- feeds(root, built, mode = TestMode.Run)
           second <- feeds(root, built)
         yield assertTrue(
           cached(first).isEmpty && out(first).contains("alpha"),
@@ -1259,7 +1259,7 @@ private[testrun] object ModuleTestSupport:
             root,
             built,
             patterns = List(pattern),
-            quick = false,
+            mode = TestMode.Run,
           )
           again <- feeds(root, built)
         yield assertTrue(
@@ -1322,7 +1322,7 @@ private[testrun] object ModuleTestSupport:
       built: histos.ProjectGraph,
       selected: Option[histos.jdk.JdkRuntime] = None,
       patterns: List[SuitePattern] = Nil,
-      quick: Boolean = true,
+      mode: TestMode = TestMode.Quick,
   ) =
     GraphCompile.jdkHere.flatMap: actual =>
       val jdk = selected.getOrElse(actual)
@@ -1333,7 +1333,7 @@ private[testrun] object ModuleTestSupport:
             .streamAt(root, built)(
               ModuleTest
                 .console(
-                  TestRun(root, built, Nil, jdk, here, patterns, quick)
+                  TestRun(root, built, Nil, jdk, here, mode, patterns)
                 )
             )
             .runCollect

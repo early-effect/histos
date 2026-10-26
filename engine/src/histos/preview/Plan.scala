@@ -135,14 +135,14 @@ object Plan:
   def show(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
   ): IO[PreviewError, String] =
     compile(repo, graph, projects).map(render(repo, _))
 
   def compile(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
   ): IO[PreviewError, CompilePlan] =
     modulePlan(repo, graph, projects, Tree.Main).map: (units, staleness) =>
       CompilePlan(units, staleness)
@@ -150,7 +150,7 @@ object Plan:
   def test(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
   ): IO[PreviewError, TestPlan] =
     modulePlan(repo, graph, projects, Tree.Test).map: (units, staleness) =>
       TestPlan(units, staleness)
@@ -160,7 +160,7 @@ object Plan:
   def publish(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       env: Map[String, String],
   ): IO[PreviewError, PublishPlan] =
     VersionTask
@@ -178,7 +178,7 @@ object Plan:
   def clean(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
   ): IO[PreviewError, CleanPlan] =
     if projects.isEmpty then ZIO.succeed(cleanAll(repo))
     else
@@ -251,7 +251,7 @@ object Plan:
   private def modulePlan(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       tree: Tree,
   ): IO[PreviewError, (List[PlanUnit], FileStaleness)] =
     val modules = graph.projects.collect { case module: Module => module }
@@ -363,7 +363,7 @@ object Plan:
 
   private def publishPlan(
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       decision: Decision,
   ): Either[PreviewError, PublishPlan] =
     words(decision, graph.catalog).flatMap: found =>
@@ -434,14 +434,14 @@ object Plan:
 
   private def accept(
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
   ): Either[PreviewError, Unit] =
     if projects.isEmpty then Right(())
     else Selection.select(graph, projects).left.map(PreviewError.Target(_)).map(_ => ())
 
   private def chosen(
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       members: Set[ProjectName],
   ): Either[PreviewError, (Set[ProjectName], Set[ProjectName])] =
     if projects.isEmpty then Right((members, members))

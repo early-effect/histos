@@ -21,7 +21,7 @@ import histos.server.{
   Watching,
 }
 import histos.load.BuildClasspath
-import histos.cache.ContentStore
+import histos.cache.{CacheCleanMode, ContentStore}
 import histos.jdk.{Machine, Toolchain}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{PluginArgs, PluginTaskId}
@@ -34,10 +34,10 @@ import histos.mcp.HistosMcp
 import histos.resolve.{Resolve, ResolveError}
 import histos.task.{RunId, TaskId}
 import histos.workflow.WorkflowAction
-import histos.testrun.{ModuleTestError, SuitePattern, TestStatus}
+import histos.testrun.{ModuleTestError, SuitePattern, TestMode, TestStatus}
 import histos.workspace.IoFailure
 import histos.zinc.{GraphCompile, GraphCompileError}
-import histos.Platform
+import histos.{Platform, ProjectName}
 
 import java.nio.file.{Files, Path}
 
@@ -49,32 +49,32 @@ enum Command:
   case Graph
   case Run(id: TaskId, platform: Option[Platform])
   case Plugin(id: PluginTaskId, args: PluginArgs)
-  case Test(projects: List[String])
-  case TestOnly(modules: List[String], patterns: List[SuitePattern])
-  case TestQuick(modules: List[String], patterns: List[SuitePattern])
+  case Test(projects: List[ProjectName])
+  case TestOnly(modules: List[ProjectName], patterns: List[SuitePattern])
+  case TestQuick(modules: List[ProjectName], patterns: List[SuitePattern])
   case Watch(command: Command, args: List[String])
-  case Compile(projects: List[String])
-  case Clean(projects: List[String])
+  case Compile(projects: List[ProjectName])
+  case Clean(projects: List[ProjectName])
   case CleanFull
   case Assembly(destination: Option[String])
-  case Publish(repository: String, projects: List[String])
+  case Publish(repository: String, projects: List[ProjectName])
   case Mcp
   case Bsp
   case Server
   case Toolchain
   case CachePath
   case CacheList
-  case CacheClean(dryRun: Boolean)
+  case CacheClean(mode: CacheCleanMode)
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
   case LauncherUpdate
   case Reload
   case Reboot
-  case Cancel(id: String)
-  case PreviewCompile(projects: List[String])
-  case PreviewTest(projects: List[String])
-  case PreviewPublish(projects: List[String])
-  case PreviewClean(projects: List[String])
+  case Cancel(id: RunId)
+  case PreviewCompile(projects: List[ProjectName])
+  case PreviewTest(projects: List[ProjectName])
+  case PreviewPublish(projects: List[ProjectName])
+  case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
   case PreviewRun(id: TaskId, platform: Option[Platform])
   case PreviewPlugin(id: PluginTaskId)
@@ -318,11 +318,11 @@ object Cli:
       case Command.Plugin(id, pluginArgs) =>
         plugin(repo, apiJar, id, pluginArgs)
       case Command.Test(projects) =>
-        test(repo, apiJar, projects, Nil, quick = false)
+        test(repo, apiJar, projects, Nil, TestMode.Run)
       case Command.TestOnly(modules, patterns) =>
-        test(repo, apiJar, modules, patterns, quick = false)
+        test(repo, apiJar, modules, patterns, TestMode.Run)
       case Command.TestQuick(modules, patterns) =>
-        test(repo, apiJar, modules, patterns, quick = true)
+        test(repo, apiJar, modules, patterns, TestMode.Quick)
       case Command.Watch(inner, _)               => watch(repo, apiJar, inner)
       case Command.Compile(projects)             => compile(repo, apiJar, projects)
       case Command.Clean(projects)               => clean(repo, apiJar, projects)
@@ -330,14 +330,14 @@ object Cli:
       case Command.Assembly(destination)         => assembly(repo, apiJar, destination)
       case Command.Publish(repository, projects) =>
         publish(repo, apiJar, repository, projects)
-      case Command.Mcp             => mcp(repo, apiJar)
-      case Command.Bsp             => bsp(repo, apiJar)
-      case Command.Server          => serve(repo, apiJar)
-      case Command.Toolchain       => toolchain(repo, apiJar)
-      case Command.CachePath       => attach(repo, Call.CachePath, cachePath)
-      case Command.CacheList       => attach(repo, Call.CacheList, cacheList)
-      case Command.CacheClean(dry) =>
-        attach(repo, Call.CacheClean(dry), cacheClean(dry))
+      case Command.Mcp              => mcp(repo, apiJar)
+      case Command.Bsp              => bsp(repo, apiJar)
+      case Command.Server           => serve(repo, apiJar)
+      case Command.Toolchain        => toolchain(repo, apiJar)
+      case Command.CachePath        => attach(repo, Call.CachePath, cachePath)
+      case Command.CacheList        => attach(repo, Call.CacheList, cacheList)
+      case Command.CacheClean(mode) =>
+        attach(repo, Call.CacheClean(mode), cacheClean(mode))
       case Command.Resolve(action)  => resolve(repo, apiJar, action)
       case Command.Workflow(action) => workflow(repo, apiJar, action)
       case Command.LauncherUpdate   =>
@@ -616,7 +616,7 @@ object Cli:
   private def compile(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     val call = Call.Compile(projects)
     attach(repo, call, locally(repo, apiJar, call))
@@ -635,7 +635,7 @@ object Cli:
   private def preview(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
@@ -646,7 +646,7 @@ object Cli:
   private def previewLocal(
       repo: Path,
       loaded: histos.load.LoadedBuild,
-      projects: List[String],
+      projects: List[ProjectName],
   ): UIO[Completed] =
     Plan
       .show(repo, loaded.graph, projects)
@@ -658,7 +658,7 @@ object Cli:
   private def previewTest(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
@@ -669,7 +669,7 @@ object Cli:
   private def previewTestLocal(
       repo: Path,
       loaded: histos.load.LoadedBuild,
-      projects: List[String],
+      projects: List[ProjectName],
   ): UIO[Completed] =
     Plan
       .test(repo, loaded.graph, projects)
@@ -681,7 +681,7 @@ object Cli:
   private def previewPublish(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
       attach(
@@ -693,7 +693,7 @@ object Cli:
   private def previewPublishLocal(
       repo: Path,
       loaded: histos.load.LoadedBuild,
-      projects: List[String],
+      projects: List[ProjectName],
       env: Map[String, String],
   ): UIO[Completed] =
     Plan
@@ -707,7 +707,7 @@ object Cli:
   private def previewClean(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
@@ -723,7 +723,7 @@ object Cli:
   private def previewCleanLocal(
       repo: Path,
       loaded: histos.load.LoadedBuild,
-      projects: List[String],
+      projects: List[ProjectName],
   ): UIO[Completed] =
     Plan
       .clean(repo, loaded.graph, projects)
@@ -793,7 +793,7 @@ object Cli:
       repo: Path,
       apiJar: Path,
       directory: String,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Local, Completed] =
     val call = Call.Publish(directory, projects)
     attach(repo, call, locally(repo, apiJar, call))
@@ -803,11 +803,11 @@ object Cli:
   private def test(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
       patterns: List[SuitePattern],
-      quick: Boolean,
+      mode: TestMode,
   ): URIO[Local, Completed] =
-    val call = Call.Test(projects, patterns.map(_.value), quick)
+    val call = Call.Test(projects, patterns, mode)
     attach(repo, call, locally(repo, apiJar, call))
 
   private def say(text: String): UIO[Unit] =
@@ -835,21 +835,23 @@ object Cli:
       )
       .merge
 
-  private def cacheClean(dryRun: Boolean): URIO[ContentStore, Completed] =
+  private def cacheClean(mode: CacheCleanMode): URIO[ContentStore, Completed] =
     ZIO
       .serviceWithZIO[ContentStore]: store =>
-        Clock.instant.flatMap(now => store.clean(now, ContentStore.Retention, dryRun))
+        Clock.instant.flatMap(now => store.clean(now, ContentStore.Retention, mode))
       .mapBoth(
-        err => held(Call.CacheClean(dryRun), "", CallResult.Fault(BuildFault.Cache(err))),
+        err => held(Call.CacheClean(mode), "", CallResult.Fault(BuildFault.Cache(err))),
         entries =>
-          val verb = if dryRun then "would remove" else "removed"
+          val verb = mode match
+            case CacheCleanMode.DryRun => "would remove"
+            case CacheCleanMode.Remove => "removed"
           val text =
             if entries.isEmpty then s"$verb nothing"
             else
               entries
                 .map(entry => s"$verb ${entry.digest.value}")
                 .mkString("\n")
-          held(Call.CacheClean(dryRun), text, CallResult.reported()),
+          held(Call.CacheClean(mode), text, CallResult.reported()),
       )
       .merge
 
@@ -857,7 +859,7 @@ object Cli:
   private def clean(
       repo: Path,
       apiJar: Path,
-      projects: List[String],
+      projects: List[ProjectName],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     attach(
       repo,
@@ -877,7 +879,7 @@ object Cli:
   private def cleanNamed(
       repo: Path,
       build: histos.load.LoadedBuild,
-      projects: List[String],
+      projects: List[ProjectName],
   ): UIO[Completed] =
     val call = Call.Clean(projects)
     histos.clean.Products
@@ -1122,7 +1124,7 @@ object Cli:
       )
 
   /** The id is the run id the server minted. No server has no runs. */
-  private def cancel(repo: Path, id: String): UIO[Completed] =
+  private def cancel(repo: Path, id: RunId): UIO[Completed] =
     attach(
       repo,
       Call.Cancel(id),

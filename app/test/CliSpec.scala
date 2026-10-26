@@ -8,7 +8,9 @@ import histos.plugin.*
 import histos.publish.{LauncherPin, LauncherScript}
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
-import histos.cache.ContentStore
+import histos.cache.{CacheCleanMode, ContentStore}
+import histos.task.{RunId, TaskError}
+import histos.testrun.{SuitePattern, TestMode}
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
 import histos.build.BuildEvent
 import histos.report.{BuildFault, CallResult, Rejection}
@@ -230,9 +232,10 @@ object CliSpec extends ZIOSpecDefault:
         preview <- Cli.parse(List("cache", "clean", "--dry-run"))
         clean   <- Cli.parse(List("cache", "clean"))
       yield assertTrue(
-        preview == Command.CacheClean(true) && clean == Command.CacheClean(
-          false
-        )
+        preview == Command.CacheClean(CacheCleanMode.DryRun),
+        clean == Command.CacheClean(CacheCleanMode.Remove),
+        Operation.call(preview) == Right(Call.CacheClean(CacheCleanMode.DryRun)),
+        Operation.call(clean) == Right(Call.CacheClean(CacheCleanMode.Remove)),
       )
     ,
     test("toolchain is a command"):
@@ -255,8 +258,8 @@ object CliSpec extends ZIOSpecDefault:
     test("cancel names the id the server already keys"):
       for parsed <- Cli.parse(List("cancel", "inspect"))
       yield assertTrue(
-        parsed == Command.Cancel("inspect"),
-        Operation.call(parsed) == Right(histos.server.Call.Cancel("inspect")),
+        parsed == Command.Cancel(RunId.trusted("inspect")),
+        Operation.call(parsed) == Right(histos.server.Call.Cancel(RunId.trusted("inspect"))),
       )
     ,
     test("workflow checks by default and update rewrites"):
@@ -277,7 +280,7 @@ object CliSpec extends ZIOSpecDefault:
         named <- Cli.parse(List("publish", "repo", "core"))
         bare  <- Cli.parse(List("publish")).either
       yield assertTrue(
-        named == Command.Publish("repo", List("core")),
+        named == Command.Publish("repo", List(ProjectName("core"))),
         bare == Left(CliParseError.MissingArgument),
       )
     ,
@@ -302,17 +305,17 @@ object CliSpec extends ZIOSpecDefault:
         cache   <- Cli.parse(List("cache", "clean", "--dry-run"))
       yield assertTrue(
         all == Command.Clean(Nil),
-        named == Command.Clean(List("engine")),
+        named == Command.Clean(List(ProjectName("engine"))),
         full == Command.CleanFull,
         watched == Command.Watch(
-          Command.Clean(List("engine")),
+          Command.Clean(List(ProjectName("engine"))),
           List("clean", "engine"),
         ),
         flag == Left(CliParseError.Pattern("clean does not take --dry-run")),
         extra == Left(
           CliParseError.Pattern("cleanFull does not take a project")
         ),
-        cache == Command.CacheClean(true),
+        cache == Command.CacheClean(CacheCleanMode.DryRun),
       )
     ,
     test("compile takes project names"):
@@ -321,7 +324,7 @@ object CliSpec extends ZIOSpecDefault:
         named  <- Cli.parse(List("compile", "core"))
       yield assertTrue(
         entire == Command.Compile(Nil),
-        named == Command.Compile(List("core")),
+        named == Command.Compile(List(ProjectName("core"))),
       )
     ,
     test("testQuick and watch parse"):
@@ -339,8 +342,8 @@ object CliSpec extends ZIOSpecDefault:
           case _                           => false
         ,
         scoped match
-          case Command.TestQuick(List("engine"), patterns) =>
-            patterns.map(_.value) == List("com.acme.Foo*")
+          case Command.TestQuick(List(module), patterns) =>
+            module == ProjectName("engine") && patterns.map(_.value) == List("com.acme.Foo*")
           case _ => false
         ,
         watched match
@@ -379,7 +382,7 @@ object CliSpec extends ZIOSpecDefault:
         ,
         scoped match
           case Command.TestOnly(modules, patterns) =>
-            modules == List("engine", "app") && patterns.map(_.value) == List(
+            modules == List(ProjectName("engine"), ProjectName("app")) && patterns.map(_.value) == List(
               "com.acme.*",
               "com.acme.Foo?",
             )
@@ -395,7 +398,46 @@ object CliSpec extends ZIOSpecDefault:
         named  <- Cli.parse(List("test", "core"))
       yield assertTrue(
         entire == Command.Test(Nil),
-        named == Command.Test(List("core")),
+        named == Command.Test(List(ProjectName("core"))),
+        Operation.call(entire) == Right(Call.Test(Nil, Nil, TestMode.Run)),
+        Operation.call(named) == Right(Call.Test(List(ProjectName("core")), Nil, TestMode.Run)),
+      )
+    ,
+    test("a bad project name is usage and is not a call"):
+      for
+        compile <- Cli.parse(List("compile", "1core")).either
+        slash   <- Cli.parse(List("test", "a/b")).either
+        clean   <- Cli.parse(List("clean", "1core")).either
+        empty   <- Cli.parse(List("cancel", "")).either
+      yield assertTrue(
+        compile == Left(CliParseError.Pattern(ProjectNameError.Bad("1core").message)),
+        slash == Left(CliParseError.Pattern(ProjectNameError.Bad("a/b").message)),
+        clean == Left(CliParseError.Pattern(ProjectNameError.Bad("1core").message)),
+        empty == Left(CliParseError.Pattern(TaskError.EmptyId.message)),
+        CliExit.Usage.code == 2,
+      )
+    ,
+    test("test and testOnly run, and testQuick is quick"):
+      for
+        only   <- Cli.parse(List("testOnly", "com.acme.Foo*"))
+        quick  <- Cli.parse(List("testQuick"))
+        scoped <- Cli.parse(List("testQuick", "--module", "engine"))
+      yield assertTrue(
+        quickCall(only, "com.acme.Foo*", TestMode.Run),
+        Operation.call(quick) == Right(Call.Test(Nil, Nil, TestMode.Quick)),
+        Operation.call(scoped) == Right(
+          Call.Test(List(ProjectName("engine")), Nil, TestMode.Quick)
+        ),
+      )
+    ,
+    test("launcher requires --update"):
+      for
+        bare   <- Cli.parse(List("launcher")).either
+        update <- Cli.parse(List("launcher", "--update"))
+      yield assertTrue(
+        bare == Left(CliParseError.Rejected),
+        update == Command.LauncherUpdate,
+        Operation.call(update) == Right(Call.LauncherUpdate),
       )
     ,
     test("workflow without a file fails"):
@@ -1414,6 +1456,12 @@ object CliSpec extends ZIOSpecDefault:
       |        api
       |      )
       |""".stripMargin
+
+  private def quickCall(parsed: Command, raw: String, mode: TestMode): Boolean =
+    SuitePattern.from(raw) match
+      case Right(pattern) =>
+        Operation.call(parsed) == Right(Call.Test(Nil, List(pattern), mode))
+      case Left(_) => false
 
   private final class Recording(trace: Ref[List[String]], graph: ProjectGraph) extends Loader:
     def scan(repo: Path) =

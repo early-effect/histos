@@ -3,6 +3,7 @@ package histos.cli
 import histos.plugin.PluginArgs
 import histos.server.Call
 import histos.task.TaskId
+import histos.testrun.TestMode
 
 /** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not operations.
   */
@@ -34,11 +35,11 @@ object Operation:
         else Right(Call.Run(id.value, platform))
       case Command.Plugin(id, args) => Right(Call.Task(id.render, args))
       case Command.Test(projects)   =>
-        Right(Call.Test(projects, Nil, quick = false))
+        Right(Call.Test(projects, Nil, TestMode.Run))
       case Command.TestOnly(modules, patterns) =>
-        Right(Call.Test(modules, patterns.map(_.value), quick = false))
+        Right(Call.Test(modules, patterns, TestMode.Run))
       case Command.TestQuick(modules, patterns) =>
-        Right(Call.Test(modules, patterns.map(_.value), quick = true))
+        Right(Call.Test(modules, patterns, TestMode.Quick))
       case Command.Compile(projects)     => Right(Call.Compile(projects))
       case Command.Clean(projects)       => Right(Call.Clean(projects))
       case Command.CleanFull             => Right(Call.CleanFull)
@@ -49,7 +50,7 @@ object Operation:
       case Command.Toolchain                => Right(Call.Toolchain)
       case Command.CachePath                => Right(Call.CachePath)
       case Command.CacheList                => Right(Call.CacheList)
-      case Command.CacheClean(dryRun)       => Right(Call.CacheClean(dryRun))
+      case Command.CacheClean(mode)         => Right(Call.CacheClean(mode))
       case Command.Resolve(action)          => Right(Call.Resolve(action))
       case Command.Workflow(action)         => Right(Call.Workflow(action))
       case Command.LauncherUpdate           => Right(Call.LauncherUpdate)

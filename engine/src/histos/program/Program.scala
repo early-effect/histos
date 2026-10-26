@@ -50,7 +50,7 @@ object Program:
         compiled <- GraphCompile
           .run(
             histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
-            List(module.name.value),
+            List(module.name),
             Some(platform),
             report,
           )

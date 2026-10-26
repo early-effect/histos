@@ -88,7 +88,7 @@ object CacheSpec extends ZIOSpecDefault:
           saved <- store
           key = digest("old")
           _       <- saved.put(key, bytes, at)
-          preview <- saved.clean(later, ContentStore.Retention, dryRun = true)
+          preview <- saved.clean(later, ContentStore.Retention, CacheCleanMode.DryRun)
           still   <- saved.read(key)
         yield assertTrue(
           preview.map(_.digest) == List(key) && still.contains(bytes)
@@ -103,7 +103,7 @@ object CacheSpec extends ZIOSpecDefault:
           _       <- saved.put(drop, bytes, at)
           _       <- saved.put(hold, bytes, at)
           _       <- saved.replace(project, Set(hold))
-          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          removed <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           gone    <- saved.read(drop)
           kept    <- saved.read(hold)
         yield assertTrue(
@@ -129,11 +129,11 @@ object CacheSpec extends ZIOSpecDefault:
             Files.createDirectories(partial)
             Files.writeString(partial.resolve("Echo.class"), "class")
           }
-          preview <- saved.clean(later, ContentStore.Retention, dryRun = true)
+          preview <- saved.clean(later, ContentStore.Retention, CacheCleanMode.DryRun)
           still   <- ZIO.attempt(
             Files.isDirectory(saved.root.resolve("plugins").resolve(old.value))
           )
-          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          removed <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           gone    <- ZIO.attempt(
             Files.exists(saved.root.resolve("plugins").resolve(old.value))
           )
@@ -141,7 +141,7 @@ object CacheSpec extends ZIOSpecDefault:
             Files.isDirectory(saved.root.resolve("plugins").resolve(held.value))
           )
           _       <- plant(saved, fresh, later)
-          after   <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          after   <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           remains <- ZIO.attempt(
             Files.isDirectory(
               saved.root.resolve("plugins").resolve(fresh.value)
@@ -172,9 +172,9 @@ object CacheSpec extends ZIOSpecDefault:
             Files.setLastModifiedTime(old, FileTime.from(at))
             Files.setLastModifiedTime(fresh, FileTime.from(later))
           }
-          _          <- saved.clean(later, ContentStore.Retention, dryRun = true)
+          _          <- saved.clean(later, ContentStore.Retention, CacheCleanMode.DryRun)
           previewOld <- ZIO.attempt(Files.isRegularFile(old))
-          removed    <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          removed    <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           gone       <- ZIO.attempt(Files.exists(old))
           kept       <- ZIO.attempt(Files.isRegularFile(fresh))
         yield assertTrue(previewOld, removed.isEmpty, !gone, kept)
@@ -193,9 +193,9 @@ object CacheSpec extends ZIOSpecDefault:
           _         <- saved.put(drop, bytes, at)
           _         <- saved.replace(project, Set(hold))
           _         <- saved.replace(elsewhere, Set(other))
-          first     <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          first     <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           _         <- saved.replace(project, Set.empty)
-          second    <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          second    <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           holdGone  <- saved.read(hold)
           otherKept <- saved.read(other)
         yield assertTrue(
@@ -215,7 +215,7 @@ object CacheSpec extends ZIOSpecDefault:
             Files.writeString(saved.root.resolve("keep"), hold.value + "\n")
           )
           kept    <- saved.kept
-          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          removed <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
           still   <- saved.read(hold)
         yield assertTrue(
           kept.contains(hold),
@@ -242,7 +242,7 @@ object CacheSpec extends ZIOSpecDefault:
           saved <- store
           key = digest("fresh")
           _       <- saved.put(key, bytes, later)
-          removed <- saved.clean(later, ContentStore.Retention, dryRun = false)
+          removed <- saved.clean(later, ContentStore.Retention, CacheCleanMode.Remove)
         yield assertTrue(removed.isEmpty)
     ,
     test(

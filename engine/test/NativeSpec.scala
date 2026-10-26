@@ -1,7 +1,7 @@
 package histos.native
 
 import histos.pack.MainClass
-import histos.testrun.{ModuleTest, ModuleTestError, TestRun}
+import histos.testrun.{ModuleTest, ModuleTestError, TestMode, TestRun}
 import histos.toolchain.Runtimes
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile}
 import histos.{
@@ -373,7 +373,7 @@ object NativeSpec extends ZIOSpecDefault:
             .run(
               root,
               built,
-              List("app"),
+              List(ProjectName("app")),
               jdk,
               here.native,
               None,
@@ -382,7 +382,7 @@ object NativeSpec extends ZIOSpecDefault:
             .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
           tested <- ModuleTest
-            .run(TestRun(root, built, List("check"), jdk, here))
+            .run(TestRun(root, built, List(ProjectName("check")), jdk, here, TestMode.Run))
             .provideSome[histos.resolve.LockedTools](histos.ToolFixture.resolver)
             .either
           main      <- ZIO.fromEither(MainClass.from("demo.Hello"))

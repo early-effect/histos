@@ -2,34 +2,40 @@ package histos.cli
 
 import histos.preview.PreviewError
 import histos.report.{BuildFault, CallResult}
-import histos.server.{Call, Calls}
-import histos.testrun.{ModuleTestError, SuitePatternError}
+import histos.server.Call
+import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 
 import zio.test.*
 
 object SuitePatternCallSpec extends ZIOSpecDefault:
   def spec = suite("suite pattern call")(
     test("an empty pattern is a suite-selection error"):
-      assertTrue(
-        Calls.suitePatterns(List("")) == Left(ModuleTestError.Pattern(SuitePatternError.Empty))
-      )
+      assertTrue(SuitePattern.from("") == Left(SuitePatternError.Empty))
     ,
     test("a blank pattern keeps the raw text"):
       assertTrue(
-        Calls.suitePatterns(List("foo bar")) ==
-          Left(ModuleTestError.Pattern(SuitePatternError.Blank("foo bar")))
+        SuitePattern.from("foo bar") == Left(SuitePatternError.Blank("foo bar"))
       )
     ,
     test("a glob is one pattern"):
-      assertTrue(
-        Calls.suitePatterns(List("com.acme.Foo*")).map(_.map(_.value)) == Right(List("com.acme.Foo*"))
+      for parsed <- Cli.parse(List("testOnly", "com.acme.Foo*"))
+      yield assertTrue(
+        SuitePattern.from("com.acme.Foo*").map(_.value) == Right("com.acme.Foo*"),
+        called(parsed, "com.acme.Foo*"),
+      )
+    ,
+    test("a blank pattern is usage and is not a call"):
+      for parsed <- Cli.parse(List("testOnly", "foo bar")).either
+      yield assertTrue(
+        parsed == Left(CliParseError.Pattern(SuitePatternError.Blank("foo bar").message))
       )
     ,
     test("an empty pattern exits as usage"):
       val error  = SuitePatternError.Empty
       val result = CallResult.Fault(BuildFault.Pattern(error))
       assertTrue(
-        CliExit.from(Call.Test(Nil, Nil, false), result) == CliExit.Usage,
+        CliExit.from(Call.Test(Nil, Nil, TestMode.Run), result) == CliExit.Usage,
+        CliExit.Usage.code == 2,
         error.message == "a test pattern is not empty",
         !error.message.contains("is not a project name"),
       )
@@ -38,7 +44,7 @@ object SuitePatternCallSpec extends ZIOSpecDefault:
       val error  = SuitePatternError.Blank("foo bar")
       val result = CallResult.Fault(BuildFault.Pattern(error))
       assertTrue(
-        CliExit.from(Call.Test(Nil, Nil, false), result) == CliExit.Usage,
+        CliExit.from(Call.Test(Nil, Nil, TestMode.Run), result) == CliExit.Usage,
         error.message == "'foo bar' is not a test pattern",
         !error.message.contains("is not a project name"),
       )
@@ -50,3 +56,10 @@ object SuitePatternCallSpec extends ZIOSpecDefault:
         !error.message.contains("is not a project name"),
       ),
   )
+
+  private def called(parsed: Command, raw: String): Boolean =
+    SuitePattern.from(raw) match
+      case Right(pattern) =>
+        Operation.call(parsed) == Right(Call.Test(Nil, List(pattern), TestMode.Run))
+      case Left(_) => false
+end SuitePatternCallSpec

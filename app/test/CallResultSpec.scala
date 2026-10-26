@@ -4,6 +4,7 @@ import histos.node.{NodeToolchain, NodeVersion}
 import histos.report.{BuildFault, CallResult, WireJson}
 import histos.resolve.ResolveError
 import histos.server.Call
+import histos.testrun.TestMode
 
 import java.nio.file.Path
 
@@ -20,7 +21,7 @@ object CallResultSpec extends ZIOSpecDefault:
       val fault = CallResult.Fault(BuildFault.Resolve(ResolveError.NoLock(Path.of("lock"))))
       assertTrue(
         CliExit.from(Call.Compile(Nil), fault) == CliExit.CompileFailed,
-        CliExit.from(Call.Test(Nil, Nil, false), fault) == CliExit.ResolveFailed,
+        CliExit.from(Call.Test(Nil, Nil, TestMode.Run), fault) == CliExit.ResolveFailed,
         CliExit.from(Call.Run("demo", None), fault) == CliExit.ResolveFailed,
         fault.toJson.fromJson[CallResult] == Right(fault),
       )
@@ -29,7 +30,7 @@ object CallResultSpec extends ZIOSpecDefault:
       val ran = CallResult.reported("demo: type mismatch")
       assertTrue(
         CliExit.from(Call.Compile(Nil), ran) == CliExit.CompileFailed,
-        CliExit.from(Call.Test(Nil, Nil, false), ran) == CliExit.TestFailed,
+        CliExit.from(Call.Test(Nil, Nil, TestMode.Run), ran) == CliExit.TestFailed,
         CliExit.from(Call.Publish("repo", Nil), ran) == CliExit.PublishFailed,
       )
     ,

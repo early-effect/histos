@@ -7,10 +7,12 @@ import histos.jdk.Sha256
 import histos.load.{HeaderScan, LoadError, LoadedBuild}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
+import histos.cache.CacheCleanMode
 import histos.task.RunId
+import histos.testrun.{SuitePattern, TestMode}
 import histos.toolchain.Runtimes
 import histos.workflow.WorkflowAction
-import histos.{Platform, ProjectGraph}
+import histos.{Platform, ProjectGraph, ProjectName}
 
 import java.io.{InputStream, OutputStream}
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
@@ -25,6 +27,7 @@ import zio.json.*
 import histos.report.WireJson.given JsonCodec[CallResult]
 import histos.report.WireJson.given JsonCodec[BuildEvent]
 import histos.report.WireJson.given JsonCodec[Platform]
+import histos.report.WireJson.given JsonCodec[ProjectName]
 import zio.stream.ZStream
 import zio.{Chunk, Exit, Fiber, IO, Promise, Queue, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
 
@@ -100,36 +103,56 @@ private object CallJson:
       raw => WorkflowAction.from(raw).left.map(_.message),
       _.token,
     )
+  given JsonCodec[SuitePattern] =
+    JsonCodec.string.transformOrFail(
+      raw => SuitePattern.from(raw).left.map(_.message),
+      _.value,
+    )
+  given JsonCodec[RunId] =
+    JsonCodec.string.transformOrFail(
+      raw => RunId.from(raw).left.map(_.message),
+      _.value,
+    )
+  given JsonCodec[TestMode] =
+    JsonCodec.string.transformOrFail(
+      raw => TestMode.from(raw).left.map(_.message),
+      _.token,
+    )
+  given JsonCodec[CacheCleanMode] =
+    JsonCodec.string.transformOrFail(
+      raw => CacheCleanMode.from(raw).left.map(_.message),
+      _.token,
+    )
 
 import CallJson.given
 
 enum Call derives JsonCodec:
-  case Compile(projects: List[String])
-  case Test(projects: List[String], patterns: List[String], quick: Boolean)
-  case Publish(repository: String, projects: List[String])
+  case Compile(projects: List[ProjectName])
+  case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
+  case Publish(repository: String, projects: List[ProjectName])
   case Graph
   case Run(id: String, platform: Option[Platform])
   case Task(id: String, args: PluginArgs)
-  case Cancel(id: String)
+  case Cancel(id: RunId)
   case Toolchain
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
   case Assembly(destination: Option[String])
-  case Clean(projects: List[String])
+  case Clean(projects: List[ProjectName])
   case CleanFull
   case Reload
   case Reboot
   case Version
   case CachePath
   case CacheList
-  case CacheClean(dryRun: Boolean)
+  case CacheClean(mode: CacheCleanMode)
   case LauncherUpdate
   case Watch(inner: Call)
   case Bsp
-  case PreviewCompile(projects: List[String])
-  case PreviewTest(projects: List[String])
-  case PreviewPublish(projects: List[String])
-  case PreviewClean(projects: List[String])
+  case PreviewCompile(projects: List[ProjectName])
+  case PreviewTest(projects: List[ProjectName])
+  case PreviewPublish(projects: List[ProjectName])
+  case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
   case PreviewRun(id: String, platform: Option[Platform])
 

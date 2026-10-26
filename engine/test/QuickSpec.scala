@@ -638,7 +638,7 @@ object QuickSpec extends ZIOSpecDefault:
         List(suiteName.value),
         List(classes),
         cover,
-        quick = true,
+        TestMode.Quick,
         names =>
           ZIO.succeed(
             ZStream.fromIterable(
