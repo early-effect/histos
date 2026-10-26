@@ -8,7 +8,7 @@ import histos.report.{BuildFault, CallResult, Rejection}
 import histos.server.{Call, Calls, Feed, Say}
 import histos.task.TaskId
 import histos.version.ManualVersion
-import histos.{Jvm, MainClass, Organization, Projects, ScalaVersion, module}
+import histos.{Jvm, MainClass, Organization, ProjectName, Projects, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.FileTime
@@ -29,7 +29,7 @@ object PreviewSpec extends ZIOSpecDefault:
         bare  <- Cli.parse(List("preview")).either
         other <- Cli.parse(List("preview", "nope")).either
       yield assertTrue(
-        named == Command.PreviewCompile(List("app")),
+        named == Command.PreviewCompile(List(ProjectName("app"))),
         all == Command.PreviewCompile(Nil),
         bare == Left(CliParseError.Help),
         other == Left(CliParseError.UnknownCommand),
@@ -47,9 +47,9 @@ object PreviewSpec extends ZIOSpecDefault:
         inspect <- Cli.parse(List("preview", "run", "inspect"))
         plugin  <- Cli.parse(List("preview", "run", "dev.example/echo"))
       yield assertTrue(
-        tests == Command.PreviewTest(List("app")),
+        tests == Command.PreviewTest(List(ProjectName("app"))),
         publish == Command.PreviewPublish(Nil),
-        clean == Command.PreviewClean(List("app")),
+        clean == Command.PreviewClean(List(ProjectName("app"))),
         full == Command.PreviewCleanFull,
         extra == Left(
           CliParseError.Pattern("cleanFull does not take a project")
@@ -75,10 +75,10 @@ object PreviewSpec extends ZIOSpecDefault:
           Call.PreviewCompile(Nil)
         ),
         HistosMcp.previewCall(args("test", "ignored", List("app"))) == Right(
-          Call.PreviewTest(List("app"))
+          Call.PreviewTest(List(ProjectName("app")))
         ),
         HistosMcp.previewCall(args("publish", "", List("app"))) == Right(
-          Call.PreviewPublish(List("app"))
+          Call.PreviewPublish(List(ProjectName("app")))
         ),
         HistosMcp.previewCall(args("clean", "", Nil)) == Right(
           Call.PreviewClean(Nil)
@@ -112,8 +112,8 @@ object PreviewSpec extends ZIOSpecDefault:
           core = module("core", Jvm)(scala3)
           app  = module("app", Jvm)(scala3).dependsOn(core)
           graph <- ZIO.fromEither(Projects(core, app))
-          text  <- Plan.test(repo, graph, List("app")).map(Plan.renderTest(repo, _))
-          heard <- ask(repo)(Calls.previewTest(repo, graph, List("app"), _))
+          text  <- Plan.test(repo, graph, List(ProjectName("app"))).map(Plan.renderTest(repo, _))
+          heard <- ask(repo)(Calls.previewTest(repo, graph, List(ProjectName("app")), _))
           kept  <- same(planted)
         yield assertTrue(
           heard.outs == Chunk(text),
@@ -149,10 +149,10 @@ object PreviewSpec extends ZIOSpecDefault:
             )
           )
           text <- Plan
-            .publish(repo, graph, List("app"), Map.empty)
+            .publish(repo, graph, List(ProjectName("app")), Map.empty)
             .map(Plan.renderPublish)
           heard <- ask(repo)(
-            Calls.previewPublish(repo, graph, List("app"), Map.empty, _)
+            Calls.previewPublish(repo, graph, List(ProjectName("app")), Map.empty, _)
           )
           kept <- same(planted)
         yield assertTrue(
@@ -178,8 +178,8 @@ object PreviewSpec extends ZIOSpecDefault:
           graph <- ZIO.fromEither(Projects(app))
           server = repo.resolve(".histos").resolve("server.json")
           lock   = repo.resolve(".histos").resolve("dependencies.lock")
-          named <- Plan.clean(repo, graph, List("app")).map(Plan.renderClean(repo, _))
-          heard <- ask(repo)(Calls.previewClean(repo, graph, List("app"), _))
+          named <- Plan.clean(repo, graph, List(ProjectName("app"))).map(Plan.renderClean(repo, _))
+          heard <- ask(repo)(Calls.previewClean(repo, graph, List(ProjectName("app")), _))
           all = Plan.renderClean(repo, Plan.cleanAll(repo))
           wiped      <- ask(repo)(Calls.previewCleanAll(repo, _))
           kept       <- same(planted)

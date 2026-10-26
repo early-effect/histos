@@ -124,7 +124,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(_, graph, names, jdk, runtimes, patterns, _, _) = asked
+    val TestRun(_, graph, names, jdk, runtimes, _, patterns, _) = asked
     ZStream.unwrap:
       for
         wanted <- ZIO.fromEither(
@@ -227,7 +227,7 @@ object ModuleTest:
       inputs: Chunk[Input],
       queue: Queue[Take[ModuleTestError, TestFeed]],
   ): Step[Resolve & ProviderInstall & LockedTools, ModuleTestError, Unit] =
-    val TestRun(repo, graph, _, jdk, runtimes, patterns, quick, onTestCompile) =
+    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile) =
       asked
     val repositories = BuildResolvers(graph.resolvers)
     val info         = StepInfo(
@@ -246,7 +246,7 @@ object ModuleTest:
         repositories,
         patterns,
         matched,
-        quick,
+        mode,
         onTestCompile,
       ).flatMap(stream => publish(queue, watch(matched, stream)))
         .exit
@@ -313,7 +313,7 @@ object ModuleTest:
 
   private def requested(
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
   ): Either[SelectError, Set[ProjectName]] =
     histos.select.Selection
       .select(graph, names)
@@ -329,7 +329,7 @@ object ModuleTest:
       repositories: Repositories,
       patterns: List[SuitePattern],
       matched: Ref[Boolean],
-      quick: Boolean,
+      mode: TestMode,
       onTestCompile: (
           ProjectName,
           ScalaVersion,
@@ -380,7 +380,7 @@ object ModuleTest:
                         runtimes,
                         lock,
                         repositories,
-                        quick,
+                        mode,
                         note,
                       )
                     case Platform.Js =>
@@ -395,7 +395,7 @@ object ModuleTest:
                         runtimes,
                         lock,
                         repositories,
-                        quick,
+                        mode,
                         note,
                       )
                     case Platform.Native =>
@@ -410,7 +410,7 @@ object ModuleTest:
                         runtimes,
                         lock,
                         repositories,
-                        quick,
+                        mode,
                         note,
                       )
               case (_, None, provider) =>
@@ -436,7 +436,7 @@ object ModuleTest:
                       lock,
                       repositories,
                       patterns,
-                      quick,
+                      mode,
                       note,
                     )
                   case Platform.Js =>
@@ -452,7 +452,7 @@ object ModuleTest:
                       lock,
                       repositories,
                       patterns,
-                      quick,
+                      mode,
                       note,
                     )
                   case Platform.Native =>
@@ -468,7 +468,7 @@ object ModuleTest:
                       lock,
                       repositories,
                       patterns,
-                      quick,
+                      mode,
                       note,
                     )
             val executes = sources.nonEmpty && (module.test match

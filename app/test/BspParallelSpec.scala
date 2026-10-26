@@ -1,8 +1,12 @@
 package histos.server
 
 import histos.bsp.{Bsp, Rpc}
+import histos.cache.CacheCleanMode
 import histos.plugin.PluginArgs
+import histos.task.RunId
+import histos.testrun.TestMode
 import histos.workflow.WorkflowAction
+import histos.ProjectName
 
 import zio.json.*
 import zio.json.ast.Json
@@ -140,16 +144,16 @@ object BspParallelSpec extends ZIOSpecDefault:
   private def outputLaw: List[(Call, Boolean)] =
     List(
       Call.Compile(Nil)                      -> true,
-      Call.Test(Nil, Nil, false)             -> true,
+      Call.Test(Nil, Nil, TestMode.Run)      -> true,
       Call.Publish("repo", Nil)              -> true,
       Call.Run("demo", None)                 -> true,
       Call.Assembly(None)                    -> true,
       Call.Clean(Nil)                        -> true,
-      Call.Clean(List("demo"))               -> true,
+      Call.Clean(List(ProjectName("demo")))  -> true,
       Call.CleanFull                         -> true,
       Call.Graph                             -> false,
       Call.Task("inspect", PluginArgs.empty) -> false,
-      Call.Cancel("run")                     -> false,
+      Call.Cancel(RunId.trusted("run"))      -> false,
       Call.Toolchain                         -> false,
       Call.Resolve(ResolveAction.Verify)     -> false,
       Call.Workflow(WorkflowAction.Check)    -> false,
@@ -158,7 +162,7 @@ object BspParallelSpec extends ZIOSpecDefault:
       Call.Version                           -> false,
       Call.CachePath                         -> false,
       Call.CacheList                         -> false,
-      Call.CacheClean(true)                  -> false,
+      Call.CacheClean(CacheCleanMode.DryRun) -> false,
       Call.LauncherUpdate                    -> false,
       Call.Watch(Call.Graph)                 -> false,
       Call.Bsp                               -> false,

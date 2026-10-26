@@ -55,7 +55,7 @@ private[testrun] object SuiteLaunch:
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
-      quick: Boolean,
+      mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
@@ -92,7 +92,7 @@ private[testrun] object SuiteLaunch:
         List(main.value),
         classes :: linked.paths,
         cover(module, linked, jdk),
-        quick,
+        mode,
         _ =>
           for
             chosen <- node(cell, runtimes)
@@ -151,7 +151,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
-      quick: Boolean,
+      mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
@@ -243,7 +243,7 @@ private[testrun] object SuiteLaunch:
                   wanted,
                   classes :: linked.paths,
                   cover(module, linked, jdk),
-                  quick,
+                  mode,
                   dirty => launch(exact(dirty), linked),
                 )
     yield stream
@@ -259,7 +259,7 @@ private[testrun] object SuiteLaunch:
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
-      quick: Boolean,
+      mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
@@ -297,7 +297,7 @@ private[testrun] object SuiteLaunch:
         List(main.value),
         classes :: linked.paths,
         cover(module, linked, jdk),
-        quick,
+        mode,
         _ =>
           for
             _         <- TestCompile.fresh(linkDir)
@@ -353,7 +353,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
-      quick: Boolean,
+      mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
@@ -466,7 +466,7 @@ private[testrun] object SuiteLaunch:
                   wanted,
                   classes :: linked.paths,
                   cover(module, linked, jdk),
-                  quick,
+                  mode,
                   dirty => launch(exact(dirty), linked, major),
                 )
     yield stream
@@ -542,8 +542,9 @@ private[testrun] object SuiteLaunch:
 
   private final case class Stamped(name: String, suite: SuiteName, digest: Option[Sha256])
 
-  /** A passing run stores each suite's fingerprint. `quick` skips a suite whose stored fingerprint still matches. `run`
-    * receives the suites that still have to run. The class tree is read once and reused for every suite.
+  /** A passing run stores each suite's fingerprint. [[TestMode.Quick]] skips a suite whose stored fingerprint still
+    * matches. [[TestMode.Run]] receives the suites that still have to run. The class tree is read once and reused for
+    * every suite.
     */
   private[testrun] def remember[R](
       repo: Path,
@@ -551,7 +552,7 @@ private[testrun] object SuiteLaunch:
       suites: List[String],
       directories: List[Path],
       cover: SuiteStamp.Cover,
-      quick: Boolean,
+      mode: TestMode,
       run: List[String] => ZIO[
         R,
         ModuleTestError,
@@ -578,7 +579,7 @@ private[testrun] object SuiteLaunch:
                   .mapError(ModuleTestError.Stamp(_))
               yield Stamped(name, suite, found)
             .flatMap: stamped =>
-              if !quick then
+              if mode == TestMode.Run then
                 run(suites)
                   .map(stream => stream.tap(keep(repo, cell, stamped, _)))
               else
@@ -691,7 +692,7 @@ private[testrun] object SuiteLaunch:
       runtimes: Runtimes,
       lock: DependencyLock,
       repositories: Repositories,
-      quick: Boolean,
+      mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
@@ -726,7 +727,7 @@ private[testrun] object SuiteLaunch:
         List(main.value),
         classes :: linked.paths,
         cover(module, linked, jdk),
-        quick,
+        mode,
         _ =>
           TestCompile
             .fresh(
@@ -765,7 +766,7 @@ private[testrun] object SuiteLaunch:
       lock: DependencyLock,
       repositories: Repositories,
       patterns: List[SuitePattern],
-      quick: Boolean,
+      mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext,
@@ -851,7 +852,7 @@ private[testrun] object SuiteLaunch:
                   wanted,
                   classes :: linked.paths,
                   cover(module, linked, jdk),
-                  quick,
+                  mode,
                   dirty => launch(exact(dirty), linked),
                 )
         yield ran

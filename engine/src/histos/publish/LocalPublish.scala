@@ -119,7 +119,7 @@ object LocalPublish:
   def run(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
       jdk: JdkRuntime,
       env: Map[String, String],
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
@@ -143,7 +143,7 @@ object LocalPublish:
               .run(
                 repo,
                 graph,
-                picked.modules.toList.map(_.value),
+                picked.modules.toList,
                 jdk,
                 NativeOrigin.read(env),
                 None,
@@ -287,7 +287,7 @@ object LocalPublish:
 
   private def choose(
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
       plans: List[Planned],
   ): Either[LocalPublishError, Chosen] =
     val shipMembers = plans.flatMap(_.members).toSet

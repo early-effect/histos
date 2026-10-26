@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.jdk.JdkRuntime
 import histos.zinc.CompileFeed
-import histos.ProjectGraph
+import histos.{ProjectGraph, ProjectName}
 
 import java.nio.file.Path
 
@@ -20,7 +20,7 @@ object PublishRun:
   def run(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
       jdk: JdkRuntime,
       env: Map[String, String],
       repository: String,

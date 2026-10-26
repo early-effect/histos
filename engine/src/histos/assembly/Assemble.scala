@@ -70,7 +70,7 @@ object Assemble:
       compiled <- GraphCompile
         .run(
           histos.zinc.CompileSession(repo, graph, jdk, native, lock),
-          List(app.name.value),
+          List(app.name),
           None,
           report,
         )

@@ -44,12 +44,12 @@ object Products:
     ) *> Workspace.delete(observation(repo))
 
   /** Empty names are the full wipe, including shared roots. A name selects modules only: an aggregate expands to its
-    * modules, and upstream stays. A bad name deletes nothing.
+    * modules, and upstream stays. An unknown or repeated name deletes nothing.
     */
   def named(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
   ): IO[SelectError | IoFailure, List[ProjectName]] =
     if names.isEmpty then wipe(repo).as(Nil)
     else

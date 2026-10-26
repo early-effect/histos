@@ -2,7 +2,7 @@ package histos.clean
 
 import histos.select.SelectError
 import histos.workspace.Workspace
-import histos.{Jvm, ProjectName, Projects, ScalaVersion, aggregate, module}
+import histos.{Jvm, ProjectName, ProjectNameError, Projects, ScalaVersion, aggregate, module}
 
 import java.nio.file.{Files, Path}
 
@@ -70,7 +70,7 @@ object ProductsSpec extends ZIOSpecDefault:
           provider      <- plant(repo, ".histos/provider/3.10.0/bridge.jar")
           tally         <- plant(repo, ".histos/observation.json")
           built         <- graph
-          cleaned       <- Products.named(repo, built, List("engine"))
+          cleaned       <- Products.named(repo, built, List(ProjectName("engine")))
           engineGone    <- exists(engineClass)
           appStays      <- isFile(appClass)
           providerStays <- isFile(provider)
@@ -92,15 +92,15 @@ object ProductsSpec extends ZIOSpecDefault:
           klass     <- plant(repo, ".histos/classes/engine/Demo.class")
           tally     <- plant(repo, ".histos/observation.json")
           built     <- graph
-          unknown   <- Products.named(repo, built, List("missing")).either
+          unknown   <- Products.named(repo, built, List(ProjectName("missing"))).either
           duplicate <- Products
-            .named(repo, built, List("engine", "engine"))
+            .named(repo, built, List(ProjectName("engine"), ProjectName("engine")))
             .either
-          bad        <- Products.named(repo, built, List("a/b")).either
           still      <- isFile(klass)
           tallyStays <- isFile(tally)
           missing    <- ZIO.fromEither(ProjectName.from("missing"))
           engine     <- ZIO.fromEither(ProjectName.from("engine"))
+          bad = ProjectName.from("a/b")
         yield assertTrue(
           unknown match
             case Left(SelectError.Unknown(name)) => name == missing
@@ -110,10 +110,7 @@ object ProductsSpec extends ZIOSpecDefault:
             case Left(SelectError.Duplicate(name)) => name == engine
             case _                                 => false
           ,
-          bad match
-            case Left(SelectError.BadName(raw)) => raw == "a/b"
-            case _                              => false
-          ,
+          bad == Left(ProjectNameError.Bad("a/b")),
           still,
           tallyStays,
         )
@@ -129,7 +126,7 @@ object ProductsSpec extends ZIOSpecDefault:
           app  = module("app", Jvm)(scala3).dependsOn(core)
           root = aggregate("root", app)
           built         <- ZIO.fromEither(Projects(root, core, app))
-          cleaned       <- Products.named(repo, built, List("root"))
+          cleaned       <- Products.named(repo, built, List(ProjectName("root")))
           coreStays     <- isFile(coreClass)
           appGone       <- exists(appClass)
           providerStays <- isFile(provider)

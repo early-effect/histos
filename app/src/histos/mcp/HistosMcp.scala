@@ -4,7 +4,7 @@ import heddle.LinePipe
 import heddle.endpoint.Schema
 import heddle.mcp.{Mcp, McpBuildError}
 import heddle.mcp.protocol.ToolName
-import histos.cache.ContentStore
+import histos.cache.{CacheCleanMode, ContentStore}
 import histos.cli.Cli
 import histos.client.{ClientJson, Session}
 import histos.report.{BuildFault, Rejection, Stored}
@@ -13,7 +13,10 @@ import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.resolve.Resolve
 import histos.server.{Call, ResolveAction}
+import histos.task.RunId
+import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
+import histos.ProjectName
 
 import ClientJson.given
 
@@ -39,7 +42,7 @@ object HistosMcp:
   final case class TestArgs(
       projects: List[String] = Nil,
       patterns: List[String] = Nil,
-      quick: Boolean = false,
+      mode: Option[String] = None,
   ) derives Schema,
         JsonCodec
   final case class PublishArgs(repository: String, projects: List[String] = Nil) derives Schema, JsonCodec
@@ -47,7 +50,7 @@ object HistosMcp:
   final case class CleanArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class ResolveArgs(action: String = "verify") derives Schema, JsonCodec
   final case class WorkflowArgs(action: String = "check") derives Schema, JsonCodec
-  final case class CacheCleanArgs(dryRun: Boolean = false) derives Schema, JsonCodec
+  final case class CacheCleanArgs(mode: Option[String] = None) derives Schema, JsonCodec
   final case class WatchArgs(args: List[String] = Nil) derives Schema, JsonCodec
   final case class PreviewArgs(
       operation: String,
@@ -148,7 +151,8 @@ object HistosMcp:
     NonEmptyChunk[McpBuildError],
     Mcp[Loader & Scope & Resolve & ContentStore],
   ] =
-    val ask = (call: Call) => Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
+    val ask     = (call: Call) => Session.deliver(Session.perform(repo, apiJar, machine, desk, call))
+    val refused = (reason: Rejection) => Session.CallProblem.Fault(BuildFault.Rejected(reason))
     for
       base    <- Mcp.from()
       listed  <- base.tool[NoArgs](Names.graph, "Show the project graph")(_ => ask(Call.Graph))
@@ -165,19 +169,21 @@ object HistosMcp:
           .mapError(Session.CallProblem.Fault(_))
           .flatMap(ask)
       )
-      stopped   <- running.tool[CancelArgs](Names.cancel, "Cancel a run")(args => ask(Call.Cancel(args.id)))
+      stopped <- running.tool[CancelArgs](Names.cancel, "Cancel a run")(args =>
+        ZIO.fromEither(cancelCall(args.id)).mapError(refused).flatMap(ask)
+      )
       compiling <- stopped.tool[CompileArgs](
         Names.compile,
         "Compile modules. An empty list compiles every module. An aggregate name compiles its modules, on every platform each module builds.",
-      )(args => ask(Call.Compile(args.projects)))
+      )(args => ZIO.fromEither(compileCall(args.projects)).mapError(refused).flatMap(ask))
       testing <- compiling.tool[TestArgs](
         Names.test,
-        "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs, the same as histos testOnly. Each module runs once per Scala version and platform it builds.",
-      )(args => ask(Call.Test(args.projects, args.patterns, args.quick)))
+        "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs, the same as histos testOnly. mode is run or quick, and an absent mode is run. Each module runs once per Scala version and platform it builds.",
+      )(args => ZIO.fromEither(testCall(args.projects, args.patterns, args.mode)).mapError(refused).flatMap(ask))
       publishing <- testing.tool[PublishArgs](
         Names.publish,
         "Publish modules into a local Maven directory. An empty list publishes the ship members.",
-      )(args => ask(Call.Publish(args.repository, args.projects)))
+      )(args => ZIO.fromEither(publishCall(args.repository, args.projects)).mapError(refused).flatMap(ask))
       toolchain <- publishing.tool[NoArgs](
         Names.toolchain,
         "Show the JDK decision, and the Node or clang decision when the build needs them",
@@ -190,7 +196,7 @@ object HistosMcp:
       cleaning <- assembly.tool[CleanArgs](
         Names.clean,
         "Delete build products. An empty list wipes every product root and does not load the graph.",
-      )(args => ask(Call.Clean(args.projects)))
+      )(args => ZIO.fromEither(cleanCall(args.projects)).mapError(refused).flatMap(ask))
       cleaned <- cleaning.tool[NoArgs](
         Names.cleanFull,
         "Wipe build products, then forget this repo in the content store.",
@@ -239,8 +245,8 @@ object HistosMcp:
       )(_ => ask(Call.CacheList))
       cacheClean <- cacheList.tool[CacheCleanArgs](
         Names.cacheClean,
-        "Remove old content store entries. dryRun lists them and deletes nothing.",
-      )(args => ask(Call.CacheClean(args.dryRun)))
+        "Remove old content store entries. mode is remove or dry-run. An absent mode removes them. dry-run lists them and deletes nothing.",
+      )(args => ZIO.fromEither(cacheCall(args.mode)).mapError(refused).flatMap(ask))
       launcher <- cacheClean.tool[NoArgs](
         Names.launcherUpdate,
         "Update the launcher pin. Does not load the graph.",
@@ -264,12 +270,42 @@ object HistosMcp:
       )(_ => Stored.read(repo))
     yield observed
 
+  def compileCall(projects: List[String]): Either[Rejection, Call] =
+    names(projects).map(Call.Compile(_))
+
+  def testCall(
+      projects: List[String],
+      patterns: List[String],
+      mode: Option[String],
+  ): Either[Rejection, Call] =
+    for
+      found  <- names(projects)
+      globs  <- suitePatterns(patterns)
+      chosen <- TestMode.from(mode.getOrElse(TestMode.Run.token)).left.map(Rejection.TestMode(_))
+    yield Call.Test(found, globs, chosen)
+
+  def publishCall(repository: String, projects: List[String]): Either[Rejection, Call] =
+    names(projects).map(found => Call.Publish(repository, found))
+
+  def cleanCall(projects: List[String]): Either[Rejection, Call] =
+    names(projects).map(Call.Clean(_))
+
+  def cacheCall(mode: Option[String]): Either[Rejection, Call] =
+    CacheCleanMode
+      .from(mode.getOrElse(CacheCleanMode.Remove.token))
+      .left
+      .map(Rejection.CacheClean(_))
+      .map(Call.CacheClean(_))
+
+  def cancelCall(id: String): Either[Rejection, Call] =
+    RunId.from(id).left.map(Rejection.RunId(_)).map(Call.Cancel(_))
+
   def previewCall(args: PreviewArgs): Either[Rejection, Call] =
     args.operation match
-      case "compile"   => Right(Call.PreviewCompile(args.projects))
-      case "test"      => Right(Call.PreviewTest(args.projects))
-      case "publish"   => Right(Call.PreviewPublish(args.projects))
-      case "clean"     => Right(Call.PreviewClean(args.projects))
+      case "compile"   => names(args.projects).map(Call.PreviewCompile(_))
+      case "test"      => names(args.projects).map(Call.PreviewTest(_))
+      case "publish"   => names(args.projects).map(Call.PreviewPublish(_))
+      case "clean"     => names(args.projects).map(Call.PreviewClean(_))
       case "cleanFull" =>
         if args.projects.nonEmpty then Left(Rejection.PreviewProjects)
         else Right(Call.PreviewCleanFull)
@@ -277,6 +313,20 @@ object HistosMcp:
         if args.id.isEmpty then Left(Rejection.MissingRunName)
         else Right(Call.PreviewRun(args.id, None))
       case other => Left(Rejection.PreviewOperation(other))
+
+  private def names(raw: List[String]): Either[Rejection, List[ProjectName]] =
+    raw.foldLeft[Either[Rejection, List[ProjectName]]](Right(Nil)): (acc, token) =>
+      for
+        have <- acc
+        name <- ProjectName.from(token).left.map(Rejection.ProjectName(_))
+      yield have :+ name
+
+  private def suitePatterns(raw: List[String]): Either[Rejection, List[SuitePattern]] =
+    raw.foldLeft[Either[Rejection, List[SuitePattern]]](Right(Nil)): (acc, token) =>
+      for
+        have    <- acc
+        pattern <- SuitePattern.from(token).left.map(Rejection.SuitePattern(_))
+      yield have :+ pattern
 
   private def arguments(
       texts: List[NamedArg],

@@ -166,11 +166,11 @@ end ModuleTestError
 final case class TestRun(
     repo: Path,
     graph: ProjectGraph,
-    names: List[String],
+    names: List[ProjectName],
     jdk: JdkRuntime,
     runtimes: Runtimes,
+    mode: TestMode,
     patterns: List[SuitePattern] = Nil,
-    quick: Boolean = false,
     onTestCompile: (
         ProjectName,
         ScalaVersion,

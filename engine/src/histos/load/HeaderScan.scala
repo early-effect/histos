@@ -10,7 +10,10 @@ final case class ScannedBuild(requests: List[PluginRequest], source: String)
 /** Text scan of the `histos.scala` prefix. It does not resolve, lock, or compile. */
 private[histos] object HeaderScan:
   def scan(text: String): Either[PluginLoadError, ScannedBuild] =
-    walk(text.split("\n", -1).toList, 1, header = true, Nil, Nil)
+    walk(text.split("\n", -1).toList, 1, Phase.Header, Nil, Nil)
+
+  private enum Phase:
+    case Header, Body
 
   /** Path-plugin directories. A failed scan contributes none: the build file bytes already changed. */
   def paths(text: String): List[ProjectPath] =
@@ -22,7 +25,7 @@ private[histos] object HeaderScan:
   private def walk(
       lines: List[String],
       number: Int,
-      header: Boolean,
+      phase: Phase,
       requests: List[PluginRequest],
       kept: List[String],
   ): Either[PluginLoadError, ScannedBuild] =
@@ -30,32 +33,43 @@ private[histos] object HeaderScan:
       case Nil          => Right(ScannedBuild(requests.reverse, kept.reverse.mkString("\n")))
       case line :: rest =>
         val trimmed = line.trim
-        if header && (trimmed.isEmpty || trimmed.startsWith("//")) then
-          walk(rest, number + 1, true, requests, line :: kept)
-        else
-          attempt(trimmed) match
-            case Some(Right(request)) if header =>
-              walk(rest, number + 1, true, request :: requests, "" :: kept)
-            case Some(Left(error)) if header                     => Left(error)
-            case Some(_)                                         => Left(PluginLoadError.Misplaced(number))
-            case None if header && trimmed.startsWith("plugin(") =>
-              Left(PluginLoadError.Misplaced(number))
-            case None =>
-              walk(rest, number + 1, false, requests, line :: kept)
+        phase match
+          case Phase.Header if trimmed.isEmpty || trimmed.startsWith("//") =>
+            walk(rest, number + 1, Phase.Header, requests, line :: kept)
+          case Phase.Header =>
+            attempt(trimmed) match
+              case Some(Right(request)) =>
+                walk(rest, number + 1, Phase.Header, request :: requests, "" :: kept)
+              case Some(Left(error))                     => Left(error)
+              case None if trimmed.startsWith("plugin(") =>
+                Left(PluginLoadError.Misplaced(number))
+              case None =>
+                walk(rest, number + 1, Phase.Body, requests, line :: kept)
+          case Phase.Body =>
+            attempt(trimmed) match
+              case Some(_) => Left(PluginLoadError.Misplaced(number))
+              case None    => walk(rest, number + 1, Phase.Body, requests, line :: kept)
 
   private def attempt(line: String): Option[Either[PluginLoadError, PluginRequest]] =
-    if line.startsWith("plugin(dep\"") then Some(parse(line, dependency = true))
-    else if line.startsWith("plugin(path\"") then Some(parse(line, dependency = false))
+    if line.startsWith("plugin(dep\"") then Some(parseDep(line))
+    else if line.startsWith("plugin(path\"") then Some(parsePath(line))
     else None
 
-  private def parse(line: String, dependency: Boolean): Either[PluginLoadError, PluginRequest] =
-    val prefix = if dependency then "plugin(dep\"" else "plugin(path\""
-    val close  = line.indexOf("\")", prefix.length)
+  private def parseDep(line: String): Either[PluginLoadError, PluginRequest] =
+    coordinate(line, "plugin(dep\"").flatMap((raw, link) => depRequest(raw, link))
+
+  private def parsePath(line: String): Either[PluginLoadError, PluginRequest] =
+    coordinate(line, "plugin(path\"").flatMap((raw, link) => pathRequest(raw, link))
+
+  private def coordinate(
+      line: String,
+      prefix: String,
+  ): Either[PluginLoadError, (String, Option[LinkStrategy])] =
+    val close = line.indexOf("\")", prefix.length)
     if close < 0 then Left(PluginLoadError.BadCoordinate(line))
     else
       val raw = line.substring(prefix.length, close)
-      linkOf(line, line.substring(close + 2)).flatMap: link =>
-        if dependency then depRequest(raw, link) else pathRequest(raw, link)
+      linkOf(line, line.substring(close + 2)).map(link => (raw, link))
 
   private def linkOf(line: String, rest: String): Either[PluginLoadError, Option[LinkStrategy]] =
     if rest.isEmpty then Right(None)

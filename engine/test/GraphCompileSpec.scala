@@ -3,7 +3,7 @@ package histos.zinc
 import histos.native.NativeOrigin
 import histos.resolve.{Resolve, ResolveError}
 import histos.select.SelectError
-import histos.{Js, Jvm, Module, ProjectPath, Projects, ScalaVersion, module}
+import histos.{Js, Jvm, Module, ProjectName, ProjectPath, Projects, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
 
@@ -154,7 +154,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .run(
                   root,
                   built,
-                  List("app"),
+                  List(ProjectName("app")),
                   jdk,
                   NativeOrigin.Central,
                   None,
@@ -225,7 +225,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .console(
                   root,
                   built,
-                  List("app"),
+                  List(ProjectName("app")),
                   jdk,
                   NativeOrigin.Central,
                   None,
@@ -418,7 +418,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .run(
                   root,
                   built,
-                  List("app"),
+                  List(ProjectName("app")),
                   jdk,
                   NativeOrigin.Central,
                   None,
@@ -486,7 +486,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .run(
                   root,
                   built,
-                  List("core"),
+                  List(ProjectName("core")),
                   jdk,
                   NativeOrigin.Central,
                   None,
@@ -656,7 +656,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .run(
                   root,
                   built,
-                  List("missing"),
+                  List(ProjectName("missing")),
                   jdk,
                   NativeOrigin.Central,
                   None,
@@ -776,7 +776,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .run(
                   root,
                   built,
-                  List("e2e"),
+                  List(ProjectName("e2e")),
                   jdk,
                   NativeOrigin.Central,
                   None,
@@ -792,7 +792,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 .run(
                   root,
                   built,
-                  List("probe"),
+                  List(ProjectName("probe")),
                   jdk,
                   NativeOrigin.Central,
                   None,

@@ -10,6 +10,7 @@ import histos.client.Session.CallProblem
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs, PluginOutput, PluginTaskId}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.server.Call
+import histos.task.RunId
 
 import ClientJson.given
 import histos.cache.ContentStore
@@ -204,7 +205,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           missing match
             case CallProblem.Fault(fault) =>
               fault.message.contains("no run 'missing'") &&
-              CliExit.from(Call.Cancel("missing"), CallResult.Fault(fault)) == CliExit.TaskFailed
+              CliExit.from(Call.Cancel(RunId.trusted("missing")), CallResult.Fault(fault)) == CliExit.TaskFailed
             case CallProblem.Transport(_) => false,
         )
     ,
@@ -412,7 +413,7 @@ object ProtocolSpec extends ZIOSpecDefault:
             Call.Task(heldTask, PluginArgs.empty),
             CallResult.Fault(BuildFault.Interrupted),
           ) == CliExit.Interrupted,
-          CliExit.from(Call.Cancel(id), CallResult.Reported(stopped)) == CliExit.Success,
+          cancelled(id, stopped),
           stopped.out.contains("cancelled"),
         )
     ,
@@ -542,6 +543,12 @@ object ProtocolSpec extends ZIOSpecDefault:
             case Right(event) => Right(events :+ event)
             case Left(detail) => Left(WireFault.BadNotice(detail))
         case (Right(events), _) => Right(events)
+
+  private def cancelled(raw: String, stopped: Report): Boolean =
+    RunId.from(raw) match
+      case Right(id) =>
+        CliExit.from(Call.Cancel(id), CallResult.Reported(stopped)) == CliExit.Success
+      case Left(_) => false
 
   private def minted(line: Notice.LogLine): Option[String] =
     val id = line.data.drop(runPrefix.length)

@@ -6,7 +6,8 @@ import histos.cli.{Cli, CliExit, Command, CompileConsole, Lines, Show}
 import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
 import histos.load.{BuildNotes, LoadError, LoadedBuild, Loader}
-import histos.testrun.{TestFeed, TestStatus}
+import histos.task.RunId
+import histos.testrun.{SuitePattern, TestFeed, TestMode, TestStatus}
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, GraphCompile}
 import histos.{Dep, Jvm, ProjectGraph, Projects, ScalaVersion, module}
@@ -383,8 +384,9 @@ object ServerSpec extends ZIOSpecDefault:
                 )
               )
               shown   <- Client.talk(running.record.socket, Call.Graph).runCollect
+              absent  <- ZIO.fromEither(RunId.from("missing"))
               missing <- Client
-                .talk(running.record.socket, Call.Cancel("missing"))
+                .talk(running.record.socket, Call.Cancel(absent))
                 .runCollect
             yield assertTrue(
               shown.exists {
@@ -394,7 +396,7 @@ object ServerSpec extends ZIOSpecDefault:
               shown.exists(succeeded(Call.Graph)),
               missing.exists {
                 case Feed.Done(result) =>
-                  CliExit.from(Call.Cancel("missing"), result) == CliExit.TaskFailed &&
+                  CliExit.from(Call.Cancel(absent), result) == CliExit.TaskFailed &&
                   result.message.contains("no run")
                 case _ => false
               },
@@ -644,10 +646,11 @@ object ServerSpec extends ZIOSpecDefault:
                 histos.resolve.BuildResolvers(built.resolvers),
               )
               running <- daemon(root, built)
+              pattern <- ZIO.fromEither(SuitePattern.from("demo.FooA"))
               feeds   <- Client
                 .talk(
                   running.record.socket,
-                  Call.Test(Nil, List("demo.FooA"), false),
+                  Call.Test(Nil, List(pattern), TestMode.Run),
                 )
                 .runCollect
               alphaRan <- ZIO.attempt(Files.isRegularFile(alpha))
@@ -674,7 +677,7 @@ object ServerSpec extends ZIOSpecDefault:
                 case _ => false
               },
               outs.contains("demo 3.10.0 jvm passed"),
-              feeds.exists(succeeded(Call.Test(Nil, List("demo.FooA"), false))),
+              feeds.exists(succeeded(Call.Test(Nil, List(pattern), TestMode.Run))),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)

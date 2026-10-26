@@ -34,7 +34,7 @@ trait ContentStore:
   /** Replace this project's keep set. Other projects are left alone. */
   def replace(project: CacheProject, digests: Set[Digest]): IO[CacheError, Unit]
   def kept: IO[CacheError, Set[Digest]]
-  def clean(now: Instant, retention: Duration, dryRun: Boolean): IO[CacheError, List[CacheEntry]]
+  def clean(now: Instant, retention: Duration, mode: CacheCleanMode): IO[CacheError, List[CacheEntry]]
 
   /** Drop this project's keep file, then delete `cas` and `plugins` entries no remaining keep set names. Age does not
     * matter. A temp stamped at `now` stays.
@@ -115,13 +115,16 @@ private final class DiskStore(val root: Path) extends ContentStore:
         listed.iterator.asScala.filter(Files.isRegularFile(_)).flatMap(linesOf).flatMap(Digest.from).toSet
       finally listed.close()
 
-  def clean(now: Instant, retention: Duration, dryRun: Boolean): IO[CacheError, List[CacheEntry]] =
+  def clean(now: Instant, retention: Duration, mode: CacheCleanMode): IO[CacheError, List[CacheEntry]] =
     val cutoff = now.minus(retention)
     for
       entries <- list
       keep    <- kept
       stale = entries.filter(entry => entry.lastUsed.isBefore(cutoff) && !keep.contains(entry.digest))
-      _ <- ZIO.unless(dryRun)(ZIO.foreachDiscard(stale)(entry => delete(entry.path)) *> sweepTemps(cutoff))
+      _ <- mode match
+        case CacheCleanMode.DryRun => ZIO.unit
+        case CacheCleanMode.Remove =>
+          ZIO.foreachDiscard(stale)(entry => delete(entry.path)) *> sweepTemps(cutoff)
     yield stale
 
   def forget(project: CacheProject, now: Instant): IO[CacheError, List[CacheEntry]] =

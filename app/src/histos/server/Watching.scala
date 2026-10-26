@@ -3,7 +3,7 @@ package histos.server
 import histos.cli.Lines
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.watch.SourceWatch
-import histos.{Module, ProjectGraph}
+import histos.{Module, ProjectGraph, ProjectName}
 
 import java.nio.file.Path
 
@@ -58,22 +58,31 @@ object Watching:
 
   def roots(repo: Path, call: Call, graph: ProjectGraph): List[Path] =
     val modules = graph.projects.collect { case module: Module => module }
-    val named   = projects(call)
-    val chosen  =
-      if named.isEmpty then modules
-      else modules.filter(module => named.contains(module.name.value))
+    val chosen  = projects(call) match
+      case WatchNames.Every       => modules
+      case WatchNames.Only(names) => modules.filter(module => names.contains(module.name))
     SourceWatch.roots(repo, chosen)
 
-  private def projects(call: Call): List[String] =
+  private enum WatchNames:
+    case Every
+    case Only(names: List[ProjectName])
+
+  private def projects(call: Call): WatchNames =
+    def listed(names: List[ProjectName]): WatchNames =
+      if names.isEmpty then WatchNames.Every else WatchNames.Only(names)
+    def one(id: String): WatchNames =
+      ProjectName.from(id) match
+        case Right(name) => WatchNames.Only(List(name))
+        case Left(_)     => WatchNames.Only(Nil)
     call match
-      case Call.Test(names, _, _)     => names
-      case Call.Compile(names)        => names
-      case Call.PreviewCompile(names) => names
-      case Call.PreviewTest(names)    => names
-      case Call.PreviewPublish(names) => names
-      case Call.PreviewClean(names)   => names
-      case Call.PreviewRun(id, _)     => List(id)
-      case Call.Clean(names)          => names
-      case Call.Run(id, _)            => List(id)
-      case _                          => Nil
+      case Call.Test(names, _, _)     => listed(names)
+      case Call.Compile(names)        => listed(names)
+      case Call.PreviewCompile(names) => listed(names)
+      case Call.PreviewTest(names)    => listed(names)
+      case Call.PreviewPublish(names) => listed(names)
+      case Call.PreviewClean(names)   => listed(names)
+      case Call.Clean(names)          => listed(names)
+      case Call.PreviewRun(id, _)     => one(id)
+      case Call.Run(id, _)            => one(id)
+      case _                          => WatchNames.Every
 end Watching

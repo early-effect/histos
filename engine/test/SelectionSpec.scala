@@ -1,6 +1,17 @@
 package histos.select
 
-import histos.{Aggregate, Jvm, ProjectGraph, ProjectName, Projects, ScalaVersion, SourcePos, aggregate, module}
+import histos.{
+  Aggregate,
+  Jvm,
+  ProjectGraph,
+  ProjectName,
+  ProjectNameError,
+  Projects,
+  ScalaVersion,
+  SourcePos,
+  aggregate,
+  module,
+}
 
 import zio.ZIO
 import zio.test.*
@@ -17,8 +28,8 @@ object SelectionSpec extends ZIOSpecDefault:
       for
         built    <- ZIO.fromEither(Projects(root, core, app))
         whole    <- ZIO.fromEither(Selection.select(built, Nil))
-        named    <- ZIO.fromEither(Selection.select(built, List("root")))
-        twice    <- ZIO.succeed(Selection.select(built, List("root", "core")))
+        named    <- ZIO.fromEither(Selection.select(built, List(ProjectName("root"))))
+        twice    <- ZIO.succeed(Selection.select(built, List(ProjectName("root"), ProjectName("core"))))
         repeated <- ZIO.fromEither(ProjectName.from("core"))
       yield assertTrue(
         whole.modules.map(_.name.value) == List("core", "app"),
@@ -32,8 +43,14 @@ object SelectionSpec extends ZIOSpecDefault:
         child <- ZIO.fromEither(ProjectName.from("child"))
         name  <- ZIO.fromEither(ProjectName.from("root"))
         graph = ProjectGraph.trusted(List(Aggregate(name, List(child), at)))
-        selected <- ZIO.succeed(Selection.select(graph, List("root")))
-      yield assertTrue(selected == Left(SelectError.Unknown(child))),
+        selected <- ZIO.succeed(Selection.select(graph, List(ProjectName("root"))))
+      yield assertTrue(selected == Left(SelectError.Unknown(child)))
+    ,
+    test("a token that is not a project name fails before selection"):
+      assertTrue(
+        ProjectName.from("1core") == Left(ProjectNameError.Bad("1core")),
+        ProjectName.from("a/b") == Left(ProjectNameError.Bad("a/b")),
+      ),
   )
 
   def spec = selection

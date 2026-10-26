@@ -5,7 +5,7 @@ import histos.cli.{Cli, CliExit}
 import histos.load.{BuildNotes, PluginLink, PluginRuntime}
 import histos.report.{BuildFault, CallResult}
 import histos.plugin.{PluginArgs, PluginOutput, PluginTaskId}
-import histos.task.{TaskError, TaskId, TaskResult}
+import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.zinc.GraphCompile
 import histos.{Jvm, Projects, ScalaVersion, module}
 
@@ -18,8 +18,9 @@ import zio.{Chunk, Dequeue, IO, NonEmptyChunk, Promise, Queue, Ref, Scope, ZIO, 
 import zio.test.*
 
 object RunSpec extends ZIOSpecDefault:
-  private val task = "dev.example/hold"
-  private val call = Call.Task(task, PluginArgs.empty)
+  private val task    = "dev.example/hold"
+  private val taskRun = RunId.trusted(task)
+  private val call    = Call.Task(task, PluginArgs.empty)
 
   private val runs = suite("run id")(
     test(
@@ -53,12 +54,12 @@ object RunSpec extends ZIOSpecDefault:
               idA != idB,
               idA != Some(task),
               told(stopped, "cancelled"),
-              idA.exists(id => endedQuiet(stopped, Call.Cancel(id), CliExit.Success)),
+              idA.flatMap(runOf).exists(id => endedQuiet(stopped, Call.Cancel(id), CliExit.Success)),
               afterA.exists(interrupted),
               !afterA.exists(said(_, "beta")),
               afterB.exists(said(_, "beta")),
               afterB.exists(endedQuiet(_, call, CliExit.Success)),
-              idB.exists(id => failed(finished, Call.Cancel(id), s"no run '$id'")),
+              idB.flatMap(runOf).exists(id => failed(finished, Call.Cancel(id), s"no run '${id.value}'")),
             )
           program.provideSome[Scope & histos.resolve.LockedTools](
             liveLayers(root)
@@ -85,7 +86,7 @@ object RunSpec extends ZIOSpecDefault:
               id != Some(task),
               gate.isDefined,
               told(stopped, "cancelled"),
-              id.exists(found => endedQuiet(stopped, Call.Cancel(found), CliExit.Success)),
+              id.flatMap(runOf).exists(found => endedQuiet(stopped, Call.Cancel(found), CliExit.Success)),
               after.exists(interrupted),
               !after.exists(said(_, "still")),
             )
@@ -105,13 +106,13 @@ object RunSpec extends ZIOSpecDefault:
               feed <- open.next.timeout(15.seconds)
               gate <- gates.take.timeout(15.seconds)
               id = feed.flatMap(runText)
-              missing <- Client.talk(socket, Call.Cancel(task)).runCollect
+              missing <- Client.talk(socket, Call.Cancel(taskRun)).runCollect
               _       <- ZIO.foreachDiscard(gate)(_.succeed("lived"))
               after   <- untilDone(open).timeout(5.seconds)
             yield assertTrue(
               id.isDefined,
               id != Some(task),
-              failed(missing, Call.Cancel(task), s"no run '$task'"),
+              failed(missing, Call.Cancel(taskRun), s"no run '$task'"),
               after.exists(said(_, "lived")),
               after.exists(endedQuiet(_, call, CliExit.Success)),
             )
@@ -188,8 +189,16 @@ object RunSpec extends ZIOSpecDefault:
       id: Option[String],
   ): ZIO[Any, ServerError, Chunk[Feed]] =
     id match
-      case Some(found) => Client.talk(socket, Call.Cancel(found)).runCollect
-      case None        => ZIO.succeed(Chunk.empty)
+      case Some(found) =>
+        RunId.from(found) match
+          case Right(id) => Client.talk(socket, Call.Cancel(id)).runCollect
+          case Left(_)   => ZIO.succeed(Chunk.empty)
+      case None => ZIO.succeed(Chunk.empty)
+
+  private def runOf(raw: String): Option[RunId] =
+    RunId.from(raw) match
+      case Right(id) => Some(id)
+      case Left(_)   => None
 
   private def runText(feed: Feed): Option[String] =
     feed match

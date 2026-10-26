@@ -111,13 +111,13 @@ final case class CompileSession(
 object GraphCompile:
   def run(
       session: CompileSession,
-      names: List[String],
+      names: List[ProjectName],
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
     console(session, names, None)
   )
   def run(
       session: CompileSession,
-      names: List[String],
+      names: List[ProjectName],
       platform: Option[Platform],
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
     console(session, names, platform)
@@ -125,7 +125,7 @@ object GraphCompile:
 
   def run(
       session: CompileSession,
-      names: List[String],
+      names: List[ProjectName],
       platform: Option[Platform],
       report: CompileFeed => UIO[Unit],
   ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
@@ -133,7 +133,7 @@ object GraphCompile:
   )
   def console(
       session: CompileSession,
-      names: List[String],
+      names: List[ProjectName],
       platform: Option[Platform],
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
     watch(
@@ -151,7 +151,7 @@ object GraphCompile:
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
   ): ZStream[Resolve, GraphCompileError, CompileFeed] =
-    val names = cells.map(_._1.value)
+    val names = cells.map(_._1)
     watch(
       session.repo,
       session.graph,
@@ -169,7 +169,7 @@ object GraphCompile:
   def run(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
       jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform],
@@ -183,7 +183,7 @@ object GraphCompile:
   def console(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
       jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform],
@@ -277,7 +277,7 @@ object GraphCompile:
 
   private def choose(
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
   ): Either[GraphCompileError, List[Module]] =
     val modules = modulesOf(graph)
     histos.select.Selection
@@ -334,7 +334,7 @@ object GraphCompile:
   private[zinc] def gated(
       repo: Path,
       graph: ProjectGraph,
-      names: List[String],
+      names: List[ProjectName],
       jdk: JdkRuntime,
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit],

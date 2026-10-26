@@ -91,10 +91,10 @@ object Perform:
         call match
           case Call.Compile(projects) =>
             held(build => follow(withJdk(jdk => Calls.compile(repo, build.graph, projects, jdk, machine, say))))
-          case Call.Test(projects, patterns, quick) =>
+          case Call.Test(projects, patterns, mode) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, quick, jdk, machine, say))
+                withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
               )
             )
           case Call.Publish(repository, projects) =>
@@ -145,8 +145,8 @@ object Perform:
             Calls.cachePath(say)
           case Call.CacheList =>
             Calls.cacheList(say)
-          case Call.CacheClean(dryRun) =>
-            Calls.cacheClean(dryRun, say)
+          case Call.CacheClean(mode) =>
+            Calls.cacheClean(mode, say)
           case Call.LauncherUpdate =>
             Calls.launcherUpdate(repo, say)
           case Call.Watch(inner) =>

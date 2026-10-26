@@ -4,7 +4,10 @@ import histos.cli.CliExit
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.resolve.ResolveError
 import histos.server.{Call, Perform, ResolveAction}
+import histos.task.RunId
+import histos.testrun.TestMode
 import histos.zinc.GraphCompileError
+import histos.ProjectName
 
 import zio.Chunk
 import zio.stream.ZStream
@@ -35,14 +38,14 @@ object BuildSpec extends ZIOSpecDefault:
     ,
     test("a missing lock is 8 for compile, 5 for test and run, and 9 for publish"):
       val compile = Perform.jdkMissed(Call.Compile(Nil), lock)
-      val test    = Perform.jdkMissed(Call.Test(Nil, Nil, false), lock)
+      val test    = Perform.jdkMissed(Call.Test(Nil, Nil, TestMode.Run), lock)
       val run     = Perform.jdkMissed(Call.Run("app", None), lock)
       val publish = Perform.jdkMissed(Call.Publish("local", Nil), lock)
       assertTrue(
         compile == CallResult.Fault(BuildFault.Resolve(missing)),
         CliExit.from(Call.Compile(Nil), compile) == CliExit.CompileFailed,
         test == CallResult.Fault(BuildFault.Resolve(missing)),
-        CliExit.from(Call.Test(Nil, Nil, false), test) == CliExit.ResolveFailed,
+        CliExit.from(Call.Test(Nil, Nil, TestMode.Run), test) == CliExit.ResolveFailed,
         run == CallResult.Fault(BuildFault.Resolve(missing)),
         CliExit.from(Call.Run("app", None), run) == CliExit.ResolveFailed,
         publish == CallResult.Fault(BuildFault.Compile(lock)),
@@ -52,11 +55,11 @@ object BuildSpec extends ZIOSpecDefault:
     test("version, cancel, and an empty clean do not adopt a graph"):
       assertTrue(
         Perform.needsGraph(Call.Compile(Nil)),
-        Perform.needsGraph(Call.Test(Nil, Nil, true)),
-        Perform.needsGraph(Call.Clean(List("core"))),
+        Perform.needsGraph(Call.Test(Nil, Nil, TestMode.Quick)),
+        Perform.needsGraph(Call.Clean(List(ProjectName("core")))),
         !Perform.needsGraph(Call.Clean(Nil)),
         !Perform.needsGraph(Call.Version),
-        !Perform.needsGraph(Call.Cancel("run")),
+        !Perform.needsGraph(Call.Cancel(RunId.trusted("run"))),
         !Perform.needsGraph(Call.Resolve(ResolveAction.Check)),
         !Perform.needsGraph(Call.Watch(Call.Version)),
         !Perform.needsGraph(Call.Reload),

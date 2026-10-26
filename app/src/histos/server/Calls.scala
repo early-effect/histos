@@ -2,11 +2,11 @@ package histos.server
 
 import histos.jdk.JdkRuntime
 import histos.assembly.Assemble
-import histos.cache.ContentStore
+import histos.cache.{CacheCleanMode, ContentStore}
 import histos.build.BuildEvent
 import histos.cli.{Cli, CompileConsole, GraphText}
 import histos.report.{BuildFault, CallResult, Diagnostic, Observation, Rejection, Report, Stored, WorkflowFault}
-import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestRun, TestStatus, TestedCell}
+import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestMode, TestRun, TestStatus, TestedCell}
 import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
@@ -22,7 +22,7 @@ import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.{Platform, ProjectGraph}
+import histos.{Platform, ProjectGraph, ProjectName}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
@@ -154,7 +154,7 @@ object Calls:
       machine: Machine,
       jdk: JdkRuntime,
       repository: String,
-      projects: List[String],
+      projects: List[ProjectName],
       say: Say,
   ): ZIO[Resolve, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
@@ -443,17 +443,19 @@ object Calls:
       )
 
   def cacheClean(
-      dryRun: Boolean,
+      mode: CacheCleanMode,
       say: Say,
   ): ZIO[ContentStore, ServerError, Unit] =
     ZIO
       .serviceWithZIO[ContentStore]: store =>
         zio.Clock.instant
-          .flatMap(now => store.clean(now, ContentStore.Retention, dryRun))
+          .flatMap(now => store.clean(now, ContentStore.Retention, mode))
       .foldZIO(
         error => fault(say, BuildFault.Cache(error)),
         entries =>
-          val verb = if dryRun then "would remove" else "removed"
+          val verb = mode match
+            case CacheCleanMode.DryRun => "would remove"
+            case CacheCleanMode.Remove => "removed"
           val text =
             if entries.isEmpty then s"$verb nothing"
             else
@@ -528,7 +530,7 @@ object Calls:
   def compile(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
@@ -567,7 +569,7 @@ object Calls:
   def previewCompile(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       say: Say,
   ): IO[ServerError, Unit] =
     Plan
@@ -580,7 +582,7 @@ object Calls:
   def previewTest(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       say: Say,
   ): IO[ServerError, Unit] =
     Plan
@@ -593,7 +595,7 @@ object Calls:
   def previewPublish(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       env: Map[String, String],
       say: Say,
   ): IO[ServerError, Unit] =
@@ -608,7 +610,7 @@ object Calls:
   def previewClean(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       say: Say,
   ): IO[ServerError, Unit] =
     Plan
@@ -640,7 +642,7 @@ object Calls:
   def clean(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
+      projects: List[ProjectName],
       say: Say,
   ): IO[ServerError, Unit] =
     val removed =
@@ -682,9 +684,9 @@ object Calls:
   def test(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[String],
-      patterns: List[String],
-      quick: Boolean,
+      projects: List[ProjectName],
+      patterns: List[SuitePattern],
+      mode: TestMode,
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
@@ -696,7 +698,6 @@ object Calls:
             val ran =
               for
                 runtimes <- Runtimes.read(machine)
-                parsed   <- ZIO.fromEither(suitePatterns(patterns))
                 _        <- ZIO
                   .fromEither(histos.select.Selection.select(graph, projects))
                   .mapError(ModuleTestError.Target(_))
@@ -728,8 +729,8 @@ object Calls:
                       projects,
                       jdk,
                       runtimes,
-                      parsed,
-                      quick,
+                      mode,
+                      patterns,
                       (module, version, platform, facts) =>
                         notes(module, version, platform, facts)
                           .flatMap(line => told(say, line).ignore),
@@ -787,20 +788,17 @@ object Calls:
 
   def cancel(
       runs: Ref[Map[RunId, Fiber[ServerError, Unit]]],
-      id: String,
+      id: RunId,
       say: Say,
   ): IO[ServerError, Unit] =
-    RunId.from(id) match
-      case Left(error)  => fault(say, BuildFault.Task(error))
-      case Right(runId) =>
-        runs.modify(map => (map.get(runId), map - runId)).flatMap {
-          case None        => fault(say, BuildFault.Task(TaskError.UnknownRun(runId)))
-          case Some(fiber) =>
-            fiber.interrupt.flatMap { exit =>
-              if exit.isInterrupted then told(say, "cancelled") *> ok(say)
-              else fault(say, BuildFault.Task(TaskError.UnknownRun(runId)))
-            }
+    runs.modify(map => (map.get(id), map - id)).flatMap {
+      case None        => fault(say, BuildFault.Task(TaskError.UnknownRun(id)))
+      case Some(fiber) =>
+        fiber.interrupt.flatMap { exit =>
+          if exit.isInterrupted then told(say, "cancelled") *> ok(say)
+          else fault(say, BuildFault.Task(TaskError.UnknownRun(id)))
         }
+    }
 
   /** The fiber is in the map before `run <id>` is sent, and the body starts after that line. A second call gets its own
     * id.
@@ -903,15 +901,6 @@ object Calls:
       case CompileFeed.Began(_, _, _)         => None
       case CompileFeed.Diagnostic(_, _, _, _) => None
       case CompileFeed.Failed(_)              => None
-
-  private[histos] def suitePatterns(
-      raw: List[String]
-  ): Either[ModuleTestError, List[SuitePattern]] =
-    raw.foldLeft[Either[ModuleTestError, List[SuitePattern]]](Right(Nil)): (acc, item) =>
-      for
-        have    <- acc
-        pattern <- SuitePattern.from(item).left.map(ModuleTestError.Pattern(_))
-      yield have :+ pattern
 
   private def failedSuite(status: TestStatus): Boolean =
     status match

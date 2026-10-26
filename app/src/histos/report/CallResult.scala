@@ -1,5 +1,6 @@
 package histos.report
 
+import histos.cache.CacheCleanModeError
 import histos.assembly.AssembleError
 import histos.jdk.ToolchainError
 import histos.load.{LoadError, PluginFault}
@@ -11,14 +12,14 @@ import histos.resolve.ResolveError
 import histos.schedule.CacheError
 import histos.select.SelectError
 import histos.task.TaskError
-import histos.testrun.{ModuleTestError, SuitePatternError, TestedCell}
+import histos.testrun.{ModuleTestError, SuitePatternError, TestModeError, TestedCell}
 import histos.toolchain.SurveyError
 import histos.version.VersionError
 import histos.watch.WatchError
 import histos.workflow.CiError
 import histos.workspace.IoFailure
 import histos.zinc.GraphCompileError
-import histos.PlatformError
+import histos.{PlatformError, ProjectNameError}
 
 import zio.Chunk
 
@@ -74,31 +75,31 @@ enum BuildFault:
   case Rejected(rejection: Rejection)
 
   def message: String = this match
-    case Load(error)           => error.message
-    case Resolve(error)        => error.message
-    case Toolchain(error)      => error.message
-    case Survey(error)         => error.message
-    case Select(error)         => error.message
-    case Pattern(error)        => error.message
-    case Compile(error)        => error.message
-    case Test(error)           => error.message
-    case Publish(error)        => error.message
-    case Workflow(error)       => error.message
-    case Program(error)        => error.message
-    case Platform(error)       => error.message
-    case Task(error)           => error.message
-    case Plugin(error)         => error.message
-    case PluginTask(error)     => error.message
-    case Preview(error)        => error.message
-    case Assemble(error)       => error.message
-    case Launcher(error)       => error.message
-    case Cache(error)          => error.message
-    case Store(failure)        => failure.message
-    case Io(failure)           => failure.message
-    case Version(error)        => error.message
-    case Watch(error)          => error.message
-    case Interrupted           => "interrupted"
-    case Rejected(rejection)   => rejection.message
+    case Load(error)         => error.message
+    case Resolve(error)      => error.message
+    case Toolchain(error)    => error.message
+    case Survey(error)       => error.message
+    case Select(error)       => error.message
+    case Pattern(error)      => error.message
+    case Compile(error)      => error.message
+    case Test(error)         => error.message
+    case Publish(error)      => error.message
+    case Workflow(error)     => error.message
+    case Program(error)      => error.message
+    case Platform(error)     => error.message
+    case Task(error)         => error.message
+    case Plugin(error)       => error.message
+    case PluginTask(error)   => error.message
+    case Preview(error)      => error.message
+    case Assemble(error)     => error.message
+    case Launcher(error)     => error.message
+    case Cache(error)        => error.message
+    case Store(failure)      => failure.message
+    case Io(failure)         => failure.message
+    case Version(error)      => error.message
+    case Watch(error)        => error.message
+    case Interrupted         => "interrupted"
+    case Rejected(rejection) => rejection.message
 end BuildFault
 
 object BuildFault:
@@ -148,26 +149,36 @@ enum Rejection:
   case PreviewOperation(raw: String)
   case MissingRunName
   case Parameter(error: ParamNameError)
+  case ProjectName(error: ProjectNameError)
+  case SuitePattern(error: SuitePatternError)
+  case RunId(error: TaskError)
+  case TestMode(error: TestModeError)
+  case CacheClean(error: CacheCleanModeError)
   case Flag(error: FlagNameError)
   case TaskPlatform(name: String)
   case CommandHelp(names: List[String])
 
   def message: String = this match
-    case ResolveAction(raw)        => s"'$raw' is not a resolve action"
-    case WorkflowAction(raw)       => s"'$raw' is not a workflow action"
-    case AssemblyDestination(_)    => "assembly path is not a path"
-    case TaskArguments(id)         => s"run $id does not take arguments"
-    case NotATool                  => "not a tool"
-    case Watch(detail)             => detail
-    case RunFailed                 => "the run failed"
-    case WatchStopped              => "watch stopped"
-    case PreviewProjects           => "cleanFull does not take a project"
-    case PreviewOperation(raw)     => s"preview does not run $raw"
-    case MissingRunName            => "run needs one name"
-    case Parameter(error)          => error.message
-    case Flag(error)               => error.message
-    case TaskPlatform(name)        => s"run $name does not take a platform"
-    case CommandHelp(names)        =>
+    case ResolveAction(raw)     => s"'$raw' is not a resolve action"
+    case WorkflowAction(raw)    => s"'$raw' is not a workflow action"
+    case AssemblyDestination(_) => "assembly path is not a path"
+    case TaskArguments(id)      => s"run $id does not take arguments"
+    case NotATool               => "not a tool"
+    case Watch(detail)          => detail
+    case RunFailed              => "the run failed"
+    case WatchStopped           => "watch stopped"
+    case PreviewProjects        => "cleanFull does not take a project"
+    case PreviewOperation(raw)  => s"preview does not run $raw"
+    case MissingRunName         => "run needs one name"
+    case Parameter(error)       => error.message
+    case ProjectName(error)     => error.message
+    case SuitePattern(error)    => error.message
+    case RunId(error)           => error.message
+    case TestMode(error)        => error.message
+    case CacheClean(error)      => error.message
+    case Flag(error)            => error.message
+    case TaskPlatform(name)     => s"run $name does not take a platform"
+    case CommandHelp(names)     =>
       if names.isEmpty then "unknown command" else s"unknown command: ${names.mkString(", ")}"
 end Rejection
 

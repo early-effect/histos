@@ -16,6 +16,7 @@ import histos.{
   ProjectDep,
   ProjectGraph,
   ProjectName,
+  ProjectNameError,
   Projects,
   ScalaVersion,
   ScalaVersions,
@@ -52,9 +53,9 @@ object PlanSpec extends ZIOSpecDefault:
           app  = module("app", Jvm)(scala3).dependsOn(core)
           idle = module("idle", Jvm)(scala3)
           graph <- ZIO.fromEither(Projects(core, app, idle))
-          plan  <- Plan.compile(repo, graph, List("app"))
+          plan  <- Plan.compile(repo, graph, List(ProjectName("app")))
           text = Plan.render(repo, plan)
-          shown <- Plan.show(repo, graph, List("app"))
+          shown <- Plan.show(repo, graph, List(ProjectName("app")))
         yield assertTrue(
           shown == text,
           plan.staleness == FileStaleness.Unknown,
@@ -84,7 +85,7 @@ object PlanSpec extends ZIOSpecDefault:
             .dependsOn(Jvm)(core)
             .clang(ClangMajor(21))
           graph <- ZIO.fromEither(Projects(core, app))
-          plan  <- Plan.compile(repo, graph, List("app"))
+          plan  <- Plan.compile(repo, graph, List(ProjectName("app")))
         yield assertTrue(
           plan.staleness == FileStaleness.Unknown,
           shapes(plan) == List(
@@ -126,7 +127,7 @@ object PlanSpec extends ZIOSpecDefault:
           app  = module("app", Jvm)(scala3).dependsOn(core)
           root = aggregate("root", core, app)
           graph <- ZIO.fromEither(Projects(root, core, app))
-          plan  <- Plan.compile(repo, graph, List("root"))
+          plan  <- Plan.compile(repo, graph, List(ProjectName("root")))
         yield assertTrue(
           shapes(plan) == List(
             ("core", "3.10.0", "jvm", Reason.Selected, Nil),
@@ -161,13 +162,13 @@ object PlanSpec extends ZIOSpecDefault:
           graph     <- ZIO.fromEither(Projects(core))
           missing   <- ZIO.fromEither(ProjectName.from("missing"))
           coreName  <- ZIO.fromEither(ProjectName.from("core"))
-          unknown   <- Plan.compile(repo, graph, List("missing")).either
-          duplicate <- Plan.compile(repo, graph, List("core", "core")).either
-          bad       <- Plan.compile(repo, graph, List("1core")).either
+          unknown   <- Plan.compile(repo, graph, List(ProjectName("missing"))).either
+          duplicate <- Plan.compile(repo, graph, List(ProjectName("core"), ProjectName("core"))).either
+          bad = ProjectName.from("1core")
         yield assertTrue(
           unknown == Left(PreviewError.Target(SelectError.Unknown(missing))),
           duplicate == Left(PreviewError.Target(SelectError.Duplicate(coreName))),
-          bad == Left(PreviewError.Target(SelectError.BadName("1core"))),
+          bad == Left(ProjectNameError.Bad("1core")),
         )
       }
     ,
@@ -183,7 +184,7 @@ object PlanSpec extends ZIOSpecDefault:
               cell(right, List(left)),
             )
           )
-          planned <- Plan.compile(repo, graph, List("left")).either
+          planned <- Plan.compile(repo, graph, List(ProjectName("left"))).either
         yield assertTrue(
           planned == Left(PreviewError.Cycle(left)),
           !Files.exists(repo.resolve(".histos")),
@@ -204,7 +205,7 @@ object PlanSpec extends ZIOSpecDefault:
           core = module("core", Jvm)(scala3)
           app  = module("app", Jvm)(older, scala3).dependsOn(core)
           graph <- ZIO.fromEither(Projects(core, app))
-          plan  <- Plan.test(repo, graph, List("app"))
+          plan  <- Plan.test(repo, graph, List(ProjectName("app")))
           text = Plan.renderTest(repo, plan)
           kept <- same(planted)
         yield assertTrue(
@@ -235,7 +236,7 @@ object PlanSpec extends ZIOSpecDefault:
           repo    <- keep("histos-preview-publish")
           planted <- plant(repo)
           graph   <- ZIO.fromEither(manualLibrary)
-          plan    <- Plan.publish(repo, graph, List("app"), Map.empty)
+          plan    <- Plan.publish(repo, graph, List(ProjectName("app")), Map.empty)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
@@ -337,7 +338,7 @@ object PlanSpec extends ZIOSpecDefault:
           planted <- plant(repo)
           idle    <- ZIO.fromEither(ProjectName.from("idle"))
           graph   <- ZIO.fromEither(withIdle)
-          refused <- Plan.publish(repo, graph, List("idle"), Map.empty).either
+          refused <- Plan.publish(repo, graph, List(ProjectName("idle")), Map.empty).either
           kept    <- same(planted)
         yield assertTrue(
           refused == Left(
@@ -381,7 +382,7 @@ object PlanSpec extends ZIOSpecDefault:
           app  = module("app", Jvm)(scala3)
           idle = module("idle", Jvm)(scala3)
           graph <- ZIO.fromEither(Projects(app, idle))
-          plan  <- Plan.clean(repo, graph, List("app"))
+          plan  <- Plan.clean(repo, graph, List(ProjectName("app")))
           text = Plan.renderClean(repo, plan)
           kept <- same(planted)
         yield assertTrue(

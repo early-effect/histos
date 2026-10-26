@@ -6,31 +6,27 @@ import histos.{Aggregate, Module, ProjectGraph, ProjectName}
 final case class Selected(modules: List[Module], expanded: Set[ProjectName])
 
 enum SelectError:
-  case BadName(raw: String)
   case Duplicate(name: ProjectName)
   case Unknown(name: ProjectName)
 
   def message: String = this match
-    case BadName(raw)    => s"'$raw' is not a project name"
     case Duplicate(name) => s"'${name.value}' is listed twice"
     case Unknown(name)   => s"'${name.value}' is not a project"
 end SelectError
 
 object Selection:
   /** Empty names are every module, in graph order. A module name is that module. An aggregate name is its direct module
-    * children. A repeated name is `SelectError.Duplicate`.
+    * children. A repeated name is `SelectError.Duplicate`. A token that is not a project name never reaches here.
     */
-  def select(graph: ProjectGraph, names: List[String]): Either[SelectError, Selected] =
+  def select(graph: ProjectGraph, names: List[ProjectName]): Either[SelectError, Selected] =
     val modules = graph.projects.collect { case module: Module => module }
     if names.isEmpty then Right(Selected(modules, Set.empty))
     else
       names
-        .foldLeft[Either[SelectError, List[ProjectName]]](Right(Nil)): (acc, raw) =>
+        .foldLeft[Either[SelectError, List[ProjectName]]](Right(Nil)): (acc, name) =>
           acc.flatMap: seen =>
-            ProjectName.from(raw) match
-              case Left(_)                            => Left(SelectError.BadName(raw))
-              case Right(name) if seen.contains(name) => Left(SelectError.Duplicate(name))
-              case Right(name)                        => Right(seen :+ name)
+            if seen.contains(name) then Left(SelectError.Duplicate(name))
+            else Right(seen :+ name)
         .flatMap: parsed =>
           parsed.foldLeft[Either[SelectError, Selected]](Right(Selected(Nil, Set.empty))): (acc, name) =>
             acc.flatMap: selected =>
