@@ -102,28 +102,30 @@ private object OrganizationMacro:
           case Right(_)  => '{ Organization.trusted(${ Expr(text) }) }
 
 private object LiteralMacro:
-  def scalaVersion(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[ScalaVersion] =
+  def scalaVersion(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[ScalaVersion] =
     onePart(sc, args, "scala").map(raw => ScalaVersionMacro.literal(Expr(raw))) match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(out) => out
 
-  def dep(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Dep] =
+  def dep(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[Dep] =
     onePart(sc, args, "dep") match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => DepMacro.literal(Expr(raw))
 
-  def declaredVersion(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ManualVersion] =
+  def declaredVersion(sc: Expr[StringContext], args: Expr[Seq[String]])(using
+      Quotes
+  ): Expr[histos.version.ManualVersion] =
     onePart(sc, args, "manual") match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => histos.version.ManualVersionMacro.literal(Expr(raw))
 
-  def maven(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Resolver] =
+  def maven(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[Resolver] =
     onePart(sc, args, "maven") match
       case Left(err) =>
         import quotes.reflect.report
@@ -132,35 +134,35 @@ private object LiteralMacro:
         val url = RepositoryUrlMacro.literal(Expr(raw))
         '{ Resolver.Maven($url) }
 
-  def artifact(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[ArtifactBase] =
+  def artifact(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[ArtifactBase] =
     onePart(sc, args, "artifact") match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => ArtifactBaseMacro.literal(Expr(raw))
 
-  def organization(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[Organization] =
+  def organization(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[Organization] =
     onePart(sc, args, "organization") match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => OrganizationMacro.literal(Expr(raw))
 
-  def projectPath(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[ProjectPath] =
+  def projectPath(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[ProjectPath] =
     onePart(sc, args, "path") match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => ProjectPathMacro.literal(Expr(raw))
 
-  def shipNumber(sc: Expr[StringContext], args: Expr[Seq[Any]])(using Quotes): Expr[histos.version.ShipNumber] =
+  def shipNumber(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[histos.version.ShipNumber] =
     onePart(sc, args, "ship") match
       case Left(err) =>
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => histos.version.ShipNumberMacro.literal(Expr(raw))
 
-  private def onePart(sc: Expr[StringContext], args: Expr[Seq[Any]], what: String)(using
+  private def onePart(sc: Expr[StringContext], args: Expr[Seq[String]], what: String)(using
       Quotes
   ): Either[String, String] =
     import quotes.reflect.*
