@@ -33,7 +33,14 @@ object CallResultSpec extends ZIOSpecDefault:
         CliExit.from(Call.Test(Nil, Nil, TestMode.Run), ran) == CliExit.TestFailed,
         CliExit.from(Call.PublishLocal(Some("repo"), Nil), ran) == CliExit.PublishFailed,
         CliExit.from(Call.PublishSnapshots(Nil), ran) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishRelease(Nil, true), ran) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishPromote("abc"), ran) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishDrop("abc"), ran) == CliExit.PublishFailed,
       )
+    ,
+    test("a release fault round trips"):
+      val fault = CallResult.Fault(BuildFault.Release("libs deployment abc failed"))
+      assertTrue(fault.toJson.fromJson[CallResult] == Right(fault))
     ,
     test("invalid config data round trips"):
       val error: Config.Error = Config.Error.InvalidData(Chunk("scala"), "not a version")

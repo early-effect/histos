@@ -1263,8 +1263,44 @@ private object WireCall extends WireSupport:
   given JsonCodec[Rejection] = JsonCodec.derived
   given Schema[Rejection]    = Schema.derived
 
+  // Deriving this sum exceeds the inline limit, so the schema is written out.
+  // The codec stays derived. The shape stays {"Case": {fields}}.
   given JsonCodec[BuildFault] = JsonCodec.derived
-  given Schema[BuildFault]    = Schema.derived
+  given Schema[BuildFault]    = Schema.of(buildFaultDoc, Some("BuildFault"))
+
+  private def buildFaultDoc: SchemaDoc =
+    val text = SchemaDoc.Str(None)
+    wrapAll(
+      "BuildFault",
+      List(
+        wrap("Load", List(req("error", docOf[LoadError]))),
+        wrap("Resolve", List(req("error", docOf[ResolveError]))),
+        wrap("Toolchain", List(req("error", docOf[ToolchainError]))),
+        wrap("Survey", List(req("error", docOf[SurveyError]))),
+        wrap("Select", List(req("error", docOf[SelectError]))),
+        wrap("Pattern", List(req("error", docOf[SuitePatternError]))),
+        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
+        wrap("Test", List(req("error", docOf[ModuleTestError]))),
+        wrap("Publish", List(req("error", docOf[LocalPublishError]))),
+        wrap("Release", List(req("detail", text))),
+        wrap("Workflow", List(req("error", docOf[WorkflowFault]))),
+        wrap("Program", List(req("error", docOf[ProgramError]))),
+        wrap("Platform", List(req("error", docOf[PlatformError]))),
+        wrap("Task", List(req("error", docOf[TaskError]))),
+        wrap("Plugin", List(req("error", docOf[PluginFault]))),
+        wrap("PluginTask", List(req("error", docOf[PluginTaskError]))),
+        wrap("Preview", List(req("error", docOf[PreviewError]))),
+        wrap("Assemble", List(req("error", docOf[AssembleError]))),
+        wrap("Launcher", List(req("error", docOf[LauncherError]))),
+        wrap("Cache", List(req("error", docOf[CacheError]))),
+        wrap("Store", List(req("failure", docOf[IoFailure]))),
+        wrap("Io", List(req("failure", docOf[IoFailure]))),
+        wrap("Version", List(req("error", docOf[VersionError]))),
+        wrap("Watch", List(req("error", docOf[WatchError]))),
+        wrap("Interrupted", Nil),
+        wrap("Rejected", List(req("rejection", docOf[Rejection]))),
+      ),
+    )
 
   given JsonCodec[CallResult] = JsonCodec.derived
   given Schema[CallResult]    = Schema.derived

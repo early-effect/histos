@@ -131,6 +131,9 @@ enum Call derives JsonCodec:
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
   case PublishLocal(directory: Option[String], tokens: List[String])
   case PublishSnapshots(tokens: List[String])
+  case PublishRelease(tokens: List[String], automatic: Boolean)
+  case PublishPromote(id: String)
+  case PublishDrop(id: String)
   case Graph
   case Run(id: String, platform: Option[Platform])
   case Task(id: String, args: PluginArgs)
@@ -917,14 +920,14 @@ object Daemon:
   /** Class-directory writers. Queries, preview, cache, and `Call.Task` stay out. */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.Run(_, _) |
-          Call.Assembly(_) | Call.Clean(_) | Call.CleanFull =>
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull =>
         true
-      case Call.Graph | Call.Task(_, _) | Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) |
-          Call.Reload | Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) |
-          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
-          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) |
-          Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
+      case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.Graph | Call.Task(_, _) | Call.Cancel(_) |
+          Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot | Call.Version |
+          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) | Call.Bsp |
+          Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(

@@ -42,6 +42,7 @@ object BuildSpec extends ZIOSpecDefault:
       val run     = Perform.jdkMissed(Call.Run("app", None), lock)
       val publish = Perform.jdkMissed(Call.PublishLocal(Some("local"), Nil), lock)
       val snaps   = Perform.jdkMissed(Call.PublishSnapshots(Nil), lock)
+      val release = Perform.jdkMissed(Call.PublishRelease(Nil, false), lock)
       assertTrue(
         compile == CallResult.Fault(BuildFault.Resolve(missing)),
         CliExit.from(Call.Compile(Nil), compile) == CliExit.CompileFailed,
@@ -53,6 +54,8 @@ object BuildSpec extends ZIOSpecDefault:
         snaps == CallResult.Fault(BuildFault.Compile(lock)),
         CliExit.from(Call.PublishLocal(Some("local"), Nil), publish) == CliExit.PublishFailed,
         CliExit.from(Call.PublishSnapshots(Nil), snaps) == CliExit.PublishFailed,
+        release == CallResult.Fault(BuildFault.Compile(lock)),
+        CliExit.from(Call.PublishRelease(Nil, false), release) == CliExit.PublishFailed,
       )
     ,
     test("version, cancel, and an empty clean do not adopt a graph"):

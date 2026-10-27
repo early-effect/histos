@@ -43,6 +43,7 @@ final case class PublishedModule(
     artifact: String,
     revision: String,
     jar: Option[Path],
+    ship: ShipName,
     unique: Option[String] = None,
 ):
   /** A snapshot prints its unique version. A directory publish prints the jar under `root`.
@@ -186,19 +187,23 @@ object LocalPublish:
             ZIO
               .fromEither(choose(graph, names, plans))
               .flatMap: picked =>
-                if picked.modules.isEmpty then
-                  if picked.refused.nonEmpty || picked.skipped.nonEmpty || chosen.held.nonEmpty then
-                    ZIO.succeed(PublishOutput(skipped(picked), Nil, chosen.held, refused(picked)))
+                // The snapshot ship stays writable so a dependent is refused, then it is not staged.
+                val (live, notes) = write match
+                  case PublishWrite.Release => releaseShips(plans, picked)
+                  case _                    => (picked, Nil)
+                if live.modules.isEmpty then
+                  if live.refused.nonEmpty || live.skipped.nonEmpty || chosen.held.nonEmpty || notes.nonEmpty then
+                    ZIO.succeed(PublishOutput(skipped(live), Nil, chosen.held, refused(live) ++ notes))
                   else ZIO.fail(LocalPublishError.NothingToPublish)
                 else
                   for
                     group <- ZIO.fromEither(organization(graph))
-                    _     <- ZIO.fromEither(requireFacts(graph, plans, picked.modules))
+                    _     <- ZIO.fromEither(requireFacts(graph, plans, live.modules))
                     cells <- GraphCompile
                       .run(
                         repo,
                         graph,
-                        picked.modules.toList,
+                        live.modules.toList,
                         jdk,
                         NativeOrigin.read(env),
                         None,
@@ -209,14 +214,14 @@ object LocalPublish:
                       repo,
                       graph,
                       group,
-                      jobs(plans, picked.modules, cells),
+                      jobs(plans, live.modules, cells),
                       cells,
                     )
                   yield PublishOutput(
-                    skipped(picked),
+                    skipped(live),
                     modules.sortBy(line => (line.group.value, line.artifact, line.revision)),
                     chosen.held,
-                    refused(picked),
+                    refused(live) ++ notes,
                   )
     yield written
 
@@ -295,7 +300,7 @@ object LocalPublish:
       case Decision.NoCatalog         => Left(LocalPublishError.NothingToPublish)
       case Decision.Develop(_, lines) =>
         write match
-          case PublishWrite.Snapshots =>
+          case PublishWrite.Snapshots | PublishWrite.Release =>
             lines match
               case line :: _ =>
                 Left(LocalPublishError.Development(line.ship, line.compile))
@@ -404,6 +409,28 @@ object LocalPublish:
         case Nil          => Right(())
         case head :: tail => Left(LocalPublishError.Facts(::(head, tail)))
 
+  private def releaseShips(plans: List[Planned], picked: Picked): (Picked, List[String]) =
+    val live = picked.modules.filter: module =>
+      plans.exists(plan => plan.members.contains(module) && releaseRevision(plan.revision))
+    (
+      picked.copy(modules = live, roots = picked.roots.intersect(live)),
+      snapshotNotes(plans, picked.modules),
+    )
+
+  private def snapshotNotes(plans: List[Planned], selected: Set[ProjectName]): List[String] =
+    plans
+      .map(_.ship)
+      .distinct
+      .flatMap: ship =>
+        val mine     = plans.filter(_.ship == ship)
+        val chosen   = mine.exists(_.members.exists(selected.contains))
+        val releases = mine.exists(plan => releaseRevision(plan.revision))
+        if chosen && !releases then
+          mine match
+            case plan :: _ => List(s"${ship.value} is ${plan.revision.render}, which is not a release")
+            case Nil       => Nil
+        else Nil
+
   private def releaseRevision(revision: Revision): Boolean =
     revision match
       case Revision.Release(_)      => true
@@ -508,6 +535,7 @@ object LocalPublish:
         Some(sourceBytes),
         Some(javadocBytes),
         artifact,
+        job.ship,
       )
     yield published
 
@@ -557,6 +585,7 @@ object LocalPublish:
         Some(sourceBytes),
         Some(javadocBytes),
         artifact,
+        job.ship,
       )
     yield published
 
@@ -579,6 +608,7 @@ object LocalPublish:
       sources: Option[Chunk[Byte]],
       javadoc: Option[Chunk[Byte]],
       artifact: String,
+      ship: ShipName,
   ): ZIO[Publisher, LocalPublishError, PublishedModule] =
     ZIO
       .serviceWithZIO[Publisher](
@@ -587,7 +617,7 @@ object LocalPublish:
       .mapError(LocalPublishError.Publish(_))
       .map: published =>
         val (jarPath, unique) = placed(published)
-        PublishedModule(group, artifact, revision.render, jarPath, unique)
+        PublishedModule(group, artifact, revision.render, jarPath, ship, unique)
 
   private def moduleOf(
       graph: ProjectGraph,

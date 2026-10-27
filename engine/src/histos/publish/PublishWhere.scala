@@ -21,10 +21,13 @@ enum PublishWhere:
     case Snapshots(_, _) => "Snapshots"
 end PublishWhere
 
-/** Local writes the coordinate this session compiles, including `<ship>-ci`. Snapshots refuse development. */
+/** Local writes the coordinate this session compiles, including `<ship>-ci`. Snapshots and a release refuse that
+  * coordinate. A release also drops a snapshot coordinate after selection, so a dependent ship is still refused.
+  */
 enum PublishWrite:
   case Local
   case Snapshots
+  case Release
 
 object PublishWhere:
   def directory(

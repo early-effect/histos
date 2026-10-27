@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.central.ReleaseMode
 import histos.jdk.JdkRuntime
 import histos.zinc.CompileFeed
 import histos.ProjectGraph
@@ -59,6 +60,24 @@ object PublishRun:
         ZIO
           .fromEither(PublishWhere.snapshots(env))
           .flatMap(where => go(repo, graph, request.names, jdk, env, where, PublishWrite.Snapshots, report))
+
+  def release(
+      repo: Path,
+      graph: ProjectGraph,
+      tokens: List[String],
+      jdk: JdkRuntime,
+      env: Map[String, String],
+      mode: ReleaseMode,
+      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
+  ): ZIO[histos.resolve.Resolve, ReleaseError, ReleaseReport] =
+    ZIO.scoped:
+      ReleaseRun.stage(repo, graph, tokens, jdk, env, report).flatMap(staged => ReleaseRun.upload(repo, staged, mode))
+
+  def promote(repo: Path, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
+    ReleaseRun.promote(repo, env, id)
+
+  def drop(repo: Path, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
+    ReleaseRun.drop(repo, env, id)
 
   private def go(
       repo: Path,

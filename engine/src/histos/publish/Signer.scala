@@ -41,6 +41,9 @@ end Armor
 trait Signer:
   def sign(payload: Chunk[Byte]): IO[SignerError, Armor]
 
+  /** The signing key, for the keyserver read. A gpg signer has this only when `PGP_KEY_HEX` names it. */
+  def fingerprint: IO[SignerError, histos.central.Fingerprint]
+
 object Signer:
   /** Decoded secret-key bytes and the passphrase that unlocks them. Fails before yielding a signer when the secret has
     * no signing key.
@@ -146,7 +149,7 @@ object Signer:
     onPath(env.getOrElse("PATH", "")) match
       case None         => Left(SignerError.GpgMissing)
       case Some(binary) =>
-        Right(new Gpg(binary, env.getOrElse("PGP_PASSPHRASE", ""), childEnv(env)))
+        Right(new Gpg(binary, env.getOrElse("PGP_PASSPHRASE", ""), childEnv(env), text(env, "PGP_KEY_HEX")))
 
   private val hiddenFromChild = Set("PGP_SECRET", "PGP_PASSPHRASE", "PGP_KEY_HEX", "HISTOS_SIGNER")
 
@@ -189,6 +192,14 @@ object Signer:
           case _: PGPException => SignerError.Signature
           case _: IOException  => SignerError.Signature
 
+    def fingerprint: IO[SignerError, histos.central.Fingerprint] =
+      ZIO.fromEither(
+        histos.central.Fingerprint
+          .from(Hex.toHexString(publicKey.getFingerprint))
+          .left
+          .map(_ => SignerError.Signature)
+      )
+
     private def detached(payload: Array[Byte]): Armor =
       val generator = new PGPSignatureGenerator(contentSigner, publicKey)
       generator.init(PGPSignature.BINARY_DOCUMENT, privateKey)
@@ -201,7 +212,18 @@ object Signer:
       Armor(buffer.toString(StandardCharsets.UTF_8))
   end Local
 
-  private final class Gpg(command: Path, passphrase: String, env: Map[String, String]) extends Signer:
+  private final class Gpg(
+      command: Path,
+      passphrase: String,
+      env: Map[String, String],
+      hex: Option[String],
+  ) extends Signer:
+    def fingerprint: IO[SignerError, histos.central.Fingerprint] =
+      hex match
+        case Some(raw) =>
+          ZIO.fromEither(histos.central.Fingerprint.from(raw).left.map(_ => SignerError.NoFingerprint))
+        case None => ZIO.fail(SignerError.NoFingerprint)
+
     def sign(payload: Chunk[Byte]): IO[SignerError, Armor] =
       ZIO.scoped:
         for
@@ -294,6 +316,7 @@ enum SignerError:
   case GpgIo
   case Signature
   case Environment
+  case NoFingerprint
 
   def message: String = this match
     case NoSecret            => "no PGP_SECRET to sign with"
@@ -308,4 +331,5 @@ enum SignerError:
     case GpgIo               => "gpg produced no signature"
     case Signature           => "the signing key produced no signature"
     case Environment         => "the process environment could not be read"
+    case NoFingerprint       => "PGP_KEY_HEX is required to publish a release with gpg"
 end SignerError

@@ -49,6 +49,12 @@ object Operation:
         Right(Call.PublishLocal(directory, tokens))
       case Command.PublishSnapshots(tokens) =>
         Right(Call.PublishSnapshots(tokens))
+      case Command.PublishRelease(automatic, tokens) =>
+        Right(Call.PublishRelease(tokens, automatic))
+      case Command.PublishPromote(id) =>
+        Right(Call.PublishPromote(id))
+      case Command.PublishDrop(id) =>
+        Right(Call.PublishDrop(id))
       case Command.Toolchain                => Right(Call.Toolchain)
       case Command.CachePath                => Right(Call.CachePath)
       case Command.CacheList                => Right(Call.CacheList)

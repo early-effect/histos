@@ -174,7 +174,7 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 - [x] **Preflights.** When the portal URL is Central, HEAD repo1 and look up the signing key on `keyserver.ubuntu.com`, both through heddle against loopback stand-ins. Either miss fails before upload. When `HISTOS_PORTAL` points at the rehearsal portal, neither stand-in is called, and a version that is public on the stand-in still uploads to the fake.
 
-- [ ] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
+- [x] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
 
 - [ ] **Histos-shaped rehearsal.** A fixture with a library module and an assembly module, at release numbers, reaches `VALIDATED` and then `PUBLISHED` on the rehearsal portal. `publish release` in this repository refuses before any HTTP, because the catalog is still the manual snapshot. No Central upload and no tag.
 

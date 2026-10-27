@@ -14,7 +14,8 @@ import histos.jdk.Sha256
 import histos.load.{LoadError, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
-import histos.publish.{LauncherPin, LauncherScript, PublishRun}
+import histos.central.ReleaseMode
+import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
 import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositories, Resolve, ResolveError}
 import histos.schedule.RemoteCache
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
@@ -197,6 +198,73 @@ object Calls:
         ),
       )
     }
+
+  def publishRelease(
+      repo: Path,
+      graph: ProjectGraph,
+      machine: Machine,
+      jdk: JdkRuntime,
+      tokens: List[String],
+      automatic: Boolean,
+      say: Say,
+  ): ZIO[Resolve, ServerError, Unit] =
+    val mode = if automatic then ReleaseMode.Automatic else ReleaseMode.Hold
+    CompileConsole.open(repo).flatMap { console =>
+      released(
+        repo,
+        say,
+        console,
+        PublishRun.release(
+          repo,
+          graph,
+          tokens,
+          jdk,
+          machine.env,
+          mode,
+          feed => speak(say, console, feed).ignore,
+        ),
+      )
+    }
+
+  def promote(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
+    changed(say, PublishRun.promote(repo, machine.env, id))
+
+  def drop(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
+    changed(say, PublishRun.drop(repo, machine.env, id))
+
+  private def released(
+      repo: Path,
+      say: Say,
+      console: histos.cli.CompileConsole.Session,
+      ran: ZIO[Resolve, ReleaseError, histos.publish.ReleaseReport],
+  ): ZIO[Resolve, ServerError, Unit] =
+    ran.foldZIO(
+      failure =>
+        console.announce(text => told(say, text)) *>
+          finishNoted(
+            repo,
+            say,
+            console,
+            List(console.observation),
+            CallResult.Fault(BuildFault.Release(failure.message)),
+          ),
+      report =>
+        val shown =
+          if report.anyFailed then report.refused ++ report.held ++ report.deployed.map(_.line)
+          else report.lines
+        val result =
+          if report.anyFailed then CallResult.Fault(BuildFault.Release(report.failed.mkString("\n")))
+          else CallResult.reported()
+        console.announce(text => told(say, text)) *>
+          told(say, shown.mkString("\n")) *>
+          finishNoted(repo, say, console, List(console.observation), result),
+    )
+
+  private def changed(say: Say, ran: IO[ReleaseError, Unit]): IO[ServerError, Unit] =
+    ran.foldZIO(
+      failure => finish(say, CallResult.Fault(BuildFault.Release(failure.message))),
+      _ => ok(say),
+    )
 
   private def reported(
       repo: Path,

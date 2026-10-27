@@ -301,6 +301,32 @@ object CliSpec extends ZIOSpecDefault:
         Operation.call(shipped) == Right(Call.PublishSnapshots(List("core"))),
       )
     ,
+    test("publish release holds unless automatic, and promote and drop take a deployment id"):
+      for
+        plain    <- Cli.parse(List("publish", "release"))
+        named    <- Cli.parse(List("publish", "release", "core"))
+        auto     <- Cli.parse(List("publish", "release", "core", "--automatic"))
+        front    <- Cli.parse(List("publish", "release", "--automatic", "specular"))
+        promoted <- Cli.parse(List("publish", "promote", "abc"))
+        dropped  <- Cli.parse(List("publish", "drop", "abc"))
+        missing  <- Cli.parse(List("publish", "promote")).either
+        preview  <- Cli.parse(List("preview", "publish", "release")).either
+      yield assertTrue(
+        plain == Command.PublishRelease(false, Nil),
+        named == Command.PublishRelease(false, List("core")),
+        auto == Command.PublishRelease(true, List("core")),
+        front == Command.PublishRelease(true, List("specular")),
+        promoted == Command.PublishPromote("abc"),
+        dropped == Command.PublishDrop("abc"),
+        missing == Left(CliParseError.MissingArgument),
+        preview == Left(CliParseError.PublishForm),
+        Operation.call(named) == Right(Call.PublishRelease(List("core"), false)),
+        Operation.call(auto) == Right(Call.PublishRelease(List("core"), true)),
+        Operation.call(front) == Right(Call.PublishRelease(List("specular"), true)),
+        Operation.call(promoted) == Right(Call.PublishPromote("abc")),
+        Operation.call(dropped) == Right(Call.PublishDrop("abc")),
+      )
+    ,
     test("assembly takes an optional path"):
       for
         plain <- Cli.parse(List("assembly"))

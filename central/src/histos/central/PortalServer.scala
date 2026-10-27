@@ -8,7 +8,7 @@ import heddle.http.header.{BasicCredentials, Headers}
 import heddle.route.PathDsl.*
 import heddle.server.{BodyBytes, Port}
 
-import zio.{Chunk, Config, Scope, ZIO}
+import zio.{Chunk, Config, Scope, UIO, ZIO}
 
 /** `./histos portal`. Loopback only. Deployments stay on disk. */
 object PortalServer:
@@ -27,6 +27,14 @@ object PortalServer:
       case _ => Left(PortalOpenError.Credentials)
 
   def serve(root: Path, credentials: RepositorySecret): ZIO[Scope, PortalOpenError, Bound] =
+    open(root, credentials, ZIO.unit)
+
+  /** `noted` runs on every request, including a rejected token. `serve` notes nothing. */
+  private[histos] def open(
+      root: Path,
+      credentials: RepositorySecret,
+      noted: UIO[Unit],
+  ): ZIO[Scope, PortalOpenError, Bound] =
     val token = bearer(credentials)
     for
       cap <- ZIO.fromEither(BodyBytes.make(PortalReport.Cap + 1024L * 1024L)).mapError(_ => PortalOpenError.Bind)
@@ -36,7 +44,7 @@ object PortalServer:
         maxBodyBytes = cap,
       )
       _       <- ZIO.attemptBlocking(Files.createDirectories(root)).mapError(_ => PortalOpenError.Bind)
-      started <- Server.install(guarded(token, routes(root)), http).mapError(_ => PortalOpenError.Bind)
+      started <- Server.install(guarded(token, routes(root), noted), http).mapError(_ => PortalOpenError.Bind)
       port    <- started.port
       base    <- ZIO.fromEither(PortalBase.from(s"http://127.0.0.1:$port")).mapError(_ => PortalOpenError.Bind)
     yield Bound(base)
@@ -44,11 +52,13 @@ object PortalServer:
   private def bearer(credentials: RepositorySecret): String =
     "Bearer " + BasicCredentials.render(credentials.user.value, new String(credentials.password.value.toArray))
 
-  private def guarded(token: String, inner: Routes[Any, Nothing]): Routes[Any, Nothing] =
+  private def guarded(token: String, inner: Routes[Any, Nothing], noted: UIO[Unit]): Routes[Any, Nothing] =
     Routes.wrap(inner): next =>
       Handler: (request: Request) =>
-        if request.header("Authorization") == Some(token) then next.run(request)
-        else ZIO.succeed(Response.unauthorized())
+        noted *> {
+          if request.header("Authorization") == Some(token) then next.run(request)
+          else ZIO.succeed(Response.unauthorized())
+        }
 
   private def routes(root: Path): Routes[Any, Nothing] =
     Routes(

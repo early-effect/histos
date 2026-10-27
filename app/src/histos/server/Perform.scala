@@ -27,25 +27,25 @@ object Perform:
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.Graph |
-          Call.Run(_, _) | Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) |
-          Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) =>
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.Graph | Call.Run(_, _) | Call.Task(_, _) | Call.Toolchain |
+          Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_) |
+          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
         false
       case Call.Clean(_) | Call.PreviewClean(_) =>
         true
-      case Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot | Call.Version |
-          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) | Call.Bsp |
-          Call.PreviewCleanFull =>
+      case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull |
+          Call.Reload | Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) |
+          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCleanFull =>
         false
 
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
+          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
       case Call.Test(_, _, _) | Call.PreviewTest(_) =>
         BuildFault.testStopped(ModuleTestError.Compile(error)) match
@@ -111,6 +111,16 @@ object Perform:
                 withJdk(jdk => Calls.publishSnapshots(repo, build.graph, machine, jdk, projects, say))
               )
             )
+          case Call.PublishRelease(projects, automatic) =>
+            held(build =>
+              follow(
+                withJdk(jdk => Calls.publishRelease(repo, build.graph, machine, jdk, projects, automatic, say))
+              )
+            )
+          case Call.PublishPromote(id) =>
+            follow(Calls.promote(repo, machine, id, say))
+          case Call.PublishDrop(id) =>
+            follow(Calls.drop(repo, machine, id, say))
           case Call.Assembly(destination) =>
             held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, destination, say))))
           case Call.Run(id, platform) =>

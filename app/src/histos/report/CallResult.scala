@@ -57,6 +57,7 @@ enum BuildFault:
   case Compile(error: GraphCompileError)
   case Test(error: ModuleTestError)
   case Publish(error: LocalPublishError)
+  case Release(detail: String)
   case Workflow(error: WorkflowFault)
   case Program(error: ProgramError)
   case Platform(error: PlatformError)
@@ -84,6 +85,7 @@ enum BuildFault:
     case Compile(error)      => error.message
     case Test(error)         => error.message
     case Publish(error)      => error.message
+    case Release(detail)     => detail
     case Workflow(error)     => error.message
     case Program(error)      => error.message
     case Platform(error)     => error.message

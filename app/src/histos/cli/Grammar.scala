@@ -38,6 +38,9 @@ object Grammar:
     case Assembly(destination: Option[String])
     case PublishLocal(tokens: List[String])
     case PublishSnapshots(projects: List[String])
+    case PublishRelease(automatic: Boolean, tokens: List[String])
+    case PublishPromote(id: String)
+    case PublishDrop(id: String)
     case CacheClean(mode: CacheCleanMode)
     case Resolve(action: ResolveAction)
     case LauncherUpdate
@@ -70,8 +73,19 @@ object Grammar:
     CliCommand("publishLocal", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
   private val publishSnapshots =
     CliCommand("snapshots", Args.text("project").*).map(names => Wire.PublishSnapshots(names.toList))
+  private val publishRelease =
+    CliCommand("release", Options.boolean("automatic"), Args.text("token").*).map { case (automatic, names) =>
+      val raw    = names.toList
+      val tokens = raw.filterNot(_ == "--automatic")
+      // An option is read only while it is the next token. A flag after a ship stays in the args.
+      Wire.PublishRelease(automatic || raw.exists(_ == "--automatic"), tokens)
+    }
+  private val publishPromote =
+    CliCommand("promote", Args.text("deployment")).map(Wire.PublishPromote(_))
+  private val publishDrop =
+    CliCommand("drop", Args.text("deployment")).map(Wire.PublishDrop(_))
   private val publish =
-    CliCommand("publish").subcommands(publishSnapshots)
+    CliCommand("publish").subcommands(publishSnapshots | publishRelease | publishPromote | publishDrop)
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
   private val server    = CliCommand("server").map(_ => Wire.Server)
@@ -215,6 +229,12 @@ object Grammar:
         ZIO.succeed(Command.PublishLocal(None, tokens))
       case Wire.PublishSnapshots(tokens) =>
         ZIO.succeed(Command.PublishSnapshots(tokens))
+      case Wire.PublishRelease(automatic, tokens) =>
+        ZIO.succeed(Command.PublishRelease(automatic, tokens))
+      case Wire.PublishPromote(id) =>
+        ZIO.succeed(Command.PublishPromote(id))
+      case Wire.PublishDrop(id) =>
+        ZIO.succeed(Command.PublishDrop(id))
       case Wire.PreviewCompile(projects) =>
         projectList("preview compile", projects).map(Command.PreviewCompile(_))
       case Wire.PreviewTest(projects) =>
@@ -334,11 +354,11 @@ object Grammar:
 
   private def failure(error: ValidationError, args: List[String]): CliParseError =
     args match
-      case "publish" :: "snapshots" :: _              => reject(error, args)
-      case "publish" :: _                             => CliParseError.PublishForm
-      case "preview" :: "publish" :: "snapshots" :: _ => reject(error, args)
-      case "preview" :: "publish" :: _                => CliParseError.PublishForm
-      case _                                          => reject(error, args)
+      case "publish" :: ("snapshots" | "release" | "promote" | "drop") :: _ => reject(error, args)
+      case "publish" :: _                                                   => CliParseError.PublishForm
+      case "preview" :: "publish" :: "snapshots" :: _                       => reject(error, args)
+      case "preview" :: "publish" :: _                                      => CliParseError.PublishForm
+      case _                                                                => reject(error, args)
 
   private def reject(
       error: ValidationError,

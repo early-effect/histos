@@ -58,6 +58,9 @@ object CallModeSpec extends ZIOSpecDefault:
         val tested   = Call.Test(List(core), List(pattern), TestMode.Quick)
         val publish  = Call.PublishLocal(Some("repo"), List("core"))
         val snaps    = Call.PublishSnapshots(List("core"))
+        val release  = Call.PublishRelease(List("core"), true)
+        val promoted = Call.PublishPromote("abc")
+        val dropped  = Call.PublishDrop("abc")
         val cleaned  = Call.Clean(List(core))
         val cancel   = Call.Cancel(RunId.trusted("run-1"))
         val dry      = Call.CacheClean(CacheCleanMode.DryRun)
@@ -73,6 +76,9 @@ object CallModeSpec extends ZIOSpecDefault:
           roundTrip(tested),
           roundTrip(publish),
           roundTrip(snaps),
+          roundTrip(release),
+          roundTrip(promoted),
+          roundTrip(dropped),
           roundTrip(cleaned),
           roundTrip(cancel),
           roundTrip(dry),
