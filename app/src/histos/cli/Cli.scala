@@ -24,7 +24,7 @@ import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.jdk.{Machine, Toolchain}
 import histos.load.{LoadError, Loader}
-import histos.plugin.{PluginArgs, PluginTaskId}
+import histos.plugin.{FlagNameError, PluginArgs, PluginTaskId}
 import histos.preview.Plan
 import histos.program.ProgramError
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
@@ -32,12 +32,12 @@ import histos.select.SelectError
 import histos.toolchain.{Runtimes, Survey}
 import histos.mcp.HistosMcp
 import histos.resolve.{Resolve, ResolveError}
-import histos.task.{RunId, TaskId}
+import histos.task.{RunId, TaskError, TaskId}
 import histos.workflow.WorkflowAction
-import histos.testrun.{ModuleTestError, SuitePattern, TestMode, TestStatus}
+import histos.testrun.{ModuleTestError, SuitePattern, SuitePatternError, TestMode, TestStatus}
 import histos.workspace.IoFailure
 import histos.zinc.{GraphCompile, GraphCompileError}
-import histos.{Platform, ProjectName}
+import histos.{Platform, ProjectName, ProjectNameError}
 
 import java.nio.file.{Files, Path}
 
@@ -92,6 +92,10 @@ enum CliParseError:
   case TaskPlatform(name: String)
   case MissingPattern
   case Pattern(detail: String)
+  case ProjectName(error: ProjectNameError)
+  case SuitePattern(error: SuitePatternError)
+  case RunId(error: TaskError)
+  case Flag(error: FlagNameError)
   case WatchCommand(detail: String)
   case Rejected
 
@@ -105,6 +109,10 @@ enum CliParseError:
     case TaskPlatform(name)                             => s"run $name does not take a platform"
     case MissingPattern                                 => "testOnly needs a pattern"
     case Pattern(detail)                                => detail
+    case ProjectName(error)                             => error.message
+    case SuitePattern(error)                            => error.message
+    case RunId(error)                                   => error.message
+    case Flag(error)                                    => error.message
     case WatchCommand(detail)                           => detail
 end CliParseError
 
@@ -1531,7 +1539,11 @@ object Cli:
     val commands = loaded.graph.plugins.flatMap: plugin =>
       plugin.contribution.commands.map(BoundCommand(plugin.id, _))
     PluginCommands.parse(commands, tokens) match
-      case Left(_)                 => TaskParsed.Usage(PluginCommands.usage(commands))
+      case Left(error) =>
+        val text = error match
+          case CliParseError.Flag(_) => error.message
+          case _                     => PluginCommands.usage(commands)
+        TaskParsed.Usage(text)
       case Right((id, pluginArgs)) =>
         TaskParsed.Ready(Call.Task(id.render, pluginArgs))
 

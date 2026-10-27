@@ -170,7 +170,7 @@ object Grammar:
       case Wire.Reboot     => ZIO.succeed(Command.Reboot)
       case Wire.Cancel(id) =>
         ZIO.fromEither(
-          RunId.from(id).left.map(error => CliParseError.Pattern(error.message)).map(Command.Cancel(_))
+          RunId.from(id).left.map(CliParseError.RunId(_)).map(Command.Cancel(_))
         )
       case Wire.CacheClean(mode) => ZIO.succeed(Command.CacheClean(mode))
       case Wire.Resolve(action)  => ZIO.succeed(Command.Resolve(action))
@@ -244,7 +244,7 @@ object Grammar:
         Left(CliParseError.Pattern(s"$command --module needs a project"))
       case "--module" :: name :: rest =>
         ProjectName.from(name) match
-          case Left(error)  => Left(CliParseError.Pattern(error.message))
+          case Left(error)  => Left(CliParseError.ProjectName(error))
           case Right(found) =>
             walk(
               command,
@@ -257,7 +257,7 @@ object Grammar:
         Left(CliParseError.Pattern(s"$command does not take $flag"))
       case token :: rest =>
         SuitePattern.from(token) match
-          case Left(error)    => Left(CliParseError.Pattern(error.message))
+          case Left(error)    => Left(CliParseError.SuitePattern(error))
           case Right(pattern) =>
             walk(command, requirePattern, rest, modules, pattern :: patterns)
 
@@ -278,7 +278,7 @@ object Grammar:
     raw.foldLeft[Either[CliParseError, List[ProjectName]]](Right(Nil)): (acc, token) =>
       for
         have <- acc
-        name <- ProjectName.from(token).left.map(error => CliParseError.Pattern(error.message))
+        name <- ProjectName.from(token).left.map(CliParseError.ProjectName(_))
       yield have :+ name
 
   /** The same id `run` accepts: a module, `inspect`, `versions`, or a plugin task.

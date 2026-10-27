@@ -47,8 +47,9 @@ object PluginCommands:
         case Nil                                     => Right((positionals.reverse, seen))
         case token :: tail if token.startsWith("--") =>
           FlagName.from(token.drop(2)) match
+            case Left(error)                         => Left(CliParseError.Flag(error))
             case Right(flag) if flags.contains(flag) => walk(tail, positionals, seen + flag)
-            case _                                   => Left(CliParseError.Rejected)
+            case Right(_)                            => Left(CliParseError.Rejected)
         case token :: tail => walk(tail, token :: positionals, seen)
     walk(args, Nil, Set.empty)
 end PluginCommands

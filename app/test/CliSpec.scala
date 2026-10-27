@@ -10,7 +10,7 @@ import histos.workflow.{Workflow, WorkflowAction}
 import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.task.{RunId, TaskError}
-import histos.testrun.{SuitePattern, TestMode}
+import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
 import histos.build.BuildEvent
 import histos.report.{BuildFault, CallResult, Rejection}
@@ -404,18 +404,29 @@ object CliSpec extends ZIOSpecDefault:
       )
     ,
     test("a bad project name is usage and is not a call"):
-      for
-        compile <- Cli.parse(List("compile", "1core")).either
-        slash   <- Cli.parse(List("test", "a/b")).either
-        clean   <- Cli.parse(List("clean", "1core")).either
-        empty   <- Cli.parse(List("cancel", "")).either
-      yield assertTrue(
-        compile == Left(CliParseError.Pattern(ProjectNameError.Bad("1core").message)),
-        slash == Left(CliParseError.Pattern(ProjectNameError.Bad("a/b").message)),
-        clean == Left(CliParseError.Pattern(ProjectNameError.Bad("1core").message)),
-        empty == Left(CliParseError.Pattern(TaskError.EmptyId.message)),
-        CliExit.Usage.code == 2,
-      )
+      ZIO.scoped:
+        val bad   = ProjectNameError.Bad("1core")
+        val slash = ProjectNameError.Bad("a/b")
+        val blank = SuitePatternError.Blank("foo bar")
+        for
+          compile <- Cli.parse(List("compile", "1core")).either
+          slashed <- Cli.parse(List("test", "a/b")).either
+          clean   <- Cli.parse(List("clean", "1core")).either
+          empty   <- Cli.parse(List("cancel", "")).either
+          jar     <- apiJar
+          dir     <- repo
+          named   <- Cli.execute(List("compile", "1core"), dir, jar).provideSome[Scope](layers(dir))
+          pattern <- Cli.execute(List("testOnly", "foo bar"), dir, jar).provideSome[Scope](layers(dir))
+          cancel  <- Cli.execute(List("cancel", ""), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          compile == Left(CliParseError.ProjectName(bad)),
+          slashed == Left(CliParseError.ProjectName(slash)),
+          clean == Left(CliParseError.ProjectName(bad)),
+          empty == Left(CliParseError.RunId(TaskError.EmptyId)),
+          named.exit == CliExit.Usage && named.exit.code == 2 && named.err == bad.message,
+          pattern.exit == CliExit.Usage && pattern.err == blank.message,
+          cancel.exit == CliExit.Usage && cancel.err == TaskError.EmptyId.message,
+        )
     ,
     test("test and testOnly run, and testQuick is quick"):
       for
@@ -975,7 +986,42 @@ object CliSpec extends ZIOSpecDefault:
         PluginCommands.parse(List(bound), List("nope")) == Left(
           CliParseError.UnknownCommand
         ),
+        PluginCommands.parse(List(bound), List("list", "--1bad")) == Left(
+          CliParseError.Flag(FlagNameError.Bad("1bad"))
+        ),
+        PluginCommands.parse(List(bound), List("list", "--")) == Left(
+          CliParseError.Flag(FlagNameError.Empty)
+        ),
+        PluginCommands.parse(List(bound), List("list", "--nope")) == Left(
+          CliParseError.Rejected
+        ),
+        CliParseError.Flag(FlagNameError.Bad("1bad")).message == FlagNameError.Bad("1bad").message,
       )
+    ,
+    test("a bad plugin flag exits as that flag error"):
+      ZIO.scoped:
+        Projects(use(Listing()), module("core", Jvm)(scala"3.9.0")) match
+          case Left(error)  => ZIO.succeed(assertTrue(error.message == "built"))
+          case Right(graph) =>
+            val bad = FlagNameError.Bad("1bad")
+            for
+              jar   <- apiJar
+              dir   <- bare
+              trace <- Ref.make(List.empty[String])
+              done  <- Cli
+                .execute(List("list", "--1bad"), dir, jar)
+                .provideSome[Scope](
+                  ZLayer.succeed(Recording(trace, graph)) ++
+                    ZLayer.succeed(FetchResolve) ++
+                    ZLayer.succeed(ContentStore.in(dir.resolve("cache"))) ++
+                    ZLayer.succeed(machine(dir, Map.empty))
+                )
+            yield assertTrue(
+              done.exit == CliExit.Usage,
+              done.exit.code == 2,
+              done.err == bad.message,
+              done.err == CliParseError.Flag(bad).message,
+            )
     ,
     test(
       "resolve --update loads the staged generation with and without a server"
