@@ -46,7 +46,14 @@ object build extends HistosBuild:
       )
     Projects
       .organization(organization"rocks.earlyeffect")
-      .assembly(artifact"histos")(
+      .assembly(artifact"histos")
+      .runnerTools(
+        RunnerTools(
+          Some(NodeFloor(25)),
+          Some(ToolRevision("21.1.8")),
+          Some(ToolRevision("1.62.1")),
+        )
+      )(
         ships(manual("histos", manual"0.0.1-SNAPSHOT")(api)),
         api,
         central,

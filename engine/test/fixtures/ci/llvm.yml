@@ -1,0 +1,22 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: KyleMayes/install-llvm-action@v2.0.9
+        with:
+          version: "20.1.8"
+      - run: "./histos test"
+  workflow:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: "./histos workflow --check"
