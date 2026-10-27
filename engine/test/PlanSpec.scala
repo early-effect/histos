@@ -1,8 +1,12 @@
 package histos.preview
 
 import histos.clean.Products
+import histos.jdk.{Machine, Sha256, Toolchain}
 import histos.publish.LocalPublishError
+import histos.resolve.{BuildResolvers, DependencyLock, LockedArtifact, LockedTool, Repository, Repositories}
+import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp, TestCompile}
 import histos.version.{ManualVersion, Refusal, Session, ShipNumber, VersionError}
+import histos.zinc.{AnalysisKind, CompilerRequests, FileStaleness, SourceStale, StoredAnalysis}
 import histos.select.SelectError
 import histos.{
   ClangMajor,
@@ -28,10 +32,14 @@ import histos.{
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.FileTime
 
+import org.objectweb.asm.{ClassWriter, Opcodes}
+
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO}
+import zio.{Chunk, Scope, ZIO}
 import zio.test.*
+
+import java.nio.charset.StandardCharsets
 
 object PlanSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
@@ -58,15 +66,17 @@ object PlanSpec extends ZIOSpecDefault:
           shown <- Plan.show(repo, graph, List(ProjectName("app")))
         yield assertTrue(
           shown == text,
-          plan.staleness == FileStaleness.Unknown,
           text ==
-            """file-level staleness: unknown
-              |core 3.10.0 jvm upstream
+            """core 3.10.0 jvm upstream
               |upstreams
               |sources core/src/main/scala/Core.scala
+              |no previous compile
+              |stale core/src/main/scala/Core.scala
               |app 3.10.0 jvm selected
               |upstreams core
-              |sources app/src/main/scala/App.scala""".stripMargin,
+              |sources app/src/main/scala/App.scala
+              |no previous compile
+              |stale app/src/main/scala/App.scala""".stripMargin,
           plan.units.collect { case PlanUnit.NotSelected(name) =>
             name.value
           } == List("idle"),
@@ -86,8 +96,8 @@ object PlanSpec extends ZIOSpecDefault:
             .clang(ClangMajor(21))
           graph <- ZIO.fromEither(Projects(core, app))
           plan  <- Plan.compile(repo, graph, List(ProjectName("app")))
+          text = Plan.render(repo, plan)
         yield assertTrue(
-          plan.staleness == FileStaleness.Unknown,
           shapes(plan) == List(
             ("core", "3.10.0", "jvm", Reason.Upstream, Nil),
             ("app", "3.8.0", "jvm", Reason.Selected, List("core")),
@@ -98,9 +108,14 @@ object PlanSpec extends ZIOSpecDefault:
             ("app", "3.10.0", "native", Reason.Selected, Nil),
           ),
           plan.units.forall:
-            case chosen: PlanUnit.Chosen => chosen.sources.isEmpty
+            case chosen: PlanUnit.Chosen =>
+              chosen.sources.isEmpty && chosen.staleness == FileStaleness.Initial(Nil) && chosen.quick.isEmpty
             case PlanUnit.NotSelected(_) => true
           ,
+          text.contains("no previous compile"),
+          !text.contains("stale"),
+          !text.contains("fresh"),
+          !text.contains("unknown"),
           !Files.exists(repo.resolve(".histos")),
         )
       }
@@ -209,10 +224,11 @@ object PlanSpec extends ZIOSpecDefault:
           text = Plan.renderTest(repo, plan)
           kept <- same(planted)
         yield assertTrue(
-          plan.staleness == FileStaleness.Unknown,
-          text.startsWith("file-level staleness: unknown"),
+          text.contains("no previous compile"),
+          text.contains("stale core/src/test/scala/CoreSpec.scala"),
+          text.contains("quick: no suite would be skipped"),
+          !text.contains("file-level staleness: unknown"),
           !text.contains("testQuick"),
-          !text.contains("skipped"),
           !text.contains("src/main"),
           !text.contains("would take"),
           lines(plan.units) == List(
@@ -240,10 +256,8 @@ object PlanSpec extends ZIOSpecDefault:
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
-          plan.staleness == FileStaleness.Unknown,
           text ==
-            """file-level staleness: unknown
-              |core libs 1.0.0 upstream
+            """core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
@@ -262,8 +276,7 @@ object PlanSpec extends ZIOSpecDefault:
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """file-level staleness: unknown
-              |app client 2.0.0-1234567890ab-SNAPSHOT selected
+            """app client 2.0.0-1234567890ab-SNAPSHOT selected
               |app client 2.0.0-SNAPSHOT selected
               |held libs 1.4.2-ci already-released""".stripMargin,
           kept,
@@ -283,8 +296,7 @@ object PlanSpec extends ZIOSpecDefault:
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """file-level staleness: unknown
-              |held libs 1.4.2-ci already-released""".stripMargin,
+            """held libs 1.4.2-ci already-released""".stripMargin,
           !text.contains("SNAPSHOT"),
           kept,
         )
@@ -301,8 +313,7 @@ object PlanSpec extends ZIOSpecDefault:
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """file-level staleness: unknown
-              |libs 1.0.0-ci not published""".stripMargin,
+            """libs 1.0.0-ci not published""".stripMargin,
           !text.contains("held"),
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
@@ -363,10 +374,10 @@ object PlanSpec extends ZIOSpecDefault:
           server = Files.isRegularFile(repo.resolve(".histos/server.json"))
         yield assertTrue(
           plan == Plan.cleanAll(repo),
-          plan.staleness == FileStaleness.Unknown,
           plan.store == StoreFate.Kept,
           plan.roots == productRoots(repo),
-          text.startsWith("file-level staleness: unknown"),
+          text.startsWith(".histos/classes"),
+          !text.contains("staleness"),
           !text.contains("server.json"),
           !text.contains("dependencies.lock"),
           !text.contains("assembly"),
@@ -389,7 +400,8 @@ object PlanSpec extends ZIOSpecDefault:
           plan.roots == Products.moduleRoots.map(name => repo.resolve(".histos").resolve(name).resolve("app")),
           !text.contains("provider"),
           !text.contains("idle"),
-          text.startsWith("file-level staleness: unknown"),
+          text.startsWith(".histos/classes/app"),
+          !text.contains("staleness"),
           kept,
         )
       }
@@ -406,8 +418,8 @@ object PlanSpec extends ZIOSpecDefault:
         yield assertTrue(
           plan.roots == Plan.cleanAll(repo).roots,
           plan.store == StoreFate.Forgotten,
-          plan.staleness == FileStaleness.Unknown,
-          text.startsWith("file-level staleness: unknown"),
+          text.startsWith(".histos/classes"),
+          !text.contains("staleness"),
           text.endsWith(sentence),
           text.linesIterator.count(_ == sentence) == 1,
           !text.contains("byte"),
@@ -438,8 +450,7 @@ object PlanSpec extends ZIOSpecDefault:
         yield assertTrue(
           planned == chosen,
           text == Right(
-            """file-level staleness: unknown
-              |app jvm
+            """app jvm
               |upstreams core""".stripMargin
           ),
           missing == Left(PreviewError.Run(RunMiss.Absent("missing"))),
@@ -449,9 +460,7 @@ object PlanSpec extends ZIOSpecDefault:
           ),
           idle == Left(PreviewError.Run(RunMiss.NoMain(idleName))),
           root == Left(PreviewError.Run(RunMiss.Aggregate(rootName))),
-          inspect == Right(
-            RunPlan(RunUnit.Task("inspect"), FileStaleness.Unknown)
-          ),
+          inspect == Right(RunPlan(RunUnit.Task("inspect"))),
           bad == Left(
             PreviewError.Run(
               RunMiss.BadId("run inspect does not take a platform")
@@ -473,16 +482,17 @@ object PlanSpec extends ZIOSpecDefault:
       )
     }
 
+  private def shown(repo: Path, path: Path): String =
+    repo.toAbsolutePath.normalize
+      .relativize(path.toAbsolutePath.normalize)
+      .iterator
+      .asScala
+      .map(_.toString)
+      .mkString("/")
+
   private def shownSources(repo: Path, units: List[PlanUnit]): List[String] =
     units.flatMap:
-      case chosen: PlanUnit.Chosen =>
-        chosen.sources.map: path =>
-          repo.toAbsolutePath.normalize
-            .relativize(path.toAbsolutePath.normalize)
-            .iterator
-            .asScala
-            .map(_.toString)
-            .mkString("/")
+      case chosen: PlanUnit.Chosen => chosen.sources.map(path => shown(repo, path))
       case PlanUnit.NotSelected(_) => Nil
 
   private def wideMatch(
@@ -583,6 +593,11 @@ object PlanSpec extends ZIOSpecDefault:
       java.util.Arrays.equals(Files.readAllBytes(planted.path), planted.bytes)
     }
 
+  private def moduleNamed(graph: ProjectGraph, name: ProjectName): Either[PreviewError, Module] =
+    graph.get(name) match
+      case Some(item: Module) => Right(item)
+      case _                  => Left(PreviewError.Run(RunMiss.Absent(name.value)))
+
   private def shapes(
       plan: CompilePlan
   ): List[(String, String, String, Reason, List[String])] =
@@ -615,6 +630,53 @@ object PlanSpec extends ZIOSpecDefault:
       Files.writeString(path, text)
     }
 
+  private final case class Mark(path: String, time: FileTime, bytes: Long)
+
+  private def census(root: Path): ZIO[Any, Throwable, List[Mark]] =
+    ZIO.attempt {
+      if !Files.exists(root) then Nil
+      else
+        val walk  = Files.walk(root)
+        val paths =
+          try walk.iterator.asScala.toList
+          finally walk.close()
+        paths
+          .filter(path => Files.isRegularFile(path))
+          .sortBy(_.toString)
+          .map: path =>
+            val name = root.relativize(path).iterator.asScala.map(_.toString).mkString("/")
+            Mark(name, Files.getLastModifiedTime(path), Files.size(path))
+    }
+
+  private def writeClass(root: Path, internal: String, mark: String): Unit =
+    val writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
+    writer.visit(
+      Opcodes.V1_8,
+      Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER,
+      internal,
+      null,
+      "java/lang/Object",
+      null,
+    )
+    val field = writer.visitField(
+      Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | Opcodes.ACC_FINAL,
+      "mark",
+      "Ljava/lang/String;",
+      null,
+      mark,
+    )
+    field.visitEnd()
+    val method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "run", "()V", null, null)
+    method.visitInsn(Opcodes.RETURN)
+    method.visitMaxs(0, 0)
+    method.visitEnd()
+    writer.visitEnd()
+    val path = root.resolve(internal + ".class")
+    Files.createDirectories(path.getParent)
+    Files.write(path, writer.toByteArray)
+    Files.setLastModifiedTime(path, FileTime.fromMillis(1700000000000L))
+    ()
+
   private def delete(root: Path): ZIO[Any, Nothing, Unit] =
     ZIO.attempt {
       if Files.exists(root) then
@@ -628,5 +690,200 @@ object PlanSpec extends ZIOSpecDefault:
           .foreach(path => Files.deleteIfExists(path))
     }.ignore
 
-  def spec = suite("preview plans")(plans, asked)
+  private val answers = suite("file staleness and quick")(
+    test("a changed source and the source that depends on it are stale, and classes stay"):
+      ZIO.scoped {
+        for
+          repo <- keep("histos-preview-stale")
+          _    <- write(repo, "app/src/main/scala/Core.scala", "object Core")
+          _    <- write(repo, "app/src/main/scala/Use.scala", "object Use")
+          appMod = module("app", Jvm)(scala3)
+          graph <- ZIO.fromEither(Projects(appMod))
+          app   <- ZIO.fromEither(moduleNamed(graph, ProjectName("app")))
+          core    = repo.resolve("app/src/main/scala/Core.scala")
+          used    = repo.resolve("app/src/main/scala/Use.scala")
+          classes = repo.resolve(".histos").resolve("classes").resolve("app").resolve("3.10.0").resolve("jvm")
+          _ <- ZIO.attempt {
+            val kept = classes.resolve("demo").resolve("Keep.class")
+            Files.createDirectories(kept.getParent)
+            Files.write(kept, Array[Byte](9, 9))
+            Files.setLastModifiedTime(kept, FileTime.fromMillis(1700000000000L))
+          }
+          before <- census(classes)
+          zip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Main).resolve("inc.zip")
+          _ <- ZIO.attempt(
+            StoredAnalysis.put(
+              zip,
+              classes,
+              List(core       -> "demo.Core", used -> "demo.Use"),
+              List("demo.Use" -> "demo.Core"),
+            )
+          )
+          _         <- ZIO.attempt(Files.setLastModifiedTime(zip, FileTime.fromMillis(1700000000000L)))
+          zipBefore <- ZIO.attempt(Files.readAllBytes(zip).toList)
+          fresh     <- Plan.compile(repo, graph, List(ProjectName("app")))
+          freshText = Plan.render(repo, fresh)
+          _     <- write(repo, "app/src/main/scala/Core.scala", "object Core { def n = 1 }")
+          stale <- Plan.compile(repo, graph, List(ProjectName("app")))
+          staleText = Plan.render(repo, stale)
+          after    <- census(classes)
+          zipAfter <- ZIO.attempt(Files.readAllBytes(zip).toList)
+          zipTime  <- ZIO.attempt(Files.getLastModifiedTime(zip))
+        yield assertTrue(
+          freshText.contains("fresh"),
+          !freshText.contains("stale"),
+          staleText.contains("stale app/src/main/scala/Core.scala"),
+          staleText.contains("stale app/src/main/scala/Use.scala"),
+          !staleText.contains("fresh"),
+          before == after,
+          zipBefore == zipAfter,
+          zipTime == FileTime.fromMillis(1700000000000L),
+        )
+      }
+    ,
+    test("a present analysis that cannot be read is unknown, and a missing one is not"):
+      ZIO.scoped {
+        for
+          repo <- keep("histos-preview-unknown")
+          _    <- write(repo, "app/src/main/scala/App.scala", "object App")
+          appMod = module("app", Jvm)(scala3)
+          graph <- ZIO.fromEither(Projects(appMod))
+          app   <- ZIO.fromEither(moduleNamed(graph, ProjectName("app")))
+          zip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Main).resolve("inc.zip")
+          missing <- Plan.compile(repo, graph, Nil)
+          _       <- ZIO.attempt {
+            Files.createDirectories(zip.getParent)
+            Files.writeString(zip, "not an analysis")
+          }
+          unread <- Plan.compile(repo, graph, Nil)
+          text = Plan.render(repo, unread)
+        yield assertTrue(
+          missing.units.collect { case chosen: PlanUnit.Chosen => chosen.staleness } match
+            case FileStaleness.Initial(paths) :: Nil =>
+              paths.map(path => shown(repo, path)) == List("app/src/main/scala/App.scala")
+            case _ => false
+          ,
+          unread.units.collect { case chosen: PlanUnit.Chosen => chosen.staleness } ==
+            List(FileStaleness.Unknown),
+          text.contains("file-level staleness: unknown"),
+          !text.contains("no previous compile"),
+          !text.contains("fresh"),
+          !text.contains("stale "),
+        )
+      }
+    ,
+    test("quick preview skips the digest a run would store, and a changed class runs"):
+      ZIO.scoped {
+        for
+          repo <- keep("histos-preview-quick")
+          _    <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
+          appMod = module("app", Jvm)(scala3)
+          graph <- ZIO.fromEither(Projects(appMod))
+          app   <- ZIO.fromEither(moduleNamed(graph, ProjectName("app")))
+          repos   = BuildResolvers(graph.resolvers)
+          request = CompilerRequests.compiler(scala3, repos)
+          toolSha = Sha256.of(Chunk.fromArray("compiler-tool".getBytes(StandardCharsets.UTF_8)))
+          lock    = DependencyLock(Nil, Nil, List(compilerTool(request, toolSha)))
+          _ <- write(repo, ".histos/dependencies.lock", DependencyLock.render(lock))
+          classes = TestCompile.testClasses(repo, app.name, scala3, Jvm)
+          _ <- ZIO.attempt {
+            writeClass(classes, "demo/Foo", "one")
+            writeClass(classes, "demo/Bar", "one")
+            val bad    = repo.resolve(".histos").resolve("test-quick").resolve("app").resolve("3.10.0").resolve("jvm")
+            val record = bad.resolve("demo").resolve("Bar")
+            Files.createDirectories(record.getParent)
+            Files.writeString(record, "nope\n")
+          }
+          machine <- Machine.load(repo)
+          jdk     <- Toolchain.resolve(machine)
+          parsed  <- ZIO.fromEither(DependencyLock.parse(DependencyLock.render(lock)))
+          stamp   <- ZIO.fromEither(
+            SuiteCover.stored(
+              SuiteAsk(
+                app,
+                List(app),
+                scala3,
+                Jvm,
+                parsed,
+                repos,
+                graph.tools,
+                machine.native,
+                jdk.identity,
+                None,
+              )
+            )
+          )
+          digest <- SuiteStamp.digest("demo.Foo", List(classes), stamp)
+          saved  <- digest match
+            case Some(value) =>
+              QuickRecord.save(repo, app.name, scala3, Jvm, SuiteName("demo.Foo"), value).as(true)
+            case None => ZIO.succeed(false)
+          before <- census(classes)
+          plan   <- Plan.test(repo, graph, List(ProjectName("app")))
+          text = Plan.renderTest(repo, plan)
+          after <- census(classes)
+          mainZip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Main).resolve("inc.zip")
+          testZip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Test).resolve("inc.zip")
+          _      <- ZIO.attempt(writeClass(classes, "demo/Foo", "two"))
+          again  <- census(classes)
+          missed <- Plan.test(repo, graph, List(ProjectName("app")))
+          missedText = Plan.renderTest(repo, missed)
+          left <- census(classes)
+        yield assertTrue(
+          saved,
+          text.contains("quick skip demo.Foo"),
+          !text.contains("quick run demo.Foo"),
+          text.contains("quick: not known to be skippable demo.Bar"),
+          !text.contains("quick run demo.Bar"),
+          !text.contains("quick skip demo.Bar"),
+          before == after,
+          !Files.exists(mainZip),
+          !Files.exists(testZip),
+          missedText.contains("quick run demo.Foo"),
+          missedText.contains("quick: not known to be skippable demo.Bar"),
+          !missedText.contains("quick skip"),
+          again == left,
+        )
+      }
+    @@ TestAspect.withLiveSystem,
+    test("quick preview without a lock does not call a stored digest a run"):
+      ZIO.scoped {
+        for
+          repo <- keep("histos-preview-nolock")
+          _    <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
+          appMod = module("app", Jvm)(scala3)
+          graph <- ZIO.fromEither(Projects(appMod))
+          app   <- ZIO.fromEither(moduleNamed(graph, ProjectName("app")))
+          classes = TestCompile.testClasses(repo, app.name, scala3, Jvm)
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", "one"))
+          digest = Sha256.of(Chunk.fromArray("stored".getBytes(StandardCharsets.UTF_8)))
+          _      <- QuickRecord.save(repo, app.name, scala3, Jvm, SuiteName("demo.Foo"), digest)
+          before <- census(classes)
+          plan   <- Plan.test(repo, graph, List(ProjectName("app")))
+          text = Plan.renderTest(repo, plan)
+          after <- census(classes)
+          zip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Test).resolve("inc.zip")
+        yield assertTrue(
+          text.contains("quick: not known to be skippable demo.Foo"),
+          !text.contains("quick run"),
+          before == after,
+          !Files.exists(zip),
+          !Files.exists(repo.resolve(".histos").resolve("dependencies.lock")),
+        )
+      },
+  )
+
+  private def compilerTool(
+      request: histos.resolve.ToolRequest,
+      sha: Sha256,
+  ): LockedTool =
+    LockedTool(
+      request.id,
+      request.roots,
+      Repositories.ordered(request.repositories),
+      request.roots.map(root => LockedArtifact(root.organization, root.name, root.revision, sha, Repository.Central)),
+      Nil,
+    )
+
+  def spec = suite("preview plans")(plans, asked, answers)
 end PlanSpec

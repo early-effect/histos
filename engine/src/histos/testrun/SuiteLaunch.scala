@@ -14,9 +14,9 @@ import histos.native.{
   NativeSuiteRequest,
   NativeToolchain,
 }
-import histos.node.{NodeBinary, NodeMiss}
+import histos.node.{NodeBinary, NodeMiss, NodeToolchain}
 import histos.toolchain.Runtimes
-import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{DependencyLock, Repositories, Resolve}
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
 import histos.zinc.{
@@ -86,12 +86,13 @@ private[testrun] object SuiteLaunch:
         cell.version,
         cell.platform,
       )
+      asked  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
       stream <- remember(
         repo,
         cell,
         List(main.value),
         classes :: linked.paths,
-        cover(module, linked, jdk),
+        asked,
         mode,
         _ =>
           for
@@ -225,6 +226,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         onCompiled = noted,
       )
+      stamp  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
       stream <-
         SuiteNames
           .discover(classes, linked.paths, provider.framework.value)
@@ -242,7 +244,7 @@ private[testrun] object SuiteLaunch:
                   cell,
                   wanted,
                   classes :: linked.paths,
-                  cover(module, linked, jdk),
+                  stamp,
                   mode,
                   dirty => launch(exact(dirty), linked),
                 )
@@ -291,12 +293,13 @@ private[testrun] object SuiteLaunch:
         cell.version,
         cell.platform,
       )
+      asked  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
       stream <- remember(
         repo,
         cell,
         List(main.value),
         classes :: linked.paths,
-        cover(module, linked, jdk),
+        asked,
         mode,
         _ =>
           for
@@ -448,6 +451,7 @@ private[testrun] object SuiteLaunch:
         repositories,
         onCompiled = noted,
       )
+      stamp  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
       stream <-
         SuiteNames
           .discover(classes, linked.paths, provider.framework.value)
@@ -465,7 +469,7 @@ private[testrun] object SuiteLaunch:
                   cell,
                   wanted,
                   classes :: linked.paths,
-                  cover(module, linked, jdk),
+                  stamp,
                   mode,
                   dirty => launch(exact(dirty), linked, major),
                 )
@@ -544,95 +548,115 @@ private[testrun] object SuiteLaunch:
 
   /** A passing run stores each suite's fingerprint. [[TestMode.Quick]] skips a suite whose stored fingerprint still
     * matches. [[TestMode.Run]] receives the suites that still have to run. The class tree is read once and reused for
-    * every suite.
+    * every suite. The digest is [[SuiteCover.stored]].
     */
   private[testrun] def remember[R](
       repo: Path,
       cell: CompiledCell,
       suites: List[String],
       directories: List[Path],
-      cover: SuiteStamp.Cover,
+      ask: SuiteAsk,
       mode: TestMode,
       run: List[String] => ZIO[
         R,
         ModuleTestError,
         ZStream[Any, ModuleTestError, TestFeed],
       ],
-  ): ZIO[
-    R & TestContext,
-    ModuleTestError,
-    ZStream[Any, ModuleTestError, TestFeed],
-  ] =
-    ZIO.serviceWithZIO[TestContext]: context =>
-      val stampedFrom =
-        cover.copy(jars = cover.jars ++ context.hashes.map(_.value))
-      SuiteStamp
-        .index(directories)
-        .mapError(ModuleTestError.Stamp(_))
-        .flatMap: tree =>
-          ZIO
-            .foreach(suites): name =>
-              for
-                suite <- suiteOf(name)
-                found <- ZIO
-                  .fromEither(SuiteStamp.digest(name, tree, stampedFrom))
-                  .mapError(ModuleTestError.Stamp(_))
-              yield Stamped(name, suite, found)
-            .flatMap: stamped =>
-              if mode == TestMode.Run then
-                run(suites)
-                  .map(stream => stream.tap(keep(repo, cell, stamped, _)))
-              else
-                ZIO
-                  .foldLeft(stamped)(
-                    (List.empty[String], List.empty[Stamped])
-                  ):
-                    case ((cached, dirty), row @ Stamped(name, suite, Some(digest))) =>
-                      QuickRecord
-                        .hit(
-                          repo,
-                          cell.module,
-                          cell.version,
-                          cell.platform,
-                          suite,
-                          digest,
-                        )
-                        .mapError(ModuleTestError.Record(_))
-                        .map: hit =>
-                          if hit then (name :: cached, dirty)
-                          else (cached, row :: dirty)
-                    case ((cached, dirty), row) =>
-                      ZIO.succeed((cached, row :: dirty))
-                  .flatMap: (cached, dirty) =>
-                    val shown = ZStream.fromIterable(
-                      cached.sorted.map(name =>
-                        TestFeed.Cached(
-                          cell.module,
-                          cell.version,
-                          cell.platform,
-                          name,
+  ): ZIO[R, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
+    ZIO
+      .fromEither(SuiteCover.stored(ask))
+      .mapError(refused(cell, _))
+      .flatMap: cover =>
+        SuiteStamp
+          .index(directories)
+          .mapError(ModuleTestError.Stamp(_))
+          .flatMap: tree =>
+            ZIO
+              .foreach(suites): name =>
+                for
+                  suite <- suiteOf(name)
+                  found <- ZIO
+                    .fromEither(SuiteStamp.digest(name, tree, cover))
+                    .mapError(ModuleTestError.Stamp(_))
+                yield Stamped(name, suite, found)
+              .flatMap: stamped =>
+                if mode == TestMode.Run then
+                  run(suites)
+                    .map(stream => stream.tap(keep(repo, cell, stamped, _)))
+                else
+                  ZIO
+                    .foldLeft(stamped)(
+                      (List.empty[String], List.empty[Stamped])
+                    ):
+                      case ((cached, dirty), row @ Stamped(name, suite, Some(digest))) =>
+                        QuickRecord
+                          .hit(
+                            repo,
+                            cell.module,
+                            cell.version,
+                            cell.platform,
+                            suite,
+                            digest,
+                          )
+                          .mapError(ModuleTestError.Record(_))
+                          .map: hit =>
+                            if hit then (name :: cached, dirty)
+                            else (cached, row :: dirty)
+                      case ((cached, dirty), row) =>
+                        ZIO.succeed((cached, row :: dirty))
+                    .flatMap: (cached, dirty) =>
+                      val shown = ZStream.fromIterable(
+                        cached.sorted.map(name =>
+                          TestFeed.Cached(
+                            cell.module,
+                            cell.version,
+                            cell.platform,
+                            name,
+                          )
                         )
                       )
-                    )
-                    if dirty.isEmpty then ZIO.succeed(shown)
-                    else
-                      run(dirty.map(_.name)).map: stream =>
-                        shown ++ stream.tap(keep(repo, cell, dirty, _))
+                      if dirty.isEmpty then ZIO.succeed(shown)
+                      else
+                        run(dirty.map(_.name)).map: stream =>
+                          shown ++ stream.tap(keep(repo, cell, dirty, _))
 
-  /** Locked jars, upstream compile jars, the accepted JDK, and scalac flags. [[TestContext]] hashes are appended inside
-    * [[remember]].
-    */
-  private def cover(
+  private def prepared(
       module: Module,
-      linked: TestCompile.Linked,
+      modules: List[Module],
+      cell: CompiledCell,
       jdk: JdkRuntime,
-  ): SuiteStamp.Cover =
-    SuiteStamp.Cover(
-      linked.hashes.map(_.value),
-      linked.upstream.map(_.value),
-      Runtimes.identityToken(jdk.identity),
-      module.flags.argv,
+      runtimes: Runtimes,
+      lock: histos.resolve.DependencyLock,
+      repositories: histos.resolve.Repositories,
+  ): ZIO[LockedTools & TestContext, Nothing, SuiteAsk] =
+    for
+      tools   <- ZIO.service[LockedTools]
+      context <- ZIO.service[TestContext]
+    yield SuiteAsk(
+      module,
+      modules,
+      cell.version,
+      cell.platform,
+      lock,
+      repositories,
+      tools.catalog,
+      runtimes.native,
+      jdk.identity,
+      nodeIdentity(context),
     )
+
+  private def nodeIdentity(context: TestContext): Option[histos.toolchain.RuntimeIdentity] =
+    context.runtimes match
+      case _ :: identity :: Nil => Some(identity)
+      case _                    => None
+
+  private def refused(cell: CompiledCell, gap: CoverGap): ModuleTestError =
+    gap match
+      case CoverGap.Locked(error)                            => ModuleTestError.Lock(error)
+      case CoverGap.Absent(module, version, platform, scope) =>
+        ModuleTestError.Lock(histos.resolve.ResolveError.LockDrift(module, version, platform, scope))
+      case CoverGap.NoNode =>
+        ModuleTestError.NoNode(cell.module, cell.version, NodeMiss.Absent(NodeToolchain.Floor))
 
   /** The fingerprint is the digest of the classes that ran. A pass stores it. A failure deletes it.
     */
@@ -721,12 +745,13 @@ private[testrun] object SuiteLaunch:
         cell.version,
         cell.platform,
       )
+      asked  <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
       stream <- remember(
         repo,
         cell,
         List(main.value),
         classes :: linked.paths,
-        cover(module, linked, jdk),
+        asked,
         mode,
         _ =>
           TestCompile
@@ -835,6 +860,7 @@ private[testrun] object SuiteLaunch:
             repositories,
             onCompiled = noted,
           )
+          stamp <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
           found <- SuiteNames
             .discover(classes, linked.paths, provider.framework.value)
             .mapError(_ => ModuleTestError.Root(classes))
@@ -851,7 +877,7 @@ private[testrun] object SuiteLaunch:
                   cell,
                   wanted,
                   classes :: linked.paths,
-                  cover(module, linked, jdk),
+                  stamp,
                   mode,
                   dirty => launch(exact(dirty), linked),
                 )

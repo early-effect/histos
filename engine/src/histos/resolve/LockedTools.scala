@@ -31,37 +31,7 @@ final case class LockedTools(
       platform: Platform,
       native: NativeOrigin,
   ): Either[ResolveError, List[ToolRequest]] =
-    val compiler = histos.zinc.CompilerRequests.compiler(version, repositories)
-    val semantic = if version.value.startsWith("2.13.") then
-      List(
-        histos.zinc.CompilerRequests.semanticdb(version, catalog, repositories)
-      )
-    else Nil
-    val platformRequests = platform match
-      case Platform.Jvm => Right(Nil)
-      case Platform.Js  =>
-        Right(
-          List(
-            histos.js.JsRequests.libraries(
-              version,
-              module.jsVersion.getOrElse(catalog.js.revision),
-              repositories,
-              catalog,
-            )
-          )
-        )
-      case Platform.Native =>
-        NativeToolchain
-          .of(module.nativeVersion.getOrElse(catalog.native.revision), native)
-          .left
-          .map(ResolveError.NativeOrigin(_))
-          .map(toolchain =>
-            List(
-              histos.native.NativeRequests
-                .libraries(version, toolchain, repositories)
-            )
-          )
-    platformRequests.map(requests => compiler :: semantic ++ requests)
+    LockedTools.compilationRequests(module, version, platform, native, catalog, repositories)
 
   def compilation(
       module: Module,
@@ -147,6 +117,91 @@ final case class LockedTools(
 end LockedTools
 
 object LockedTools:
+  def compilationRequests(
+      module: Module,
+      version: ScalaVersion,
+      platform: Platform,
+      native: NativeOrigin,
+      catalog: ToolCatalog,
+      repositories: Repositories,
+  ): Either[ResolveError, List[ToolRequest]] =
+    val compiler = histos.zinc.CompilerRequests.compiler(version, repositories)
+    val semantic =
+      if version.value.startsWith("2.13.") then
+        List(histos.zinc.CompilerRequests.semanticdb(version, catalog, repositories))
+      else Nil
+    val platformRequests = platform match
+      case Platform.Jvm => Right(Nil)
+      case Platform.Js  =>
+        Right(
+          List(
+            histos.js.JsRequests.libraries(
+              version,
+              module.jsVersion.getOrElse(catalog.js.revision),
+              repositories,
+              catalog,
+            )
+          )
+        )
+      case Platform.Native =>
+        NativeToolchain
+          .of(module.nativeVersion.getOrElse(catalog.native.revision), native)
+          .left
+          .map(ResolveError.NativeOrigin(_))
+          .map(toolchain => List(histos.native.NativeRequests.libraries(version, toolchain, repositories)))
+    platformRequests.map(requests => compiler :: semantic ++ requests)
+
+  /** Execution tools [[histos.testrun.TestContext]] selects after compilation. Jvm has none. */
+  def executionRequests(
+      module: Module,
+      platform: Platform,
+      native: NativeOrigin,
+      catalog: ToolCatalog,
+      repositories: Repositories,
+  ): Either[ResolveError, List[ToolRequest]] =
+    val provider = module.test.isEmpty
+    platform match
+      case Platform.Jvm => Right(Nil)
+      case Platform.Js  =>
+        val revision = module.jsVersion.getOrElse(catalog.js.revision)
+        val selected =
+          if provider then
+            List(
+              histos.js.JsRequests.suite(revision, module.jsEnv, catalog, repositories),
+              histos.js.JsRequests.testBridge(revision, catalog, repositories),
+            )
+          else
+            List(
+              histos.js.JsRequests.linker(revision, catalog.js.bridgeScala, repositories),
+              histos.js.JsRequests.environment(module.jsEnv, catalog, repositories),
+            )
+        Right(
+          selected ++ histos.zinc.CompilerRequests.supporting(
+            List(
+              catalog.js.bridgeScala,
+              histos.js.JsRequests.compiler(module.jsEnv, catalog),
+            ),
+            catalog,
+            repositories,
+          )
+        )
+      case Platform.Native =>
+        NativeToolchain
+          .of(module.nativeVersion.getOrElse(catalog.native.revision), native)
+          .left
+          .map(ResolveError.NativeOrigin(_))
+          .map: toolchain =>
+            List(histos.native.NativeRequests.linker(toolchain, catalog, repositories)) ++
+              Option
+                .when(provider)(
+                  histos.native.NativeRequests.suite(toolchain, catalog, repositories)
+                )
+                .toList ++ histos.zinc.CompilerRequests.supporting(
+                List(catalog.native.bridgeScala),
+                catalog,
+                repositories,
+              )
+
   def validate(
       request: ToolRequest,
       cell: LockedTool,

@@ -9,14 +9,14 @@ import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
 import histos.toolchain.VersionOrder
 import histos.version.{Decision, HoldReason, PublishAction, ShipName, VersionError, VersionTask}
 import histos.workspace.{IoFailure, IoFault}
-import histos.zinc.{CompileError, GraphCompile, GraphCompileError, Sources}
+import histos.zinc.{AnalysisKind, CompileError, FileStaleness, GraphCompile, GraphCompileError, SourceStale, Sources}
 import histos.{Aggregate, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{IO, UIO, ZIO}
 
 /** Why a module is in the plan. A module outside the closure is [[PlanUnit.NotSelected]], and the printed plan omits
   * it.
@@ -30,12 +30,6 @@ enum Reason:
     case Upstream => "upstream"
 end Reason
 
-/** Zinc reports invalid sources from `compile`, which writes class files and `inc.zip`. A preview does not call that,
-  * so file-level staleness stays unknown. Clean has no sources and still says this.
-  */
-enum FileStaleness:
-  case Unknown
-
 enum PlanUnit:
   case Chosen(
       module: ProjectName,
@@ -44,12 +38,14 @@ enum PlanUnit:
       reason: Reason,
       upstreams: List[ProjectName],
       sources: List[Path],
+      staleness: FileStaleness,
+      quick: Option[QuickAnswer],
   )
   case NotSelected(module: ProjectName)
 
-final case class CompilePlan(units: List[PlanUnit], staleness: FileStaleness)
+final case class CompilePlan(units: List[PlanUnit])
 
-final case class TestPlan(units: List[PlanUnit], staleness: FileStaleness)
+final case class TestPlan(units: List[PlanUnit])
 
 enum PublishUnit:
   case Module(
@@ -61,10 +57,7 @@ enum PublishUnit:
   case Held(ship: ShipName, compile: String, reason: HoldReason)
   case Idle(ship: ShipName, compile: String)
 
-final case class PublishPlan(
-    units: List[PublishUnit],
-    staleness: FileStaleness,
-)
+final case class PublishPlan(units: List[PublishUnit])
 
 /** What `clean` would delete. [[StoreFate.Forgotten]] is `cleanFull`: this repo's content-store entries, with no byte
   * count.
@@ -73,11 +66,7 @@ enum StoreFate:
   case Kept
   case Forgotten
 
-final case class CleanPlan(
-    roots: List[Path],
-    staleness: FileStaleness,
-    store: StoreFate,
-)
+final case class CleanPlan(roots: List[Path], store: StoreFate)
 
 enum RunUnit:
   case Module(
@@ -87,7 +76,7 @@ enum RunUnit:
   )
   case Task(id: String)
 
-final case class RunPlan(unit: RunUnit, staleness: FileStaleness)
+final case class RunPlan(unit: RunUnit)
 
 enum RunMiss:
   case Absent(name: String)
@@ -144,16 +133,14 @@ object Plan:
       graph: ProjectGraph,
       projects: List[ProjectName],
   ): IO[PreviewError, CompilePlan] =
-    modulePlan(repo, graph, projects, Tree.Main).map: (units, staleness) =>
-      CompilePlan(units, staleness)
+    modulePlan(repo, graph, projects, Tree.Main).map(CompilePlan(_))
 
   def test(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
   ): IO[PreviewError, TestPlan] =
-    modulePlan(repo, graph, projects, Tree.Test).map: (units, staleness) =>
-      TestPlan(units, staleness)
+    modulePlan(repo, graph, projects, Tree.Test).map(TestPlan(_))
 
   /** Reads the version decision already in the tree. Writes no jar and opens no repository.
     */
@@ -170,7 +157,7 @@ object Plan:
 
   /** Every product root. Does not read the graph and does not delete. */
   def cleanAll(repo: Path): CleanPlan =
-    CleanPlan(fullRoots(repo), FileStaleness.Unknown, StoreFate.Kept)
+    CleanPlan(fullRoots(repo), StoreFate.Kept)
 
   /** Empty names are [[cleanAll]] and ignore `graph`. A name selects modules only: an aggregate expands, and upstream
     * stays.
@@ -189,7 +176,6 @@ object Plan:
           selected =>
             CleanPlan(
               selected.modules.flatMap(module => moduleRoots(repo, module)),
-              FileStaleness.Unknown,
               StoreFate.Kept,
             ),
         )
@@ -210,22 +196,23 @@ object Plan:
     else runModule(graph, id, platform)
 
   def render(repo: Path, plan: CompilePlan): String =
-    renderUnits(repo, plan.units, plan.staleness)
+    renderUnits(repo, plan.units)
 
   def renderTest(repo: Path, plan: TestPlan): String =
-    renderUnits(repo, plan.units, plan.staleness)
+    renderUnits(repo, plan.units)
 
   def renderPublish(plan: PublishPlan): String =
-    val body = plan.units.map:
-      case PublishUnit.Module(module, ship, revision, reason) =>
-        s"${module.value} ${ship.value} $revision ${reason.word}"
-      case PublishUnit.Held(ship, compile, reason) =>
-        val why = reason match
-          case HoldReason.AlreadyReleased => "already-released"
-        s"held ${ship.value} $compile $why"
-      case PublishUnit.Idle(ship, compile) =>
-        s"${ship.value} $compile not published"
-    (stalenessLine(plan.staleness) :: body).mkString("\n")
+    plan.units
+      .map:
+        case PublishUnit.Module(module, ship, revision, reason) =>
+          s"${module.value} ${ship.value} $revision ${reason.word}"
+        case PublishUnit.Held(ship, compile, reason) =>
+          val why = reason match
+            case HoldReason.AlreadyReleased => "already-released"
+          s"held ${ship.value} $compile $why"
+        case PublishUnit.Idle(ship, compile) =>
+          s"${ship.value} $compile not published"
+      .mkString("\n")
 
   def renderClean(repo: Path, plan: CleanPlan): String =
     val roots = plan.roots.map(path => relative(repo, path))
@@ -233,7 +220,7 @@ object Plan:
       case StoreFate.Kept      => Nil
       case StoreFate.Forgotten =>
         List("content-store entries for this repo would be forgotten")
-    (stalenessLine(plan.staleness) :: roots ++ store).mkString("\n")
+    (roots ++ store).mkString("\n")
 
   def renderRun(plan: RunPlan): String =
     val body = plan.unit match
@@ -242,7 +229,7 @@ object Plan:
         val line  = if names.isEmpty then "upstreams" else s"upstreams $names"
         List(s"${module.value} ${platform.token}", line)
       case RunUnit.Task(id) => List(id)
-    (stalenessLine(plan.staleness) :: body).mkString("\n")
+    body.mkString("\n")
 
   private enum Tree:
     case Main
@@ -253,7 +240,7 @@ object Plan:
       graph: ProjectGraph,
       projects: List[ProjectName],
       tree: Tree,
-  ): IO[PreviewError, (List[PlanUnit], FileStaleness)] =
+  ): IO[PreviewError, List[PlanUnit]] =
     val modules = graph.projects.collect { case module: Module => module }
     for
       selected <- ZIO
@@ -267,18 +254,15 @@ object Plan:
           .sourceBase(repo, module, modules)
           .mapBoth(rootFault(repo, _), base => module.name -> base)
       listed <- ZIO.foreach(modules): module =>
-        cells(repo, module, modules, closure, chosen, bases.toMap, tree)
-    yield (listed.flatten, FileStaleness.Unknown)
+        cells(repo, module, modules, closure, chosen, bases.toMap, tree, graph)
+    yield listed.flatten
 
-  private def renderUnits(
-      repo: Path,
-      units: List[PlanUnit],
-      staleness: FileStaleness,
-  ): String =
-    val body = units.flatMap:
-      case chosen: PlanUnit.Chosen => renderChosen(repo, chosen)
-      case PlanUnit.NotSelected(_) => Nil
-    (stalenessLine(staleness) :: body).mkString("\n")
+  private def renderUnits(repo: Path, units: List[PlanUnit]): String =
+    units
+      .flatMap:
+        case chosen: PlanUnit.Chosen => renderChosen(repo, chosen)
+        case PlanUnit.NotSelected(_) => Nil
+      .mkString("\n")
 
   private def acyclic(modules: List[Module]): Either[ProjectName, Unit] =
     val names = modules.map(_.name).toSet
@@ -306,6 +290,7 @@ object Plan:
       selected: Set[ProjectName],
       bases: Map[ProjectName, Option[Path]],
       tree: Tree,
+      graph: ProjectGraph,
   ): IO[PreviewError, List[PlanUnit]] =
     if !closure.exists(_.name == module.name) then ZIO.succeed(List(PlanUnit.NotSelected(module.name)))
     else
@@ -323,15 +308,25 @@ object Plan:
           ZIO.foreach(platforms): platform =>
             val upstreams = Module.chain(module, closure, platform).map(_.name)
             val base      = bases.get(module.name).flatten
-            paths(repo, module, modules, version, platform, base, tree).map: found =>
-              PlanUnit.Chosen(
-                module.name,
-                version,
-                platform,
-                reason,
-                upstreams,
-                found,
-              )
+            paths(repo, module, modules, version, platform, base, tree).flatMap: found =>
+              val kind = tree match
+                case Tree.Main => AnalysisKind.Main
+                case Tree.Test => AnalysisKind.Test
+              val dir = SourceStale.directory(repo, module.name, version, platform, kind)
+              SourceStale
+                .read(dir, found)
+                .flatMap: stale =>
+                  quickOf(repo, module, modules, version, platform, tree, graph).map: quick =>
+                    PlanUnit.Chosen(
+                      module.name,
+                      version,
+                      platform,
+                      reason,
+                      upstreams,
+                      found,
+                      stale,
+                      quick,
+                    )
         .map(_.flatten)
 
   private def paths(
@@ -372,22 +367,16 @@ object Plan:
       val publishing = found.collect { case word: ShipWord.Publish => word }
       if idle.nonEmpty then
         accept(graph, projects).map: _ =>
-          PublishPlan(
-            idle.map(word => PublishUnit.Idle(word.ship, word.compile)),
-            FileStaleness.Unknown,
-          )
+          PublishPlan(idle.map(word => PublishUnit.Idle(word.ship, word.compile)))
       else if publishing.isEmpty then
         accept(graph, projects).map: _ =>
-          PublishPlan(heldUnits(held), FileStaleness.Unknown)
+          PublishPlan(heldUnits(held))
       else
         val members = publishing.flatMap(_.members.toList).toSet
         chosen(graph, projects, members).flatMap: (roots, names) =>
           linked(graph, names).flatMap: _ =>
             organized(graph).map: _ =>
-              PublishPlan(
-                moduleUnits(graph, publishing, roots, names) ++ heldUnits(held),
-                FileStaleness.Unknown,
-              )
+              PublishPlan(moduleUnits(graph, publishing, roots, names) ++ heldUnits(held))
 
   private def words(
       decision: Decision,
@@ -540,7 +529,7 @@ object Plan:
       case Some(_) =>
         Left(PreviewError.Run(RunMiss.BadId(s"run $id does not take a platform")))
       case None =>
-        Right(RunPlan(RunUnit.Task(id), FileStaleness.Unknown))
+        Right(RunPlan(RunUnit.Task(id)))
 
   private def pluginTask(
       graph: ProjectGraph,
@@ -558,7 +547,7 @@ object Plan:
             val known = graph.plugins.exists: plugin =>
               plugin.id == found.plugin &&
                 plugin.contribution.tasks.exists(_.name == found.name)
-            if known then Right(RunPlan(RunUnit.Task(found.render), FileStaleness.Unknown))
+            if known then Right(RunPlan(RunUnit.Task(found.render)))
             else Left(PreviewError.Run(RunMiss.UnknownTask(found.render)))
 
   private def runModule(
@@ -586,8 +575,7 @@ object Plan:
                       module.name,
                       chosen,
                       Module.chain(module, modules, chosen).map(_.name),
-                    ),
-                    FileStaleness.Unknown,
+                    )
                   )
 
   private def pick(
@@ -614,11 +602,44 @@ object Plan:
     List(
       s"${unit.module.value} ${unit.version.value} ${unit.platform.token} ${unit.reason.word}",
       upstreams,
-    ) ++ sources
+    ) ++ sources ++ stalenessLines(repo, unit.staleness) ++ quickLines(unit.quick)
 
-  private def stalenessLine(staleness: FileStaleness): String =
+  private def stalenessLines(repo: Path, staleness: FileStaleness): List[String] =
     staleness match
-      case FileStaleness.Unknown => "file-level staleness: unknown"
+      case FileStaleness.Initial(sources) =>
+        "no previous compile" :: sources.map(path => s"stale ${relative(repo, path)}")
+      case FileStaleness.Known(Nil) =>
+        List("fresh")
+      case FileStaleness.Known(stale) =>
+        stale.map(path => s"stale ${relative(repo, path)}")
+      case FileStaleness.Unknown =>
+        List("file-level staleness: unknown")
+
+  private def quickLines(quick: Option[QuickAnswer]): List[String] =
+    quick match
+      case None                         => Nil
+      case Some(QuickAnswer.Uncompiled) =>
+        List("quick: no suite would be skipped")
+      case Some(QuickAnswer.Named(skip, run, unknown)) =>
+        skip.map(name => s"quick skip $name") ++
+          run.map(name => s"quick run $name") ++
+          unknown.map(name => s"quick: not known to be skippable $name")
+      case Some(QuickAnswer.Partial(skip)) =>
+        skip.map(name => s"quick skip $name") :+ "quick: the rest are not known to be skippable"
+
+  private def quickOf(
+      repo: Path,
+      module: Module,
+      modules: List[Module],
+      version: ScalaVersion,
+      platform: Platform,
+      tree: Tree,
+      graph: ProjectGraph,
+  ): UIO[Option[QuickAnswer]] =
+    tree match
+      case Tree.Main => ZIO.succeed(None)
+      case Tree.Test =>
+        QuickAnswer.read(repo, module, modules, version, platform, graph).map(Some(_))
 
   private def relative(repo: Path, path: Path): String =
     val root  = repo.toAbsolutePath.normalize

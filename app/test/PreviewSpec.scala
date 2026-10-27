@@ -118,14 +118,16 @@ object PreviewSpec extends ZIOSpecDefault:
         yield assertTrue(
           heard.outs == Chunk(text),
           heard.done == Chunk(CallResult.reported()),
-          text.startsWith("file-level staleness: unknown"),
-          text.contains("core 3.10.0 jvm upstream"),
+          text.startsWith("core 3.10.0 jvm upstream"),
+          text.contains("no previous compile"),
+          text.contains("stale core/src/test/scala/CoreSpec.scala"),
+          text.contains("quick: no suite would be skipped"),
           text.contains("sources core/src/test/scala/CoreSpec.scala"),
           text.contains("app 3.10.0 jvm selected"),
           text.contains("sources app/src/test/scala/AppSpec.scala"),
+          !text.contains("file-level staleness: unknown"),
           !text.contains("src/main"),
           !text.contains("testQuick"),
-          !text.contains("skipped"),
           !text.contains("would take"),
           kept,
           !Files.exists(repo.resolve(".histos").resolve("test-classes")),
@@ -159,8 +161,7 @@ object PreviewSpec extends ZIOSpecDefault:
           heard.outs == Chunk(text),
           heard.done == Chunk(CallResult.reported()),
           text ==
-            """file-level staleness: unknown
-              |core libs 1.0.0 upstream
+            """core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
@@ -214,8 +215,8 @@ object PreviewSpec extends ZIOSpecDefault:
         yield assertTrue(
           heard.outs == Chunk(text),
           heard.done == Chunk(CallResult.reported()),
-          text.startsWith("file-level staleness: unknown"),
-          text.contains(".histos/classes"),
+          text.startsWith(".histos/classes"),
+          !text.contains("staleness"),
           text.endsWith(sentence),
           !text.contains("byte"),
           kept,
@@ -242,8 +243,7 @@ object PreviewSpec extends ZIOSpecDefault:
           heard.outs == Chunk(text),
           heard.done == Chunk(CallResult.reported()),
           text ==
-            """file-level staleness: unknown
-              |app jvm
+            """app jvm
               |upstreams core""".stripMargin,
           missing.outs.isEmpty,
           missing.done == Chunk(missed),

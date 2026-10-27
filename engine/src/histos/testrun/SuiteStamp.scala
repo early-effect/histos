@@ -27,8 +27,8 @@ end StampError
 
 /** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, and the scalac flags.
   * Each class is a fingerprint and the names it points at. The bytes are not kept. A class this suite does not
-  * reference is not part of the digest. Tool and runtime hashes supplied by [[histos.testrun.TestContext]] are jar
-  * lines. This digest adds the upstream jars, the JDK token, and the flags.
+  * reference is not part of the digest. Tool fingerprints and runtime-token hashes from [[SuiteCover]] are jar lines.
+  * This digest adds the upstream jars, the JDK token, and the flags.
   */
 object SuiteStamp:
   /** Fingerprint of one class file, and the binary names it mentions. */
@@ -37,10 +37,11 @@ object SuiteStamp:
       refs: Set[String],
   )
 
-  /** Identity besides the referenced class files. `jars` are this module's locked artifacts. `upstream` are compile
-    * jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac arguments.
+  /** Identity besides the referenced class files. `jars` are locked shas, tool fingerprints, and runtime-token hashes.
+    * `upstream` are compile jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac
+    * arguments.
     */
-  private[testrun] final case class Cover(
+  private[histos] final case class Cover(
       jars: List[String],
       upstream: List[String],
       jdk: String,
@@ -53,6 +54,24 @@ object SuiteStamp:
       cover: Cover,
   ): IO[StampError, Option[Sha256]] =
     index(directories).flatMap(tree => ZIO.fromEither(digest(suite, tree, cover)))
+
+  /** One class walk, then a digest per named suite. A missing suite class is `None`, not an error. */
+  def digests(
+      suites: List[String],
+      directories: List[Path],
+      cover: Cover,
+  ): IO[StampError, Map[String, Option[Sha256]]] =
+    index(directories).flatMap(tree => ZIO.fromEither(foldDigests(suites, tree, cover)))
+
+  private def foldDigests(
+      suites: List[String],
+      indexed: Map[String, Print],
+      cover: Cover,
+  ): Either[StampError, Map[String, Option[Sha256]]] =
+    suites.foldLeft[Either[StampError, Map[String, Option[Sha256]]]](Right(Map.empty)):
+      case (Left(error), _)     => Left(error)
+      case (Right(seen), suite) =>
+        digest(suite, indexed, cover).map(found => seen.updated(suite, found))
 
   /** One walk of the class directories. `remember` stamps every suite from this.
     */
