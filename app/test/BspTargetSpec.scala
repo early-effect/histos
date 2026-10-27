@@ -40,15 +40,6 @@ object BspTargetSpec extends ZIOSpecDefault:
         missing != main,
       )
     ,
-    test("js and native are the allow-list, and jvm is not a token"):
-      assertTrue(
-        Bsp.parsePlatforms("js\nnative\n") == Right(Set(Platform.Js, Platform.Native)),
-        Bsp.parsePlatforms("js\njs\n\n  ") == Right(Set(Platform.Js)),
-        Bsp.parsePlatforms("\n") == Right(Set.empty[Platform]),
-        Bsp.parsePlatforms("jvm\n") == Left(Bsp.AllowFault.Unknown("jvm")),
-        Bsp.parsePlatforms("js\njvm\n") == Left(Bsp.AllowFault.Unknown("jvm")),
-      )
-    ,
     test("a main class field fault is rendered at the codec"):
       val required = Rpc.ScalaMainClass.FieldFault.Required("class")
       val strings  = Rpc.ScalaMainClass.FieldFault.NotStrings("arguments")

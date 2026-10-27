@@ -5,19 +5,10 @@ import histos.jdk.Sha256
 import histos.js.ScalaJs
 import histos.native.{NativeCompile, NativeOrigin, NativeToolchain}
 import histos.resolve.LockedTools
-import histos.resolve.{
-  BuildResolvers,
-  Classpath,
-  ClasspathScope,
-  DependencyLock,
-  Repositories,
-  Resolve,
-  ResolveCell,
-  ResolveError,
-}
+import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Resolve, ResolveError}
 import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
-import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -525,28 +516,26 @@ object GraphCompile:
             upstreamClasses <- ZIO.fromEither(
               upstreamClasses(module, chain, version, platform, done)
             )
-            fetched <- ZIO
-              .foreach(chain :+ module)(item =>
-                classpathOf(
-                  item,
-                  version,
-                  platform,
-                  plan.lock,
-                  plan.repositories,
-                )
+            assembled <- ScalacClasspath
+              .of(
+                plan.repo,
+                plan.modules,
+                module,
+                version,
+                platform,
+                plan.lock,
+                plan.repositories,
+                ClasspathScope.Compile,
               )
-              .map(merge)
-            libraries =
-              if platform == Platform.Jvm then withoutStdlib(fetched)
-              else fetched
+              .provideSome[Resolve](ZLayer.succeed(plan.tools))
             classes = classesDir(plan.repo, module.name, version, platform)
             request = CompileRequest(
               CompileToolchain(version, platform, plan.jdk, module.flags),
               sources,
-              upstreamClasses ++ libraries.paths,
+              upstreamClasses ++ assembled.jars,
               classes,
               analysis(plan.repo, module.name, version, platform),
-              libraries.hashes,
+              assembled.hashes,
             )
             compiled <- compile(
               work,
@@ -640,46 +629,6 @@ object GraphCompile:
                 platform,
               )
             )
-
-  /** JVM compile prepends `JvmCompile.runtime`. The lock's copy of that library has to stay off.
-    */
-  private def withoutStdlib(fetched: Fetched): Fetched =
-    val kept = fetched.paths
-      .zip(fetched.hashes)
-      .filterNot((path, _) => JvmCompile.isStandardLibrary(path))
-    Fetched(kept.map(_._1), kept.map(_._2))
-
-  private def merge(fetched: List[Fetched]): Fetched =
-    val paired             = fetched.flatMap(item => item.paths.zip(item.hashes))
-    val (paths, hashes, _) =
-      paired.foldLeft((List.empty[Path], List.empty[Sha256], Set.empty[Path])):
-        case ((paths, hashes, seen), (path, _)) if seen.contains(path) =>
-          (paths, hashes, seen)
-        case ((paths, hashes, seen), (path, hash)) =>
-          (paths :+ path, hashes :+ hash, seen + path)
-    Fetched(paths, hashes)
-
-  private def classpathOf(
-      module: Module,
-      version: ScalaVersion,
-      platform: Platform,
-      lock: DependencyLock,
-      repositories: Repositories,
-  ): ZIO[Resolve, GraphCompileError, Fetched] =
-    val cell = ResolveCell(
-      module.name,
-      Dep.select(module.dependencies, platform),
-      version,
-      platform,
-      repositories,
-      ClasspathScope.Compile,
-    )
-    Resolve.materialize(cell, lock).mapBoth(GraphCompileError.Lock(_), fetched)
-
-  private final case class Fetched(paths: List[Path], hashes: List[Sha256])
-
-  private def fetched(classpath: Classpath): Fetched =
-    Fetched(classpath.artifacts.map(_.path), classpath.artifacts.map(_.sha256))
 
   private def readLock(repo: Path): IO[GraphCompileError, DependencyLock] =
     Resolve

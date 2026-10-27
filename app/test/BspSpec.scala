@@ -28,7 +28,7 @@ import scala.jdk.CollectionConverters.*
 
 import zio.json.*
 import zio.json.ast.Json
-import zio.{Ref, Scope, System, UIO, ZIO, durationInt}
+import zio.{Ref, Scope, System, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object BspSpec extends ZIOSpecDefault:
@@ -182,7 +182,7 @@ object BspSpec extends ZIOSpecDefault:
               )
               _       <- open.answer(request("build/initialize", 1))
               listed  <- open.answer(request("workspace/buildTargets", 2))
-              uri     <- one(listed, "3.10.0")
+              uri     <- uriOf(listed, "demo?scala=3.10.0&platform=jvm&scope=main")
               sources <- open.answer(targeted("buildTarget/sources", 3, uri))
               options <- open.answer(
                 targeted("buildTarget/scalacOptions", 4, uri)
@@ -202,11 +202,12 @@ object BspSpec extends ZIOSpecDefault:
               otherGone <- ZIO.attempt(!Files.exists(other))
               flagsOn = scalacFlags(options)
             yield assertTrue(
-              displayNames(listed) == List("demo", "demo", "histos.scala"),
-              versions(listed) == List("2.13.16", "3.10.0", "3.10.0"),
-              binaries(listed) == List("2.13", "3", "3"),
-              platforms(listed) == List(1, 1, 1),
+              displayNames(listed) == List("demo", "demo", "ui", "histos.scala"),
+              versions(listed) == List("2.13.16", "3.10.0", "3.10.0", "3.10.0"),
+              binaries(listed) == List("2.13", "3", "3", "3"),
+              platforms(listed) == List(1, 1, 2, 1),
               tags(listed) == List(
+                List("library"),
                 List("library"),
                 List("library"),
                 List("library"),
@@ -215,9 +216,9 @@ object BspSpec extends ZIOSpecDefault:
               jars(listed, "3.10.0").exists(_.contains("scala3-compiler")),
               jars(listed, "2.13.16").exists(_.contains("scala-library")),
               jars(listed, "2.13.16").exists(_.contains("scala-compiler")),
-              flags(listed, "canCompile") == List(true, true, true),
-              flags(listed, "canTest") == List(false, false, false),
-              flags(listed, "canRun") == List(true, true, false),
+              flags(listed, "canCompile") == List(true, true, true, true),
+              flags(listed, "canTest") == List(false, false, false, false),
+              flags(listed, "canRun") == List(true, true, true, false),
               uri.contains("platform=jvm"),
               uri.contains("scope=main"),
               sourcePaths(sources) == List(source),
@@ -518,16 +519,15 @@ object BspSpec extends ZIOSpecDefault:
             histos.AppToolFixture.resolver
           )
     ,
-    test("a js allow-list publishes a distinct id and a compile does not link"):
+    test("a js cell is a js target and a compile does not link"):
       ZIO.scoped:
         temp.flatMap: root =>
           val program =
             for
               built <- ZIO.fromEither(Projects(module("ui", Jvm, Js)(scala3)))
               _     <- ZIO.attempt {
-                write(root, ".histos/bsp-platforms", "js\njs\n")
                 write(root, "ui/src/Hello.scala", "object Hello\n")
-                write(root, ".histos/dependencies.lock", "cell ui 3.10.0 js\n")
+                write(root, ".histos/dependencies.lock", "cell ui 3.10.0 js\ncell ui 3.10.0 jvm\n")
               }
               jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
@@ -555,24 +555,96 @@ object BspSpec extends ZIOSpecDefault:
             histos.AppToolFixture.resolver
           )
     ,
-    test("a bad bsp platform fails the target list"):
+    test("a js module is a js target, a jvm module is not, and scalac options are the engine classpath"):
       ZIO.scoped:
         temp.flatMap: root =>
           val program =
             for
-              built <- ZIO.fromEither(Projects(module("ui", Js)(scala3)))
-              _     <- ZIO.attempt(write(root, ".histos/bsp-platforms", "jvm\n"))
-              jdk   <- GraphCompile.jdkHere
-              open  <- runtimes.flatMap(found =>
+              lib   <- ZIO.succeed(module("lib", Jvm)(scala3))
+              built <- ZIO.fromEither(
+                Projects(lib, module("core", Jvm)(scala3).dependsOn(lib), module("ui", Js)(scala3))
+              )
+              _ <- ZIO.attempt {
+                write(root, "core/test/CoreSpec.scala", "object CoreSpec\n")
+                write(
+                  root,
+                  ".histos/dependencies.lock",
+                  "cell lib 3.10.0 jvm\ncell core 3.10.0 jvm\ncell ui 3.10.0 js\n",
+                )
+              }
+              modules = built.projects.collect { case item: Module => item }
+              core <- ZIO.fromEither(only(modules, "core"))
+              ui   <- ZIO.fromEither(only(modules, "ui"))
+              jdk  <- GraphCompile.jdkHere
+              open <- runtimes.flatMap(found =>
                 histos.AppToolFixture.at(root, built)(
                   Bsp.open(root, built, jdk, found)
                 )
               )
-              _      <- open.answer(request("build/initialize", 1))
-              listed <- open.answer(request("workspace/buildTargets", 2))
+              lock        <- histos.resolve.Resolve.readLock(root)
+              _           <- open.answer(request("build/initialize", 1))
+              listed      <- open.answer(request("workspace/buildTargets", 2))
+              mainUri     <- uriOf(listed, "core?scala=3.10.0&platform=jvm&scope=main")
+              testUri     <- uriOf(listed, "core?scala=3.10.0&platform=jvm&scope=test")
+              jsUri       <- uriOf(listed, "ui?scala=3.10.0&platform=js&scope=main")
+              mainOptions <- open.answer(targeted("buildTarget/scalacOptions", 3, mainUri))
+              testOptions <- open.answer(targeted("buildTarget/scalacOptions", 4, testUri))
+              jsOptions   <- open.answer(targeted("buildTarget/scalacOptions", 5, jsUri))
+              repos = histos.resolve.BuildResolvers(built.resolvers)
+              wanted <- (
+                for
+                  mainWant <- histos.zinc.ScalacClasspath.of(
+                    root,
+                    modules,
+                    core,
+                    scala3,
+                    Jvm,
+                    lock,
+                    repos,
+                    histos.resolve.ClasspathScope.Compile,
+                  )
+                  testWant <- histos.zinc.ScalacClasspath.of(
+                    root,
+                    modules,
+                    core,
+                    scala3,
+                    Jvm,
+                    lock,
+                    repos,
+                    histos.resolve.ClasspathScope.Test,
+                  )
+                  jsWant <- histos.zinc.ScalacClasspath.of(
+                    root,
+                    modules,
+                    ui,
+                    scala3,
+                    Js,
+                    lock,
+                    repos,
+                    histos.resolve.ClasspathScope.Compile,
+                  )
+                yield (mainWant, testWant, jsWant)
+              ).provideSomeLayer[Resolve](ZLayer.fromZIO(histos.resolve.LockedTools.make(lock, built)))
+              (mainWant, testWant, jsWant) = wanted
+              uris                         = targetUris(listed)
+              jsIds                        = uris.filter(_.contains("platform=js"))
+              libClasses                   = GraphCompile.classesDir(root, ProjectName("lib"), scala3, Jvm)
             yield assertTrue(
-              code(listed).contains(-32603),
-              message(listed).exists(_.contains("'jvm' is not a bsp platform")),
+              code(listed).isEmpty,
+              code(mainOptions).isEmpty,
+              code(testOptions).isEmpty,
+              code(jsOptions).isEmpty,
+              jsIds.nonEmpty,
+              jsIds.forall(_.contains("ui?scala=")),
+              uris.exists(uri => uri.contains("core?scala=") && uri.contains("platform=jvm")),
+              !uris.exists(uri => uri.contains("core?scala=") && uri.contains("platform=js")),
+              !uris.exists(uri => uri.contains("lib?scala=") && uri.contains("platform=js")),
+              absolute(pathsOf(mainOptions)) == absolute(mainWant.paths),
+              absolute(pathsOf(testOptions)) == absolute(testWant.paths),
+              absolute(pathsOf(jsOptions)) == absolute(jsWant.paths),
+              absolute(mainWant.paths).lastOption.contains(libClasses.toAbsolutePath.normalize),
+              !Files.exists(libClasses),
+              mainWant.paths.nonEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools](
             histos.AppToolFixture.resolver
@@ -656,6 +728,17 @@ object BspSpec extends ZIOSpecDefault:
     System.envs
       .orElseSucceed(Map.empty[String, String])
       .flatMap(env => Runtimes.read(Calls.idleMachine.copy(env = env)))
+
+  private def only(modules: List[Module], name: String): Either[FixtureFault, Module] =
+    modules.filter(_.name.value == name) match
+      case item :: Nil => Right(item)
+      case _           => Left(FixtureFault.Shape)
+
+  private def pathsOf(answer: Bsp.Answer): List[Path] =
+    classpath(answer).flatMap(uri => pathOf(uri).toList)
+
+  private def absolute(paths: List[Path]): List[Path] =
+    paths.map(_.toAbsolutePath.normalize)
 
   private def moduleName(
       graph: ProjectGraph,

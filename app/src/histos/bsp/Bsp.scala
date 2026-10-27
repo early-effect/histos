@@ -13,7 +13,6 @@ import histos.resolve.{
   LockedArtifact,
   Repository,
   Resolve,
-  ResolveCell,
   ResolveError,
 }
 import histos.program.{EntryPoints, Program, ProgramError}
@@ -30,8 +29,8 @@ import histos.zinc.{
   GraphCompileError,
   JvmCompile,
   PositionBase,
-
   ScalaSeries,
+  ScalacClasspath,
   SemanticDb,
 }
 import histos.{Dep, Module, Platform, PlatformError, ProjectGraph, ProjectName, ScalaVersion, ScalaVersionError}
@@ -44,7 +43,7 @@ import scala.jdk.CollectionConverters.*
 import zio.json.*
 import zio.{Chunk, IO, Ref, UIO, ZIO}
 
-/** BSP 2.2 for Metals. JVM targets, a build-file target, and diagnostics. Test running stays out.
+/** BSP 2.2 for Metals. One target per cell the module builds, a build-file target, and diagnostics.
   */
 object Bsp:
   val BspVersion: String    = "2.2.0"
@@ -131,7 +130,6 @@ object Bsp:
     case Build(error: LoadError)
     case NotTest
     case NotMain
-    case Platforms(error: AllowFault)
     case Mains(failure: IoFailure)
     case Io(failure: IoFailure)
 
@@ -142,7 +140,7 @@ object Bsp:
       case Params(_) | UnknownTarget | Target(_) | NotTest | NotMain => -32602
       case NotInitialized                                            => -32002
       case Machine(_) | Lock(_) | LockRead(_) | Resolve(_) | Toolchain(_) | Sources(_) | Tests(_) | Run(_) | Build(_) |
-          Platforms(_) | Mains(_) | Io(_) =>
+          Mains(_) | Io(_) =>
         -32603
 
     def message: String = this match
@@ -166,7 +164,6 @@ object Bsp:
       case Build(error)          => error.message
       case NotTest               => "jvmTestEnvironment needs a test target"
       case NotMain               => "jvmRunEnvironment needs a main target"
-      case Platforms(error)      => error.message
       case Mains(failure)        => failure.message
       case Io(failure)           => failure.message
   end BspError
@@ -207,14 +204,6 @@ object Bsp:
     case BadVersion(error: ScalaVersionError)
     case BadPlatform(error: PlatformError)
     case BadScope(error: ScopeFault)
-
-  /** `jvm` is always published and is not a token in the allow-list. */
-  private[bsp] enum AllowFault:
-    case Unknown(token: String)
-
-    def message: String = this match
-      case Unknown(token) => s"'$token' is not a bsp platform"
-  end AllowFault
 
   /** A directory the request needs. A file in the way is a fault, not a defect. */
   private[bsp] def ensureDir(path: Path): IO[BspError, Path] =
@@ -634,7 +623,7 @@ object Bsp:
             )
           )
         case id: Id.Main =>
-          classpath(id.module, id.version, id.platform).map: paths =>
+          assembled(id.module, id.version, id.platform, ClasspathScope.Compile).map: paths =>
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
               id.module.flags.argv ++ SemanticDb.argv(repo, id.version),
@@ -649,7 +638,7 @@ object Bsp:
               ),
             )
         case id: Id.Test =>
-          testClasspath(id).map: paths =>
+          assembled(id.module, id.version, id.platform, ClasspathScope.Test).map: paths =>
             Rpc.ScalacOptionsItem(
               Rpc.TargetId(uri),
               id.module.flags.argv ++ SemanticDb.argv(repo, id.version),
@@ -665,6 +654,50 @@ object Bsp:
             )
 
       }
+
+    private def assembled(
+        module: Module,
+        version: ScalaVersion,
+        platform: Platform,
+        scope: ClasspathScope,
+    ): ZIO[Resolve, BspError, List[Path]] =
+      for
+        graph <- request.get
+        lock  <- readLock
+        modules = modulesOf(graph)
+        found <- withTools(
+          ScalacClasspath
+            .of(
+              repo,
+              modules,
+              module,
+              version,
+              platform,
+              lock,
+              BuildResolvers(graph.resolvers),
+              scope,
+            )
+            .mapError(compiled)
+        )
+      yield found.paths
+
+    private def compiled(error: GraphCompileError): BspError =
+      error match
+        case GraphCompileError.Lock(found)            => BspError.Resolve(found)
+        case GraphCompileError.LockRead(path)         => BspError.LockRead(path)
+        case GraphCompileError.Failed(_, _, _, found) => BspError.Toolchain(found)
+        case found @ (GraphCompileError.Runtime(_) | GraphCompileError.Target(_) | GraphCompileError.UnknownCell(
+              _,
+              _,
+            ) | GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) | GraphCompileError.MissingUpstream(
+              _,
+              _,
+              _,
+              _,
+            ) | GraphCompileError.Cycle(_) | GraphCompileError.RootRead(_) | GraphCompileError.Output(_) |
+            GraphCompileError.Cells(_)) =>
+          BspError.Sources(found)
+
     private def withTools[A](
         effect: ZIO[Resolve & LockedTools, BspError, A]
     ): ZIO[Resolve, BspError, A] =
@@ -675,74 +708,6 @@ object Bsp:
           )
         )
       )
-
-    private def classpath(
-        module: Module,
-        version: ScalaVersion,
-        platform: Platform,
-    ): ZIO[Resolve, BspError, List[Path]] =
-      request.get.flatMap { graph =>
-        val cell = ResolveCell(
-          module.name,
-          Dep.select(module.dependencies, platform),
-          version,
-          platform,
-          BuildResolvers(graph.resolvers),
-          ClasspathScope.Compile,
-        )
-        val upstream = module
-          .upstream(platform)
-          .map(dependency => GraphCompile.classesDir(repo, dependency, version, platform))
-        for
-          lock <- readLock
-          jars <- Resolve
-            .materialize(cell, lock)
-            .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-          library <- withTools(
-            JvmCompile.runtime(version).mapError(BspError.Toolchain(_))
-          )
-        yield (library ++ dropStdlib(jars) ++ upstream).distinct
-      }
-
-    /** The `runtimeClasspath` order, naming directories that are not there yet. Import runs before compile.
-      */
-    private def testClasspath(id: Id.Test): ZIO[Resolve, BspError, List[Path]] =
-      request.get.flatMap { graph =>
-        val modules = modulesOf(graph)
-        val main    =
-          GraphCompile.classesDir(repo, id.module.name, id.version, id.platform)
-        val upstream = Module
-          .chain(id.module, modules, id.platform)
-          .map(dependency =>
-            GraphCompile
-              .classesDir(repo, dependency.name, id.version, id.platform)
-          )
-        val dependencies =
-          Dep.select(id.module.dependencies, id.platform) ++ Dep.select(
-            id.module.testDependencies,
-            id.platform,
-          )
-        val scope =
-          if Dep.select(id.module.testDependencies, id.platform).isEmpty then ClasspathScope.Compile
-          else ClasspathScope.Test
-        val cell = ResolveCell(
-          id.module.name,
-          dependencies,
-          id.version,
-          id.platform,
-          BuildResolvers(graph.resolvers),
-          scope,
-        )
-        for
-          lock <- readLock
-          jars <- Resolve
-            .materialize(cell, lock)
-            .mapBoth(BspError.Resolve(_), _.artifacts.map(_.path))
-          library <- withTools(
-            JvmCompile.runtime(id.version).mapError(BspError.Toolchain(_))
-          )
-        yield main :: (upstream ++ library ++ dropStdlib(jars))
-      }
 
     private def sourceJars(
         uri: String
@@ -1140,27 +1105,9 @@ object Bsp:
     private def targetList(
         graph: ProjectGraph
     ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
-      for
-        extra <- allowed
-        cells    = cellsOf(graph, extra)
-        versions = (cells.map(_.version) :+ BuildScala).distinct
-        result <- listed(graph, cells, versions)
-      yield result
-
-    /** JVM is always published. `js` and `native` are added only when the allow-list names them.
-      */
-    private def allowed: IO[BspError, Set[Platform]] =
-      val path = repo.resolve(".histos").resolve("bsp-platforms")
-      ZIO
-        .attemptBlocking(Files.exists(path))
-        .mapError(_ => BspError.Io(IoFailure(path, IoFault.Stat)))
-        .flatMap:
-          case false => ZIO.succeed(Set.empty)
-          case true  =>
-            Workspace
-              .readString(path)
-              .mapError(BspError.Io(_))
-              .flatMap(text => ZIO.fromEither(parsePlatforms(text)).mapError(BspError.Platforms(_)))
+      val cells    = cellsOf(graph)
+      val versions = (cells.map(_.version) :+ BuildScala).distinct
+      listed(graph, cells, versions)
 
     private def listed(
         graph: ProjectGraph,
@@ -1260,18 +1207,14 @@ object Bsp:
         ),
       )
 
-    private def cellsOf(graph: ProjectGraph, extra: Set[Platform]): List[Cell] =
-      val wanted = Set[Platform](Platform.Jvm) ++ extra
-      val order  = List(Platform.Jvm, Platform.Js, Platform.Native)
+    private def cellsOf(graph: ProjectGraph): List[Cell] =
+      val order = List(Platform.Jvm, Platform.Js, Platform.Native)
       graph.projects
         .collect { case module: Module => module }
         .flatMap: module =>
           module.versions.all.flatMap: version =>
             order
-              .filter(platform =>
-                wanted.contains(platform) && module.platforms.all
-                  .contains(platform)
-              )
+              .filter(module.platforms.all.contains)
               .map: platform =>
                 Cell(module, version, platform)
         .sortBy(cell => (cell.module.name.value, cell.version.value, cell.platform.token))
@@ -1367,11 +1310,6 @@ object Bsp:
           case Left(BspError.UnknownTarget) => ZIO.unit
           case Left(error)                  => ZIO.fail(error)
       }
-
-    /** The compiler library is `JvmCompile.runtime`. A locked copy of either standard library is a second version.
-      */
-    private def dropStdlib(jars: List[Path]): List[Path] =
-      jars.filterNot(JvmCompile.isStandardLibrary)
 
     private def publish(target: String, problem: CompileProblem): UIO[Unit] =
       Ranges.of(problem) match
@@ -1530,16 +1468,6 @@ object Bsp:
 
   private[bsp] def buildUri(repo: Path): String =
     s"${directoryUri(repo)}?build=histos.scala"
-
-  /** JVM is always published. The file names only the extra platforms. */
-  private[bsp] def parsePlatforms(text: String): Either[AllowFault, Set[Platform]] =
-    val lines = text.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-    lines.foldLeft[Either[AllowFault, Set[Platform]]](Right(Set.empty)): (acc, token) =>
-      acc.flatMap: have =>
-        token match
-          case "js"     => Right(have + Platform.Js)
-          case "native" => Right(have + Platform.Native)
-          case other    => Left(AllowFault.Unknown(other))
 
   private def directoryUri(path: Path): String =
     val text = fileUri(path)
