@@ -40,7 +40,7 @@ object SuiteStamp:
   /** Identity besides the referenced class files. `jars` are this module's locked artifacts. `upstream` are compile
     * jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac arguments.
     */
-  private[testrun] final case class Cover(
+  private[histos] final case class Cover(
       jars: List[String],
       upstream: List[String],
       jdk: String,
@@ -53,6 +53,24 @@ object SuiteStamp:
       cover: Cover,
   ): IO[StampError, Option[Sha256]] =
     index(directories).flatMap(tree => ZIO.fromEither(digest(suite, tree, cover)))
+
+  /** One class walk, then a digest per named suite. A missing suite class is `None`, not an error. */
+  def digests(
+      suites: List[String],
+      directories: List[Path],
+      cover: Cover,
+  ): IO[StampError, Map[String, Option[Sha256]]] =
+    index(directories).flatMap(tree => ZIO.fromEither(foldDigests(suites, tree, cover)))
+
+  private def foldDigests(
+      suites: List[String],
+      indexed: Map[String, Print],
+      cover: Cover,
+  ): Either[StampError, Map[String, Option[Sha256]]] =
+    suites.foldLeft[Either[StampError, Map[String, Option[Sha256]]]](Right(Map.empty)):
+      case (Left(error), _)     => Left(error)
+      case (Right(seen), suite) =>
+        digest(suite, indexed, cover).map(found => seen.updated(suite, found))
 
   /** One walk of the class directories. `remember` stamps every suite from this.
     */

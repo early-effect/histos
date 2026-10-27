@@ -257,7 +257,7 @@ object HistosMcp:
       )(args => Cli.watchCall(args.args, repo, apiJar).mapError(Session.CallProblem.Fault(_)).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
         Names.preview,
-        "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. File-level staleness is unknown.",
+        "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. Compile and test name stale sources from the last analysis.",
       )(args =>
         ZIO
           .fromEither(previewCall(args))
