@@ -15,7 +15,7 @@ object SourceStaleSpec extends ZIOSpecDefault:
         for
           root <- keep
           source = root.resolve("Core.scala")
-          _ <- ZIO.attempt(Files.writeString(source, "object Core"))
+          _       <- ZIO.attempt(Files.writeString(source, "object Core"))
           missing <- SourceStale.read(root.resolve("absent"), List(source))
           zip = root.resolve("bad").resolve("inc.zip")
           _ <- ZIO.attempt {
@@ -30,7 +30,7 @@ object SourceStaleSpec extends ZIOSpecDefault:
         )
       }
     ,
-    test("a matching stamp is fresh, a changed source marks its direct dependent, and a new file is stale"):
+    test("a matching stamp is fresh, a changed source marks every dependent, and a new file is stale"):
       ZIO.scoped {
         for
           root <- keep
@@ -50,7 +50,7 @@ object SourceStaleSpec extends ZIOSpecDefault:
             StoredAnalysis.put(
               zip,
               classes,
-              List(core -> "demo.Core", used -> "demo.Use", far -> "demo.Far"),
+              List(core       -> "demo.Core", used       -> "demo.Use", far -> "demo.Far"),
               List("demo.Use" -> "demo.Core", "demo.Far" -> "demo.Use"),
             )
             val kept = classes.resolve("Keep.class")
@@ -59,25 +59,56 @@ object SourceStaleSpec extends ZIOSpecDefault:
             Files.setLastModifiedTime(kept, FileTime.fromMillis(1700000000000L))
             Files.setLastModifiedTime(zip, FileTime.fromMillis(1700000000000L))
           }
-          before <- census(classes)
+          before    <- census(classes)
           zipBefore <- ZIO.attempt(Files.readAllBytes(zip).toList)
-          fresh <- SourceStale.read(zip.getParent, List(core, used, far))
-          _     <- ZIO.attempt(Files.writeString(core, "object Core { def n = 1 }"))
-          stale <- SourceStale.read(zip.getParent, List(core, used, far))
-          added <- SourceStale.read(zip.getParent, List(core, used, next, far))
-          gone  <- SourceStale.read(zip.getParent, List(used, far))
-          after <- census(classes)
-          zipAfter <- ZIO.attempt(Files.readAllBytes(zip).toList)
-          zipTime  <- ZIO.attempt(Files.getLastModifiedTime(zip))
+          fresh     <- SourceStale.read(zip.getParent, List(core, used, far))
+          _         <- ZIO.attempt(Files.writeString(core, "object Core { def n = 1 }"))
+          stale     <- SourceStale.read(zip.getParent, List(core, used, far))
+          added     <- SourceStale.read(zip.getParent, List(core, used, next, far))
+          gone      <- SourceStale.read(zip.getParent, List(used, far))
+          after     <- census(classes)
+          zipAfter  <- ZIO.attempt(Files.readAllBytes(zip).toList)
+          zipTime   <- ZIO.attempt(Files.getLastModifiedTime(zip))
         yield assertTrue(
           fresh == FileStaleness.Known(Nil),
-          stale == FileStaleness.Known(List(core, used)),
-          added == FileStaleness.Known(List(core, used, next)),
-          gone == FileStaleness.Known(List(used)),
+          stale == FileStaleness.Known(List(core, used, far)),
+          added == FileStaleness.Known(List(core, used, next, far)),
+          gone == FileStaleness.Known(List(used, far)),
           before == after,
           zipBefore == zipAfter,
           zipTime == FileTime.fromMillis(1700000000000L),
           !Files.exists(root.resolve("inc.zip")),
+        )
+      }
+    ,
+    test("a member-ref child and the grandchild two hops away are stale when the parent changes"):
+      ZIO.scoped {
+        for
+          root <- keep
+          parent = root.resolve("Parent.scala")
+          child  = root.resolve("Child.scala")
+          grand  = root.resolve("Grand.scala")
+          _ <- ZIO.attempt {
+            Files.writeString(parent, "class Parent")
+            Files.writeString(child, "class Child extends Parent")
+            Files.writeString(grand, "class Grand extends Child")
+          }
+          classes = root.resolve("classes")
+          zip     = root.resolve("analysis").resolve("inc.zip")
+          _ <- ZIO.attempt(
+            StoredAnalysis.put(
+              zip,
+              classes,
+              List(parent       -> "demo.Parent", child        -> "demo.Child", grand -> "demo.Grand"),
+              List("demo.Child" -> "demo.Parent", "demo.Grand" -> "demo.Child"),
+            )
+          )
+          fresh <- SourceStale.read(zip.getParent, List(parent, child, grand))
+          _     <- ZIO.attempt(Files.writeString(parent, "class Parent { def n = 1 }"))
+          stale <- SourceStale.read(zip.getParent, List(parent, child, grand))
+        yield assertTrue(
+          fresh == FileStaleness.Known(Nil),
+          stale == FileStaleness.Known(List(parent, child, grand)),
         )
       },
   )
@@ -88,13 +119,16 @@ object SourceStaleSpec extends ZIOSpecDefault:
     ZIO.attempt {
       if !Files.exists(root) then Nil
       else
-        val walk = Files.walk(root)
+        val walk  = Files.walk(root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()
-        paths.filter(path => Files.isRegularFile(path)).sortBy(_.toString).map: path =>
-          val name = root.relativize(path).iterator.asScala.map(_.toString).mkString("/")
-          Mark(name, Files.getLastModifiedTime(path), Files.size(path))
+        paths
+          .filter(path => Files.isRegularFile(path))
+          .sortBy(_.toString)
+          .map: path =>
+            val name = root.relativize(path).iterator.asScala.map(_.toString).mkString("/")
+            Mark(name, Files.getLastModifiedTime(path), Files.size(path))
     }
 
   private def keep: ZIO[Scope, Throwable, Path] =
@@ -103,7 +137,7 @@ object SourceStaleSpec extends ZIOSpecDefault:
   private def delete(root: Path): ZIO[Any, Nothing, Unit] =
     ZIO.attempt {
       if Files.exists(root) then
-        val walk = Files.walk(root)
+        val walk  = Files.walk(root)
         val paths =
           try walk.iterator.asScala.toList
           finally walk.close()

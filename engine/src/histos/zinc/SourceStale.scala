@@ -28,8 +28,8 @@ enum FileStaleness:
   case Known(stale: List[Path])
   case Unknown
 
-/** Read source stamps and source dependencies out of an existing analysis. This does not call the compiler and does
-  * not write class files or a new analysis.
+/** Read source stamps and source dependencies out of an existing analysis. This does not call the compiler and does not
+  * write class files or a new analysis.
   */
 object SourceStale:
   def directory(
@@ -63,10 +63,14 @@ object SourceStale:
 
   /** `None` is a file that exists and could not be read, or an analysis that is not Zinc's. */
   private def load(zip: Path): Option[sbt.internal.inc.Analysis] =
-    FileAnalysisStore.binary(zip.toFile).get().toScala.flatMap: contents =>
-      contents.getAnalysis match
-        case analysis: sbt.internal.inc.Analysis => Some(analysis)
-        case _                                   => None
+    FileAnalysisStore
+      .binary(zip.toFile)
+      .get()
+      .toScala
+      .flatMap: contents =>
+        contents.getAnalysis match
+          case analysis: sbt.internal.inc.Analysis => Some(analysis)
+          case _                                   => None
 
   private def stale(analysis: sbt.internal.inc.Analysis, sources: List[Path]): List[Path] =
     val converter = MappedFileConverter.empty
@@ -89,21 +93,25 @@ object SourceStale:
       case Row(_, Some(ref), true) => ref
     val defined =
       (changed.toSet ++ removed.toSet).flatMap(ref => analysis.relations.classNames(ref))
-    val users   = directUsers(analysis.relations, defined)
+    val users   = dependents(analysis.relations, defined)
     val userIds =
       users.flatMap(name => analysis.relations.definesClass(name)).map(_.id).toSet
     val wanted = rows.collect:
-      case Row(file, _, true)                                       => file
+      case Row(file, _, true)                                      => file
       case Row(file, Some(ref), false) if userIds.contains(ref.id) => file
     val keep = wanted.toSet
     sources.filter(path => keep.contains(path.toAbsolutePath.normalize))
 
-  /** Direct member-ref users of `defined`, not `defined` itself. That relation is not transitive. */
-  private def directUsers(
+  /** Member-ref users of `defined`, then users of those, until the set stops growing. Not `defined` itself. */
+  private def dependents(
       relations: sbt.internal.inc.Relations,
       defined: Set[String],
   ): Set[String] =
-    defined.flatMap(name => relations.usesInternalClass(name)) -- defined
+    @scala.annotation.tailrec
+    def grow(seen: Set[String], wave: Set[String]): Set[String] =
+      val next = wave.flatMap(name => relations.usesInternalClass(name)) -- seen
+      if next.isEmpty then seen else grow(seen ++ next, next)
+    grow(defined, defined) -- defined
 
   private final case class Row(file: Path, ref: Option[VirtualFileRef], changed: Boolean)
 end SourceStale

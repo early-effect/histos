@@ -1,10 +1,12 @@
 package histos.preview
 
 import histos.clean.Products
+import histos.jdk.{Machine, Sha256, Toolchain}
 import histos.publish.LocalPublishError
-import histos.testrun.{QuickRecord, SuiteName, SuiteStamp, TestCompile}
+import histos.resolve.{BuildResolvers, DependencyLock, LockedArtifact, LockedTool, Repository, Repositories}
+import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp, TestCompile}
 import histos.version.{ManualVersion, Refusal, Session, ShipNumber, VersionError}
-import histos.zinc.{AnalysisKind, FileStaleness, SourceStale, StoredAnalysis}
+import histos.zinc.{AnalysisKind, CompilerRequests, FileStaleness, SourceStale, StoredAnalysis}
 import histos.select.SelectError
 import histos.{
   ClangMajor,
@@ -34,8 +36,10 @@ import org.objectweb.asm.{ClassWriter, Opcodes}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO}
+import zio.{Chunk, Scope, ZIO}
 import zio.test.*
+
+import java.nio.charset.StandardCharsets
 
 object PlanSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
@@ -768,7 +772,7 @@ object PlanSpec extends ZIOSpecDefault:
         )
       }
     ,
-    test("quick preview names a record hit and a miss, and does not write classes"):
+    test("quick preview skips the digest a run would store, and a changed class runs"):
       ZIO.scoped {
         for
           repo <- keep("histos-preview-quick")
@@ -776,6 +780,11 @@ object PlanSpec extends ZIOSpecDefault:
           appMod = module("app", Jvm)(scala3)
           graph <- ZIO.fromEither(Projects(appMod))
           app   <- ZIO.fromEither(moduleNamed(graph, ProjectName("app")))
+          repos   = BuildResolvers(graph.resolvers)
+          request = CompilerRequests.compiler(scala3, repos)
+          toolSha = Sha256.of(Chunk.fromArray("compiler-tool".getBytes(StandardCharsets.UTF_8)))
+          lock    = DependencyLock(Nil, Nil, List(compilerTool(request, toolSha)))
+          _ <- write(repo, ".histos/dependencies.lock", DependencyLock.render(lock))
           classes = TestCompile.testClasses(repo, app.name, scala3, Jvm)
           _ <- ZIO.attempt {
             writeClass(classes, "demo/Foo", "one")
@@ -785,7 +794,26 @@ object PlanSpec extends ZIOSpecDefault:
             Files.createDirectories(record.getParent)
             Files.writeString(record, "nope\n")
           }
-          digest <- SuiteStamp.digest("demo.Foo", List(classes), QuickAnswer.cover(app))
+          machine <- Machine.load(repo)
+          jdk     <- Toolchain.resolve(machine)
+          parsed  <- ZIO.fromEither(DependencyLock.parse(DependencyLock.render(lock)))
+          stamp   <- ZIO.fromEither(
+            SuiteCover.stored(
+              SuiteAsk(
+                app,
+                List(app),
+                scala3,
+                Jvm,
+                parsed,
+                repos,
+                graph.tools,
+                machine.native,
+                jdk.identity,
+                None,
+              )
+            )
+          )
+          digest <- SuiteStamp.digest("demo.Foo", List(classes), stamp)
           saved  <- digest match
             case Some(value) =>
               QuickRecord.save(repo, app.name, scala3, Jvm, SuiteName("demo.Foo"), value).as(true)
@@ -793,7 +821,9 @@ object PlanSpec extends ZIOSpecDefault:
           before <- census(classes)
           plan   <- Plan.test(repo, graph, List(ProjectName("app")))
           text = Plan.renderTest(repo, plan)
-          after  <- census(classes)
+          after <- census(classes)
+          mainZip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Main).resolve("inc.zip")
+          testZip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Test).resolve("inc.zip")
           _      <- ZIO.attempt(writeClass(classes, "demo/Foo", "two"))
           again  <- census(classes)
           missed <- Plan.test(repo, graph, List(ProjectName("app")))
@@ -807,13 +837,53 @@ object PlanSpec extends ZIOSpecDefault:
           !text.contains("quick run demo.Bar"),
           !text.contains("quick skip demo.Bar"),
           before == after,
+          !Files.exists(mainZip),
+          !Files.exists(testZip),
           missedText.contains("quick run demo.Foo"),
           missedText.contains("quick: not known to be skippable demo.Bar"),
           !missedText.contains("quick skip"),
           again == left,
         )
+      }
+    @@ TestAspect.withLiveSystem,
+    test("quick preview without a lock does not call a stored digest a run"):
+      ZIO.scoped {
+        for
+          repo <- keep("histos-preview-nolock")
+          _    <- write(repo, "app/src/test/scala/AppSpec.scala", "object AppSpec")
+          appMod = module("app", Jvm)(scala3)
+          graph <- ZIO.fromEither(Projects(appMod))
+          app   <- ZIO.fromEither(moduleNamed(graph, ProjectName("app")))
+          classes = TestCompile.testClasses(repo, app.name, scala3, Jvm)
+          _ <- ZIO.attempt(writeClass(classes, "demo/Foo", "one"))
+          digest = Sha256.of(Chunk.fromArray("stored".getBytes(StandardCharsets.UTF_8)))
+          _      <- QuickRecord.save(repo, app.name, scala3, Jvm, SuiteName("demo.Foo"), digest)
+          before <- census(classes)
+          plan   <- Plan.test(repo, graph, List(ProjectName("app")))
+          text = Plan.renderTest(repo, plan)
+          after <- census(classes)
+          zip = SourceStale.directory(repo, app.name, scala3, Jvm, AnalysisKind.Test).resolve("inc.zip")
+        yield assertTrue(
+          text.contains("quick: not known to be skippable demo.Foo"),
+          !text.contains("quick run"),
+          before == after,
+          !Files.exists(zip),
+          !Files.exists(repo.resolve(".histos").resolve("dependencies.lock")),
+        )
       },
   )
+
+  private def compilerTool(
+      request: histos.resolve.ToolRequest,
+      sha: Sha256,
+  ): LockedTool =
+    LockedTool(
+      request.id,
+      request.roots,
+      Repositories.ordered(request.repositories),
+      request.roots.map(root => LockedArtifact(root.organization, root.name, root.revision, sha, Repository.Central)),
+      Nil,
+    )
 
   def spec = suite("preview plans")(plans, asked, answers)
 end PlanSpec

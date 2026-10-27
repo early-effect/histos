@@ -1,8 +1,12 @@
 package histos.preview
 
-import histos.testrun.{QuickRecord, SuiteName, SuiteStamp}
+import histos.jdk.{Machine, Toolchain}
+import histos.node.NodeToolchain
+import histos.resolve.{BuildResolvers, Resolve}
+import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp}
+import histos.toolchain.RuntimeIdentity
 import histos.zinc.GraphCompile
-import histos.{Module, Platform, ProjectName, ScalaVersion}
+import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -10,18 +14,17 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, UIO, ZIO}
 
-/** What a quick run would do with the classes already on disk. Preview does not launch a test framework and does not
-  * write a record.
+/** What a quick run would do with the classes and the lock already on disk. Preview does not launch a framework, fetch
+  * a dependency, or write a record.
   *
-  * The digest is the class files plus the module's scalac flags. A preview does not resolve jars or a JDK, so a record
-  * written by a run that hashed those does not match.
+  * A skip is a stored digest of [[SuiteCover]]. A cover that cannot be built is not known to be skippable.
   */
 enum QuickAnswer:
   /** The test class directory is absent. No suite would be skipped. */
   case Uncompiled
 
   /** Suites named from `.class` files. `skip` is a stored digest that still matches. `run` would run: the digest
-    * missed, there is no record, or the class is gone. `unknown` could not be read.
+    * missed, or the class is gone. `unknown` could not be read, or the cover could not be built.
     */
   case Named(skip: List[String], run: List[String], unknown: List[String])
 
@@ -29,18 +32,16 @@ enum QuickAnswer:
     * still matches. The rest are not known to be skippable.
     */
   case Partial(skip: List[String])
+end QuickAnswer
 
 object QuickAnswer:
-  /** The cover [[read]] recomputes. Tests that store a record use this same value. */
-  private[histos] def cover(module: Module): SuiteStamp.Cover =
-    SuiteStamp.Cover(Nil, Nil, "", module.flags.argv)
-
   def read(
       repo: Path,
       module: Module,
       modules: List[Module],
       version: ScalaVersion,
       platform: Platform,
+      graph: ProjectGraph,
   ): UIO[QuickAnswer] =
     val classes = TestClasses(repo, module.name, version, platform)
     isDirectory(classes).flatMap:
@@ -48,14 +49,99 @@ object QuickAnswer:
       case true  =>
         namesOf(classes).flatMap:
           case Seen.Failed => ZIO.succeed(QuickAnswer.Partial(Nil))
-          case Seen.Empty  =>
-            recordNames(repo, module.name, version, platform).map:
-              case Nil    => QuickAnswer.Uncompiled
-              case found  => QuickAnswer.Named(Nil, found.sorted, Nil)
-          case Seen.Inner =>
-            matchingRecords(repo, module, modules, version, platform, classes)
-          case Seen.Names(found) =>
-            judge(repo, module, modules, version, platform, classes, found)
+          case seen        =>
+            cover(repo, module, modules, version, platform, graph).flatMap: found =>
+              decide(repo, module, modules, version, platform, classes, seen, found)
+
+  private def decide(
+      repo: Path,
+      module: Module,
+      modules: List[Module],
+      version: ScalaVersion,
+      platform: Platform,
+      classes: Path,
+      seen: Seen,
+      found: Option[SuiteStamp.Cover],
+  ): UIO[QuickAnswer] =
+    seen match
+      case Seen.Failed => ZIO.succeed(QuickAnswer.Partial(Nil))
+      case Seen.Empty  =>
+        recordNames(repo, module.name, version, platform).flatMap:
+          case Nil   => ZIO.succeed(QuickAnswer.Uncompiled)
+          case names =>
+            found match
+              case None        => ZIO.succeed(QuickAnswer.Named(Nil, Nil, names.sorted))
+              case Some(stamp) =>
+                judge(repo, module, modules, version, platform, classes, names, stamp)
+      case Seen.Inner =>
+        found match
+          case None        => ZIO.succeed(QuickAnswer.Partial(Nil))
+          case Some(stamp) =>
+            matchingRecords(repo, module, modules, version, platform, classes, stamp)
+      case Seen.Names(names) =>
+        found match
+          case None        => ZIO.succeed(QuickAnswer.Named(Nil, Nil, names.sorted))
+          case Some(stamp) =>
+            judge(repo, module, modules, version, platform, classes, names, stamp)
+
+  private def cover(
+      repo: Path,
+      module: Module,
+      modules: List[Module],
+      version: ScalaVersion,
+      platform: Platform,
+      graph: ProjectGraph,
+  ): UIO[Option[SuiteStamp.Cover]] =
+    Resolve
+      .readLock(repo)
+      .either
+      .flatMap:
+        case Left(_)     => ZIO.succeed(None)
+        case Right(lock) =>
+          Machine
+            .load(repo)
+            .either
+            .flatMap:
+              case Left(_)        => ZIO.succeed(None)
+              case Right(machine) =>
+                accepted(platform, machine).map: runtime =>
+                  runtime.flatMap: (jdk, node) =>
+                    SuiteCover
+                      .stored(
+                        SuiteAsk(
+                          module,
+                          modules,
+                          version,
+                          platform,
+                          lock,
+                          BuildResolvers(graph.resolvers),
+                          graph.tools,
+                          machine.native,
+                          jdk,
+                          node,
+                        )
+                      )
+                      .toOption
+
+  private def accepted(
+      platform: Platform,
+      machine: Machine,
+  ): UIO[Option[(RuntimeIdentity, Option[RuntimeIdentity])]] =
+    Toolchain
+      .resolve(machine)
+      .either
+      .flatMap:
+        case Left(_)    => ZIO.succeed(None)
+        case Right(jdk) =>
+          platform match
+            case Platform.Jvm | Platform.Native => ZIO.succeed(Some((jdk.identity, None)))
+            case Platform.Js                    =>
+              NodeToolchain
+                .resolve(machine)
+                .either
+                .map:
+                  case Left(_)     => None
+                  case Right(node) => Some((jdk.identity, Some(node.identity)))
 
   private def judge(
       repo: Path,
@@ -65,12 +151,13 @@ object QuickAnswer:
       platform: Platform,
       classes: Path,
       names: List[String],
+      stamp: SuiteStamp.Cover,
   ): UIO[QuickAnswer] =
     directories(repo, module, modules, version, platform, classes).flatMap: dirs =>
       SuiteStamp
-        .digests(names, dirs, cover(module))
+        .digests(names, dirs, stamp)
         .foldZIO(
-          _ => ZIO.succeed(QuickAnswer.Partial(Nil)),
+          _ => ZIO.succeed(QuickAnswer.Named(Nil, Nil, names.sorted)),
           answers => split(repo, module.name, version, platform, names.sorted, answers),
         )
 
@@ -101,8 +188,7 @@ object QuickAnswer:
                       else ZIO.succeed(buckets.ran(name)),
                   )
       .map: buckets =>
-        if buckets.skip.isEmpty && buckets.run.isEmpty && buckets.unknown.isEmpty then
-          QuickAnswer.Uncompiled
+        if buckets.skip.isEmpty && buckets.run.isEmpty && buckets.unknown.isEmpty then QuickAnswer.Uncompiled
         else QuickAnswer.Named(buckets.skip, buckets.run, buckets.unknown)
 
   private def matchingRecords(
@@ -112,13 +198,14 @@ object QuickAnswer:
       version: ScalaVersion,
       platform: Platform,
       classes: Path,
+      stamp: SuiteStamp.Cover,
   ): UIO[QuickAnswer] =
     recordNames(repo, module.name, version, platform).flatMap: names =>
       if names.isEmpty then ZIO.succeed(QuickAnswer.Partial(Nil))
       else
         directories(repo, module, modules, version, platform, classes).flatMap: dirs =>
           SuiteStamp
-            .digests(names, dirs, cover(module))
+            .digests(names, dirs, stamp)
             .foldZIO(
               _ => ZIO.succeed(QuickAnswer.Partial(Nil)),
               answers =>
@@ -136,10 +223,10 @@ object QuickAnswer:
       answers: Map[String, Option[histos.jdk.Sha256]],
   ): UIO[Boolean] =
     answers.get(name).flatten match
-      case None => ZIO.succeed(false)
+      case None         => ZIO.succeed(false)
       case Some(digest) =>
         SuiteName.from(name) match
-          case Left(_) => ZIO.succeed(false)
+          case Left(_)      => ZIO.succeed(false)
           case Right(suite) =>
             QuickRecord
               .hit(repo, module, version, platform, suite, digest)
@@ -153,8 +240,10 @@ object QuickAnswer:
       platform: Platform,
       classes: Path,
   ): UIO[List[Path]] =
-    val upstream = Module.chain(module, modules, platform).map: dependency =>
-      GraphCompile.classesDir(repo, dependency.name, version, platform)
+    val upstream = Module
+      .chain(module, modules, platform)
+      .map: dependency =>
+        GraphCompile.classesDir(repo, dependency.name, version, platform)
     val candidates =
       classes :: GraphCompile.classesDir(repo, module.name, version, platform) :: upstream
     ZIO.filter(candidates)(isDirectory).map(_.distinct)

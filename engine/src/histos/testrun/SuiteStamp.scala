@@ -27,8 +27,8 @@ end StampError
 
 /** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, and the scalac flags.
   * Each class is a fingerprint and the names it points at. The bytes are not kept. A class this suite does not
-  * reference is not part of the digest. Tool and runtime hashes supplied by [[histos.testrun.TestContext]] are jar
-  * lines. This digest adds the upstream jars, the JDK token, and the flags.
+  * reference is not part of the digest. Tool fingerprints and runtime-token hashes from [[SuiteCover]] are jar lines.
+  * This digest adds the upstream jars, the JDK token, and the flags.
   */
 object SuiteStamp:
   /** Fingerprint of one class file, and the binary names it mentions. */
@@ -37,8 +37,9 @@ object SuiteStamp:
       refs: Set[String],
   )
 
-  /** Identity besides the referenced class files. `jars` are this module's locked artifacts. `upstream` are compile
-    * jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac arguments.
+  /** Identity besides the referenced class files. `jars` are locked shas, tool fingerprints, and runtime-token hashes.
+    * `upstream` are compile jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac
+    * arguments.
     */
   private[histos] final case class Cover(
       jars: List[String],

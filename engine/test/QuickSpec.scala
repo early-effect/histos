@@ -1,11 +1,25 @@
 package histos.testrun
 
 import histos.jdk.{Sha256, Sha256Error}
-import histos.native.ClassShapes
+import histos.native.{ClassShapes, NativeOrigin}
+import histos.resolve.{DependencyLock, LockedArtifact, LockedCell, LockedTool, Repository, Repositories}
+import histos.toolchain.RuntimeIdentity
 import histos.watch.SourceWatch
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.CompiledCell
-import histos.{Jvm, ProjectName, ScalaVersion}
+import histos.zinc.{CompiledCell, CompilerRequests}
+import histos.{
+  Jvm,
+  Module,
+  Platforms,
+  ProjectDep,
+  ProjectName,
+  ScalaVersion,
+  ScalaVersions,
+  ScalacFlag,
+  ScalacFlags,
+  SourcePos,
+  ToolCatalog,
+}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -13,7 +27,7 @@ import java.nio.file.attribute.PosixFilePermissions
 
 import org.objectweb.asm.{ClassWriter, Opcodes}
 
-import zio.{Chunk, Scope, ZIO, ZLayer}
+import zio.{Chunk, Scope, ZIO}
 import zio.stream.ZStream
 import zio.test.*
 
@@ -293,7 +307,7 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digest,
           )
-          feeds <- quick(root, module, classes, TestStatus.Passed, plain)
+          feeds <- quick(root, module, classes, TestStatus.Passed, base)
         yield assertTrue(!recorded, feeds == ran(module, TestStatus.Passed))
     ,
     test("a digest mismatch runs the suite"):
@@ -328,7 +342,7 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digestB,
           )
-          feeds <- quick(root, module, classes, TestStatus.Passed, plain)
+          feeds <- quick(root, module, classes, TestStatus.Passed, base)
         yield assertTrue(
           digest != digestB,
           !recorded,
@@ -365,7 +379,7 @@ object QuickSpec extends ZIOSpecDefault:
           hidden <- QuickRecord
             .hit(root, module, scala3, Jvm, suiteName, digest)
             .either
-          failed <- quick(root, module, classes, TestStatus.Passed, plain).either
+          failed <- quick(root, module, classes, TestStatus.Passed, base).either
           refused = QuickError.Read(IoFailure(path, IoFault.Read))
         yield assertTrue(
           readable,
@@ -389,7 +403,7 @@ object QuickSpec extends ZIOSpecDefault:
             digestA,
           )
           missing <- SuiteStamp.digest(suiteName.value, List(classes), plain)
-          feeds   <- quick(root, module, classes, TestStatus.Passed, plain)
+          feeds   <- quick(root, module, classes, TestStatus.Passed, base)
         yield assertTrue(
           missing.isEmpty,
           feeds == ran(module, TestStatus.Passed),
@@ -415,7 +429,7 @@ object QuickSpec extends ZIOSpecDefault:
             writeClass(classes, "demo/Foo", List("demo/Other"))
           )
           changed <- requireDigest(classes)
-          failed  <- quick(root, module, classes, TestStatus.Failed(1), plain)
+          failed  <- quick(root, module, classes, TestStatus.Failed(1), base)
           cleared <- QuickRecord.hit(
             root,
             module,
@@ -434,7 +448,7 @@ object QuickSpec extends ZIOSpecDefault:
           )
           _        <- ZIO.attempt(writeClass(classes, "demo/Foo", Nil))
           restored <- requireDigest(classes)
-          again    <- quick(root, module, classes, TestStatus.Passed, plain)
+          again    <- quick(root, module, classes, TestStatus.Passed, base)
         yield assertTrue(
           digest != changed,
           restored == digest,
@@ -460,7 +474,7 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digest,
           )
-          feeds <- quick(root, module, classes, TestStatus.Passed, plain)
+          feeds <- quick(root, module, classes, TestStatus.Passed, base)
         yield assertTrue(
           feeds == Chunk(
             TestFeed.Cached(module, scala3, Jvm, suiteName.value)
@@ -483,15 +497,9 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digest,
           )
-          same     <- quick(root, module, classes, TestStatus.Passed, plain)
-          upstream <- quick(
-            root,
-            module,
-            classes,
-            TestStatus.Passed,
-            plain.copy(upstream = List("up-1")),
-          )
-          _ <- QuickRecord.save(
+          same     <- quick(root, module, classes, TestStatus.Passed, base)
+          upstream <- quick(root, module, classes, TestStatus.Passed, upstreamAsk)
+          _        <- QuickRecord.save(
             root,
             module,
             scala3,
@@ -499,14 +507,8 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digest,
           )
-          jdk <- quick(
-            root,
-            module,
-            classes,
-            TestStatus.Passed,
-            plain.copy(jdk = "other-jdk"),
-          )
-          _ <- QuickRecord.save(
+          jdk <- quick(root, module, classes, TestStatus.Passed, jdkAsk)
+          _   <- QuickRecord.save(
             root,
             module,
             scala3,
@@ -514,13 +516,7 @@ object QuickSpec extends ZIOSpecDefault:
             suiteName,
             digest,
           )
-          flags <- quick(
-            root,
-            module,
-            classes,
-            TestStatus.Passed,
-            plain.copy(flags = List("-encoding", "UTF-8")),
-          )
+          flags <- quick(root, module, classes, TestStatus.Passed, flagsAsk)
         yield assertTrue(
           same == Chunk(TestFeed.Cached(module, scala3, Jvm, suiteName.value)),
           upstream == ran(module, TestStatus.Passed),
@@ -596,16 +592,102 @@ object QuickSpec extends ZIOSpecDefault:
     Sha256.of(Chunk.fromArray("a".getBytes(StandardCharsets.UTF_8)))
   private val digestB =
     Sha256.of(Chunk.fromArray("b".getBytes(StandardCharsets.UTF_8)))
+  private val repos = Repositories.central
+  private val jdkA  = RuntimeIdentity.Local(
+    Path.of("/jdk-a"),
+    Sha256.of(Chunk.fromArray("jdk-a".getBytes(StandardCharsets.UTF_8))),
+  )
+  private val jdkB = RuntimeIdentity.Local(
+    Path.of("/jdk-b"),
+    Sha256.of(Chunk.fromArray("jdk-b".getBytes(StandardCharsets.UTF_8))),
+  )
+  private val compilerSha =
+    Sha256.of(Chunk.fromArray("compiler-tool".getBytes(StandardCharsets.UTF_8)))
 
   private def named: ZIO[Any, histos.ProjectNameError, ProjectName] =
     ZIO.fromEither(ProjectName.from("app"))
 
-  private def requireDigest(classes: Path): ZIO[Any, StampError, Sha256] =
-    SuiteStamp
-      .digest(suiteName.value, List(classes), plain)
-      .flatMap:
-        case Some(value) => ZIO.succeed(value)
-        case None        => ZIO.fail(StampError.Missing(suiteName.value))
+  private def appModule(dependsOn: List[ProjectDep], flags: ScalacFlags): Module =
+    Module(
+      ProjectName("app"),
+      Platforms(Jvm, Nil),
+      ScalaVersions(scala3, Nil),
+      Nil,
+      dependsOn,
+      SourcePos("histos.scala", 1, 1),
+      flags = flags,
+    )
+
+  private def coreModule: Module =
+    Module(
+      ProjectName("core"),
+      Platforms(Jvm, Nil),
+      ScalaVersions(scala3, Nil),
+      Nil,
+      Nil,
+      SourcePos("histos.scala", 1, 1),
+    )
+
+  private def compilerTool(request: histos.resolve.ToolRequest, sha: Sha256): LockedTool =
+    LockedTool(
+      request.id,
+      request.roots,
+      Repositories.ordered(request.repositories),
+      request.roots.map(root => LockedArtifact(root.organization, root.name, root.revision, sha, Repository.Central)),
+      Nil,
+    )
+
+  private def toolLock: DependencyLock =
+    DependencyLock(Nil, Nil, List(compilerTool(CompilerRequests.compiler(scala3, repos), compilerSha)))
+
+  private def asked(module: Module, modules: List[Module], lock: DependencyLock, jdk: RuntimeIdentity): SuiteAsk =
+    SuiteAsk(
+      module,
+      modules,
+      scala3,
+      Jvm,
+      lock,
+      repos,
+      ToolCatalog.default,
+      NativeOrigin.Central,
+      jdk,
+      None,
+    )
+
+  private def base: SuiteAsk =
+    val module = appModule(Nil, ScalacFlags.empty)
+    asked(module, List(module), toolLock, jdkA)
+
+  private def upstreamAsk: SuiteAsk =
+    val linked = appModule(List(ProjectDep(ProjectName("core"), None)), ScalacFlags.empty)
+    val sha    = Sha256.of(Chunk.fromArray("upstream-jar".getBytes(StandardCharsets.UTF_8)))
+    val cell   = LockedCell(
+      ProjectName("core"),
+      scala3,
+      Jvm,
+      Nil,
+      List(LockedArtifact("org.example", "core-lib", "1", sha, Repository.Central)),
+      Nil,
+    )
+    asked(linked, List(coreModule, linked), toolLock.copy(cells = List(cell)), jdkA)
+
+  private def jdkAsk: SuiteAsk =
+    val module = appModule(Nil, ScalacFlags.empty)
+    asked(module, List(module), toolLock, jdkB)
+
+  private def flagsAsk: SuiteAsk =
+    val module = appModule(Nil, ScalacFlags.of(ScalacFlag.EncodingUtf8))
+    asked(module, List(module), toolLock, jdkA)
+
+  private def requireDigest(classes: Path): ZIO[Any, CoverGap | StampError, Sha256] =
+    ZIO
+      .fromEither(SuiteCover.stored(base))
+      .flatMap: cover =>
+        SuiteStamp
+          .digest(suiteName.value, List(classes), cover)
+          .flatMap:
+            case Some(value) => ZIO.succeed(value)
+            case None        => ZIO.fail(StampError.Missing(suiteName.value))
 
   private def ran(module: ProjectName, status: TestStatus): Chunk[TestFeed] =
     Chunk(
@@ -619,7 +701,7 @@ object QuickSpec extends ZIOSpecDefault:
       module: ProjectName,
       classes: Path,
       status: TestStatus,
-      cover: SuiteStamp.Cover,
+      ask: SuiteAsk,
   ): ZIO[Any, ModuleTestError, Chunk[TestFeed]] =
     SuiteLaunch
       .remember(
@@ -637,7 +719,7 @@ object QuickSpec extends ZIOSpecDefault:
         ),
         List(suiteName.value),
         List(classes),
-        cover,
+        ask,
         TestMode.Quick,
         names =>
           ZIO.succeed(
@@ -651,7 +733,6 @@ object QuickSpec extends ZIOSpecDefault:
           ),
       )
       .flatMap(_.runCollect)
-      .provide(ZLayer.succeed(TestContext.empty))
 
   private def unreadable(path: Path): ZIO[Scope, Throwable, Unit] =
     ZIO

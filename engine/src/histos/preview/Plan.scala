@@ -254,7 +254,7 @@ object Plan:
           .sourceBase(repo, module, modules)
           .mapBoth(rootFault(repo, _), base => module.name -> base)
       listed <- ZIO.foreach(modules): module =>
-        cells(repo, module, modules, closure, chosen, bases.toMap, tree)
+        cells(repo, module, modules, closure, chosen, bases.toMap, tree, graph)
     yield listed.flatten
 
   private def renderUnits(repo: Path, units: List[PlanUnit]): String =
@@ -290,6 +290,7 @@ object Plan:
       selected: Set[ProjectName],
       bases: Map[ProjectName, Option[Path]],
       tree: Tree,
+      graph: ProjectGraph,
   ): IO[PreviewError, List[PlanUnit]] =
     if !closure.exists(_.name == module.name) then ZIO.succeed(List(PlanUnit.NotSelected(module.name)))
     else
@@ -315,7 +316,7 @@ object Plan:
               SourceStale
                 .read(dir, found)
                 .flatMap: stale =>
-                  quickOf(repo, module, modules, version, platform, tree).map: quick =>
+                  quickOf(repo, module, modules, version, platform, tree, graph).map: quick =>
                     PlanUnit.Chosen(
                       module.name,
                       version,
@@ -633,11 +634,12 @@ object Plan:
       version: ScalaVersion,
       platform: Platform,
       tree: Tree,
+      graph: ProjectGraph,
   ): UIO[Option[QuickAnswer]] =
     tree match
       case Tree.Main => ZIO.succeed(None)
       case Tree.Test =>
-        QuickAnswer.read(repo, module, modules, version, platform).map(Some(_))
+        QuickAnswer.read(repo, module, modules, version, platform, graph).map(Some(_))
 
   private def relative(repo: Path, path: Path): String =
     val root  = repo.toAbsolutePath.normalize
