@@ -58,6 +58,7 @@ object CommandName:
     trusted("acp"),
     trusted("bsp"),
     trusted("server"),
+    trusted("portal"),
     trusted("toolchain"),
     trusted("cache"),
     trusted("resolve"),

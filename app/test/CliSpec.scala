@@ -468,6 +468,21 @@ object CliSpec extends ZIOSpecDefault:
         Operation.call(update) == Right(Call.LauncherUpdate),
       )
     ,
+    test("portal is a loopback command and missing secrets fail before it binds"):
+      ZIO.scoped:
+        for
+          parsed  <- Cli.parse(List("portal"))
+          watched <- Cli.parse(List("~", "portal"))
+          done    <- invoke(List("portal"))
+        yield assertTrue(
+          parsed == Command.Portal,
+          Operation.call(parsed) == Left(CliParseError.Rejected),
+          watched == Command.Watch(Command.Portal, List("portal")),
+          done.exit == CliExit.PublishFailed,
+          done.err == "SONATYPE_USERNAME and SONATYPE_PASSWORD are required",
+          done.out.isEmpty,
+        )
+    ,
     test("workflow without a file fails"):
       ZIO.scoped:
         for done <- invoke(List("workflow"))

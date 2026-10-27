@@ -5,7 +5,7 @@ import histos.server.Call
 import histos.task.TaskId
 import histos.testrun.TestMode
 
-/** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not operations.
+/** The call a command sends. `mcp`, `bsp`, `server`, `portal`, and `observe` are not operations.
   */
 object Operation:
   def call(command: Command): Either[CliParseError, Call] =
@@ -26,7 +26,7 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Mcp | Command.Bsp | Command.Server | Command.Observe =>
+      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)

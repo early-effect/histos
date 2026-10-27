@@ -2,6 +2,7 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.bsp.{Bsp, Connection, Frame}
+import histos.central.PortalServer
 import histos.build.{Beat, Build}
 import histos.load.LoadedBuild
 import histos.server.{
@@ -62,6 +63,7 @@ enum Command:
   case Mcp
   case Bsp
   case Server
+  case Portal
   case Toolchain
   case CachePath
   case CacheList
@@ -303,7 +305,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | observe | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -359,6 +361,7 @@ object Cli:
       case Command.Mcp              => mcp(repo, apiJar)
       case Command.Bsp              => bsp(repo, apiJar)
       case Command.Server           => serve(repo, apiJar)
+      case Command.Portal           => portal(repo)
       case Command.Toolchain        => toolchain(repo, apiJar)
       case Command.CachePath        => attach(repo, Call.CachePath, cachePath)
       case Command.CacheList        => attach(repo, Call.CacheList, cacheList)
@@ -389,6 +392,21 @@ object Cli:
         previewRun(repo, apiJar, id.render, None)
       case Command.Observe => observe(repo)
 
+  /** Loopback rehearsal of the Central portal. Does not load the graph. */
+  private def portal(repo: Path): URIO[Machine & Scope, Completed] =
+    ZIO.serviceWithZIO[Machine] { machine =>
+      PortalServer.credentials(machine.env) match
+        case Left(error) =>
+          ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message, Playback.Held))
+        case Right(secret) =>
+          PortalServer
+            .serve(repo.resolve(".histos").resolve("portal"), secret)
+            .foldZIO(
+              error => ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message, Playback.Held)),
+              bound => say(bound.url) *> ZIO.never.as(Completed(CliExit.Success, bound.url, "", Playback.Heard)),
+            )
+    }
+
   /** Read the stored tally. Does not load the graph. */
   private def observe(repo: Path): UIO[Completed] =
     histos.report.Stored
@@ -411,7 +429,7 @@ object Cli:
       )
 
   /** One `Call.Watch`. The server, or this process when no server is up, runs that call again after a source save.
-    * `mcp`, `bsp`, `server`, `observe`, and a nested watch are usage and do not start a transport.
+    * `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested watch are usage and do not start a transport.
     */
   private def watch(
       repo: Path,

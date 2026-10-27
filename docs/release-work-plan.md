@@ -170,9 +170,9 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 - [x] **Portal client.** One heddle client. A scripted loopback server checks the Bearer token and the multipart part named `bundle`. Hold waits until `VALIDATED`. `--automatic` waits until `PUBLISHED`. `FAILED` stops the poll. Promote and drop call the deployment route. The suite makes no connection to `central.sonatype.com`.
 
-- [ ] **Rehearsal portal.** `./histos portal` binds loopback, stores deployments on disk, and returns the validation report from the Portal section: layout, file set, checksums, pom fields, snapshot version, snapshot dependency, a GAV already in the store, an empty pom, and the 1GB cap. A second process promotes and drops against that disk. The suite starts the server in a `Scope`.
+- [x] **Rehearsal portal.** `./histos portal` binds loopback, stores deployments on disk, and returns the validation report from the Portal section: layout, file set, checksums, pom fields, snapshot version, snapshot dependency, a GAV already in the store, an empty pom, and the 1GB cap. A second process promotes and drops against that disk. The suite starts the server in a `Scope`.
 
-- [ ] **Preflights.** When the portal URL is Central, HEAD repo1 and look up the signing key on `keyserver.ubuntu.com`, both through heddle against loopback stand-ins. Either miss fails before upload. When `HISTOS_PORTAL` points at the rehearsal portal, neither stand-in is called, and a version that is public on the stand-in still uploads to the fake.
+- [x] **Preflights.** When the portal URL is Central, HEAD repo1 and look up the signing key on `keyserver.ubuntu.com`, both through heddle against loopback stand-ins. Either miss fails before upload. When `HISTOS_PORTAL` points at the rehearsal portal, neither stand-in is called, and a version that is public on the stand-in still uploads to the fake.
 
 - [ ] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
 

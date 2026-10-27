@@ -126,6 +126,7 @@ object PluginSpec extends ZIOSpecDefault:
           "acp",
           "bsp",
           "server",
+          "portal",
           "reload",
           "reboot",
           "toolchain",

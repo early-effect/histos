@@ -25,7 +25,7 @@ import zio.cli.{
   */
 object Grammar:
   private enum Wire:
-    case Version, Graph, Mcp, Bsp, Server, CachePath, CacheList, Toolchain,
+    case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Toolchain,
       Reload, Reboot
     case Cancel(id: String)
     case Run(name: String, platform: Option[String])
@@ -75,6 +75,7 @@ object Grammar:
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
   private val server    = CliCommand("server").map(_ => Wire.Server)
+  private val portal    = CliCommand("portal").map(_ => Wire.Portal)
   private val toolchain = CliCommand("toolchain").map(_ => Wire.Toolchain)
   private val reload    = CliCommand("reload").map(_ => Wire.Reload)
   private val reboot    = CliCommand("reboot").map(_ => Wire.Reboot)
@@ -136,7 +137,7 @@ object Grammar:
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
+      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -174,6 +175,7 @@ object Grammar:
       case Wire.Mcp        => ZIO.succeed(Command.Mcp)
       case Wire.Bsp        => ZIO.succeed(Command.Bsp)
       case Wire.Server     => ZIO.succeed(Command.Server)
+      case Wire.Portal     => ZIO.succeed(Command.Portal)
       case Wire.CachePath  => ZIO.succeed(Command.CachePath)
       case Wire.CacheList  => ZIO.succeed(Command.CacheList)
       case Wire.Toolchain  => ZIO.succeed(Command.Toolchain)
