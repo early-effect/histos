@@ -35,6 +35,8 @@ These are the same packer with a different coordinate:
 
 `histos-api_3` and the `histos` assembly stay two modules in one ship, and one deployment. [Projects.assembly](../api/src/histos/Graph.scala) as a graph-level side door goes away. The empty pom it writes for snapshots will not pass Central.
 
+`engine` and `central` stay out of that ship. They are packed into the fat jar and are not coordinates. Before the catalog leaves the snapshot, selection must allow an assembly to depend on a module that is not in a ship: compile it, pack it, and do not publish it. A library or an application that depends on such a module still fails. This organization still needs a license, a developer, and an scm before that release number will pass. Neither change adds a publication.
+
 An asset publication is a file the build already produced, plus a name. For Histos the file is `dist/histos.jar`. A native image and a native launcher stay later work. The asset is not a GAV and it is not in the portal zip.
 
 ## Commands
@@ -176,7 +178,7 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 - [x] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
 
-- [ ] **Histos-shaped rehearsal.** A fixture with a library module and an assembly module, at release numbers, reaches `VALIDATED` and then `PUBLISHED` on the rehearsal portal. `publish release` in this repository refuses before any HTTP, because the catalog is still the manual snapshot. No Central upload and no tag.
+- [x] **Histos-shaped rehearsal.** A fixture with a library module and an assembly module, at release numbers, reaches `VALIDATED` and then `PUBLISHED` on the rehearsal portal. `publish release` in this repository refuses before any HTTP, because the catalog is still the manual snapshot. No Central upload and no tag.
 
 ### Assets
 
@@ -194,4 +196,4 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 ### Ready
 
-- [ ] **One rehearsal, any Histos project.** A fixture that is not this repo's snapshot catalog publishes a library, an sbt 2 plugin, and an assembly, as two ships. One ship is refused for a snapshot dependency. The other reaches `VALIDATED` on the rehearsal portal, the asset lands on the GitHub stand-in, promote reaches `PUBLISHED`, and a later drop frees the version. A run with no `HISTOS_PORTAL` and no Sonatype secrets fails before a connection. `publish release` in this repository still refuses. The same commands are what another Histos project runs, and what this repository runs the day its catalog leaves `0.0.1-SNAPSHOT`.
+- [ ] **One rehearsal, any Histos project.** A fixture that is not this repo's snapshot catalog publishes a library, an sbt 2 plugin, and an assembly, as two ships. One ship is refused for a snapshot dependency. The other reaches `VALIDATED` on the rehearsal portal, the asset lands on the GitHub stand-in, promote reaches `PUBLISHED`, and a later drop frees the version. A run with no `HISTOS_PORTAL` and no Sonatype secrets fails before a connection. `publish release` in this repository still refuses. Before this repository's catalog leaves the snapshot, an assembly may depend on a module that is not in the ship without publishing it, and the organization names a license, a developer, and an scm. The same commands are what another Histos project runs, and what this repository runs that day.

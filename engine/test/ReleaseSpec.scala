@@ -1,14 +1,21 @@
 package histos.publish
 
+import histos.cache.ContentStore
 import histos.central.{DeploymentState, PortalBase, PortalServer, ReleaseMode, RepositorySecret}
-import histos.version.ManualVersion
+import histos.load.{ApiJar, Loader}
+import histos.resolve.Resolve
+import histos.version.{Catalog, ManualVersion}
 import histos.zinc.GraphCompile
 import histos.{
+  ArtifactBase,
   Developer,
   Jvm,
   License,
+  MainClass,
+  Module,
   Organization,
   Projects,
+  Publication,
   ScalaVersion,
   Scm,
   connection,
@@ -41,7 +48,7 @@ import org.bouncycastle.openpgp.operator.jcajce.{
   JcaPGPKeyPair,
   JcePBESecretKeyEncryptorBuilder,
 }
-import zio.{Chunk, Ref, Scope, ZIO, durationInt}
+import zio.{Chunk, Ref, Scope, System, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object ReleaseSpec extends ZIOSpecDefault:
@@ -260,8 +267,108 @@ object ReleaseSpec extends ZIOSpecDefault:
         )
       }
 
+  private val shaped =
+    test("a library and an assembly at a release number are validated, then published"):
+      ZIO.scoped {
+        for
+          jdk    <- GraphCompile.jdkHere
+          root   <- temp
+          portal <- temp
+          secret <- secretOf
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          key    <- Keys.signing
+          built  <- ZIO.fromEither(libraryAndAssembly)
+          _      <- plant(
+            root,
+            built,
+            List(
+              "api/src/main/scala/lib/Lib.scala"  -> libSource,
+              "app/src/main/scala/demo/App.scala" -> appSource,
+            ),
+            "cell api 3.10.0 jvm\ncell app 3.10.0 jvm\n",
+          )
+          env = signing(bound.url, key.armor)
+          report       <- publish(root, built, jdk, env, ReleaseMode.Hold)
+          ids          <- deploymentIds(portal)
+          record       <- text(deployment(root, "histos"))
+          state        <- states(portal, ids)
+          libraryHeld  <- exists(published(portal, "histos-api_3", "1.0.0"))
+          assemblyHeld <- exists(published(portal, "histos", "1.0.0"))
+          id = report.deployed match
+            case List(deployed) => Some(deployed.id.value)
+            case _              => None
+          _ <- id match
+            case Some(value) => PublishRun.promote(root, env, value)
+            case None        => ZIO.unit
+          after <- id match
+            case Some(_) => text(deployment(root, "histos"))
+            case None    => ZIO.succeed("")
+          publishedState <- states(portal, ids)
+          libraryMarked  <- exists(published(portal, "histos-api_3", "1.0.0"))
+          assemblyMarked <- exists(published(portal, "histos", "1.0.0"))
+        yield assertTrue(
+          report.refused.isEmpty,
+          report.failed.isEmpty,
+          report.deployed.map(item => (item.ship.value, item.state, item.version)) == List(
+            ("histos", DeploymentState.Validated, "1.0.0")
+          ),
+          ids.length == 1,
+          state == List("VALIDATED"),
+          record == file(report.deployed.map(_.id.value), "VALIDATED", "1.0.0"),
+          !libraryHeld,
+          !assemblyHeld,
+          after == file(report.deployed.map(_.id.value), "PUBLISHED", "1.0.0"),
+          publishedState == List("PUBLISHED"),
+          libraryMarked,
+          assemblyMarked,
+        )
+      }
+
+  private val snapshotCatalog =
+    test("this repository's snapshot catalog refuses before any http"):
+      ZIO.scoped {
+        for
+          jdk    <- GraphCompile.jdkHere
+          repo   <- repository
+          portal <- temp
+          work   <- temp
+          hits   <- Ref.make(0)
+          secret <- secretOf
+          bound  <- PortalServer.open(portal, secret, hits.update(_ + 1))
+          key    <- Keys.signing
+          _      <- ZIO.attempt {
+            Files.createDirectories(work.resolve("cache"))
+            Files.createDirectories(work.resolve("store"))
+            Files.createDirectories(work.resolve("publish"))
+          }
+          api    <- ApiJar.locate.provideSomeLayer[Scope](ZLayer.succeed(System.SystemLive))
+          loaded <- ZIO
+            .serviceWithZIO[Loader](_.load(repo, api))
+            .provideSome[Scope](
+              Resolve.live(work.resolve("cache")),
+              ZLayer.succeed(ContentStore.in(work.resolve("store"))),
+              Loader.live,
+            )
+          report <- PublishRun
+            .release(work.resolve("publish"), loaded.graph, Nil, jdk, signing(bound.url, key.armor), ReleaseMode.Hold)
+            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
+          count  <- hits.get
+          record <- exists(deployment(work.resolve("publish"), "histos"))
+          (library, assembly) = forms(loaded.graph)
+        yield assertTrue(
+          snapshotShip(loaded.graph),
+          library,
+          assembly,
+          report.refused.contains("histos is 0.0.1-SNAPSHOT, which is not a release"),
+          report.failed.isEmpty,
+          report.deployed.isEmpty,
+          !record,
+          count == 0,
+        )
+      }
+
   def spec =
-    suite("release")(hold, automatic, failedBundle, missingSecrets)
+    suite("release")(hold, automatic, failedBundle, missingSecrets, shaped, snapshotCatalog)
       .provideSomeLayerShared[zio.test.TestEnvironment & Scope](
         histos.ToolFixture.layer(Projects(module("library", Jvm)(scala3)))
       ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(5.minutes)
@@ -372,6 +479,43 @@ object ReleaseSpec extends ZIOSpecDefault:
       core,
       site,
     )
+
+  private val libraryAndAssembly =
+    val library = module("api", Jvm)(scala3).artifact(ArtifactBase("histos-api"))
+    val program = module("app", Jvm)(scala3)
+      .artifact(ArtifactBase("histos"))
+      .assembly(MainClass("demo.App"))
+      .dependsOn(library)
+    released(histos.ships(histos.manual("histos", ManualVersion("1.0.0"))(library, program)), library, program)
+
+  private def repository: ZIO[Any, Throwable, Path] =
+    System
+      .env("HISTOS_REPO")
+      .provide(ZLayer.succeed(System.SystemLive))
+      .flatMap: named =>
+        val cwd  = Path.of("").toAbsolutePath.normalize
+        val root = named.filter(_.nonEmpty).fold(cwd)(Path.of(_))
+        val file = root.resolve("histos.scala")
+        ZIO
+          .attempt(Files.isRegularFile(file))
+          .flatMap:
+            case true  => ZIO.succeed(root)
+            case false => ZIO.fail(new IllegalStateException(s"histos.scala is not at $file"))
+
+  private def snapshotShip(graph: histos.ProjectGraph): Boolean =
+    graph.catalog match
+      case Catalog.Manual(ship :: rest) =>
+        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.1-SNAPSHOT"
+      case Catalog.Empty | Catalog.Lines(_) => false
+
+  private def forms(graph: histos.ProjectGraph): (Boolean, Boolean) =
+    val modules  = graph.projects.collect { case item: Module => item }
+    val library  = modules.exists(item => item.name.value == "api" && item.publication == Publication.Library)
+    val assembly = modules.exists: item =>
+      item.publication match
+        case Publication.Assembly(main) => item.name.value == "app" && main.value == "histos.cli.Main"
+        case _                          => false
+    (library, assembly)
 
   private def write(root: Path, name: String, body: String): Unit =
     val path = root.resolve(name)
