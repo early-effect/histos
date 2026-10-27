@@ -12,6 +12,26 @@ What we still intend is [next](docs/next.md).
 
 A build file is a Scala program that returns a graph. A module names its platforms (`jvm`, `js`, `native`), its Scala versions, and its dependencies. A literal that is not a version, a dependency, or a name does not compile. This repository is built by [histos.scala](histos.scala). The literals are [Literals.scala](api/src/histos/Literals.scala).
 
+## This repository
+
+Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds a JVM and starts one jar.
+
+`HISTOS_ASSEMBLY`, when set, is that jar. Otherwise `dist/histos.jar` in the checkout is that jar. `.histos/assembly.sha256` has to match the file. A checkout without either jar downloads the snapshot in [.histos/launcher.lock](.histos/launcher.lock) and checks its sha256. `dist/` stays uncommitted. CI runs the lock.
+
+[histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
+
+`assembly` compiles with the running jar, writes `dist/histos.jar`, and puts the api it just compiled at `bootstrap/histos-api.jar`. It records `.histos/assembly.sha256`. The next `./histos` in this checkout runs that jar.
+
+When the build file calls api the committed pin does not contain, start from a jar that can still compile the build file, then:
+
+```
+./histos assembly
+./histos publish snapshots
+./histos launcher --update
+```
+
+`publish snapshots` uploads the manual ship `histos-api_3` and the assembly `rocks.earlyeffect:histos` to Sonatype Central snapshots. Both stay `0.0.1-SNAPSHOT`. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. `launcher --update` writes that assembly's revision and checksum into the lock. Commit the lock. The next run, including CI, compiles the build file against the published api.
+
 ## An operation
 
 You ask for one thing: compile, test, run, publish, assembly, clean, resolve, or a contributed plugin command. `testOnly` and `testQuick` are that same test operation. `preview` of compile, test, publish, clean, cleanFull, or run writes nothing. Compile and test name the sources the last analysis says are stale, and a test preview names the suites a quick run would skip. When that analysis or digest cannot be read, it says it does not know. `observe` reads the last tally and does not compile. `cancel` names the run id the command minted. `server` keeps a warm process. `mcp` and `bsp` open a transport. They are not operations.
