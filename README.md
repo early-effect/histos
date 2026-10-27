@@ -14,7 +14,7 @@ A build file is a Scala program that returns a graph. A module names its platfor
 
 ## An operation
 
-You ask for one thing: compile, test, run, publish, assembly, clean, resolve, or a contributed plugin command. `testOnly` and `testQuick` are that same test operation. `preview` of compile, test, publish, clean, cleanFull, or run writes nothing, and it says file-level staleness is unknown. `observe` reads the last tally and does not compile. `cancel` names the run id the command minted. `server` keeps a warm process. `mcp` and `bsp` open a transport. They are not operations.
+You ask for one thing: compile, test, run, publish, assembly, clean, resolve, or a contributed plugin command. `testOnly` and `testQuick` are that same test operation. `preview` of compile, test, publish, clean, cleanFull, or run writes nothing. Compile and test name the sources the last analysis says are stale, and a test preview names the suites a quick run would skip. When that analysis or digest cannot be read, it says it does not know. `observe` reads the last tally and does not compile. `cancel` names the run id the command minted. `server` keeps a warm process. `mcp` and `bsp` open a transport. They are not operations.
 
 The tally is source files, class files written this round, and modules.
 
