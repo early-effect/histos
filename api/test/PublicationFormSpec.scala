@@ -38,7 +38,42 @@ object PublicationFormSpec extends ZIOSpecDefault:
       assertTrue(
         shape(js, "plug"),
         shape(cross, "app"),
-      ),
+      )
+    ,
+    test("an assembly names one asset, and a library names none"):
+      val library = module("lib", Jvm)(scala3)
+      val named   = module("lib", Jvm)(scala3).library
+      val program = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).asset(asset"dist/histos.jar")
+      val swapped = module("app", Jvm)(scala3).asset(asset"dist/histos.jar").assembly(MainClass("demo.App"))
+      val ship    = Projects(ships(manual("libs", manual"1.0.0")(library)), library)
+      assertTrue(
+        assets(library) == Right(List(None)),
+        assets(named) == Right(List(None)),
+        assets(program) == Right(List(Some("dist/histos.jar"))),
+        assets(swapped) == Right(List(Some("dist/histos.jar"))),
+        form(program) == Right(List(Publication.Assembly(MainClass("demo.App")))),
+        form(swapped) == Right(List(Publication.Assembly(MainClass("demo.App")))),
+        ship.map(graph => assetsOf(graph)) == Right(List(None)),
+      )
+    ,
+    test("an asset on a module that is not an assembly is refused"):
+      val bare    = module("lib", Jvm)(scala3).asset(asset"dist/histos.jar")
+      val library = module("lib", Jvm)(scala3).library.asset(asset"dist/histos.jar")
+      val thin    = module("thin", Jvm)(scala3).application.asset(asset"dist/app.jar")
+      val plugin  = module("plug", Jvm)(scala3).sbtPlugin(sbt"2").asset(asset"dist/plug.jar")
+      assertTrue(
+        without(bare, "lib"),
+        without(library, "lib"),
+        without(thin, "thin"),
+        without(plugin, "plug"),
+      )
+    ,
+    test("two assets are refused"):
+      val both = module("app", Jvm)(scala3)
+        .assembly(MainClass("demo.App"))
+        .asset(asset"dist/histos.jar")
+        .asset(asset"dist/other.jar")
+      assertTrue(two(both, "app")),
   )
 
   private def form(defn: ProjectDef): Either[BuildError, List[Publication]] =
@@ -59,5 +94,28 @@ object PublicationFormSpec extends ZIOSpecDefault:
         error.name.value == name &&
         error.message ==
           s"'$name' publishes an assembly, which is one jvm jar (${error.position.line}:${error.position.column})"
+      case _ => false
+
+  private def assets(defn: ProjectDef): Either[BuildError, List[Option[String]]] =
+    Projects(defn).map(assetsOf)
+
+  private def assetsOf(graph: ProjectGraph): List[Option[String]] =
+    graph.projects.collect:
+      case module: Module => module.asset.map(_.value)
+
+  private def without(defn: ProjectDef, name: String): Boolean =
+    Projects(defn) match
+      case Left(error: BuildError.AssetWithoutAssembly) =>
+        error.name.value == name &&
+        error.message ==
+          s"'$name' names an asset and does not publish an assembly (${error.position.line}:${error.position.column})"
+      case _ => false
+
+  private def two(defn: ProjectDef, name: String): Boolean =
+    Projects(defn) match
+      case Left(error: BuildError.TwoAssets) =>
+        error.name.value == name &&
+        error.message ==
+          s"'$name' names two assets (${error.position.line}:${error.position.column})"
       case _ => false
 end PublicationFormSpec

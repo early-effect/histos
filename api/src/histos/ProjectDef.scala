@@ -2,7 +2,7 @@ package histos
 
 import _root_.scala.annotation.publicInBinary
 
-import histos.plugin.{ModuleNote, NoteKey, NoteText, PluginId}
+import histos.plugin.{ModuleNote, NoteKey, NoteText, PluginId, RepoPath}
 
 /** One or more platforms. The builder requires the first, so empty is not representable.
   */
@@ -76,6 +76,11 @@ sealed trait ModuleDef[P] extends ProjectDef:
   /** Publish the thin jar. The pom lists the classpath. A second publication is refused at load. */
   def application: ModuleDef[P]
 
+  /** A file this assembly already produced. It is not a Maven artifact. A second file, or a file on a module that is
+    * not an assembly, is refused at load.
+    */
+  def asset(file: RepoPath): ModuleDef[P]
+
   /** Replace this module's scalac flags. A second call replaces the list. It does not append. */
   def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P]
 
@@ -117,6 +122,7 @@ object ModuleDef:
       Nil,
       ScalacFlags.empty,
       None,
+      Nil,
       Nil,
     )
 
@@ -167,6 +173,7 @@ private[histos] final class ModuleBody[P](
     val flags: ScalacFlags,
     val published: Option[ArtifactBase],
     val publications: List[Publication],
+    val assets: List[RepoPath],
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -207,6 +214,9 @@ private[histos] final class ModuleBody[P](
 
   override def application: ModuleDef[P] =
     revise(publications = publications :+ Publication.Application)
+
+  override def asset(file: RepoPath): ModuleDef[P] =
+    revise(assets = assets :+ file)
 
   override def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P] =
     revise(flags = ScalacFlags.of(flag, rest*))
@@ -249,6 +259,7 @@ private[histos] final class ModuleBody[P](
       flags: ScalacFlags = this.flags,
       published: Option[ArtifactBase] = this.published,
       publications: List[Publication] = this.publications,
+      assets: List[RepoPath] = this.assets,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -271,6 +282,7 @@ private[histos] final class ModuleBody[P](
       flags,
       published,
       publications,
+      assets,
     )
 end ModuleBody
 

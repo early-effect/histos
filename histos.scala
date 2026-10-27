@@ -33,6 +33,7 @@ object build extends HistosBuild:
     val app = module("app", Jvm)(scala3)
       .artifact(artifact"histos")
       .assembly(MainClass("histos.cli.Main"))
+      .asset(asset"dist/histos.jar")
       .dependsOn(engine, central, api)
       .libraryDependencies(
         zio,

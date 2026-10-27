@@ -216,6 +216,13 @@ private object LiteralMacro:
         report.errorAndAbort(err)
       case Right(raw) => ProjectPathMacro.literal(Expr(raw))
 
+  def asset(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[histos.plugin.RepoPath] =
+    onePart(sc, args, "asset") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => histos.plugin.PluginMacros.repoPath(Expr(raw))
+
   def shipNumber(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[histos.version.ShipNumber] =
     onePart(sc, args, "ship") match
       case Left(err) =>

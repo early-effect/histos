@@ -182,7 +182,7 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 ### Assets
 
-- [ ] **Name the asset.** The assembly module names `dist/histos.jar` as an asset. The portal zip has no such entry. A library-only ship has no asset to upload.
+- [x] **Name the asset.** The assembly module names `dist/histos.jar` as an asset. The portal zip has no such entry. A library-only ship has no asset to upload.
 
 - [ ] **`publish assets`.** A loopback stand-in receives the jar only when `.histos/deployments/<ship>` records `VALIDATED`. A ship with no recorded deployment fails and uploads nothing. `--automatic` does not upload an asset. The stored bytes match the jar.
 

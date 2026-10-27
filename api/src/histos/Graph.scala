@@ -1,6 +1,16 @@
 package histos
 
-import histos.plugin.{DeclaredInput, EntryName, HistosPlugin, ModuleNote, PluginId, RegisteredPlugin, TaskDep, TaskName}
+import histos.plugin.{
+  DeclaredInput,
+  EntryName,
+  HistosPlugin,
+  ModuleNote,
+  PluginId,
+  RegisteredPlugin,
+  RepoPath,
+  TaskDep,
+  TaskName,
+}
 import histos.version.Catalog
 
 import _root_.scala.util.control.NonFatal
@@ -41,6 +51,7 @@ final case class Module(
     flags: ScalacFlags = ScalacFlags.empty,
     published: Option[ArtifactBase] = None,
     publication: Publication = Publication.Library,
+    asset: Option[RepoPath] = None,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -405,7 +416,7 @@ object Projects:
           case (Some(_), Some(_)) =>
             Left(BuildError.MixedTest(n.name, m.position))
           case _ =>
-            publicationOf(n.name, m).map: publication =>
+            publicationOf(n.name, m).map: (publication, asset) =>
               Module(
                 n.name,
                 m.platforms,
@@ -427,21 +438,29 @@ object Projects:
                 m.flags,
                 m.published,
                 publication,
+                asset,
               )
 
   private def publicationOf(
       name: ProjectName,
       module: ModuleBody[?],
-  ): Either[BuildError, Publication] =
-    module.publications match
+  ): Either[BuildError, (Publication, Option[RepoPath])] =
+    val chosen = module.publications match
       case Nil       => Right(Publication.Library)
       case List(one) =>
         one match
           case Publication.Assembly(_)
               if module.platforms.all != List(Platform.Jvm) || module.versions.all.lengthIs != 1 =>
             Left(BuildError.AssemblyShape(name, module.position))
-          case chosen => Right(chosen)
+          case found => Right(found)
       case _ => Left(BuildError.TwoPublications(name, module.position))
+    chosen.flatMap: publication =>
+      (publication, module.assets) match
+        case (Publication.Assembly(_), Nil)        => Right((publication, None))
+        case (Publication.Assembly(_), List(file)) => Right((publication, Some(file)))
+        case (Publication.Assembly(_), _)          => Left(BuildError.TwoAssets(name, module.position))
+        case (_, Nil)                              => Right((publication, None))
+        case _                                     => Left(BuildError.AssetWithoutAssembly(name, module.position))
 
   private def linkAggregate(
       n: Named,

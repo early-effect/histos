@@ -908,6 +908,10 @@ private object WireBuild extends WireSupport:
         wrap("UnknownPluginTask", List(req("plugin", plugin), req("name", task))),
         wrap("CommandShadow", List(req("name", command))),
         wrap("PluginDefect", List(req("plugin", plugin), req("binary", text))),
+        wrap("TwoPublications", List(req("name", project), req("position", position))),
+        wrap("AssemblyShape", List(req("name", project), req("position", position))),
+        wrap("AssetWithoutAssembly", List(req("name", project), req("position", position))),
+        wrap("TwoAssets", List(req("name", project), req("position", position))),
       ),
     )
 end WireBuild

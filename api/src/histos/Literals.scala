@@ -1,9 +1,9 @@
 package histos
 
 /** `scala"3.9.0"`, `dep"dev.zio::zio:2.1.26"`, `ship"1.4.2"`, `manual"1.2.3"`, `organization"com.example"`,
-  * `artifact"histos-api"`, `path"example/todo"`, `pom"..."`, `url"https://..."`, `license"Apache-2.0"`,
-  * `developer"early-effect"`, `connection"scm:git:..."`, and `sbt"2"`. A bad literal fails compilation of the build
-  * file.
+  * `artifact"histos-api"`, `path"example/todo"`, `asset"dist/histos.jar"`, `pom"..."`, `url"https://..."`,
+  * `license"Apache-2.0"`, `developer"early-effect"`, `connection"scm:git:..."`, and `sbt"2"`. A bad literal fails
+  * compilation of the build file.
   */
 extension (inline sc: StringContext)
   inline def scala(inline args: String*): ScalaVersion                  = ${ LiteralMacro.scalaVersion('sc, 'args) }
@@ -14,6 +14,7 @@ extension (inline sc: StringContext)
   inline def artifact(inline args: String*): ArtifactBase               = ${ LiteralMacro.artifact('sc, 'args) }
   inline def maven(inline args: String*): Resolver                      = ${ LiteralMacro.maven('sc, 'args) }
   inline def path(inline args: String*): ProjectPath                    = ${ LiteralMacro.projectPath('sc, 'args) }
+  inline def asset(inline args: String*): histos.plugin.RepoPath        = ${ LiteralMacro.asset('sc, 'args) }
   inline def pom(inline args: String*): PomText                         = ${ LiteralMacro.pomText('sc, 'args) }
   inline def url(inline args: String*): HttpUrl                         = ${ LiteralMacro.httpUrl('sc, 'args) }
   inline def license(inline args: String*): LicenseName                 = ${ LiteralMacro.licenseName('sc, 'args) }

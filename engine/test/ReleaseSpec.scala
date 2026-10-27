@@ -18,6 +18,7 @@ import histos.{
   Publication,
   ScalaVersion,
   Scm,
+  asset,
   connection,
   developer,
   license,
@@ -268,7 +269,7 @@ object ReleaseSpec extends ZIOSpecDefault:
       }
 
   private val shaped =
-    test("a library and an assembly at a release number are validated, then published"):
+    test("a library and an assembly at a release number are validated, then published, without the asset in the zip"):
       ZIO.scoped {
         for
           jdk    <- GraphCompile.jdkHere
@@ -292,6 +293,9 @@ object ReleaseSpec extends ZIOSpecDefault:
           ids          <- deploymentIds(portal)
           record       <- text(deployment(root, "histos"))
           state        <- states(portal, ids)
+          portalReport <- ids match
+            case List(id) => text(portal.resolve("deployments").resolve(id).resolve("report"))
+            case _        => ZIO.succeed("missing")
           libraryHeld  <- exists(published(portal, "histos-api_3", "1.0.0"))
           assemblyHeld <- exists(published(portal, "histos", "1.0.0"))
           id = report.deployed match
@@ -307,6 +311,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           libraryMarked  <- exists(published(portal, "histos-api_3", "1.0.0"))
           assemblyMarked <- exists(published(portal, "histos", "1.0.0"))
         yield assertTrue(
+          recorded(built) == List("api" -> None, "app" -> Some("dist/histos.jar")),
           report.refused.isEmpty,
           report.failed.isEmpty,
           report.deployed.map(item => (item.ship.value, item.state, item.version)) == List(
@@ -314,6 +319,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           ),
           ids.length == 1,
           state == List("VALIDATED"),
+          portalReport.isEmpty,
           record == file(report.deployed.map(_.id.value), "VALIDATED", "1.0.0"),
           !libraryHeld,
           !assemblyHeld,
@@ -485,6 +491,7 @@ object ReleaseSpec extends ZIOSpecDefault:
     val program = module("app", Jvm)(scala3)
       .artifact(ArtifactBase("histos"))
       .assembly(MainClass("demo.App"))
+      .asset(asset"dist/histos.jar")
       .dependsOn(library)
     released(histos.ships(histos.manual("histos", ManualVersion("1.0.0"))(library, program)), library, program)
 
@@ -508,13 +515,20 @@ object ReleaseSpec extends ZIOSpecDefault:
         rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.1-SNAPSHOT"
       case Catalog.Empty | Catalog.Lines(_) => false
 
+  private def recorded(graph: histos.ProjectGraph): List[(String, Option[String])] =
+    graph.projects.collect:
+      case item: Module => item.name.value -> item.asset.map(_.value)
+
   private def forms(graph: histos.ProjectGraph): (Boolean, Boolean) =
-    val modules  = graph.projects.collect { case item: Module => item }
-    val library  = modules.exists(item => item.name.value == "api" && item.publication == Publication.Library)
+    val modules = graph.projects.collect { case item: Module => item }
+    val library = modules.exists: item =>
+      item.name.value == "api" && item.publication == Publication.Library && item.asset.isEmpty
     val assembly = modules.exists: item =>
       item.publication match
-        case Publication.Assembly(main) => item.name.value == "app" && main.value == "histos.cli.Main"
-        case _                          => false
+        case Publication.Assembly(main) =>
+          item.name.value == "app" && main.value == "histos.cli.Main" &&
+          item.asset.map(_.value) == Some("dist/histos.jar")
+        case _ => false
     (library, assembly)
 
   private def write(root: Path, name: String, body: String): Unit =
