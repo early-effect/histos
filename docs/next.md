@@ -6,4 +6,6 @@ The terminal, the server, and the agent share one request. Histos refuses to ins
 
 The build file rejects a setting for a platform the module does not build. Compile, test, run, package, and the editor call the same engine paths. A bad name, a bad pattern, and a bad flag are one typed error. Preview names the sources a compile would rebuild and the suites a quick run would skip, and it says when it does not know. A generated workflow names the tools the graph declared.
 
-Closed until we reopen them: a non-snapshot release, a Windows port, installing toolchains, matching sbt feature for feature, and a hermetic sandbox.
+The release path is open. The decisions are in [release-work-plan.md](release-work-plan.md).
+
+Closed until we reopen them: a Windows port, installing toolchains, matching sbt feature for feature, and a hermetic sandbox.
