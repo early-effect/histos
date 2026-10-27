@@ -26,119 +26,66 @@ final case class ProjectEdge(
     platforms: Option[List[Platform]],
 )
 
-final case class ModuleDef private (
-    name: String,
-    platforms: Platforms,
-    versions: ScalaVersions,
-    dependencies: List[Dep],
-    testDependencies: List[Dep],
-    dependsOn: List[ProjectEdge],
-    clang: ClangPin,
-    test: Option[TestMain],
-    position: SourcePos,
-    provider: Option[TestProvider],
-    nativeVersion: Option[NativeVersion],
-    jsVersion: Option[JsVersion],
-    directory: Option[ProjectPath],
-    jsEnv: JsEnv = JsEnv.Node,
-    jsModule: JsModuleKind = JsModuleKind.NoModule,
-    application: Option[MainClass] = None,
-    notes: List[ModuleNote] = Nil,
-    flags: ScalacFlags = ScalacFlags.empty,
-    published: Option[ArtifactBase] = None,
-) extends ProjectDef:
+/** A module as written. `P` is the platforms `module(...)` named, as a union of the case singleton types.
+  *
+  * Js settings exist only when [[Platform.Js]] is in `P`. Native settings exist only when [[Platform.Native]] is in
+  * `P`. There is no `copy`: a caller cannot put a Js field on a JVM module by copying.
+  */
+sealed trait ModuleDef[P] extends ProjectDef:
   /** Compile classpath. These are the dependencies the published pom lists. */
-  def libraryDependencies(deps: Dep*): ModuleDef =
-    copy(dependencies = dependencies ++ deps.toList)
+  def libraryDependencies(deps: Dep*): ModuleDef[P]
 
-  /** Test classpath only. Compile does not see them, and publish does not write them.
-    */
-  def testDependencies(deps: Dep*): ModuleDef =
-    copy(testDependencies = testDependencies ++ deps.toList)
+  /** Test classpath only. Compile does not see them, and publish does not write them. */
+  def testDependencies(deps: Dep*): ModuleDef[P]
 
-  def dependsOn(projects: ProjectDef*): ModuleDef =
-    add(projects.toList.map(project => ProjectEdge(project, None)))
+  def dependsOn(projects: ProjectDef*): ModuleDef[P]
 
   /** These upstreams are on the classpath only for the named platforms. */
-  def dependsOn(platform: Platform, rest: Platform*)(
-      projects: ProjectDef*
-  ): ModuleDef =
-    val chosen = (platform :: rest.toList).distinct
-    add(projects.toList.map(project => ProjectEdge(project, Some(chosen))))
-
-  private def add(edges: List[ProjectEdge]): ModuleDef =
-    copy(dependsOn = dependsOn ++ edges)
-
-  /** The clang major this Native module must find on `PATH`. */
-  def clang(major: ClangMajor): ModuleDef =
-    copy(clang = ClangPin.Major(major))
+  def dependsOn(platform: Platform, rest: Platform*)(projects: ProjectDef*): ModuleDef[P]
 
   /** Opt out of the test provider and run this main. */
-  def test(main: TestMain): ModuleDef =
-    copy(test = Some(main))
+  def test(main: TestMain): ModuleDef[P]
 
-  /** Run this framework in the child. `TestProvider.Zio` is the one `histos test` uses when this is unset.
-    */
-  def testProvider(provider: TestProvider): ModuleDef =
-    copy(provider = Some(provider))
-
-  /** The Scala Native toolchain this module links with. Unset means the engine default.
-    */
-  def nativeVersion(version: NativeVersion): ModuleDef =
-    copy(nativeVersion = Some(version))
-
-  def jsVersion(version: JsVersion): ModuleDef =
-    copy(jsVersion = Some(version))
+  /** Run this framework in the child. `TestProvider.Zio` is the one `histos test` uses when this is unset. */
+  def testProvider(provider: TestProvider): ModuleDef[P]
 
   /** Sources live in `<directory>/src` instead of `<name>/src`. */
-  def in(directory: ProjectPath): ModuleDef =
-    copy(directory = Some(directory))
+  def in(directory: ProjectPath): ModuleDef[P]
 
-  /** Node, jsdom, or Firefox. A module that does not target Js stays on Node.
-    */
-  def jsEnv(env: JsEnv): ModuleDef =
-    copy(jsEnv = env)
+  /** The class `histos run` starts. A module that does not name one is not linked. */
+  def main(main: MainClass): ModuleDef[P]
 
-  /** `NoModule` is the linker default. Ascent's ES modules name [[JsModuleKind.ESModule]].
+  /** Apply a function of this same module. A plugin publishes `ModuleDef[P] => ModuleDef[P]`, so it cannot add a
+    * platform.
     */
-  def jsModule(kind: JsModuleKind): ModuleDef =
-    copy(jsModule = kind)
-
-  /** The class `histos run` starts. A module that does not name one is not linked.
-    */
-  def main(main: MainClass): ModuleDef =
-    copy(application = Some(main))
-
-  /** Apply a function this module already has. A plugin publishes `ModuleDef => ModuleDef`.
-    */
-  def pipe(f: ModuleDef => ModuleDef): ModuleDef =
+  def pipe(f: ModuleDef[P] => ModuleDef[P]): ModuleDef[P] =
     f(this)
 
-  /** The published artifact id, without a Scala or platform suffix. A second call replaces it.
-    */
-  def artifact(name: ArtifactBase): ModuleDef =
-    copy(published = Some(name))
+  /** The published artifact id, without a Scala or platform suffix. A second call replaces it. */
+  def artifact(name: ArtifactBase): ModuleDef[P]
 
-  /** Replace this module's scalac flags. A second call replaces the list. It does not append.
-    */
-  def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef =
-    copy(flags = ScalacFlags.of(flag, rest*))
+  /** Replace this module's scalac flags. A second call replaces the list. It does not append. */
+  def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P]
 
-  /** Leave plugin-owned text on this module. A repeated plugin and key is refused later.
-    */
-  def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef =
-    copy(notes = notes :+ ModuleNote(plugin, key, value))
+  /** Leave plugin-owned text on this module. A repeated plugin and key is refused later. */
+  def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef[P]
+
+  private[histos] def rewriteJsVersion(version: JsVersion): ModuleDef[P]
+  private[histos] def rewriteJsEnv(env: JsEnv): ModuleDef[P]
+  private[histos] def rewriteJsModule(kind: JsModuleKind): ModuleDef[P]
+  private[histos] def rewriteNativeVersion(version: NativeVersion): ModuleDef[P]
+  private[histos] def rewriteClang(major: ClangMajor): ModuleDef[P]
 end ModuleDef
 
 object ModuleDef:
   /** Spliced by `module`. Source code outside this package cannot call it. */
-  @publicInBinary private[histos] def make(
+  @publicInBinary private[histos] def make[P](
       name: String,
       platforms: Platforms,
       versions: ScalaVersions,
       position: SourcePos,
-  ): ModuleDef =
-    new ModuleDef(
+  ): ModuleDef[P] =
+    new ModuleBody[P](
       name,
       platforms,
       versions,
@@ -152,11 +99,156 @@ object ModuleDef:
       None,
       None,
       None,
+      JsEnv.Node,
+      JsModuleKind.NoModule,
+      None,
+      Nil,
+      ScalacFlags.empty,
+      None,
     )
+
+  /** Node, jsdom, or Firefox. */
+  extension [P](module: ModuleDef[P])(using Platform.Js.type <:< P)
+    def jsVersion(version: JsVersion): ModuleDef[P] =
+      module.rewriteJsVersion(version)
+
+    def jsEnv(env: JsEnv): ModuleDef[P] =
+      module.rewriteJsEnv(env)
+
+    /** `NoModule` is the linker default. Ascent's ES modules name [[JsModuleKind.ESModule]]. */
+    def jsModule(kind: JsModuleKind): ModuleDef[P] =
+      module.rewriteJsModule(kind)
+  end extension
+
+  extension [P](module: ModuleDef[P])(using Platform.Native.type <:< P)
+    /** The clang major this Native module must find on `PATH`. */
+    def clang(major: ClangMajor): ModuleDef[P] =
+      module.rewriteClang(major)
+
+    /** The Scala Native toolchain this module links with. Unset means the engine default. */
+    def nativeVersion(version: NativeVersion): ModuleDef[P] =
+      module.rewriteNativeVersion(version)
+  end extension
+end ModuleDef
+
+/** The stored module. Graph reads these fields. Callers see [[ModuleDef]], whose platform methods are the extensions.
+  */
+private[histos] final class ModuleBody[P](
+    override val name: String,
+    val platforms: Platforms,
+    val versions: ScalaVersions,
+    val dependencies: List[Dep],
+    val testDependencies: List[Dep],
+    val dependsOn: List[ProjectEdge],
+    val clang: ClangPin,
+    val test: Option[TestMain],
+    override val position: SourcePos,
+    val provider: Option[TestProvider],
+    val nativeVersion: Option[NativeVersion],
+    val jsVersion: Option[JsVersion],
+    val directory: Option[ProjectPath],
+    val jsEnv: JsEnv,
+    val jsModule: JsModuleKind,
+    val application: Option[MainClass],
+    val notes: List[ModuleNote],
+    val flags: ScalacFlags,
+    val published: Option[ArtifactBase],
+) extends ModuleDef[P]:
+  override def libraryDependencies(deps: Dep*): ModuleDef[P] =
+    revise(dependencies = dependencies ++ deps.toList)
+
+  override def testDependencies(deps: Dep*): ModuleDef[P] =
+    revise(testDependencies = testDependencies ++ deps.toList)
+
+  override def dependsOn(projects: ProjectDef*): ModuleDef[P] =
+    add(projects.toList.map(project => ProjectEdge(project, None)))
+
+  override def dependsOn(platform: Platform, rest: Platform*)(projects: ProjectDef*): ModuleDef[P] =
+    val chosen = (platform :: rest.toList).distinct
+    add(projects.toList.map(project => ProjectEdge(project, Some(chosen))))
+
+  override def test(main: TestMain): ModuleDef[P] =
+    revise(tested = Some(main))
+
+  override def testProvider(provider: TestProvider): ModuleDef[P] =
+    revise(provider = Some(provider))
+
+  override def in(directory: ProjectPath): ModuleDef[P] =
+    revise(directory = Some(directory))
+
+  override def main(main: MainClass): ModuleDef[P] =
+    revise(application = Some(main))
+
+  override def artifact(name: ArtifactBase): ModuleDef[P] =
+    revise(published = Some(name))
+
+  override def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P] =
+    revise(flags = ScalacFlags.of(flag, rest*))
+
+  override def note(plugin: PluginId, key: NoteKey, value: NoteText): ModuleDef[P] =
+    revise(notes = notes :+ ModuleNote(plugin, key, value))
+
+  override private[histos] def rewriteJsVersion(version: JsVersion): ModuleDef[P] =
+    revise(jsVersion = Some(version))
+
+  override private[histos] def rewriteJsEnv(env: JsEnv): ModuleDef[P] =
+    revise(jsEnv = env)
+
+  override private[histos] def rewriteJsModule(kind: JsModuleKind): ModuleDef[P] =
+    revise(jsModule = kind)
+
+  override private[histos] def rewriteNativeVersion(version: NativeVersion): ModuleDef[P] =
+    revise(nativeVersion = Some(version))
+
+  override private[histos] def rewriteClang(major: ClangMajor): ModuleDef[P] =
+    revise(clang = ClangPin.Major(major))
+
+  private def add(edges: List[ProjectEdge]): ModuleDef[P] =
+    revise(edges = dependsOn ++ edges)
+
+  private def revise(
+      dependencies: List[Dep] = this.dependencies,
+      testDependencies: List[Dep] = this.testDependencies,
+      edges: List[ProjectEdge] = this.dependsOn,
+      clang: ClangPin = this.clang,
+      tested: Option[TestMain] = this.test,
+      provider: Option[TestProvider] = this.provider,
+      nativeVersion: Option[NativeVersion] = this.nativeVersion,
+      jsVersion: Option[JsVersion] = this.jsVersion,
+      directory: Option[ProjectPath] = this.directory,
+      jsEnv: JsEnv = this.jsEnv,
+      jsModule: JsModuleKind = this.jsModule,
+      application: Option[MainClass] = this.application,
+      notes: List[ModuleNote] = this.notes,
+      flags: ScalacFlags = this.flags,
+      published: Option[ArtifactBase] = this.published,
+  ): ModuleDef[P] =
+    new ModuleBody[P](
+      name,
+      platforms,
+      versions,
+      dependencies,
+      testDependencies,
+      edges,
+      clang,
+      tested,
+      position,
+      provider,
+      nativeVersion,
+      jsVersion,
+      directory,
+      jsEnv,
+      jsModule,
+      application,
+      notes,
+      flags,
+      published,
+    )
+end ModuleBody
 
 final case class AggregateDef private (
     name: String,
-    children: List[ModuleDef],
+    children: List[ModuleDef[?]],
     position: SourcePos,
 ) extends ProjectDef
 
@@ -164,7 +256,7 @@ object AggregateDef:
   /** Spliced by `aggregate`. Source code cannot call it. */
   @publicInBinary private[histos] def make(
       name: String,
-      children: List[ModuleDef],
+      children: List[ModuleDef[?]],
       position: SourcePos,
   ): AggregateDef =
     new AggregateDef(name, children, position)

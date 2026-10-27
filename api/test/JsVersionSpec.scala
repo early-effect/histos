@@ -34,16 +34,12 @@ object JsVersionSpec extends ZIOSpecDefault:
         }) == Right(List(Some("1.22.0"))),
       )
     ,
-    test("a Js revision on a JVM-only module is a typed graph error"):
-      val app = module("app", Platform.Jvm)(ScalaVersion("3.10.0"))
-        .jsVersion(JsVersion("1.22.0"))
-      zio.ZIO
-        .fromEither(ProjectName.from("app"))
-        .map(name =>
-          assertTrue(
-            Projects(app) == Left(
-              BuildError.JsVersionWithoutJs(name, app.position)
-            )
-          )
-        ),
+    test("a Js revision on a JVM-only module is not a member"):
+      val errors = typeCheckErrors("""import histos.*
+        module("app", Platform.Jvm)(ScalaVersion("3.10.0")).jsVersion(JsVersion("1.22.0"))
+      """)
+      assertTrue:
+        errors match
+          case error :: _ => error.message.contains("jsVersion is not a member")
+          case Nil        => false,
   )

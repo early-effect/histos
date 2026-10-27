@@ -111,29 +111,21 @@ object GraphSpec extends ZIOSpecDefault:
         .jsEnv(JsEnv.Jsdom)
         .jsModule(JsModuleKind.ESModule)
       val firefox = module("browser", Js)(scala3).jsEnv(JsEnv.Firefox)
-      val jvm     = module("core", Jvm)(scala3).jsEnv(JsEnv.Node)
-      val refused = module("core", Jvm)(scala3).jsModule(JsModuleKind.CommonJS)
+      val jvm     = module("core", Jvm)(scala3)
       val kinds   = Projects(ui, firefox).map(_.projects.collect { case module: Module =>
         (module.name.value, module.jsEnv, module.jsModule)
       })
-      projectName("core").map: core =>
-        assertTrue(
-          kinds == Right(
-            List(
-              ("ui", JsEnv.Jsdom, JsModuleKind.ESModule),
-              ("browser", JsEnv.Firefox, JsModuleKind.NoModule),
-            )
-          ),
-          Projects(jvm).map(_.projects.collect { case module: Module =>
-            module.jsEnv
-          }) == Right(List(JsEnv.Node)),
-          Projects(refused) == Left(BuildError.JsModuleWithoutJs(core, refused.position)),
-        )
-    ,
-    test("a js environment other than node needs a js module"):
-      val jvm = module("core", Jvm)(scala3).jsEnv(JsEnv.Jsdom)
-      projectName("core").map: core =>
-        assertTrue(Projects(jvm) == Left(BuildError.JsEnvWithoutJs(core, jvm.position)))
+      assertTrue(
+        kinds == Right(
+          List(
+            ("ui", JsEnv.Jsdom, JsModuleKind.ESModule),
+            ("browser", JsEnv.Firefox, JsModuleKind.NoModule),
+          )
+        ),
+        Projects(jvm).map(_.projects.collect { case module: Module =>
+          module.jsEnv
+        }) == Right(List(JsEnv.Node)),
+      )
     ,
     test("test dependencies stay off the compile classpath"):
       val tests = dep"dev.zio::zio-test:2.1.27"
@@ -394,26 +386,21 @@ object GraphSpec extends ZIOSpecDefault:
           .clang(ClangMajor(21))
           .nativeVersion(NativeVersion("0.5.13-SNAPSHOT"))
       )
-      val jvm = module("core", Jvm)(scala3).nativeVersion(NativeVersion("0.5.12"))
-      projectName("core").map: core =>
-        assertTrue(
-          native.map(_.projects.collect { case item: Module =>
-            item.nativeVersion.map(_.value)
-          }) == Right(List(Some("0.5.13-SNAPSHOT"))),
-          Projects(jvm) == Left(BuildError.NativeVersionWithoutNative(core, jvm.position)),
-          NativeVersion.from("0.5") == Left(NativeVersionError.Bad("0.5")),
-          NativeVersion.from("latest") == Left(NativeVersionError.Bad("latest")),
-        )
+      assertTrue(
+        native.map(_.projects.collect { case item: Module =>
+          item.nativeVersion.map(_.value)
+        }) == Right(List(Some("0.5.13-SNAPSHOT"))),
+        NativeVersion.from("0.5") == Left(NativeVersionError.Bad("0.5")),
+        NativeVersion.from("latest") == Left(NativeVersionError.Bad("latest")),
+      )
     ,
-    test("a native module names a clang major, and a jvm module does not"):
+    test("a native module names a clang major"):
       val missing = module("core", Native)(scala3)
       val named   = Projects(module("core", Native)(scala3).clang(ClangMajor(21)))
-      val extra   = module("core", Jvm)(scala3).clang(ClangMajor(21))
       val pin     = named.map(_.projects.collect { case item: Module => item.clang })
       projectName("core").map: core =>
         assertTrue(
           Projects(missing) == Left(BuildError.MissingClang(core, missing.position)),
-          Projects(extra) == Left(BuildError.ClangWithoutNative(core, extra.position)),
           pin == Right(List(ClangPin.Major(ClangMajor(21)))),
         )
     ,
