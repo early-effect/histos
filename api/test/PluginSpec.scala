@@ -276,7 +276,7 @@ object PluginSpec extends ZIOSpecDefault:
   private def projectName(raw: String): IO[ProjectNameError, ProjectName] =
     ZIO.fromEither(ProjectName.from(raw))
 
-  private def jvm(name: String): ModuleDef =
+  private def jvm(name: String): ModuleDef[Platform.Jvm.type] =
     module(name, Jvm)(scala"3.9.0")
 
   private def task(

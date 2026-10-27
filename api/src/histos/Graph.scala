@@ -327,7 +327,7 @@ object Projects:
 
   private def shapeOf(n: Named): Option[BuildError] =
     n.defn match
-      case m: ModuleDef =>
+      case m: ModuleBody[?] =>
         duplicate(m.platforms.all)
           .map(BuildError.DuplicatePlatform(n.name, _, m.position))
           .orElse(
@@ -336,12 +336,6 @@ object Projects:
             )
           )
           .orElse(clangOf(n.name, m))
-          .orElse(nativeVersionOf(n.name, m))
-          .orElse(jsVersionOf(n.name, m))
-          .orElse(jsEnvOf(n.name, m))
-          .orElse(
-            jsModuleOf(n.name, m)
-          )
           .orElse(duplicateNote(n.name, m))
       case a: AggregateDef =>
         val children = a.children.map(_.name)
@@ -362,12 +356,12 @@ object Projects:
       byName: Map[String, Named],
   ): Either[BuildError, Project] =
     n.defn match
-      case m: ModuleDef    => linkModule(n, m, byName)
-      case a: AggregateDef => linkAggregate(n, a, byName)
+      case m: ModuleBody[?] => linkModule(n, m, byName)
+      case a: AggregateDef  => linkAggregate(n, a, byName)
 
   private def linkModule(
       n: Named,
-      m: ModuleDef,
+      m: ModuleBody[?],
       byName: Map[String, Named],
   ): Either[BuildError, Project] =
     m.dependsOn
@@ -384,7 +378,7 @@ object Projects:
                     BuildError
                       .DependsOnAggregate(n.name, target.name, m.position)
                   )
-                case upstream: ModuleDef =>
+                case upstream: ModuleBody[?] =>
                   if deps.exists(_.name == target.name) then
                     Left(
                       BuildError
@@ -433,8 +427,8 @@ object Projects:
         acc.flatMap: names =>
           lookup(child, byName).flatMap: target =>
             target.defn match
-              case _: ModuleDef => Right(names :+ target.name)
-              case _            =>
+              case _: ModuleDef[?] => Right(names :+ target.name)
+              case _               =>
                 Left(
                   BuildError.AggregateChild(n.name, target.name, a.position)
                 )
@@ -442,53 +436,12 @@ object Projects:
 
   private def clangOf(
       name: ProjectName,
-      module: ModuleDef,
+      module: ModuleBody[?],
   ): Option[BuildError] =
-    val native = module.platforms.all.contains(Platform.Native)
     module.clang match
-      case ClangPin.Major(_) if !native =>
-        Some(BuildError.ClangWithoutNative(name, module.position))
-      case ClangPin.Unused if native =>
+      case ClangPin.Unused if module.platforms.all.contains(Platform.Native) =>
         Some(BuildError.MissingClang(name, module.position))
       case _ => None
-
-  private def nativeVersionOf(
-      name: ProjectName,
-      module: ModuleDef,
-  ): Option[BuildError] =
-    val native = module.platforms.all.contains(Platform.Native)
-    module.nativeVersion match
-      case Some(_) if !native =>
-        Some(BuildError.NativeVersionWithoutNative(name, module.position))
-      case _ => None
-
-  private def jsVersionOf(
-      name: ProjectName,
-      module: ModuleDef,
-  ): Option[BuildError] =
-    Option.when(
-      module.jsVersion.isDefined && !module.platforms.all.contains(Platform.Js)
-    )(BuildError.JsVersionWithoutJs(name, module.position))
-
-  private def jsEnvOf(
-      name: ProjectName,
-      module: ModuleDef,
-  ): Option[BuildError] =
-    val js = module.platforms.all.contains(Platform.Js)
-    module.jsEnv match
-      case JsEnv.Node => None
-      case _ if !js   => Some(BuildError.JsEnvWithoutJs(name, module.position))
-      case _          => None
-
-  private def jsModuleOf(
-      name: ProjectName,
-      module: ModuleDef,
-  ): Option[BuildError] =
-    val js = module.platforms.all.contains(Platform.Js)
-    module.jsModule match
-      case JsModuleKind.NoModule => None
-      case _ if !js              => Some(BuildError.JsModuleWithoutJs(name, module.position))
-      case _                     => None
 
   private def directories(projects: List[Project]): Either[BuildError, Unit] =
     val modules = projects.collect { case module: Module => module }
@@ -511,9 +464,9 @@ object Projects:
     */
   private def accept(
       module: ProjectName,
-      depender: ModuleDef,
+      depender: ModuleBody[?],
       target: ProjectName,
-      upstream: ModuleDef,
+      upstream: ModuleBody[?],
       edge: ProjectEdge,
   ): Either[BuildError, ProjectDep] =
     val wanted = edge.platforms match
@@ -604,7 +557,7 @@ object Projects:
 
   private def duplicateNote(
       name: ProjectName,
-      module: ModuleDef,
+      module: ModuleBody[?],
   ): Option[BuildError] =
     duplicate(module.notes.map(note => (note.plugin, note.key))) match
       case Some((plugin, key)) =>

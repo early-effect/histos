@@ -53,8 +53,6 @@ enum BuildError:
   )
   case Cycle(platform: Platform, path: List[ProjectName])
   case MissingClang(name: ProjectName, position: SourcePos)
-  case ClangWithoutNative(name: ProjectName, position: SourcePos)
-  case NativeVersionWithoutNative(name: ProjectName, position: SourcePos)
   case EmptyShipName(position: SourcePos)
   case BadShipName(raw: String, position: SourcePos)
   case DuplicateShip(name: ShipName, first: SourcePos, second: SourcePos)
@@ -82,9 +80,6 @@ enum BuildError:
       other: ProjectName,
       directory: String,
   )
-  case JsVersionWithoutJs(name: ProjectName, position: SourcePos)
-  case JsEnvWithoutJs(name: ProjectName, position: SourcePos)
-  case JsModuleWithoutJs(name: ProjectName, position: SourcePos)
   case DuplicatePlugin(id: PluginId)
   case DuplicatePluginTask(plugin: PluginId, name: TaskName)
   case DuplicateCommand(name: CommandName)
@@ -135,10 +130,6 @@ enum BuildError:
       s"dependency cycle on ${platform.toString.toLowerCase} ${path.map(_.value).mkString(" -> ")}"
     case MissingClang(name, position) =>
       s"project '${name.value}' targets Native and does not name a clang major (${position.line}:${position.column})"
-    case ClangWithoutNative(name, position) =>
-      s"project '${name.value}' names a clang major and does not target Native (${position.line}:${position.column})"
-    case NativeVersionWithoutNative(name, position) =>
-      s"project '${name.value}' names a Scala Native version and does not target Native (${position.line}:${position.column})"
     case EmptyShipName(position) =>
       s"a ship name is not empty (${position.line}:${position.column})"
     case BadShipName(raw, position) =>
@@ -158,12 +149,6 @@ enum BuildError:
       s"'${name.value}' names a test main and a test provider (${position.line}:${position.column})"
     case DuplicateDirectory(name, other, directory) =>
       s"'${name.value}' and '${other.value}' both use directory $directory"
-    case JsVersionWithoutJs(name, _) =>
-      s"project '${name.value}' names a Scala.js revision and does not target js"
-    case JsEnvWithoutJs(name, position) =>
-      s"project '${name.value}' names a js environment and does not target js (${position.line}:${position.column})"
-    case JsModuleWithoutJs(name, position) =>
-      s"project '${name.value}' names a js module kind and does not target js (${position.line}:${position.column})"
     case DuplicatePlugin(id)               => s"plugin ${id.value} is registered twice"
     case DuplicatePluginTask(plugin, name) =>
       s"plugin ${plugin.value} declares task ${name.value} twice"
