@@ -1,6 +1,6 @@
 package histos.version
 
-/** `<ship>-ci`. Every non-release session compiles this. It is never published. */
+/** `<ship>-ci`. publishLocal writes it. Snapshots refuse it. */
 opaque type CiVersion = ShipNumber
 
 object CiVersion:

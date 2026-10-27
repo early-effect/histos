@@ -38,7 +38,8 @@ object PreviewSpec extends ZIOSpecDefault:
     test("preview test, publish, clean, cleanFull, and run parse"):
       for
         tests   <- Cli.parse(List("preview", "test", "app"))
-        publish <- Cli.parse(List("preview", "publish"))
+        publish <- Cli.parse(List("preview", "publishLocal"))
+        snaps   <- Cli.parse(List("preview", "publish", "snapshots", "app"))
         clean   <- Cli.parse(List("preview", "clean", "app"))
         full    <- Cli.parse(List("preview", "cleanFull"))
         extra   <- Cli.parse(List("preview", "cleanFull", "app")).either
@@ -48,7 +49,8 @@ object PreviewSpec extends ZIOSpecDefault:
         plugin  <- Cli.parse(List("preview", "run", "dev.example/echo"))
       yield assertTrue(
         tests == Command.PreviewTest(List(ProjectName("app"))),
-        publish == Command.PreviewPublish(Nil),
+        publish == Command.PreviewPublishLocal(None, Nil),
+        snaps == Command.PreviewPublishSnapshots(List("app")),
         clean == Command.PreviewClean(List(ProjectName("app"))),
         full == Command.PreviewCleanFull,
         extra == Left(
@@ -77,8 +79,11 @@ object PreviewSpec extends ZIOSpecDefault:
         HistosMcp.previewCall(args("test", "ignored", List("app"))) == Right(
           Call.PreviewTest(List(ProjectName("app")))
         ),
-        HistosMcp.previewCall(args("publish", "", List("app"))) == Right(
-          Call.PreviewPublish(List(ProjectName("app")))
+        HistosMcp.previewCall(args("publishLocal", "", List("app"), Some("repo"))) == Right(
+          Call.PreviewPublishLocal(Some("repo"), List("app"))
+        ),
+        HistosMcp.previewCall(args("publishSnapshots", "", List("app"))) == Right(
+          Call.PreviewPublishSnapshots(List("app"))
         ),
         HistosMcp.previewCall(args("clean", "", Nil)) == Right(
           Call.PreviewClean(Nil)
@@ -151,17 +156,18 @@ object PreviewSpec extends ZIOSpecDefault:
             )
           )
           text <- Plan
-            .publish(repo, graph, List(ProjectName("app")), Map.empty)
+            .publishLocal(repo, graph, List("app"), Map.empty, Some("target/repo"), ZIO.succeed(repo))
             .map(Plan.renderPublish)
           heard <- ask(repo)(
-            Calls.previewPublish(repo, graph, List(ProjectName("app")), Map.empty, _)
+            Calls.previewPublishLocal(repo, graph, Some("target/repo"), List("app"), Map.empty, _)
           )
           kept <- same(planted)
         yield assertTrue(
           heard.outs == Chunk(text),
           heard.done == Chunk(CallResult.reported()),
           text ==
-            """core libs 1.0.0 upstream
+            """target/repo
+              |core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),

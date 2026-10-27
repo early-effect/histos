@@ -45,7 +45,10 @@ object HistosMcp:
       mode: Option[String] = None,
   ) derives Schema,
         JsonCodec
-  final case class PublishArgs(repository: String, projects: List[String] = Nil) derives Schema, JsonCodec
+  final case class PublishLocalArgs(directory: Option[String] = None, projects: List[String] = Nil)
+      derives Schema,
+        JsonCodec
+  final case class PublishSnapshotsArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class AssemblyArgs(destination: Option[String] = None) derives Schema, JsonCodec
   final case class CleanArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class ResolveArgs(action: String = "verify") derives Schema, JsonCodec
@@ -56,6 +59,7 @@ object HistosMcp:
       operation: String,
       id: String,
       projects: List[String] = Nil,
+      directory: Option[String] = None,
   ) derives Schema,
         JsonCodec
 
@@ -92,28 +96,29 @@ object HistosMcp:
   val toolNames: Set[ToolName] = Names.all
 
   private object Names:
-    inline val graph          = "graph"
-    inline val run            = "run"
-    inline val cancel         = "cancel"
-    inline val compile        = "compile"
-    inline val test           = "test"
-    inline val publish        = "publish"
-    inline val toolchain      = "toolchain"
-    inline val version        = "version"
-    inline val assembly       = "assembly"
-    inline val clean          = "clean"
-    inline val cleanFull      = "cleanFull"
-    inline val resolve        = "resolve"
-    inline val workflow       = "workflow"
-    inline val reload         = "reload"
-    inline val reboot         = "reboot"
-    inline val cachePath      = "cachePath"
-    inline val cacheList      = "cacheList"
-    inline val cacheClean     = "cacheClean"
-    inline val launcherUpdate = "launcherUpdate"
-    inline val watch          = "watch"
-    inline val preview        = "preview"
-    inline val observe        = "observe"
+    inline val graph            = "graph"
+    inline val run              = "run"
+    inline val cancel           = "cancel"
+    inline val compile          = "compile"
+    inline val test             = "test"
+    inline val publishLocal     = "publishLocal"
+    inline val publishSnapshots = "publishSnapshots"
+    inline val toolchain        = "toolchain"
+    inline val version          = "version"
+    inline val assembly         = "assembly"
+    inline val clean            = "clean"
+    inline val cleanFull        = "cleanFull"
+    inline val resolve          = "resolve"
+    inline val workflow         = "workflow"
+    inline val reload           = "reload"
+    inline val reboot           = "reboot"
+    inline val cachePath        = "cachePath"
+    inline val cacheList        = "cacheList"
+    inline val cacheClean       = "cacheClean"
+    inline val launcherUpdate   = "launcherUpdate"
+    inline val watch            = "watch"
+    inline val preview          = "preview"
+    inline val observe          = "observe"
 
     val all: Set[ToolName] =
       Set(
@@ -122,7 +127,8 @@ object HistosMcp:
         ToolName(cancel),
         ToolName(compile),
         ToolName(test),
-        ToolName(publish),
+        ToolName(publishLocal),
+        ToolName(publishSnapshots),
         ToolName(toolchain),
         ToolName(version),
         ToolName(assembly),
@@ -180,11 +186,15 @@ object HistosMcp:
         Names.test,
         "Test modules. An empty list tests every module. An aggregate name tests its modules. patterns are suite name globs, the same as histos testOnly. mode is run or quick, and an absent mode is run. Each module runs once per Scala version and platform it builds.",
       )(args => ZIO.fromEither(testCall(args.projects, args.patterns, args.mode)).mapError(refused).flatMap(ask))
-      publishing <- testing.tool[PublishArgs](
-        Names.publish,
-        "Publish modules into a local Maven directory. An empty list publishes the ship members.",
-      )(args => ZIO.fromEither(publishCall(args.repository, args.projects)).mapError(refused).flatMap(ask))
-      toolchain <- publishing.tool[NoArgs](
+      publishing <- testing.tool[PublishLocalArgs](
+        Names.publishLocal,
+        "Publish into a Maven directory. An absent directory is ~/.m2/repository. A token is a ship, an aggregate, or a module. An empty list publishes every ship. Nothing is signed and nothing is uploaded.",
+      )(args => ZIO.fromEither(publishLocalCall(args.directory, args.projects)).mapError(refused).flatMap(ask))
+      snapshots <- publishing.tool[PublishSnapshotsArgs](
+        Names.publishSnapshots,
+        "Publish to the Central snapshot repository. A token is a ship, an aggregate, or a module. An empty list publishes every ship. A directory belongs on publishLocal.",
+      )(args => ZIO.fromEither(publishSnapshotsCall(args.projects)).mapError(refused).flatMap(ask))
+      toolchain <- snapshots.tool[NoArgs](
         Names.toolchain,
         "Show the JDK decision, and the Node or clang decision when the build needs them",
       )(_ => ask(Call.Toolchain))
@@ -257,7 +267,7 @@ object HistosMcp:
       )(args => Cli.watchCall(args.args, repo, apiJar).mapError(Session.CallProblem.Fault(_)).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
         Names.preview,
-        "Say what compile, test, publish, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. Compile and test name stale sources from the last analysis.",
+        "Say what compile, test, publishLocal, publishSnapshots, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. publishLocal may set directory. An empty project list is the command's default. Writes nothing. Compile and test name stale sources from the last analysis.",
       )(args =>
         ZIO
           .fromEither(previewCall(args))
@@ -284,8 +294,11 @@ object HistosMcp:
       chosen <- TestMode.from(mode.getOrElse(TestMode.Run.token)).left.map(Rejection.TestMode(_))
     yield Call.Test(found, globs, chosen)
 
-  def publishCall(repository: String, projects: List[String]): Either[Rejection, Call] =
-    names(projects).map(found => Call.Publish(repository, found))
+  def publishLocalCall(directory: Option[String], projects: List[String]): Either[Rejection, Call] =
+    Right(Call.PublishLocal(directory, projects))
+
+  def publishSnapshotsCall(projects: List[String]): Either[Rejection, Call] =
+    Right(Call.PublishSnapshots(projects))
 
   def cleanCall(projects: List[String]): Either[Rejection, Call] =
     names(projects).map(Call.Clean(_))
@@ -302,11 +315,12 @@ object HistosMcp:
 
   def previewCall(args: PreviewArgs): Either[Rejection, Call] =
     args.operation match
-      case "compile"   => names(args.projects).map(Call.PreviewCompile(_))
-      case "test"      => names(args.projects).map(Call.PreviewTest(_))
-      case "publish"   => names(args.projects).map(Call.PreviewPublish(_))
-      case "clean"     => names(args.projects).map(Call.PreviewClean(_))
-      case "cleanFull" =>
+      case "compile"          => names(args.projects).map(Call.PreviewCompile(_))
+      case "test"             => names(args.projects).map(Call.PreviewTest(_))
+      case "publishLocal"     => Right(Call.PreviewPublishLocal(args.directory, args.projects))
+      case "publishSnapshots" => Right(Call.PreviewPublishSnapshots(args.projects))
+      case "clean"            => names(args.projects).map(Call.PreviewClean(_))
+      case "cleanFull"        =>
         if args.projects.nonEmpty then Left(Rejection.PreviewProjects)
         else Right(Call.PreviewCleanFull)
       case "run" =>

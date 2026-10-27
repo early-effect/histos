@@ -101,6 +101,67 @@ private object OrganizationMacro:
           case Left(err) => report.errorAndAbort(err.message, raw)
           case Right(_)  => '{ Organization.trusted(${ Expr(text) }) }
 
+private object PomTextMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[PomText] =
+    import quotes.reflect.report
+    raw.value match
+      case None       => report.errorAndAbort("PomText(...) takes a literal. Use PomText.from at runtime.", raw)
+      case Some(text) =>
+        PomText.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ PomText.trusted(${ Expr(text) }) }
+
+private object HttpUrlMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[HttpUrl] =
+    import quotes.reflect.report
+    raw.value match
+      case None       => report.errorAndAbort("HttpUrl(...) takes a literal. Use HttpUrl.from at runtime.", raw)
+      case Some(text) =>
+        HttpUrl.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ HttpUrl.trusted(${ Expr(text) }) }
+
+private object SbtSeriesMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[SbtSeries] =
+    import quotes.reflect.report
+    raw.value match
+      case None       => report.errorAndAbort("SbtSeries(...) takes a literal. Use SbtSeries.from at runtime.", raw)
+      case Some(text) =>
+        SbtSeries.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ SbtSeries.trusted(${ Expr(text) }) }
+
+private object LicenseNameMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[LicenseName] =
+    import quotes.reflect.report
+    raw.value match
+      case None       => report.errorAndAbort("LicenseName(...) takes a literal. Use LicenseName.from at runtime.", raw)
+      case Some(text) =>
+        LicenseName.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ LicenseName.trusted(${ Expr(text) }) }
+
+private object DeveloperIdMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[DeveloperId] =
+    import quotes.reflect.report
+    raw.value match
+      case None       => report.errorAndAbort("DeveloperId(...) takes a literal. Use DeveloperId.from at runtime.", raw)
+      case Some(text) =>
+        DeveloperId.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ DeveloperId.trusted(${ Expr(text) }) }
+
+private object ScmConnectionMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ScmConnection] =
+    import quotes.reflect.report
+    raw.value match
+      case None =>
+        report.errorAndAbort("ScmConnection(...) takes a literal. Use ScmConnection.from at runtime.", raw)
+      case Some(text) =>
+        ScmConnection.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ ScmConnection.trusted(${ Expr(text) }) }
+
 private object LiteralMacro:
   def scalaVersion(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[ScalaVersion] =
     onePart(sc, args, "scala").map(raw => ScalaVersionMacro.literal(Expr(raw))) match
@@ -161,6 +222,48 @@ private object LiteralMacro:
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => histos.version.ShipNumberMacro.literal(Expr(raw))
+
+  def pomText(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[PomText] =
+    onePart(sc, args, "pom") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => PomTextMacro.literal(Expr(raw))
+
+  def httpUrl(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[HttpUrl] =
+    onePart(sc, args, "url") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => HttpUrlMacro.literal(Expr(raw))
+
+  def sbtSeries(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[SbtSeries] =
+    onePart(sc, args, "sbt") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => SbtSeriesMacro.literal(Expr(raw))
+
+  def licenseName(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[LicenseName] =
+    onePart(sc, args, "license") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => LicenseNameMacro.literal(Expr(raw))
+
+  def developerId(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[DeveloperId] =
+    onePart(sc, args, "developer") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => DeveloperIdMacro.literal(Expr(raw))
+
+  def scmConnection(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[ScmConnection] =
+    onePart(sc, args, "connection") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => ScmConnectionMacro.literal(Expr(raw))
 
   private def onePart(sc: Expr[StringContext], args: Expr[Seq[String]], what: String)(using
       Quotes

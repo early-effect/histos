@@ -3,6 +3,7 @@ package histos.server
 import histos.cli.Lines
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.watch.SourceWatch
+import histos.publish.PublishSelect
 import histos.{Module, ProjectGraph, ProjectName}
 
 import java.nio.file.Path
@@ -58,7 +59,7 @@ object Watching:
 
   def roots(repo: Path, call: Call, graph: ProjectGraph): List[Path] =
     val modules = graph.projects.collect { case module: Module => module }
-    val chosen  = projects(call) match
+    val chosen  = projects(graph, call) match
       case WatchNames.Every       => modules
       case WatchNames.Only(names) => modules.filter(module => names.contains(module.name))
     SourceWatch.roots(repo, chosen)
@@ -67,7 +68,12 @@ object Watching:
     case Every
     case Only(names: List[ProjectName])
 
-  private def projects(call: Call): WatchNames =
+  private def publish(graph: ProjectGraph, tokens: List[String]): WatchNames =
+    PublishSelect.watch(graph, tokens) match
+      case None        => WatchNames.Every
+      case Some(names) => WatchNames.Only(names)
+
+  private def projects(graph: ProjectGraph, call: Call): WatchNames =
     def listed(names: List[ProjectName]): WatchNames =
       if names.isEmpty then WatchNames.Every else WatchNames.Only(names)
     def one(id: String): WatchNames =
@@ -75,14 +81,15 @@ object Watching:
         case Right(name) => WatchNames.Only(List(name))
         case Left(_)     => WatchNames.Only(Nil)
     call match
-      case Call.Test(names, _, _)     => listed(names)
-      case Call.Compile(names)        => listed(names)
-      case Call.PreviewCompile(names) => listed(names)
-      case Call.PreviewTest(names)    => listed(names)
-      case Call.PreviewPublish(names) => listed(names)
-      case Call.PreviewClean(names)   => listed(names)
-      case Call.Clean(names)          => listed(names)
-      case Call.PreviewRun(id, _)     => one(id)
-      case Call.Run(id, _)            => one(id)
-      case _                          => WatchNames.Every
+      case Call.Test(names, _, _)               => listed(names)
+      case Call.Compile(names)                  => listed(names)
+      case Call.PreviewCompile(names)           => listed(names)
+      case Call.PreviewTest(names)              => listed(names)
+      case Call.PreviewPublishLocal(_, tokens)  => publish(graph, tokens)
+      case Call.PreviewPublishSnapshots(tokens) => publish(graph, tokens)
+      case Call.PreviewClean(names)             => listed(names)
+      case Call.Clean(names)                    => listed(names)
+      case Call.PreviewRun(id, _)               => one(id)
+      case Call.Run(id, _)                      => one(id)
+      case _                                    => WatchNames.Every
 end Watching

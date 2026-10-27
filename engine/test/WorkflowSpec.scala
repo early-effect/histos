@@ -242,7 +242,6 @@ object WorkflowSpec extends ZIOSpecDefault:
     val api = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
     histos.Projects
       .organization(histos.Organization("rocks.earlyeffect"))
-      .assembly(histos.ArtifactBase("histos"))
       .runnerTools(
         RunnerTools(
           Some(NodeFloor(25)),

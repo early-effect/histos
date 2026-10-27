@@ -252,12 +252,13 @@ object PlanSpec extends ZIOSpecDefault:
           repo    <- keep("histos-preview-publish")
           planted <- plant(repo)
           graph   <- ZIO.fromEither(manualLibrary)
-          plan    <- Plan.publish(repo, graph, List(ProjectName("app")), Map.empty)
+          plan    <- Plan.publishLocal(repo, graph, List("app"), Map.empty, Some("target/repo"), ZIO.succeed(repo))
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """core libs 1.0.0 upstream
+            """target/repo
+              |core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
@@ -271,14 +272,15 @@ object PlanSpec extends ZIOSpecDefault:
           planted <- plant(repo)
           _       <- write(repo, ".histos/releases", "libs matches\n")
           graph   <- ZIO.fromEither(twoShips)
-          plan    <- Plan.publish(repo, graph, Nil, snapshotEnv)
+          plan    <- Plan.publishSnapshots(repo, graph, Nil, snapshotEnv)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """app client 2.0.0-1234567890ab-SNAPSHOT selected
-              |app client 2.0.0-SNAPSHOT selected
-              |held libs 1.4.2-ci already-released""".stripMargin,
+            s"""${histos.central.SnapshotRepository.central.root.render}
+               |app client 2.0.0-1234567890ab-SNAPSHOT selected
+               |app client 2.0.0-SNAPSHOT selected
+               |held libs 1.4.2-ci already-released""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
@@ -291,30 +293,37 @@ object PlanSpec extends ZIOSpecDefault:
           planted <- plant(repo)
           _       <- write(repo, ".histos/releases", "libs matches\n")
           graph   <- ZIO.fromEither(heldShip)
-          plan    <- Plan.publish(repo, graph, Nil, snapshotEnv)
+          plan    <- Plan.publishSnapshots(repo, graph, Nil, snapshotEnv)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """held libs 1.4.2-ci already-released""".stripMargin,
+            s"""${histos.central.SnapshotRepository.central.root.render}
+               |held libs 1.4.2-ci already-released""".stripMargin,
           !text.contains("SNAPSHOT"),
           kept,
         )
       }
     ,
-    test("development is not published and is not called held"):
+    test("development writes locally and snapshots leave it unpublished"):
       ZIO.scoped {
         for
           repo    <- keep("histos-preview-develop")
           planted <- plant(repo)
           graph   <- ZIO.fromEither(developShip)
-          plan    <- Plan.publish(repo, graph, Nil, Map.empty)
-          text = Plan.renderPublish(plan)
+          local   <- Plan.publishLocal(repo, graph, Nil, Map.empty, Some("target/repo"), ZIO.succeed(repo))
+          remote  <- Plan.publishSnapshots(repo, graph, Nil, Map.empty)
+          localText  = Plan.renderPublish(local)
+          remoteText = Plan.renderPublish(remote)
           kept <- same(planted)
         yield assertTrue(
-          text ==
-            """libs 1.0.0-ci not published""".stripMargin,
-          !text.contains("held"),
+          localText ==
+            """target/repo
+              |core libs 1.0.0-ci selected""".stripMargin,
+          remoteText ==
+            s"""${histos.central.SnapshotRepository.central.root.render}
+               |libs 1.0.0-ci not published""".stripMargin,
+          !remoteText.contains("held"),
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
@@ -326,7 +335,7 @@ object PlanSpec extends ZIOSpecDefault:
           repo    <- keep("histos-preview-refused")
           planted <- plant(repo)
           graph   <- ZIO.fromEither(heldShip)
-          refused <- Plan.publish(repo, graph, Nil, snapshotEnv).either
+          refused <- Plan.publishSnapshots(repo, graph, Nil, snapshotEnv).either
           kept    <- same(planted)
         yield assertTrue(
           refused match
@@ -349,8 +358,17 @@ object PlanSpec extends ZIOSpecDefault:
           planted <- plant(repo)
           idle    <- ZIO.fromEither(ProjectName.from("idle"))
           graph   <- ZIO.fromEither(withIdle)
-          refused <- Plan.publish(repo, graph, List(ProjectName("idle")), Map.empty).either
-          kept    <- same(planted)
+          refused <- Plan
+            .publishLocal(
+              repo,
+              graph,
+              List("idle"),
+              Map.empty,
+              Some("target/repo"),
+              ZIO.succeed(repo),
+            )
+            .either
+          kept <- same(planted)
         yield assertTrue(
           refused == Left(
             PreviewError.Publish(LocalPublishError.NotPublished(idle))

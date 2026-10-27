@@ -17,7 +17,7 @@ ship("specular-histos", ship"0.0.1")(histosAdapter)
 
 The ship name is the release. The members are the publications. The Maven artifact id stays the module's artifact. There is no second constructor for a lone module. One member is a ship of one.
 
-The number in the file is the next release. Edit it, then publish. Publish does not rewrite the file and does not open a bump pull request. [PublishAction.Release](../api/src/histos/version/Versions.scala) carries a `CatalogBump` today. That follow-up pull request is withdrawn.
+The number in the file is the next release. Edit it, then publish. Publish does not rewrite the file and does not open a bump pull request. [PublishAction.Release](../api/src/histos/version/Versions.scala) carries the release version and nothing else.
 
 An early-effect ship releases its ship number. A manual `major.minor.patch` releases as written. A manual snapshot and a `-ci` coordinate are refused by `publish release`. Histos itself stays `manual("histos", manual"0.0.1-SNAPSHOT")` until a later decision cuts it.
 
@@ -152,23 +152,23 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 ### Publisher
 
-- [ ] **Withdraw `CatalogBump`.** `PublishAction.Release` carries the release version only. The version specs show that publish leaves the catalog file alone.
+- [x] **Withdraw `CatalogBump`.** `PublishAction.Release` carries the release version only. The version specs show that publish leaves the catalog file alone.
 
-- [ ] **Split the command.** `publishLocal` writes a Maven directory, default `~/.m2/repository`. `publish snapshots` is the snapshot upload. A directory argument is rejected by `publish`. The CLI, preview, and the MCP publish tool share that split. A `-ci` coordinate writes locally and is refused by snapshots. Grammar and local-publish specs cover both.
+- [x] **Split the command.** `publishLocal` writes a Maven directory, default `~/.m2/repository`. `publish snapshots` is the snapshot upload. A directory argument is rejected by `publish`. The CLI, preview, and the MCP publish tool share that split. A `-ci` coordinate writes locally and is refused by snapshots. Grammar and local-publish specs cover both.
 
-- [ ] **Selection.** A ship name publishes that ship. An aggregate publishes the modules it lists, at each module's own ship version, and does not pull the other members of those ships. A module outside a ship is an error. A directory token is legal only on `publishLocal`. A ship name wins when a ship and a module share it. No name on `publishLocal` or `publish snapshots` is every ship the session can write. A snapshot dependency refuses that ship and the rest of the invocation continues. One spec covers each of those.
+- [x] **Selection.** A ship name publishes that ship. An aggregate publishes the modules it lists, at each module's own ship version, and does not pull the other members of those ships. A module outside a ship is an error. A directory token is legal only on `publishLocal`. A ship name wins when a ship and a module share it. No name on `publishLocal` or `publish snapshots` is every ship the session can write. A snapshot dependency refuses that ship and the rest of the invocation continues. One spec covers each of those.
 
-- [ ] **Publication and Central pom.** A module has one publication. Unspecified, it is a library. The organization carries license, developer, and scm. A ship may override description and url. `name` defaults to the artifact id. The release pom includes those fields and the module's dependencies. Missing license, developer, or scm fails before signing. `publishLocal` still writes the coordinate the session compiles, including `-ci`. Specs cover the default, the ship override, and the refusal.
+- [x] **Publication and Central pom.** A module has one publication. Unspecified, it is a library. The organization carries license, developer, and scm. A ship may override description and url. `name` defaults to the artifact id. The release pom includes those fields and the module's dependencies. Missing license, developer, or scm fails before signing. `publishLocal` still writes the coordinate the session compiles, including `-ci`. Specs cover the default, the ship override, and the refusal.
 
-- [ ] **Stage a library, unsigned.** One library publication stages the jar, a sources jar, a javadoc jar that contains a README, the pom, and `.md5`, `.sha1`, and `.sha256` on each of those four. The spec reads the directory and the pom. No `.asc` yet, and no HTTP.
+- [x] **Stage a library, unsigned.** One library publication stages the jar, a sources jar, a javadoc jar that contains a README, the pom, and `.md5`, `.sha1`, and `.sha256` on each of those four. The spec reads the directory and the pom. No `.asc` yet, and no HTTP.
 
-- [ ] **Stage the other Maven forms.** An sbt 2 plugin on Scala 3 stages under the sbt 2 artifact id, and the descriptor stays in the jar. Assembly stages a fat jar with no Scala suffix, a pom whose dependency list is empty, and `Main-Class` in the manifest. Application stages the thin jar and a pom that lists the classpath. A module with two publications is refused at load. `Projects.assembly` is removed. This repo's launcher coordinate still publishes from the app module's assembly publication, with a real pom. The existing snapshot specs stay green without a live upload.
+- [x] **Stage the other Maven forms.** An sbt 2 plugin on Scala 3 stages under the sbt 2 artifact id, and the descriptor stays in the jar. Assembly stages a fat jar with no Scala suffix, a pom whose dependency list is empty, and `Main-Class` in the manifest. Application stages the thin jar and a pom that lists the classpath. A module with two publications is refused at load. `Projects.assembly` is removed. This repo's launcher coordinate still publishes from the app module's assembly publication, with a real pom. The existing snapshot specs stay green without a live upload.
 
-- [ ] **Signer.** `Signer.local` signs with a generated key and the public half verifies. A secret with no signing subkey fails before a client exists. `PGP_SECRET` and `PGP_KEY_HEX`, when both are set, must be the same key. `HISTOS_SIGNER=gpg` is the argument list and the passphrase on stdin. `gpg` on `PATH` with the variable unset stays on the local signer. Bouncy Castle is passed as a provider and is not registered on the JVM. The gpg round-trip runs when `gpg` is present.
+- [x] **Signer.** `Signer.local` signs with a generated key and the public half verifies. A secret with no signing subkey fails before a client exists. `PGP_SECRET` and `PGP_KEY_HEX`, when both are set, must be the same key. `HISTOS_SIGNER=gpg` is the argument list and the passphrase on stdin. `gpg` on `PATH` with the variable unset stays on the local signer. Bouncy Castle is passed as a provider and is not registered on the JVM. The gpg round-trip runs when `gpg` is present.
 
-- [ ] **Bundle.** Zip the signed stage in Maven layout. The spec unzips it and finds every required name. A declared size over 1GB is refused without writing a 1GB file.
+- [x] **Bundle.** Zip the signed stage in Maven layout. The spec unzips it and finds every required name. A declared size over 1GB is refused without writing a 1GB file.
 
-- [ ] **Portal client.** One heddle client. A scripted loopback server checks the Bearer token and the multipart part named `bundle`. Hold waits until `VALIDATED`. `--automatic` waits until `PUBLISHED`. `FAILED` stops the poll. Promote and drop call the deployment route. The suite makes no connection to `central.sonatype.com`.
+- [x] **Portal client.** One heddle client. A scripted loopback server checks the Bearer token and the multipart part named `bundle`. Hold waits until `VALIDATED`. `--automatic` waits until `PUBLISHED`. `FAILED` stops the poll. Promote and drop call the deployment route. The suite makes no connection to `central.sonatype.com`.
 
 - [ ] **Rehearsal portal.** `./histos portal` binds loopback, stores deployments on disk, and returns the validation report from the Portal section: layout, file set, checksums, pom fields, snapshot version, snapshot dependency, a GAV already in the store, an empty pom, and the 1GB cap. A second process promotes and drops against that disk. The suite starts the server in a `Scope`.
 

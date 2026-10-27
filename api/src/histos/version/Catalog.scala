@@ -3,7 +3,7 @@ package histos.version
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
-import histos.ProjectName
+import histos.{HttpUrl, PomText, ProjectName}
 
 /** The catalog identity of a ship. A letter, then letters, digits, `_`, or `-`. Not a project name. */
 opaque type ShipName = String
@@ -52,18 +52,40 @@ private object ShipNameMacro:
             quotes.reflect.report.errorAndAbort(error.message, raw)
           case Right(_) => '{ ShipName.trusted(${ Expr(value) }) }
 
-/** One catalog row. A line derives coordinates from a ship number. A manual row publishes the version it states. */
+/** One catalog row. A line derives coordinates from a ship number. A manual row publishes the version it states.
+  * Description and url replace the organization's when this ship sets them.
+  */
 enum Ship:
-  case Line(shipName: ShipName, number: ShipNumber, modules: ::[ProjectName])
-  case Manual(shipName: ShipName, version: ManualVersion, modules: ::[ProjectName])
+  case Line(
+      shipName: ShipName,
+      number: ShipNumber,
+      modules: ::[ProjectName],
+      described: Option[PomText] = None,
+      located: Option[HttpUrl] = None,
+  )
+  case Manual(
+      shipName: ShipName,
+      version: ManualVersion,
+      modules: ::[ProjectName],
+      described: Option[PomText] = None,
+      located: Option[HttpUrl] = None,
+  )
 
   def name: ShipName = this match
-    case Line(shipName, _, _)   => shipName
-    case Manual(shipName, _, _) => shipName
+    case line: Line     => line.shipName
+    case manual: Manual => manual.shipName
 
   def members: ::[ProjectName] = this match
-    case Line(_, _, modules)   => modules
-    case Manual(_, _, modules) => modules
+    case line: Line     => line.modules
+    case manual: Manual => manual.modules
+
+  def description: Option[PomText] = this match
+    case line: Line     => line.described
+    case manual: Manual => manual.described
+
+  def url: Option[HttpUrl] = this match
+    case line: Line     => line.located
+    case manual: Manual => manual.located
 end Ship
 
 /** How a build versions its ships. The two schemes are not mixed. Empty is an application. */

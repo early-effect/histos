@@ -53,6 +53,7 @@ object CommandName:
     trusted("cleanFull"),
     trusted("assembly"),
     trusted("publish"),
+    trusted("publishLocal"),
     trusted("mcp"),
     trusted("acp"),
     trusted("bsp"),

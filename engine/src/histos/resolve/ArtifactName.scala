@@ -1,6 +1,6 @@
 package histos.resolve
 
-import histos.{Dep, DepKind, Platform, ScalaVersion}
+import histos.{Dep, DepKind, Platform, SbtSeries, ScalaVersion}
 
 /** Platform suffixes from design section 5.2. The fetch uses these values. */
 object PlatformSuffix:
@@ -18,6 +18,15 @@ object ArtifactName:
       platform: Platform,
   ): String =
     s"$base${platformSuffix(platform)}_${binary(version)}"
+
+  /** sbt 2 on Scala 3 is `name_sbt2_3`. The platform suffix stays in front of the series, as sbt writes it. */
+  def plugin(
+      base: String,
+      version: ScalaVersion,
+      platform: Platform,
+      series: SbtSeries,
+  ): String =
+    s"$base${platformSuffix(platform)}_sbt${series.value}_${binary(version)}"
 
   def of(dependency: Dep, version: ScalaVersion, platform: Platform): String =
     dependency.kind match

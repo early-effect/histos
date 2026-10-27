@@ -36,7 +36,15 @@ object PublishHoldSpec extends ZIOSpecDefault:
           }
           graph  <- ZIO.fromEither(held)
           report <- PublishRun
-            .run(root, graph, Nil, jdk, env, repo.toString, _ => ZIO.unit)
+            .local(
+              root,
+              graph,
+              Nil,
+              jdk,
+              env,
+              Some(repo.toString),
+              _ => ZIO.unit,
+            )
             .provide(IdleResolve.layer)
           decision <- VersionTask.decide(graph, root, env)
           wrote    <- ZIO.attempt(

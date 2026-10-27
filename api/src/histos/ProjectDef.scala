@@ -64,6 +64,18 @@ sealed trait ModuleDef[P] extends ProjectDef:
   /** The published artifact id, without a Scala or platform suffix. A second call replaces it. */
   def artifact(name: ArtifactBase): ModuleDef[P]
 
+  /** Publish the library jar. A second publication on this module is refused at load. */
+  def library: ModuleDef[P]
+
+  /** Publish an sbt plugin. `series` is the binary series: `sbt"2"` stages `name_sbt2_3` on Scala 3. */
+  def sbtPlugin(series: SbtSeries): ModuleDef[P]
+
+  /** Publish one JVM fat jar. The pom lists no dependencies. A second publication is refused at load. */
+  def assembly(main: MainClass): ModuleDef[P]
+
+  /** Publish the thin jar. The pom lists the classpath. A second publication is refused at load. */
+  def application: ModuleDef[P]
+
   /** Replace this module's scalac flags. A second call replaces the list. It does not append. */
   def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P]
 
@@ -105,6 +117,7 @@ object ModuleDef:
       Nil,
       ScalacFlags.empty,
       None,
+      Nil,
     )
 
   /** Node, jsdom, or Firefox. */
@@ -149,10 +162,11 @@ private[histos] final class ModuleBody[P](
     val directory: Option[ProjectPath],
     val jsEnv: JsEnv,
     val jsModule: JsModuleKind,
-    val application: Option[MainClass],
+    val mainClass: Option[MainClass],
     val notes: List[ModuleNote],
     val flags: ScalacFlags,
     val published: Option[ArtifactBase],
+    val publications: List[Publication],
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -177,10 +191,22 @@ private[histos] final class ModuleBody[P](
     revise(directory = Some(directory))
 
   override def main(main: MainClass): ModuleDef[P] =
-    revise(application = Some(main))
+    revise(mainClass = Some(main))
 
   override def artifact(name: ArtifactBase): ModuleDef[P] =
     revise(published = Some(name))
+
+  override def library: ModuleDef[P] =
+    revise(publications = publications :+ Publication.Library)
+
+  override def sbtPlugin(series: SbtSeries): ModuleDef[P] =
+    revise(publications = publications :+ Publication.SbtPlugin(series))
+
+  override def assembly(main: MainClass): ModuleDef[P] =
+    revise(publications = publications :+ Publication.Assembly(main))
+
+  override def application: ModuleDef[P] =
+    revise(publications = publications :+ Publication.Application)
 
   override def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P] =
     revise(flags = ScalacFlags.of(flag, rest*))
@@ -218,10 +244,11 @@ private[histos] final class ModuleBody[P](
       directory: Option[ProjectPath] = this.directory,
       jsEnv: JsEnv = this.jsEnv,
       jsModule: JsModuleKind = this.jsModule,
-      application: Option[MainClass] = this.application,
+      mainClass: Option[MainClass] = this.mainClass,
       notes: List[ModuleNote] = this.notes,
       flags: ScalacFlags = this.flags,
       published: Option[ArtifactBase] = this.published,
+      publications: List[Publication] = this.publications,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -239,10 +266,11 @@ private[histos] final class ModuleBody[P](
       directory,
       jsEnv,
       jsModule,
-      application,
+      mainClass,
       notes,
       flags,
       published,
+      publications,
     )
 end ModuleBody
 

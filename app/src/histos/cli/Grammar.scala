@@ -36,14 +36,16 @@ object Grammar:
     case Clean(projects: List[String])
     case CleanFull(projects: List[String])
     case Assembly(destination: Option[String])
-    case Publish(repository: String, projects: List[String])
+    case PublishLocal(tokens: List[String])
+    case PublishSnapshots(projects: List[String])
     case CacheClean(mode: CacheCleanMode)
     case Resolve(action: ResolveAction)
     case LauncherUpdate
     case Workflow(action: WorkflowAction)
     case PreviewCompile(projects: List[String])
     case PreviewTest(projects: List[String])
-    case PreviewPublish(projects: List[String])
+    case PreviewPublishLocal(tokens: List[String])
+    case PreviewPublishSnapshots(projects: List[String])
     case PreviewClean(projects: List[String])
     case PreviewCleanFull(projects: List[String])
     case PreviewRun(name: String, platform: Option[String])
@@ -64,11 +66,12 @@ object Grammar:
   private val cleanFull  = CliCommand("cleanFull", Args.text("project").*).map(names => Wire.CleanFull(names.toList))
   private val assembly   =
     CliCommand("assembly", Args.text("destination").atMost(1)).map(paths => Wire.Assembly(paths.headOption))
+  private val publishLocal =
+    CliCommand("publishLocal", Args.text("token").*).map(tokens => Wire.PublishLocal(tokens.toList))
+  private val publishSnapshots =
+    CliCommand("snapshots", Args.text("project").*).map(names => Wire.PublishSnapshots(names.toList))
   private val publish =
-    CliCommand("publish", Args.text("repository") ++ Args.text("project").*)
-      .map { case (repository, projects) =>
-        Wire.Publish(repository, projects.toList)
-      }
+    CliCommand("publish").subcommands(publishSnapshots)
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
   private val server    = CliCommand("server").map(_ => Wire.Server)
@@ -112,8 +115,12 @@ object Grammar:
     CliCommand("compile", Args.text("project").*).map(names => Wire.PreviewCompile(names.toList))
   private val previewTest =
     CliCommand("test", Args.text("project").*).map(names => Wire.PreviewTest(names.toList))
+  private val previewPublishSnapshots =
+    CliCommand("snapshots", Args.text("project").*).map(names => Wire.PreviewPublishSnapshots(names.toList))
   private val previewPublish =
-    CliCommand("publish", Args.text("project").*).map(names => Wire.PreviewPublish(names.toList))
+    CliCommand("publish").subcommands(previewPublishSnapshots)
+  private val previewPublishLocal =
+    CliCommand("publishLocal", Args.text("token").*).map(tokens => Wire.PreviewPublishLocal(tokens.toList))
   private val previewClean =
     CliCommand("clean", Args.text("project").*).map(names => Wire.PreviewClean(names.toList))
   private val previewCleanFull =
@@ -125,11 +132,11 @@ object Grammar:
       }
   private val observe = CliCommand("observe").map(_ => Wire.Observe)
   private val preview = CliCommand("preview").subcommands(
-    previewCompile | previewTest | previewPublish | previewClean | previewCleanFull | previewRun
+    previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
+      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -149,12 +156,16 @@ object Grammar:
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
     root
       .parse("histos" :: args, CliConfig.default)
-      .mapError(error => reject(error, args))
+      .mapError(error => failure(error, args))
       .flatMap:
         case CommandDirective.UserDefined(Nil, wire) => command(wire)
         case CommandDirective.UserDefined(_, _)      =>
           ZIO.fail(CliParseError.UnexpectedArguments)
-        case CommandDirective.BuiltIn(_) => ZIO.fail(CliParseError.Help)
+        case CommandDirective.BuiltIn(_) =>
+          args match
+            case "publish" :: Nil              => ZIO.fail(CliParseError.PublishForm)
+            case "preview" :: "publish" :: Nil => ZIO.fail(CliParseError.PublishForm)
+            case _                             => ZIO.fail(CliParseError.Help)
 
   private def command(wire: Wire): IO[CliParseError, Command] =
     wire match
@@ -198,14 +209,18 @@ object Grammar:
         ZIO.fail(CliParseError.Pattern("cleanFull does not take a project"))
       case Wire.Assembly(destination) =>
         ZIO.succeed(Command.Assembly(destination))
-      case Wire.Publish(repository, projects) =>
-        projectList("publish", projects).map(Command.Publish(repository, _))
+      case Wire.PublishLocal(tokens) =>
+        ZIO.succeed(Command.PublishLocal(None, tokens))
+      case Wire.PublishSnapshots(tokens) =>
+        ZIO.succeed(Command.PublishSnapshots(tokens))
       case Wire.PreviewCompile(projects) =>
         projectList("preview compile", projects).map(Command.PreviewCompile(_))
       case Wire.PreviewTest(projects) =>
         projectList("preview test", projects).map(Command.PreviewTest(_))
-      case Wire.PreviewPublish(projects) =>
-        projectList("preview publish", projects).map(Command.PreviewPublish(_))
+      case Wire.PreviewPublishLocal(tokens) =>
+        ZIO.succeed(Command.PreviewPublishLocal(None, tokens))
+      case Wire.PreviewPublishSnapshots(tokens) =>
+        ZIO.succeed(Command.PreviewPublishSnapshots(tokens))
       case Wire.PreviewClean(projects) =>
         projectList("preview clean", projects).map(Command.PreviewClean(_))
       case Wire.PreviewCleanFull(Nil) => ZIO.succeed(Command.PreviewCleanFull)
@@ -314,6 +329,14 @@ object Grammar:
                   error => CliParseError.BadPlatform(error),
                   platform => NamedRun.Module(id, Some(platform)),
                 )
+
+  private def failure(error: ValidationError, args: List[String]): CliParseError =
+    args match
+      case "publish" :: "snapshots" :: _              => reject(error, args)
+      case "publish" :: _                             => CliParseError.PublishForm
+      case "preview" :: "publish" :: "snapshots" :: _ => reject(error, args)
+      case "preview" :: "publish" :: _                => CliParseError.PublishForm
+      case _                                          => reject(error, args)
 
   private def reject(
       error: ValidationError,

@@ -31,7 +31,8 @@ object CallResultSpec extends ZIOSpecDefault:
       assertTrue(
         CliExit.from(Call.Compile(Nil), ran) == CliExit.CompileFailed,
         CliExit.from(Call.Test(Nil, Nil, TestMode.Run), ran) == CliExit.TestFailed,
-        CliExit.from(Call.Publish("repo", Nil), ran) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishLocal(Some("repo"), Nil), ran) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishSnapshots(Nil), ran) == CliExit.PublishFailed,
       )
     ,
     test("invalid config data round trips"):

@@ -121,6 +121,7 @@ object PluginSpec extends ZIOSpecDefault:
           "cleanFull",
           "assembly",
           "publish",
+          "publishLocal",
           "mcp",
           "acp",
           "bsp",

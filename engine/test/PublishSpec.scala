@@ -11,8 +11,16 @@ import histos.{
   Dep,
   Js,
   Jvm,
+  Developer,
+  License,
   Organization,
   Projects,
+  Scm,
+  connection,
+  developer,
+  license,
+  pom,
+  url,
   RepositoryUrl,
   RepositoryUrlError,
   Resolver,
@@ -56,7 +64,7 @@ object PublishSpec extends ZIOSpecDefault:
           built     <- ZIO.fromEither(library)
           _         <- histos.ToolFixture.seed(root, built)
           published <- LocalPublish
-            .run(root, built, Nil, jdk, Map.empty)
+            .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(repo)
             )
@@ -108,7 +116,7 @@ object PublishSpec extends ZIOSpecDefault:
           built     <- ZIO.fromEither(crossLibrary)
           _         <- histos.ToolFixture.seed(root, built)
           published <- LocalPublish
-            .run(root, built, Nil, jdk, Map.empty)
+            .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(repo)
             )
@@ -147,24 +155,48 @@ object PublishSpec extends ZIOSpecDefault:
           !jsPom.contains("<artifactId>core_3</artifactId>"),
         )
     ,
-    test(
-      "development does not publish, and a catalog without an organization does not write"
-    ):
+    test("a development coordinate writes locally"):
+      ZIO.scoped:
+        for
+          jdk  <- GraphCompile.jdkHere
+          root <- temp
+          repo <- temp
+          _    <- ZIO.attempt {
+            write(
+              root,
+              "core/src/main/scala/demo/Hello.scala",
+              "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n",
+            )
+            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+          }
+          develop   <- ZIO.fromEither(development)
+          _         <- histos.ToolFixture.seed(root, develop)
+          published <- LocalPublish
+            .run(root, develop, Nil, jdk, Map.empty, PublishWrite.Local)
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver ++ Publisher.local(repo)
+            )
+          jar <- ZIO.attempt(
+            Files.isRegularFile(
+              repo.resolve("com/example/core_3/1.0.0-ci/core_3-1.0.0-ci.jar")
+            )
+          )
+        yield assertTrue(
+          published.modules.map(line => s"${line.group.value} ${line.artifact} ${line.revision}") == List(
+            "com.example core_3 1.0.0-ci"
+          ),
+          jar,
+        )
+    ,
+    test("snapshots refuse a development coordinate and write nothing"):
       ZIO.scoped:
         for
           jdk     <- GraphCompile.jdkHere
           root    <- temp
           repo    <- temp
           develop <- ZIO.fromEither(development)
-          plain   <- ZIO.fromEither(unorganized)
           held    <- LocalPublish
-            .run(root, develop, Nil, jdk, Map.empty)
-            .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver ++ Publisher.local(repo)
-            )
-            .either
-          missing <- LocalPublish
-            .run(root, plain, Nil, jdk, Map.empty)
+            .run(root, develop, Nil, jdk, Map.empty, PublishWrite.Snapshots)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(repo)
             )
@@ -174,10 +206,30 @@ object PublishSpec extends ZIOSpecDefault:
           )
         yield assertTrue(
           held match
-            case Left(LocalPublishError.Development(ship, _)) =>
-              ship.value == "libs"
+            case Left(LocalPublishError.Development(ship, compile)) =>
+              ship.value == "libs" && compile.render == "1.0.0-ci"
             case _ => false
           ,
+          wrote.isEmpty,
+        )
+    ,
+    test("a catalog without an organization does not write"):
+      ZIO.scoped:
+        for
+          jdk     <- GraphCompile.jdkHere
+          root    <- temp
+          repo    <- temp
+          plain   <- ZIO.fromEither(unorganized)
+          missing <- LocalPublish
+            .run(root, plain, Nil, jdk, Map.empty, PublishWrite.Local)
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver ++ Publisher.local(repo)
+            )
+            .either
+          wrote <- ZIO.attempt(
+            Option(repo.toFile.list()).map(_.toList).getOrElse(Nil)
+          )
+        yield assertTrue(
           missing == Left(LocalPublishError.NoOrganization),
           wrote.isEmpty,
         ),
@@ -236,7 +288,7 @@ object PublishSpec extends ZIOSpecDefault:
     val app          = module("app", Jvm)(scalaVersion)
       .dependsOn(core)
       .testDependencies(Dep("dev.zio::zio-test:2.1.27"))
-    Projects.organization(Organization("com.example"))(
+    released(Projects.organization(Organization("com.example")))(
       histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)),
       core,
       app,
@@ -246,7 +298,7 @@ object PublishSpec extends ZIOSpecDefault:
     val scalaVersion = ScalaVersion("3.10.0")
     val core         = module("core", Jvm, Js)(scalaVersion)
     val app          = module("app", Jvm, Js)(scalaVersion).dependsOn(core)
-    Projects.organization(Organization("com.example"))(
+    released(Projects.organization(Organization("com.example")))(
       histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)),
       core,
       app,
@@ -258,6 +310,13 @@ object PublishSpec extends ZIOSpecDefault:
       histos.ships(histos.ship("libs", ShipNumber("1.0.0"))(core)),
       core,
     )
+
+  /** A release coordinate needs these. `-ci` does not. */
+  private def released(group: histos.Organized): histos.Organized =
+    group
+      .license(License(license"Apache-2.0", url"https://www.apache.org/licenses/LICENSE-2.0.txt"))
+      .developer(Developer(developer"early-effect", pom"Early Effect"))
+      .scm(Scm(url"https://example.com/libs", connection"scm:git:https://example.com/libs.git"))
 
   private val unorganized =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))
