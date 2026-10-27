@@ -24,7 +24,7 @@ import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.jdk.{Machine, Toolchain}
 import histos.load.{LoadError, Loader}
-import histos.plugin.{FlagNameError, PluginArgs, PluginTaskId}
+import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
 import histos.preview.Plan
 import histos.program.ProgramError
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
@@ -37,7 +37,7 @@ import histos.workflow.WorkflowAction
 import histos.testrun.{ModuleTestError, SuitePattern, SuitePatternError, TestMode, TestStatus}
 import histos.workspace.IoFailure
 import histos.zinc.{GraphCompile, GraphCompileError}
-import histos.{Platform, ProjectName, ProjectNameError}
+import histos.{Platform, PlatformError, ProjectName, ProjectNameError}
 
 import java.nio.file.{Files, Path}
 
@@ -87,8 +87,8 @@ enum CliParseError:
   case MissingArgument
   case UnexpectedArguments
   case BadTaskId
-  case BadPluginTask(detail: String)
-  case BadPlatform(detail: String)
+  case BadPluginTask(error: PluginTaskError)
+  case BadPlatform(error: PlatformError)
   case TaskPlatform(name: String)
   case MissingPattern
   case Pattern(detail: String)
@@ -104,8 +104,8 @@ enum CliParseError:
     case MissingArgument                                => "run needs one name"
     case UnexpectedArguments                            => Cli.usageText
     case BadTaskId                                      => "a task id is not empty"
-    case BadPluginTask(detail)                          => detail
-    case BadPlatform(detail)                            => detail
+    case BadPluginTask(error)                           => error.message
+    case BadPlatform(error)                             => error.message
     case TaskPlatform(name)                             => s"run $name does not take a platform"
     case MissingPattern                                 => "testOnly needs a pattern"
     case Pattern(detail)                                => detail

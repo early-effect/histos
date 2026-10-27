@@ -294,7 +294,7 @@ object Grammar:
           ZIO
             .fromEither(PluginTaskId.parse(raw))
             .mapBoth(
-              error => CliParseError.BadPluginTask(error.message),
+              error => CliParseError.BadPluginTask(error),
               NamedRun.Plugin(_),
             )
     else
@@ -311,7 +311,7 @@ object Grammar:
               ZIO
                 .fromEither(Platform.from(text))
                 .mapBoth(
-                  error => CliParseError.BadPlatform(error.message),
+                  error => CliParseError.BadPlatform(error),
                   platform => NamedRun.Module(id, Some(platform)),
                 )
 

@@ -735,29 +735,32 @@ object CliSpec extends ZIOSpecDefault:
         )
     ,
     test("run takes one platform and refuses a token that is not one"):
-      for
-        plain   <- Cli.parse(List("run", "app"))
-        jvm     <- Cli.parse(List("run", "app", "jvm"))
-        bad     <- Cli.parse(List("run", "app", "scala")).either
-        task    <- Cli.parse(List("run", "versions", "jvm")).either
-        inspect <- Cli.parse(List("run", "inspect", "native")).either
-      yield assertTrue(
-        plain match
-          case Command.Run(id, None) => id.value == "app"
-          case _                     => false
-        ,
-        jvm match
-          case Command.Run(id, Some(histos.Jvm)) => id.value == "app"
-          case _                                 => false
-        ,
-        bad == Left(
-          CliParseError.BadPlatform(
-            histos.PlatformError.Unknown("scala").message
-          )
-        ),
-        task == Left(CliParseError.TaskPlatform("versions")),
-        inspect == Left(CliParseError.TaskPlatform("inspect")),
-      )
+      ZIO.scoped:
+        val error = PlatformError.Unknown("scala")
+        for
+          plain   <- Cli.parse(List("run", "app"))
+          jvm     <- Cli.parse(List("run", "app", "jvm"))
+          bad     <- Cli.parse(List("run", "app", "scala")).either
+          task    <- Cli.parse(List("run", "versions", "jvm")).either
+          inspect <- Cli.parse(List("run", "inspect", "native")).either
+          jar     <- apiJar
+          dir     <- repo
+          ran     <- Cli.execute(List("run", "app", "scala"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          plain match
+            case Command.Run(id, None) => id.value == "app"
+            case _                     => false
+          ,
+          jvm match
+            case Command.Run(id, Some(histos.Jvm)) => id.value == "app"
+            case _                                 => false
+          ,
+          bad == Left(CliParseError.BadPlatform(error)),
+          CliParseError.BadPlatform(error).message == error.message,
+          ran.exit == CliExit.Usage && ran.exit.code == 2 && ran.err == error.message,
+          task == Left(CliParseError.TaskPlatform("versions")),
+          inspect == Left(CliParseError.TaskPlatform("inspect")),
+        )
     ,
     test("a multi-platform module names no platform and does not start"):
       ZIO.scoped:
@@ -830,33 +833,38 @@ object CliSpec extends ZIOSpecDefault:
         )
     ,
     test("a slash id is a plugin task and a typo is an unknown root"):
-      for
-        plain    <- Cli.parse(List("run", "dev.example/echo"))
-        platform <- Cli.parse(List("run", "dev.example/echo", "jvm")).either
-        broken   <- Cli.parse(List("run", "a/b/c")).either
-        site     <- Cli.parse(List("~", "site")).either
-        watched  <- Cli.parse(List("~", "test"))
-        cache    <- Cli.parse(List("cache", "nope")).either
-        flag     <- Cli.parse(List("test", "--nope")).either
-        list     <- Cli.parse(List("list")).either
-      yield assertTrue(
-        plain == Command.Plugin(
-          PluginTaskId(PluginId("dev.example"), TaskName("echo")),
-          PluginArgs.empty,
-        ),
-        platform == Left(CliParseError.TaskPlatform("dev.example/echo")),
-        broken match
-          case Left(CliParseError.BadPluginTask(_)) => true
-          case _                                    => false,
-        site == Left(CliParseError.UnknownRoot),
-        watched == Command.Watch(Command.Test(Nil), List("test")),
-        cache == Left(CliParseError.UnknownCommand),
-        flag match
-          case Left(CliParseError.UnknownRoot) => false
-          case Left(_)                         => true
-          case Right(_)                        => false,
-        list == Left(CliParseError.UnknownRoot),
-      )
+      ZIO.scoped:
+        val error = PluginTaskError.Shape("a/b/c")
+        for
+          plain    <- Cli.parse(List("run", "dev.example/echo"))
+          platform <- Cli.parse(List("run", "dev.example/echo", "jvm")).either
+          broken   <- Cli.parse(List("run", "a/b/c")).either
+          site     <- Cli.parse(List("~", "site")).either
+          watched  <- Cli.parse(List("~", "test"))
+          cache    <- Cli.parse(List("cache", "nope")).either
+          flag     <- Cli.parse(List("test", "--nope")).either
+          list     <- Cli.parse(List("list")).either
+          jar      <- apiJar
+          dir      <- repo
+          ran      <- Cli.execute(List("run", "a/b/c"), dir, jar).provideSome[Scope](layers(dir))
+        yield assertTrue(
+          plain == Command.Plugin(
+            PluginTaskId(PluginId("dev.example"), TaskName("echo")),
+            PluginArgs.empty,
+          ),
+          platform == Left(CliParseError.TaskPlatform("dev.example/echo")),
+          broken == Left(CliParseError.BadPluginTask(error)),
+          CliParseError.BadPluginTask(error).message == error.message,
+          ran.exit == CliExit.Usage && ran.exit.code == 2 && ran.err == error.message,
+          site == Left(CliParseError.UnknownRoot),
+          watched == Command.Watch(Command.Test(Nil), List("test")),
+          cache == Left(CliParseError.UnknownCommand),
+          flag match
+            case Left(CliParseError.UnknownRoot) => false
+            case Left(_)                         => true
+            case Right(_)                        => false,
+          list == Left(CliParseError.UnknownRoot),
+        )
     ,
     test("built-in failures do not load, and an unknown root does"):
       ZIO.scoped:
