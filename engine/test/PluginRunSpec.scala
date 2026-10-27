@@ -77,9 +77,9 @@ object PluginRunSpec extends ZIOSpecDefault:
   ): Script =
     Script(id, Contribution(tasks, Nil, Nil), calls, seen, argsSeen, body)
 
-  private def graph(
+  private def graph[P](
       plugin: HistosPlugin,
-      docs: ModuleDef,
+      docs: ModuleDef[P],
   ): ZIO[Any, BuildError, ProjectGraph] =
     ZIO.fromEither(Projects(use(plugin), docs))
 

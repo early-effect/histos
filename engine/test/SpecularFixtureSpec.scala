@@ -49,7 +49,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
        |object Specular:
        |  val plugin: HistosPlugin = SpecularPlugin
        |
-       |  def site(module: ModuleDef): ModuleDef =
+       |  def site[P](module: ModuleDef[P]): ModuleDef[P] =
        |    module.note(plugin.id, NoteKey("role"), NoteText("site"))
        |
        |object SpecularPlugin extends HistosPlugin:
