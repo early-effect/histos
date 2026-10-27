@@ -113,6 +113,7 @@ final case class ProjectGraph private (
     plugins: List[RegisteredPlugin] = Nil,
     assembly: Option[ArtifactBase] = None,
     tools: ToolCatalog = ToolCatalog.default,
+    runnerTools: RunnerTools = RunnerTools.empty,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -151,6 +152,7 @@ object ProjectGraph:
       plugins: List[RegisteredPlugin] = Nil,
       assembly: Option[ArtifactBase] = None,
       tools: ToolCatalog = ToolCatalog.default,
+      runnerTools: RunnerTools = RunnerTools.empty,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -161,6 +163,7 @@ object ProjectGraph:
       plugins,
       assembly,
       tools,
+      runnerTools,
     )
 end ProjectGraph
 
@@ -170,6 +173,10 @@ trait HistosBuild:
 object Projects:
   def tools(catalog: ToolCatalog): Organized =
     Organized(None, Nil, tools = catalog)
+
+  /** Empty installs nothing. A build that never calls this asks the runner for no tools. */
+  def runnerTools(tools: RunnerTools): Organized =
+    Organized(None, Nil, runnerTools = tools)
 
   /** Every published module uses this organization. A build that does not publish omits it.
     */
@@ -238,6 +245,7 @@ object Projects:
       uses: Uses = Uses(Nil),
       assembly: Option[ArtifactBase] = None,
       tools: ToolCatalog = ToolCatalog.default,
+      runnerTools: RunnerTools = RunnerTools.empty,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -248,6 +256,7 @@ object Projects:
       uses,
       assembly,
       tools,
+      runnerTools,
     )
 
   private def build(
@@ -259,6 +268,7 @@ object Projects:
       uses: Uses = Uses(Nil),
       assembly: Option[ArtifactBase] = None,
       tools: ToolCatalog = ToolCatalog.default,
+      runnerTools: RunnerTools = RunnerTools.empty,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -281,6 +291,7 @@ object Projects:
       registered,
       assembly,
       tools,
+      runnerTools,
     )
 
   private def uniqueResolvers(
@@ -783,12 +794,13 @@ final class Organized(
     resolvers: List[Resolver],
     assembly: Option[ArtifactBase] = None,
     tools: ToolCatalog = ToolCatalog.default,
+    runnerTools: RunnerTools = RunnerTools.empty,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, assembly, catalog)
+    Organized(organization, resolvers, assembly, catalog, runnerTools)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, assembly, tools)
+    Organized(Some(value), resolvers, assembly, tools, runnerTools)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -796,12 +808,16 @@ final class Organized(
       resolvers ++ (first :: rest.toList),
       assembly,
       tools,
+      runnerTools,
     )
 
   /** The assembly jar publishes under this artifact id. No Scala suffix, and the pom has no dependencies.
     */
   def assembly(name: ArtifactBase): Organized =
-    Organized(organization, resolvers, Some(name), tools)
+    Organized(organization, resolvers, Some(name), tools, runnerTools)
+
+  def runnerTools(value: RunnerTools): Organized =
+    Organized(organization, resolvers, assembly, tools, value)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -812,6 +828,7 @@ final class Organized(
       defs.toList,
       assembly = assembly,
       tools = tools,
+      runnerTools = runnerTools,
     )
 
   def apply(
@@ -826,6 +843,7 @@ final class Organized(
       defs.toList,
       assembly = assembly,
       tools = tools,
+      runnerTools = runnerTools,
     )
 
   def apply(
@@ -840,6 +858,7 @@ final class Organized(
       defs.toList,
       assembly = assembly,
       tools = tools,
+      runnerTools = runnerTools,
     )
 
   def apply(
@@ -855,6 +874,7 @@ final class Organized(
       defs.toList,
       assembly = assembly,
       tools = tools,
+      runnerTools = runnerTools,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -867,6 +887,7 @@ final class Organized(
       uses,
       assembly,
       tools,
+      runnerTools,
     )
 
   def apply(
@@ -883,6 +904,7 @@ final class Organized(
       uses,
       assembly,
       tools,
+      runnerTools,
     )
 
   def apply(
@@ -899,6 +921,7 @@ final class Organized(
       uses,
       assembly,
       tools,
+      runnerTools,
     )
 
   def apply(
@@ -916,5 +939,6 @@ final class Organized(
       uses,
       assembly,
       tools,
+      runnerTools,
     )
 end Organized

@@ -4,7 +4,19 @@ import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPl
 import histos.resolve.PlatformToken
 import histos.version.Catalog
 import histos.workspace.{IoFailure, IoFault}
-import histos.{Aggregate, Axis, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, Splits}
+import histos.{
+  Aggregate,
+  Axis,
+  Module,
+  NodeFloor,
+  Platform,
+  ProjectGraph,
+  ProjectName,
+  RunnerTools,
+  ScalaVersion,
+  Splits,
+  ToolRevision,
+}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 
@@ -125,12 +137,12 @@ object Workflow:
           case first :: rest => Right(TestTarget.Named(first, rest))
           case Nil           => Right(TestTarget.Entire)
 
-  def render(graph: ProjectGraph, setup: Boolean = false): Either[CiError, String] =
-    plan(graph, CiEvent.Other).map(jobs => document(graph, jobs, setup))
+  def render(graph: ProjectGraph): Either[CiError, String] =
+    plan(graph, CiEvent.Other).map(jobs => document(graph, jobs))
 
   /** `ci.yml` plus one `histos-<job>.yml` for each scheduled plugin job. */
-  def renderAll(graph: ProjectGraph, setup: Boolean = false): Either[CiError, List[RenderedWorkflow]] =
-    render(graph, setup).map: body =>
+  def renderAll(graph: ProjectGraph): Either[CiError, List[RenderedWorkflow]] =
+    render(graph).map: body =>
       RenderedWorkflow(fileName, body) :: scheduled(graph)
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
@@ -138,8 +150,7 @@ object Workflow:
 
   def check(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
     for
-      setup    <- present(repo)
-      rendered <- ZIO.fromEither(renderAll(graph, setup))
+      rendered <- ZIO.fromEither(renderAll(graph))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.when(extra.nonEmpty)(ZIO.fail(CiError.Drift))
@@ -147,8 +158,7 @@ object Workflow:
 
   def update(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
     for
-      setup    <- present(repo)
-      rendered <- ZIO.fromEither(renderAll(graph, setup))
+      rendered <- ZIO.fromEither(renderAll(graph))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.foreachDiscard(extra): orphan =>
@@ -238,18 +248,10 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def toolsMarker(repo: Path): Path =
-    repo.resolve(".github").resolve("ci-tools")
-
-  private def present(repo: Path): IO[CiError, Boolean] =
-    ZIO
-      .attemptBlocking(Files.isRegularFile(toolsMarker(repo)))
-      .mapError(_ => CiError.Io(IoFailure(toolsMarker(repo), IoFault.Stat)))
-
-  private def document(graph: ProjectGraph, jobs: List[TestJob], setup: Boolean): String =
+  private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
     val test = jobs match
       case Nil => Nil
-      case _   => testJob(jobs, setup)
+      case _   => testJob(jobs, graph.runnerTools)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob)
@@ -312,27 +314,48 @@ object Workflow:
       "jobs:",
     )
 
-  /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action. Chekhov 0.1.3
-    * reads Playwright 1.62.1 from `~/.cache/chekhov`, not from an npx cache.
+  /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action. Chekhov reads
+    * Playwright from `~/.cache/chekhov`, not from an npx cache.
     */
-  private val tools: List[String] =
-    List(
-      "      - uses: actions/setup-node@v4",
-      "        with:",
-      "          node-version: \"25\"",
-      "      - uses: KyleMayes/install-llvm-action@v2.0.9",
-      "        with:",
-      "          version: \"21.1.8\"",
-      "      - run: |",
-      "          dir=\"$HOME/.cache/chekhov/playwright/1.62.1\"",
-      "          mkdir -p \"$dir\"",
-      "          npm install --prefix \"$dir\" --no-fund --no-audit --no-progress playwright@1.62.1",
-      "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
-      "          node \"$dir/node_modules/playwright/cli.js\" install firefox",
-    )
+  private def steps(tools: RunnerTools): List[String] =
+    nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright)
 
-  private def testJob(jobs: List[TestJob], setup: Boolean): List[String] =
-    val prepare = if setup then tools else Nil
+  private def nodeStep(floor: Option[NodeFloor]): List[String] =
+    floor match
+      case None        => Nil
+      case Some(major) =>
+        List(
+          "      - uses: actions/setup-node@v4",
+          "        with:",
+          s"          node-version: ${quote(major.value.toString)}",
+        )
+
+  private def llvmStep(revision: Option[ToolRevision]): List[String] =
+    revision match
+      case None         => Nil
+      case Some(pinned) =>
+        List(
+          "      - uses: KyleMayes/install-llvm-action@v2.0.9",
+          "        with:",
+          s"          version: ${quote(pinned.value)}",
+        )
+
+  private def playwrightStep(revision: Option[ToolRevision]): List[String] =
+    revision match
+      case None         => Nil
+      case Some(pinned) =>
+        val version = pinned.value
+        List(
+          "      - run: |",
+          s"          dir=\"$$HOME/.cache/chekhov/playwright/$version\"",
+          "          mkdir -p \"$dir\"",
+          s"          npm install --prefix \"$$dir\" --no-fund --no-audit --no-progress playwright@$version",
+          "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
+          "          node \"$dir/node_modules/playwright/cli.js\" install firefox",
+        )
+
+  private def testJob(jobs: List[TestJob], tools: RunnerTools): List[String] =
+    val prepare = steps(tools)
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(

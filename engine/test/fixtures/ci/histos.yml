@@ -1,0 +1,36 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "25"
+      - uses: KyleMayes/install-llvm-action@v2.0.9
+        with:
+          version: "21.1.8"
+      - run: |
+          dir="$HOME/.cache/chekhov/playwright/1.62.1"
+          mkdir -p "$dir"
+          npm install --prefix "$dir" --no-fund --no-audit --no-progress playwright@1.62.1
+          node "$dir/node_modules/playwright/cli.js" install-deps firefox
+          node "$dir/node_modules/playwright/cli.js" install firefox
+      - run: "./histos test"
+  versions:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: "./histos run versions"
+  workflow:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: "./histos workflow --check"

@@ -12,19 +12,22 @@ import histos.plugin.{
   RegisteredPlugin,
   TaskName,
 }
-import histos.version.{Catalog, Ship, ShipName, ShipNumber}
+import histos.version.{Catalog, ManualVersion, Ship, ShipName, ShipNumber}
 import histos.{
   Axis,
   Module,
+  NodeFloor,
   Platform,
   Platforms,
   ProjectDep,
   ProjectGraph,
   ProjectName,
+  RunnerTools,
   ScalaVersion,
   ScalaVersions,
   SourcePos,
   Splits,
+  ToolRevision,
 }
 import histos.workspace.Workspace
 
@@ -36,9 +39,12 @@ import zio.{Scope, System, ZIO}
 import zio.test.*
 
 object WorkflowSpec extends ZIOSpecDefault:
-  private val v390  = ScalaVersion.trusted("3.9.0")
-  private val core  = project("core")
-  private val tests = project("tests")
+  private val v390           = ScalaVersion.trusted("3.9.0")
+  private val core           = project("core")
+  private val tests          = project("tests")
+  private val nodeOnly       = RunnerTools(Some(NodeFloor(22)), None, None)
+  private val llvmOnly       = RunnerTools(None, Some(ToolRevision("20.1.8")), None)
+  private val playwrightOnly = RunnerTools(None, None, Some(ToolRevision("1.49.0")))
 
   private val render = suite("render")(
     test("the empty split set is one aggregate test job"):
@@ -51,8 +57,9 @@ object WorkflowSpec extends ZIOSpecDefault:
         golden.contains("./histos test") && golden.contains(
           "contents: read"
         ) && golden.contains("workflow --check"),
-        !golden.contains("setup-java") && !golden.contains("format") && !golden
-          .contains("publish") &&
+        !golden.contains("setup-java") && !golden.contains("setup-node") && !golden
+          .contains("install-llvm-action") && !golden.contains("playwright") && !golden
+          .contains("format") && !golden.contains("publish") &&
           golden.contains("push:\n    branches:\n      - main") && !golden
             .contains("tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
@@ -70,7 +77,8 @@ object WorkflowSpec extends ZIOSpecDefault:
             yaml.contains("fail-fast: false") &&
             yaml.contains("\"./histos test core\"") &&
             yaml.contains("\"./histos test tests\"") &&
-            !yaml.contains("setup-java")
+            !yaml.contains("setup-java") && !yaml.contains("setup-node") &&
+            !yaml.contains("install-llvm-action") && !yaml.contains("playwright")
           case Left(_) => false
     ,
     test("a catalog adds the versions command and still does not publish"):
@@ -115,7 +123,25 @@ object WorkflowSpec extends ZIOSpecDefault:
             case Left(CiError.Missing(path)) =>
               path == Workflow.path(root.resolve("absent"))
             case _ => false,
-        ),
+        )
+    ,
+    test("one tool renders that tool only"):
+      for
+        node       <- text("node.yml")
+        llvm       <- text("llvm.yml")
+        playwright <- text("playwright.yml")
+      yield assertTrue(
+        Workflow.render(graph(Splits.aggregate, nodeOnly)) == Right(node),
+        Workflow.render(graph(Splits.aggregate, llvmOnly)) == Right(llvm),
+        Workflow.render(graph(Splits.aggregate, playwrightOnly)) == Right(playwright),
+      )
+    ,
+    test("this repository asks the runner for node, llvm, and playwright"):
+      for golden <- text("histos.yml")
+      yield assertTrue:
+        repository match
+          case Right(built) => Workflow.render(built) == Right(golden)
+          case Left(_)      => false,
   )
 
   private val affected = suite("affected")(
@@ -199,10 +225,34 @@ object WorkflowSpec extends ZIOSpecDefault:
       ),
   )
 
-  private def graph(splits: Splits): ProjectGraph =
+  private def graph(splits: Splits, tools: RunnerTools = RunnerTools.empty): ProjectGraph =
     val library = module("core", Platform.Jvm, Nil)
     val suite   = module("tests", Platform.Jvm, List(core))
-    ProjectGraph.trusted(List(library, suite), splits)
+    ProjectGraph.trusted(
+      List(library, suite),
+      splits,
+      Catalog.empty,
+      None,
+      Nil,
+      runnerTools = tools,
+    )
+
+  /** The tools and the manual ship this repository names. The module list does not appear in an aggregate render. */
+  private def repository: Either[histos.BuildError, ProjectGraph] =
+    val api = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
+    histos.Projects
+      .organization(histos.Organization("rocks.earlyeffect"))
+      .assembly(histos.ArtifactBase("histos"))
+      .runnerTools(
+        RunnerTools(
+          Some(NodeFloor(25)),
+          Some(ToolRevision("21.1.8")),
+          Some(ToolRevision("1.62.1")),
+        )
+      )(
+        histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
+        api,
+      )
 
   private def module(
       name: String,
