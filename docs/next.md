@@ -8,4 +8,6 @@ The build file rejects a setting for a platform the module does not build. Compi
 
 The release path is open. The decisions are in [release-work-plan.md](release-work-plan.md).
 
+The cache is why this tool exists. The decisions and the checklist are in [cache-work-plan.md](cache-work-plan.md).
+
 Closed until we reopen them: a Windows port, installing toolchains, matching sbt feature for feature, and a hermetic sandbox.

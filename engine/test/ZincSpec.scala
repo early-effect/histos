@@ -17,8 +17,12 @@ import histos.schedule.{
 }
 import histos.{Platform, ScalaVersion}
 
+import java.io.ByteArrayOutputStream
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.util.jar.{JarEntry, JarOutputStream}
+
+import org.objectweb.asm.{ClassWriter, Label, Opcodes}
 
 import scala.jdk.CollectionConverters.*
 
@@ -425,6 +429,37 @@ object ZincSpec extends ZIOSpecDefault:
           edited.classesWritten.exists(written => written > 0 && written < edited.classFiles),
         )
     ,
+    test("a comment and a method body keep the public signature, and a new parameter moves it"):
+      val greet =
+        """object Hello:
+          |  def greet(name: String): String = name
+          |""".stripMargin
+      val noted = greet + "// note\n"
+      val body  =
+        """object Hello:
+          |  def greet(name: String): String = name + "!"
+          |""".stripMargin
+      val widened =
+        """object Hello:
+          |  def greet(name: String, n: Int): String = name
+          |""".stripMargin
+      ZIO.scoped:
+        for
+          jdk     <- running
+          base    <- signature(jdk, greet)
+          comment <- signature(jdk, noted)
+          edited  <- signature(jdk, body)
+          added   <- signature(jdk, widened)
+        yield assertTrue(
+          comment.api == base.api,
+          edited.api == base.api,
+          added.api != base.api,
+          comment.product == base.product,
+          edited.product != base.product,
+          added.product != base.product,
+          added.product.length == 64,
+        )
+    ,
     test("two compiles on one pool open the compiler once"):
       ZIO.scoped:
         for
@@ -579,6 +614,106 @@ object ZincSpec extends ZIOSpecDefault:
       Nil,
     )
 
+  private final case class Signatures(api: String, product: String)
+
+  private def signature(
+      jdk: JdkRuntime,
+      source: String,
+  ): ZIO[Scope & histos.resolve.LockedTools, CompileError, Signatures] =
+    for
+      root <- temp.mapError(_ => CompileError.Io(IoFailure(Path.of("signature"), IoFault.Temp)))
+      file <- ZIO
+        .attempt(write(root, "Hello.scala", source))
+        .mapError(_ => CompileError.Io(IoFailure(root, IoFault.Write)))
+      _ <- JvmCompile.compile(liveRequest(root, file, jdk))
+      api     = root.resolve("analysis").resolve(ApiDigest.fileName)
+      product = root.resolve("analysis").resolve(ProductDigest.fileName)
+      read    = (path: Path) =>
+        ZIO.attempt(Files.readString(path).trim).mapError(_ => CompileError.Io(IoFailure(path, IoFault.Read)))
+      apiText     <- read(api)
+      productText <- read(product)
+    yield Signatures(apiText, productText)
+
+  private val products = suite("product digest")(
+    test("a line number and an absolute path are not part of the class digest"):
+      val early = classFile(1, "/var/folders/a/Hello.scala", "/Users/russ/projects/Hello.scala")
+      val late  = classFile(40, "/var/folders/b/Hello.scala", "/Users/russ/projects/Hello.scala")
+      val one   = ProductDigest.normalize(early)
+      val two   = ProductDigest.normalize(late)
+      val same  =
+        one.flatMap(left => two.map(right => Sha256.of(Chunk.fromArray(left)) == Sha256.of(Chunk.fromArray(right))))
+      val clean = one match
+        case Right(bytes) =>
+          val text = new String(bytes, StandardCharsets.ISO_8859_1)
+          !text.contains("/var/folders") && !text.contains("/Users/russ")
+        case Left(_) => false
+      assertTrue(same == Right(true), clean)
+    ,
+    test("bytes that are not a class file are refused"):
+      val garbage = ProductDigest.normalize(Array[Byte](1, 2, 3))
+      val broken  = ProductDigest.normalize(
+        Array[Byte](
+          0xca.toByte,
+          0xfe.toByte,
+          0xba.toByte,
+          0xbe.toByte,
+          0,
+          0,
+          0,
+          61,
+          0,
+          2,
+          1,
+          0,
+          1,
+          0xff.toByte,
+        )
+      )
+      assertTrue(garbage.isLeft, broken.isLeft)
+    ,
+    test("jar entry timestamps are not part of the digest"):
+      ZIO.scoped:
+        for
+          root  <- temp
+          early <- ZIO.attempt(jar(root, "early.jar", 0L, classFile(1, "Hello.scala", "hi")))
+          late  <- ZIO.attempt(jar(root, "late.jar", 50_000L, classFile(1, "Hello.scala", "hi")))
+          other <- ZIO.attempt(jar(root, "other.jar", 0L, classFile(1, "Hello.scala", "no")))
+          left  <- ZIO.fromEither(ProductDigest.ofJar(early))
+          right <- ZIO.fromEither(ProductDigest.ofJar(late))
+          moved <- ZIO.fromEither(ProductDigest.ofJar(other))
+        yield assertTrue(left == right, left != moved),
+  )
+
+  private def classFile(line: Int, source: String, constant: String): Array[Byte] =
+    val writer = new ClassWriter(0)
+    writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, "Hello", null, "java/lang/Object", null)
+    writer.visitSource(source, s"SMAP\n$source\n*E\n")
+    val method =
+      writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "greet", "()Ljava/lang/String;", null, null)
+    method.visitCode()
+    val start = new Label()
+    method.visitLabel(start)
+    method.visitLineNumber(line, start)
+    method.visitLdcInsn(constant)
+    method.visitInsn(Opcodes.ARETURN)
+    method.visitMaxs(1, 0)
+    method.visitEnd()
+    writer.visitEnd()
+    writer.toByteArray
+
+  private def jar(root: Path, name: String, time: Long, bytes: Array[Byte]): Path =
+    val path   = root.resolve(name)
+    val buffer = new ByteArrayOutputStream
+    val output = new JarOutputStream(buffer)
+    val entry  = new JarEntry("Hello.class")
+    entry.setTime(time)
+    output.putNextEntry(entry)
+    output.write(bytes)
+    output.closeEntry()
+    output.close()
+    Files.write(path, buffer.toByteArray)
+    path
+
   private def liveRequest(
       root: Path,
       source: Path,
@@ -646,6 +781,7 @@ object ZincSpec extends ZIOSpecDefault:
 
   def spec = suite("jvm compile")(
     keys,
+    products,
     banned,
     builds,
   ).provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](

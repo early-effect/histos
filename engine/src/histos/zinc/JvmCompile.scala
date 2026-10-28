@@ -608,10 +608,14 @@ object JvmCompile:
         .set(result)
       if reporter.hasErrors then Left(CompileError.Failed(reporter.diagnostics))
       else
-        val files = result.analysis() match
-          case found: sbt.internal.inc.Analysis => sourceCount(prior, found)
-          case _                                => None
-        Right(
+        val recorded = result.analysis() match
+          case found: sbt.internal.inc.Analysis =>
+            ApiDigest
+              .write(request.analysis, found)
+              .flatMap: _ =>
+                ProductDigest.write(request.analysis, request.classes).map(_ => sourceCount(prior, found))
+          case _ => Right(None)
+        recorded.map: files =>
           CompileOutput(
             request.classes,
             countClasses(request.classes),
@@ -620,7 +624,6 @@ object JvmCompile:
             files,
             writtenClasses(before, request.classes),
           )
-        )
     catch
       case _: xsbti.CompileFailed =>
         Left(CompileError.Failed(reporter.diagnostics))

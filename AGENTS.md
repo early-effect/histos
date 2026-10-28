@@ -2,6 +2,14 @@
 
 Standing rules for this repository. They apply to this agent and to every subagent. Read this file before editing.
 
+## Why this exists
+
+Histos exists because compile, package, and link are expensive, and sbt does not skip them reliably. zipx made that tolerable. It is not the goal. The goal is a cache Russ can trust on his machine and in CI, where he picks local or remote and he picks how a result is pinned, and the tool does the expensive work only when the code it depends on changed. Tests of unchanged code run only when he asks for the full run. `testQuick` is that ask. A result that is wrong, or a skip that hides a real change, is a failure even when the command was fast.
+
+The proof is a bench that builds the same graph with sbt and zipx and with Histos. Histos has to be faster where a change should not rebuild the world. Cold may tie. Caching Node, browsers, and the dependency resolve is part of the want and is not the gate. Mill is not in the comparison.
+
+The decisions and the checklist are [docs/cache-work-plan.md](docs/cache-work-plan.md). Read that file before changing cache, compile identity, link, package, `testQuick`, or the generated workflow. Finish one checklist item and prove it before starting the next. Do not check a box the proof has not earned. A change that forgets this want is the wrong change.
+
 ## Watch the commands
 
 Leave command output on the terminal. Russ reads it and corrects the run from it.
@@ -47,3 +55,4 @@ Public APIs pin the hard type first, then take the function. If a call site need
 - CI has no `dist/` and no `.histos/assembly.sha256`, so every job runs the snapshot in `.histos/launcher.lock`. `HISTOS_ASSEMBLY`, or `dist/histos.jar` when that file exists, is used only when `.histos/assembly.sha256` matches. A mismatch fails and does not fall through to the lock, so a local command can pass while CI still runs the pin. `workflow --check` compares the files this jar renders with the files in the tree. Do not hand-edit the lock. `launcher --update` is the only command that writes it, and it records the latest published `rocks.earlyeffect:histos` snapshot rather than the hash of `dist/histos.jar`. When the build file calls api the running jar does not contain, run `./histos assembly`, `./histos publish snapshots`, then `./histos launcher --update`, and commit the lock. The README section "This repository" is that procedure.
 - Tests do not call Central, GitHub, or a keyserver. Loopback stands in.
 - Read `docs/release-work-plan.md` before changing publish. Finish one checklist item and prove it before starting the next.
+- Read `docs/cache-work-plan.md` before changing cache, compile identity, link, package, `testQuick`, or the generated workflow. The same rule: one checklist item, then its proof.
