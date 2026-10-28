@@ -37,9 +37,11 @@ The action index is namespaced. The namespace is a prefix, not part of the diges
 
 A pull request reads `pr/<n>/`, then `main/`, and writes `pr/<n>/` only. A push to `main` reads and writes `main/`. A laptop reads `main/` and does not write unless a `dev/<name>` namespace is set.
 
+The index path is `/{namespace}/ac/{digest}`, where the namespace is `main`, `pr/<n>`, or `dev/<name>`. The blob path stays `/cas/{digest}`. A miss is a 404. A hit, a bad entry, or any other status stops the walk and does not try the next prefix.
+
 The key is the declared inputs plus the toolchain identity: OS, arch, JDK, Scala, and the linker. The lock digest is an input. There is no epoch and no restore-key that drops an input.
 
-`RemoteMode` stays `Off`, `Read`, and `Write`. The client speaks the Bazel HTTP API (`/ac/`, `/cas/`) through heddle. An action-cache value is an `ActionResult` whose stdout digest names the blob: bazel-remote rejects any other body unless validation is turned off. The URI is configuration. gRPC can follow. It is not this work.
+`RemoteMode` stays `Off`, `Read`, and `Write`. The client speaks the Bazel HTTP API through heddle. An action-cache value is an `ActionResult` whose stdout digest names the blob: bazel-remote rejects any other body unless validation is turned off. The URI is configuration. gRPC can follow. It is not this work.
 
 ## What a compile publishes
 
@@ -119,7 +121,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **HTTP client.** A heddle client for `/ac/` and `/cas/`. A loopback server is the store. Put then get returns the same bytes. An index entry that names a missing blob is `RemoteError.Dangling`. `Off` and `Read` refuse `store`. Proof: `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine` (505 passed, 1 ignored). No docker.
 
-- [ ] **Namespaces.** The prefix is on the index only. A write to `pr/1` is invisible to a read of `main`. A read of `pr/1` falls through to `main` on a miss. A pull-request writer cannot write `main`. Proof: the same loopback store.
+- [x] **Namespaces.** The prefix is on the index only. A write to `pr/1` is invisible to a read of `main`. A read of `pr/1` falls through to `main` on a miss. A pull-request writer cannot write `main`. Proof: the same loopback store. `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine` (515 passed, 1 ignored).
 
 - [ ] **purge.** `purge` deletes the index entries of one named namespace and does not delete a blob another namespace still names. A pull-request invocation cannot name `main`. Proof: the remote spec.
 
