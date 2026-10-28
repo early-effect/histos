@@ -18,7 +18,7 @@ Histos is unreleased. A breaking change is expected when the new signature is th
 - A refactor that changes what the product does gets an interview first. Russ's wants decide. Do not pick the product for him.
 - Still prove the change. A test asserts the value, the graph, or the typed error. `isSuccess` on a fat effect is not a test.
 - Do not commit, push, or open a pull request unless Russ says so in that turn. Humans merge. A green check is not permission to merge.
-- Do not cut a non-snapshot Histos release, upload to Central, send a public key, or tag Histos while `docs/release-work-plan.md` is in progress. The catalog stays `manual("histos", manual"0.0.1-SNAPSHOT")` until Russ says to cut it.
+- `./histos publish snapshots` is the normal publish. It uploads `histos-api_3` and `rocks.earlyeffect:histos` and does not sign, tag, or open a portal deployment. A non-snapshot release, a public key, a tag, or `publish release` waits until Russ says the feature is complete. The catalog stays `manual("histos", manual"0.0.1-SNAPSHOT")` until then.
 
 ## How the code is written
 

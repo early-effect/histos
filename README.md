@@ -30,7 +30,7 @@ When the build file calls api the committed pin does not contain, start from a j
 ./histos launcher --update
 ```
 
-`publish snapshots` uploads the manual ship `histos-api_3` and the assembly `rocks.earlyeffect:histos` to Sonatype Central snapshots. Both stay `0.0.1-SNAPSHOT`. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. `launcher --update` writes that assembly's revision and checksum into the lock. Commit the lock. The next run, including CI, compiles the build file against the published api.
+`publish snapshots` is the normal publish. It uploads the manual ship `histos-api_3` and the assembly `rocks.earlyeffect:histos` to Sonatype Central snapshots. Both stay `0.0.1-SNAPSHOT`. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign, tag, or open a portal deployment. `launcher --update` writes that assembly's revision and checksum into the lock. Commit the lock. The next run, including CI, compiles the build file against the published api.
 
 ## A release
 
