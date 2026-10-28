@@ -26,8 +26,9 @@ import histos.resolve.{
   ResolvedArtifact,
 }
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
-import histos.workspace.Workspace
+import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{
+  ApiDigest,
   CompileError,
   CompileFacts,
   CompileProblem,
@@ -160,12 +161,13 @@ private[histos] object TestCompile:
   /** Compiler library first, then locked jars. The first jar on the classpath defines `scala.*`.
     */
   /** `hashes` are this module's locked jars. `upstream` are compile jars of upstream modules, without the hashes
-    * already in `hashes`.
+    * already in `hashes`. `classDirs` contribute their API digests, not their class bytes.
     */
   private[histos] final case class Linked(
       paths: List[Path],
       hashes: List[Sha256],
       upstream: List[Sha256],
+      classDirs: List[Path],
   )
 
   private[histos] def runtimeClasspath(
@@ -219,6 +221,7 @@ private[histos] object TestCompile:
       cell.classes :: (upstream ++ library ++ jars),
       kept.map(_._2),
       upstreamHashes,
+      cell.classes :: upstream,
     )
 
   /** The JVM suite needs `scala-library` on the child classpath. Js and Native put their own library on the compiler
@@ -233,6 +236,12 @@ private[histos] object TestCompile:
           .runtime(cell.version)
           .mapError(error => ModuleTestError.Sources(cell.module, cell.version, error))
       case Platform.Js | Platform.Native => ZIO.succeed(Nil)
+
+  private def readApi(module: ProjectName, version: ScalaVersion, classes: Path): IO[ModuleTestError, Sha256] =
+    val found = GraphCompile.analysisDirOf(classes) match
+      case Some(dir) => ApiDigest.read(dir)
+      case None      => Left(CompileError.Io(IoFailure(classes, IoFault.Stat)))
+    ZIO.fromEither(found).mapError(error => ModuleTestError.Sources(module, version, error))
 
   private[histos] def compiledTests(
       repo: Path,
@@ -258,6 +267,7 @@ private[histos] object TestCompile:
         lock,
         repositories,
       )
+      apis <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
       request = CompileRequest(
         CompileToolchain(cell.version, cell.platform, jdk, module.flags),
         sources,
@@ -265,6 +275,7 @@ private[histos] object TestCompile:
         classes,
         analysis,
         linked.hashes,
+        apis,
       )
       facts <- compileSuite(
         module,

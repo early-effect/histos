@@ -86,6 +86,7 @@ object NativeSuite:
             classes,
             bridgeRoot.resolve("analysis"),
             Nil,
+            Nil,
           )
         )
         .mapError(NativeSuiteError.Compile(_))

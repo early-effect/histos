@@ -79,6 +79,7 @@ object JsLink:
             classes,
             bridgeRoot.resolve("analysis"),
             Nil,
+            Nil,
           )
         )
         .mapError(JsLinkError.Library(_))

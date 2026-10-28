@@ -230,6 +230,7 @@ object NativeLink:
       work.resolve("classes"),
       work.resolve("analysis"),
       Nil,
+      Nil,
     )
     JvmCompile.compilePrepared(
       request.copy(
@@ -305,6 +306,7 @@ object NativeLink:
             jars,
             classes,
             bridgeRoot.resolve("analysis"),
+            Nil,
             Nil,
           )
         )

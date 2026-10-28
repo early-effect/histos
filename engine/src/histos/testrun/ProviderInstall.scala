@@ -81,6 +81,7 @@ private[testrun] final class ProviderInstall(
             classes,
             root.resolve("analysis"),
             Nil,
+            Nil,
           )
         )
         .mapError(error => ModuleTestError.Sources(module, version, error))

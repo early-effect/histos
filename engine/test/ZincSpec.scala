@@ -82,6 +82,28 @@ object ZincSpec extends ZIOSpecDefault:
         key == CompileKey.of(base, sha),
       )
     ,
+    test("an upstream signature is the dependent key, and the class bytes are not"):
+      val base = sample(
+        ScalacFlags.empty,
+        v21,
+        Platform.Jvm,
+        histos.ScalaVersion("3.9.0"),
+      )
+      val signature = Sha256.of(Chunk.fromArray("signature".getBytes))
+      val widened   = Sha256.of(Chunk.fromArray("widened".getBytes))
+      val bytes     = Sha256.of(Chunk.fromArray("class-bytes".getBytes))
+      val comment   = base.copy(upstreamApis = List(signature))
+      val moved     = base.copy(upstreamApis = List(widened))
+      val hashed    = comment.copy(artifactHashes = List(bytes))
+      val asJar     = base.copy(artifactHashes = List(signature))
+      val key       = CompileKey.of(comment, sha)
+      assertTrue(
+        key == CompileKey.of(base.copy(upstreamApis = List(signature)), sha),
+        key != CompileKey.of(moved, sha),
+        key != CompileKey.of(hashed, sha),
+        key != CompileKey.of(asJar, sha),
+      )
+    ,
     test("locked tool bytes and local runtime identity affect compile keys"):
       val request = sample(
         ScalacFlags.empty,
@@ -588,6 +610,7 @@ object ZincSpec extends ZIOSpecDefault:
       Path.of("/out"),
       Path.of("/analysis"),
       Nil,
+      Nil,
     )
 
   private def running: zio.IO[GraphCompileError, JdkRuntime] =
@@ -611,6 +634,7 @@ object ZincSpec extends ZIOSpecDefault:
       Nil,
       root.resolve("classes"),
       root.resolve("analysis"),
+      Nil,
       Nil,
     )
 
@@ -730,6 +754,7 @@ object ZincSpec extends ZIOSpecDefault:
       Nil,
       root.resolve("classes"),
       root.resolve("analysis"),
+      Nil,
       Nil,
     )
 

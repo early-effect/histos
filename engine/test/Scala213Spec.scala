@@ -216,6 +216,7 @@ object Scala213Spec extends ZIOSpecDefault:
                 classes,
                 root.resolve("analysis"),
                 Nil,
+                Nil,
               )
             )
             .either
@@ -269,6 +270,7 @@ object Scala213Spec extends ZIOSpecDefault:
                 root.resolve("classes"),
                 root.resolve("analysis"),
                 Nil,
+                Nil,
               )
             )
             .either
@@ -296,6 +298,7 @@ object Scala213Spec extends ZIOSpecDefault:
                 Nil,
                 root.resolve("classes"),
                 root.resolve("analysis"),
+                Nil,
                 Nil,
               )
             )
@@ -335,6 +338,7 @@ object Scala213Spec extends ZIOSpecDefault:
               Nil,
               root.resolve("classes"),
               root.resolve("analysis"),
+              Nil,
               Nil,
             )
           )

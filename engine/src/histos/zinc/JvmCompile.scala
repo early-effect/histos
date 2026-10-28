@@ -141,6 +141,7 @@ final case class CompileRequest(
     classes: Path,
     analysis: Path,
     artifactHashes: List[Sha256],
+    upstreamApis: List[Sha256],
     compilationTools: List[histos.resolve.ToolInput] = Nil,
     compilerPlugins: List[histos.resolve.ToolInput] = Nil,
 )
@@ -263,7 +264,8 @@ object CompileKey:
       )
     )
 
-  /** Identity of a compile. The classes directory is not part of it. Artifact checksums are.
+  /** Identity of a compile. An upstream classes directory contributes its API digest, not its class bytes. `apis` keeps
+    * that digest from colliding with a jar checksum of the same hex. Artifact checksums are the jars.
     */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
     val tool = request.toolchain
@@ -275,6 +277,8 @@ object CompileKey:
          |${tool.flags.canonical}
          |${sources.value}
          |${request.artifactHashes.map(_.value).mkString("\n")}
+         |apis
+         |${request.upstreamApis.map(_.value).mkString("\n")}
          |${request.compilationTools.map(_.fingerprint.value).mkString("\n")}
          |""".stripMargin
     Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))

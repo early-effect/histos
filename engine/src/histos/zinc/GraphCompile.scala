@@ -516,6 +516,12 @@ object GraphCompile:
             upstreamClasses <- ZIO.fromEither(
               upstreamClasses(module, chain, version, platform, done)
             )
+            apis <- ZIO
+              .foreach(chain): dependency =>
+                ZIO.fromEither(
+                  ApiDigest.read(analysis(plan.repo, dependency.name, version, platform))
+                )
+              .mapError(failed)
             assembled <- ScalacClasspath
               .of(
                 plan.repo,
@@ -536,6 +542,7 @@ object GraphCompile:
               classes,
               analysis(plan.repo, module.name, version, platform),
               assembled.hashes,
+              apis,
             )
             compiled <- compile(
               work,
@@ -573,19 +580,24 @@ object GraphCompile:
           finally walk.close()
           paths.sortBy(path => -path.getNameCount).foreach(Files.deleteIfExists)
         Files.createDirectories(classes)
-        CompiledCell(
-          module,
-          version,
-          platform,
-          classes,
-          0,
-          key = None,
-          changed = false,
-          sources = Some(SourceCount(0, 0)),
-          classesWritten = Some(0),
-        )
       }
-      .mapError(_ => GraphCompileError.Output(classes))
+      .mapError(_ => GraphCompileError.Output(classes)) *>
+      ZIO
+        .fromEither(ApiDigest.writeEmpty(analysis(repo, module, version, platform)))
+        .mapError(error => GraphCompileError.Failed(module, version, platform, error))
+        .as(
+          CompiledCell(
+            module,
+            version,
+            platform,
+            classes,
+            0,
+            key = None,
+            changed = false,
+            sources = Some(SourceCount(0, 0)),
+            classesWritten = Some(0),
+          )
+        )
 
   private def compile(
       work: CellWork,

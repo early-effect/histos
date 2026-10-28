@@ -108,6 +108,7 @@ object JsSuite:
             classes,
             bridgeRoot.resolve("analysis"),
             Nil,
+            Nil,
           )
         )
         .mapError(JsSuiteError.Library(_))

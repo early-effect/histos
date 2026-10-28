@@ -67,6 +67,7 @@ object JsRun:
             classes,
             bridgeRoot.resolve("analysis"),
             Nil,
+            Nil,
           )
         )
         .mapError(JsRunError.Compile(_))

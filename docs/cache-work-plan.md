@@ -45,11 +45,11 @@ The key is the declared inputs plus the toolchain identity: OS, arch, JDK, Scala
 
 A compile publishes two digests. Downstream tasks pick one. They do not key on "the task ran".
 
-The API digest is Zinc's public-signature hash, written beside `inc.zip`. A downstream compile keys on it. A comment or a method body does not recompile dependents. A public signature does.
+The API digest is Zinc's public-signature hash, written beside `inc.zip`. A downstream compile's key includes it. A comment or a method body does not change that key. A public signature does. The compiler still runs until a later item restores a hit.
 
 The product digest is the class bytes after normalization: jar timestamps fixed, line-number tables stripped, the `TASTY` attribute dropped, no absolute path in the hashed bytes. `TASTY` is a hash of positions and comments, so a trailing comment changes those bytes while the bytecode stays the same. `.tasty` files are not hashed. Link and package key on the digest. A trailing comment that does not move member positions keeps it, so the link hits. A method body changes it, so the link runs.
 
-[CompileKey](../engine/src/histos/zinc/JvmCompile.scala) is the compile identity today. It hashes sources, flags, the JDK, and artifact checksums. An upstream classes directory has to contribute its API digest there, not a hash of the raw class files. [GraphCompile](../engine/src/histos/zinc/GraphCompile.scala) owns the analysis directory. [ContentStore](../engine/src/histos/cache/ContentStore.scala) is the local CAS.
+[CompileKey](../engine/src/histos/zinc/JvmCompile.scala) hashes sources, flags, the JDK, jar checksums, and each upstream classes directory's API digest. It does not hash that directory's class bytes. [GraphCompile](../engine/src/histos/zinc/GraphCompile.scala) owns the analysis directory and reads `api.sha256` from it. [ContentStore](../engine/src/histos/cache/ContentStore.scala) is the local CAS.
 
 `./histos clean` deletes the work tree and leaves the CAS. The next compile of an unchanged key restores the analysis and the class files and does not start the compiler. `cleanFull` stays the product wipe. `cache clean` stays the aged sweep. Neither deletes a remote index.
 
@@ -107,7 +107,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Product digest.** Hash the class files after stripping line-number tables, dropping the `TASTY` attribute, and fixing jar timestamps. No absolute path is in the hashed bytes. `.tasty` files are not hashed. The same three fixtures: the comment keeps the digest, the body change moves it. The signature fixture records the digest it produces. Proof: `./histos testOnly --module engine 'histos.zinc.ZincSpec'`.
 
-- [ ] **Downstream compile key.** When the classpath entry is an upstream classes directory, [CompileKey](../engine/src/histos/zinc/JvmCompile.scala) mixes in that upstream's API digest instead of a hash of the class bytes. A comment in the upstream does not change the dependent key. A new public method does. The spec calls the key function. It does not need a second compiler run.
+- [x] **Downstream compile key.** When the classpath entry is an upstream classes directory, [CompileKey](../engine/src/histos/zinc/JvmCompile.scala) mixes in that upstream's API digest instead of a hash of the class bytes. A comment in the upstream does not change the dependent key. A new public method does. The spec calls the key function. It does not need a second compiler run. Proof: `./histos testOnly --module engine 'histos.zinc.ZincSpec'`.
 
 - [ ] **Link and package key.** The Scala.js link key and the package key include the product digest. A trailing comment keeps the link key. A method-body change moves it. Native is out of this item. Proof: the link and package specs.
 

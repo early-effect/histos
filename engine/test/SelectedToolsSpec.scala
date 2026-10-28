@@ -33,6 +33,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
     Path.of("classes"),
     Path.of("analysis"),
     Nil,
+    Nil,
   )
 
   private def held(request: ToolRequest): LockedTool = LockedTool(

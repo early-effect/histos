@@ -619,6 +619,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 open.root.resolve("classes"),
                 open.root.resolve("analysis"),
                 classpath.artifacts.map(_.sha256),
+                Nil,
               )
             case Left(_) =>
               CompileRequest(
@@ -632,6 +633,7 @@ object ResolveSpec extends ZIOSpecDefault:
                 Nil,
                 open.root.resolve("classes"),
                 open.root.resolve("analysis"),
+                Nil,
                 Nil,
               )
           compiled <- JvmCompile.compile(request).either

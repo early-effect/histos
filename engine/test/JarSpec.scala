@@ -93,6 +93,7 @@ object JarSpec extends ZIOSpecDefault:
         root.resolve("classes"),
         root.resolve("analysis"),
         Nil,
+        Nil,
       )
 
   private def temp: ZIO[Scope, Throwable, Path] =
