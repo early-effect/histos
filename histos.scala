@@ -50,6 +50,14 @@ object build extends HistosBuild:
       )
     Projects
       .organization(organization"rocks.earlyeffect")
+      .license(License(license"Apache-2.0", url"https://www.apache.org/licenses/LICENSE-2.0.txt"))
+      .developer(Developer(developer"russwyte", pom"Russ White"))
+      .scm(
+        Scm(
+          url"https://github.com/early-effect/histos",
+          connection"scm:git@github.com:early-effect/histos.git",
+        )
+      )
       .runnerTools(
         RunnerTools(
           Some(NodeFloor(25)),

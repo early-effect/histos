@@ -1,8 +1,8 @@
 package histos.publish
 
 import histos.preview.{Plan, PreviewError}
-import histos.version.ManualVersion
-import histos.{Jvm, Organization, ProjectName, Projects, ScalaVersion, aggregate, module}
+import histos.version.{ManualVersion, ShipName}
+import histos.{Jvm, MainClass, Organization, ProjectName, Projects, SbtSeries, ScalaVersion, aggregate, module}
 
 import java.nio.file.Path
 
@@ -118,6 +118,45 @@ object PublishSelectSpec extends ZIOSpecDefault:
           """target/repo
             |api histos 0.0.1-SNAPSHOT selected
             |engine histos 0.0.1-SNAPSHOT selected""".stripMargin
+      )
+    ,
+    test("an assembly may depend on a module that is not in a ship"):
+      for graph <- ZIO.fromEither(packedAssembly)
+      yield assertTrue(
+        PublishSelect
+          .pick(graph, Nil, List(ShipWrite(ShipName("tool"), List(ProjectName("core"), ProjectName("app")), false))) ==
+          Right(
+            Picked(
+              Set(ProjectName("core"), ProjectName("app")),
+              Set(ProjectName("core"), ProjectName("app")),
+              Nil,
+              Nil,
+            )
+          )
+      )
+    ,
+    test("a library, an application, or a plugin refuses a module that is not in a ship"):
+      for
+        library     <- ZIO.fromEither(libraryOutside)
+        application <- ZIO.fromEither(applicationOutside)
+        plugin      <- ZIO.fromEither(pluginOutside)
+      yield assertTrue(
+        PublishSelect.pick(library, Nil, List(ShipWrite(ShipName("tool"), List(ProjectName("core")), false))) ==
+          Left(LocalPublishError.UnpublishedDependency(ProjectName("core"), ProjectName("inside"))),
+        PublishSelect.pick(application, Nil, List(ShipWrite(ShipName("tool"), List(ProjectName("app")), false))) ==
+          Left(LocalPublishError.UnpublishedDependency(ProjectName("app"), ProjectName("inside"))),
+        PublishSelect.pick(plugin, Nil, List(ShipWrite(ShipName("tool"), List(ProjectName("plug")), false))) ==
+          Left(LocalPublishError.UnpublishedDependency(ProjectName("plug"), ProjectName("inside"))),
+      )
+    ,
+    test("an assembly refuses a module owned by a ship this run did not select"):
+      for graph <- ZIO.fromEither(ownedElsewhere)
+      yield assertTrue(
+        PublishSelect.pick(
+          graph,
+          List(PublishName.Ship(ShipName("tool"))),
+          List(ShipWrite(ShipName("tool"), List(ProjectName("app")), false)),
+        ) == Left(LocalPublishError.UnpublishedDependency(ProjectName("app"), ProjectName("core")))
       ),
   )
 
@@ -170,6 +209,56 @@ object PublishSelectSpec extends ZIOSpecDefault:
       core,
       site,
       lib,
+      app,
+    )
+
+  private def packedAssembly: Either[histos.BuildError, histos.ProjectGraph] =
+    val inside = module("inside", Jvm)(scala3)
+    val core   = module("core", Jvm)(scala3)
+    val app    = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).dependsOn(core, inside)
+    Projects.organization(Organization("com.example"))(
+      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(core, app)),
+      core,
+      app,
+      inside,
+    )
+
+  private def libraryOutside: Either[histos.BuildError, histos.ProjectGraph] =
+    val inside = module("inside", Jvm)(scala3)
+    val core   = module("core", Jvm)(scala3).dependsOn(inside)
+    Projects.organization(Organization("com.example"))(
+      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(core)),
+      core,
+      inside,
+    )
+
+  private def applicationOutside: Either[histos.BuildError, histos.ProjectGraph] =
+    val inside = module("inside", Jvm)(scala3)
+    val app    = module("app", Jvm)(scala3).application.dependsOn(inside)
+    Projects.organization(Organization("com.example"))(
+      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(app)),
+      app,
+      inside,
+    )
+
+  private def pluginOutside: Either[histos.BuildError, histos.ProjectGraph] =
+    val inside = module("inside", Jvm)(scala3)
+    val plug   = module("plug", Jvm)(scala3).sbtPlugin(SbtSeries("2")).dependsOn(inside)
+    Projects.organization(Organization("com.example"))(
+      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(plug)),
+      plug,
+      inside,
+    )
+
+  private def ownedElsewhere: Either[histos.BuildError, histos.ProjectGraph] =
+    val core = module("core", Jvm)(scala3)
+    val app  = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).dependsOn(core)
+    Projects.organization(Organization("com.example"))(
+      histos.ships(
+        histos.manual("libs", ManualVersion("1.0.0"))(core),
+        histos.manual("tool", ManualVersion("2.0.0"))(app),
+      ),
+      core,
       app,
     )
 

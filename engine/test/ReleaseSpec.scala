@@ -1,13 +1,14 @@
 package histos.publish
 
 import histos.cache.ContentStore
-import histos.central.{DeploymentState, PortalBase, PortalServer, ReleaseMode, RepositorySecret}
+import histos.central.{DeploymentState, PortalBase, PortalServer, Publisher, ReleaseMode, RepositorySecret}
 import histos.load.{ApiJar, Loader}
 import histos.resolve.Resolve
 import histos.version.{Catalog, ManualVersion}
 import histos.zinc.GraphCompile
 import histos.{
   ArtifactBase,
+  Dep,
   Developer,
   Jvm,
   License,
@@ -16,6 +17,7 @@ import histos.{
   Organization,
   Projects,
   Publication,
+  SbtSeries,
   ScalaVersion,
   Scm,
   asset,
@@ -27,7 +29,9 @@ import histos.{
   url,
 }
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.util.zip.ZipFile
 import java.security.KeyPairGenerator
 import java.util.{Base64, Date}
 
@@ -62,10 +66,14 @@ object ReleaseSpec extends ZIOSpecDefault:
   private val scmValue       =
     Scm(url"https://example.com/source", connection"scm:git:https://example.com/source.git")
 
-  private val hello      = "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n"
-  private val libSource  = "package lib\n\nobject Lib {\n  def word: String = \"lib\"\n}\n"
-  private val appSource  = "package demo\n\nobject App {\n  def go: String = lib.Lib.word\n}\n"
-  private val siteSource = "package demo\n\nobject Site {\n  def go: String = \"site\"\n}\n"
+  private val hello        = "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n"
+  private val insideSource = "package inside\n\nobject Inside {\n  def word: String = \"in\"\n}\n"
+  private val packedSource = "package demo\n\nobject App {\n  def go: String = inside.Inside.word + lib.Lib.word\n}\n"
+  private val plugSource   = "package demo\n\nobject Plug {\n  def name: String = \"plug\"\n}\n"
+  private val toolBytes    = "tool-jar\n"
+  private val libSource    = "package lib\n\nobject Lib {\n  def word: String = \"lib\"\n}\n"
+  private val appSource    = "package demo\n\nobject App {\n  def go: String = lib.Lib.word\n}\n"
+  private val siteSource   = "package demo\n\nobject Site {\n  def go: String = \"site\"\n}\n"
 
   private val scala3 = ScalaVersion("3.10.0")
 
@@ -338,6 +346,142 @@ object ReleaseSpec extends ZIOSpecDefault:
         )
       }
 
+  private val rehearsal =
+    test(
+      "a library, a plugin, and an assembly: one ship is refused, the other is held, uploaded, promoted, and dropped"
+    ):
+      ZIO.scoped {
+        for
+          jdk    <- GraphCompile.jdkHere
+          root   <- temp
+          portal <- temp
+          maven  <- temp
+          secret <- secretOf
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          key    <- Keys.signing
+          built  <- ZIO.fromEither(twoShips)
+          idBox  <- Ref.make("")
+          order  <- Ref.make(false)
+          stand  <- AssetStand.open(
+            "asset-token",
+            onDelete = idBox.get.flatMap { id =>
+              ZIO
+                .attemptBlocking(
+                  id.nonEmpty &&
+                    !Files.exists(deployment(root, "tool")) &&
+                    !Files.exists(portal.resolve("deployments").resolve(id))
+                )
+                .orElseSucceed(false)
+                .flatMap(order.set)
+            },
+          )
+          _ <- plant(
+            root,
+            built,
+            List(
+              "core/src/main/scala/lib/Lib.scala"         -> libSource,
+              "inside/src/main/scala/inside/Inside.scala" -> insideSource,
+              "app/src/main/scala/demo/App.scala"         -> packedSource,
+              "plug/src/main/scala/demo/Plug.scala"       -> plugSource,
+              "dist/tool.jar"                             -> toolBytes,
+            ),
+            "cell core 3.10.0 jvm\ncell inside 3.10.0 jvm\ncell app 3.10.0 jvm\ncell plug 3.10.0 jvm\n",
+          )
+          env = signing(bound.url, key.armor) ++ Map(
+            "HISTOS_GITHUB"     -> stand.base,
+            "GITHUB_TOKEN"      -> "asset-token",
+            "GITHUB_REPOSITORY" -> "early-effect/histos",
+          )
+          report <- publish(root, built, jdk, env, ReleaseMode.Hold)
+          id     <- report.deployed match
+            case List(deployed) => ZIO.succeed(deployed.id.value)
+            case _              => ZIO.succeed("")
+          gavs <-
+            if id.isEmpty then ZIO.succeed("")
+            else text(portal.resolve("deployments").resolve(id).resolve("gavs"))
+          portalReport <-
+            if id.isEmpty then ZIO.succeed("missing")
+            else text(portal.resolve("deployments").resolve(id).resolve("report"))
+          state  <- states(portal, if id.isEmpty then Nil else List(id))
+          record <- text(deployment(root, "tool"))
+          staged <- LocalPublish
+            .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+            .provideSomeLayer[histos.resolve.LockedTools](
+              histos.ToolFixture.resolver ++ Publisher.local(maven)
+            )
+          packed    <- jarNames(staged.modules)
+          pom       <- pomOf(staged.modules)
+          compiled  <- classFile(root, "inside", "Inside")
+          insideGav <- exists(maven.resolve("com").resolve("example").resolve("inside_3"))
+          plugGav   <- exists(maven.resolve("com").resolve("example").resolve("plug_sbt2_3"))
+          uploaded  <- PublishRun.assets(root, built, List("tool"), env)
+          sent      <- stand.seen
+          _         <-
+            if id.isEmpty then ZIO.unit
+            else idBox.set(id) *> PublishRun.promote(root, env, id)
+          marked    <- exists(published(portal, "tool", "1.0.0"))
+          libMarked <- exists(published(portal, "core_3", "1.0.0"))
+          _         <- if id.isEmpty then ZIO.unit else PublishRun.drop(root, built, env, id)
+          goneId    <- exists(portal.resolve("deployments").resolve(id))
+          goneTool  <- exists(published(portal, "tool", "1.0.0"))
+          goneLib   <- exists(published(portal, "core_3", "1.0.0"))
+          goneFile  <- exists(deployment(root, "tool"))
+          dropped   <- order.get
+          after     <- stand.seen
+          again     <- publish(root, built, jdk, env, ReleaseMode.Hold)
+          fresh     <- deploymentIds(portal)
+        yield assertTrue(
+          report.refused == List(
+            "plug depends on snapshot com.example:left:1.2.3-SNAPSHOT, so it is not published"
+          ),
+          report.failed.isEmpty,
+          report.deployed.map(item => (item.ship.value, item.state, item.version)) == List(
+            ("tool", DeploymentState.Validated, "1.0.0")
+          ),
+          state == List("VALIDATED"),
+          portalReport.isEmpty,
+          lines(gavs) == Set("com.example:core_3:1.0.0", "com.example:tool:1.0.0"),
+          record == file(List(id), "VALIDATED", "1.0.0"),
+          staged.modules.map(_.artifact).sorted == List("core_3", "tool"),
+          staged.refused == List(
+            "plug depends on snapshot com.example:left:1.2.3-SNAPSHOT, so it is not published"
+          ),
+          packed.exists(_.startsWith("inside/Inside")),
+          pom.contains("<artifactId>tool</artifactId>"),
+          !pom.contains("inside"),
+          compiled,
+          !insideGav,
+          !plugGav,
+          uploaded == AssetReport(Nil, List("tool tool.jar")),
+          sent.tags == List("tool/v1.0.0"),
+          sent.uploads == List(
+            AssetStand.Upload(
+              "early-effect",
+              "histos",
+              "tool.jar",
+              Chunk.fromArray(toolBytes.getBytes(StandardCharsets.UTF_8)),
+              "application/octet-stream",
+            )
+          ),
+          marked,
+          libMarked,
+          dropped,
+          !goneId,
+          !goneTool,
+          !goneLib,
+          !goneFile,
+          after.uploads.isEmpty,
+          again.refused == report.refused,
+          again.failed.isEmpty,
+          again.held.isEmpty,
+          again.deployed.map(item => (item.ship.value, item.state, item.version)) == List(
+            ("tool", DeploymentState.Validated, "1.0.0")
+          ),
+          fresh.length == 1,
+          !fresh.contains(id),
+        )
+      }
+
   private val snapshotCatalog =
     test("this repository's snapshot catalog refuses before any http"):
       ZIO.scoped {
@@ -371,6 +515,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           (library, assembly) = forms(loaded.graph)
         yield assertTrue(
           snapshotShip(loaded.graph),
+          organization(loaded.graph),
           library,
           assembly,
           report.refused.contains("histos is 0.0.1-SNAPSHOT, which is not a release"),
@@ -382,7 +527,7 @@ object ReleaseSpec extends ZIOSpecDefault:
       }
 
   def spec =
-    suite("release")(hold, automatic, failedBundle, missingSecrets, shaped, snapshotCatalog)
+    suite("release")(hold, automatic, failedBundle, missingSecrets, shaped, rehearsal, snapshotCatalog)
       .provideSomeLayerShared[zio.test.TestEnvironment & Scope](
         histos.ToolFixture.layer(Projects(module("library", Jvm)(scala3)))
       ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(5.minutes)
@@ -494,6 +639,28 @@ object ReleaseSpec extends ZIOSpecDefault:
       site,
     )
 
+  private val twoShips =
+    val core    = module("core", Jvm)(scala3)
+    val inside  = module("inside", Jvm)(scala3)
+    val program = module("app", Jvm)(scala3)
+      .artifact(ArtifactBase("tool"))
+      .assembly(MainClass("demo.App"))
+      .asset(asset"dist/tool.jar")
+      .dependsOn(core, inside)
+    val plug = module("plug", Jvm)(scala3)
+      .sbtPlugin(SbtSeries("2"))
+      .libraryDependencies(Dep("com.example:left:1.2.3-SNAPSHOT"))
+    released(
+      histos.ships(
+        histos.manual("tool", ManualVersion("1.0.0"))(core, program),
+        histos.manual("plug", ManualVersion("2.0.0"))(plug),
+      ),
+      core,
+      inside,
+      program,
+      plug,
+    )
+
   private val libraryAndAssembly =
     val library = module("api", Jvm)(scala3).artifact(ArtifactBase("histos-api"))
     val program = module("app", Jvm)(scala3)
@@ -516,6 +683,51 @@ object ReleaseSpec extends ZIOSpecDefault:
           .flatMap:
             case true  => ZIO.succeed(root)
             case false => ZIO.fail(new IllegalStateException(s"histos.scala is not at $file"))
+
+  private def organization(graph: histos.ProjectGraph): Boolean =
+    val licenseOk = graph.facts.license match
+      case Some(found) =>
+        found.name.value == "Apache-2.0" &&
+        found.url.value == "https://www.apache.org/licenses/LICENSE-2.0.txt"
+      case None => false
+    val developerOk = graph.facts.developer match
+      case Some(found) => found.id.value == "russwyte" && found.name.value == "Russ White"
+      case None        => false
+    val scmOk = graph.facts.scm match
+      case Some(found) =>
+        found.url.value == "https://github.com/early-effect/histos" &&
+        found.connection.value == "scm:git@github.com:early-effect/histos.git"
+      case None => false
+    licenseOk && developerOk && scmOk
+
+  private def lines(raw: String): Set[String] =
+    raw.split('\n').iterator.filter(_.nonEmpty).toSet
+
+  private def classFile(root: Path, module: String, name: String): ZIO[Any, Throwable, Boolean] =
+    val dir = root.resolve(".histos").resolve("classes").resolve(module).resolve("3.10.0").resolve("jvm")
+    ZIO.attempt:
+      if !Files.isDirectory(dir) then false
+      else
+        val walk = Files.walk(dir)
+        try walk.iterator.asScala.exists(path => Option(path.getFileName).exists(_.toString.contains(name)))
+        finally walk.close()
+
+  private def jarNames(modules: List[PublishedModule]): ZIO[Any, Throwable, List[String]] =
+    modules.collectFirst { case item if item.artifact == "tool" => item.jar } match
+      case Some(Some(path)) =>
+        ZIO.attempt:
+          val zip = new ZipFile(path.toFile)
+          try zip.entries.asScala.map(_.getName).toList
+          finally zip.close()
+      case _ => ZIO.succeed(Nil)
+
+  private def pomOf(modules: List[PublishedModule]): ZIO[Any, Throwable, String] =
+    modules.collectFirst { case item if item.artifact == "tool" => item.jar } match
+      case Some(Some(path)) =>
+        Option(path.getParent) match
+          case Some(dir) => ZIO.attempt(Files.readString(dir.resolve("tool-1.0.0.pom")))
+          case None      => ZIO.succeed("")
+      case _ => ZIO.succeed("")
 
   private def snapshotShip(graph: histos.ProjectGraph): Boolean =
     graph.catalog match

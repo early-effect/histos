@@ -3,7 +3,7 @@ package histos.publish
 import histos.central.Revision
 import histos.select.SelectError
 import histos.version.ShipName
-import histos.{Aggregate, Module, ProjectGraph, ProjectName}
+import histos.{Aggregate, Module, ProjectGraph, ProjectName, Publication}
 
 /** What a publish token named. A ship wins over a module with the same text. */
 enum PublishName:
@@ -27,7 +27,9 @@ final case class PublishRequest(directory: Option[String], names: List[PublishNa
 
 /** Publish names are not compile names. A ship, an aggregate, then a module. One directory, and only on a local
   * publish. A snapshot dependency is another ship's snapshot coordinate, or a library revision ending in `-SNAPSHOT`. A
-  * module in the same ship is that ship's own version.
+  * module in the same ship is that ship's own version. An assembly may depend on a module that no ship owns: that
+  * module is compiled and packed, and it is not published. A library, an application, or an sbt plugin may not. An
+  * owned module that this run did not select is still unpublished.
   */
 object PublishSelect:
   def snapshotCoordinate(revision: String): Boolean =
@@ -93,7 +95,7 @@ object PublishSelect:
           case None       => false
       val liveRoots = acc.roots.filter(liveable.contains)
       val live      = closure(graph, liveRoots, liveable)
-      unpublished(graph, live).flatMap: _ =>
+      unpublished(graph, live, owned).flatMap: _ =>
         if live.isEmpty && refused.isEmpty && acc.skipped.isEmpty && names.nonEmpty && !held(graph, names, writable)
         then Left(LocalPublishError.NothingToPublish)
         else Right(Picked(liveRoots, live, acc.skipped, refused))
@@ -220,15 +222,27 @@ object PublishSelect:
   private def unpublished(
       graph: ProjectGraph,
       chosen: Set[ProjectName],
+      owned: Map[ProjectName, ShipName],
   ): Either[LocalPublishError, Unit] =
     val modules = graph.projects.collect:
       case module: Module if chosen.contains(module.name) => module
     modules.foldLeft[Either[LocalPublishError, Unit]](Right(())): (acc, module) =>
       acc.flatMap: _ =>
-        upstream(module).find(name => !chosen.contains(name)) match
+        upstream(module).find(name => !chosen.contains(name) && !assemblyPacks(module, name, owned)) match
           case Some(dependency) =>
             Left(LocalPublishError.UnpublishedDependency(module.name, dependency))
           case None => Right(())
+
+  /** The fat jar packs a module no ship owns. It does not pack a coordinate this run did not select. */
+  private def assemblyPacks(
+      module: Module,
+      dependency: ProjectName,
+      owned: Map[ProjectName, ShipName],
+  ): Boolean =
+    (module.publication match
+      case Publication.Assembly(_)                                                  => !owned.contains(dependency)
+      case Publication.Library | Publication.SbtPlugin(_) | Publication.Application => false
+    )
 
   private def refusals(
       graph: ProjectGraph,
