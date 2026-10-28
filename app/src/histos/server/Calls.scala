@@ -1044,6 +1044,7 @@ object Calls:
       case CompileFeed.Done(cell)             => Some(cell)
       case CompileFeed.Began(_, _, _)         => None
       case CompileFeed.Diagnostic(_, _, _, _) => None
+      case CompileFeed.Miss(_, _, _, _)       => None
       case CompileFeed.Failed(_)              => None
 
   private def failedSuite(status: TestStatus): Boolean =

@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.report.{Diagnostic, ModuleTally, Observation}
-import histos.zinc.{CompileFacts, CompileFeed, SourceCount}
+import histos.zinc.{CompileFacts, CompileFeed, KeyMiss, SourceCount}
 import histos.{Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
@@ -21,6 +21,8 @@ object CompileConsole:
         Chunk(Line.Out(Lines.compiling(module, version, platform)))
       case CompileFeed.Diagnostic(_, _, _, problem) =>
         Chunk(Line.Err(Lines.diagnostic(repo, problem)))
+      case CompileFeed.Miss(module, version, platform, change) =>
+        Chunk(Line.Out(KeyMiss.line(module, version, platform, change)))
       case CompileFeed.Done(cell) =>
         Lines
           .outcome(
@@ -55,6 +57,8 @@ object CompileConsole:
       val shown = lines(repo, feed)
       feed match
         case CompileFeed.Began(_, _, _) =>
+          ZIO.succeed(shown)
+        case CompileFeed.Miss(_, _, _, _) =>
           ZIO.succeed(shown)
         case CompileFeed.Diagnostic(_, _, _, problem) =>
           val (found, _) = Lines.heard(repo, problem)

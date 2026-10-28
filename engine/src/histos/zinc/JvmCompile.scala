@@ -167,6 +167,7 @@ final case class CompileOutput(
     changed: Boolean,
     sources: Option[SourceCount],
     classesWritten: Option[Int],
+    miss: Option[KeyMiss],
 ):
   def facts: CompileFacts =
     CompileFacts(changed, sources, classesWritten)
@@ -260,6 +261,7 @@ object SemanticDb:
 end SemanticDb
 
 object CompileKey:
+  /** Compiler-jar fingerprints. The named `compiler` row records the same list. */
   def withTools(key: Sha256, hashes: List[Sha256]): Sha256 =
     Sha256.of(
       Chunk.fromArray(
@@ -268,24 +270,12 @@ object CompileKey:
       )
     )
 
-  /** Identity of a compile. An upstream classes directory contributes its API digest, not its class bytes. `apis` keeps
-    * that digest from colliding with a jar checksum of the same hex. Artifact checksums are the jars.
+  /** Identity of a compile, excluding compiler jars. An upstream classes directory contributes its API digest, not its
+    * class bytes. The digest is named `apis`, so it cannot collide with a jar checksum. Artifact checksums are the
+    * jars.
     */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
-    val tool = request.toolchain
-    val text =
-      s"""${tool.version.value}
-         |${tool.platform}
-         |${tool.jdk.version.value}
-         |${histos.toolchain.Runtimes.identityToken(tool.jdk.identity)}
-         |${tool.flags.canonical}
-         |${sources.value}
-         |${request.artifactHashes.map(_.value).mkString("\n")}
-         |apis
-         |${request.upstreamApis.map(_.value).mkString("\n")}
-         |${request.compilationTools.map(_.fingerprint.value).mkString("\n")}
-         |""".stripMargin
-    Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
+    Sha256.of(CompileInputs.encode(CompileInputs.declared(request, sources)))
 end CompileKey
 
 object JvmCompile:
@@ -323,6 +313,7 @@ object JvmCompile:
             extra,
             hear,
             None,
+            CompileInputs.declared(request, digest),
             CompileKey.of(request, digest),
             Some(pool),
           )
@@ -341,7 +332,13 @@ object JvmCompile:
        else
          hashSources(request.sources).flatMap: digest =>
            val key = CompileKey.of(request, digest)
-           invoke(request, plugins.map(pluginArg) ++ extra, hear, key = key))
+           invoke(
+             request,
+             plugins.map(pluginArg) ++ extra,
+             hear,
+             rows = CompileInputs.declared(request, digest),
+             key = key,
+           ))
 
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
@@ -460,6 +457,7 @@ object JvmCompile:
                plugins.map(pluginArg) ++ extra,
                hear,
                Some(stdlib),
+               CompileInputs.declared(request, digest),
                key,
              ))
 
@@ -468,14 +466,15 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]] = None,
+      rows: List[CompileRow],
       key: Sha256,
       pool: Option[CompilerPool] = None,
   ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     pool match
-      case Some(found) => drive(found, request, extra, hear, stdlib, key)
+      case Some(found) => drive(found, request, extra, hear, stdlib, rows, key)
       case None        =>
         ZIO.scoped(
-          CompilerPool.make.flatMap(drive(_, request, extra, hear, stdlib, key))
+          CompilerPool.make.flatMap(drive(_, request, extra, hear, stdlib, rows, key))
         )
 
   private def drive(
@@ -484,6 +483,7 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
+      rows: List[CompileRow],
       key: Sha256,
   ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     val version = request.toolchain.version
@@ -501,6 +501,7 @@ object JvmCompile:
               .flatMap: toolchain =>
                 val inputs =
                   compiler :: request.compilerPlugins ++ request.compilationTools
+                val prints = (compiler :: request.compilerPlugins).map(_.fingerprint)
                 cached(
                   pool,
                   request,
@@ -512,10 +513,8 @@ object JvmCompile:
                   ),
                   extra,
                   hear,
-                  CompileKey.withTools(
-                    key,
-                    (compiler :: request.compilerPlugins).map(_.fingerprint),
-                  ),
+                  CompileInputs.withCompiler(rows, prints),
+                  CompileKey.withTools(key, prints),
                 )
           case Some(ScalaSeries.Scala2(13)) =>
             for
@@ -531,6 +530,7 @@ object JvmCompile:
                 compiler,
                 semantic,
               ) ++ request.compilerPlugins ++ request.compilationTools
+              prints = (List(compiler, semantic) ++ request.compilerPlugins).map(_.fingerprint)
               compiled <- cached(
                 pool,
                 request,
@@ -542,11 +542,8 @@ object JvmCompile:
                 ),
                 s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra,
                 hear,
-                CompileKey.withTools(
-                  key,
-                  (List(compiler, semantic) ++ request.compilerPlugins)
-                    .map(_.fingerprint),
-                ),
+                CompileInputs.withCompiler(rows, prints),
+                CompileKey.withTools(key, prints),
               )
             yield compiled
           case _ => ZIO.fail(CompileError.UnsupportedScala(version))
@@ -559,18 +556,25 @@ object JvmCompile:
       artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
+      rows: List[CompileRow],
       key: Sha256,
   ): ZIO[ContentStore & CompilerStarts, CompileError, CompileOutput] =
     for
       store  <- ZIO.service[ContentStore]
       hit    <- CompileReplay.load(store, key, request)
       output <- hit match
-        case Some(found) => ZIO.succeed(found)
-        case None        =>
-          CompilerStarts.tick *>
-            pool
-              .compile(request, artifacts, extra, hear, key)
-              .tap(written => CompileReplay.save(store, written.key, request))
+        case Some(found) =>
+          CompileInputs.remember(store, request.analysis, rows).as(found)
+        case None =>
+          for
+            change  <- CompileInputs.explain(store, request.analysis, rows)
+            written <- CompilerStarts.tick *>
+              pool
+                .compile(request, artifacts, extra, hear, key)
+                .tap: done =>
+                  CompileReplay.save(store, done.key, request) *>
+                    CompileInputs.remember(store, request.analysis, rows)
+          yield written.copy(miss = Some(change))
     yield output
 
   /** One compile against a pooled compiler. The analysis file is the previous result and the next one.
@@ -654,6 +658,7 @@ object JvmCompile:
             result.hasModified,
             files,
             writtenClasses(before, request.classes),
+            None,
           )
     catch
       case _: xsbti.CompileFailed =>

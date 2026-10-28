@@ -262,6 +262,7 @@ object CompileReplay:
                   changed = false,
                   sources = Some(SourceCount(0, request.sources.size)),
                   classesWritten = Some(0),
+                  miss = None,
                 )
 
   private def readAnalysis(

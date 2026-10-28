@@ -53,7 +53,7 @@ The product digest is the class bytes after normalization: jar timestamps fixed,
 
 `./histos clean` deletes the work tree and leaves the CAS. The next compile of an unchanged key restores the analysis and the class files and does not start the compiler. `cleanFull` stays the product wipe. `cache clean` stays the aged sweep. Neither deletes a remote index.
 
-On a miss, the previous input map for that action is diffed and the changed input names are printed. No previous map prints `no prior key`.
+On a miss, the previous input map for that action is diffed and the changed input names are printed. No previous map prints `no prior key`. [CompileInputs](../engine/src/histos/zinc/CompileInputs.scala) stores those named rows under the analysis directory, which `clean` deletes and the CAS keeps. [CompileKey](../engine/src/histos/zinc/JvmCompile.scala) hashes the same rows. The `compiler` row is the jar fingerprints `CompileKey.withTools` adds. A hit prints nothing.
 
 ## Who writes main
 
@@ -113,7 +113,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Replay after clean.** The local CAS stores `inc.zip` and the class files under the compile key. `./histos clean` deletes the product tree and leaves the CAS. The next compile of that key restores both and does not start the compiler. The spec counts compiler starts. `cleanFull` and `cache clean` keep their current jobs. Proof: `./histos testOnly --module engine 'histos.zinc.CompileReplaySpec'` and `./histos test engine`.
 
-- [ ] **Miss names the input.** Store the previous input map for the action id. On a miss, print the names whose values changed. With no stored map, print `no prior key`. The spec asserts that line.
+- [x] **Miss names the input.** Store the previous input map for the action id. On a miss, print the names whose values changed. With no stored map, print `no prior key`. The spec asserts that line. Proof: `./histos testOnly --module engine 'histos.zinc.CompileMissSpec'`, `./histos test engine`, and `./histos test app`.
 
 ### Remote
 

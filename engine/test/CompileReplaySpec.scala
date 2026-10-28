@@ -42,25 +42,26 @@ object CompileReplaySpec extends ZIOSpecDefault:
           env = held(store, count)
           first   <- cells(root, built, jdk, env)
           entries <- store.list
+          stored = archive(entries, first)
           before  <- saved(root)
           now     <- zio.Clock.ClockLive.instant
           dry     <- store.clean(now, ContentStore.Retention, CacheCleanMode.DryRun)
           removed <- store.clean(now, ContentStore.Retention, CacheCleanMode.Remove)
           _       <- Products.wipe(root)
           wiped   <- ZIO.attempt(missing(root))
-          kept    <- readEntry(store, one(entries))
+          kept    <- readEntry(store, stored)
           second  <- cells(root, built, jdk, env)
           after   <- saved(root)
           opened  <- count.get
           _       <- Products.wipe(root)
           dropped <- store.forget(CacheProject.of(root), now)
-          gone    <- readEntry(store, one(entries))
+          gone    <- readEntry(store, stored)
           _       <- cells(root, built, jdk, env)
           again   <- count.get
           done = finished(second)
         yield assertTrue(
-          one(entries).isDefined,
-          digestOf(first) == one(entries).map(_.digest),
+          stored.isDefined,
+          digestOf(first) == stored.map(_.digest),
           kept.exists(bytes => bytes.take(4) == magic),
           dry.isEmpty,
           removed.isEmpty,
@@ -71,7 +72,7 @@ object CompileReplaySpec extends ZIOSpecDefault:
             !cell.changed && cell.classesWritten.contains(0) && cell.sources.contains(SourceCount(0, 1))
           ),
           done.exists(_.classFiles == 2),
-          one(entries).exists(entry => dropped.exists(_.digest == entry.digest)),
+          stored.exists(entry => dropped.exists(_.digest == entry.digest)),
           gone.isEmpty,
           again == 2,
         )
@@ -91,9 +92,9 @@ object CompileReplaySpec extends ZIOSpecDefault:
             write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
           }
           env = held(store, count)
-          _       <- cells(root, built, jdk, env)
+          first   <- cells(root, built, jdk, env)
           entries <- store.list
-          _       <- ZIO.foreach(one(entries))(entry =>
+          _       <- ZIO.foreach(archive(entries, first))(entry =>
             ZIO.attempt(Files.write(entry.path, "nope".getBytes(StandardCharsets.UTF_8)))
           )
           _      <- Products.wipe(root)
@@ -130,10 +131,8 @@ object CompileReplaySpec extends ZIOSpecDefault:
       .runCollect
       .provideSomeLayer[histos.resolve.LockedTools](env)
 
-  private def one(entries: List[CacheEntry]): Option[CacheEntry] =
-    entries match
-      case entry :: Nil => Some(entry)
-      case _            => None
+  private def archive(entries: List[CacheEntry], feeds: Chunk[CompileFeed]): Option[CacheEntry] =
+    digestOf(feeds).flatMap(id => entries.find(_.digest == id))
 
   private def digestOf(feeds: Chunk[CompileFeed]): Option[Digest] =
     feeds.collect { case CompileFeed.Done(cell) => cell.key }.toList match

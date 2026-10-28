@@ -43,6 +43,7 @@ enum CompileFeed:
       platform: Platform,
       problem: CompileProblem,
   )
+  case Miss(module: ProjectName, version: ScalaVersion, platform: Platform, change: KeyMiss)
   case Done(cell: CompiledCell)
   case Failed(error: GraphCompileError)
 
@@ -496,12 +497,16 @@ object GraphCompile:
                       .as(ScheduleCells.render(upstreams))
                   case None => ZIO.fail(error)
               ,
-              cell =>
+              result =>
                 val paths = upstreams.updated(
                   (module.name, version, platform),
-                  cell.classes,
+                  result.cell.classes,
                 )
-                tell(CompileFeed.Done(cell)).as(ScheduleCells.render(paths)),
+                val noted = result.miss match
+                  case Some(change) =>
+                    tell(CompileFeed.Miss(module.name, version, platform, change))
+                  case None => ZIO.unit
+                noted *> tell(CompileFeed.Done(result.cell)).as(ScheduleCells.render(paths)),
             )
 
   private final case class CellWork(
@@ -513,10 +518,12 @@ object GraphCompile:
       upstreams: Map[CellKey, Path],
   )
 
+  private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
+
   private def compileOf(
       work: CellWork,
       hear: CompileProblem => Unit,
-  ): ZIO[Fed, GraphCompileError, CompiledCell] =
+  ): ZIO[Fed, GraphCompileError, CellResult] =
     val CellWork(plan, module, version, platform, base, done) = work
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
@@ -565,16 +572,19 @@ object GraphCompile:
               SemanticDb.argv(plan.repo, version),
               hear,
             ).mapError(failed)
-          yield CompiledCell(
-            module.name,
-            version,
-            platform,
-            compiled.classes,
-            compiled.classFiles,
-            Some(compiled.key),
-            compiled.changed,
-            compiled.sources,
-            compiled.classesWritten,
+          yield CellResult(
+            CompiledCell(
+              module.name,
+              version,
+              platform,
+              compiled.classes,
+              compiled.classFiles,
+              Some(compiled.key),
+              compiled.changed,
+              compiled.sources,
+              compiled.classesWritten,
+            ),
+            compiled.miss,
           )
     yield compiled
 
@@ -585,7 +595,7 @@ object GraphCompile:
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
-  ): IO[GraphCompileError, CompiledCell] =
+  ): IO[GraphCompileError, CellResult] =
     val classes = classesDir(repo, module, version, platform)
     ZIO
       .attemptBlocking {
@@ -604,16 +614,19 @@ object GraphCompile:
         .fromEither(ProductDigest.write(analysis(repo, module, version, platform), classes))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error))
         .as(
-          CompiledCell(
-            module,
-            version,
-            platform,
-            classes,
-            0,
-            key = None,
-            changed = false,
-            sources = Some(SourceCount(0, 0)),
-            classesWritten = Some(0),
+          CellResult(
+            CompiledCell(
+              module,
+              version,
+              platform,
+              classes,
+              0,
+              key = None,
+              changed = false,
+              sources = Some(SourceCount(0, 0)),
+              classesWritten = Some(0),
+            ),
+            None,
           )
         )
 

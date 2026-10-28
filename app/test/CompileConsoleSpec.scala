@@ -9,10 +9,12 @@ import histos.zinc.{
   CompileError,
   CompileFacts,
   CompileFeed,
+  CompileInput,
   CompileProblem,
   CompileSeverity,
   CompiledCell,
   GraphCompileError,
+  KeyMiss,
   PositionBase,
   SourceCount,
 }
@@ -536,6 +538,26 @@ object CompileConsoleSpec extends ZIOSpecDefault:
               ),
             )
         }
+      }
+    ,
+    test("a miss names the input and does not count a module"):
+      name("core").flatMap { core =>
+        val change = KeyMiss.Changed(List(CompileInput.Sources))
+        for
+          console <- CompileConsole.open(repo)
+          lines   <- play(
+            console,
+            CompileFeed.Miss(core, version, Platform.Jvm, KeyMiss.NoPrior),
+            CompileFeed.Miss(core, version, Platform.Jvm, change),
+          )
+          tally <- console.tally
+        yield assertTrue(
+          lines == Chunk(
+            CompileConsole.Line.Out("core 3.10.0 jvm no prior key"),
+            CompileConsole.Line.Out("core 3.10.0 jvm sources"),
+          ),
+          tally.isEmpty,
+        )
       },
   )
 
