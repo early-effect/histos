@@ -171,7 +171,7 @@ object LocalPublish:
       env: Map[String, String],
       write: PublishWrite,
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
-  ): ZIO[histos.resolve.Resolve & Publisher, LocalPublishError, PublishOutput] =
+  ): ZIO[histos.resolve.Resolve & Publisher & histos.cache.ContentStore, LocalPublishError, PublishOutput] =
     for
       decision <- VersionTask
         .decide(graph, repo, env)

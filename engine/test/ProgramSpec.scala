@@ -146,7 +146,7 @@ object ProgramSpec extends ZIOSpecDefault:
               afterCompile = ZIO.unit,
             )
             .runCollect
-            .provide(ZLayer.succeed(resolver))
+            .provide(ZLayer.succeed(resolver) ++ histos.zinc.CompileReplay.processStore)
             .forkScoped
           _ <- reached.await
           _ <- Workspace.writeString(
@@ -167,7 +167,7 @@ object ProgramSpec extends ZIOSpecDefault:
               afterCompile = ZIO.unit,
             )
             .runCollect
-            .provide(ZLayer.succeed(resolver))
+            .provide(ZLayer.succeed(resolver) ++ histos.zinc.CompileReplay.processStore)
         yield assertTrue(
           inFlight.collect { case ProgramFeed.Exited(_, version, _, code) =>
             (version, code)

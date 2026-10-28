@@ -145,7 +145,7 @@ object BspSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           cache  <- temp
-          result <- run.provide(Resolve.live(cache))
+          result <- run.provide(Resolve.live(cache), histos.zinc.CompileReplay.processStore)
         yield result,
   )
 

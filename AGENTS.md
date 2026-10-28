@@ -47,6 +47,15 @@ Scala 3, braceless, ZIO, ZIO Test. Typed error enums. Opaque values. Exhaustive 
 
 Public APIs pin the hard type first, then take the function. If a call site needs `(x: Foo) =>` or `: Foo` to compile, the builder is wrong.
 
+## ZIO Test
+
+Use ZIO Test the way the ZIO docs describe it. When a layer, a remainder, or a test service does not compile, read `~/projects/forks/zio/docs/reference/test/` and `~/projects/forks/zio/docs/reference/di/` before changing a `provide`. Do not invent a second shape.
+
+- `provide` closes that effect. Every service in its environment is an argument, in any order. A missing one is the compiler's `ZLAYER ERROR`: "Please provide a layer for the following type". Add that layer. "You have provided more than is required" is a warning about an extra layer. It is not the failure.
+- `provideSome[Remainder]` and `provideSomeLayer[Remainder]` keep `Remainder`. Write the remainder. The compiler will not infer it. The remainder intersected with what the layer provides has to cover the effect. `provideSomeLayer` builds its layer from that same remainder, so a layer that needs `LockedTools` stays `provideSomeLayer[LockedTools]`.
+- A suite shares one resource with `provideShared` or `provideSomeLayerShared`. Leave `TestEnvironment & Scope` (`provideSomeLayerShared[TestEnvironment & Scope]`) so the test clock, console, random, system, and the suite scope stay. Do not replace those with a live layer unless the aspect asked for the live service (`TestAspect.withLiveSystem`, and the clock docs before `withLiveClock`).
+- A value the test builds (`Ref`, a temp store) is provided on that test when each test must see its own. Do not hide it in the shared suite layer.
+
 ## Running Histos
 
 - The proof is `./histos test` on the modules the change touches. `testQuick` is not that proof. `./histos test` with no modules is the full suite.

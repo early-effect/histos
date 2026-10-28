@@ -104,8 +104,8 @@ object ToolFixture:
       case histos.resolve.Repository.IvyLocal   => true
       case histos.resolve.Repository.Central    => false
 
-  val resolver: ZLayer[LockedTools, Nothing, Resolve] =
-    ZLayer.fromZIO(ZIO.serviceWith[LockedTools](_.resolve))
+  val resolver: ZLayer[LockedTools, Nothing, Resolve & histos.cache.ContentStore] =
+    ZLayer.fromZIO(ZIO.serviceWith[LockedTools](_.resolve)) ++ histos.zinc.CompileReplay.processStore
 
   def seed(
       repo: Path,

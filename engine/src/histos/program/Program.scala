@@ -35,7 +35,7 @@ object Program:
       choice: Option[Platform],
       report: CompileFeed => UIO[Unit],
       afterCompile: UIO[Unit],
-  ): ZStream[Resolve, ProgramError, ProgramFeed] =
+  ): ZStream[Resolve & histos.cache.ContentStore, ProgramError, ProgramFeed] =
     ZStream.unwrap:
       for
         module <- ZIO.fromEither(locate(graph, name))

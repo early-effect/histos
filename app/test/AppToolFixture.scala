@@ -23,8 +23,8 @@ object AppToolFixture:
   /** Coursier's cache. A coordinate already there is not downloaded again. */
   val resolve: ULayer[Resolve] = Resolve.coursier
 
-  val resolver: ZLayer[LockedTools, Nothing, Resolve] =
-    ZLayer.fromZIO(ZIO.serviceWith[LockedTools](_.resolve))
+  val resolver: ZLayer[LockedTools, Nothing, Resolve & histos.cache.ContentStore] =
+    ZLayer.fromZIO(ZIO.serviceWith[LockedTools](_.resolve)) ++ histos.zinc.CompileReplay.processStore
 
   def at[R, E, A](repo: Path, graph: ProjectGraph)(
       effect: ZIO[R, E, A]

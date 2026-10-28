@@ -45,7 +45,7 @@ The key is the declared inputs plus the toolchain identity: OS, arch, JDK, Scala
 
 A compile publishes two digests. Downstream tasks pick one. They do not key on "the task ran".
 
-The API digest is Zinc's public-signature hash, written beside `inc.zip`. A downstream compile's key includes it. A comment or a method body does not change that key. A public signature does. The compiler still runs until a later item restores a hit.
+The API digest is Zinc's public-signature hash, written beside `inc.zip`. A downstream compile's key includes it. A comment or a method body does not change that key. A public signature does. A hit restores that compile and does not start the compiler. A miss still runs it.
 
 The product digest is the class bytes after normalization: jar timestamps fixed, line-number tables stripped, the `TASTY` attribute dropped, no absolute path in the hashed bytes. `TASTY` is a hash of positions and comments, so a trailing comment changes those bytes while the bytecode stays the same. `.tasty` files are not hashed. Link and package key on the digest. A trailing comment that does not move member positions keeps it, so the link hits. A method body changes it, so the link runs.
 
@@ -111,7 +111,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Link and package key.** [JsKey](../engine/src/histos/js/JsKey.scala) mixes the product digest of each classes directory on the link classpath. [PackageKey](../engine/src/histos/pack/PackageKey.scala) mixes the product digest of each packed classes directory. A comment keeps the product digest, so it keeps these keys. A method body moves the product digest, so it moves them. The specs call the key functions. The linker and the publisher still run. Native is out of this item. Proof: `./histos testOnly --module engine 'histos.js.JsLinkSpec'`, `./histos testOnly --module engine 'histos.pack.JarSpec'`, and `./histos test engine`.
 
-- [ ] **Replay after clean.** The local CAS stores `inc.zip` and the class files under the compile key. `./histos clean` deletes the product tree and leaves the CAS. The next compile of that key restores both and does not start the compiler. The spec counts compiler starts. `cleanFull` and `cache clean` keep their current jobs.
+- [x] **Replay after clean.** The local CAS stores `inc.zip` and the class files under the compile key. `./histos clean` deletes the product tree and leaves the CAS. The next compile of that key restores both and does not start the compiler. The spec counts compiler starts. `cleanFull` and `cache clean` keep their current jobs. Proof: `./histos testOnly --module engine 'histos.zinc.CompileReplaySpec'` and `./histos test engine`.
 
 - [ ] **Miss names the input.** Store the previous input map for the action id. On a miss, print the names whose values changed. With no stored map, print `no prior key`. The spec asserts that line.
 

@@ -34,7 +34,7 @@ object PublishRun:
       env: Map[String, String],
       directory: Option[String],
       report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
-  ): ZIO[histos.resolve.Resolve, LocalPublishError, Report] =
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
     ZIO
       .fromEither(PublishSelect.resolve(graph, tokens, directory, allowDirectory = true))
       .flatMap: request =>
@@ -53,7 +53,7 @@ object PublishRun:
       jdk: JdkRuntime,
       env: Map[String, String],
       report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
-  ): ZIO[histos.resolve.Resolve, LocalPublishError, Report] =
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
     ZIO
       .fromEither(PublishSelect.resolve(graph, tokens, None, allowDirectory = false))
       .flatMap: request =>
@@ -69,7 +69,7 @@ object PublishRun:
       env: Map[String, String],
       mode: ReleaseMode,
       report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
-  ): ZIO[histos.resolve.Resolve, ReleaseError, ReleaseReport] =
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, ReleaseError, ReleaseReport] =
     ZIO.scoped:
       ReleaseRun.stage(repo, graph, tokens, jdk, env, report).flatMap(staged => ReleaseRun.upload(repo, staged, mode))
 
@@ -98,12 +98,12 @@ object PublishRun:
       where: PublishWhere,
       write: PublishWrite,
       report: CompileFeed => UIO[Unit],
-  ): ZIO[histos.resolve.Resolve, LocalPublishError, Report] =
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
     val body =
       LocalPublish
         .run(repo, graph, names, jdk, env, write, report)
         .map(done => Report(where, done))
-    body.provideSome[histos.resolve.Resolve](
+    body.provideSome[histos.resolve.Resolve & histos.cache.ContentStore](
       where.layer.mapError(LocalPublishError.Publish(_))
     )
 end PublishRun

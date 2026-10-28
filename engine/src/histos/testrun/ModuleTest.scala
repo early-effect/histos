@@ -50,7 +50,7 @@ object ModuleTest:
     * is the provider when the module names neither a provider nor a main. Upstream modules are compiled and not run.
     * The engine does not load the provider.
     */
-  def run(asked: TestRun): ZIO[Resolve, ModuleTestError, List[TestReport]] =
+  def run(asked: TestRun): ZIO[Resolve & histos.cache.ContentStore, ModuleTestError, List[TestReport]] =
     console(asked)
       .runFold(Reports(Transcript.empty, Chunk.empty))(report)
       .map(_.done.toList)
@@ -71,7 +71,7 @@ object ModuleTest:
   /** Test compiles stay parallel. Cells run in parallel. The console emits one cell, then the next, so the trees do not
     * interleave. The speaking cell is printed as it writes. A later cell keeps only its own lines.
     */
-  def console(asked: TestRun): ZStream[Resolve, ModuleTestError, TestFeed] =
+  def console(asked: TestRun): ZStream[Resolve & histos.cache.ContentStore, ModuleTestError, TestFeed] =
     ZStream.unwrap:
       TestCompile
         .readLock(asked.repo)

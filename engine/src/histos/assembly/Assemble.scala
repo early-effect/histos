@@ -61,7 +61,7 @@ object Assemble:
       native: NativeOrigin,
       destination: Path,
       report: CompileFeed => UIO[Unit],
-  ): ZIO[Resolve, AssembleError, Assembled] =
+  ): ZIO[Resolve & histos.cache.ContentStore, AssembleError, Assembled] =
     for
       app      <- module(graph, "app")
       api      <- module(graph, "api")

@@ -1,7 +1,9 @@
 package histos.zinc
 
+import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
+import histos.schedule.CacheError
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
 import histos.resolve.{LockedTools, ResolveError}
@@ -97,6 +99,7 @@ enum CompileError:
   case NativeFetch(error: histos.native.NativeFetch)
   case NativeOrigin(error: histos.native.NativeToolchainError)
   case NativeLibrary(text: String)
+  case Stored(error: CacheError)
 
   def message: String = this match
     case Resolved(error)               => error.message
@@ -113,6 +116,7 @@ enum CompileError:
     case NativeFetch(error)  => error.message
     case NativeOrigin(error) => error.message
     case NativeLibrary(text) => text
+    case Stored(error)       => error.message
 end CompileError
 
 /** Why the Scala.js standard library did not arrive. The compiler's `-scalajs` backend needs it instead of
@@ -298,7 +302,7 @@ object JvmCompile:
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
-    else compilePrepared(request, Nil, extra, hear)
+    else CompileReplay.isolated(compilePrepared(request, Nil, extra, hear))
 
   /** Uses the batch's compiler pool when a compile is already inside one. */
   private[zinc] def compilePooled(
@@ -306,7 +310,7 @@ object JvmCompile:
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
@@ -331,7 +335,7 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
        else
@@ -443,7 +447,7 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
       ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned) *>
@@ -466,7 +470,7 @@ object JvmCompile:
       stdlib: Option[List[Path]] = None,
       key: Sha256,
       pool: Option[CompilerPool] = None,
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     pool match
       case Some(found) => drive(found, request, extra, hear, stdlib, key)
       case None        =>
@@ -481,7 +485,7 @@ object JvmCompile:
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
       key: Sha256,
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
     val version = request.toolchain.version
     ZIO.serviceWithZIO[LockedTools]: tools =>
       for
@@ -497,7 +501,8 @@ object JvmCompile:
               .flatMap: toolchain =>
                 val inputs =
                   compiler :: request.compilerPlugins ++ request.compilationTools
-                pool.compile(
+                cached(
+                  pool,
                   request,
                   CompilerArtifacts(
                     stdlib.getOrElse(toolchain.runtime),
@@ -526,7 +531,8 @@ object JvmCompile:
                 compiler,
                 semantic,
               ) ++ request.compilerPlugins ++ request.compilationTools
-              compiled <- pool.compile(
+              compiled <- cached(
+                pool,
                 request,
                 CompilerArtifacts(
                   jars.runtime,
@@ -545,6 +551,27 @@ object JvmCompile:
             yield compiled
           case _ => ZIO.fail(CompileError.UnsupportedScala(version))
       yield output
+
+  /** A stored key is restored before the pool opens a compiler. A miss ticks, compiles, then stores. */
+  private def cached(
+      pool: CompilerPool,
+      request: CompileRequest,
+      artifacts: CompilerArtifacts,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+      key: Sha256,
+  ): ZIO[ContentStore & CompilerStarts, CompileError, CompileOutput] =
+    for
+      store  <- ZIO.service[ContentStore]
+      hit    <- CompileReplay.load(store, key, request)
+      output <- hit match
+        case Some(found) => ZIO.succeed(found)
+        case None        =>
+          CompilerStarts.tick *>
+            pool
+              .compile(request, artifacts, extra, hear, key)
+              .tap(written => CompileReplay.save(store, written.key, request))
+    yield output
 
   /** One compile against a pooled compiler. The analysis file is the previous result and the next one.
     */

@@ -16,7 +16,7 @@ object NativeCompile:
       origin: NativeOrigin,
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts, CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Native then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else

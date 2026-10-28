@@ -1575,7 +1575,7 @@ object Cli:
         )
 
   /** Same reader and writer as a server splice. Stdio has no histos exit marker. */
-  private def speak(session: Bsp.Session): ZIO[Resolve & Scope, ServerError, Int] =
+  private def speak(session: Bsp.Session): ZIO[Resolve & ContentStore & Scope, ServerError, Int] =
     val stdin  = Path.of("stdin")
     val stdout = Path.of("stdout")
     val send   =

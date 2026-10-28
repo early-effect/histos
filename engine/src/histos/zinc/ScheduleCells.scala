@@ -37,7 +37,7 @@ private[zinc] final case class CellRun(
 private[zinc] object ScheduleCells:
   private[zinc] type CellKey = (ProjectName, ScalaVersion, Platform)
   private type CellStep      =
-    histos.step.HermeticStep[histos.resolve.Resolve, GraphCompileError, String]
+    histos.step.HermeticStep[GraphCompile.Fed, GraphCompileError, String]
 
   /** One step per cell. A cell's upstreams are the cells it depends on, at its own version and platform.
     */

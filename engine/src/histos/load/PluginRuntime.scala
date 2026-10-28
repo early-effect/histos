@@ -60,9 +60,9 @@ trait PluginRuntime:
   def run(
       id: PluginTaskId,
       args: PluginArgs,
-  ): ZIO[ActionCache & RemoteCache & Resolve, PluginFault, PluginOutput]
+  ): ZIO[ActionCache & RemoteCache & Resolve & histos.cache.ContentStore, PluginFault, PluginOutput]
   def bind: ZIO[
-    ActionCache & RemoteCache & Resolve,
+    ActionCache & RemoteCache & Resolve & histos.cache.ContentStore,
     TaskError,
     Map[TaskId, IO[TaskError, TaskResult]],
   ]
@@ -109,7 +109,7 @@ object PluginRuntime:
     def run(
         id: PluginTaskId,
         args: PluginArgs,
-    ): ZIO[ActionCache & RemoteCache & Resolve, PluginFault, PluginOutput] =
+    ): ZIO[ActionCache & RemoteCache & Resolve & histos.cache.ContentStore, PluginFault, PluginOutput] =
       taskOf(id) match
         case None    => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(_) =>
@@ -177,7 +177,7 @@ object PluginRuntime:
           yield output
 
     def bind: ZIO[
-      ActionCache & RemoteCache & Resolve,
+      ActionCache & RemoteCache & Resolve & histos.cache.ContentStore,
       TaskError,
       Map[TaskId, IO[TaskError, TaskResult]],
     ] =
@@ -185,6 +185,7 @@ object PluginRuntime:
         cache   <- ZIO.service[ActionCache]
         remote  <- ZIO.service[RemoteCache]
         resolve <- ZIO.service[Resolve]
+        store   <- ZIO.service[histos.cache.ContentStore]
         bound   <- ZIO.foreach(tasks): (id, _) =>
           for
             key <- ZIO.fromEither(TaskId.from(id.render))
@@ -193,6 +194,7 @@ object PluginRuntime:
                 ZLayer.succeed(cache),
                 ZLayer.succeed(remote),
                 ZLayer.succeed(resolve),
+                ZLayer.succeed(store),
               )
               .map(out => TaskResult.Plugin(out))
               .mapError:

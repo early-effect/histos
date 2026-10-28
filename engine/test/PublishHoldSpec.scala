@@ -45,7 +45,7 @@ object PublishHoldSpec extends ZIOSpecDefault:
               Some(repo.toString),
               _ => ZIO.unit,
             )
-            .provide(IdleResolve.layer)
+            .provide(IdleResolve.layer, histos.zinc.CompileReplay.processStore)
           decision <- VersionTask.decide(graph, root, env)
           wrote    <- ZIO.attempt(
             Option(repo.toFile.list()).map(_.toList).getOrElse(Nil)

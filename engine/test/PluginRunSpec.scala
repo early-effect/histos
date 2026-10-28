@@ -146,7 +146,7 @@ object PluginRunSpec extends ZIOSpecDefault:
   ) =
     plugins.flatMap:
       _.run(id, args)
-        .provide(ZLayer.succeed(cache), RemoteCache.off, resolve)
+        .provide(ZLayer.succeed(cache), RemoteCache.off, resolve, histos.zinc.CompileReplay.processStore)
 
   private val core = module("core", Jvm)(scala"3.9.0")
 
@@ -853,7 +853,12 @@ object PluginRunSpec extends ZIOSpecDefault:
           (values, cache) <- recording
           running         <- runtime(dir, built, live)
           bound           <- running.bind
-            .provide(ZLayer.succeed(cache), RemoteCache.off, IdleResolve.layer)
+            .provide(
+              ZLayer.succeed(cache),
+              RemoteCache.off,
+              IdleResolve.layer,
+              histos.zinc.CompileReplay.processStore,
+            )
           id = PluginTaskId(echoId, TaskName("wait"))
           result <-
             TaskId.from(id.render) match

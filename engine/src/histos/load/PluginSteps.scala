@@ -11,7 +11,7 @@ import Histos.given
 /** The reachable plugin tasks, with each `TaskDep.Compile` as a compile step.
   */
 private[load] object PluginSteps:
-  private type R        = histos.resolve.Resolve
+  private type R        = histos.resolve.Resolve & histos.cache.ContentStore
   private type CellStep = histos.step.HermeticStep[R, PluginFault, String]
 
   def goal(
@@ -19,7 +19,7 @@ private[load] object PluginSteps:
       taskOf: PluginTaskId => Option[DeclaredTask],
       cellsOf: DeclaredTask => Either[PluginRunError, List[PluginCells.Cell]],
       compile: PluginCells.Cell => ZIO[
-        histos.resolve.Resolve,
+        R,
         PluginFault,
         Unit,
       ],
@@ -71,7 +71,7 @@ private[load] object PluginSteps:
   private def compileStep(
       cell: PluginCells.Cell,
       compile: PluginCells.Cell => ZIO[
-        histos.resolve.Resolve,
+        R,
         PluginFault,
         Unit,
       ],

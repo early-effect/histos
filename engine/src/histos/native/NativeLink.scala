@@ -10,6 +10,7 @@ import histos.zinc.{
   CompileError,
   CompileOutput,
   CompileRequest,
+  CompileReplay,
   CompileToolchain,
   JvmCompile,
 
@@ -232,14 +233,16 @@ object NativeLink:
       Nil,
       Nil,
     )
-    JvmCompile.compilePrepared(
-      request.copy(
-        compilationTools = List(libs.input),
-        compilerPlugins = List(
-          libs.input.copy(artifacts = libs.input.artifacts.filter(_.path == libs.plugin))
+    CompileReplay.isolated(
+      JvmCompile.compilePrepared(
+        request.copy(
+          compilationTools = List(libs.input),
+          compilerPlugins = List(
+            libs.input.copy(artifacts = libs.input.artifacts.filter(_.path == libs.plugin))
+          ),
         ),
-      ),
-      List(libs.plugin),
+        List(libs.plugin),
+      )
     )
 
   /** The toolchain appends its own native libraries. A resolved test jar of the same file is the same library.

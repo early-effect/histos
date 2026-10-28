@@ -490,9 +490,9 @@ object ZincSpec extends ZIOSpecDefault:
           source <- ZIO.attempt(write(root, "Hello.scala", hello))
           req = liveRequest(root, source, jdk)
           pool   <- CompilerPool.make
-          _      <- JvmCompile.compilePooled(pool, req, Nil, _ => ())
+          _      <- CompileReplay.isolated(JvmCompile.compilePooled(pool, req, Nil, _ => ()))
           opened <- pool.openings
-          _      <- JvmCompile.compilePooled(pool, req, Nil, _ => ())
+          _      <- CompileReplay.isolated(JvmCompile.compilePooled(pool, req, Nil, _ => ()))
           again  <- pool.openings
         yield assertTrue(opened == 1 && again == 1)
     ,

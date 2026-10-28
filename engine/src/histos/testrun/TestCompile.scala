@@ -37,6 +37,7 @@ import histos.zinc.{
   CompiledCell,
   GraphCompile,
   GraphCompileError,
+  CompileReplay,
   JvmCompile,
 
   ScalacFlags,
@@ -303,7 +304,8 @@ private[histos] object TestCompile:
           val revision =
             module.nativeVersion.getOrElse(tools.catalog.native.revision)
           NativeCompile.compile(request, revision, native, extra, hear)
-      compiled
+      CompileReplay
+        .isolated(compiled)
         .mapBoth(
           error =>
             ModuleTestError

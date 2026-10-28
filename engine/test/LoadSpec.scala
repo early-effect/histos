@@ -411,11 +411,13 @@ object LoadSpec extends ZIOSpecDefault:
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
+              histos.zinc.CompileReplay.processStore,
             )
           bound <- loaded.plugins.bind.provide(
             ZLayer.succeed(ActionCache.miss),
             RemoteCache.off,
             ZLayer.succeed(IdleResolve),
+            histos.zinc.CompileReplay.processStore,
           )
         yield assertTrue(
           loaded.graph.projects.map(_.name.value) == List("core"),
@@ -504,6 +506,7 @@ object LoadSpec extends ZIOSpecDefault:
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
+              histos.zinc.CompileReplay.processStore,
             )
         yield assertTrue(
           loaded.plugins.links match
@@ -557,6 +560,7 @@ object LoadSpec extends ZIOSpecDefault:
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
+              histos.zinc.CompileReplay.processStore,
             )
         yield assertTrue(
           loaded.plugins.links match
@@ -693,6 +697,7 @@ object LoadSpec extends ZIOSpecDefault:
               ZLayer.succeed(ActionCache.miss),
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
+              histos.zinc.CompileReplay.processStore,
             )
         yield assertTrue(
           !Files.exists(Resolve.lockPath(repo)),
@@ -860,6 +865,7 @@ object LoadSpec extends ZIOSpecDefault:
         ZLayer.succeed(ActionCache.miss),
         RemoteCache.off,
         ZLayer.succeed(IdleResolve),
+        histos.zinc.CompileReplay.processStore,
       )
 
   private val echoTask =

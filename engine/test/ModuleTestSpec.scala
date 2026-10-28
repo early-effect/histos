@@ -241,7 +241,7 @@ private[testrun] object ModuleTestSupport:
             ) = tools.resolve.sources(organization, name, revision, repository)
           coexisting <- ModuleTest
             .run(TestRun(root, built, Nil, jdk, here, TestMode.Run))
-            .provide(zio.ZLayer.succeed(resolver))
+            .provide(zio.ZLayer.succeed(resolver), histos.zinc.CompileReplay.processStore)
           consumed <- fetched.get
           ran      <- TestMachine.launches(chosen)
           skipped  <- TestMachine.launches(other)

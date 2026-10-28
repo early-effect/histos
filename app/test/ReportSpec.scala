@@ -290,7 +290,7 @@ object ReportSpec extends ZIOSpecDefault:
           say = Say.record(repo, feeds)
           _ <- Calls
             .compile(repo, built, Nil, jdk, Calls.idleMachine, say)
-            .provide(ZLayer.succeed(DeadResolve))
+            .provide(ZLayer.succeed(DeadResolve), histos.zinc.CompileReplay.processStore)
           read        <- Stored.read(repo).either
           observation <- say.observation
           chunk       <- feeds.get

@@ -680,7 +680,7 @@ object Plan:
       case CompileError.Resolved(_) | CompileError.UnsupportedPlatform(_) | CompileError.UnsupportedScala(_) |
           CompileError.NoSources | CompileError.Banned(_, _) | CompileError.Failed(_) | CompileError.Toolchain(_) |
           CompileError.JsLibrary(_) | CompileError.NativeFetch(_) | CompileError.NativeOrigin(_) |
-          CompileError.NativeLibrary(_) =>
+          CompileError.NativeLibrary(_) | CompileError.Stored(_) =>
         PreviewError.Sources(IoFailure(root, IoFault.Walk))
 
   private def testFault(repo: Path, error: ModuleTestError): PreviewError =

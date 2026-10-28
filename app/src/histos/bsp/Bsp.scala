@@ -1,5 +1,6 @@
 package histos.bsp
 
+import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import zio.stream.ZStream
 
@@ -230,7 +231,7 @@ object Bsp:
       buildClasspath: List[Path] = Nil,
       notify: String => UIO[Unit] = _ => ZIO.unit,
       build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
-      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int] = effect => effect,
+      gate: ZIO[Resolve & ContentStore, Nothing, Int] => ZIO[Resolve & ContentStore, Nothing, Int] = effect => effect,
       shared: Option[Ref[ProjectGraph]] = None,
   ): IO[ResolveError, Session] =
     for
@@ -266,7 +267,7 @@ object Bsp:
         notify: String => UIO[Unit],
         build: IO[LoadError, BuildNotes],
         phase: Ref[Phase],
-        gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
+        gate: ZIO[Resolve & ContentStore, Nothing, Int] => ZIO[Resolve & ContentStore, Nothing, Int],
         current: Ref[ProjectGraph],
         request: Ref[ProjectGraph],
         captured: Ref[Option[DependencyLock]],
@@ -295,7 +296,7 @@ object Bsp:
       notify: String => UIO[Unit],
       build: IO[LoadError, BuildNotes],
       phase: Ref[Phase],
-      gate: ZIO[Resolve, Nothing, Int] => ZIO[Resolve, Nothing, Int],
+      gate: ZIO[Resolve & ContentStore, Nothing, Int] => ZIO[Resolve & ContentStore, Nothing, Int],
       current: Ref[ProjectGraph],
       request: Ref[ProjectGraph],
       captured: Ref[Option[DependencyLock]],
@@ -303,13 +304,13 @@ object Bsp:
     /** One request sees the graph it started with. A later swap does not rewrite it. The JDK and Node are the ones
       * captured when the session opened.
       */
-    def answer(payload: String): ZIO[Resolve, Nothing, Answer] =
+    def answer(payload: String): ZIO[Resolve & ContentStore, Nothing, Answer] =
       current.get.flatMap(graph => answer(graph, payload))
 
     def answer(
         seen: ProjectGraph,
         payload: String,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       for
         requested <- Ref.make(seen)
         lock      <- Ref.make(Option.empty[DependencyLock])
@@ -334,7 +335,7 @@ object Bsp:
     def changed(
         previous: ProjectGraph,
         next: ProjectGraph,
-    ): ZIO[Resolve, Nothing, Unit] =
+    ): ZIO[Resolve & ContentStore, Nothing, Unit] =
       targetUris(previous).either.zip(targetUris(next).either).flatMap {
         case (Right(before), Right(after)) =>
           notify(
@@ -346,7 +347,7 @@ object Bsp:
         case _ => ZIO.unit
       }
 
-    private def read(payload: String): ZIO[Resolve, Nothing, Answer] =
+    private def read(payload: String): ZIO[Resolve & ContentStore, Nothing, Answer] =
       payload.fromJson[zio.json.ast.Json] match
         case Left(_) =>
           ZIO.succeed(Answer.Reply(failure(Rpc.RpcId.Absent, BspError.Parse)))
@@ -370,7 +371,7 @@ object Bsp:
         name: String,
         incoming: Rpc.Incoming,
         notification: Boolean,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       val asked = Method.from(name)
       (current, asked, notification) match
         case (_, Some(Method.Exit), _) =>
@@ -415,7 +416,7 @@ object Bsp:
     private def sources(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(sourceItem).map(Rpc.SourcesResult(_))),
@@ -424,7 +425,7 @@ object Bsp:
     private def options(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(scalac).map(Rpc.ScalacOptionsResult(_))),
@@ -433,7 +434,7 @@ object Bsp:
     private def dependencySources(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(sourceJars).map(Rpc.DependencySourcesResult(_))),
@@ -442,7 +443,7 @@ object Bsp:
     private def compile(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       ZIO
         .fromEither(Rpc.compileParams(incoming.params).left.map(fault))
         .foldZIO(
@@ -463,7 +464,7 @@ object Bsp:
             },
         )
 
-    private def runCompile(ids: List[Id]): ZIO[Resolve, Nothing, Int] =
+    private def runCompile(ids: List[Id]): ZIO[Resolve & ContentStore, Nothing, Int] =
       val mains  = ids.collect { case id: Id.Main => id }
       val tests  = ids.collect { case id: Id.Test => id }
       val builds = ids.collect { case Id.Build => Id.Build }
@@ -483,7 +484,7 @@ object Bsp:
     private def compileMains(
         platform: Platform,
         group: List[Id.Main],
-    ): ZIO[Resolve, Nothing, Int] =
+    ): ZIO[Resolve & ContentStore, Nothing, Int] =
       val cells = group.map(id => id.module.name -> id.version)
       request.get.flatMap { graph =>
         Ref.make(false).flatMap { failed =>
@@ -532,7 +533,7 @@ object Bsp:
         }
       }
 
-    private def compileTest(id: Id.Test): ZIO[Resolve, Nothing, Int] =
+    private def compileTest(id: Id.Test): ZIO[Resolve & ContentStore, Nothing, Int] =
       request.get.flatMap { graph =>
         val modules = modulesOf(graph)
         val uri     = targetUri(id)
@@ -577,7 +578,7 @@ object Bsp:
         }
       }
 
-    private def compileBuild: ZIO[Resolve, Nothing, Int] =
+    private def compileBuild: ZIO[Resolve & ContentStore, Nothing, Int] =
       val uri = buildUri
       (clear(uri) *> build.mapError(BspError.Build(_))).either.flatMap {
         case Left(error)  => log(CompileSeverity.Error, error.message).as(2)
@@ -602,8 +603,8 @@ object Bsp:
 
     private def reply[A: JsonCodec](
         id: Rpc.RpcId,
-        body: ZIO[Resolve, BspError, A],
-    ): ZIO[Resolve, Nothing, Answer] =
+        body: ZIO[Resolve & ContentStore, BspError, A],
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       body.fold(
         error => Answer.Reply(failure(id, error)),
         value => Answer.Reply(Rpc.ok(id, value)),
@@ -611,7 +612,7 @@ object Bsp:
 
     private def scalac(
         uri: String
-    ): ZIO[Resolve, BspError, Rpc.ScalacOptionsItem] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.ScalacOptionsItem] =
       parsed(uri) {
         case Id.Build =>
           ZIO.succeed(
@@ -660,7 +661,7 @@ object Bsp:
         version: ScalaVersion,
         platform: Platform,
         scope: ClasspathScope,
-    ): ZIO[Resolve, BspError, List[Path]] =
+    ): ZIO[Resolve & ContentStore, BspError, List[Path]] =
       for
         graph <- request.get
         lock  <- readLock
@@ -699,11 +700,11 @@ object Bsp:
           BspError.Sources(found)
 
     private def withTools[A](
-        effect: ZIO[Resolve & LockedTools, BspError, A]
-    ): ZIO[Resolve, BspError, A] =
+        effect: ZIO[Resolve & ContentStore & LockedTools, BspError, A]
+    ): ZIO[Resolve & ContentStore, BspError, A] =
       request.get.flatMap(graph =>
         readLock.flatMap(lock =>
-          effect.provideSome[Resolve](
+          effect.provideSome[Resolve & ContentStore](
             zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
           )
         )
@@ -711,7 +712,7 @@ object Bsp:
 
     private def sourceJars(
         uri: String
-    ): ZIO[Resolve, BspError, Rpc.DependencySourcesItem] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.DependencySourcesItem] =
       parsed(uri) { id =>
         jarsOf(id)
           .flatMap(paths => ZIO.foreach(paths)(oneSource).map(_.flatten))
@@ -719,7 +720,7 @@ object Bsp:
             Rpc.DependencySourcesItem(Rpc.TargetId(uri), sources.map(fileUri))
 
       }
-    private def jarsOf(id: Id): ZIO[Resolve, BspError, List[SourceAsk]] =
+    private def jarsOf(id: Id): ZIO[Resolve & ContentStore, BspError, List[SourceAsk]] =
       id match
         case Id.Build =>
           ZIO.succeed(buildClasspath.flatMap(runtimeAsk(BuildScala, _)))
@@ -733,7 +734,7 @@ object Bsp:
         version: ScalaVersion,
         platform: Platform,
         test: Boolean,
-    ): ZIO[Resolve, BspError, List[SourceAsk]] =
+    ): ZIO[Resolve & ContentStore, BspError, List[SourceAsk]] =
       for
         lock    <- readLock
         library <- withTools(
@@ -785,7 +786,7 @@ object Bsp:
           )
         case _ => None
 
-    private def oneSource(ask: SourceAsk): ZIO[Resolve, Nothing, Option[Path]] =
+    private def oneSource(ask: SourceAsk): ZIO[Resolve & ContentStore, Nothing, Option[Path]] =
       ZIO
         .serviceWithZIO[Resolve](
           _.sources(ask.organization, ask.name, ask.revision, ask.repository)
@@ -810,7 +811,7 @@ object Bsp:
     private def mainClasses(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(mainClassItem).map(Rpc.ScalaMainClassesResult(_))),
@@ -819,7 +820,7 @@ object Bsp:
     private def testClasses(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(testClassItem).map(Rpc.ScalaTestClassesResult(_))),
@@ -828,7 +829,7 @@ object Bsp:
     private def runEnvironment(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(runItem).map(Rpc.JvmEnvironmentResult(_))),
@@ -837,7 +838,7 @@ object Bsp:
     private def testEnvironment(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve, Nothing, Answer] =
+    ): ZIO[Resolve & ContentStore, Nothing, Answer] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(testItem).map(Rpc.JvmEnvironmentResult(_))),
@@ -845,7 +846,7 @@ object Bsp:
 
     private def mainClassItem(
         uri: String
-    ): ZIO[Resolve, BspError, Rpc.ScalaMainClassesItem] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.ScalaMainClassesItem] =
       parsed(uri) {
         case id: Id.Main =>
           val named   = id.module.application.toList.map(_.value)
@@ -870,7 +871,7 @@ object Bsp:
       }
     private def testClassItem(
         uri: String
-    ): ZIO[Resolve, BspError, Rpc.ScalaTestClassesItem] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.ScalaTestClassesItem] =
       parsed(uri) {
         case id: Id.Test =>
           suites(id).map: found =>
@@ -885,7 +886,7 @@ object Bsp:
       }
     private def runItem(
         uri: String
-    ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.JvmEnvironmentItem] =
       parsed(uri) {
         case id: Id.Main =>
           val classes = GraphCompile.classesDir(
@@ -936,7 +937,7 @@ object Bsp:
       }
     private def testItem(
         uri: String
-    ): ZIO[Resolve, BspError, Rpc.JvmEnvironmentItem] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.JvmEnvironmentItem] =
       parsed(uri) {
         case id: Id.Test =>
           val work =
@@ -996,7 +997,7 @@ object Bsp:
 
     /** Compiled suites when the classes directory exists. An uncompiled target is an empty list, not an error.
       */
-    private def suites(id: Id.Test): ZIO[Resolve, BspError, Suites] =
+    private def suites(id: Id.Test): ZIO[Resolve & ContentStore, BspError, Suites] =
       val classes =
         TestCompile.testClasses(repo, id.module.name, id.version, id.platform)
       id.module.test match
@@ -1094,17 +1095,17 @@ object Bsp:
               .testSources(repo, module, modules, version, platform)
               .mapError(BspError.Tests(_))
 
-    private def targets: ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
+    private def targets: ZIO[Resolve & ContentStore, BspError, Rpc.BuildTargetsResult] =
       request.get.flatMap(graph => targetList(graph))
 
     private def targetUris(
         graph: ProjectGraph
-    ): ZIO[Resolve, BspError, List[String]] =
+    ): ZIO[Resolve & ContentStore, BspError, List[String]] =
       targetList(graph).map(_.targets.map(_.id.uri))
 
     private def targetList(
         graph: ProjectGraph
-    ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.BuildTargetsResult] =
       val cells    = cellsOf(graph)
       val versions = (cells.map(_.version) :+ BuildScala).distinct
       listed(graph, cells, versions)
@@ -1113,7 +1114,7 @@ object Bsp:
         graph: ProjectGraph,
         cells: List[Cell],
         versions: List[ScalaVersion],
-    ): ZIO[Resolve, BspError, Rpc.BuildTargetsResult] =
+    ): ZIO[Resolve & ContentStore, BspError, Rpc.BuildTargetsResult] =
       for
         jars <- ZIO
           .foreach(versions)(version =>

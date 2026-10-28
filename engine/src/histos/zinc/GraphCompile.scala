@@ -1,5 +1,6 @@
 package histos.zinc
 
+import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
 import histos.js.ScalaJs
@@ -100,17 +101,20 @@ final case class CompileSession(
 )
 
 object GraphCompile:
+  /** Resolve, the local CAS, and the compiler-start counter. Public entry points supply the counter. */
+  private[zinc] type Fed = Resolve & ContentStore & CompilerStarts
+
   def run(
       session: CompileSession,
       names: List[ProjectName],
-  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
+  ): ZIO[Resolve & ContentStore, GraphCompileError, List[CompiledCell]] = collected(
     console(session, names, None)
   )
   def run(
       session: CompileSession,
       names: List[ProjectName],
       platform: Option[Platform],
-  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
+  ): ZIO[Resolve & ContentStore, GraphCompileError, List[CompiledCell]] = collected(
     console(session, names, platform)
   )
 
@@ -119,14 +123,14 @@ object GraphCompile:
       names: List[ProjectName],
       platform: Option[Platform],
       report: CompileFeed => UIO[Unit],
-  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] = collected(
+  ): ZIO[Resolve & ContentStore, GraphCompileError, List[CompiledCell]] = collected(
     console(session, names, platform).tap(report)
   )
   def console(
       session: CompileSession,
       names: List[ProjectName],
       platform: Option[Platform],
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
     watch(
       session.repo,
       session.graph,
@@ -136,12 +140,12 @@ object GraphCompile:
       session.jdk,
       session.native,
       captured = Some(session.lock),
-    )
+    ).provideSomeLayer(CompilerStarts.live)
   def cellFeed(
       session: CompileSession,
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
     val names = cells.map(_._1)
     watch(
       session.repo,
@@ -152,7 +156,7 @@ object GraphCompile:
       session.jdk,
       session.native,
       captured = Some(session.lock),
-    )
+    ).provideSomeLayer(CompilerStarts.live)
 
   /** Compile every platform a module names, or only `platform` when that is set. Names pull in `dependsOn` upstreams
     * and not dependents. A cell starts when its own upstream cells finish.
@@ -165,7 +169,7 @@ object GraphCompile:
       native: NativeOrigin,
       platform: Option[Platform],
       report: CompileFeed => UIO[Unit],
-  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
+  ): ZIO[Resolve & ContentStore, GraphCompileError, List[CompiledCell]] =
     collected(console(repo, graph, names, jdk, native, platform).tap(report))
 
   /** Cells compile when their upstreams are done. `platform` limits each module to that target. A module that does not
@@ -178,14 +182,25 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform],
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
+    consoleCounted(repo, graph, names, jdk, native, platform).provideSomeLayer(CompilerStarts.live)
+
+  /** The same console, with the caller holding the start counter. */
+  private[histos] def consoleCounted(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[ProjectName],
+      jdk: JdkRuntime,
+      native: NativeOrigin,
+      platform: Option[Platform],
+  ): ZStream[Fed, GraphCompileError, CompileFeed] =
     watch(repo, graph, choose(graph, names), None, platform, jdk, native)
 
   /** Fails after the last event when a cell failed. Test runs keep the lenient stream so passing cells still test.
     */
-  def strict(
-      feeds: ZStream[Resolve, GraphCompileError, CompileFeed]
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+  def strict[R](
+      feeds: ZStream[R, GraphCompileError, CompileFeed]
+  ): ZStream[R, GraphCompileError, CompileFeed] =
     ZStream.unwrap:
       zio.Ref
         .make(List.empty[GraphCompileError])
@@ -211,7 +226,7 @@ object GraphCompile:
       platform: Platform,
       jdk: JdkRuntime,
       native: NativeOrigin,
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
     watch(
       repo,
       graph,
@@ -220,11 +235,11 @@ object GraphCompile:
       Some(platform),
       jdk,
       native,
-    )
+    ).provideSomeLayer(CompilerStarts.live)
 
-  private def collected(
-      feeds: ZStream[Resolve, GraphCompileError, CompileFeed]
-  ): ZIO[Resolve, GraphCompileError, List[CompiledCell]] =
+  private def collected[R](
+      feeds: ZStream[R, GraphCompileError, CompileFeed]
+  ): ZIO[R, GraphCompileError, List[CompiledCell]] =
     feeds.runCollect.flatMap: chunk =>
       val failed = chunk.collect { case CompileFeed.Failed(error) => error }
       val cells  = chunk
@@ -329,7 +344,7 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit],
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
     watch(
       repo,
       graph,
@@ -340,7 +355,7 @@ object GraphCompile:
       native,
       hold,
       Parallelism(64, 64, 64),
-    )
+    ).provideSomeLayer(CompilerStarts.live)
 
   private def watch(
       repo: Path,
@@ -353,8 +368,8 @@ object GraphCompile:
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
       parallelism: Parallelism = Parallelism.default,
       captured: Option[DependencyLock] = None,
-  ): ZStream[Resolve, GraphCompileError, CompileFeed] =
-    ZStream.asyncScoped[Resolve, GraphCompileError, CompileFeed](
+  ): ZStream[Fed, GraphCompileError, CompileFeed] =
+    ZStream.asyncScoped[Fed, GraphCompileError, CompileFeed](
       emit =>
         val offer    = (feed: CompileFeed) => emit(ZIO.succeed(Chunk.single(feed)))
         val compiled =
@@ -387,7 +402,7 @@ object GraphCompile:
                   )
                   ZIO
                     .serviceWithZIO[Histos](_.start(goal))
-                    .provideSome[Resolve & zio.Scope](
+                    .provideSome[Fed & zio.Scope](
                       ZLayer.succeed(parallelism),
                       Histos.live,
                     )
@@ -417,7 +432,7 @@ object GraphCompile:
     )
 
   private def end(
-      emit: ZIO[Resolve, Option[GraphCompileError], Chunk[CompileFeed]] => Unit,
+      emit: ZIO[Fed, Option[GraphCompileError], Chunk[CompileFeed]] => Unit,
       error: Option[GraphCompileError],
   ): UIO[Unit] =
     val stop = error match
@@ -426,7 +441,7 @@ object GraphCompile:
     ZIO.attemptBlockingInterrupt(emit(stop)).orDie
 
   private def die(
-      emit: ZIO[Resolve, Option[GraphCompileError], Chunk[CompileFeed]] => Unit
+      emit: ZIO[Fed, Option[GraphCompileError], Chunk[CompileFeed]] => Unit
   ): UIO[Unit] =
     ZIO
       .attemptBlockingInterrupt(
@@ -458,7 +473,7 @@ object GraphCompile:
 
   private[zinc] def compileCell(
       run: CellRun
-  ): ZIO[Resolve, GraphCompileError, String] =
+  ): ZIO[Fed, GraphCompileError, String] =
     val CellRun(plan, module, version, platform, upstreams, hold, offer) = run
     def tell(feed: CompileFeed): UIO[Unit]                               =
       ZIO.attemptBlockingInterrupt(offer(feed)).orDie
@@ -501,7 +516,7 @@ object GraphCompile:
   private def compileOf(
       work: CellWork,
       hear: CompileProblem => Unit,
-  ): ZIO[Resolve, GraphCompileError, CompiledCell] =
+  ): ZIO[Fed, GraphCompileError, CompiledCell] =
     val CellWork(plan, module, version, platform, base, done) = work
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
@@ -533,7 +548,7 @@ object GraphCompile:
                 plan.repositories,
                 ClasspathScope.Compile,
               )
-              .provideSome[Resolve](ZLayer.succeed(plan.tools))
+              .provideSomeLayer(ZLayer.succeed(plan.tools))
             classes = classesDir(plan.repo, module.name, version, platform)
             request = CompileRequest(
               CompileToolchain(version, platform, plan.jdk, module.flags),
@@ -607,7 +622,7 @@ object GraphCompile:
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): IO[CompileError, CompileOutput] =
+  ): ZIO[ContentStore & CompilerStarts, CompileError, CompileOutput] =
     val compiled = request.toolchain.platform match
       case Platform.Jvm =>
         JvmCompile.compilePooled(work.plan.pool, request, extra, hear)
@@ -622,7 +637,7 @@ object GraphCompile:
           extra,
           hear,
         )
-    compiled.provide(ZLayer.succeed(work.plan.tools))
+    compiled.provideSome[ContentStore & CompilerStarts](ZLayer.succeed(work.plan.tools))
 
   private def upstreamClasses(
       module: Module,

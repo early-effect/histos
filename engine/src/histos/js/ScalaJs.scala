@@ -25,7 +25,7 @@ object ScalaJs:
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
       revision: Option[JsVersion] = None,
-  ): ZIO[LockedTools, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts, CompileError, CompileOutput] =
     if request.toolchain.platform != Platform.Js then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else

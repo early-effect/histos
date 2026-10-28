@@ -157,7 +157,7 @@ object Calls:
       directory: Option[String],
       tokens: List[String],
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       reported(
         repo,
@@ -182,7 +182,7 @@ object Calls:
       jdk: JdkRuntime,
       tokens: List[String],
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       reported(
         repo,
@@ -207,7 +207,7 @@ object Calls:
       tokens: List[String],
       automatic: Boolean,
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     val mode = if automatic then ReleaseMode.Automatic else ReleaseMode.Hold
     CompileConsole.open(repo).flatMap { console =>
       released(
@@ -257,12 +257,12 @@ object Calls:
           told(say, shown.mkString("\n")) *> finish(say, result),
       )
 
-  private def released(
+  private def released[R](
       repo: Path,
       say: Say,
       console: histos.cli.CompileConsole.Session,
-      ran: ZIO[Resolve, ReleaseError, histos.publish.ReleaseReport],
-  ): ZIO[Resolve, ServerError, Unit] =
+      ran: ZIO[R, ReleaseError, histos.publish.ReleaseReport],
+  ): ZIO[R, ServerError, Unit] =
     ran.foldZIO(
       failure =>
         console.announce(text => told(say, text)) *>
@@ -291,12 +291,12 @@ object Calls:
       _ => ok(say),
     )
 
-  private def reported(
+  private def reported[R](
       repo: Path,
       say: Say,
       console: histos.cli.CompileConsole.Session,
-      ran: ZIO[Resolve, histos.publish.LocalPublishError, histos.publish.PublishRun.Report],
-  ): ZIO[Resolve, ServerError, Unit] =
+      ran: ZIO[R, histos.publish.LocalPublishError, histos.publish.PublishRun.Report],
+  ): ZIO[R, ServerError, Unit] =
     ran.foldZIO(
       failure =>
         console.announce(text => told(say, text)) *>
@@ -326,7 +326,7 @@ object Calls:
       id: String,
       platform: Option[Platform],
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole
       .open(repo)
       .flatMap: console =>
@@ -608,7 +608,7 @@ object Calls:
       machine: Machine,
       destination: Option[String],
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     placed(repo, destination) match
       case None =>
         reject(say, Rejection.AssemblyDestination(destination.getOrElse("")))
@@ -662,7 +662,7 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       GraphCompile
         .strict(
@@ -834,7 +834,7 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
-  ): ZIO[Resolve, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       CompileConsole.notes.flatMap { notes =>
         Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
@@ -982,7 +982,7 @@ object Calls:
     ZIO.serviceWithZIO[ContentStore] { store =>
       plugins
         .run(id, args)
-        .provideSome[Resolve](
+        .provideSome[Resolve & ContentStore](
           ZLayer.succeed(ContentStore.actions(store)),
           RemoteCache.off,
         )

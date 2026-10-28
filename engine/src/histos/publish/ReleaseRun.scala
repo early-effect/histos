@@ -91,7 +91,7 @@ private[publish] object ReleaseRun:
       jdk: JdkRuntime,
       env: Map[String, String],
       report: CompileFeed => UIO[Unit],
-  ): ZIO[histos.resolve.Resolve & Scope, ReleaseError, ReleaseStage] =
+  ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, ReleaseError, ReleaseStage] =
     for
       secret      <- ZIO.fromEither(credentials(env))
       signer      <- Signer.fromEnv(env).mapError(ReleaseError.Signer(_))
@@ -105,7 +105,7 @@ private[publish] object ReleaseRun:
       dir    <- ZIO.acquireRelease(directory("histos-release"))(deleteTree)
       output <- LocalPublish
         .run(repo, graph, request.names, jdk, env, PublishWrite.Release, report)
-        .provideSome[histos.resolve.Resolve](Publisher.local(dir))
+        .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(dir))
         .mapError(ReleaseError.Stage(_))
     yield ReleaseStage(
       dir,
