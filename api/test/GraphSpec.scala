@@ -170,6 +170,27 @@ object GraphSpec extends ZIOSpecDefault:
         Splits.of(Axis.Module, Axis.Module) == Splits.of(Axis.Module),
       )
     ,
+    test("a one-module graph defaults to rebuild and reads copy-index"):
+      val core      = module("core", Jvm)(scala3)
+      val omitted   = Projects(core)
+      val chosen    = Projects.promote(Promote.CopyIndex)(core)
+      val afterOrg  = Projects.organization(organization"com.example").promote(Promote.CopyIndex)(core)
+      val beforeOrg =
+        Projects.promote(Promote.CopyIndex).organization(organization"com.example")(core)
+      val unknown = Promote.from("nope")
+      assertTrue(
+        omitted.map(_.promote) == Right(Promote.Rebuild),
+        chosen.map(_.promote) == Right(Promote.CopyIndex),
+        afterOrg.map(_.promote) == Right(Promote.CopyIndex),
+        beforeOrg.map(_.promote) == Right(Promote.CopyIndex),
+        beforeOrg.map(_.organization.map(_.value)) == Right(Some("com.example")),
+        Promote.from("rebuild") == Right(Promote.Rebuild),
+        Promote.from("copy-index") == Right(Promote.CopyIndex),
+        unknown match
+          case Left(error @ PromoteError.Unknown(raw)) => raw == "nope" && error.message.contains("nope")
+          case Right(_)                                => false,
+      )
+    ,
     test("rejects a duplicate name"):
       val first  = module("core", Jvm)(scala3)
       val second = module("core", Js)(scala3)

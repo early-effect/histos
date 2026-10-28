@@ -126,6 +126,7 @@ final case class ProjectGraph private (
     tools: ToolCatalog = ToolCatalog.default,
     runnerTools: RunnerTools = RunnerTools.empty,
     facts: OrganizationFacts = OrganizationFacts.empty,
+    promote: Promote = Promote.Rebuild,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -165,6 +166,7 @@ object ProjectGraph:
       tools: ToolCatalog = ToolCatalog.default,
       runnerTools: RunnerTools = RunnerTools.empty,
       facts: OrganizationFacts = OrganizationFacts.empty,
+      promote: Promote = Promote.Rebuild,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -176,6 +178,7 @@ object ProjectGraph:
       tools,
       runnerTools,
       facts,
+      promote,
     )
 end ProjectGraph
 
@@ -200,6 +203,10 @@ object Projects:
     */
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(None, first :: rest.toList)
+
+  /** How a push to main fills the main index. Omission, from [[apply]], is rebuild. */
+  def promote(value: Promote): Organized =
+    Organized(None, Nil, promote = value)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
@@ -258,6 +265,7 @@ object Projects:
       tools: ToolCatalog = ToolCatalog.default,
       runnerTools: RunnerTools = RunnerTools.empty,
       facts: OrganizationFacts = OrganizationFacts.empty,
+      promote: Promote = Promote.Rebuild,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -269,6 +277,7 @@ object Projects:
       tools,
       runnerTools,
       facts,
+      promote,
     )
 
   private def build(
@@ -281,6 +290,7 @@ object Projects:
       tools: ToolCatalog = ToolCatalog.default,
       runnerTools: RunnerTools = RunnerTools.empty,
       facts: OrganizationFacts = OrganizationFacts.empty,
+      promote: Promote = Promote.Rebuild,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -304,6 +314,7 @@ object Projects:
       tools,
       runnerTools,
       facts,
+      promote,
     )
 
   private def uniqueResolvers(
@@ -782,12 +793,13 @@ final class Organized(
     tools: ToolCatalog = ToolCatalog.default,
     runnerTools: RunnerTools = RunnerTools.empty,
     facts: OrganizationFacts = OrganizationFacts.empty,
+    promote: Promote = Promote.Rebuild,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -796,10 +808,14 @@ final class Organized(
       tools,
       runnerTools,
       facts,
+      promote,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts)
+    Organized(organization, resolvers, tools, value, facts, promote)
+
+  def promote(value: Promote): Organized =
+    Organized(organization, resolvers, tools, runnerTools, facts, value)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -822,7 +838,7 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value)
+    Organized(organization, resolvers, tools, runnerTools, value, promote)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -834,6 +850,7 @@ final class Organized(
       tools = tools,
       runnerTools = runnerTools,
       facts = facts,
+      promote = promote,
     )
 
   def apply(
@@ -849,6 +866,7 @@ final class Organized(
       tools = tools,
       runnerTools = runnerTools,
       facts = facts,
+      promote = promote,
     )
 
   def apply(
@@ -864,6 +882,7 @@ final class Organized(
       tools = tools,
       runnerTools = runnerTools,
       facts = facts,
+      promote = promote,
     )
 
   def apply(
@@ -880,6 +899,7 @@ final class Organized(
       tools = tools,
       runnerTools = runnerTools,
       facts = facts,
+      promote = promote,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -893,6 +913,7 @@ final class Organized(
       tools,
       runnerTools,
       facts,
+      promote,
     )
 
   def apply(
@@ -910,6 +931,7 @@ final class Organized(
       tools,
       runnerTools,
       facts,
+      promote,
     )
 
   def apply(
@@ -927,6 +949,7 @@ final class Organized(
       tools,
       runnerTools,
       facts,
+      promote,
     )
 
   def apply(
@@ -945,5 +968,6 @@ final class Organized(
       tools,
       runnerTools,
       facts,
+      promote,
     )
 end Organized

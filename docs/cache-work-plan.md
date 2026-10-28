@@ -59,7 +59,7 @@ On a miss, the previous input map for that action is diffed and the changed inpu
 
 ## Who writes main
 
-`Promote` lives on the build. The default is `Rebuild`. The main build writes `main/` as a side effect of the work it already does. It does not copy the pull-request index, so a pull request cannot poison the next one. `CopyIndex` copies `pr/<n>/` into `main/` without recompiling. That trusts the pull request. The owner picks it.
+`Promote` lives on the build. The default is `Rebuild`. The main build writes `main/` as a side effect of the work it already does. It does not copy the pull-request index, so a pull request cannot poison the next one. `CopyIndex` copies `pr/<n>/` into `main/` without recompiling. That trusts the pull request. The owner picks it. The build file writes `promote"rebuild"` or `promote"copy-index"`. Omission is `Rebuild`. Any other token does not compile, so load fails.
 
 Neither strategy is a `needs` of docs, deploy, or any job that does not compile. There is no snapshot restore in front of those jobs. A hit downloads that action's outputs. A miss compiles.
 
@@ -129,7 +129,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 ### Promote and workflow
 
-- [ ] **Promote on the build.** `Rebuild` is the default. `CopyIndex` is the other value. An unknown token fails at load. A one-module graph spec reads the default and the explicit value.
+- [x] **Promote on the build.** `Rebuild` is the default. `CopyIndex` is the other value. An unknown token fails at load. A one-module graph spec reads the default and the explicit value. Proof: `./histos testOnly --module api 'histos.GraphSpec'`, `./histos testOnly --module engine 'histos.load.PromoteSpec'`, `./histos test api` (116 passed), and `./histos test engine` (526 passed, 1 ignored).
 
 - [ ] **Copy the index.** `./histos cache promote --from pr/<n> --to main` copies index entries and does not compile. The copied entry names the blob the pull request stored. `Rebuild` does not call this command. Proof: the loopback store.
 

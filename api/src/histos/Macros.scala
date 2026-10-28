@@ -162,6 +162,18 @@ private object ScmConnectionMacro:
           case Left(err) => report.errorAndAbort(err.message, raw)
           case Right(_)  => '{ ScmConnection.trusted(${ Expr(text) }) }
 
+private object PromoteMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[Promote] =
+    import quotes.reflect.report
+    raw.value match
+      case None =>
+        report.errorAndAbort("promote\"...\" takes a literal. Use Promote.from at runtime.", raw)
+      case Some(text) =>
+        Promote.from(text) match
+          case Left(err)                => report.errorAndAbort(err.message, raw)
+          case Right(Promote.Rebuild)   => '{ Promote.Rebuild }
+          case Right(Promote.CopyIndex) => '{ Promote.CopyIndex }
+
 private object LiteralMacro:
   def scalaVersion(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[ScalaVersion] =
     onePart(sc, args, "scala").map(raw => ScalaVersionMacro.literal(Expr(raw))) match
@@ -271,6 +283,13 @@ private object LiteralMacro:
         import quotes.reflect.report
         report.errorAndAbort(err)
       case Right(raw) => ScmConnectionMacro.literal(Expr(raw))
+
+  def promote(sc: Expr[StringContext], args: Expr[Seq[String]])(using Quotes): Expr[Promote] =
+    onePart(sc, args, "promote") match
+      case Left(err) =>
+        import quotes.reflect.report
+        report.errorAndAbort(err)
+      case Right(raw) => PromoteMacro.literal(Expr(raw))
 
   private def onePart(sc: Expr[StringContext], args: Expr[Seq[String]], what: String)(using
       Quotes

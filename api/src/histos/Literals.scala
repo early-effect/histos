@@ -2,8 +2,8 @@ package histos
 
 /** `scala"3.9.0"`, `dep"dev.zio::zio:2.1.26"`, `ship"1.4.2"`, `manual"1.2.3"`, `organization"com.example"`,
   * `artifact"histos-api"`, `path"example/todo"`, `asset"dist/histos.jar"`, `pom"..."`, `url"https://..."`,
-  * `license"Apache-2.0"`, `developer"early-effect"`, `connection"scm:git:..."`, and `sbt"2"`. A bad literal fails
-  * compilation of the build file.
+  * `license"Apache-2.0"`, `developer"early-effect"`, `connection"scm:git:..."`, `sbt"2"`, and `promote"rebuild"`. A bad
+  * literal fails compilation of the build file.
   */
 extension (inline sc: StringContext)
   inline def scala(inline args: String*): ScalaVersion                  = ${ LiteralMacro.scalaVersion('sc, 'args) }
@@ -21,6 +21,7 @@ extension (inline sc: StringContext)
   inline def developer(inline args: String*): DeveloperId               = ${ LiteralMacro.developerId('sc, 'args) }
   inline def connection(inline args: String*): ScmConnection            = ${ LiteralMacro.scmConnection('sc, 'args) }
   inline def sbt(inline args: String*): SbtSeries                       = ${ LiteralMacro.sbtSeries('sc, 'args) }
+  inline def promote(inline args: String*): Promote                     = ${ LiteralMacro.promote('sc, 'args) }
 
 /** An early-effect catalog row. The number is the next release. Members are the modules that publish it. */
 inline def ship(name: String, number: histos.version.ShipNumber)(member: ProjectDef, members: ProjectDef*): ShipDef =
