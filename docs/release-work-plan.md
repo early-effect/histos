@@ -102,7 +102,7 @@ specular-histos/v0.0.1
 
 One ship in the catalog uses a bare `v0.21.2`. More than one ship uses `<ship>/v<number>`. The publisher does not require a tag. The workflow slice runs the command when a tag appears, and that tag must match the number in the file at that commit.
 
-A matching tag runs `publish release <ship>` in hold, then `publish assets <ship>`. Promote is a separate workflow dispatch. The tag workflow does not pass `--automatic`.
+A matching tag, or a dispatch that chooses `release` and the ship, runs `publish release <ship>` in hold, then `publish assets <ship>` when that ship names an asset. A library ship has no assets step. A dispatch that chooses `promote` runs `publish promote` with the deployment id. The file is `.github/workflows/histos-release.yml`, rendered by [Workflow](../engine/src/histos/workflow/Workflow.scala). It does not pass `--automatic`.
 
 ## Portal
 
@@ -192,7 +192,7 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 ### Workflow
 
-- [ ] **Generated workflow.** A matching tag, or a named dispatch, runs `./histos publish release <ship>` and then `./histos publish assets <ship>`. A second dispatch runs `./histos publish promote`. The generated file does not pass `--automatic`. `./histos workflow --check` is the proof. No tag of Histos is created.
+- [x] **Generated workflow.** A matching tag, or a named dispatch, runs `./histos publish release <ship>` and then `./histos publish assets <ship>`. A second dispatch runs `./histos publish promote`. The generated file does not pass `--automatic`. `./histos workflow --check` is the proof. No tag of Histos is created.
 
 ### Ready
 

@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.central.DeploymentState
 import histos.plugin.RepoPath
-import histos.version.{Ship, ShipName}
+import histos.version.{ReleaseTag, Ship, ShipName}
 import histos.{Module, ProjectGraph}
 
 import java.nio.file.{Files, Path}
@@ -50,7 +50,7 @@ object AssetRun:
         names match
           case Nil => ZIO.unit
           case _   =>
-            val tag = tagOf(graph.catalog.ships.length, ship, version)
+            val tag = ReleaseTag.of(graph.catalog.ships.length, ship, version)
             for
               access <- ZIO.fromEither(accessOf(env))
               bases  <- ZIO.fromEither(basesOf(env))
@@ -144,7 +144,7 @@ object AssetRun:
             ZIO.succeed(Judged.failed(s"$ship deployment records ${found.version}, not $version"))
           case Asked.Quiet(_) => ZIO.succeed(Judged.skip)
       case Some(found) =>
-        val tag = tagOf(graph.catalog.ships.length, asked.ship.name, found.version)
+        val tag = ReleaseTag.of(graph.catalog.ships.length, asked.ship.name, found.version)
         readAll(repo, asked.ship.name, tag, files)
 
   private def readAll(
@@ -210,10 +210,6 @@ object AssetRun:
     ship match
       case Ship.Manual(_, version, _, _, _) => version.value
       case Ship.Line(_, number, _, _, _)    => number.render
-
-  /** One ship in the catalog is `v<number>`. More than one is `<ship>/v<number>`. */
-  private def tagOf(ships: Int, ship: ShipName, version: String): String =
-    if ships > 1 then s"${ship.value}/v$version" else s"v$version"
 
   private def accessOf(env: Map[String, String]): Either[AssetError, Access] =
     val token = env.get("GITHUB_TOKEN").filter(_.nonEmpty)
