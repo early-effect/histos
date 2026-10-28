@@ -87,7 +87,7 @@ The remote mode and the namespace come from the event. `CopyIndex` adds a siblin
 
 The modules are `core`, `service` (`core`), `app` (`service`), one Scala.js module that depends on `core` and has a real link, one unrelated JVM module, and a Node or Firefox test so the tool cache is on the clock.
 
-The shared store is bazel-remote, with no hosted account. Locally it is compose. On GitHub the same container listens on localhost, and only its data directory is saved with `actions/cache`, keyed by OS plus namespace. Histos and the sbt remote column both speak HTTP to that localhost. A hosted URI replaces the disk later without a client change. The Actions quota applies to that directory. A docs job never restores it.
+The shared store is bazel-remote, with no hosted account. The image is `buchgr/bazel-remote-cache` at the multi-arch index the spec pins. The container is started with `--enable_ac_key_instance_mangling`. Without that flag the server stores the action cache by hash, so a write to `pr/1` is visible to `main`. Locally it is compose. On GitHub the same container listens on localhost, and only its data directory is saved with `actions/cache`, keyed by OS plus namespace. Histos and the sbt remote column both speak HTTP to that localhost. A hosted URI replaces the disk later without a client change. The Actions quota applies to that directory. A docs job never restores it.
 
 Same runner class. The table is a median of three. A wrong skip fails the run.
 
@@ -125,7 +125,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **purge.** `purge` deletes the index entries of one named namespace and does not delete a blob another namespace still names. A pull-request invocation cannot name `main`. Proof: the remote spec. `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine` (522 passed, 1 ignored).
 
-- [ ] **bazel-remote, when docker is present.** One spec starts the pinned container, writes as `pr/1`, reads as `main` and misses, writes as `main`, and then reads a hit. The spec is ignored when docker is absent, so the default suite stays green without a daemon. The image pin lives next to the spec.
+- [x] **bazel-remote, when docker is present.** One spec starts the pinned container, writes as `pr/1`, reads as `main` and misses, writes as `main`, and then reads a hit. The spec is ignored when docker is absent, so the default suite stays green without a daemon. The image pin lives next to the spec. The run passes `--enable_ac_key_instance_mangling`. Proof: `./histos testOnly --module engine 'histos.schedule.BazelRemoteSpec'` (2 passed) and `./histos test engine` (524 passed, 1 ignored).
 
 ### Promote and workflow
 
