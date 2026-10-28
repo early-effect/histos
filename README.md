@@ -16,7 +16,13 @@ A build file is a Scala program that returns a graph. A module names its platfor
 
 Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds a JVM and starts one jar.
 
-CI has no `dist/`. Every job runs the snapshot named in [.histos/launcher.lock](.histos/launcher.lock). This checkout uses `dist/histos.jar` when `.histos/assembly.sha256` matches that file, so a local command can pass while CI cannot compile [histos.scala](histos.scala). The same gap shows up when `workflow --check` disagrees with a file this tree rendered. The lock is behind the commit. Publish a snapshot and pin it. Do not open the jar, and do not hand-edit the lock.
+`HISTOS_ASSEMBLY`, when set, is that jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through to the lock. With neither jar, the script downloads the snapshot named in [.histos/launcher.lock](.histos/launcher.lock) and checks its sha256. `dist/` and `.histos/assembly.sha256` stay uncommitted, so CI has neither jar and every job runs the pin. A local jar can compile [histos.scala](histos.scala) while CI still runs that pin. `workflow --check` compares the files this jar renders with the files in the tree, so the two jars can disagree. Do not hand-edit the lock.
+
+[histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` packed inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
+
+`assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The next `./histos` in this checkout runs `dist/histos.jar` when that checksum matches.
+
+When the build file calls api the running jar does not contain:
 
 ```
 ./histos assembly
@@ -24,13 +30,9 @@ CI has no `dist/`. Every job runs the snapshot named in [.histos/launcher.lock](
 ./histos launcher --update
 ```
 
-`assembly` compiles with the running jar, writes `dist/histos.jar`, and puts the api it just compiled at `bootstrap/histos-api.jar`. It records `.histos/assembly.sha256`. The next `./histos` in this checkout runs that jar.
+`publish snapshots` is the normal publish. It uploads the ship `histos`: the library `histos-api_3` and the assembly `rocks.earlyeffect:histos`. The catalog version stays `0.0.1-SNAPSHOT`. The repository stores a timestamped revision of that version. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign, tag, or open a portal deployment. That is `publish release`, and this catalog still refuses it.
 
-`publish snapshots` is the normal publish. It uploads the manual ship `histos-api_3` and the assembly `rocks.earlyeffect:histos` to Sonatype Central snapshots. Both stay `0.0.1-SNAPSHOT`. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign, tag, or open a portal deployment. That is `publish release`, and this catalog still refuses it.
-
-`launcher --update` is the only command that writes the lock. It records that assembly's revision and sha256. Commit the lock and push the branch. The next CI run compiles the build file against the published api.
-
-`HISTOS_ASSEMBLY`, when set, is the jar instead of `dist/histos.jar`. A checkout with neither downloads the lock and checks its sha256. [histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
+`launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Run it after `publish snapshots` so the latest revision is the assembly just uploaded. Commit the lock. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
 
 ## A release
 
@@ -40,7 +42,7 @@ Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `H
 
 This catalog is still the manual snapshot in [histos.scala](histos.scala), so `publish release` in this checkout refuses before any HTTP. The launcher stays the Maven coordinate in [LauncherPin](engine/src/histos/publish/LauncherPin.scala) and the sha256 in [.histos/launcher.lock](.histos/launcher.lock). `./histos` does not download a GitHub asset.
 
-The ship is `api`, a library, and `app`, an assembly. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. After `VALIDATED`, `publish assets` uploads it to the GitHub release, before promote, so the jar is installable while the library version can still be dropped. Histos does not create the tag. One ship in the catalog is `v<version>`. More than one is `<ship>/v<version>`. The release has to exist already. Humans and other CI use `gh release download`. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub. `--automatic` does not upload an asset. The asset reads `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
+The ship `histos` publishes `api`, a library, and `app`, an assembly. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. After `VALIDATED`, `publish assets` uploads it to the GitHub release, before promote, so the jar is installable while the library version can still be dropped. Histos does not create the tag. One ship in the catalog is `v<version>`. More than one is `<ship>/v<version>`. The release has to exist already. Humans and other CI use `gh release download`. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub. `--automatic` does not upload an asset. The asset reads `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
 
 A library-only ship names no asset and uploads none. Another project uses this same split when people install a tool and builds depend on a library.
 
