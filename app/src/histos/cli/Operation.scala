@@ -61,6 +61,7 @@ object Operation:
       case Command.CachePath                => Right(Call.CachePath)
       case Command.CacheList                => Right(Call.CacheList)
       case Command.CacheClean(mode)         => Right(Call.CacheClean(mode))
+      case Command.CachePromote(from, to)   => Right(Call.CachePromote(from, to))
       case Command.Resolve(action)          => Right(Call.Resolve(action))
       case Command.Workflow(action)         => Right(Call.Workflow(action))
       case Command.LauncherUpdate           => Right(Call.LauncherUpdate)

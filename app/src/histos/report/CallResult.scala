@@ -9,7 +9,7 @@ import histos.preview.PreviewError
 import histos.program.ProgramError
 import histos.publish.{LauncherError, LocalPublishError, ScriptError}
 import histos.resolve.ResolveError
-import histos.schedule.CacheError
+import histos.schedule.{CacheError, RemoteError}
 import histos.select.SelectError
 import histos.task.TaskError
 import histos.testrun.{ModuleTestError, SuitePatternError, TestModeError, TestedCell}
@@ -68,6 +68,7 @@ enum BuildFault:
   case Assemble(error: AssembleError)
   case Launcher(error: LauncherError)
   case Cache(error: CacheError)
+  case Remote(error: RemoteError)
   case Store(failure: IoFailure)
   case Io(failure: IoFailure)
   case Version(error: VersionError)
@@ -96,6 +97,7 @@ enum BuildFault:
     case Assemble(error)     => error.message
     case Launcher(error)     => error.message
     case Cache(error)        => error.message
+    case Remote(error)       => error.message
     case Store(failure)      => failure.message
     case Io(failure)         => failure.message
     case Version(error)      => error.message

@@ -11,7 +11,13 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('.histos/dependencies.lock') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos test"
+        env:
+          HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
   workflow:
     runs-on: ubuntu-26.04
     steps:

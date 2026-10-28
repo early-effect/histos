@@ -59,7 +59,7 @@ On a miss, the previous input map for that action is diffed and the changed inpu
 
 ## Who writes main
 
-`Promote` lives on the build. The default is `Rebuild`. The main build writes `main/` as a side effect of the work it already does. It does not copy the pull-request index, so a pull request cannot poison the next one. `CopyIndex` copies `pr/<n>/` into `main/` without recompiling. That trusts the pull request. The owner picks it. The build file writes `promote"rebuild"` or `promote"copy-index"`. Omission is `Rebuild`. Any other token does not compile, so load fails.
+`Promote` lives on the build. The default is `Rebuild`. The main build writes `main/` as a side effect of the work it already does. It does not copy the pull-request index, so a pull request cannot poison the next one. `CopyIndex` copies `pr/<n>/` into `main/` without recompiling. That trusts the pull request. The owner picks it. The copy reads `GET /{namespace}/ac`, one action digest per line, and writes those ActionResult bytes onto the destination index. It does not write a blob. `Rebuild` does not run it. bazel-remote does not implement that list. The loopback store does. A status other than 200 is a failure, not an empty index. The build file writes `promote"rebuild"` or `promote"copy-index"`. Omission is `Rebuild`. Any other token does not compile, so load fails.
 
 Neither strategy is a `needs` of docs, deploy, or any job that does not compile. There is no snapshot restore in front of those jobs. A hit downloads that action's outputs. A miss compiles.
 
@@ -71,7 +71,7 @@ Neither strategy is a `needs` of docs, deploy, or any job that does not compile.
 
 `testQuick` is local. Its stamp includes the upstream API digest, so a signature change cannot skip the suite.
 
-`TestStore` on the module is `Off` (the default), `Local`, or `Remote`. `Remote` stores a hermetic pass record. A `Need` vetoes it, the same veto [Sendable](../engine/src/histos/schedule/Sendable.scala) already applies to network and docker. The bench modules stay `Off`. The bench does not need remote test results in order to win.
+`TestStore` on the module is `Off` (the default), `Local`, or `Remote`. `Local` skips `test` when the stored suite digest still matches. `Remote` together with a `Need` fails at load. That is the same veto [Sendable](../engine/src/histos/schedule/Sendable.scala) already applies to network and docker. The remote URI is configuration, so `Remote` does not upload and does not skip. The bench modules stay `Off`. The bench does not need remote test results in order to win.
 
 The existing CI planner already limits a pull request to the changed modules and their dependents. The action key is the finer cut inside that set.
 
@@ -107,7 +107,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **API digest.** After a successful compile, write Zinc's public-signature hash beside `inc.zip`. One spec, three fixtures: a trailing comment keeps the digest, a new public method moves it, a method-body change does not. Proof: `./histos test engine` for that spec.
 
-- [x] **Product digest.** Hash the class files after stripping line-number tables, dropping the `TASTY` attribute, and fixing jar timestamps. No absolute path is in the hashed bytes. `.tasty` files are not hashed. The same three fixtures: the comment keeps the digest, the body change moves it. The signature fixture records the digest it produces. Proof: `./histos testOnly --module engine 'histos.zinc.ZincSpec'`.
+- [x] **Product digest.** Hash the class files after stripping line-number tables, dropping the `TASTY` attribute, and fixing jar timestamps. No absolute path is in the hashed bytes. `.tasty` files are not hashed. The same three fixtures: the comment keeps the digest, the body change moves it. The signature fixture records the digest it produces. A path leaf that contains `$` still hashes. Proof: `./histos testOnly --module engine 'histos.zinc.ZincSpec'`. The `$` leaf is in `./histos test engine` (535 passed, 1 ignored).
 
 - [x] **Downstream compile key.** When the classpath entry is an upstream classes directory, [CompileKey](../engine/src/histos/zinc/JvmCompile.scala) mixes in that upstream's API digest instead of a hash of the class bytes. A comment in the upstream does not change the dependent key. A new public method does. The spec calls the key function. It does not need a second compiler run. Proof: `./histos testOnly --module engine 'histos.zinc.ZincSpec'`.
 
@@ -131,15 +131,15 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Promote on the build.** `Rebuild` is the default. `CopyIndex` is the other value. An unknown token fails at load. A one-module graph spec reads the default and the explicit value. Proof: `./histos testOnly --module api 'histos.GraphSpec'`, `./histos testOnly --module engine 'histos.load.PromoteSpec'`, `./histos test api` (116 passed), and `./histos test engine` (526 passed, 1 ignored).
 
-- [ ] **Copy the index.** `./histos cache promote --from pr/<n> --to main` copies index entries and does not compile. The copied entry names the blob the pull request stored. `Rebuild` does not call this command. Proof: the loopback store.
+- [x] **Copy the index.** `HttpCache.copy` copies index entries and does not compile. The copied entry names the blob the pull request stored. `Rebuild` does not run the copy. `./histos cache promote --from pr/<n> --to main` parses those namespaces. The remote URI is not configured, so that command reports that and does not open a connection. Proof: the loopback store. `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` (34 passed), `./histos test engine` (533 passed, 1 ignored), and `./histos test app` (193 passed).
 
-- [ ] **Namespace from the event.** The generated workflow passes the namespace: a pull request writes `pr/<n>` and reads it, then `main`; a push to `main` writes `main`. A docs or deploy job does not `needs` the cache job and does not restore the remote disk. Proof: `./histos workflow --check`.
+- [x] **Namespace from the event.** The test step sets `HISTOS_CACHE_NAMESPACE`. A pull request is `pr/<n>` (that prefix, then `main`). A push is `main`, because this file starts `push` only for `main`. Docs, deploy, versions, workflow, and release do not set it, do not `needs` a cache job, and do not restore a remote disk. This render does not emit that job: the remote URI is configuration, and the process does not read the variable yet. Proof: `./histos test engine` (535 passed, 1 ignored), `./histos test app` (193 passed), and `./histos workflow --check`.
 
-- [ ] **Tool keys.** The generated steps cache Playwright, LLVM, and Coursier on an exact key (tool, revision or lock digest, OS, arch) with no restore-key prefix. `setup-node` does not set `cache: npm`. A fetched JDK keys the locked revision. Proof: `./histos workflow --check`. This item is not a bench gate.
+- [x] **Tool keys.** The test job caches Playwright, LLVM, and Coursier with `actions/cache@v6` and no `restore-keys`. Playwright keys `~/.cache/chekhov/playwright/<revision>` and `~/.cache/ms-playwright` by revision, OS, and arch. LLVM keys `${{ runner.temp }}/llvm` by the pinned revision, OS, and arch, and passes `cache-hit` as `cached` so a hit does not download again. Coursier keys `~/.cache/coursier/v1` by `hashFiles('.histos/dependencies.lock')`, OS, and arch. `setup-node` does not set `cache: npm`. This workflow does not fetch a JDK, so it emits no JDK key and no `setup-java`. Versions, docs, deploy, workflow, and release do not restore these and do not `needs` a cache job. This is not the remote-disk restore. Proof: `./histos testOnly --module engine 'histos.workflow.WorkflowSpec'` (22 passed), `./histos assembly`, and `./histos workflow --check`. This item is not a bench gate.
 
 ### Test results
 
-- [ ] **TestStore.** A module is `Off` unless it says `Local` or `Remote`. `Remote` together with a `Need` fails at load. `test` on `Off` launches the suite. `test` on `Local` skips when the local action key hits. Proof: a module-test spec. Bench modules stay `Off`.
+- [x] **TestStore.** A module is `Off` unless it says `Local` or `Remote`. `Remote` together with a `Need` fails at load. `test` on `Off` launches the suite. `test` on `Local` skips when the stored suite digest matches. That digest is the one a passing run already stores. The upstream API digest is the next item. `test` on `Remote` launches and does not upload, because the remote URI is configuration. Bench modules stay `Off`. Proof: `./histos testOnly --module engine 'histos.testrun.ModuleTestQuickSpec'` (11 passed) and `./histos testOnly --module app 'histos.report.SchemaSpec'` (2 passed).
 
 - [ ] **testQuick stamp.** The quick stamp includes the upstream API digest. A signature change in the upstream dirties the suite. A trailing comment does not. Proof: the quick spec.
 

@@ -17,7 +17,7 @@ import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
 import histos.central.ReleaseMode
 import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
 import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositories, Resolve, ResolveError}
-import histos.schedule.RemoteCache
+import histos.schedule.{CacheNamespace, RemoteCache, RemoteError}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
@@ -592,6 +592,12 @@ object Calls:
                 .mkString("\n")
           told(say, text) *> ok(say),
       )
+
+  /** The remote URI is configuration. The copy is [[histos.schedule.HttpCache.copy]]. This command does not open a
+    * connection.
+    */
+  def cachePromote(from: CacheNamespace, to: CacheNamespace, say: Say): IO[ServerError, Unit] =
+    fault(say, BuildFault.Remote(RemoteError.Off))
 
   def launcherUpdate(repo: Path, say: Say): IO[ServerError, Unit] =
     LauncherPin

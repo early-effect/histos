@@ -2,6 +2,7 @@ package histos.workflow
 
 import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin}
 import histos.resolve.PlatformToken
+import histos.schedule.CacheNamespace
 import histos.version.{Catalog, ReleaseTag, Ship}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{
@@ -414,11 +415,48 @@ object Workflow:
       "jobs:",
     )
 
-  /** Node runs the Scala.js tests. LLVM supplies clang and lld. GitHub publishes no clang setup action. Chekhov reads
-    * Playwright from `~/.cache/chekhov`, not from an npx cache.
+  /** The test job only. Versions, docs, deploy, workflow, and release do not restore these. This workflow does not
+    * fetch a JDK, so it emits no JDK key. Node runs the Scala.js tests. `setup-node` does not set `cache: npm`: that
+    * key is a package lock, and Chekhov does not read it. LLVM supplies clang and lld. The action skips its download
+    * only when `cached` is the string `true`, which `cache-hit` is for this key alone. Chekhov reads Playwright from
+    * `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. Coursier is
+    * the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` is the lock digest, so the
+    * file is not baked into the key. No step sets `restore-keys`.
     */
   private def steps(tools: RunnerTools): List[String] =
-    nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright)
+    nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright) ++ coursierStep
+
+  /** Current major. v4 still targets Node 20. */
+  private val ToolCache = "actions/cache@v6"
+
+  private val CoursierCache = "~/.cache/coursier/v1"
+
+  private val PlaywrightBrowsers = "~/.cache/ms-playwright"
+
+  private val coursierKey: String =
+    "coursier-${{ hashFiles('.histos/dependencies.lock') }}-${{ runner.os }}-${{ runner.arch }}"
+
+  private def toolKey(name: String, revision: String): String =
+    s"$name-$revision-$${{ runner.os }}-$${{ runner.arch }}"
+
+  private def cacheStep(id: Option[String], paths: List[String], key: String): List[String] =
+    paths match
+      case Nil => Nil
+      case _   =>
+        val ident = id match
+          case None       => Nil
+          case Some(name) => List(s"        id: $name")
+        List(s"      - uses: $ToolCache") ++ ident ++ List("        with:") ++ cachePaths(paths) ++ List(
+          s"          key: ${quote(key)}"
+        )
+
+  private def cachePaths(paths: List[String]): List[String] =
+    paths match
+      case path :: Nil => List(s"          path: ${quote(path)}")
+      case many        => "          path: |" :: many.map(path => s"            $path")
+
+  private def coursierStep: List[String] =
+    cacheStep(None, List(CoursierCache), coursierKey)
 
   private def nodeStep(floor: Option[NodeFloor]): List[String] =
     floor match
@@ -434,10 +472,13 @@ object Workflow:
     revision match
       case None         => Nil
       case Some(pinned) =>
-        List(
+        val directory = "${{ runner.temp }}/llvm"
+        cacheStep(Some("llvm"), List(directory), toolKey("llvm", pinned.value)) ++ List(
           "      - uses: KyleMayes/install-llvm-action@v2.0.9",
           "        with:",
           s"          version: ${quote(pinned.value)}",
+          s"          directory: ${quote(directory)}",
+          "          cached: \"${{ steps.llvm.outputs.cache-hit }}\"",
         )
 
   private def playwrightStep(revision: Option[ToolRevision]): List[String] =
@@ -445,7 +486,11 @@ object Workflow:
       case None         => Nil
       case Some(pinned) =>
         val version = pinned.value
-        List(
+        cacheStep(
+          None,
+          List(s"~/.cache/chekhov/playwright/$version", PlaywrightBrowsers),
+          toolKey("playwright", version),
+        ) ++ List(
           "      - run: |",
           s"          dir=\"$$HOME/.cache/chekhov/playwright/$version\"",
           "          mkdir -p \"$dir\"",
@@ -463,9 +508,7 @@ object Workflow:
           s"    runs-on: $Runner",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ prepare ++ List(
-          s"      - run: ${quote(argv(aggregate).mkString(" "))}"
-        )
+        ) ++ prepare ++ testRun(argv(aggregate).mkString(" "))
       case _ =>
         List(
           "  test:",
@@ -477,9 +520,7 @@ object Workflow:
         ) ++ jobs.flatMap(include) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ prepare ++ List(
-          "      - run: \"${{ matrix.command }}\""
-        )
+        ) ++ prepare ++ testRun("${{ matrix.command }}")
 
   private def include(job: TestJob): List[String] =
     List(
@@ -508,6 +549,20 @@ object Workflow:
     version match
       case VersionRef.All           => None
       case VersionRef.One(selected) => Some(selected.value)
+
+  /** The test step only. A pull request is `pr/<n>`. This file starts `push` only for `main`, so that event is `main`.
+    * Docs, deploy, versions, workflow, and release do not set it. None of them `needs` a cache job or restores a remote
+    * disk. This render does not emit that job: the remote URI is configuration.
+    */
+  private val cacheNamespace: String =
+    "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
+
+  private def testRun(command: String): List[String] =
+    List(
+      s"      - run: ${quote(command)}",
+      "        env:",
+      s"          ${CacheNamespace.Key}: ${quote(cacheNamespace)}",
+    )
 
   /** Pinned image. `ubuntu-latest` moves, and this render should not move with it. */
   private val Runner = "ubuntu-26.04"

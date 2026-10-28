@@ -18,6 +18,7 @@ import histos.{
   ScalacFlag,
   ScalacFlags,
   SourcePos,
+  TestStore,
   ToolCatalog,
 }
 
@@ -721,6 +722,7 @@ object QuickSpec extends ZIOSpecDefault:
         List(classes),
         ask,
         TestMode.Quick,
+        TestStore.Off,
         names =>
           ZIO.succeed(
             ZStream.fromIterable(

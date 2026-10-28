@@ -8,6 +8,7 @@ import histos.load.{HeaderScan, LoadError, LoadedBuild}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
 import histos.cache.CacheCleanMode
+import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.toolchain.Runtimes
@@ -123,6 +124,11 @@ private object CallJson:
       raw => CacheCleanMode.from(raw).left.map(_.message),
       _.token,
     )
+  given JsonCodec[CacheNamespace] =
+    JsonCodec.string.transformOrFail(
+      raw => CacheNamespace.from(raw).left.map(_.message),
+      _.token,
+    )
 
 import CallJson.given
 
@@ -151,6 +157,7 @@ enum Call derives JsonCodec:
   case CachePath
   case CacheList
   case CacheClean(mode: CacheCleanMode)
+  case CachePromote(from: CacheNamespace, to: CacheNamespace)
   case LauncherUpdate
   case Watch(inner: Call)
   case Bsp
@@ -926,9 +933,10 @@ object Daemon:
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
           Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
-          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) |
-          Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
+          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
+          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) |
+          Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(

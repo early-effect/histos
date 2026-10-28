@@ -252,8 +252,9 @@ object ProductDigest:
   private val rooted =
     """(?<![A-Za-z0-9_$.])(?:[A-Za-z]:[\\/]|/)(?:[^\\/\s\u0000"]+[\\/])+[^\\/\s\u0000"]*""".r
 
+  /** `replaceAllIn` reads `$` in the replacement as a group. A leaf is literal text. */
   private def scrubUtf8(text: String): String =
-    rooted.replaceAllIn(text, matched => leaf(matched.matched))
+    rooted.replaceAllIn(text, matched => scala.util.matching.Regex.quoteReplacement(leaf(matched.matched)))
 
   private def scrubBytes(bytes: Array[Byte]): Array[Byte] =
     val text = new String(bytes, StandardCharsets.ISO_8859_1)

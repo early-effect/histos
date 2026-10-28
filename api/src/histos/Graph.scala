@@ -5,6 +5,7 @@ import histos.plugin.{
   EntryName,
   HistosPlugin,
   ModuleNote,
+  Need,
   PluginId,
   RegisteredPlugin,
   RepoPath,
@@ -52,6 +53,8 @@ final case class Module(
     published: Option[ArtifactBase] = None,
     publication: Publication = Publication.Library,
     asset: Option[RepoPath] = None,
+    testStore: TestStore = TestStore.Off,
+    needs: Set[Need] = Set.empty,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -423,34 +426,39 @@ object Projects:
                       deps :+ _
                     )
       .flatMap: deps =>
-        (m.test, m.provider) match
-          case (Some(_), Some(_)) =>
-            Left(BuildError.MixedTest(n.name, m.position))
-          case _ =>
-            publicationOf(n.name, m).map: (publication, asset) =>
-              Module(
-                n.name,
-                m.platforms,
-                m.versions,
-                m.dependencies,
-                deps,
-                m.position,
-                m.clang,
-                m.test,
-                m.testDependencies,
-                m.provider,
-                m.nativeVersion,
-                m.jsVersion,
-                m.directory,
-                m.jsEnv,
-                m.jsModule,
-                m.mainClass,
-                m.notes,
-                m.flags,
-                m.published,
-                publication,
-                asset,
-              )
+        if m.testStore == TestStore.Remote && m.needs.nonEmpty then
+          Left(BuildError.RemoteNeeds(n.name, m.needs, m.position))
+        else
+          (m.test, m.provider) match
+            case (Some(_), Some(_)) =>
+              Left(BuildError.MixedTest(n.name, m.position))
+            case _ =>
+              publicationOf(n.name, m).map: (publication, asset) =>
+                Module(
+                  n.name,
+                  m.platforms,
+                  m.versions,
+                  m.dependencies,
+                  deps,
+                  m.position,
+                  m.clang,
+                  m.test,
+                  m.testDependencies,
+                  m.provider,
+                  m.nativeVersion,
+                  m.jsVersion,
+                  m.directory,
+                  m.jsEnv,
+                  m.jsModule,
+                  m.mainClass,
+                  m.notes,
+                  m.flags,
+                  m.published,
+                  publication,
+                  asset,
+                  m.testStore,
+                  m.needs,
+                )
 
   private def publicationOf(
       name: ProjectName,

@@ -5,6 +5,7 @@ import heddle.http.Url
 import heddle.route.PathDsl.*
 import heddle.server.Port
 import heddle.{Body, Method, Request, Response, Routes, Server, Status, string}
+import histos.Promote
 import histos.version.PullRequestNumber
 
 import java.nio.charset.StandardCharsets
@@ -72,6 +73,24 @@ object HttpCacheSpec extends ZIOSpecDefault:
         pullRequest.reads == List(pullRequest, CacheNamespace.Main),
         dev.map(role => role.segments -> role.reads.map(_.segments)) == Right(
           List("dev", "laptop") -> List(List("dev", "laptop"), List("main"))
+        ),
+      )
+    ,
+    test("a namespace token is main, pr/<n>, or dev/<name>"):
+      val dev     = CacheNamespace.from("dev/laptop")
+      val leading = CacheNamespace.from("pr/01")
+      assertTrue(
+        CacheNamespace.from("main") == Right(CacheNamespace.Main),
+        CacheNamespace.from("pr/1") == Right(pullRequest),
+        CacheNamespace.from("pr/11").map(_.token) == Right("pr/11"),
+        dev.map(_.token) == Right("dev/laptop"),
+        CacheNamespace.Main.token == "main",
+        pullRequest.token == "pr/1",
+        CacheNamespace.from("nope") == Left(NamespaceError.Shape("nope")),
+        CacheNamespace.from("pr/1/extra") == Left(NamespaceError.Shape("pr/1/extra")),
+        (leading match
+          case Left(error) => error.message.contains("01")
+          case Right(_)    => false
         ),
       ),
   )
@@ -560,6 +579,128 @@ object HttpCacheSpec extends ZIOSpecDefault:
             s"GET /pr/1/ac/${action.value}",
             s"GET /cas/${output.value}",
           ),
+        )
+    ,
+    test("rebuild does not request the index list"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          pr    <- stand.cache(RemoteMode.Write, pullRequest)
+          action = digest("rebuild")
+          bytes  = utf8("kept")
+          _     <- pr.store(action, bytes)
+          ticks <- Ref.make(0)
+          copying = ticks.update(_ + 1) *> stand.copy(pullRequest, CacheNamespace.Main)
+          _     <- IndexPromote.run(Promote.Rebuild, copying)
+          hits  <- ticks.get
+          main  <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
+          found <- main.find(action)
+          calls <- stand.calls
+        yield assertTrue(
+          hits == 0,
+          found == None,
+          !calls.contains("GET /pr/1/ac"),
+          !calls.exists(_.startsWith("PUT /main/ac/")),
+        )
+    ,
+    test("copy-index writes the pull request action results onto main and does not write a blob"):
+      ZIO.scoped:
+        for
+          stand  <- Stand.open
+          pr     <- stand.cache(RemoteMode.Write, pullRequest)
+          eleven <- stand.cache(RemoteMode.Write, CacheNamespace.PullRequest(PullRequestNumber("11")))
+          left   = digest("left")
+          right  = digest("right")
+          other  = digest("eleven")
+          bytesL = utf8("left-bytes")
+          bytesR = utf8("right-bytes")
+          bytesE = utf8("eleven-bytes")
+          outL   = Digest.ofBytes(bytesL)
+          outR   = Digest.ofBytes(bytesR)
+          outE   = Digest.ofBytes(bytesE)
+          _        <- pr.store(left, bytesL)
+          _        <- pr.store(right, bytesR)
+          _        <- eleven.store(other, bytesE)
+          _        <- IndexPromote.run(Promote.CopyIndex, stand.copy(pullRequest, CacheNamespace.Main))
+          main     <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
+          foundL   <- main.find(left)
+          missed   <- main.find(other)
+          again    <- pr.find(left)
+          mainBody <- stand.indexBytes("main/ac", left.value)
+          prBody   <- stand.indexBytes("pr/1/ac", left.value)
+          calls    <- stand.calls
+          ordered = List(left, right).sortBy(_.value)
+          copied  = "GET /pr/1/ac" :: ordered.flatMap { action =>
+            List(s"GET /pr/1/ac/${action.value}", s"PUT /main/ac/${action.value}")
+          }
+        yield assertTrue(
+          foundL == Some(bytesL),
+          missed == None,
+          again == Some(bytesL),
+          mainBody == prBody,
+          mainBody == Some(ActionResult.encode(outL, bytesL.length)),
+          !calls.contains(s"PUT /main/ac/${other.value}"),
+          calls == List(
+            s"PUT /cas/${outL.value}",
+            s"PUT /pr/1/ac/${left.value}",
+            s"PUT /cas/${outR.value}",
+            s"PUT /pr/1/ac/${right.value}",
+            s"PUT /cas/${outE.value}",
+            s"PUT /pr/11/ac/${other.value}",
+          ) ++ copied ++ List(
+            s"GET /main/ac/${left.value}",
+            s"GET /cas/${outL.value}",
+            s"GET /main/ac/${other.value}",
+            s"GET /pr/1/ac/${left.value}",
+            s"GET /cas/${outL.value}",
+          ),
+        )
+    ,
+    test("an empty index list copies nothing"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          _     <- stand.copy(pullRequest, CacheNamespace.Main)
+          calls <- stand.calls
+        yield assertTrue(calls == List("GET /pr/1/ac"))
+    ,
+    test("a missing index list is a status, not an empty copy"):
+      ZIO.scoped:
+        for
+          stand   <- Stand.open
+          _       <- stand.fail(404)
+          refused <- stand.copy(pullRequest, CacheNamespace.Main).either
+          calls   <- stand.calls
+        yield assertTrue(
+          refused == Left(RemoteError.Status(404)),
+          calls == List("GET /pr/1/ac"),
+        )
+    ,
+    test("a list line that is not a digest fails and writes nothing"):
+      ZIO.scoped:
+        for
+          stand   <- Stand.open
+          _       <- stand.plantList("pr/1/ac", utf8("nope\n"))
+          refused <- stand.copy(pullRequest, CacheNamespace.Main).either
+          calls   <- stand.calls
+        yield assertTrue(
+          refused == Left(RemoteError.Catalog("nope")),
+          calls == List("GET /pr/1/ac"),
+        )
+    ,
+    test("an index body that is not an action result is not copied"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          action = digest("garbage")
+          _       <- stand.plantAc("pr/1/ac", action.value, Chunk(1, 2, 3))
+          refused <- stand.copy(pullRequest, CacheNamespace.Main).either
+          copied  <- stand.indexBytes("main/ac", action.value)
+          calls   <- stand.calls
+        yield assertTrue(
+          refused == Left(RemoteError.Index(action)),
+          copied == None,
+          calls == List(s"GET /pr/1/ac", s"GET /pr/1/ac/${action.value}"),
         ),
   )
 
@@ -589,6 +730,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
       cas: Map[String, Chunk[Byte]],
       calls: List[String],
       fail: Option[Int],
+      lists: Map[String, Chunk[Byte]],
   )
 
   private final class Stand(origin: Url, note: Ref[Note]):
@@ -609,13 +751,22 @@ object HttpCacheSpec extends ZIOSpecDefault:
 
     def holdsBlob(hash: String): UIO[Boolean] =
       note.get.map(_.cas.contains(hash))
+
+    def copy(from: CacheNamespace, to: CacheNamespace): ZIO[Client, RemoteError, Unit] =
+      HttpCache.copy(origin, from, to)
+
+    def plantList(prefix: String, bytes: Chunk[Byte]): UIO[Unit] =
+      note.update(current => current.copy(lists = current.lists + (prefix -> bytes)))
+
+    def indexBytes(prefix: String, hash: String): UIO[Option[Chunk[Byte]]] =
+      note.get.map(_.ac.get(s"$prefix/$hash"))
   end Stand
 
   private object Stand:
     def open: ZIO[Scope, heddle.error.ServerError, Stand] =
       val http = Server.Config.default.copy(host = "127.0.0.1", port = Port(0))
       for
-        note   <- Ref.make(Note(Map.empty, Map.empty, Nil, None))
+        note   <- Ref.make(Note(Map.empty, Map.empty, Nil, None, Map.empty))
         server <- Server.install(routes(note), http)
         port   <- server.port
       yield Stand(Url.parse(s"http://127.0.0.1:$port"), note)
@@ -640,6 +791,9 @@ object HttpCacheSpec extends ZIOSpecDefault:
         },
         Method.GET / "cas" / string("hash") -> { hash => read(note, Slot.Blob, hash) },
         Method.PUT / "cas" / string("hash") handle { (hash, request) => write(note, Slot.Blob, hash, request) },
+        Method.GET / "main" / "ac"                     -> { _ => catalog(note, "main/ac") },
+        Method.GET / "pr" / string("number") / "ac"    -> { number => catalog(note, s"pr/$number/ac") },
+        Method.GET / "dev" / string("name") / "ac"     -> { name => catalog(note, s"dev/$name/ac") },
         Method.DELETE / "main" / "ac"                  -> { _ => drop(note, "main/ac") },
         Method.DELETE / "pr" / string("number") / "ac" -> { number => drop(note, s"pr/$number/ac") },
         Method.DELETE / "dev" / string("name") / "ac"  -> { name => drop(note, s"dev/$name/ac") },
@@ -672,6 +826,23 @@ object HttpCacheSpec extends ZIOSpecDefault:
                 case Slot.Index(_) => Status.NoContent
               (Response.empty(status), stored.copy(calls = stored.calls :+ line)),
       )
+
+    private def catalog(note: Ref[Note], prefix: String) =
+      note.modify: current =>
+        val line = s"GET /$prefix"
+        forced(current, line).getOrElse:
+          val body = current.lists.get(prefix).getOrElse(rendered(current, prefix))
+          (Response(Status.Ok, Body.fromBytes(body)), current.copy(calls = current.calls :+ line))
+
+    private def rendered(current: Note, prefix: String): Chunk[Byte] =
+      val hashes = current.ac.keys
+        .collect {
+          case key if key.startsWith(s"$prefix/") => key.drop(prefix.length + 1)
+        }
+        .toList
+        .sorted
+      val text = if hashes.isEmpty then "" else hashes.mkString("\n") + "\n"
+      Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))
 
     private def drop(note: Ref[Note], prefix: String) =
       note.modify: current =>

@@ -1,6 +1,6 @@
 package histos
 
-import histos.plugin.{CommandName, JobName, NoteKey, PluginId, TaskName}
+import histos.plugin.{CommandName, JobName, Need, NoteKey, PluginId, TaskName}
 import histos.version.ShipName
 
 enum BuildError:
@@ -101,6 +101,7 @@ enum BuildError:
   case AssemblyShape(name: ProjectName, position: SourcePos)
   case AssetWithoutAssembly(name: ProjectName, position: SourcePos)
   case TwoAssets(name: ProjectName, position: SourcePos)
+  case RemoteNeeds(name: ProjectName, needs: Set[Need], position: SourcePos)
 
   def message: String = this match
     case EmptyName(position) =>
@@ -186,4 +187,11 @@ enum BuildError:
       s"'${name.value}' names an asset and does not publish an assembly (${position.line}:${position.column})"
     case TwoAssets(name, position) =>
       s"'${name.value}' names two assets (${position.line}:${position.column})"
+    case RemoteNeeds(name, needs, position) =>
+      val listed = needs.toList.map(needWord).sorted.mkString(", ")
+      s"'${name.value}' stores remote test results and needs $listed (${position.line}:${position.column})"
+
+  private def needWord(need: Need): String = need match
+    case Need.Network => "network"
+    case Need.Docker  => "docker"
 end BuildError

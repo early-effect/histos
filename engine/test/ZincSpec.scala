@@ -673,6 +673,16 @@ object ZincSpec extends ZIOSpecDefault:
         case Left(_) => false
       assertTrue(same == Right(true), clean)
     ,
+    test("a path leaf that contains a dollar sign still hashes"):
+      val bytes  = classFile(1, "Hello.scala", "/tmp/histos-$revision.jar")
+      val hashed = ProductDigest.normalize(bytes)
+      val clean  = hashed match
+        case Right(out) =>
+          val text = new String(out, StandardCharsets.ISO_8859_1)
+          !text.contains("/tmp/histos-") && text.contains("histos-$revision.jar")
+        case Left(_) => false
+      assertTrue(hashed.isRight, clean)
+    ,
     test("bytes that are not a class file are refused"):
       val garbage = ProductDigest.normalize(Array[Byte](1, 2, 3))
       val broken  = ProductDigest.normalize(

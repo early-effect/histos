@@ -2,7 +2,7 @@ package histos
 
 import _root_.scala.annotation.publicInBinary
 
-import histos.plugin.{ModuleNote, NoteKey, NoteText, PluginId, RepoPath}
+import histos.plugin.{ModuleNote, Need, NoteKey, NoteText, PluginId, RepoPath}
 
 /** One or more platforms. The builder requires the first, so empty is not representable.
   */
@@ -45,6 +45,12 @@ sealed trait ModuleDef[P] extends ProjectDef:
 
   /** Opt out of the test provider and run this main. */
   def test(main: TestMain): ModuleDef[P]
+
+  /** Where a passing `test` is recorded. A second call replaces the store. */
+  def testStore(store: TestStore): ModuleDef[P]
+
+  /** A need that keeps this module's work on this machine. A repeated need is one. */
+  def needs(need: Need, rest: Need*): ModuleDef[P]
 
   /** Run this framework in the child. `TestProvider.Zio` is the one `histos test` uses when this is unset. */
   def testProvider(provider: TestProvider): ModuleDef[P]
@@ -124,6 +130,8 @@ object ModuleDef:
       None,
       Nil,
       Nil,
+      TestStore.Off,
+      Set.empty,
     )
 
   /** Node, jsdom, or Firefox. */
@@ -174,6 +182,8 @@ private[histos] final class ModuleBody[P](
     val published: Option[ArtifactBase],
     val publications: List[Publication],
     val assets: List[RepoPath],
+    val testStore: TestStore,
+    val needs: Set[Need],
 ) extends ModuleDef[P]:
   override def libraryDependencies(deps: Dep*): ModuleDef[P] =
     revise(dependencies = dependencies ++ deps.toList)
@@ -190,6 +200,12 @@ private[histos] final class ModuleBody[P](
 
   override def test(main: TestMain): ModuleDef[P] =
     revise(tested = Some(main))
+
+  override def testStore(store: TestStore): ModuleDef[P] =
+    revise(testStore = store)
+
+  override def needs(need: Need, rest: Need*): ModuleDef[P] =
+    revise(needs = this.needs ++ (need +: rest))
 
   override def testProvider(provider: TestProvider): ModuleDef[P] =
     revise(provider = Some(provider))
@@ -260,6 +276,8 @@ private[histos] final class ModuleBody[P](
       published: Option[ArtifactBase] = this.published,
       publications: List[Publication] = this.publications,
       assets: List[RepoPath] = this.assets,
+      testStore: TestStore = this.testStore,
+      needs: Set[Need] = this.needs,
   ): ModuleDef[P] =
     new ModuleBody[P](
       name,
@@ -283,6 +301,8 @@ private[histos] final class ModuleBody[P](
       published,
       publications,
       assets,
+      testStore,
+      needs,
     )
 end ModuleBody
 

@@ -3,7 +3,7 @@ package histos.schedule
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
-import histos.version.PullRequestNumber
+import histos.version.{PullRequestError, PullRequestNumber}
 
 /** The `dev/<name>` segment. One segment of letters, digits, `-`, or `_`. */
 opaque type DevName = String
@@ -64,4 +64,35 @@ enum CacheNamespace:
     case Main           => List(this)
     case PullRequest(_) => List(this, Main)
     case Dev(_)         => List(this, Main)
+
+  def token: String = segments.mkString("/")
 end CacheNamespace
+
+object CacheNamespace:
+  /** Env var the generated test step sets. Other jobs leave it unset. The remote URI is separate configuration. */
+  val Key: String = "HISTOS_CACHE_NAMESPACE"
+
+  def from(raw: String): Either[NamespaceError, CacheNamespace] =
+    raw match
+      case "main" => Right(Main)
+      case other  =>
+        other.split("/", -1).toList match
+          case "pr" :: number :: Nil =>
+            PullRequestNumber.parse(number).left.map(NamespaceError.Number(_)).map(PullRequest(_))
+          case "dev" :: name :: Nil =>
+            DevName.from(name).left.map(NamespaceError.Name(_)).map(Dev(_))
+          case _ =>
+            Left(NamespaceError.Shape(raw))
+end CacheNamespace
+
+enum NamespaceError:
+  case Shape(raw: String)
+  case Number(error: PullRequestError)
+  case Name(error: DevNameError)
+
+  def message: String = this match
+    case Shape(raw) =>
+      s"'$raw' is not a cache namespace. A namespace is main, pr/<n>, or dev/<name>."
+    case Number(error) => error.message
+    case Name(error)   => error.message
+end NamespaceError

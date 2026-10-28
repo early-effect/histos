@@ -1,5 +1,7 @@
 package histos.schedule
 
+import java.nio.charset.StandardCharsets
+
 import heddle.client.{Client, ClientError}
 import heddle.http.{Body, Method, Request, Response, Url}
 
@@ -9,11 +11,21 @@ import zio.{Chunk, IO, URIO, ZIO}
   * names them. bazel-remote ignores an instance prefix on the blob and keeps the action cache per instance, so only the
   * index is prefixed. The blob is written first: a crash leaves an unreferenced blob, not an index entry for a missing
   * one. A lookup walks the role's prefixes. Only a 404 tries the next one. `purge` sends `DELETE /{namespace}/ac` for
-  * this role and does not delete a blob.
+  * this role and does not delete a blob. `copy` reads `GET /{namespace}/ac` (one action digest per line) and writes
+  * those ActionResult bytes onto another index. It does not write a blob. bazel-remote does not implement that list. A
+  * status other than 200 is a failure, not an empty index.
   */
 object HttpCache:
   def make(origin: Url, mode: RemoteMode, namespace: CacheNamespace): URIO[Client, RemoteCache] =
     ZIO.serviceWith[Client](client => new Cache(client, origin, mode, namespace))
+
+  /** Copy index entries from `source` onto `dest`. The mode on a namespaced client does not apply: this writes the
+    * destination index and does not compile.
+    */
+  def copy(origin: Url, source: CacheNamespace, dest: CacheNamespace): ZIO[Client, RemoteError, Unit] =
+    ZIO.serviceWithZIO[Client] { client =>
+      new Cache(client, origin, RemoteMode.Write, source).transfer(dest)
+    }
 
   private[schedule] def exchange(error: ClientError): CacheExchange = error match
     case ClientError.InvalidTarget(_, _)            => CacheExchange.Target
@@ -51,6 +63,15 @@ object HttpCache:
         case RemoteMode.Write =>
           remove(indexRoot(namespace))
 
+    /** The constructor mode is unused. Copy writes the destination index and does not touch `/cas/`. */
+    private[HttpCache] def transfer(dest: CacheNamespace): IO[RemoteError, Unit] =
+      listed(indexRoot(namespace)).flatMap: actions =>
+        ZIO.foreachDiscard(actions): action =>
+          readIndex(index(namespace, action)).flatMap: body =>
+            ActionResult.decode(body) match
+              case None    => ZIO.fail(RemoteError.Index(action))
+              case Some(_) => put(index(dest, action), body)
+
     private def lookup(rest: List[CacheNamespace], action: Digest): IO[RemoteError, Option[Chunk[Byte]]] =
       rest match
         case Nil               => ZIO.none
@@ -74,6 +95,35 @@ object HttpCache:
 
     private def index(role: CacheNamespace, action: Digest): Url =
       indexRoot(role) / action.value
+
+    private def listed(url: Url): IO[RemoteError, Chunk[Digest]] =
+      send(Request.get(url)).flatMap: response =>
+        response.status.code match
+          case 200 =>
+            payload(response).flatMap: bytes =>
+              ZIO.fromEither(entries(bytes))
+          case code =>
+            ZIO.fail(RemoteError.Status(code))
+
+    private def entries(bytes: Chunk[Byte]): Either[RemoteError, Chunk[Digest]] =
+      val text  = new String(bytes.toArray, StandardCharsets.UTF_8)
+      val split = text.split("\n", -1).toList
+      val lines = split match
+        case init :+ "" => init
+        case other      => other
+      lines
+        .foldLeft[Either[RemoteError, List[Digest]]](Right(Nil)): (acc, line) =>
+          acc.flatMap: rest =>
+            Digest.from(line) match
+              case Some(digest) => Right(rest :+ digest)
+              case None         => Left(RemoteError.Catalog(line))
+        .map(Chunk.fromIterable)
+
+    private def readIndex(url: Url): IO[RemoteError, Chunk[Byte]] =
+      send(Request.get(url)).flatMap: response =>
+        response.status.code match
+          case 200  => payload(response)
+          case code => ZIO.fail(RemoteError.Status(code))
 
     private def get(url: Url): IO[RemoteError, Option[Chunk[Byte]]] =
       send(Request.get(url)).flatMap: response =>

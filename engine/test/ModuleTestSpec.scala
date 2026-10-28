@@ -9,8 +9,10 @@ import histos.{
   Dep,
   FrameworkClass,
   Js,
+  BuildError,
   JsEnv,
   Jvm,
+  Module,
   Native,
   ProjectName,
   Projects,
@@ -19,9 +21,11 @@ import histos.{
   TestMachine,
   TestMain,
   TestProvider,
+  TestStore,
   Tool,
   module,
 }
+import histos.plugin.Need
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
@@ -1314,6 +1318,99 @@ private[testrun] object ModuleTestSupport:
           failed(first) && failed(second) && cached(first).isEmpty && cached(
             second
           ).isEmpty
+        )
+    ,
+    test("Off is the default, Remote with a need does not load, and Local with a need does"):
+      val omitted    = module("app", Jvm)(scala3)
+      val remote     = omitted.testStore(TestStore.Remote)
+      val localNeed  = omitted.testStore(TestStore.Local).needs(Need.Network)
+      val remoteNeed = omitted.testStore(TestStore.Remote).needs(Need.Network, Need.Docker)
+      val plain      = Projects(omitted)
+      val alone      = Projects(remote)
+      val allowed    = Projects(localNeed)
+      val refused    = Projects(remoteNeed)
+      val detail     = refused match
+        case Left(error @ BuildError.RemoteNeeds(name, needs, position)) =>
+          Some((name.value, needs, position.line, position.column, error.message))
+        case _ => None
+      assertTrue(
+        storeOf(plain).contains(TestStore.Off),
+        needsOf(plain).contains(Set.empty[Need]),
+        storeOf(alone).contains(TestStore.Remote),
+        needsOf(alone).contains(Set.empty[Need]),
+        storeOf(allowed).contains(TestStore.Local),
+        needsOf(allowed).contains(Set(Need.Network)),
+        detail.exists { (name, needs, line, column, message) =>
+          name == "app" &&
+          needs == Set(Need.Network, Need.Docker) &&
+          line > 0 &&
+          column > 0 &&
+          message.contains("'app'") &&
+          message.contains("network") &&
+          message.contains("docker") &&
+          message.contains(s"$line:$column")
+        },
+      )
+    ,
+    test("test on Off launches again after a passing run"):
+      ZIO.scoped:
+        for
+          root <- temp
+          app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
+          built <- ZIO.fromEither(Projects(app))
+          _     <- ZIO.attempt {
+            write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
+            write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
+            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          first  <- feeds(root, built, mode = TestMode.Run)
+          second <- feeds(root, built, mode = TestMode.Run)
+        yield assertTrue(
+          storeOf(Right(built)).contains(TestStore.Off),
+          cached(first).isEmpty && out(first).contains("alpha"),
+          cached(second).isEmpty && out(second).contains("alpha"),
+        )
+    ,
+    test("test on Local skips when the stored suite digest still matches"):
+      ZIO.scoped:
+        for
+          root <- temp
+          app = module("app", Jvm)(scala3)
+            .test(TestMain("demo.Foo"))
+            .testStore(TestStore.Local)
+          built <- ZIO.fromEither(Projects(app))
+          _     <- ZIO.attempt {
+            write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
+            write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
+            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          first  <- feeds(root, built, mode = TestMode.Run)
+          second <- feeds(root, built, mode = TestMode.Run)
+        yield assertTrue(
+          storeOf(Right(built)).contains(TestStore.Local),
+          cached(first).isEmpty && out(first).contains("alpha"),
+          cached(second) == List("demo.Foo") && !out(second).contains("alpha"),
+        )
+    ,
+    test("test on Remote launches again and does not skip"):
+      ZIO.scoped:
+        for
+          root <- temp
+          app = module("app", Jvm)(scala3)
+            .test(TestMain("demo.Foo"))
+            .testStore(TestStore.Remote)
+          built <- ZIO.fromEither(Projects(app))
+          _     <- ZIO.attempt {
+            write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
+            write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
+            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          first  <- feeds(root, built, mode = TestMode.Run)
+          second <- feeds(root, built, mode = TestMode.Run)
+        yield assertTrue(
+          storeOf(Right(built)).contains(TestStore.Remote),
+          cached(first).isEmpty && out(first).contains("alpha"),
+          cached(second).isEmpty && out(second).contains("alpha"),
         ),
   )
 
@@ -1347,6 +1444,12 @@ private[testrun] object ModuleTestSupport:
 
   private def cached(feeds: zio.Chunk[TestFeed]): List[String] =
     feeds.collect { case TestFeed.Cached(_, _, _, suite) => suite }.toList
+
+  private def storeOf(graph: Either[BuildError, histos.ProjectGraph]): Option[TestStore] =
+    graph.toOption.flatMap(_.projects.collectFirst { case found: Module => found.testStore })
+
+  private def needsOf(graph: Either[BuildError, histos.ProjectGraph]): Option[Set[Need]] =
+    graph.toOption.flatMap(_.projects.collectFirst { case found: Module => found.needs })
 
   private def failed(feeds: zio.Chunk[TestFeed]): Boolean =
     feeds.collect { case TestFeed.Done(TestedCell(_, _, _, TestStatus.Failed(exit))) =>

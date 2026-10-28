@@ -737,6 +737,21 @@ private object WireBuild extends WireSupport:
   given JsonDecoder[CompileError]                        = compileErrorCodec.decoder
   given Schema[CompileError]                             = compileErrorSchema
 
+  given JsonCodec[histos.plugin.Need] =
+    choose(
+      "need",
+      List(
+        "network" -> histos.plugin.Need.Network,
+        "docker"  -> histos.plugin.Need.Docker,
+      ),
+      {
+        case histos.plugin.Need.Network => "network"
+        case histos.plugin.Need.Docker  => "docker"
+      },
+    )
+  given Schema[histos.plugin.Need] =
+    enumeration("Need", List("network", "docker"))
+
   given JsonCodec[BuildError] = JsonCodec.derived
   given Schema[BuildError]    = Schema.of(buildErrorDoc, Some("BuildError"))
 
@@ -918,6 +933,14 @@ private object WireBuild extends WireSupport:
         wrap("AssemblyShape", List(req("name", project), req("position", position))),
         wrap("AssetWithoutAssembly", List(req("name", project), req("position", position))),
         wrap("TwoAssets", List(req("name", project), req("position", position))),
+        wrap(
+          "RemoteNeeds",
+          List(
+            req("name", project),
+            req("needs", SchemaDoc.Array(docOf[histos.plugin.Need])),
+            req("position", position),
+          ),
+        ),
       ),
     )
 end WireBuild
@@ -1303,6 +1326,7 @@ private object WireCall extends WireSupport:
         wrap("Assemble", List(req("error", docOf[AssembleError]))),
         wrap("Launcher", List(req("error", docOf[LauncherError]))),
         wrap("Cache", List(req("error", docOf[CacheError]))),
+        wrap("Remote", List(req("error", docOf[RemoteError]))),
         wrap("Store", List(req("failure", docOf[IoFailure]))),
         wrap("Io", List(req("failure", docOf[IoFailure]))),
         wrap("Version", List(req("error", docOf[VersionError]))),

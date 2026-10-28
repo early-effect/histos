@@ -38,8 +38,8 @@ object Perform:
       case Call.Clean(_) | Call.PreviewClean(_) =>
         true
       case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot |
-          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) |
-          Call.Bsp | Call.PreviewCleanFull =>
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
+          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCleanFull =>
         false
 
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
@@ -170,6 +170,8 @@ object Perform:
             Calls.cacheList(say)
           case Call.CacheClean(mode) =>
             Calls.cacheClean(mode, say)
+          case Call.CachePromote(from, to) =>
+            Calls.cachePromote(from, to, say)
           case Call.LauncherUpdate =>
             Calls.launcherUpdate(repo, say)
           case Call.Watch(inner) =>

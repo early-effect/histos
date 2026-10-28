@@ -44,6 +44,7 @@ enum RemoteError:
   case Status(code: Int)
   case Index(action: Digest)
   case Mismatch(action: Digest, output: Digest)
+  case Catalog(line: String)
 
   def message: String = this match
     case Off                      => "remote cache is not configured"
@@ -56,6 +57,7 @@ enum RemoteError:
     case Index(action)            => s"remote cache action ${action.value} is not an action result"
     case Mismatch(action, output) =>
       s"remote cache action ${action.value} returned bytes that are not ${output.value}"
+    case Catalog(line) => s"'$line' is not an action digest"
 end RemoteError
 
 /** Action index plus a content-addressed store. `find` reads both. `store` writes both, and refuses unless the mode is

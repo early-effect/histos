@@ -23,6 +23,7 @@ import histos.server.{
 }
 import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
+import histos.schedule.{CacheNamespace, NamespaceError, RemoteError}
 import histos.jdk.{Machine, Toolchain}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
@@ -72,6 +73,7 @@ enum Command:
   case CachePath
   case CacheList
   case CacheClean(mode: CacheCleanMode)
+  case CachePromote(from: CacheNamespace, to: CacheNamespace)
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
   case LauncherUpdate
@@ -104,6 +106,7 @@ enum CliParseError:
   case SuitePattern(error: SuitePatternError)
   case RunId(error: TaskError)
   case Flag(error: FlagNameError)
+  case Namespace(error: NamespaceError)
   case WatchCommand(detail: String)
   case PublishForm
   case Rejected
@@ -122,6 +125,7 @@ enum CliParseError:
     case SuitePattern(error)                            => error.message
     case RunId(error)                                   => error.message
     case Flag(error)                                    => error.message
+    case Namespace(error)                               => error.message
     case WatchCommand(detail)                           => detail
     case PublishForm                                    => "a directory belongs on publishLocal"
 end CliParseError
@@ -215,7 +219,7 @@ object CliExit:
       case BuildFault.Preview(_)                         => previewExit(call)
       case BuildFault.Assemble(_)                        => CompileFailed
       case BuildFault.Launcher(_)                        => ResolveFailed
-      case BuildFault.Cache(_)                           => LoadFailed
+      case BuildFault.Cache(_) | BuildFault.Remote(_)    => LoadFailed
       case BuildFault.Store(_)                           => LoadFailed
       case BuildFault.Io(_)                              => ioExit(call)
       case BuildFault.Version(_)                         => TaskFailed
@@ -289,8 +293,8 @@ object CliExit:
           Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
           Call.PreviewPublishSnapshots(_) =>
         PublishFailed
-      case Call.CachePath | Call.CacheList | Call.CacheClean(_) => LoadFailed
-      case _                                                    => TaskFailed
+      case Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) => LoadFailed
+      case _                                                                              => TaskFailed
 
   private def rejectedExit(rejection: Rejection): CliExit =
     rejection match
@@ -315,7 +319,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -385,6 +389,8 @@ object Cli:
       case Command.CacheList        => attach(repo, Call.CacheList, cacheList)
       case Command.CacheClean(mode) =>
         attach(repo, Call.CacheClean(mode), cacheClean(mode))
+      case Command.CachePromote(from, to) =>
+        attach(repo, Call.CachePromote(from, to), cachePromote(from, to))
       case Command.Resolve(action)  => resolve(repo, apiJar, action)
       case Command.Workflow(action) => workflow(repo, apiJar, action)
       case Command.LauncherUpdate   =>
@@ -979,6 +985,11 @@ object Cli:
           held(Call.CacheClean(mode), text, CallResult.reported()),
       )
       .merge
+
+  /** The remote URI is configuration. This command names the namespaces and does not open a connection. */
+  private def cachePromote(from: CacheNamespace, to: CacheNamespace): UIO[Completed] =
+    val call = Call.CachePromote(from, to)
+    ZIO.succeed(held(call, "", CallResult.Fault(BuildFault.Remote(RemoteError.Off))))
 
   /** No names skip the graph. A live server still holds the compile permit. */
   private def clean(

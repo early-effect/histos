@@ -34,7 +34,18 @@ import histos.zinc.{
   Sources,
 }
 import histos.pack.{MainClass, MainClassError}
-import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
+import histos.{
+  ClangPin,
+  Dep,
+  Module,
+  Platform,
+  ProjectGraph,
+  ProjectName,
+  ScalaVersion,
+  TestMain,
+  TestProvider,
+  TestStore,
+}
 
 import java.nio.file.{Files, Path}
 
@@ -94,6 +105,7 @@ private[testrun] object SuiteLaunch:
         classes :: linked.paths,
         asked,
         mode,
+        module.testStore,
         _ =>
           for
             chosen <- node(cell, runtimes)
@@ -246,6 +258,7 @@ private[testrun] object SuiteLaunch:
                   classes :: linked.paths,
                   stamp,
                   mode,
+                  module.testStore,
                   dirty => launch(exact(dirty), linked),
                 )
     yield stream
@@ -301,6 +314,7 @@ private[testrun] object SuiteLaunch:
         classes :: linked.paths,
         asked,
         mode,
+        module.testStore,
         _ =>
           for
             _         <- TestCompile.fresh(linkDir)
@@ -471,6 +485,7 @@ private[testrun] object SuiteLaunch:
                   classes :: linked.paths,
                   stamp,
                   mode,
+                  module.testStore,
                   dirty => launch(exact(dirty), linked, major),
                 )
     yield stream
@@ -546,9 +561,9 @@ private[testrun] object SuiteLaunch:
 
   private final case class Stamped(name: String, suite: SuiteName, digest: Option[Sha256])
 
-  /** A passing run stores each suite's fingerprint. [[TestMode.Quick]] skips a suite whose stored fingerprint still
-    * matches. [[TestMode.Run]] receives the suites that still have to run. The class tree is read once and reused for
-    * every suite. The digest is [[SuiteCover.stored]].
+  /** A passing run stores each suite's fingerprint. [[TestMode.Quick]] and [[TestStore.Local]] skip a suite whose
+    * stored fingerprint still matches. [[TestMode.Run]] on [[TestStore.Off]] or [[TestStore.Remote]] receives every
+    * suite. The class tree is read once and reused for every suite. The digest is [[SuiteCover.stored]].
     */
   private[testrun] def remember[R](
       repo: Path,
@@ -557,6 +572,7 @@ private[testrun] object SuiteLaunch:
       directories: List[Path],
       ask: SuiteAsk,
       mode: TestMode,
+      store: TestStore,
       run: List[String] => ZIO[
         R,
         ModuleTestError,
@@ -580,10 +596,7 @@ private[testrun] object SuiteLaunch:
                     .mapError(ModuleTestError.Stamp(_))
                 yield Stamped(name, suite, found)
               .flatMap: stamped =>
-                if mode == TestMode.Run then
-                  run(suites)
-                    .map(stream => stream.tap(keep(repo, cell, stamped, _)))
-                else
+                if mode == TestMode.Quick || store == TestStore.Local then
                   ZIO
                     .foldLeft(stamped)(
                       (List.empty[String], List.empty[Stamped])
@@ -619,6 +632,9 @@ private[testrun] object SuiteLaunch:
                       else
                         run(dirty.map(_.name)).map: stream =>
                           shown ++ stream.tap(keep(repo, cell, dirty, _))
+                else
+                  run(suites)
+                    .map(stream => stream.tap(keep(repo, cell, stamped, _)))
 
   private def prepared(
       module: Module,
@@ -753,6 +769,7 @@ private[testrun] object SuiteLaunch:
         classes :: linked.paths,
         asked,
         mode,
+        module.testStore,
         _ =>
           TestCompile
             .fresh(
@@ -879,6 +896,7 @@ private[testrun] object SuiteLaunch:
                   classes :: linked.paths,
                   stamp,
                   mode,
+                  module.testStore,
                   dirty => launch(exact(dirty), linked),
                 )
         yield ran

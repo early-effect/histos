@@ -2,6 +2,7 @@ package histos.cli
 
 import histos.cache.CacheCleanMode
 import histos.plugin.{CommandName, PluginTaskId}
+import histos.schedule.CacheNamespace
 import histos.server.ResolveAction
 import histos.task.{RunId, TaskId}
 import histos.testrun.SuitePattern
@@ -43,6 +44,7 @@ object Grammar:
     case PublishDrop(id: String)
     case PublishAssets(tokens: List[String])
     case CacheClean(mode: CacheCleanMode)
+    case CachePromote(from: String, to: String)
     case Resolve(action: ResolveAction)
     case LauncherUpdate
     case Workflow(action: WorkflowAction)
@@ -106,8 +108,12 @@ object Grammar:
     Left(ValidationError(ValidationErrorType.InvalidValue, HelpDoc.empty))
   private val cacheMode =
     Options.boolean("dry-run").map(dry => if dry then CacheCleanMode.DryRun else CacheCleanMode.Remove)
-  private val clean         = CliCommand("clean", cacheMode).map(Wire.CacheClean(_))
-  private val cache         = CliCommand("cache").subcommands(path | list | clean)
+  private val clean   = CliCommand("clean", cacheMode).map(Wire.CacheClean(_))
+  private val promote =
+    CliCommand("promote", Options.text("from") ++ Options.text("to")).map { (from, to) =>
+      Wire.CachePromote(from, to)
+    }
+  private val cache         = CliCommand("cache").subcommands(path | list | clean | promote)
   private val resolveAction =
     (Options.boolean("update") ++ Options.boolean("check")).mapOrFail:
       case (false, false) => Right(ResolveAction.Verify)
@@ -204,7 +210,11 @@ object Grammar:
         ZIO.fromEither(
           RunId.from(id).left.map(CliParseError.RunId(_)).map(Command.Cancel(_))
         )
-      case Wire.CacheClean(mode) => ZIO.succeed(Command.CacheClean(mode))
+      case Wire.CacheClean(mode)       => ZIO.succeed(Command.CacheClean(mode))
+      case Wire.CachePromote(from, to) =>
+        ZIO.fromEither(namespaces(from, to)).map { (source, dest) =>
+          Command.CachePromote(source, dest)
+        }
       case Wire.Resolve(action)  => ZIO.succeed(Command.Resolve(action))
       case Wire.LauncherUpdate   => ZIO.succeed(Command.LauncherUpdate)
       case Wire.Workflow(action) => ZIO.succeed(Command.Workflow(action))
@@ -359,8 +369,19 @@ object Grammar:
                   platform => NamedRun.Module(id, Some(platform)),
                 )
 
+  private def namespaces(from: String, to: String): Either[CliParseError, (CacheNamespace, CacheNamespace)] =
+    for
+      source <- CacheNamespace.from(from).left.map(CliParseError.Namespace(_))
+      dest   <- CacheNamespace.from(to).left.map(CliParseError.Namespace(_))
+    yield (source, dest)
+
   private def failure(error: ValidationError, args: List[String]): CliParseError =
     args match
+      case "cache" :: "promote" :: _ =>
+        error.validationErrorType match
+          case ValidationErrorType.MissingValue | ValidationErrorType.InvalidArgument =>
+            CliParseError.Pattern("cache promote needs --from and --to")
+          case _ => reject(error, args)
       case "publish" :: ("snapshots" | "release" | "assets" | "promote" | "drop") :: _ => reject(error, args)
       case "publish" :: _                                                              => CliParseError.PublishForm
       case "preview" :: "publish" :: "snapshots" :: _                                  => reject(error, args)

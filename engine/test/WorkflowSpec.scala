@@ -13,6 +13,7 @@ import histos.plugin.{
   RepoPath,
   TaskName,
 }
+import histos.schedule.CacheNamespace
 import histos.version.{Catalog, ManualVersion, Ship, ShipName, ShipNumber}
 import histos.{
   Axis,
@@ -60,7 +61,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         ) && golden.contains("workflow --check"),
         !golden.contains("setup-java") && !golden.contains("setup-node") && !golden
           .contains("install-llvm-action") && !golden.contains("playwright") && !golden
-          .contains("format") && !golden.contains("publish") &&
+          .contains("format:") && !golden.contains("publish") &&
           golden.contains("push:\n    branches:\n      - main") && !golden
             .contains("tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
@@ -97,7 +98,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                 case Right(yaml) =>
                   yaml.contains("./histos run versions") && !yaml.contains(
                     "publish"
-                  ) && !yaml.contains("format")
+                  ) && !yaml.contains("format:")
                 case Left(_) => false
             case Left(_) => false
         case _ => false
@@ -135,6 +136,15 @@ object WorkflowSpec extends ZIOSpecDefault:
         Workflow.render(graph(Splits.aggregate, nodeOnly)) == Right(node),
         Workflow.render(graph(Splits.aggregate, llvmOnly)) == Right(llvm),
         Workflow.render(graph(Splits.aggregate, playwrightOnly)) == Right(playwright),
+        !node.contains("restore-keys") && !llvm.contains("restore-keys") && !playwright.contains("restore-keys"),
+        !node.contains("cache: npm") && !node.contains("setup-java"),
+        node.contains("hashFiles('.histos/dependencies.lock')") &&
+          node.contains("${{ runner.os }}") && node.contains("${{ runner.arch }}"),
+        llvm.contains("llvm-20.1.8-${{ runner.os }}-${{ runner.arch }}") &&
+          llvm.contains("steps.llvm.outputs.cache-hit"),
+        playwright.contains("playwright-1.49.0-${{ runner.os }}-${{ runner.arch }}") &&
+          playwright.contains("~/.cache/chekhov/playwright/1.49.0") &&
+          playwright.contains("~/.cache/ms-playwright"),
       )
     ,
     test("this repository asks the runner for node, llvm, and playwright"):
@@ -299,6 +309,63 @@ object WorkflowSpec extends ZIOSpecDefault:
       .mapError(error => new java.io.IOException(error.message))
 
   private val plugins = suite("plugins")(
+    test("the test job passes the event namespace and caches coursier, and docs and deploy do not"):
+      val rendered = Workflow.render(
+        withJobs(
+          List(
+            CiJob(JobName("docs"), TaskName("site"), JobWhen.Always),
+            CiJob(
+              JobName("deploy"),
+              TaskName("ship"),
+              JobWhen.Always,
+              JobPermissions.ContentsWrite,
+            ),
+          )
+        )
+      )
+      val pull = CacheNamespace.from("pr/8")
+      val main = CacheNamespace.from("main")
+      assertTrue:
+        rendered match
+          case Right(yaml) =>
+            (
+              slice(yaml, "  test:", "  docs:"),
+              slice(yaml, "  docs:", "  deploy:"),
+              slice(
+                yaml,
+                "  deploy:",
+                "  workflow:",
+              ),
+              slice(yaml, "  workflow:", ""),
+            ) match
+              case (Some(test), Some(docs), Some(deploy), Some(workflow)) =>
+                test.contains(CacheNamespace.Key) &&
+                test.contains(
+                  "case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main')"
+                ) &&
+                test.contains("./histos test") &&
+                test.contains("actions/cache@v6") &&
+                test.contains("hashFiles('.histos/dependencies.lock')") &&
+                !test.contains("restore-keys") &&
+                !test.contains("cache: npm") &&
+                !test.contains("setup-java") &&
+                occurrences(yaml, CacheNamespace.Key) == 1 &&
+                occurrences(yaml, "actions/cache") == 1 &&
+                !docs.contains(CacheNamespace.Key) &&
+                !deploy.contains(CacheNamespace.Key) &&
+                !workflow.contains(CacheNamespace.Key) &&
+                !docs.contains("actions/cache") &&
+                !deploy.contains("actions/cache") &&
+                !workflow.contains("actions/cache") &&
+                !docs.contains("needs:") &&
+                !deploy.contains("needs:") &&
+                !yaml.contains("needs:") &&
+                !yaml.contains("restore-keys") &&
+                pull.map(ns => (ns.token, ns.reads.map(_.token))) == Right(("pr/8", List("pr/8", "main"))) &&
+                main.map(ns => (ns.token, ns.reads.map(_.token))) == Right(("main", List("main")))
+              case _ => false
+          case Left(_) => false
+    ,
     test(
       "an always job is rendered after test and before workflow, and the plugin supplies no yaml"
     ):
@@ -454,6 +521,20 @@ object WorkflowSpec extends ZIOSpecDefault:
         ),
   )
 
+  private def slice(yaml: String, start: String, end: String): Option[String] =
+    val from = yaml.indexOf(start)
+    if from < 0 then None
+    else if end.isEmpty then Some(yaml.substring(from))
+    else
+      val to = yaml.indexOf(end, from + start.length)
+      if to < 0 then None else Some(yaml.substring(from, to))
+
+  private def occurrences(text: String, needle: String): Int =
+    def go(from: Int, seen: Int): Int =
+      val at = text.indexOf(needle, from)
+      if at < 0 then seen else go(at + needle.length, seen + 1)
+    go(0, 0)
+
   private def withJobs(jobs: List[CiJob]): ProjectGraph =
     ProjectGraph.trusted(
       List(
@@ -507,7 +588,10 @@ object WorkflowSpec extends ZIOSpecDefault:
             toolJob.contains("\"./histos publish assets tool\"") &&
             toolJob.contains("contents: write") &&
             body.contains("\"./histos publish promote ${{ inputs.deployment }}\"") &&
-            !body.contains("--automatic")
+            !body.contains("--automatic") &&
+            !body.contains(CacheNamespace.Key) &&
+            !body.contains("actions/cache") &&
+            !body.contains("needs:")
           case _ => false
     ,
     test("a schedule is rendered after the release file"):

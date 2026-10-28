@@ -9,6 +9,8 @@ import histos.publish.{LauncherPin, LauncherScript}
 import histos.workflow.{Workflow, WorkflowAction}
 import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
 import histos.cache.{CacheCleanMode, ContentStore}
+import histos.schedule.{CacheNamespace, NamespaceError}
+import histos.version.PullRequestNumber
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
@@ -236,6 +238,19 @@ object CliSpec extends ZIOSpecDefault:
         clean == Command.CacheClean(CacheCleanMode.Remove),
         Operation.call(preview) == Right(Call.CacheClean(CacheCleanMode.DryRun)),
         Operation.call(clean) == Right(Call.CacheClean(CacheCleanMode.Remove)),
+      )
+    ,
+    test("cache promote names the source and the destination"):
+      val source = CacheNamespace.PullRequest(PullRequestNumber("1"))
+      for
+        parsed  <- Cli.parse(List("cache", "promote", "--from", "pr/1", "--to", "main"))
+        bad     <- Cli.parse(List("cache", "promote", "--from", "nope", "--to", "main")).either
+        missing <- Cli.parse(List("cache", "promote", "--to", "main")).either
+      yield assertTrue(
+        parsed == Command.CachePromote(source, CacheNamespace.Main),
+        Operation.call(parsed) == Right(Call.CachePromote(source, CacheNamespace.Main)),
+        bad == Left(CliParseError.Namespace(NamespaceError.Shape("nope"))),
+        missing == Left(CliParseError.Pattern("cache promote needs --from and --to")),
       )
     ,
     test("toolchain is a command"):

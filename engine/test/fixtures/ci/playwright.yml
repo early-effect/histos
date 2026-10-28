@@ -11,13 +11,25 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/chekhov/playwright/1.49.0
+            ~/.cache/ms-playwright
+          key: "playwright-1.49.0-${{ runner.os }}-${{ runner.arch }}"
       - run: |
           dir="$HOME/.cache/chekhov/playwright/1.49.0"
           mkdir -p "$dir"
           npm install --prefix "$dir" --no-fund --no-audit --no-progress playwright@1.49.0
           node "$dir/node_modules/playwright/cli.js" install-deps firefox
           node "$dir/node_modules/playwright/cli.js" install firefox
+      - uses: actions/cache@v6
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('.histos/dependencies.lock') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos test"
+        env:
+          HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
   workflow:
     runs-on: ubuntu-26.04
     steps:
