@@ -28,8 +28,8 @@ object Perform:
   def needsGraph(call: Call): Boolean =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Graph | Call.Run(_, _) | Call.Task(_, _) | Call.Toolchain |
-          Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_) |
+          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.Graph | Call.Run(_, _) | Call.Task(_, _) |
+          Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_) |
           Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
@@ -121,6 +121,8 @@ object Perform:
             follow(Calls.promote(repo, machine, id, say))
           case Call.PublishDrop(id) =>
             follow(Calls.drop(repo, machine, id, say))
+          case Call.PublishAssets(tokens) =>
+            held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
           case Call.Assembly(destination) =>
             held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, destination, say))))
           case Call.Run(id, platform) =>

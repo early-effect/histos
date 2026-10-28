@@ -79,6 +79,15 @@ object PublishRun:
   def drop(repo: Path, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
     ReleaseRun.drop(repo, env, id)
 
+  /** The jar named on the assembly, for a ship whose deployment file says `VALIDATED`. */
+  def assets(
+      repo: Path,
+      graph: ProjectGraph,
+      tokens: List[String],
+      env: Map[String, String],
+  ): IO[AssetError, AssetReport] =
+    AssetRun.publish(repo, graph, tokens, env)
+
   private def go(
       repo: Path,
       graph: ProjectGraph,

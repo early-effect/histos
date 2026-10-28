@@ -61,6 +61,7 @@ object CallModeSpec extends ZIOSpecDefault:
         val release  = Call.PublishRelease(List("core"), true)
         val promoted = Call.PublishPromote("abc")
         val dropped  = Call.PublishDrop("abc")
+        val assets   = Call.PublishAssets(List("histos"))
         val cleaned  = Call.Clean(List(core))
         val cancel   = Call.Cancel(RunId.trusted("run-1"))
         val dry      = Call.CacheClean(CacheCleanMode.DryRun)
@@ -79,6 +80,7 @@ object CallModeSpec extends ZIOSpecDefault:
           roundTrip(release),
           roundTrip(promoted),
           roundTrip(dropped),
+          roundTrip(assets),
           roundTrip(cleaned),
           roundTrip(cancel),
           roundTrip(dry),

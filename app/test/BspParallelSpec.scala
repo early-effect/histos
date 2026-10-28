@@ -150,6 +150,7 @@ object BspParallelSpec extends ZIOSpecDefault:
       Call.PublishRelease(Nil, false)        -> true,
       Call.PublishPromote("abc")             -> false,
       Call.PublishDrop("abc")                -> false,
+      Call.PublishAssets(Nil)                -> false,
       Call.Run("demo", None)                 -> true,
       Call.Assembly(None)                    -> true,
       Call.Clean(Nil)                        -> true,

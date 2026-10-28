@@ -36,6 +36,7 @@ object CallResultSpec extends ZIOSpecDefault:
         CliExit.from(Call.PublishRelease(Nil, true), ran) == CliExit.PublishFailed,
         CliExit.from(Call.PublishPromote("abc"), ran) == CliExit.PublishFailed,
         CliExit.from(Call.PublishDrop("abc"), ran) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishAssets(List("histos")), ran) == CliExit.PublishFailed,
       )
     ,
     test("a release fault round trips"):

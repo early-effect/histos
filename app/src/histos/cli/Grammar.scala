@@ -41,6 +41,7 @@ object Grammar:
     case PublishRelease(automatic: Boolean, tokens: List[String])
     case PublishPromote(id: String)
     case PublishDrop(id: String)
+    case PublishAssets(tokens: List[String])
     case CacheClean(mode: CacheCleanMode)
     case Resolve(action: ResolveAction)
     case LauncherUpdate
@@ -84,8 +85,12 @@ object Grammar:
     CliCommand("promote", Args.text("deployment")).map(Wire.PublishPromote(_))
   private val publishDrop =
     CliCommand("drop", Args.text("deployment")).map(Wire.PublishDrop(_))
+  private val publishAssets =
+    CliCommand("assets", Args.text("token").*).map(tokens => Wire.PublishAssets(tokens.toList))
   private val publish =
-    CliCommand("publish").subcommands(publishSnapshots | publishRelease | publishPromote | publishDrop)
+    CliCommand("publish").subcommands(
+      publishSnapshots | publishRelease | publishAssets | publishPromote | publishDrop
+    )
   private val mcp       = CliCommand("mcp").map(_ => Wire.Mcp)
   private val bsp       = CliCommand("bsp").map(_ => Wire.Bsp)
   private val server    = CliCommand("server").map(_ => Wire.Server)
@@ -235,6 +240,8 @@ object Grammar:
         ZIO.succeed(Command.PublishPromote(id))
       case Wire.PublishDrop(id) =>
         ZIO.succeed(Command.PublishDrop(id))
+      case Wire.PublishAssets(tokens) =>
+        ZIO.succeed(Command.PublishAssets(tokens))
       case Wire.PreviewCompile(projects) =>
         projectList("preview compile", projects).map(Command.PreviewCompile(_))
       case Wire.PreviewTest(projects) =>
@@ -354,11 +361,11 @@ object Grammar:
 
   private def failure(error: ValidationError, args: List[String]): CliParseError =
     args match
-      case "publish" :: ("snapshots" | "release" | "promote" | "drop") :: _ => reject(error, args)
-      case "publish" :: _                                                   => CliParseError.PublishForm
-      case "preview" :: "publish" :: "snapshots" :: _                       => reject(error, args)
-      case "preview" :: "publish" :: _                                      => CliParseError.PublishForm
-      case _                                                                => reject(error, args)
+      case "publish" :: ("snapshots" | "release" | "assets" | "promote" | "drop") :: _ => reject(error, args)
+      case "publish" :: _                                                              => CliParseError.PublishForm
+      case "preview" :: "publish" :: "snapshots" :: _                                  => reject(error, args)
+      case "preview" :: "publish" :: _                                                 => CliParseError.PublishForm
+      case _                                                                           => reject(error, args)
 
   private def reject(
       error: ValidationError,

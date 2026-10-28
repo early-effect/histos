@@ -63,6 +63,7 @@ enum Command:
   case PublishRelease(automatic: Boolean, tokens: List[String])
   case PublishPromote(id: String)
   case PublishDrop(id: String)
+  case PublishAssets(tokens: List[String])
   case Mcp
   case Bsp
   case Server
@@ -189,7 +190,8 @@ object CliExit:
     call match
       case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
       case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => CompileFailed
 
@@ -226,7 +228,8 @@ object CliExit:
     call match
       case Call.Compile(_) | Call.PreviewCompile(_) | Call.Assembly(_) => CompileFailed
       case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => ResolveFailed
 
@@ -235,7 +238,8 @@ object CliExit:
       case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
       case Call.Test(_, _, _) | Call.PreviewTest(_)                    => TestFailed
       case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => TaskFailed
 
@@ -246,7 +250,8 @@ object CliExit:
         call match
           case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
           case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-              Call.PublishDrop(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+              Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+              Call.PreviewPublishSnapshots(_) =>
             PublishFailed
           case _ => CompileFailed
 
@@ -270,7 +275,8 @@ object CliExit:
       case Call.PreviewCompile(_) | Call.Compile(_) => CompileFailed
       case Call.PreviewTest(_) | Call.Test(_, _, _) => TestFailed
       case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => TaskFailed
 
@@ -280,7 +286,8 @@ object CliExit:
       case Call.Test(_, _, _) | Call.Run(_, _)                         => ResolveFailed
       case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
       case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case Call.CachePath | Call.CacheList | Call.CacheClean(_) => LoadFailed
       case _                                                    => TaskFailed
@@ -308,7 +315,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -367,6 +374,8 @@ object Cli:
         publishPromote(repo, apiJar, id)
       case Command.PublishDrop(id) =>
         publishDrop(repo, apiJar, id)
+      case Command.PublishAssets(tokens) =>
+        publishAssets(repo, apiJar, tokens)
       case Command.Mcp              => mcp(repo, apiJar)
       case Command.Bsp              => bsp(repo, apiJar)
       case Command.Server           => serve(repo, apiJar)
@@ -908,6 +917,10 @@ object Cli:
 
   private def publishDrop(repo: Path, apiJar: Path, id: String): URIO[Local, Completed] =
     val call = Call.PublishDrop(id)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishAssets(repo: Path, apiJar: Path, tokens: List[String]): URIO[Local, Completed] =
+    val call = Call.PublishAssets(tokens)
     attach(repo, call, locally(repo, apiJar, call))
 
   /** Compile, then one subprocess per Scala version. `no tests` is success and is not a passing suite.

@@ -146,10 +146,15 @@ object ReleaseSpec extends ZIOSpecDefault:
           portal <- temp
           secret <- secretOf
           bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          stand  <- AssetStand.open("asset-token")
           key    <- Keys.signing
           built  <- ZIO.fromEither(library)
           _      <- plant(root, built, List("core/src/main/scala/demo/Hello.scala" -> hello), "cell core 3.10.0 jvm\n")
-          env = signing(bound.url, key.armor)
+          env = signing(bound.url, key.armor) ++ Map(
+            "HISTOS_GITHUB"     -> stand.base,
+            "GITHUB_TOKEN"      -> "asset-token",
+            "GITHUB_REPOSITORY" -> "early-effect/histos",
+          )
           first   <- publish(root, built, jdk, env, ReleaseMode.Automatic)
           ids     <- deploymentIds(portal)
           record  <- text(deployment(root, "libs"))
@@ -165,6 +170,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           goneFile <- exists(deployment(root, "libs"))
           third    <- publish(root, built, jdk, env, ReleaseMode.Automatic)
           fresh    <- deploymentIds(portal)
+          seen     <- stand.seen
         yield assertTrue(
           first.deployed.map(item => (item.ship.value, item.state, item.version)) == List(
             ("libs", DeploymentState.Published, "1.0.0")
@@ -183,6 +189,8 @@ object ReleaseSpec extends ZIOSpecDefault:
           fresh.length == 1,
           fresh != ids,
           third.deployed.map(_.state) == List(DeploymentState.Published),
+          seen.requests == 0,
+          seen.uploads.isEmpty,
         )
       }
 

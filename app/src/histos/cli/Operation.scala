@@ -55,6 +55,8 @@ object Operation:
         Right(Call.PublishPromote(id))
       case Command.PublishDrop(id) =>
         Right(Call.PublishDrop(id))
+      case Command.PublishAssets(tokens) =>
+        Right(Call.PublishAssets(tokens))
       case Command.Toolchain                => Right(Call.Toolchain)
       case Command.CachePath                => Right(Call.CachePath)
       case Command.CacheList                => Right(Call.CacheList)

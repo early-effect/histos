@@ -134,6 +134,7 @@ enum Call derives JsonCodec:
   case PublishRelease(tokens: List[String], automatic: Boolean)
   case PublishPromote(id: String)
   case PublishDrop(id: String)
+  case PublishAssets(tokens: List[String])
   case Graph
   case Run(id: String, platform: Option[Platform])
   case Task(id: String, args: PluginArgs)
@@ -923,10 +924,10 @@ object Daemon:
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull =>
         true
-      case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.Graph | Call.Task(_, _) | Call.Cancel(_) |
-          Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot | Call.Version |
-          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) | Call.Bsp |
-          Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) |
+      case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
+          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) |
+          Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) |
           Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
         false
 

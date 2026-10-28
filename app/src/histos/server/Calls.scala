@@ -232,6 +232,25 @@ object Calls:
   def drop(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
     changed(say, PublishRun.drop(repo, machine.env, id))
 
+  def publishAssets(
+      repo: Path,
+      graph: ProjectGraph,
+      machine: Machine,
+      tokens: List[String],
+      say: Say,
+  ): IO[ServerError, Unit] =
+    PublishRun
+      .assets(repo, graph, tokens, machine.env)
+      .foldZIO(
+        failure => finish(say, CallResult.Fault(BuildFault.Release(failure.message))),
+        report =>
+          val shown  = if report.anyFailed then report.uploaded else report.lines
+          val result =
+            if report.anyFailed then CallResult.Fault(BuildFault.Release(report.failed.mkString("\n")))
+            else CallResult.reported()
+          told(say, shown.mkString("\n")) *> finish(say, result),
+      )
+
   private def released(
       repo: Path,
       say: Say,
