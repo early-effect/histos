@@ -188,7 +188,7 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 - [x] **Drop deletes the asset second.** The deployment is dropped first. The stand-in then shows the asset gone. When the asset call fails, the deployment stays dropped and the reported error is that failure.
 
-- [ ] **README.** Histos development: rehearse with `./histos portal`, install the asset after `VALIDATED`, promote on a later dispatch, and leave the launcher on the Maven pin. Other projects: use the same split when people install a tool and builds depend on a library. A library-only ship publishes no asset.
+- [x] **README.** Histos development: rehearse with `./histos portal`, install the asset after `VALIDATED`, promote on a later dispatch, and leave the launcher on the Maven pin. Other projects: use the same split when people install a tool and builds depend on a library. A library-only ship publishes no asset.
 
 ### Workflow
 
