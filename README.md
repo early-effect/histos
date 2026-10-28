@@ -16,13 +16,7 @@ A build file is a Scala program that returns a graph. A module names its platfor
 
 Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds a JVM and starts one jar.
 
-`HISTOS_ASSEMBLY`, when set, is that jar. Otherwise `dist/histos.jar` in the checkout is that jar. `.histos/assembly.sha256` has to match the file. A checkout without either jar downloads the snapshot in [.histos/launcher.lock](.histos/launcher.lock) and checks its sha256. `dist/` stays uncommitted. CI runs the lock.
-
-[histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
-
-`assembly` compiles with the running jar, writes `dist/histos.jar`, and puts the api it just compiled at `bootstrap/histos-api.jar`. It records `.histos/assembly.sha256`. The next `./histos` in this checkout runs that jar.
-
-When the build file calls api the committed pin does not contain, start from a jar that can still compile the build file, then:
+CI has no `dist/`. Every job runs the snapshot named in [.histos/launcher.lock](.histos/launcher.lock). This checkout uses `dist/histos.jar` when `.histos/assembly.sha256` matches that file, so a local command can pass while CI cannot compile [histos.scala](histos.scala). The same gap shows up when `workflow --check` disagrees with a file this tree rendered. The lock is behind the commit. Publish a snapshot and pin it. Do not open the jar, and do not hand-edit the lock.
 
 ```
 ./histos assembly
@@ -30,7 +24,13 @@ When the build file calls api the committed pin does not contain, start from a j
 ./histos launcher --update
 ```
 
-`publish snapshots` is the normal publish. It uploads the manual ship `histos-api_3` and the assembly `rocks.earlyeffect:histos` to Sonatype Central snapshots. Both stay `0.0.1-SNAPSHOT`. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign, tag, or open a portal deployment. `launcher --update` writes that assembly's revision and checksum into the lock. Commit the lock. The next run, including CI, compiles the build file against the published api.
+`assembly` compiles with the running jar, writes `dist/histos.jar`, and puts the api it just compiled at `bootstrap/histos-api.jar`. It records `.histos/assembly.sha256`. The next `./histos` in this checkout runs that jar.
+
+`publish snapshots` is the normal publish. It uploads the manual ship `histos-api_3` and the assembly `rocks.earlyeffect:histos` to Sonatype Central snapshots. Both stay `0.0.1-SNAPSHOT`. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign, tag, or open a portal deployment. That is `publish release`, and this catalog still refuses it.
+
+`launcher --update` is the only command that writes the lock. It records that assembly's revision and sha256. Commit the lock and push the branch. The next CI run compiles the build file against the published api.
+
+`HISTOS_ASSEMBLY`, when set, is the jar instead of `dist/histos.jar`. A checkout with neither downloads the lock and checks its sha256. [histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
 
 ## A release
 

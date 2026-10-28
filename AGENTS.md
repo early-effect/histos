@@ -44,5 +44,6 @@ Public APIs pin the hard type first, then take the function. If a call site need
 - The proof is `./histos test` on the modules the change touches. `testQuick` is not that proof. `./histos test` with no modules is the full suite.
 - Only one `./histos` runs in a checkout. A subagent that must run it uses its own worktree and does not run it here. Do not open a worktree to dodge a dirty tree, and do not push from it.
 - Do not copy `dist/` or `.histos` products from another checkout. `./histos assembly` regenerates the launcher in that tree.
+- CI has no `dist/`. Every job runs the snapshot in `.histos/launcher.lock`. This checkout uses `dist/histos.jar` when `.histos/assembly.sha256` matches, so a local command can pass while CI cannot compile `histos.scala`, or while `workflow --check` still renders the previous files. The lock is behind. Do not open the jar. Do not hand-edit the lock. Run `./histos assembly`, `./histos publish snapshots`, then `./histos launcher --update`. Commit the lock and push the branch. `launcher --update` is the only command that writes it. The README section "This repository" is that procedure.
 - Tests do not call Central, GitHub, or a keyserver. Loopback stands in.
 - Read `docs/release-work-plan.md` before changing publish. Finish one checklist item and prove it before starting the next.
