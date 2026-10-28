@@ -1,5 +1,6 @@
 package histos.pack
 
+import histos.jdk.Sha256
 import histos.zinc.{CompileRequest, CompileToolchain, GraphCompile, GraphCompileError, JvmCompile, ScalacFlags}
 
 import java.nio.file.{Files, Path}
@@ -7,10 +8,22 @@ import java.util.zip.ZipFile
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, ZIO}
+import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
 object JarSpec extends ZIOSpecDefault:
+  private val keys = suite("package key")(
+    test("a trailing comment keeps the package key, and a method body moves it"):
+      val comment = Sha256.of(Chunk.fromArray("comment".getBytes))
+      val body    = Sha256.of(Chunk.fromArray("body".getBytes))
+      val kept    = PackageKey.of(List(comment))
+      assertTrue(
+        kept == PackageKey.of(List(comment)),
+        kept != PackageKey.of(List(body)),
+        kept != PackageKey.of(List(comment, body)),
+      )
+  )
+
   private val jar = suite("class jar")(
     test("class files are entries, and an empty directory is refused"):
       ZIO.scoped:
@@ -110,7 +123,7 @@ object JarSpec extends ZIOSpecDefault:
             .foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  def spec = jar.provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
+  def spec = suite("package")(keys, jar).provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
     histos.ToolFixture.jvm(histos.ScalaVersion("3.9.0"))
   ) @@ TestAspect.withLiveSystem
 end JarSpec

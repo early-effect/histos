@@ -1,6 +1,6 @@
 package histos.js
 
-import histos.jdk.JdkRuntime
+import histos.jdk.{JdkRuntime, Sha256}
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
 import histos.workspace.Workspace
@@ -8,7 +8,9 @@ import histos.zinc.{
   CompileError,
   CompileRequest,
   CompileToolchain,
+  GraphCompile,
   JvmCompile,
+  ProductDigest,
 
   ScalacFlags,
 }
@@ -34,10 +36,12 @@ final case class JsLinkRequest(
 
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
   */
+final case class JsLinked(script: Path, key: Sha256)
+
 object JsLink:
   private val BridgeMain: String = "subprocess.JsBridge"
 
-  def link(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, Path] =
+  def link(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, JsLinked] =
     val JsLinkRequest(version, main, classpath, work, jdk, kind, revision) =
       request
     val output     = work.resolve("out")
@@ -50,6 +54,7 @@ object JsLink:
     for
       view <- ZIO.service[LockedTools]
       selected = revision.getOrElse(view.catalog.js.revision)
+      digests   <- productsOf(classpath)
       libraries <- ScalaJs
         .libraries(version, Some(selected))
         .mapError(JsLinkError.Library(_))
@@ -102,11 +107,15 @@ object JsLink:
           )
         )
         .mapError(error => JsLinkError.Linker(error.message))
-      linked <- ran.exit.value match
+      script <- ran.exit.value match
         case 0 => readJs(child.resolve("js.path"))
         case _ =>
           ZIO.fail(JsLinkError.Linker(shown(ran.out.text, ran.err.text)))
-    yield linked
+    yield JsLinked(script, JsKey.of(version, selected, kind, main, digests))
+
+  private def productsOf(classpath: List[Path]): IO[JsLinkError, List[Sha256]] =
+    ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
+      ZIO.fromEither(ProductDigest.read(dir)).mapError(JsLinkError.Product(_))
 
   private def bridge: String =
     """package subprocess
@@ -192,11 +201,13 @@ enum JsLinkError:
   case Resolved(error: ResolveError)
   case Unavailable
   case Library(error: CompileError)
+  case Product(error: CompileError)
   case Linker(text: String)
 
   def message: String = this match
     case Resolved(error) => error.message
     case Unavailable     => "the Scala.js linker could not be fetched"
     case Library(error)  => error.message
+    case Product(error)  => error.message
     case Linker(text)    => text
 end JsLinkError

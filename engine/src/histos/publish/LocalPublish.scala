@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.jdk.JdkRuntime
+import histos.jdk.{JdkRuntime, Sha256}
 import histos.central.{
   Artifact,
   ArtifactId,
@@ -13,11 +13,12 @@ import histos.central.{
   Revision,
 }
 import histos.native.NativeOrigin
-import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JavadocJar, Resources}
+import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JavadocJar, PackageKey, Resources}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{CiVersion, Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.select.SelectError
-import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, Sources}
+import histos.workspace.{IoFailure, IoFault}
+import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, Sources}
 import histos.{
   Dep,
   MainClass,
@@ -44,6 +45,7 @@ final case class PublishedModule(
     revision: String,
     jar: Option[Path],
     ship: ShipName,
+    key: Sha256,
     unique: Option[String] = None,
 ):
   /** A snapshot prints its unique version. A directory publish prints the jar under `root`.
@@ -513,12 +515,13 @@ object LocalPublish:
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
-      name    <- artifactId(group, artifact, job.revision.render)
-      deps    <- ZIO.fromEither(dependencies(graph, group, cell, job.revision, jobs))
-      module  <- ZIO.fromEither(moduleOf(graph, cell.module))
-      packed  <- sourcesOf(repo, graph, cell)
-      extra   <- resourceEntries(repo, graph, List(module), cell.version, cell.platform)
-      classes <- ClassJar
+      products <- productDigests(List(cell.classes), cell)
+      name     <- artifactId(group, artifact, job.revision.render)
+      deps     <- ZIO.fromEither(dependencies(graph, group, cell, job.revision, jobs))
+      module   <- ZIO.fromEither(moduleOf(graph, cell.module))
+      packed   <- sourcesOf(repo, graph, cell)
+      extra    <- resourceEntries(repo, graph, List(module), cell.version, cell.platform)
+      classes  <- ClassJar
         .write(cell.classes, extra, scratch(repo, cell, job.revision, Scratch.Classes))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
       sources <- ClassJar
@@ -541,6 +544,7 @@ object LocalPublish:
         Some(javadocBytes),
         artifact,
         job.ship,
+        PackageKey.of(products),
       )
     yield published
 
@@ -558,11 +562,12 @@ object LocalPublish:
       name   <- artifactId(group, artifact, job.revision.render)
       module <- ZIO.fromEither(moduleOf(graph, cell.module))
       ordered = module :: Module.chain(module, modulesOf(graph), cell.platform)
-      dirs    <- ZIO.fromEither(classDirectories(ordered, cell.version, cell.platform, cells))
-      extra   <- resourceEntries(repo, graph, ordered, cell.version, cell.platform)
-      jars    <- runtimeJars(repo, graph, ordered, cell.version, cell.platform)
-      packed  <- sourcesOf(repo, graph, cell)
-      classes <- Assembly
+      dirs     <- ZIO.fromEither(classDirectories(ordered, cell.version, cell.platform, cells))
+      products <- productDigests(dirs, cell)
+      extra    <- resourceEntries(repo, graph, ordered, cell.version, cell.platform)
+      jars     <- runtimeJars(repo, graph, ordered, cell.version, cell.platform)
+      packed   <- sourcesOf(repo, graph, cell)
+      classes  <- Assembly
         .write(
           dirs,
           jars,
@@ -591,6 +596,7 @@ object LocalPublish:
         Some(javadocBytes),
         artifact,
         job.ship,
+        PackageKey.of(products),
       )
     yield published
 
@@ -614,6 +620,7 @@ object LocalPublish:
       javadoc: Option[Chunk[Byte]],
       artifact: String,
       ship: ShipName,
+      key: Sha256,
   ): ZIO[Publisher, LocalPublishError, PublishedModule] =
     ZIO
       .serviceWithZIO[Publisher](
@@ -622,7 +629,7 @@ object LocalPublish:
       .mapError(LocalPublishError.Publish(_))
       .map: published =>
         val (jarPath, unique) = placed(published)
-        PublishedModule(group, artifact, revision.render, jarPath, ship, unique)
+        PublishedModule(group, artifact, revision.render, jarPath, ship, key, unique)
 
   private def moduleOf(
       graph: ProjectGraph,
@@ -631,6 +638,20 @@ object LocalPublish:
     graph.get(name) match
       case Some(module: Module) => Right(module)
       case _                    => Left(LocalPublishError.Compile(GraphCompileError.NoRoot(name)))
+
+  private def productDigests(
+      dirs: List[Path],
+      cell: histos.zinc.CompiledCell,
+  ): ZIO[Any, LocalPublishError, List[Sha256]] =
+    ZIO.foreach(dirs): classes =>
+      val found = GraphCompile.analysisDirOf(classes) match
+        case Some(dir) => ProductDigest.read(dir)
+        case None      => Left(CompileError.Io(IoFailure(classes, IoFault.Stat)))
+      ZIO
+        .fromEither(found)
+        .mapError(error =>
+          LocalPublishError.Compile(GraphCompileError.Failed(cell.module, cell.version, cell.platform, error))
+        )
 
   private def classDirectories(
       ordered: List[Module],

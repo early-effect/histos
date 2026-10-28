@@ -46,7 +46,7 @@ object ProductDigest:
         .foldLeft[Either[CompileError, List[Array[Byte]]]](Right(Nil)):
           case (Left(error), _)           => Left(error)
           case (Right(acc), (name, path)) =>
-            read(path).flatMap: bytes =>
+            readBytes(path).flatMap: bytes =>
               normalize(bytes) match
                 case Right(clean) => Right(acc :+ piece(name, clean))
                 case Left(_)      => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
@@ -64,6 +64,16 @@ object ProductDigest:
             finally stream.close()
         hashed(rows.sortBy(_._1))
       finally zip.close()
+    catch case _: IOException => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
+
+  def read(dir: Path): Either[CompileError, Sha256] =
+    val path = dir.resolve(fileName)
+    try
+      Sha256
+        .from(Files.readString(path, StandardCharsets.UTF_8))
+        .left
+        .map: _ =>
+          CompileError.Io(IoFailure(path, IoFault.Read))
     catch case _: IOException => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
 
   def write(dir: Path, classes: Path): Either[CompileError, Sha256] =
@@ -111,7 +121,7 @@ object ProductDigest:
             Left(CompileError.Io(IoFailure(root, IoFault.Walk)))
         finally walk.close()
 
-  private def read(path: Path): Either[CompileError, Array[Byte]] =
+  private def readBytes(path: Path): Either[CompileError, Array[Byte]] =
     try Right(Files.readAllBytes(path))
     catch case _: IOException => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
 

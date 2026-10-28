@@ -98,7 +98,7 @@ private[testrun] object SuiteLaunch:
           for
             chosen <- node(cell, runtimes)
             _      <- TestCompile.fresh(linkDir)
-            script <- JsLink
+            linked <- JsLink
               .link(
                 JsLinkRequest(
                   cell.version,
@@ -122,7 +122,7 @@ private[testrun] object SuiteLaunch:
                 JsRunRequest(
                   module.jsEnv,
                   module.jsModule,
-                  script,
+                  linked.script,
                   linkDir,
                   jdk,
                   TestCompile.suiteEnv(repo, runtimes.env),

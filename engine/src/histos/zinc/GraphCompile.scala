@@ -584,6 +584,9 @@ object GraphCompile:
       .mapError(_ => GraphCompileError.Output(classes)) *>
       ZIO
         .fromEither(ApiDigest.writeEmpty(analysis(repo, module, version, platform)))
+        .mapError(error => GraphCompileError.Failed(module, version, platform, error)) *>
+      ZIO
+        .fromEither(ProductDigest.write(analysis(repo, module, version, platform), classes))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error))
         .as(
           CompiledCell(
@@ -685,8 +688,8 @@ object GraphCompile:
       .resolve(version.value)
       .resolve(platform.token)
 
-  /** Inverse of `classesDir` / `analysis`. None for a path that is not a `.histos/classes/<module>/<scala>/<platform>`
-    * product.
+  /** Inverse of a classes directory and its analysis directory. `test-classes` maps to `test-analysis`. None for a path
+    * that is not one of those products.
     */
   private[histos] def analysisDirOf(classes: Path): Option[Path] =
     val absolute = classes.toAbsolutePath.normalize
@@ -695,12 +698,15 @@ object GraphCompile:
       (scala, moduleDir)   <- named(scalaDir)
       (module, kindDir)    <- named(moduleDir)
       (kind, histos)       <- named(kindDir)
-      if kind == "classes"
+      analysisKind         <- kind match
+        case "classes"      => Some("analysis")
+        case "test-classes" => Some("test-analysis")
+        case _              => None
       (dot, repo) <- named(histos)
       if dot == ".histos"
     yield repo
       .resolve(".histos")
-      .resolve("analysis")
+      .resolve(analysisKind)
       .resolve(module)
       .resolve(scala)
       .resolve(platform)

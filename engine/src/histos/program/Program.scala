@@ -241,7 +241,7 @@ object Program:
                 repositories,
               )
               _      <- fresh(linkDir)
-              script <- JsLink
+              linked <- JsLink
                 .link(
                   JsLinkRequest(
                     cell.version,
@@ -265,7 +265,7 @@ object Program:
                   JsRunRequest(
                     module.jsEnv,
                     module.jsModule,
-                    script,
+                    linked.script,
                     linkDir,
                     jdk,
                     env,

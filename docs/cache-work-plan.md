@@ -109,7 +109,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Downstream compile key.** When the classpath entry is an upstream classes directory, [CompileKey](../engine/src/histos/zinc/JvmCompile.scala) mixes in that upstream's API digest instead of a hash of the class bytes. A comment in the upstream does not change the dependent key. A new public method does. The spec calls the key function. It does not need a second compiler run. Proof: `./histos testOnly --module engine 'histos.zinc.ZincSpec'`.
 
-- [ ] **Link and package key.** The Scala.js link key and the package key include the product digest. A trailing comment keeps the link key. A method-body change moves it. Native is out of this item. Proof: the link and package specs.
+- [x] **Link and package key.** [JsKey](../engine/src/histos/js/JsKey.scala) mixes the product digest of each classes directory on the link classpath. [PackageKey](../engine/src/histos/pack/PackageKey.scala) mixes the product digest of each packed classes directory. A comment keeps the product digest, so it keeps these keys. A method body moves the product digest, so it moves them. The specs call the key functions. The linker and the publisher still run. Native is out of this item. Proof: `./histos testOnly --module engine 'histos.js.JsLinkSpec'`, `./histos testOnly --module engine 'histos.pack.JarSpec'`, and `./histos test engine`.
 
 - [ ] **Replay after clean.** The local CAS stores `inc.zip` and the class files under the compile key. `./histos clean` deletes the product tree and leaves the CAS. The next compile of that key restores both and does not start the compiler. The spec counts compiler starts. `cleanFull` and `cache clean` keep their current jobs.
 
