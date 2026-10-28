@@ -6,7 +6,7 @@ import java.util.zip.{ZipEntry, ZipOutputStream}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{IO, ZIO}
+import zio.{Chunk, IO, ZIO}
 
 enum JarIo:
   case Read(path: Path)
@@ -28,13 +28,15 @@ enum JarError:
   case NotADirectory(path: Path)
   case Empty(path: Path)
   case Escaped(name: String)
+  case Duplicate(name: String)
   case DestinationInside(path: Path)
   case Io(op: JarIo)
 
   def message: String = this match
     case NotADirectory(path)     => s"$path is not a directory of classes"
-    case Empty(path)             => s"$path has no class files"
-    case Escaped(name)           => s"'$name' leaves the classes directory"
+    case Empty(path)             => s"$path has nothing to jar"
+    case Escaped(name)           => s"'$name' leaves the jar"
+    case Duplicate(name)         => s"'$name' is already a jar entry"
     case DestinationInside(path) => s"$path is inside the classes directory"
     case Io(op)                  => s"jar failed while ${op.word} ${op.location}"
 end JarError
@@ -44,10 +46,38 @@ final case class Jarred(path: Path, entries: Int)
 object ClassJar:
   /** Zip the class files. Entry names are relative and sorted. A file that leaves the directory is refused. */
   def write(classes: Path, destination: Path): IO[JarError, Jarred] =
+    write(classes, Nil, destination)
+
+  /** Class files plus named extras. A repeated entry name is refused. */
+  def write(
+      classes: Path,
+      extra: List[(String, Path)],
+      destination: Path,
+  ): IO[JarError, Jarred] =
     for
       files <- entries(classes, destination)
-      _     <- place(destination, files)
+      _     <- accept(extra, files.map(_._1))
+      named = files ++ extra
+      _ <- place(destination, named.sortBy(_._1))
+    yield Jarred(destination, named.length)
+
+  def writeNamed(files: List[(String, Path)], destination: Path): IO[JarError, Jarred] =
+    for
+      _ <- checked(files.map(_._1), destination)
+      _ <- place(destination, files.sortBy(_._1))
     yield Jarred(destination, files.length)
+
+  def writeBytes(entries: List[(String, Chunk[Byte])], destination: Path): IO[JarError, Jarred] =
+    for
+      _ <- checked(entries.map(_._1), destination)
+      _ <- commit(destination): stream =>
+        entries
+          .sortBy(_._1)
+          .foreach: (name, bytes) =>
+            stream.putNextEntry(new ZipEntry(name))
+            stream.write(bytes.toArray)
+            stream.closeEntry()
+    yield Jarred(destination, entries.length)
 
   private def entries(classes: Path, destination: Path): IO[JarError, List[(String, Path)]] =
     ZIO
@@ -76,7 +106,44 @@ object ClassJar:
       .mapError(_ => JarError.Io(JarIo.Read(classes)))
       .flatMap(ZIO.fromEither)
 
+  private def accept(extra: List[(String, Path)], have: List[String]): IO[JarError, Unit] =
+    extra match
+      case Nil => ZIO.unit
+      case _   =>
+        extra.map(_._1).collectFirst { case name if rejected(name) => name } match
+          case Some(name) => ZIO.fail(JarError.Escaped(name))
+          case None       =>
+            (have ++ extra.map(_._1)).groupBy(identity).collectFirst {
+              case (name, found) if found.lengthIs > 1 => name
+            } match
+              case Some(name) => ZIO.fail(JarError.Duplicate(name))
+              case None       => ZIO.unit
+
+  private def checked(names: List[String], destination: Path): IO[JarError, Unit] =
+    names match
+      case Nil => ZIO.fail(JarError.Empty(destination))
+      case _   =>
+        names.collectFirst { case name if rejected(name) => name } match
+          case Some(name) => ZIO.fail(JarError.Escaped(name))
+          case None       =>
+            names.groupBy(identity).collectFirst { case (name, found) if found.lengthIs > 1 => name } match
+              case Some(name) => ZIO.fail(JarError.Duplicate(name))
+              case None       => ZIO.unit
+
+  private def rejected(name: String): Boolean =
+    name.isEmpty ||
+      name.startsWith("/") ||
+      name.contains('\\') ||
+      name.split("/", -1).exists(part => part.isEmpty || part == "." || part == "..")
+
   private def place(destination: Path, files: List[(String, Path)]): IO[JarError, Unit] =
+    commit(destination): stream =>
+      files.foreach: (name, file) =>
+        stream.putNextEntry(new ZipEntry(name))
+        Files.copy(file, stream)
+        stream.closeEntry()
+
+  private def commit(destination: Path)(body: ZipOutputStream => Unit): IO[JarError, Unit] =
     val parent   = Option(destination.getParent).getOrElse(destination)
     val fileName = Option(destination.getFileName).map(_.toString).getOrElse("classes.jar")
     val temp     = parent.resolve(s"$fileName.tmp")
@@ -86,11 +153,7 @@ object ClassJar:
           .attemptBlocking {
             Files.createDirectories(parent)
             val stream = new ZipOutputStream(new BufferedOutputStream(Files.newOutputStream(temp)))
-            try
-              files.foreach: (name, file) =>
-                stream.putNextEntry(new ZipEntry(name))
-                Files.copy(file, stream)
-                stream.closeEntry()
+            try body(stream)
             finally stream.close()
             try Files.move(temp, destination, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
             catch

@@ -27,9 +27,13 @@ object build extends HistosBuild:
         dep"io.get-coursier::coursier:2.1.26",
         dep"org.ow2.asm:asm:9.11.1",
         dep"org.ow2.asm:asm-tree:9.11.1",
+        dep"org.bouncycastle:bcpg-jdk18on:1.86",
       )
       .testDependencies(zioTest, zioTestSbt)
     val app = module("app", Jvm)(scala3)
+      .artifact(artifact"histos")
+      .assembly(MainClass("histos.cli.Main"))
+      .asset(asset"dist/histos.jar")
       .dependsOn(engine, central, api)
       .libraryDependencies(
         zio,
@@ -46,7 +50,14 @@ object build extends HistosBuild:
       )
     Projects
       .organization(organization"rocks.earlyeffect")
-      .assembly(artifact"histos")
+      .license(License(license"Apache-2.0", url"https://www.apache.org/licenses/LICENSE-2.0.txt"))
+      .developer(Developer(developer"russwyte", pom"Russ White"))
+      .scm(
+        Scm(
+          url"https://github.com/early-effect/histos",
+          connection"scm:git@github.com:early-effect/histos.git",
+        )
+      )
       .runnerTools(
         RunnerTools(
           Some(NodeFloor(25)),
@@ -54,7 +65,7 @@ object build extends HistosBuild:
           Some(ToolRevision("1.62.1")),
         )
       )(
-        ships(manual("histos", manual"0.0.1-SNAPSHOT")(api)),
+        ships(manual("histos", manual"0.0.1-SNAPSHOT")(api, app)),
         api,
         central,
         engine,

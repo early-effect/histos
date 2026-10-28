@@ -2,7 +2,7 @@ package histos.workflow
 
 import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin}
 import histos.resolve.PlatformToken
-import histos.version.Catalog
+import histos.version.{Catalog, ReleaseTag, Ship}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
@@ -101,6 +101,9 @@ end CiError
 object Workflow:
   val fileName: String = "ci.yml"
 
+  /** Owned like a scheduled `histos-*.yml`. An empty catalog does not emit it, so update deletes a stale copy. */
+  val releaseName: String = "histos-release.yml"
+
   def path(repo: Path): Path =
     file(repo, fileName)
 
@@ -140,10 +143,10 @@ object Workflow:
   def render(graph: ProjectGraph): Either[CiError, String] =
     plan(graph, CiEvent.Other).map(jobs => document(graph, jobs))
 
-  /** `ci.yml` plus one `histos-<job>.yml` for each scheduled plugin job. */
+  /** `ci.yml`, `histos-release.yml` when the catalog names a ship, then one `histos-<job>.yml` per schedule. */
   def renderAll(graph: ProjectGraph): Either[CiError, List[RenderedWorkflow]] =
     render(graph).map: body =>
-      RenderedWorkflow(fileName, body) :: scheduled(graph)
+      RenderedWorkflow(fileName, body) :: releaseWorkflow(graph).toList ++ scheduled(graph)
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
@@ -265,6 +268,103 @@ object Workflow:
         job.when match
           case JobWhen.Always      => List(jobLines(plugin, job).mkString("\n"))
           case JobWhen.Schedule(_) => Nil
+
+  /** Hold, then the asset when the ship names one. Promote is the other dispatch. No `--automatic`. */
+  private def releaseWorkflow(graph: ProjectGraph): Option[RenderedWorkflow] =
+    graph.catalog.ships match
+      case Nil   => None
+      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships)))
+
+  private def releaseDocument(graph: ProjectGraph, ships: List[Ship]): String =
+    val count = ships.length
+    val lines = List(
+      "name: release",
+      "on:",
+      "  push:",
+      "    tags:",
+    ) ++ ships.map(ship => s"      - ${quote(ReleaseTag.of(count, ship.name, stated(ship)))}") ++ List(
+      "  workflow_dispatch:",
+      "    inputs:",
+      "      command:",
+      "        description: release or promote",
+      "        required: true",
+      "        type: choice",
+      "        options:",
+      "          - release",
+      "          - promote",
+      "      ship:",
+      "        description: ship",
+      "        required: true",
+      "        type: choice",
+      "        options:",
+    ) ++ ships.map(ship => s"          - ${quote(ship.name.value)}") ++ List(
+      "      deployment:",
+      "        description: deployment id",
+      "        required: false",
+      "        type: string",
+      "permissions:",
+      "  contents: read",
+      "jobs:",
+    ) ++ ships.flatMap(ship => releaseJob(graph, count, ship)) ++ promoteJob
+    lines.mkString("\n") + "\n"
+
+  private def releaseJob(graph: ProjectGraph, count: Int, ship: Ship): List[String] =
+    val name   = ship.name.value
+    val tag    = ReleaseTag.of(count, ship.name, stated(ship))
+    val upload = namesAsset(graph, ship)
+    val guard  =
+      s"github.ref == 'refs/tags/$tag' || (inputs.command == 'release' && inputs.ship == '$name')"
+    val access = if upload then "write" else "read"
+    List(
+      s"  release-$name:",
+      s"    if: $guard",
+      s"    runs-on: $Runner",
+      "    permissions:",
+      s"      contents: $access",
+      "    steps:",
+      s"      - uses: $Checkout",
+      s"      - run: ${quote(s"./histos publish release $name")}",
+      "        env:",
+    ) ++ portalEnv ++ signingEnv ++ (if upload then assetStep(name) else Nil)
+
+  private def assetStep(name: String): List[String] =
+    List(
+      s"      - run: ${quote(s"./histos publish assets $name")}",
+      "        env:",
+      "          GITHUB_TOKEN: ${{ github.token }}",
+      "          GITHUB_REPOSITORY: ${{ github.repository }}",
+    )
+
+  private def promoteJob: List[String] =
+    List(
+      "  promote:",
+      "    if: github.event_name == 'workflow_dispatch' && inputs.command == 'promote'",
+      s"    runs-on: $Runner",
+      "    steps:",
+      s"      - uses: $Checkout",
+      "      - run: \"./histos publish promote ${{ inputs.deployment }}\"",
+      "        env:",
+    ) ++ portalEnv
+
+  private def portalEnv: List[String] =
+    List(secret("SONATYPE_USERNAME"), secret("SONATYPE_PASSWORD"))
+
+  private def signingEnv: List[String] =
+    List("PGP_SECRET", "PGP_PASSPHRASE", "PGP_KEY_HEX").map(secret)
+
+  private def secret(name: String): String =
+    s"          $name: $${{ secrets.$name }}"
+
+  private def stated(ship: Ship): String =
+    ship match
+      case line: Ship.Line     => line.number.render
+      case manual: Ship.Manual => manual.version.value
+
+  private def namesAsset(graph: ProjectGraph, ship: Ship): Boolean =
+    ship.members.toList.exists: name =>
+      graph.get(name) match
+        case Some(module: Module) => module.asset.isDefined
+        case _                    => false
 
   private def scheduled(graph: ProjectGraph): List[RenderedWorkflow] =
     graph.plugins.flatMap: plugin =>

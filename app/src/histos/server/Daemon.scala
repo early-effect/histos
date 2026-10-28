@@ -129,7 +129,12 @@ import CallJson.given
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
-  case Publish(repository: String, projects: List[ProjectName])
+  case PublishLocal(directory: Option[String], tokens: List[String])
+  case PublishSnapshots(tokens: List[String])
+  case PublishRelease(tokens: List[String], automatic: Boolean)
+  case PublishPromote(id: String)
+  case PublishDrop(id: String)
+  case PublishAssets(tokens: List[String])
   case Graph
   case Run(id: String, platform: Option[Platform])
   case Task(id: String, args: PluginArgs)
@@ -151,7 +156,8 @@ enum Call derives JsonCodec:
   case Bsp
   case PreviewCompile(projects: List[ProjectName])
   case PreviewTest(projects: List[ProjectName])
-  case PreviewPublish(projects: List[ProjectName])
+  case PreviewPublishLocal(directory: Option[String], tokens: List[String])
+  case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
   case PreviewRun(id: String, platform: Option[Platform])
@@ -915,13 +921,14 @@ object Daemon:
   /** Class-directory writers. Queries, preview, cache, and `Call.Task` stay out. */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.Publish(_, _) | Call.Run(_, _) | Call.Assembly(_) |
-          Call.Clean(_) | Call.CleanFull =>
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull =>
         true
-      case Call.Graph | Call.Task(_, _) | Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) |
-          Call.Reload | Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) |
-          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
-          Call.PreviewPublish(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
+      case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
+          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) |
+          Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(

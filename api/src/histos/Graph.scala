@@ -1,6 +1,16 @@
 package histos
 
-import histos.plugin.{DeclaredInput, EntryName, HistosPlugin, ModuleNote, PluginId, RegisteredPlugin, TaskDep, TaskName}
+import histos.plugin.{
+  DeclaredInput,
+  EntryName,
+  HistosPlugin,
+  ModuleNote,
+  PluginId,
+  RegisteredPlugin,
+  RepoPath,
+  TaskDep,
+  TaskName,
+}
 import histos.version.Catalog
 
 import _root_.scala.util.control.NonFatal
@@ -40,6 +50,8 @@ final case class Module(
     notes: List[ModuleNote] = Nil,
     flags: ScalacFlags = ScalacFlags.empty,
     published: Option[ArtifactBase] = None,
+    publication: Publication = Publication.Library,
+    asset: Option[RepoPath] = None,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -111,9 +123,9 @@ final case class ProjectGraph private (
     organization: Option[Organization],
     resolvers: List[Resolver],
     plugins: List[RegisteredPlugin] = Nil,
-    assembly: Option[ArtifactBase] = None,
     tools: ToolCatalog = ToolCatalog.default,
     runnerTools: RunnerTools = RunnerTools.empty,
+    facts: OrganizationFacts = OrganizationFacts.empty,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -150,9 +162,9 @@ object ProjectGraph:
       organization: Option[Organization],
       resolvers: List[Resolver],
       plugins: List[RegisteredPlugin] = Nil,
-      assembly: Option[ArtifactBase] = None,
       tools: ToolCatalog = ToolCatalog.default,
       runnerTools: RunnerTools = RunnerTools.empty,
+      facts: OrganizationFacts = OrganizationFacts.empty,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -161,9 +173,9 @@ object ProjectGraph:
       organization,
       resolvers,
       plugins,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 end ProjectGraph
 
@@ -243,9 +255,9 @@ object Projects:
       catalog: CatalogSpec,
       listed: List[ProjectDef],
       uses: Uses = Uses(Nil),
-      assembly: Option[ArtifactBase] = None,
       tools: ToolCatalog = ToolCatalog.default,
       runnerTools: RunnerTools = RunnerTools.empty,
+      facts: OrganizationFacts = OrganizationFacts.empty,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -254,9 +266,9 @@ object Projects:
       catalog,
       listed,
       uses,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 
   private def build(
@@ -266,9 +278,9 @@ object Projects:
       catalog: CatalogSpec,
       listed: List[ProjectDef],
       uses: Uses = Uses(Nil),
-      assembly: Option[ArtifactBase] = None,
       tools: ToolCatalog = ToolCatalog.default,
       runnerTools: RunnerTools = RunnerTools.empty,
+      facts: OrganizationFacts = OrganizationFacts.empty,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -289,9 +301,9 @@ object Projects:
       organization,
       resolvers,
       registered,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 
   private def uniqueResolvers(
@@ -404,7 +416,7 @@ object Projects:
           case (Some(_), Some(_)) =>
             Left(BuildError.MixedTest(n.name, m.position))
           case _ =>
-            Right(
+            publicationOf(n.name, m).map: (publication, asset) =>
               Module(
                 n.name,
                 m.platforms,
@@ -421,12 +433,34 @@ object Projects:
                 m.directory,
                 m.jsEnv,
                 m.jsModule,
-                m.application,
+                m.mainClass,
                 m.notes,
                 m.flags,
                 m.published,
+                publication,
+                asset,
               )
-            )
+
+  private def publicationOf(
+      name: ProjectName,
+      module: ModuleBody[?],
+  ): Either[BuildError, (Publication, Option[RepoPath])] =
+    val chosen = module.publications match
+      case Nil       => Right(Publication.Library)
+      case List(one) =>
+        one match
+          case Publication.Assembly(_)
+              if module.platforms.all != List(Platform.Jvm) || module.versions.all.lengthIs != 1 =>
+            Left(BuildError.AssemblyShape(name, module.position))
+          case found => Right(found)
+      case _ => Left(BuildError.TwoPublications(name, module.position))
+    chosen.flatMap: publication =>
+      (publication, module.assets) match
+        case (Publication.Assembly(_), Nil)        => Right((publication, None))
+        case (Publication.Assembly(_), List(file)) => Right((publication, Some(file)))
+        case (Publication.Assembly(_), _)          => Left(BuildError.TwoAssets(name, module.position))
+        case (_, Nil)                              => Right((publication, None))
+        case _                                     => Left(BuildError.AssetWithoutAssembly(name, module.position))
 
   private def linkAggregate(
       n: Named,
@@ -745,32 +779,50 @@ end Projects
 final class Organized(
     organization: Option[Organization],
     resolvers: List[Resolver],
-    assembly: Option[ArtifactBase] = None,
     tools: ToolCatalog = ToolCatalog.default,
     runnerTools: RunnerTools = RunnerTools.empty,
+    facts: OrganizationFacts = OrganizationFacts.empty,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, assembly, catalog, runnerTools)
+    Organized(organization, resolvers, catalog, runnerTools, facts)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, assembly, tools, runnerTools)
+    Organized(Some(value), resolvers, tools, runnerTools, facts)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
       organization,
       resolvers ++ (first :: rest.toList),
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 
-  /** The assembly jar publishes under this artifact id. No Scala suffix, and the pom has no dependencies.
-    */
-  def assembly(name: ArtifactBase): Organized =
-    Organized(organization, resolvers, Some(name), tools, runnerTools)
-
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, assembly, tools, value)
+    Organized(organization, resolvers, tools, value, facts)
+
+  /** Written once. A second call replaces it. */
+  def license(value: License): Organized =
+    withFacts(facts.copy(license = Some(value)))
+
+  /** Written once. A second call replaces it. */
+  def developer(value: Developer): Organized =
+    withFacts(facts.copy(developer = Some(value)))
+
+  /** Written once. A second call replaces it. */
+  def scm(value: Scm): Organized =
+    withFacts(facts.copy(scm = Some(value)))
+
+  /** The description a ship may replace. */
+  def description(text: PomText): Organized =
+    withFacts(facts.copy(description = Some(text)))
+
+  /** The url a ship may replace. */
+  def url(value: HttpUrl): Organized =
+    withFacts(facts.copy(url = Some(value)))
+
+  private def withFacts(value: OrganizationFacts): Organized =
+    Organized(organization, resolvers, tools, runnerTools, value)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -779,9 +831,9 @@ final class Organized(
       Splits.aggregate,
       CatalogSpec.empty,
       defs.toList,
-      assembly = assembly,
       tools = tools,
       runnerTools = runnerTools,
+      facts = facts,
     )
 
   def apply(
@@ -794,9 +846,9 @@ final class Organized(
       splits,
       CatalogSpec.empty,
       defs.toList,
-      assembly = assembly,
       tools = tools,
       runnerTools = runnerTools,
+      facts = facts,
     )
 
   def apply(
@@ -809,9 +861,9 @@ final class Organized(
       Splits.aggregate,
       catalog,
       defs.toList,
-      assembly = assembly,
       tools = tools,
       runnerTools = runnerTools,
+      facts = facts,
     )
 
   def apply(
@@ -825,9 +877,9 @@ final class Organized(
       splits,
       catalog,
       defs.toList,
-      assembly = assembly,
       tools = tools,
       runnerTools = runnerTools,
+      facts = facts,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -838,9 +890,9 @@ final class Organized(
       CatalogSpec.empty,
       defs.toList,
       uses,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 
   def apply(
@@ -855,9 +907,9 @@ final class Organized(
       CatalogSpec.empty,
       defs.toList,
       uses,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 
   def apply(
@@ -872,9 +924,9 @@ final class Organized(
       catalog,
       defs.toList,
       uses,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 
   def apply(
@@ -890,8 +942,8 @@ final class Organized(
       catalog,
       defs.toList,
       uses,
-      assembly,
       tools,
       runnerTools,
+      facts,
     )
 end Organized

@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.version.Catalog
 import histos.workspace.{IoFailure, IoFault}
-import histos.ProjectGraph
+import histos.{Module, ProjectGraph, Publication}
 
 import java.nio.file.{Files, Path}
 
@@ -58,15 +58,22 @@ object LauncherScript:
     Windows.replace("__VERSION__", version)
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
-    graph.assembly match
-      case None    => Right(None)
-      case Some(_) =>
-        graph.catalog match
-          case Catalog.Manual(rows) =>
-            rows.toList.map(_.version.value).distinct match
-              case List(version) => Right(Some(version))
-              case _             => Left(ScriptError.Revision)
-          case _ => Left(ScriptError.Revision)
+    if !launcher(graph) then Right(None)
+    else
+      graph.catalog match
+        case Catalog.Manual(rows) =>
+          rows.toList.map(_.version.value).distinct match
+            case List(version) => Right(Some(version))
+            case _             => Left(ScriptError.Revision)
+        case _ => Left(ScriptError.Revision)
+
+  private def launcher(graph: ProjectGraph): Boolean =
+    graph.projects.exists:
+      case module: Module =>
+        module.publication match
+          case Publication.Assembly(_) => true
+          case _                       => false
+      case _ => false
 
   private def agree(path: Path, body: String): IO[ScriptError, Unit] =
     ZIO

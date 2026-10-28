@@ -174,6 +174,7 @@ import histos.{
   Organization,
   Platform,
   PlatformError,
+  PomFact,
   ProjectName,
   ProjectNameError,
   ProjectPath,
@@ -191,6 +192,7 @@ import histos.{
 import java.nio.file.{InvalidPathException, Path}
 
 import zio.json.*
+import zio.json.ast.Json
 import zio.{Cause, Chunk, Config, FiberId, NonEmptyChunk}
 
 /** App-only codecs. Engine and api stay free of zio-json. A derived given is one type, so a parent summons it instead
@@ -262,6 +264,23 @@ private object WireLeaves extends WireSupport:
 
   given Schema[Platform] =
     Schema.of(SchemaDoc.Enum(Some("Platform"), List("jvm", "js", "native")))
+
+  given JsonCodec[PomFact] =
+    choose(
+      "pom fact",
+      List(
+        "License"   -> PomFact.License,
+        "Developer" -> PomFact.Developer,
+        "Scm"       -> PomFact.Scm,
+      ),
+      {
+        case PomFact.License   => "License"
+        case PomFact.Developer => "Developer"
+        case PomFact.Scm       => "Scm"
+      },
+    )
+
+  given Schema[PomFact] = enumeration("PomFact", List("License", "Developer", "Scm"))
 
   given [A: JsonCodec]: JsonCodec[NonEmptyChunk[A]] =
     JsonCodec[Chunk[A]].transformOrFail(
@@ -683,8 +702,12 @@ private object WireBuild extends WireSupport:
   given JsonCodec[PluginLoadError] = JsonCodec.derived
   given Schema[PluginLoadError]    = Schema.derived
 
-  given JsonCodec[ResolveError] = JsonCodec.derived
-  given Schema[ResolveError]    = Schema.derived
+  private val resolveErrorCodec: JsonCodec[ResolveError] = JsonCodec.derived
+  private val resolveErrorSchema: Schema[ResolveError]   = Schema.derived
+  given JsonCodec[ResolveError]                          = resolveErrorCodec
+  given JsonEncoder[ResolveError]                        = resolveErrorCodec.encoder
+  given JsonDecoder[ResolveError]                        = resolveErrorCodec.decoder
+  given Schema[ResolveError]                             = resolveErrorSchema
 
   given JsonCodec[ClasspathBan] = JsonCodec.derived
   given Schema[ClasspathBan]    = Schema.derived
@@ -701,8 +724,12 @@ private object WireBuild extends WireSupport:
   given JsonCodec[NativeFetch] = JsonCodec.derived
   given Schema[NativeFetch]    = Schema.of(nativeFetchDoc, Some("NativeFetch"))
 
-  given JsonCodec[CompileError] = JsonCodec.derived
-  given Schema[CompileError]    = Schema.derived
+  private val compileErrorCodec: JsonCodec[CompileError] = JsonCodec.derived
+  private val compileErrorSchema: Schema[CompileError]   = Schema.derived
+  given JsonCodec[CompileError]                          = compileErrorCodec
+  given JsonEncoder[CompileError]                        = compileErrorCodec.encoder
+  given JsonDecoder[CompileError]                        = compileErrorCodec.decoder
+  given Schema[CompileError]                             = compileErrorSchema
 
   given JsonCodec[BuildError] = JsonCodec.derived
   given Schema[BuildError]    = Schema.of(buildErrorDoc, Some("BuildError"))
@@ -881,6 +908,10 @@ private object WireBuild extends WireSupport:
         wrap("UnknownPluginTask", List(req("plugin", plugin), req("name", task))),
         wrap("CommandShadow", List(req("name", command))),
         wrap("PluginDefect", List(req("plugin", plugin), req("binary", text))),
+        wrap("TwoPublications", List(req("name", project), req("position", position))),
+        wrap("AssemblyShape", List(req("name", project), req("position", position))),
+        wrap("AssetWithoutAssembly", List(req("name", project), req("position", position))),
+        wrap("TwoAssets", List(req("name", project), req("position", position))),
       ),
     )
 end WireBuild
@@ -954,8 +985,12 @@ private object WireCall extends WireSupport:
   given JsonCodec[JarIo] = JsonCodec.derived
   given Schema[JarIo]    = Schema.derived
 
-  given JsonCodec[JarError] = JsonCodec.derived
-  given Schema[JarError]    = Schema.derived
+  private val jarErrorCodec: JsonCodec[JarError] = JsonCodec.derived
+  private val jarErrorSchema: Schema[JarError]   = Schema.derived
+  given JsonCodec[JarError]                      = jarErrorCodec
+  given JsonEncoder[JarError]                    = jarErrorCodec.encoder
+  given JsonDecoder[JarError]                    = jarErrorCodec.decoder
+  given Schema[JarError]                         = jarErrorSchema
 
   given JsonCodec[PublishFault] = JsonCodec.derived
   given Schema[PublishFault]    = Schema.derived
@@ -972,8 +1007,175 @@ private object WireCall extends WireSupport:
   given JsonCodec[PublishError] = JsonCodec.derived
   given Schema[PublishError]    = Schema.derived
 
-  given JsonCodec[LocalPublishError] = JsonCodec.derived
-  given Schema[LocalPublishError]    = Schema.derived
+  given JsonCodec[LazyValFrame] = JsonCodec.derived
+  given Schema[LazyValFrame]    = Schema.derived
+
+  given JsonCodec[LazyValError] = JsonCodec.derived
+  given Schema[LazyValError]    = Schema.derived
+
+  private val assemblyErrorCodec: JsonCodec[AssemblyError] = JsonCodec.derived
+  private val assemblyErrorSchema: Schema[AssemblyError]   = Schema.derived
+  given JsonCodec[AssemblyError]                           = assemblyErrorCodec
+  given JsonEncoder[AssemblyError]                         = assemblyErrorCodec.encoder
+  given JsonDecoder[AssemblyError]                         = assemblyErrorCodec.decoder
+  given Schema[AssemblyError]                              = assemblyErrorSchema
+
+  // Each case is derived alone. Deriving this sum exceeds the inline limit, so the codec
+  // dispatches on the case name and the schema is written out. The shape stays {"Case": {fields}}.
+  private val versionCodec: JsonCodec[LocalPublishError.Version]     = JsonCodec.derived
+  private val targetCodec: JsonCodec[LocalPublishError.Target]       = JsonCodec.derived
+  private val compileCodec: JsonCodec[LocalPublishError.Compile]     = JsonCodec.derived
+  private val jarCodec: JsonCodec[LocalPublishError.Jar]             = JsonCodec.derived
+  private val sourceCodec: JsonCodec[LocalPublishError.SourceRead]   = JsonCodec.derived
+  private val publishCodec: JsonCodec[LocalPublishError.Publish]     = JsonCodec.derived
+  private val factsCodec: JsonCodec[LocalPublishError.Facts]         = JsonCodec.derived
+  private val classpathCodec: JsonCodec[LocalPublishError.Classpath] = JsonCodec.derived
+  private val runtimeCodec: JsonCodec[LocalPublishError.Runtime]     = JsonCodec.derived
+  private val packCodec: JsonCodec[LocalPublishError.Pack]           = JsonCodec.derived
+
+  private val noSourcesCodec: JsonCodec[LocalPublishError.NoSources]                   = JsonCodec.derived
+  private val readCodec: JsonCodec[LocalPublishError.Read]                             = JsonCodec.derived
+  private val developmentCodec: JsonCodec[LocalPublishError.Development]               = JsonCodec.derived
+  private val unknownShipCodec: JsonCodec[LocalPublishError.UnknownShip]               = JsonCodec.derived
+  private val notPublishedCodec: JsonCodec[LocalPublishError.NotPublished]             = JsonCodec.derived
+  private val snapshotDependencyCodec: JsonCodec[LocalPublishError.SnapshotDependency] =
+    JsonCodec.derived
+  private val unpublishedCodec: JsonCodec[LocalPublishError.UnpublishedDependency] = JsonCodec.derived
+  private val badDependencyCodec: JsonCodec[LocalPublishError.BadDependency]       = JsonCodec.derived
+  private val notAPathCodec: JsonCodec[LocalPublishError.NotAPath]                 = JsonCodec.derived
+  private val missingClassesCodec: JsonCodec[LocalPublishError.MissingClasses]     = JsonCodec.derived
+
+  private def nest[A](name: String, value: A, codec: JsonCodec[A]): Json =
+    codec.encoder.toJsonAST(value) match
+      case Right(body) => Json.Obj(Chunk(name -> body))
+      case Left(_)     => Json.Obj(Chunk(name -> Json.Obj.empty))
+
+  private def emptyCase(name: String): Json =
+    Json.Obj(Chunk(name -> Json.Obj.empty))
+
+  private def encodePublish(error: LocalPublishError): Json =
+    error match
+      case value @ LocalPublishError.Version(_)             => nest("Version", value, versionCodec)
+      case value @ LocalPublishError.Target(_)              => nest("Target", value, targetCodec)
+      case value @ LocalPublishError.Compile(_)             => nest("Compile", value, compileCodec)
+      case value @ LocalPublishError.Jar(_, _, _, _)        => nest("Jar", value, jarCodec)
+      case value @ LocalPublishError.SourceRead(_, _, _, _) =>
+        nest("SourceRead", value, sourceCodec)
+      case value @ LocalPublishError.NoSources(_, _, _)       => nest("NoSources", value, noSourcesCodec)
+      case value @ LocalPublishError.Publish(_)               => nest("Publish", value, publishCodec)
+      case value @ LocalPublishError.Read(_)                  => nest("Read", value, readCodec)
+      case LocalPublishError.NoOrganization                   => emptyCase("NoOrganization")
+      case LocalPublishError.NothingToPublish                 => emptyCase("NothingToPublish")
+      case value @ LocalPublishError.Development(_, _)        => nest("Development", value, developmentCodec)
+      case value @ LocalPublishError.UnknownShip(_)           => nest("UnknownShip", value, unknownShipCodec)
+      case value @ LocalPublishError.NotPublished(_)          => nest("NotPublished", value, notPublishedCodec)
+      case value @ LocalPublishError.SnapshotDependency(_, _) =>
+        nest("SnapshotDependency", value, snapshotDependencyCodec)
+      case LocalPublishError.Directory                           => emptyCase("Directory")
+      case LocalPublishError.TwoDirectories                      => emptyCase("TwoDirectories")
+      case value @ LocalPublishError.UnpublishedDependency(_, _) =>
+        nest("UnpublishedDependency", value, unpublishedCodec)
+      case value @ LocalPublishError.Facts(_)                => nest("Facts", value, factsCodec)
+      case value @ LocalPublishError.BadDependency(_, _, _)  => nest("BadDependency", value, badDependencyCodec)
+      case LocalPublishError.Credentials                     => emptyCase("Credentials")
+      case LocalPublishError.NoHome                          => emptyCase("NoHome")
+      case value @ LocalPublishError.NotAPath(_)             => nest("NotAPath", value, notAPathCodec)
+      case value @ LocalPublishError.Classpath(_)            => nest("Classpath", value, classpathCodec)
+      case value @ LocalPublishError.Runtime(_)              => nest("Runtime", value, runtimeCodec)
+      case value @ LocalPublishError.Pack(_, _, _, _)        => nest("Pack", value, packCodec)
+      case value @ LocalPublishError.MissingClasses(_, _, _) =>
+        nest("MissingClasses", value, missingClassesCodec)
+
+  private def readCase[A <: LocalPublishError](body: Json, codec: JsonCodec[A]): Either[String, LocalPublishError] =
+    codec.decoder.fromJsonAST(body).map(value => value)
+
+  private def readEmpty(body: Json, value: LocalPublishError): Either[String, LocalPublishError] =
+    body match
+      case Json.Obj(fields) if fields.isEmpty => Right(value)
+      case _                                  => Left("expected an empty object")
+
+  private def decodePublish(json: Json): Either[String, LocalPublishError] =
+    json match
+      case Json.Obj(fields) =>
+        fields.toList match
+          case (name, body) :: Nil =>
+            name match
+              case "Version"               => readCase(body, versionCodec)
+              case "Target"                => readCase(body, targetCodec)
+              case "Compile"               => readCase(body, compileCodec)
+              case "Jar"                   => readCase(body, jarCodec)
+              case "SourceRead"            => readCase(body, sourceCodec)
+              case "NoSources"             => readCase(body, noSourcesCodec)
+              case "Publish"               => readCase(body, publishCodec)
+              case "Read"                  => readCase(body, readCodec)
+              case "NoOrganization"        => readEmpty(body, LocalPublishError.NoOrganization)
+              case "NothingToPublish"      => readEmpty(body, LocalPublishError.NothingToPublish)
+              case "Development"           => readCase(body, developmentCodec)
+              case "UnknownShip"           => readCase(body, unknownShipCodec)
+              case "NotPublished"          => readCase(body, notPublishedCodec)
+              case "SnapshotDependency"    => readCase(body, snapshotDependencyCodec)
+              case "Directory"             => readEmpty(body, LocalPublishError.Directory)
+              case "TwoDirectories"        => readEmpty(body, LocalPublishError.TwoDirectories)
+              case "UnpublishedDependency" => readCase(body, unpublishedCodec)
+              case "Facts"                 => readCase(body, factsCodec)
+              case "BadDependency"         => readCase(body, badDependencyCodec)
+              case "Credentials"           => readEmpty(body, LocalPublishError.Credentials)
+              case "NoHome"                => readEmpty(body, LocalPublishError.NoHome)
+              case "NotAPath"              => readCase(body, notAPathCodec)
+              case "Classpath"             => readCase(body, classpathCodec)
+              case "Runtime"               => readCase(body, runtimeCodec)
+              case "Pack"                  => readCase(body, packCodec)
+              case "MissingClasses"        => readCase(body, missingClassesCodec)
+              case other                   => Left(s"'$other' is not a publish failure")
+          case _ => Left("expected one publish failure")
+      case _ => Left("expected a publish failure object")
+
+  private val publishFailureCodec: JsonCodec[LocalPublishError] =
+    JsonCodec[Json].transformOrFail(decodePublish, encodePublish)
+
+  given JsonCodec[LocalPublishError]   = publishFailureCodec
+  given JsonEncoder[LocalPublishError] = publishFailureCodec.encoder
+  given JsonDecoder[LocalPublishError] = publishFailureCodec.decoder
+  given Schema[LocalPublishError]      = Schema.of(publishErrorDoc, Some("LocalPublishError"))
+
+  private def publishErrorDoc: SchemaDoc =
+    val project  = docOf[ProjectName]
+    val version  = docOf[ScalaVersion]
+    val platform = docOf[Platform]
+    val ship     = docOf[ShipName]
+    val text     = SchemaDoc.Str(None)
+    val cell     = List(req("module", project), req("version", version), req("platform", platform))
+    wrapAll(
+      "LocalPublishError",
+      List(
+        wrap("Version", List(req("error", docOf[VersionError]))),
+        wrap("Target", List(req("error", docOf[SelectError]))),
+        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
+        wrap("Jar", cell :+ req("error", docOf[JarError])),
+        wrap("SourceRead", cell :+ req("error", docOf[CompileError])),
+        wrap("NoSources", cell),
+        wrap("Publish", List(req("error", docOf[PublishError]))),
+        wrap("Read", List(req("path", docOf[Path]))),
+        wrap("NoOrganization", Nil),
+        wrap("NothingToPublish", Nil),
+        wrap("Development", List(req("ship", ship), req("compile", docOf[CiVersion]))),
+        wrap("UnknownShip", List(req("ship", ship))),
+        wrap("NotPublished", List(req("module", project))),
+        wrap("SnapshotDependency", List(req("ship", ship), req("dependency", text))),
+        wrap("Directory", Nil),
+        wrap("TwoDirectories", Nil),
+        wrap("UnpublishedDependency", List(req("module", project), req("dependency", project))),
+        wrap("Facts", List(req("missing", docOf[::[PomFact]]))),
+        wrap("BadDependency", List(req("organization", text), req("name", text), req("revision", text))),
+        wrap("Credentials", Nil),
+        wrap("NoHome", Nil),
+        wrap("NotAPath", List(req("raw", text))),
+        wrap("Classpath", List(req("error", docOf[ResolveError]))),
+        wrap("Runtime", List(req("error", docOf[CompileError]))),
+        wrap("Pack", cell :+ req("error", docOf[AssemblyError])),
+        wrap("MissingClasses", cell),
+      ),
+    )
 
   given JsonCodec[PreviewError] = JsonCodec.derived
   given Schema[PreviewError]    = Schema.derived
@@ -1046,15 +1248,6 @@ private object WireCall extends WireSupport:
   given JsonCodec[LauncherPayload] = JsonCodec.derived
   given Schema[LauncherPayload]    = Schema.derived
 
-  given JsonCodec[LazyValFrame] = JsonCodec.derived
-  given Schema[LazyValFrame]    = Schema.derived
-
-  given JsonCodec[LazyValError] = JsonCodec.derived
-  given Schema[LazyValError]    = Schema.derived
-
-  given JsonCodec[AssemblyError] = JsonCodec.derived
-  given Schema[AssemblyError]    = Schema.derived
-
   given JsonCodec[AssembleError] = JsonCodec.derived
   given Schema[AssembleError]    = Schema.derived
 
@@ -1074,8 +1267,44 @@ private object WireCall extends WireSupport:
   given JsonCodec[Rejection] = JsonCodec.derived
   given Schema[Rejection]    = Schema.derived
 
+  // Deriving this sum exceeds the inline limit, so the schema is written out.
+  // The codec stays derived. The shape stays {"Case": {fields}}.
   given JsonCodec[BuildFault] = JsonCodec.derived
-  given Schema[BuildFault]    = Schema.derived
+  given Schema[BuildFault]    = Schema.of(buildFaultDoc, Some("BuildFault"))
+
+  private def buildFaultDoc: SchemaDoc =
+    val text = SchemaDoc.Str(None)
+    wrapAll(
+      "BuildFault",
+      List(
+        wrap("Load", List(req("error", docOf[LoadError]))),
+        wrap("Resolve", List(req("error", docOf[ResolveError]))),
+        wrap("Toolchain", List(req("error", docOf[ToolchainError]))),
+        wrap("Survey", List(req("error", docOf[SurveyError]))),
+        wrap("Select", List(req("error", docOf[SelectError]))),
+        wrap("Pattern", List(req("error", docOf[SuitePatternError]))),
+        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
+        wrap("Test", List(req("error", docOf[ModuleTestError]))),
+        wrap("Publish", List(req("error", docOf[LocalPublishError]))),
+        wrap("Release", List(req("detail", text))),
+        wrap("Workflow", List(req("error", docOf[WorkflowFault]))),
+        wrap("Program", List(req("error", docOf[ProgramError]))),
+        wrap("Platform", List(req("error", docOf[PlatformError]))),
+        wrap("Task", List(req("error", docOf[TaskError]))),
+        wrap("Plugin", List(req("error", docOf[PluginFault]))),
+        wrap("PluginTask", List(req("error", docOf[PluginTaskError]))),
+        wrap("Preview", List(req("error", docOf[PreviewError]))),
+        wrap("Assemble", List(req("error", docOf[AssembleError]))),
+        wrap("Launcher", List(req("error", docOf[LauncherError]))),
+        wrap("Cache", List(req("error", docOf[CacheError]))),
+        wrap("Store", List(req("failure", docOf[IoFailure]))),
+        wrap("Io", List(req("failure", docOf[IoFailure]))),
+        wrap("Version", List(req("error", docOf[VersionError]))),
+        wrap("Watch", List(req("error", docOf[WatchError]))),
+        wrap("Interrupted", Nil),
+        wrap("Rejected", List(req("rejection", docOf[Rejection]))),
+      ),
+    )
 
   given JsonCodec[CallResult] = JsonCodec.derived
   given Schema[CallResult]    = Schema.derived

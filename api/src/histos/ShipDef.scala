@@ -15,7 +15,15 @@ final case class ShipDef private (
     spec: ShipSpec,
     members: ::[ProjectDef],
     position: SourcePos,
-)
+    description: Option[PomText] = None,
+    url: Option[HttpUrl] = None,
+):
+  /** Replaces the organization's description for every member of this ship. */
+  def description(text: PomText): ShipDef = copy(description = Some(text))
+
+  /** Replaces the organization's url for every member of this ship. */
+  def url(value: HttpUrl): ShipDef = copy(url = Some(value))
+end ShipDef
 
 object ShipDef:
   /** Spliced by `ship`. Source code cannot call it. */
@@ -70,8 +78,10 @@ object ShipLink:
           case None        =>
             members(defn, name, projects, seen.map(_._1)).map: parsed =>
               defn.spec match
-                case ShipSpec.Line(number)    => Ship.Line(name, number, parsed)
-                case ShipSpec.Manual(version) => Ship.Manual(name, version, parsed)
+                case ShipSpec.Line(number) =>
+                  Ship.Line(name, number, parsed, defn.description, defn.url)
+                case ShipSpec.Manual(version) =>
+                  Ship.Manual(name, version, parsed, defn.description, defn.url)
 
   private def members(
       defn: ShipDef,

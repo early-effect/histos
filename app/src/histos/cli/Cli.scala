@@ -2,6 +2,7 @@ package histos.cli
 
 import heddle.LinePipe
 import histos.bsp.{Bsp, Connection, Frame}
+import histos.central.PortalServer
 import histos.build.{Beat, Build}
 import histos.load.LoadedBuild
 import histos.server.{
@@ -25,7 +26,7 @@ import histos.cache.{CacheCleanMode, ContentStore}
 import histos.jdk.{Machine, Toolchain}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
-import histos.preview.Plan
+import histos.preview.{Plan, PreviewError}
 import histos.program.ProgramError
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
 import histos.select.SelectError
@@ -57,10 +58,16 @@ enum Command:
   case Clean(projects: List[ProjectName])
   case CleanFull
   case Assembly(destination: Option[String])
-  case Publish(repository: String, projects: List[ProjectName])
+  case PublishLocal(directory: Option[String], tokens: List[String])
+  case PublishSnapshots(tokens: List[String])
+  case PublishRelease(automatic: Boolean, tokens: List[String])
+  case PublishPromote(id: String)
+  case PublishDrop(id: String)
+  case PublishAssets(tokens: List[String])
   case Mcp
   case Bsp
   case Server
+  case Portal
   case Toolchain
   case CachePath
   case CacheList
@@ -73,7 +80,8 @@ enum Command:
   case Cancel(id: RunId)
   case PreviewCompile(projects: List[ProjectName])
   case PreviewTest(projects: List[ProjectName])
-  case PreviewPublish(projects: List[ProjectName])
+  case PreviewPublishLocal(directory: Option[String], tokens: List[String])
+  case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
   case PreviewRun(id: TaskId, platform: Option[Platform])
@@ -97,6 +105,7 @@ enum CliParseError:
   case RunId(error: TaskError)
   case Flag(error: FlagNameError)
   case WatchCommand(detail: String)
+  case PublishForm
   case Rejected
 
   def message: String = this match
@@ -114,6 +123,7 @@ enum CliParseError:
     case RunId(error)                                   => error.message
     case Flag(error)                                    => error.message
     case WatchCommand(detail)                           => detail
+    case PublishForm                                    => "a directory belongs on publishLocal"
 end CliParseError
 
 enum CliExit:
@@ -178,60 +188,72 @@ object CliExit:
   /** A report that already failed. Publish is 9, test is 7, and every other call is 8. */
   private def failedCall(call: Call): CliExit =
     call match
-      case Call.Test(_, _, _) | Call.PreviewTest(_)    => TestFailed
-      case Call.Publish(_, _) | Call.PreviewPublish(_) => PublishFailed
-      case _                                           => CompileFailed
+      case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
+        PublishFailed
+      case _ => CompileFailed
 
   private def fromFault(call: Call, fault: BuildFault): CliExit =
     fault match
-      case BuildFault.Load(_)             => LoadFailed
-      case BuildFault.Resolve(_)          => resolveExit(call)
-      case BuildFault.Toolchain(_)        => ToolchainFailed
-      case BuildFault.Survey(_)           => ToolchainFailed
-      case BuildFault.Select(_)           => selectExit(call)
-      case BuildFault.Pattern(_)          => Usage
-      case BuildFault.Compile(error)      => compileExit(call, error)
-      case BuildFault.Test(error)         => testFaultExit(error)
-      case BuildFault.Publish(_)          => PublishFailed
-      case BuildFault.Workflow(_)         => WorkflowFailed
-      case BuildFault.Program(error)      => programFaultExit(error)
-      case BuildFault.Platform(_)         => TaskFailed
-      case BuildFault.Task(_)             => TaskFailed
-      case BuildFault.Plugin(_)           => TaskFailed
-      case BuildFault.PluginTask(_)       => TaskFailed
-      case BuildFault.Preview(_)          => previewExit(call)
-      case BuildFault.Assemble(_)         => CompileFailed
-      case BuildFault.Launcher(_)         => ResolveFailed
-      case BuildFault.Cache(_)            => LoadFailed
-      case BuildFault.Store(_)            => LoadFailed
-      case BuildFault.Io(_)               => ioExit(call)
-      case BuildFault.Version(_)          => TaskFailed
-      case BuildFault.Watch(_)            => TaskFailed
-      case BuildFault.Interrupted         => Interrupted
-      case BuildFault.Rejected(rejection) => rejectedExit(rejection)
+      case BuildFault.Load(_)                            => LoadFailed
+      case BuildFault.Resolve(_)                         => resolveExit(call)
+      case BuildFault.Toolchain(_)                       => ToolchainFailed
+      case BuildFault.Survey(_)                          => ToolchainFailed
+      case BuildFault.Select(_)                          => selectExit(call)
+      case BuildFault.Pattern(_)                         => Usage
+      case BuildFault.Compile(error)                     => compileExit(call, error)
+      case BuildFault.Test(error)                        => testFaultExit(error)
+      case BuildFault.Publish(_) | BuildFault.Release(_) => PublishFailed
+      case BuildFault.Workflow(_)                        => WorkflowFailed
+      case BuildFault.Program(error)                     => programFaultExit(error)
+      case BuildFault.Platform(_)                        => TaskFailed
+      case BuildFault.Task(_)                            => TaskFailed
+      case BuildFault.Plugin(_)                          => TaskFailed
+      case BuildFault.PluginTask(_)                      => TaskFailed
+      case BuildFault.Preview(_)                         => previewExit(call)
+      case BuildFault.Assemble(_)                        => CompileFailed
+      case BuildFault.Launcher(_)                        => ResolveFailed
+      case BuildFault.Cache(_)                           => LoadFailed
+      case BuildFault.Store(_)                           => LoadFailed
+      case BuildFault.Io(_)                              => ioExit(call)
+      case BuildFault.Version(_)                         => TaskFailed
+      case BuildFault.Watch(_)                           => TaskFailed
+      case BuildFault.Interrupted                        => Interrupted
+      case BuildFault.Rejected(rejection)                => rejectedExit(rejection)
 
   /** No lock is 8 for compile and assembly, 9 for publish, and 5 for test, run, and resolve. */
   private def resolveExit(call: Call): CliExit =
     call match
       case Call.Compile(_) | Call.PreviewCompile(_) | Call.Assembly(_) => CompileFailed
-      case Call.Publish(_, _) | Call.PreviewPublish(_)                 => PublishFailed
-      case _                                                           => ResolveFailed
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
+        PublishFailed
+      case _ => ResolveFailed
 
   private def selectExit(call: Call): CliExit =
     call match
       case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
       case Call.Test(_, _, _) | Call.PreviewTest(_)                    => TestFailed
-      case Call.Publish(_, _) | Call.PreviewPublish(_)                 => PublishFailed
-      case _                                                           => TaskFailed
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
+        PublishFailed
+      case _ => TaskFailed
 
   private def compileExit(call: Call, error: GraphCompileError): CliExit =
     error match
       case GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) => resolveExit(call)
       case _                                                         =>
         call match
-          case Call.Test(_, _, _) | Call.PreviewTest(_)    => TestFailed
-          case Call.Publish(_, _) | Call.PreviewPublish(_) => PublishFailed
-          case _                                           => CompileFailed
+          case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
+          case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+              Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+              Call.PreviewPublishSnapshots(_) =>
+            PublishFailed
+          case _ => CompileFailed
 
   private def testFaultExit(error: ModuleTestError): CliExit =
     error match
@@ -250,19 +272,25 @@ object CliExit:
 
   private def previewExit(call: Call): CliExit =
     call match
-      case Call.PreviewCompile(_) | Call.Compile(_)    => CompileFailed
-      case Call.PreviewTest(_) | Call.Test(_, _, _)    => TestFailed
-      case Call.PreviewPublish(_) | Call.Publish(_, _) => PublishFailed
-      case _                                           => TaskFailed
+      case Call.PreviewCompile(_) | Call.Compile(_) => CompileFailed
+      case Call.PreviewTest(_) | Call.Test(_, _, _) => TestFailed
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
+        PublishFailed
+      case _ => TaskFailed
 
   /** A missing lock file read on test or run is 5. Cache is 3. Clean is 1. */
   private def ioExit(call: Call): CliExit =
     call match
       case Call.Test(_, _, _) | Call.Run(_, _)                         => ResolveFailed
       case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
-      case Call.Publish(_, _) | Call.PreviewPublish(_)                 => PublishFailed
-      case Call.CachePath | Call.CacheList | Call.CacheClean(_)        => LoadFailed
-      case _                                                           => TaskFailed
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          Call.PreviewPublishSnapshots(_) =>
+        PublishFailed
+      case Call.CachePath | Call.CacheList | Call.CacheClean(_) => LoadFailed
+      case _                                                    => TaskFailed
 
   private def rejectedExit(rejection: Rejection): CliExit =
     rejection match
@@ -287,7 +315,7 @@ object Cli:
   val VersionText: String = "histos 0.0.1-SNAPSHOT"
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publish <repository> [project ...] | observe | mcp | bsp | server | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publish [project ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -331,16 +359,27 @@ object Cli:
         test(repo, apiJar, modules, patterns, TestMode.Run)
       case Command.TestQuick(modules, patterns) =>
         test(repo, apiJar, modules, patterns, TestMode.Quick)
-      case Command.Watch(inner, _)               => watch(repo, apiJar, inner)
-      case Command.Compile(projects)             => compile(repo, apiJar, projects)
-      case Command.Clean(projects)               => clean(repo, apiJar, projects)
-      case Command.CleanFull                     => cleanFull(repo)
-      case Command.Assembly(destination)         => assembly(repo, apiJar, destination)
-      case Command.Publish(repository, projects) =>
-        publish(repo, apiJar, repository, projects)
+      case Command.Watch(inner, _)                 => watch(repo, apiJar, inner)
+      case Command.Compile(projects)               => compile(repo, apiJar, projects)
+      case Command.Clean(projects)                 => clean(repo, apiJar, projects)
+      case Command.CleanFull                       => cleanFull(repo)
+      case Command.Assembly(destination)           => assembly(repo, apiJar, destination)
+      case Command.PublishLocal(directory, tokens) =>
+        publishLocal(repo, apiJar, directory, tokens)
+      case Command.PublishSnapshots(tokens) =>
+        publishSnapshots(repo, apiJar, tokens)
+      case Command.PublishRelease(automatic, tokens) =>
+        publishRelease(repo, apiJar, automatic, tokens)
+      case Command.PublishPromote(id) =>
+        publishPromote(repo, apiJar, id)
+      case Command.PublishDrop(id) =>
+        publishDrop(repo, apiJar, id)
+      case Command.PublishAssets(tokens) =>
+        publishAssets(repo, apiJar, tokens)
       case Command.Mcp              => mcp(repo, apiJar)
       case Command.Bsp              => bsp(repo, apiJar)
       case Command.Server           => serve(repo, apiJar)
+      case Command.Portal           => portal(repo)
       case Command.Toolchain        => toolchain(repo, apiJar)
       case Command.CachePath        => attach(repo, Call.CachePath, cachePath)
       case Command.CacheList        => attach(repo, Call.CacheList, cacheList)
@@ -357,8 +396,10 @@ object Cli:
         preview(repo, apiJar, projects)
       case Command.PreviewTest(projects) =>
         previewTest(repo, apiJar, projects)
-      case Command.PreviewPublish(projects) =>
-        previewPublish(repo, apiJar, projects)
+      case Command.PreviewPublishLocal(directory, tokens) =>
+        previewPublishLocal(repo, apiJar, directory, tokens)
+      case Command.PreviewPublishSnapshots(tokens) =>
+        previewPublishSnapshots(repo, apiJar, tokens)
       case Command.PreviewClean(projects) =>
         previewClean(repo, apiJar, projects)
       case Command.PreviewCleanFull =>
@@ -368,6 +409,21 @@ object Cli:
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
       case Command.Observe => observe(repo)
+
+  /** Loopback rehearsal of the Central portal. Does not load the graph. */
+  private def portal(repo: Path): URIO[Machine & Scope, Completed] =
+    ZIO.serviceWithZIO[Machine] { machine =>
+      PortalServer.credentials(machine.env) match
+        case Left(error) =>
+          ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message, Playback.Held))
+        case Right(secret) =>
+          PortalServer
+            .serve(repo.resolve(".histos").resolve("portal"), secret)
+            .foldZIO(
+              error => ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message, Playback.Held)),
+              bound => say(bound.url) *> ZIO.never.as(Completed(CliExit.Success, bound.url, "", Playback.Heard)),
+            )
+    }
 
   /** Read the stored tally. Does not load the graph. */
   private def observe(repo: Path): UIO[Completed] =
@@ -391,7 +447,7 @@ object Cli:
       )
 
   /** One `Call.Watch`. The server, or this process when no server is up, runs that call again after a source save.
-    * `mcp`, `bsp`, `server`, `observe`, and a nested watch are usage and do not start a transport.
+    * `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested watch are usage and do not start a transport.
     */
   private def watch(
       repo: Path,
@@ -686,29 +742,61 @@ object Cli:
         plan => held(Call.PreviewTest(projects), Plan.renderTest(repo, plan), CallResult.reported()),
       )
 
-  private def previewPublish(
+  private def previewPublishLocal(
       repo: Path,
       apiJar: Path,
-      projects: List[ProjectName],
+      directory: Option[String],
+      tokens: List[String],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    val call = Call.PreviewPublishLocal(directory, tokens)
     ZIO.serviceWithZIO[Machine]: machine =>
       attach(
         repo,
-        Call.PreviewPublish(projects),
-        loaded(repo, apiJar)(build => previewPublishLocal(repo, build, projects, machine.env)),
+        call,
+        loaded(repo, apiJar)(build => previewLocalPlan(repo, build, directory, tokens, machine.env, call)),
       )
 
-  private def previewPublishLocal(
+  private def previewPublishSnapshots(
+      repo: Path,
+      apiJar: Path,
+      tokens: List[String],
+  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+    val call = Call.PreviewPublishSnapshots(tokens)
+    ZIO.serviceWithZIO[Machine]: machine =>
+      attach(
+        repo,
+        call,
+        loaded(repo, apiJar)(build => previewSnapshotPlan(repo, build, tokens, machine.env, call)),
+      )
+
+  private def previewLocalPlan(
       repo: Path,
       loaded: histos.load.LoadedBuild,
-      projects: List[ProjectName],
+      directory: Option[String],
+      tokens: List[String],
       env: Map[String, String],
+      call: Call,
+  ): UIO[Completed] =
+    val home = histos.publish.PublishRun.home.mapError(error => PreviewError.Publish(error))
+    Plan
+      .publishLocal(repo, loaded.graph, tokens, env, directory, home)
+      .fold(
+        error => held(call, "", CallResult.Fault(BuildFault.Preview(error))),
+        plan => held(call, Plan.renderPublish(plan), CallResult.reported()),
+      )
+
+  private def previewSnapshotPlan(
+      repo: Path,
+      loaded: histos.load.LoadedBuild,
+      tokens: List[String],
+      env: Map[String, String],
+      call: Call,
   ): UIO[Completed] =
     Plan
-      .publish(repo, loaded.graph, projects, env)
+      .publishSnapshots(repo, loaded.graph, tokens, env)
       .fold(
-        error => held(Call.PreviewPublish(projects), "", CallResult.Fault(BuildFault.Preview(error))),
-        plan => held(Call.PreviewPublish(projects), Plan.renderPublish(plan), CallResult.reported()),
+        error => held(call, "", CallResult.Fault(BuildFault.Preview(error))),
+        plan => held(call, Plan.renderPublish(plan), CallResult.reported()),
       )
 
   /** Empty names skip the graph. Nothing is deleted. */
@@ -797,13 +885,42 @@ object Cli:
         else s"$count cells failed to compile"
       case other => other.message
 
-  private def publish(
+  private def publishLocal(
       repo: Path,
       apiJar: Path,
-      directory: String,
-      projects: List[ProjectName],
+      directory: Option[String],
+      tokens: List[String],
   ): URIO[Local, Completed] =
-    val call = Call.Publish(directory, projects)
+    val call = Call.PublishLocal(directory, tokens)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishSnapshots(
+      repo: Path,
+      apiJar: Path,
+      tokens: List[String],
+  ): URIO[Local, Completed] =
+    val call = Call.PublishSnapshots(tokens)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishRelease(
+      repo: Path,
+      apiJar: Path,
+      automatic: Boolean,
+      tokens: List[String],
+  ): URIO[Local, Completed] =
+    val call = Call.PublishRelease(tokens, automatic)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishPromote(repo: Path, apiJar: Path, id: String): URIO[Local, Completed] =
+    val call = Call.PublishPromote(id)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishDrop(repo: Path, apiJar: Path, id: String): URIO[Local, Completed] =
+    val call = Call.PublishDrop(id)
+    attach(repo, call, locally(repo, apiJar, call))
+
+  private def publishAssets(repo: Path, apiJar: Path, tokens: List[String]): URIO[Local, Completed] =
+    val call = Call.PublishAssets(tokens)
     attach(repo, call, locally(repo, apiJar, call))
 
   /** Compile, then one subprocess per Scala version. `no tests` is success and is not a passing suite.

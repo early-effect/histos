@@ -1,12 +1,12 @@
 package histos.version
 
-/** `<ship>-ci` for one ship. Development never publishes. */
+/** `<ship>-ci` for one ship. publishLocal writes it. Snapshots refuse it. */
 final case class DevelopLine(ship: ShipName, compile: CiVersion)
 
 /** What a publish session does with one ship. A hold publishes nothing. */
 enum PublishAction:
   case Snapshot(compile: CiVersion, stored: SnapshotCoordinate, pointer: Option[SnapshotPointer])
-  case Release(compile: ReleaseVersion, bump: CatalogBump)
+  case Release(compile: ReleaseVersion)
   case Hold(compile: HoldCompile, reason: HoldReason)
 
 final case class PublishLine(ship: ShipName, action: PublishAction)
@@ -23,11 +23,6 @@ end HoldCompile
 
 enum HoldReason:
   case AlreadyReleased
-
-/** The release job opens a pull request for the next line. The tagged commit does not contain it, and the next number
-  * is not guessed here.
-  */
-final case class CatalogBump(ship: ShipName, released: ShipNumber)
 
 enum Drift:
   case Clear
@@ -53,7 +48,7 @@ enum Decision:
   case Publish(kind: PublishKind, lines: ::[PublishLine])
   case Refused(refusals: ::[Refusal])
 
-  /** The build stated these versions. Git, the registry, and a bump pull request are not involved. */
+  /** The build stated these versions. Git and the registry are not involved. */
   case Manual(lines: ::[ManualLine])
 end Decision
 
@@ -109,8 +104,8 @@ object Decision:
         pointer match
           case Some(value) => s"$published pointer ${value.render}"
           case None        => published
-      case PublishAction.Release(compile, _) =>
-        s"compile ${compile.render} publish ${compile.render} bump pull-request"
+      case PublishAction.Release(compile) =>
+        s"compile ${compile.render} publish ${compile.render}"
       case PublishAction.Hold(compile, HoldReason.AlreadyReleased) =>
         s"compile ${compile.render} hold already-released"
     s"${line.ship.value} $body"
@@ -254,7 +249,7 @@ object Versions:
           case PublishKind.PullRequest(_, commit) =>
             PublishAction.Snapshot(CiVersion(ship.number), SnapshotCoordinate(ship.number, commit.abbreviate), None)
           case PublishKind.Release =>
-            PublishAction.Release(ReleaseVersion(ship.number), CatalogBump(ship.name, ship.number))
+            PublishAction.Release(ReleaseVersion(ship.number))
     PublishLine(ship.name, action)
 
   private def isHold(line: PublishLine): Boolean =

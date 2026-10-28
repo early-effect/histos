@@ -137,6 +137,53 @@ object Scala213Spec extends ZIOSpecDefault:
             "src/main/scala-2.13/Only213.scala",
             "src/main/scala/Shared.scala",
           ),
+        )
+    ,
+    test("a sources jar entry is the package path"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt {
+            write(root, "src/main/scala/demo/Hello.scala", "package demo\n")
+            write(root, "src/main/scala/scala/Named.scala", "package scala\n")
+            write(root, "src/main/scala/jvm/Widget.scala", "package jvm\n")
+            write(root, "src/main/java/demo/JavaOnly.java", "package demo;\n")
+            write(root, "src/main/jvm/demo/OnJvm.scala", "package demo\n")
+            write(root, "src/scala/Root.scala", "package scala\n")
+            write(root, "src/main/scala-3/Only3.scala", "enum Only3 { case A }\n")
+            write(root, "src/main/scala-2.13/Only213.scala", "object Only213\n")
+            write(root, "src/test/scala/demo/No.scala", "package demo\n")
+          }
+          base = root.resolve("src")
+          for213 <- Sources.packaged(base, v213, Platform.Jvm)
+          for3   <- Sources.packaged(base, v390, Platform.Jvm)
+          forJs  <- Sources.packaged(base, v390, Platform.Js)
+        yield assertTrue(
+          for213.map(_.entry).sorted == List(
+            "Only213.scala",
+            "demo/Hello.scala",
+            "demo/JavaOnly.java",
+            "demo/OnJvm.scala",
+            "jvm/Widget.scala",
+            "scala/Named.scala",
+            "scala/Root.scala",
+          ),
+          for3.map(_.entry).sorted == List(
+            "Only3.scala",
+            "demo/Hello.scala",
+            "demo/JavaOnly.java",
+            "demo/OnJvm.scala",
+            "jvm/Widget.scala",
+            "scala/Named.scala",
+            "scala/Root.scala",
+          ),
+          forJs.map(_.entry).sorted == List(
+            "Only3.scala",
+            "demo/Hello.scala",
+            "jvm/Widget.scala",
+            "scala/Named.scala",
+            "scala/Root.scala",
+          ),
         ),
   )
 

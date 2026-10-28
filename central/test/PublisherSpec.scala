@@ -118,6 +118,122 @@ object PublisherSpec extends ZIOSpecDefault:
             pom.contains("<version>2.1.27</version>"),
           )
     ,
+    test("a bare jar gets three checksums and no sources, javadoc, or signature"):
+      use: fixture =>
+        ZIO.scoped:
+          for
+            root      <- directory
+            published <- send(root, fixture, Revision.Release(ReleaseVersion(fixture.number)), fixture.widget)
+            jar       <- localJar(published)
+            names     <- listed(jar)
+            jarBytes  <- ZIO.attempt(Files.readAllBytes(jar))
+            pom       <- ZIO.attempt(Files.readAllBytes(jar.resolveSibling("widget-1.4.2.pom")))
+            jarSums   <- summed(jar, jarBytes)
+            pomSums   <- summed(jar.resolveSibling("widget-1.4.2.pom"), pom)
+            (jarMd5, jarMd5Expected, jarSha1, jarSha1Expected, jarSha256, jarSha256Expected) = jarSums
+            (pomMd5, pomMd5Expected, pomSha1, pomSha1Expected, pomSha256, pomSha256Expected) = pomSums
+          yield assertTrue(
+            names == List(
+              "widget-1.4.2.jar",
+              "widget-1.4.2.jar.md5",
+              "widget-1.4.2.jar.sha1",
+              "widget-1.4.2.jar.sha256",
+              "widget-1.4.2.pom",
+              "widget-1.4.2.pom.md5",
+              "widget-1.4.2.pom.sha1",
+              "widget-1.4.2.pom.sha256",
+            ),
+            !names.exists(_.endsWith(".asc")),
+            jarMd5 == jarMd5Expected,
+            jarSha1 == jarSha1Expected,
+            jarSha256 == jarSha256Expected,
+            pomMd5 == pomMd5Expected,
+            pomSha1 == pomSha1Expected,
+            pomSha256 == pomSha256Expected,
+          )
+    ,
+    test("sources and javadoc land beside the jar with the same checksums"):
+      use: fixture =>
+        ZIO.scoped:
+          for
+            root      <- directory
+            published <- ZIO
+              .serviceWithZIO[Publisher](
+                _.publish(
+                  Artifact(
+                    fixture.group,
+                    fixture.widget,
+                    Revision.Release(ReleaseVersion(fixture.number)),
+                    bytes,
+                    sources = Some(bytes),
+                    javadoc = Some(bytes),
+                  )
+                )
+              )
+              .provide(Publisher.local(root))
+            jar     <- localJar(published)
+            names   <- listed(jar)
+            stored  <- ZIO.attempt(Files.readAllBytes(jar.resolveSibling("widget-1.4.2-sources.jar")))
+            javadoc <- ZIO.attempt(Files.readAllBytes(jar.resolveSibling("widget-1.4.2-javadoc.jar")))
+            sums    <- summed(jar.resolveSibling("widget-1.4.2-sources.jar"), stored)
+            docSums <- summed(jar.resolveSibling("widget-1.4.2-javadoc.jar"), javadoc)
+            (srcMd5, srcMd5Expected, srcSha1, srcSha1Expected, srcSha256, srcSha256Expected) = sums
+            (docMd5, docMd5Expected, docSha1, docSha1Expected, docSha256, docSha256Expected) = docSums
+          yield assertTrue(
+            names == List(
+              "widget-1.4.2-javadoc.jar",
+              "widget-1.4.2-javadoc.jar.md5",
+              "widget-1.4.2-javadoc.jar.sha1",
+              "widget-1.4.2-javadoc.jar.sha256",
+              "widget-1.4.2-sources.jar",
+              "widget-1.4.2-sources.jar.md5",
+              "widget-1.4.2-sources.jar.sha1",
+              "widget-1.4.2-sources.jar.sha256",
+              "widget-1.4.2.jar",
+              "widget-1.4.2.jar.md5",
+              "widget-1.4.2.jar.sha1",
+              "widget-1.4.2.jar.sha256",
+              "widget-1.4.2.pom",
+              "widget-1.4.2.pom.md5",
+              "widget-1.4.2.pom.sha1",
+              "widget-1.4.2.pom.sha256",
+            ),
+            !names.exists(_.endsWith(".asc")),
+            stored.sameElements(bytes.toArray),
+            javadoc.sameElements(bytes.toArray),
+            srcMd5 == srcMd5Expected,
+            srcSha1 == srcSha1Expected,
+            srcSha256 == srcSha256Expected,
+            docMd5 == docMd5Expected,
+            docSha1 == docSha1Expected,
+            docSha256 == docSha256Expected,
+          )
+    ,
+    test("sources that are not a jar are refused before a write"):
+      use: fixture =>
+        ZIO.scoped:
+          for
+            root    <- directory
+            refused <- ZIO
+              .serviceWithZIO[Publisher](
+                _.publish(
+                  Artifact(
+                    fixture.group,
+                    fixture.widget,
+                    Revision.Release(ReleaseVersion(fixture.number)),
+                    bytes,
+                    sources = Some(Chunk.fromArray("not a jar".getBytes)),
+                  )
+                )
+              )
+              .provide(Publisher.local(root))
+              .either
+            listedNames <- ZIO.attempt(Option(root.toFile.list()).map(_.toList).getOrElse(Nil))
+          yield assertTrue(
+            refused == Left(PublishError.NotAJar),
+            listedNames.isEmpty,
+          )
+    ,
     test("an empty file, plain text, and an escaping name are refused before a write"):
       use: fixture =>
         ZIO.scoped:
@@ -165,6 +281,25 @@ object PublisherSpec extends ZIOSpecDefault:
           sidecar <- ZIO.attempt(Files.readString(jar.resolveSibling("widget-1.4.2.jar.sha256")))
         yield Some((pomText, stored, sidecar, jar, sha256))
       case Published.Snapshot(_, _) => ZIO.succeed(None)
+
+  private def localJar(published: Published): zio.UIO[Path] =
+    published match
+      case Published.Local(jar, _, _) => ZIO.succeed(jar)
+      case Published.Snapshot(_, _)   => ZIO.dieMessage("local publish returned a snapshot")
+
+  private def listed(jar: Path): zio.Task[List[String]] =
+    ZIO.attempt:
+      val parent = Option(jar.getParent).getOrElse(jar)
+      Option(parent.toFile.list()).map(_.toList.sorted).getOrElse(Nil)
+
+  private def summed(path: Path, body: Array[Byte]): zio.Task[(String, String, String, String, String, String)] =
+    ZIO.attempt:
+      val bytes                        = Chunk.fromArray(body)
+      def side(suffix: String): String =
+        val name   = Option(path.getFileName).map(_.toString).getOrElse("artifact")
+        val parent = Option(path.getParent).getOrElse(path)
+        Files.readString(parent.resolve(s"$name.$suffix")).stripLineEnd
+      (side("md5"), Digest.md5(bytes), side("sha1"), Digest.sha1(bytes), side("sha256"), Digest.sha256(bytes))
 
   private def send(root: Path, fixture: Fixture, revision: Revision, name: ArtifactId) =
     ZIO

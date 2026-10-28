@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.Organization
+import histos.{Developer, HttpUrl, License, Organization, PomText, Scm}
 
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
 import java.security.MessageDigest
@@ -31,13 +31,25 @@ end DependencyVersionError
 /** One pom dependency. The artifact id already includes its Scala suffix. */
 final case class MavenDependency(group: Organization, name: ArtifactId, version: DependencyVersion)
 
-/** Bytes of one jar, at one publishable revision. */
+/** The pom fields beyond the coordinate. `name` is the artifact id and is not stored here. */
+final case class PomDocument(
+    description: Option[PomText] = None,
+    url: Option[HttpUrl] = None,
+    license: Option[License] = None,
+    developer: Option[Developer] = None,
+    scm: Option[Scm] = None,
+)
+
+/** Bytes of one publication. A library also carries a sources jar and a javadoc jar. */
 final case class Artifact(
     group: Organization,
     name: ArtifactId,
     revision: Revision,
     jar: Chunk[Byte],
     dependencies: List[MavenDependency] = Nil,
+    document: PomDocument = PomDocument(),
+    sources: Option[Chunk[Byte]] = None,
+    javadoc: Option[Chunk[Byte]] = None,
 )
 
 /** Why a publish filesystem call failed. The path stays on `PublishError.Io`. */
@@ -90,5 +102,11 @@ object Checksum:
   extension (sum: Checksum) def value: String = sum
 end Checksum
 
-/** Where one artifact lands. Every path is under the repository root. */
-final case class MavenPaths(directory: Path, jar: Path, pom: Path, jarSha256: Path, pomSha256: Path)
+/** Where one artifact lands. Sources and javadoc are present only when the artifact has them. */
+final case class MavenPaths(
+    directory: Path,
+    jar: Path,
+    pom: Path,
+    sources: Option[Path],
+    javadoc: Option[Path],
+)

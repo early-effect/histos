@@ -56,7 +56,12 @@ object CallModeSpec extends ZIOSpecDefault:
         val core     = ProjectName("core")
         val compile  = Call.Compile(List(core))
         val tested   = Call.Test(List(core), List(pattern), TestMode.Quick)
-        val publish  = Call.Publish("repo", List(core))
+        val publish  = Call.PublishLocal(Some("repo"), List("core"))
+        val snaps    = Call.PublishSnapshots(List("core"))
+        val release  = Call.PublishRelease(List("core"), true)
+        val promoted = Call.PublishPromote("abc")
+        val dropped  = Call.PublishDrop("abc")
+        val assets   = Call.PublishAssets(List("histos"))
         val cleaned  = Call.Clean(List(core))
         val cancel   = Call.Cancel(RunId.trusted("run-1"))
         val dry      = Call.CacheClean(CacheCleanMode.DryRun)
@@ -64,18 +69,25 @@ object CallModeSpec extends ZIOSpecDefault:
         val ran      = Call.Test(Nil, Nil, TestMode.Run)
         val removed  = Call.CacheClean(CacheCleanMode.Remove)
         val compiled = Call.PreviewCompile(List(core))
-        val shipped  = Call.PreviewPublish(List(core))
+        val shipped  = Call.PreviewPublishLocal(None, List("core"))
+        val looked   = Call.PreviewPublishSnapshots(List("core"))
         val wiped    = Call.PreviewClean(List(core))
         assertTrue(
           roundTrip(compile),
           roundTrip(tested),
           roundTrip(publish),
+          roundTrip(snaps),
+          roundTrip(release),
+          roundTrip(promoted),
+          roundTrip(dropped),
+          roundTrip(assets),
           roundTrip(cleaned),
           roundTrip(cancel),
           roundTrip(dry),
           roundTrip(preview),
           roundTrip(compiled),
           roundTrip(shipped),
+          roundTrip(looked),
           roundTrip(wiped),
           roundTrip(ran),
           roundTrip(removed),

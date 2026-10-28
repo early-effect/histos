@@ -33,20 +33,17 @@ object RunnerToolsSpec extends ZIOSpecDefault:
         Projects.tools(ToolCatalog.default)(core).map(_.runnerTools) == Right(RunnerTools.empty),
       )
     ,
-    test("organization and assembly keep the tools the build named"):
+    test("organization keeps the tools the build named"):
       val core  = module("core", Jvm)(scala3)
       val named = Projects
         .organization(organization"rocks.earlyeffect")
-        .assembly(artifact"histos")
         .runnerTools(tools)(core)
       val flipped = Projects
         .runnerTools(tools)
-        .organization(organization"rocks.earlyeffect")
-        .assembly(artifact"histos")(core)
+        .organization(organization"rocks.earlyeffect")(core)
       val node = RunnerTools(Some(NodeFloor(22)), None, None)
       assertTrue(
         named.map(_.runnerTools) == Right(tools),
-        named.map(_.assembly.map(_.value)) == Right(Some("histos")),
         named.map(_.organization.map(_.value)) == Right(Some("rocks.earlyeffect")),
         flipped.map(_.runnerTools) == Right(tools),
         Projects.runnerTools(node)(core).map(_.runnerTools) == Right(node),

@@ -65,10 +65,19 @@ object SourceFilter:
       case SeriesDir(required)   => ScalaSeries.of(version).contains(required)
 end SourceFilter
 
+/** One main source and the name it takes inside a sources jar. */
+final case class PackagedSource(entry: String, path: Path)
+
 object Sources:
   /** Main sources. `src/test` is not main. `.scala`, and `.java` on the JVM, whose path filters match. */
   def select(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
     collect(root, version, platform, Tree.Main)
+
+  /** Main sources named for a sources jar. The entry is the package path. */
+  def packaged(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[PackagedSource]] =
+    select(root, version, platform).map: paths =>
+      paths.map: path =>
+        PackagedSource(entryName(root, path), path)
 
   /** `src/test` for this platform. A package named `test` under `scala` is main code, so it is absent here. */
   def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
@@ -102,7 +111,34 @@ object Sources:
       case None          => false
       case Some(filters) => filters.forall(filter => SourceFilter.allows(filter, version, platform))
 
-  private val layout = Set("src", "main")
+  private val layout   = Set("src", "main")
+  private val language = Set("scala", "java")
+
+  private def entryName(root: Path, path: Path): String =
+    val parts = root.relativize(path).iterator.asScala.map(_.toString).toList
+    splitLast(parts) match
+      case None =>
+        Option(path.getFileName).map(_.toString).getOrElse("source")
+      case Some((dirs, file)) =>
+        (dropPrefix(dirs, seenLayout = false, seenLanguage = false) :+ file).mkString("/")
+
+  private def splitLast(parts: List[String]): Option[(List[String], String)] =
+    parts.reverse match
+      case file :: dirs => Some((dirs.reverse, file))
+      case Nil          => None
+
+  /** `scala` and `java` are source roots only after `src` or `main`. A package with those names stays. A filter after
+    * that source root is a package too.
+    */
+  private def dropPrefix(directories: List[String], seenLayout: Boolean, seenLanguage: Boolean): List[String] =
+    directories match
+      case name :: rest if !seenLanguage && layout.contains(name) =>
+        dropPrefix(rest, seenLayout = true, seenLanguage)
+      case name :: rest if !seenLanguage && SourceFilter.parse(name).isDefined =>
+        dropPrefix(rest, seenLayout, seenLanguage)
+      case name :: rest if !seenLanguage && seenLayout && language.contains(name) =>
+        dropPrefix(rest, seenLayout, seenLanguage = true)
+      case rest => rest
 
   private enum Tree:
     case Main, Test

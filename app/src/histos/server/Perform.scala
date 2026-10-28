@@ -27,23 +27,26 @@ object Perform:
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.Publish(_, _) | Call.Graph | Call.Run(_, _) | Call.Task(_, _) |
-          Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_) |
-          Call.PreviewPublish(_) | Call.PreviewRun(_, _) =>
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
+          Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) |
+          Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) |
+          Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
         false
       case Call.Clean(_) | Call.PreviewClean(_) =>
         true
-      case Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot | Call.Version |
-          Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) | Call.Bsp |
-          Call.PreviewCleanFull =>
+      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) |
+          Call.Bsp | Call.PreviewCleanFull =>
         false
 
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
-      case Call.Publish(_, _) | Call.PreviewPublish(_) =>
+      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
+          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
       case Call.Test(_, _, _) | Call.PreviewTest(_) =>
         BuildFault.testStopped(ModuleTestError.Compile(error)) match
@@ -97,12 +100,30 @@ object Perform:
                 withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
               )
             )
-          case Call.Publish(repository, projects) =>
+          case Call.PublishLocal(directory, projects) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.publish(repo, build.graph, machine, jdk, repository, projects, say))
+                withJdk(jdk => Calls.publishLocal(repo, build.graph, machine, jdk, directory, projects, say))
               )
             )
+          case Call.PublishSnapshots(projects) =>
+            held(build =>
+              follow(
+                withJdk(jdk => Calls.publishSnapshots(repo, build.graph, machine, jdk, projects, say))
+              )
+            )
+          case Call.PublishRelease(projects, automatic) =>
+            held(build =>
+              follow(
+                withJdk(jdk => Calls.publishRelease(repo, build.graph, machine, jdk, projects, automatic, say))
+              )
+            )
+          case Call.PublishPromote(id) =>
+            follow(Calls.promote(repo, machine, id, say))
+          case Call.PublishDrop(id) =>
+            held(build => follow(Calls.drop(repo, build.graph, machine, id, say)))
+          case Call.PublishAssets(tokens) =>
+            held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
           case Call.Assembly(destination) =>
             held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, destination, say))))
           case Call.Run(id, platform) =>
@@ -129,8 +150,10 @@ object Perform:
             held(build => Calls.previewCompile(repo, build.graph, projects, say))
           case Call.PreviewTest(projects) =>
             held(build => Calls.previewTest(repo, build.graph, projects, say))
-          case Call.PreviewPublish(projects) =>
-            held(build => Calls.previewPublish(repo, build.graph, projects, machine.env, say))
+          case Call.PreviewPublishLocal(directory, projects) =>
+            held(build => Calls.previewPublishLocal(repo, build.graph, directory, projects, machine.env, say))
+          case Call.PreviewPublishSnapshots(projects) =>
+            held(build => Calls.previewPublishSnapshots(repo, build.graph, projects, machine.env, say))
           case Call.PreviewClean(Nil) =>
             Calls.previewCleanAll(repo, say)
           case Call.PreviewClean(projects) =>

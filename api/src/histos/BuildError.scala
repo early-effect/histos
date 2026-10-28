@@ -97,6 +97,10 @@ enum BuildError:
   case UnknownPluginTask(plugin: PluginId, name: TaskName)
   case CommandShadow(name: CommandName)
   case PluginDefect(plugin: PluginId, binary: String)
+  case TwoPublications(name: ProjectName, position: SourcePos)
+  case AssemblyShape(name: ProjectName, position: SourcePos)
+  case AssetWithoutAssembly(name: ProjectName, position: SourcePos)
+  case TwoAssets(name: ProjectName, position: SourcePos)
 
   def message: String = this match
     case EmptyName(position) =>
@@ -174,4 +178,12 @@ enum BuildError:
     case CommandShadow(name)          => s"command ${name.value} is a built-in"
     case PluginDefect(plugin, binary) =>
       s"plugin ${plugin.value} failed while contributing ($binary)"
+    case TwoPublications(name, position) =>
+      s"'${name.value}' publishes two artifacts (${position.line}:${position.column})"
+    case AssemblyShape(name, position) =>
+      s"'${name.value}' publishes an assembly, which is one jvm jar (${position.line}:${position.column})"
+    case AssetWithoutAssembly(name, position) =>
+      s"'${name.value}' names an asset and does not publish an assembly (${position.line}:${position.column})"
+    case TwoAssets(name, position) =>
+      s"'${name.value}' names two assets (${position.line}:${position.column})"
 end BuildError

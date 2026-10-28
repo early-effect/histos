@@ -236,7 +236,7 @@ object VersionSpec extends ZIOSpecDefault:
           absent == Decision.NoCatalog,
         )
     ,
-    test("a release publishes the bare number and a pull-request bump, and does not release a number twice"):
+    test("a release publishes the catalog number and leaves that number in place"):
       use: fixture =>
         val first = Versions.decide(fixture.one, Session.Release, clear)
         val again = registry(s"${fixture.libs.value} matches").map: evidence =>
@@ -249,20 +249,13 @@ object VersionSpec extends ZIOSpecDefault:
         )
         val published = PublishLine(
           fixture.client,
-          PublishAction.Release(ReleaseVersion(clientNumber), CatalogBump(fixture.client, clientNumber)),
+          PublishAction.Release(ReleaseVersion(clientNumber)),
         )
+        val line = PublishLine(fixture.libs, PublishAction.Release(ReleaseVersion(number)))
         assertTrue(
           ReleaseVersion(number).render == "1.4.2",
-          first == Decision.Publish(
-            PublishKind.Release,
-            ::(
-              PublishLine(
-                fixture.libs,
-                PublishAction.Release(ReleaseVersion(number), CatalogBump(fixture.libs, number)),
-              ),
-              Nil,
-            ),
-          ),
+          first == Decision.Publish(PublishKind.Release, ::(line, Nil)),
+          Decision.rendered(line) == s"${fixture.libs.value} compile 1.4.2 publish 1.4.2",
           again == Right(Decision.Refused(::(Refusal.NothingToRelease, Nil))),
           mixed == Right(Decision.Publish(PublishKind.Release, ::(held, published :: Nil))),
         )

@@ -10,6 +10,7 @@ import histos.plugin.{
   JobWhen,
   PluginId,
   RegisteredPlugin,
+  RepoPath,
   TaskName,
 }
 import histos.version.{Catalog, ManualVersion, Ship, ShipName, ShipNumber}
@@ -242,7 +243,6 @@ object WorkflowSpec extends ZIOSpecDefault:
     val api = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
     histos.Projects
       .organization(histos.Organization("rocks.earlyeffect"))
-      .assembly(histos.ArtifactBase("histos"))
       .runnerTools(
         RunnerTools(
           Some(NodeFloor(25)),
@@ -474,6 +474,189 @@ object WorkflowSpec extends ZIOSpecDefault:
       Contribution(Nil, Nil, jobs),
     )
 
+  private val release = suite("release")(
+    test("one ship holds, uploads the named jar, and promote is the other dispatch"):
+      val body = renderRelease(List(manual("histos", "0.0.1-SNAPSHOT", "app")), Set("app")).flatMap:
+        case RenderedWorkflow("ci.yml", ci) :: RenderedWorkflow(name, text) :: Nil
+            if name == Workflow.releaseName && !ci.contains("publish") && !ci.contains("tags:") =>
+          Right(text)
+        case other => Left(other.toString)
+      assertTrue(body == Right(oneShipRelease))
+    ,
+    test("two ships prefix the tag, and a library ship does not upload"):
+      val rendered = renderRelease(
+        List(line("libs", "1.0.0", "core"), line("tool", "2.0.0", "app")),
+        Set("app"),
+      )
+      assertTrue:
+        rendered match
+          case Right(_ :: RenderedWorkflow("histos-release.yml", body) :: Nil) =>
+            val libsAt    = body.indexOf("  release-libs:")
+            val toolAt    = body.indexOf("  release-tool:")
+            val promoteAt = body.indexOf("  promote:")
+            val libsJob   = if libsAt >= 0 && toolAt > libsAt then body.substring(libsAt, toolAt) else ""
+            val toolJob   = if toolAt >= 0 && promoteAt > toolAt then body.substring(toolAt, promoteAt) else ""
+            body.contains("- \"libs/v1.0.0\"") &&
+            body.contains("- \"tool/v2.0.0\"") &&
+            !body.contains("- \"v1.0.0\"") &&
+            !body.contains("- \"v2.0.0\"") &&
+            libsJob.contains("\"./histos publish release libs\"") &&
+            !libsJob.contains("publish assets") &&
+            !libsJob.contains("contents: write") &&
+            toolJob.contains("\"./histos publish release tool\"") &&
+            toolJob.contains("\"./histos publish assets tool\"") &&
+            toolJob.contains("contents: write") &&
+            body.contains("\"./histos publish promote ${{ inputs.deployment }}\"") &&
+            !body.contains("--automatic")
+          case _ => false
+    ,
+    test("a schedule is rendered after the release file"):
+      val nightly = CiJob(
+        JobName("nightly"),
+        TaskName("site"),
+        JobWhen.Schedule(Cron("0 6 * * 1")),
+      )
+      val rendered = renderRelease(
+        List(manual("histos", "0.0.1-SNAPSHOT", "app")),
+        Set("app"),
+        List(registered(List(nightly))),
+      )
+      assertTrue:
+        rendered match
+          case Right(
+                RenderedWorkflow("ci.yml", _) :: RenderedWorkflow("histos-release.yml", _) :: RenderedWorkflow(
+                  "histos-nightly.yml",
+                  _,
+                ) :: Nil
+              ) =>
+            true
+          case _ => false
+    ,
+    test("update writes the release file and an empty catalog deletes it"):
+      ZIO.scoped:
+        for
+          root    <- temp
+          built   <- ZIO.fromEither(releaseGraph(List(manual("histos", "0.0.1-SNAPSHOT", "app")), Set("app")))
+          _       <- Workflow.update(root, built)
+          text    <- ZIO.attempt(Files.readString(Workflow.file(root, Workflow.releaseName)))
+          again   <- Workflow.check(root, built)
+          _       <- ZIO.attempt(Files.delete(Workflow.file(root, Workflow.releaseName)))
+          missing <- Workflow.check(root, built).either
+          stale = Workflow.file(root, Workflow.releaseName)
+          _ <- ZIO.attempt(Files.writeString(stale, "stale\n"))
+          _ <- Workflow.update(root, graph(Splits.aggregate))
+          gone = !Files.exists(stale)
+          clean <- Workflow.check(root, graph(Splits.aggregate))
+        yield assertTrue(
+          text == oneShipRelease,
+          again == Workflow.path(root),
+          missing == Left(CiError.Drift),
+          gone,
+          clean == Workflow.path(root),
+        ),
+  )
+
+  private val oneShipRelease: String =
+    """name: release
+      |on:
+      |  push:
+      |    tags:
+      |      - "v0.0.1-SNAPSHOT"
+      |  workflow_dispatch:
+      |    inputs:
+      |      command:
+      |        description: release or promote
+      |        required: true
+      |        type: choice
+      |        options:
+      |          - release
+      |          - promote
+      |      ship:
+      |        description: ship
+      |        required: true
+      |        type: choice
+      |        options:
+      |          - "histos"
+      |      deployment:
+      |        description: deployment id
+      |        required: false
+      |        type: string
+      |permissions:
+      |  contents: read
+      |jobs:
+      |  release-histos:
+      |    if: github.ref == 'refs/tags/v0.0.1-SNAPSHOT' || (inputs.command == 'release' && inputs.ship == 'histos')
+      |    runs-on: ubuntu-26.04
+      |    permissions:
+      |      contents: write
+      |    steps:
+      |      - uses: actions/checkout@v7
+      |      - run: "./histos publish release histos"
+      |        env:
+      |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+      |          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+      |          PGP_SECRET: ${{ secrets.PGP_SECRET }}
+      |          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
+      |          PGP_KEY_HEX: ${{ secrets.PGP_KEY_HEX }}
+      |      - run: "./histos publish assets histos"
+      |        env:
+      |          GITHUB_TOKEN: ${{ github.token }}
+      |          GITHUB_REPOSITORY: ${{ github.repository }}
+      |  promote:
+      |    if: github.event_name == 'workflow_dispatch' && inputs.command == 'promote'
+      |    runs-on: ubuntu-26.04
+      |    steps:
+      |      - uses: actions/checkout@v7
+      |      - run: "./histos publish promote ${{ inputs.deployment }}"
+      |        env:
+      |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+      |          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+      |""".stripMargin
+
+  private def renderRelease(
+      rows: List[Either[String, Ship]],
+      assets: Set[String],
+      plugins: List[RegisteredPlugin] = Nil,
+  ): Either[String, List[RenderedWorkflow]] =
+    releaseGraph(rows, assets, plugins).flatMap(graph => Workflow.renderAll(graph).left.map(_.message))
+
+  private def releaseGraph(
+      rows: List[Either[String, Ship]],
+      assets: Set[String],
+      plugins: List[RegisteredPlugin] = Nil,
+  ): Either[String, ProjectGraph] =
+    rows
+      .foldLeft[Either[String, List[Ship]]](Right(Nil)): (acc, row) =>
+        acc.flatMap(seen => row.map(ship => seen :+ ship))
+      .flatMap: ships =>
+        Catalog
+          .from(ships)
+          .left
+          .map(_.message)
+          .map: catalog =>
+            val modules = ships
+              .flatMap(_.members.toList)
+              .distinct
+              .map: name =>
+                val base = module(name.value, Platform.Jvm, Nil)
+                if assets.contains(name.value) then base.copy(asset = Some(RepoPath.trusted("dist/histos.jar")))
+                else base
+            ProjectGraph.trusted(modules, Splits.aggregate, catalog, None, Nil, plugins)
+
+  private def line(name: String, number: String, member: String): Either[String, Ship] =
+    for
+      ship    <- ShipName.from(name).left.map(_.message)
+      parsed  <- ShipNumber.from(number).left.map(_.message)
+      project <- ProjectName.from(member).left.map(_.message)
+    yield Ship.Line(ship, parsed, ::(project, Nil))
+
+  private def manual(name: String, version: String, member: String): Either[String, Ship] =
+    for
+      ship    <- ShipName.from(name).left.map(_.message)
+      parsed  <- ManualVersion.from(version).left.map(_.message)
+      project <- ProjectName.from(member).left.map(_.message)
+    yield Ship.Manual(ship, parsed, ::(project, Nil))
+
   def spec =
-    suite("workflow")(render, affected, plugins) @@ TestAspect.withLiveSystem
+    suite("workflow")(render, affected, plugins, release) @@ TestAspect.withLiveSystem
 end WorkflowSpec

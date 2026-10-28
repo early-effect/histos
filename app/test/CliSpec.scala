@@ -275,13 +275,63 @@ object CliSpec extends ZIOSpecDefault:
         both == Left(CliParseError.Rejected),
       )
     ,
-    test("publish takes a repository and project names"):
+    test("publishLocal takes a directory and project names, and publish snapshots does not take a directory"):
       for
-        named <- Cli.parse(List("publish", "repo", "core"))
-        bare  <- Cli.parse(List("publish")).either
+        named    <- Cli.parse(List("publishLocal", "repo", "core"))
+        plain    <- Cli.parse(List("publishLocal"))
+        shipped  <- Cli.parse(List("publish", "snapshots", "core"))
+        all      <- Cli.parse(List("publish", "snapshots"))
+        bare     <- Cli.parse(List("publish")).either
+        folder   <- Cli.parse(List("publish", "repo")).either
+        preview  <- Cli.parse(List("preview", "publishLocal", "repo", "core"))
+        looked   <- Cli.parse(List("preview", "publish", "snapshots"))
+        rejected <- Cli.parse(List("preview", "publish", "repo")).either
       yield assertTrue(
-        named == Command.Publish("repo", List(ProjectName("core"))),
-        bare == Left(CliParseError.MissingArgument),
+        named == Command.PublishLocal(None, List("repo", "core")),
+        plain == Command.PublishLocal(None, Nil),
+        shipped == Command.PublishSnapshots(List("core")),
+        all == Command.PublishSnapshots(Nil),
+        bare == Left(CliParseError.PublishForm),
+        folder == Left(CliParseError.PublishForm),
+        CliParseError.PublishForm.message == "a directory belongs on publishLocal",
+        preview == Command.PreviewPublishLocal(None, List("repo", "core")),
+        looked == Command.PreviewPublishSnapshots(Nil),
+        rejected == Left(CliParseError.PublishForm),
+        Operation.call(named) == Right(Call.PublishLocal(None, List("repo", "core"))),
+        Operation.call(shipped) == Right(Call.PublishSnapshots(List("core"))),
+      )
+    ,
+    test("publish release holds unless automatic, and promote and drop take a deployment id"):
+      for
+        plain         <- Cli.parse(List("publish", "release"))
+        named         <- Cli.parse(List("publish", "release", "core"))
+        auto          <- Cli.parse(List("publish", "release", "core", "--automatic"))
+        front         <- Cli.parse(List("publish", "release", "--automatic", "specular"))
+        promoted      <- Cli.parse(List("publish", "promote", "abc"))
+        dropped       <- Cli.parse(List("publish", "drop", "abc"))
+        assets        <- Cli.parse(List("publish", "assets"))
+        namedAsset    <- Cli.parse(List("publish", "assets", "histos"))
+        missing       <- Cli.parse(List("publish", "promote")).either
+        preview       <- Cli.parse(List("preview", "publish", "release")).either
+        previewAssets <- Cli.parse(List("preview", "publish", "assets")).either
+      yield assertTrue(
+        plain == Command.PublishRelease(false, Nil),
+        named == Command.PublishRelease(false, List("core")),
+        auto == Command.PublishRelease(true, List("core")),
+        front == Command.PublishRelease(true, List("specular")),
+        promoted == Command.PublishPromote("abc"),
+        dropped == Command.PublishDrop("abc"),
+        assets == Command.PublishAssets(Nil),
+        namedAsset == Command.PublishAssets(List("histos")),
+        missing == Left(CliParseError.MissingArgument),
+        preview == Left(CliParseError.PublishForm),
+        previewAssets == Left(CliParseError.PublishForm),
+        Operation.call(named) == Right(Call.PublishRelease(List("core"), false)),
+        Operation.call(auto) == Right(Call.PublishRelease(List("core"), true)),
+        Operation.call(front) == Right(Call.PublishRelease(List("specular"), true)),
+        Operation.call(promoted) == Right(Call.PublishPromote("abc")),
+        Operation.call(dropped) == Right(Call.PublishDrop("abc")),
+        Operation.call(namedAsset) == Right(Call.PublishAssets(List("histos"))),
       )
     ,
     test("assembly takes an optional path"):
@@ -451,6 +501,21 @@ object CliSpec extends ZIOSpecDefault:
         Operation.call(update) == Right(Call.LauncherUpdate),
       )
     ,
+    test("portal is a loopback command and missing secrets fail before it binds"):
+      ZIO.scoped:
+        for
+          parsed  <- Cli.parse(List("portal"))
+          watched <- Cli.parse(List("~", "portal"))
+          done    <- invoke(List("portal"))
+        yield assertTrue(
+          parsed == Command.Portal,
+          Operation.call(parsed) == Left(CliParseError.Rejected),
+          watched == Command.Watch(Command.Portal, List("portal")),
+          done.exit == CliExit.PublishFailed,
+          done.err == "SONATYPE_USERNAME and SONATYPE_PASSWORD are required",
+          done.out.isEmpty,
+        )
+    ,
     test("workflow without a file fails"):
       ZIO.scoped:
         for done <- invoke(List("workflow"))
@@ -461,7 +526,7 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("publish of an empty catalog writes nothing"):
       ZIO.scoped:
-        for done <- invoke(List("publish", "repo"))
+        for done <- invoke(List("publishLocal", "repo"))
         yield assertTrue(
           done.exit == CliExit.PublishFailed && done.exit.code == 9 && done.err
             .contains("nothing publishes")
@@ -1133,17 +1198,13 @@ object CliSpec extends ZIOSpecDefault:
           remote <- Cli
             .execute(List("workflow"), dir, jar)
             .provideSome[Scope](stack)
-        yield
-          val assembled = loaded.graph.assembly match
-            case Some(_) => true
-            case None    => false
-          assertTrue(
-            assembled,
-            local.exit == CliExit.WorkflowFailed,
-            remote.exit == CliExit.WorkflowFailed,
-            local.err.contains("launcher pin is absent"),
-            remote.err.contains("launcher pin is absent"),
-          )
+        yield assertTrue(
+          launcher(loaded.graph),
+          local.exit == CliExit.WorkflowFailed,
+          remote.exit == CliExit.WorkflowFailed,
+          local.err.contains("launcher pin is absent"),
+          remote.err.contains("launcher pin is absent"),
+        )
     ,
     test(
       "workflow --update rewrites launcher scripts with and without a server"
@@ -1215,14 +1276,11 @@ object CliSpec extends ZIOSpecDefault:
           remoteLock     <- fileBytes(lockPath)
           remotePin      <- LauncherPin.read(dir).mapError(_.message)
         yield
-          val posix     = utf8(LauncherScript.posix(pin.version))
-          val windows   = utf8(LauncherScript.windows(pin.version))
-          val workflow  = utf8(rendered)
-          val assembled = loaded.graph.assembly match
-            case Some(_) => true
-            case None    => false
+          val posix    = utf8(LauncherScript.posix(pin.version))
+          val windows  = utf8(LauncherScript.windows(pin.version))
+          val workflow = utf8(rendered)
           assertTrue(
-            assembled,
+            launcher(loaded.graph),
             pin.version == "0.0.1-SNAPSHOT",
             pin.revision == "0.0.1-20261024.203501-20",
             local.exit == CliExit.Success,
@@ -1498,16 +1556,28 @@ object CliSpec extends ZIOSpecDefault:
   private def utf8(text: String): Chunk[Byte] =
     Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))
 
+  private def launcher(graph: ProjectGraph): Boolean =
+    graph.projects.exists:
+      case module: Module =>
+        module.publication match
+          case Publication.Assembly(main) =>
+            module.published.map(_.value).contains("histos") && main.value == "histos.cli.Main"
+          case _ => false
+      case _ => false
+
   private val ship =
     """import histos.*
       |object build extends HistosBuild:
       |  def graph =
       |    val api = module("api", Jvm)(scala"3.9.0")
+      |    val app = module("app", Jvm)(scala"3.9.0")
+      |      .artifact(artifact"histos")
+      |      .assembly(MainClass("histos.cli.Main"))
       |    Projects
-      |      .organization(organization"rocks.earlyeffect")
-      |      .assembly(artifact"histos")(
+      |      .organization(organization"rocks.earlyeffect")(
       |        ships(manual("histos", manual"0.0.1-SNAPSHOT")(api)),
-      |        api
+      |        api,
+      |        app
       |      )
       |""".stripMargin
 

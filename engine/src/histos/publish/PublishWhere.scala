@@ -6,7 +6,7 @@ import java.nio.file.{InvalidPathException, Path}
 
 import zio.{Chunk, Config}
 
-/** Where `histos publish` writes. `snapshots` is Central. Any other token is a directory. */
+/** Where a publish writes. A directory stays on this machine. Snapshots are Central. */
 enum PublishWhere:
   case Directory(path: Path)
   case Snapshots(user: RepositoryUser, password: Config.Secret)
@@ -21,16 +21,34 @@ enum PublishWhere:
     case Snapshots(_, _) => "Snapshots"
 end PublishWhere
 
-object PublishWhere:
-  val Token: String = "snapshots"
+/** Local writes the coordinate this session compiles, including `<ship>-ci`. Snapshots and a release refuse that
+  * coordinate. A release with no release coordinate stops before selection. When another ship is a release, the
+  * snapshot coordinate stays through selection so that ship is refused, and then it is not staged.
+  */
+enum PublishWrite:
+  case Local
+  case Snapshots
+  case Release
 
-  def resolve(
+object PublishWhere:
+  def directory(
       repo: Path,
-      repository: String,
-      env: Map[String, String],
+      raw: Option[String],
+      home: Path,
   ): Either[LocalPublishError, PublishWhere] =
-    if repository == Token then credentials(env)
-    else directory(repo, repository)
+    localRoot(repo, raw, home).map(PublishWhere.Directory(_))
+
+  def snapshots(env: Map[String, String]): Either[LocalPublishError, PublishWhere] =
+    credentials(env)
+
+  /** `None` is `home/.m2/repository`. A relative token resolves under `repo`. An absolute token stays absolute. */
+  def localRoot(repo: Path, raw: Option[String], home: Path): Either[LocalPublishError, Path] =
+    raw match
+      case None        => Right(maven(home))
+      case Some(token) => located(repo, token)
+
+  def maven(home: Path): Path =
+    home.resolve(".m2").resolve("repository")
 
   private def credentials(
       env: Map[String, String]
@@ -45,14 +63,11 @@ object PublishWhere:
           case Left(_) => Left(LocalPublishError.Credentials)
       case _ => Left(LocalPublishError.Credentials)
 
-  private def directory(
-      repo: Path,
-      repository: String,
-  ): Either[LocalPublishError, PublishWhere] =
+  private def located(repo: Path, repository: String): Either[LocalPublishError, Path] =
     try
       val raw  = Path.of(repository)
       val path = if raw.isAbsolute then raw else repo.resolve(raw)
-      Right(PublishWhere.Directory(path))
+      Right(path)
     catch
       case _: InvalidPathException =>
         Left(LocalPublishError.NotAPath(repository))

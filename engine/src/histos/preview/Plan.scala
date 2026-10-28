@@ -2,7 +2,8 @@ package histos.preview
 
 import histos.clean.Products
 import histos.plugin.PluginTaskId
-import histos.publish.LocalPublishError
+import histos.central.SnapshotRepository
+import histos.publish.{LocalPublishError, PublishName, PublishSelect, PublishWhere, ShipWrite}
 import histos.select.{SelectError, Selection}
 import histos.task.TaskId
 import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
@@ -56,8 +57,10 @@ enum PublishUnit:
   )
   case Held(ship: ShipName, compile: String, reason: HoldReason)
   case Idle(ship: ShipName, compile: String)
+  case Skipped(module: ProjectName)
+  case Refused(ship: ShipName, dependency: String)
 
-final case class PublishPlan(units: List[PublishUnit])
+final case class PublishPlan(place: String, units: List[PublishUnit])
 
 /** What `clean` would delete. [[StoreFate.Forgotten]] is `cleanFull`: this repo's content-store entries, with no byte
   * count.
@@ -142,18 +145,57 @@ object Plan:
   ): IO[PreviewError, TestPlan] =
     modulePlan(repo, graph, projects, Tree.Test).map(TestPlan(_))
 
-  /** Reads the version decision already in the tree. Writes no jar and opens no repository.
+  /** Reads the version decision already in the tree. Writes no jar and opens no repository. An absent directory is
+    * `home/.m2/repository`.
     */
-  def publish(
+  def publishLocal(
       repo: Path,
       graph: ProjectGraph,
-      projects: List[ProjectName],
+      tokens: List[String],
       env: Map[String, String],
+      directory: Option[String],
+      home: IO[PreviewError, Path],
+  ): IO[PreviewError, PublishPlan] =
+    ZIO
+      .fromEither(PublishSelect.resolve(graph, tokens, directory, allowDirectory = true))
+      .mapError(PreviewError.Publish(_))
+      .flatMap: request =>
+        val root = request.directory match
+          case Some(path) =>
+            ZIO
+              .fromEither(PublishWhere.localRoot(repo, Some(path), repo))
+              .mapError(PreviewError.Publish(_))
+          case None =>
+            home.flatMap: found =>
+              ZIO
+                .fromEither(PublishWhere.localRoot(repo, None, found))
+                .mapError(PreviewError.Publish(_))
+        root.flatMap(path => planned(repo, graph, request.names, env, Place.Local(path)))
+
+  /** Reads the version decision already in the tree. Names Central. Writes no jar and opens no repository.
+    */
+  def publishSnapshots(
+      repo: Path,
+      graph: ProjectGraph,
+      tokens: List[String],
+      env: Map[String, String],
+  ): IO[PreviewError, PublishPlan] =
+    ZIO
+      .fromEither(PublishSelect.resolve(graph, tokens, None, allowDirectory = false))
+      .mapError(PreviewError.Publish(_))
+      .flatMap(request => planned(repo, graph, request.names, env, Place.Snapshots))
+
+  private def planned(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[PublishName],
+      env: Map[String, String],
+      place: Place,
   ): IO[PreviewError, PublishPlan] =
     VersionTask
       .decide(graph, repo, env)
       .mapError(PreviewError.Version(_))
-      .flatMap(decision => ZIO.fromEither(publishPlan(graph, projects, decision)))
+      .flatMap(decision => ZIO.fromEither(publishPlan(repo, graph, names, decision, place)))
 
   /** Every product root. Does not read the graph and does not delete. */
   def cleanAll(repo: Path): CleanPlan =
@@ -202,7 +244,7 @@ object Plan:
     renderUnits(repo, plan.units)
 
   def renderPublish(plan: PublishPlan): String =
-    plan.units
+    val body = plan.units
       .map:
         case PublishUnit.Module(module, ship, revision, reason) =>
           s"${module.value} ${ship.value} $revision ${reason.word}"
@@ -212,7 +254,12 @@ object Plan:
           s"held ${ship.value} $compile $why"
         case PublishUnit.Idle(ship, compile) =>
           s"${ship.value} $compile not published"
+        case PublishUnit.Skipped(module) =>
+          LocalPublishError.NotPublished(module).message
+        case PublishUnit.Refused(ship, dependency) =>
+          LocalPublishError.SnapshotDependency(ship, dependency).message
       .mkString("\n")
+    if body.isEmpty then plan.place else s"${plan.place}\n$body"
 
   def renderClean(repo: Path, plan: CleanPlan): String =
     val roots = plan.roots.map(path => relative(repo, path))
@@ -356,31 +403,47 @@ object Plan:
     case Held(ship: ShipName, compile: String, reason: HoldReason)
     case Idle(ship: ShipName, compile: String)
 
+  private enum Place:
+    case Local(path: Path)
+    case Snapshots
+
+    def text(repo: Path): String = this match
+      case Local(path) => relative(repo, path)
+      case Snapshots   => SnapshotRepository.central.root.render
+  end Place
+
   private def publishPlan(
+      repo: Path,
       graph: ProjectGraph,
-      projects: List[ProjectName],
+      names: List[PublishName],
       decision: Decision,
+      place: Place,
   ): Either[PreviewError, PublishPlan] =
-    words(decision, graph.catalog).flatMap: found =>
+    words(decision, graph.catalog, place).flatMap: found =>
       val idle       = found.collect { case word: ShipWord.Idle => word }
       val held       = found.collect { case word: ShipWord.Held => word }
       val publishing = found.collect { case word: ShipWord.Publish => word }
-      if idle.nonEmpty then
-        accept(graph, projects).map: _ =>
-          PublishPlan(idle.map(word => PublishUnit.Idle(word.ship, word.compile)))
-      else if publishing.isEmpty then
-        accept(graph, projects).map: _ =>
-          PublishPlan(heldUnits(held))
+      val shown      = place.text(repo)
+      if idle.nonEmpty then Right(PublishPlan(shown, idle.map(word => PublishUnit.Idle(word.ship, word.compile))))
+      else if publishing.isEmpty then Right(PublishPlan(shown, heldUnits(held)))
       else
-        val members = publishing.flatMap(_.members.toList).toSet
-        chosen(graph, projects, members).flatMap: (roots, names) =>
-          linked(graph, names).flatMap: _ =>
+        PublishSelect
+          .pick(graph, names, writes(publishing))
+          .left
+          .map(PreviewError.Publish(_))
+          .flatMap: picked =>
             organized(graph).map: _ =>
-              PublishPlan(moduleUnits(graph, publishing, roots, names) ++ heldUnits(held))
+              val units =
+                skippedUnits(picked.skipped) ++
+                  refusedUnits(picked.refused) ++
+                  moduleUnits(graph, publishing, picked.roots, picked.modules) ++
+                  heldUnits(held)
+              PublishPlan(shown, units)
 
   private def words(
       decision: Decision,
       catalog: histos.version.Catalog,
+      place: Place,
   ): Either[PreviewError, List[ShipWord]] =
     decision match
       case Decision.NoCatalog =>
@@ -388,9 +451,14 @@ object Plan:
       case Decision.Refused(refusals) =>
         Left(PreviewError.Version(VersionError.Refused(refusals)))
       case Decision.Develop(_, lines) =>
-        Right(
-          lines.toList.map(line => ShipWord.Idle(line.ship, line.compile.render))
-        )
+        place match
+          case Place.Snapshots =>
+            Right(lines.toList.map(line => ShipWord.Idle(line.ship, line.compile.render)))
+          case Place.Local(_) =>
+            lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
+              acc.flatMap: seen =>
+                membersOf(catalog, line.ship).map: mods =>
+                  seen :+ ShipWord.Publish(line.ship, line.compile.render, mods)
       case Decision.Manual(lines) =>
         lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
           acc.flatMap: seen =>
@@ -402,7 +470,7 @@ object Plan:
             line.action match
               case PublishAction.Hold(compile, reason) =>
                 Right(seen :+ ShipWord.Held(line.ship, compile.render, reason))
-              case PublishAction.Release(version, _) =>
+              case PublishAction.Release(version) =>
                 membersOf(catalog, line.ship).map: mods =>
                   seen :+ ShipWord.Publish(line.ship, version.render, mods)
               case PublishAction.Snapshot(_, stored, pointer) =>
@@ -421,73 +489,15 @@ object Plan:
       case None      =>
         Left(PreviewError.Publish(LocalPublishError.UnknownShip(ship)))
 
-  private def accept(
-      graph: ProjectGraph,
-      projects: List[ProjectName],
-  ): Either[PreviewError, Unit] =
-    if projects.isEmpty then Right(())
-    else Selection.select(graph, projects).left.map(PreviewError.Target(_)).map(_ => ())
-
-  private def chosen(
-      graph: ProjectGraph,
-      projects: List[ProjectName],
-      members: Set[ProjectName],
-  ): Either[PreviewError, (Set[ProjectName], Set[ProjectName])] =
-    if projects.isEmpty then Right((members, members))
-    else
-      Selection.select(graph, projects) match
-        case Left(error)     => Left(PreviewError.Target(error))
-        case Right(selected) =>
-          val direct = selected.modules.filter(module => !selected.expanded.contains(module.name))
-          direct.find(module => !members.contains(module.name)) match
-            case Some(module) =>
-              Left(
-                PreviewError.Publish(LocalPublishError.NotPublished(module.name))
-              )
-            case None =>
-              val keep = selected.modules.filter(module => members.contains(module.name))
-              keep match
-                case Nil =>
-                  Left(PreviewError.Publish(LocalPublishError.NothingToPublish))
-                case _ =>
-                  val asked = keep.map(_.name).toSet
-                  Right((asked, shipClosure(graph, asked, members)))
-
-  private def shipClosure(
-      graph: ProjectGraph,
-      asked: Set[ProjectName],
-      members: Set[ProjectName],
-  ): Set[ProjectName] =
-    def step(seen: Set[ProjectName], more: Set[ProjectName]): Set[ProjectName] =
-      if more.isEmpty then seen
-      else
-        val next = more.flatMap: name =>
-          graph.get(name) match
-            case Some(module: Module) =>
-              upstream(module).filter(members.contains).toSet
-            case _ => Set.empty
-        step(seen ++ more, next -- seen)
-    step(Set.empty, asked)
-
-  private def upstream(module: Module): List[ProjectName] =
-    module.platforms.all.flatMap(module.upstream).distinct
-
-  private def linked(
-      graph: ProjectGraph,
-      chosen: Set[ProjectName],
-  ): Either[PreviewError, Unit] =
-    val modules = graph.projects.collect:
-      case module: Module if chosen.contains(module.name) => module
-    modules.foldLeft[Either[PreviewError, Unit]](Right(())): (acc, module) =>
-      acc.flatMap: _ =>
-        upstream(module).find(name => !chosen.contains(name)) match
-          case Some(dependency) =>
-            Left(
-              PreviewError.Publish(
-                LocalPublishError.UnpublishedDependency(module.name, dependency)
-              )
-            )
-          case None => Right(())
+  private def writes(publishing: List[ShipWord.Publish]): List[ShipWrite] =
+    publishing.foldLeft(List.empty[ShipWrite]): (seen, word) =>
+      val snapshot = PublishSelect.snapshotCoordinate(word.revision)
+      seen.find(_.ship == word.ship) match
+        case None    => seen :+ ShipWrite(word.ship, word.members.toList, snapshot)
+        case Some(_) =>
+          seen.map: item =>
+            if item.ship == word.ship then item.copy(snapshot = item.snapshot || snapshot)
+            else item
 
   private def organized(graph: ProjectGraph): Either[PreviewError, Unit] =
     graph.organization match
@@ -509,6 +519,12 @@ object Plan:
             if roots.contains(module.name) then Reason.Selected
             else Reason.Upstream
           PublishUnit.Module(module.name, word.ship, word.revision, reason)
+
+  private def skippedUnits(names: List[ProjectName]): List[PublishUnit] =
+    names.map(PublishUnit.Skipped(_))
+
+  private def refusedUnits(refused: List[LocalPublishError.SnapshotDependency]): List[PublishUnit] =
+    refused.map(error => PublishUnit.Refused(error.ship, error.dependency))
 
   private def heldUnits(held: List[ShipWord.Held]): List[PublishUnit] =
     held.map(word => PublishUnit.Held(word.ship, word.compile, word.reason))

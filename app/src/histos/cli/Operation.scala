@@ -5,7 +5,7 @@ import histos.server.Call
 import histos.task.TaskId
 import histos.testrun.TestMode
 
-/** The call a command sends. `mcp`, `bsp`, `server`, and `observe` are not operations.
+/** The call a command sends. `mcp`, `bsp`, `server`, `portal`, and `observe` are not operations.
   */
 object Operation:
   def call(command: Command): Either[CliParseError, Call] =
@@ -26,7 +26,7 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Mcp | Command.Bsp | Command.Server | Command.Observe =>
+      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)
@@ -45,8 +45,18 @@ object Operation:
       case Command.CleanFull             => Right(Call.CleanFull)
       case Command.Assembly(destination) =>
         Right(Call.Assembly(destination))
-      case Command.Publish(repository, projects) =>
-        Right(Call.Publish(repository, projects))
+      case Command.PublishLocal(directory, tokens) =>
+        Right(Call.PublishLocal(directory, tokens))
+      case Command.PublishSnapshots(tokens) =>
+        Right(Call.PublishSnapshots(tokens))
+      case Command.PublishRelease(automatic, tokens) =>
+        Right(Call.PublishRelease(tokens, automatic))
+      case Command.PublishPromote(id) =>
+        Right(Call.PublishPromote(id))
+      case Command.PublishDrop(id) =>
+        Right(Call.PublishDrop(id))
+      case Command.PublishAssets(tokens) =>
+        Right(Call.PublishAssets(tokens))
       case Command.Toolchain                => Right(Call.Toolchain)
       case Command.CachePath                => Right(Call.CachePath)
       case Command.CacheList                => Right(Call.CacheList)
@@ -61,8 +71,10 @@ object Operation:
         Right(Call.PreviewCompile(projects))
       case Command.PreviewTest(projects) =>
         Right(Call.PreviewTest(projects))
-      case Command.PreviewPublish(projects) =>
-        Right(Call.PreviewPublish(projects))
+      case Command.PreviewPublishLocal(directory, tokens) =>
+        Right(Call.PreviewPublishLocal(directory, tokens))
+      case Command.PreviewPublishSnapshots(tokens) =>
+        Right(Call.PreviewPublishSnapshots(tokens))
       case Command.PreviewClean(projects) =>
         Right(Call.PreviewClean(projects))
       case Command.PreviewCleanFull =>

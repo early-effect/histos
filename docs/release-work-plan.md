@@ -17,7 +17,7 @@ ship("specular-histos", ship"0.0.1")(histosAdapter)
 
 The ship name is the release. The members are the publications. The Maven artifact id stays the module's artifact. There is no second constructor for a lone module. One member is a ship of one.
 
-The number in the file is the next release. Edit it, then publish. Publish does not rewrite the file and does not open a bump pull request. [PublishAction.Release](../api/src/histos/version/Versions.scala) carries a `CatalogBump` today. That follow-up pull request is withdrawn.
+The number in the file is the next release. Edit it, then publish. Publish does not rewrite the file and does not open a bump pull request. [PublishAction.Release](../api/src/histos/version/Versions.scala) carries the release version and nothing else.
 
 An early-effect ship releases its ship number. A manual `major.minor.patch` releases as written. A manual snapshot and a `-ci` coordinate are refused by `publish release`. Histos itself stays `manual("histos", manual"0.0.1-SNAPSHOT")` until a later decision cuts it.
 
@@ -34,6 +34,8 @@ These are the same packer with a different coordinate:
 - A CLI module picks one form. Assembly is the fat jar: no Scala suffix, a real pom with an empty dependency list, `Main-Class` in the manifest. That is `java -jar` and the histos launcher. Application is the thin jar whose pom carries the classpath, which is `coursier launch`.
 
 `histos-api_3` and the `histos` assembly stay two modules in one ship, and one deployment. [Projects.assembly](../api/src/histos/Graph.scala) as a graph-level side door goes away. The empty pom it writes for snapshots will not pass Central.
+
+`engine` and `central` stay out of that ship. They are packed into the fat jar and are not coordinates. An assembly may depend on a module that is not in a ship: that module is compiled and packed, and it is not published. A library, an application, or an sbt plugin that depends on such a module still fails. The organization names a license, a developer, and an scm. The catalog version is still the snapshot, so `publish release` in this repository refuses before any upload. Neither adds a publication.
 
 An asset publication is a file the build already produced, plus a name. For Histos the file is `dist/histos.jar`. A native image and a native launcher stay later work. The asset is not a GAV and it is not in the portal zip.
 
@@ -100,7 +102,7 @@ specular-histos/v0.0.1
 
 One ship in the catalog uses a bare `v0.21.2`. More than one ship uses `<ship>/v<number>`. The publisher does not require a tag. The workflow slice runs the command when a tag appears, and that tag must match the number in the file at that commit.
 
-A matching tag runs `publish release <ship>` in hold, then `publish assets <ship>`. Promote is a separate workflow dispatch. The tag workflow does not pass `--automatic`.
+A matching tag, or a dispatch that chooses `release` and the ship, runs `publish release <ship>` in hold, then `publish assets <ship>` when that ship names an asset. A library ship has no assets step. A dispatch that chooses `promote` runs `publish promote` with the deployment id. The file is `.github/workflows/histos-release.yml`, rendered by [Workflow](../engine/src/histos/workflow/Workflow.scala). It does not pass `--automatic`.
 
 ## Portal
 
@@ -152,46 +154,46 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 ### Publisher
 
-- [ ] **Withdraw `CatalogBump`.** `PublishAction.Release` carries the release version only. The version specs show that publish leaves the catalog file alone.
+- [x] **Withdraw `CatalogBump`.** `PublishAction.Release` carries the release version only. The version specs show that publish leaves the catalog file alone.
 
-- [ ] **Split the command.** `publishLocal` writes a Maven directory, default `~/.m2/repository`. `publish snapshots` is the snapshot upload. A directory argument is rejected by `publish`. The CLI, preview, and the MCP publish tool share that split. A `-ci` coordinate writes locally and is refused by snapshots. Grammar and local-publish specs cover both.
+- [x] **Split the command.** `publishLocal` writes a Maven directory, default `~/.m2/repository`. `publish snapshots` is the snapshot upload. A directory argument is rejected by `publish`. The CLI, preview, and the MCP publish tool share that split. A `-ci` coordinate writes locally and is refused by snapshots. Grammar and local-publish specs cover both.
 
-- [ ] **Selection.** A ship name publishes that ship. An aggregate publishes the modules it lists, at each module's own ship version, and does not pull the other members of those ships. A module outside a ship is an error. A directory token is legal only on `publishLocal`. A ship name wins when a ship and a module share it. No name on `publishLocal` or `publish snapshots` is every ship the session can write. A snapshot dependency refuses that ship and the rest of the invocation continues. One spec covers each of those.
+- [x] **Selection.** A ship name publishes that ship. An aggregate publishes the modules it lists, at each module's own ship version, and does not pull the other members of those ships. A module outside a ship is an error. A directory token is legal only on `publishLocal`. A ship name wins when a ship and a module share it. No name on `publishLocal` or `publish snapshots` is every ship the session can write. A snapshot dependency refuses that ship and the rest of the invocation continues. One spec covers each of those.
 
-- [ ] **Publication and Central pom.** A module has one publication. Unspecified, it is a library. The organization carries license, developer, and scm. A ship may override description and url. `name` defaults to the artifact id. The release pom includes those fields and the module's dependencies. Missing license, developer, or scm fails before signing. `publishLocal` still writes the coordinate the session compiles, including `-ci`. Specs cover the default, the ship override, and the refusal.
+- [x] **Publication and Central pom.** A module has one publication. Unspecified, it is a library. The organization carries license, developer, and scm. A ship may override description and url. `name` defaults to the artifact id. The release pom includes those fields and the module's dependencies. Missing license, developer, or scm fails before signing. `publishLocal` still writes the coordinate the session compiles, including `-ci`. Specs cover the default, the ship override, and the refusal.
 
-- [ ] **Stage a library, unsigned.** One library publication stages the jar, a sources jar, a javadoc jar that contains a README, the pom, and `.md5`, `.sha1`, and `.sha256` on each of those four. The spec reads the directory and the pom. No `.asc` yet, and no HTTP.
+- [x] **Stage a library, unsigned.** One library publication stages the jar, a sources jar, a javadoc jar that contains a README, the pom, and `.md5`, `.sha1`, and `.sha256` on each of those four. The spec reads the directory and the pom. No `.asc` yet, and no HTTP.
 
-- [ ] **Stage the other Maven forms.** An sbt 2 plugin on Scala 3 stages under the sbt 2 artifact id, and the descriptor stays in the jar. Assembly stages a fat jar with no Scala suffix, a pom whose dependency list is empty, and `Main-Class` in the manifest. Application stages the thin jar and a pom that lists the classpath. A module with two publications is refused at load. `Projects.assembly` is removed. This repo's launcher coordinate still publishes from the app module's assembly publication, with a real pom. The existing snapshot specs stay green without a live upload.
+- [x] **Stage the other Maven forms.** An sbt 2 plugin on Scala 3 stages under the sbt 2 artifact id, and the descriptor stays in the jar. Assembly stages a fat jar with no Scala suffix, a pom whose dependency list is empty, and `Main-Class` in the manifest. Application stages the thin jar and a pom that lists the classpath. A module with two publications is refused at load. `Projects.assembly` is removed. This repo's launcher coordinate still publishes from the app module's assembly publication, with a real pom. The existing snapshot specs stay green without a live upload.
 
-- [ ] **Signer.** `Signer.local` signs with a generated key and the public half verifies. A secret with no signing subkey fails before a client exists. `PGP_SECRET` and `PGP_KEY_HEX`, when both are set, must be the same key. `HISTOS_SIGNER=gpg` is the argument list and the passphrase on stdin. `gpg` on `PATH` with the variable unset stays on the local signer. Bouncy Castle is passed as a provider and is not registered on the JVM. The gpg round-trip runs when `gpg` is present.
+- [x] **Signer.** `Signer.local` signs with a generated key and the public half verifies. A secret with no signing subkey fails before a client exists. `PGP_SECRET` and `PGP_KEY_HEX`, when both are set, must be the same key. `HISTOS_SIGNER=gpg` is the argument list and the passphrase on stdin. `gpg` on `PATH` with the variable unset stays on the local signer. Bouncy Castle is passed as a provider and is not registered on the JVM. The gpg round-trip runs when `gpg` is present.
 
-- [ ] **Bundle.** Zip the signed stage in Maven layout. The spec unzips it and finds every required name. A declared size over 1GB is refused without writing a 1GB file.
+- [x] **Bundle.** Zip the signed stage in Maven layout. The spec unzips it and finds every required name. A declared size over 1GB is refused without writing a 1GB file.
 
-- [ ] **Portal client.** One heddle client. A scripted loopback server checks the Bearer token and the multipart part named `bundle`. Hold waits until `VALIDATED`. `--automatic` waits until `PUBLISHED`. `FAILED` stops the poll. Promote and drop call the deployment route. The suite makes no connection to `central.sonatype.com`.
+- [x] **Portal client.** One heddle client. A scripted loopback server checks the Bearer token and the multipart part named `bundle`. Hold waits until `VALIDATED`. `--automatic` waits until `PUBLISHED`. `FAILED` stops the poll. Promote and drop call the deployment route. The suite makes no connection to `central.sonatype.com`.
 
-- [ ] **Rehearsal portal.** `./histos portal` binds loopback, stores deployments on disk, and returns the validation report from the Portal section: layout, file set, checksums, pom fields, snapshot version, snapshot dependency, a GAV already in the store, an empty pom, and the 1GB cap. A second process promotes and drops against that disk. The suite starts the server in a `Scope`.
+- [x] **Rehearsal portal.** `./histos portal` binds loopback, stores deployments on disk, and returns the validation report from the Portal section: layout, file set, checksums, pom fields, snapshot version, snapshot dependency, a GAV already in the store, an empty pom, and the 1GB cap. A second process promotes and drops against that disk. The suite starts the server in a `Scope`.
 
-- [ ] **Preflights.** When the portal URL is Central, HEAD repo1 and look up the signing key on `keyserver.ubuntu.com`, both through heddle against loopback stand-ins. Either miss fails before upload. When `HISTOS_PORTAL` points at the rehearsal portal, neither stand-in is called, and a version that is public on the stand-in still uploads to the fake.
+- [x] **Preflights.** When the portal URL is Central, HEAD repo1 and look up the signing key on `keyserver.ubuntu.com`, both through heddle against loopback stand-ins. Either miss fails before upload. When `HISTOS_PORTAL` points at the rehearsal portal, neither stand-in is called, and a version that is public on the stand-in still uploads to the fake.
 
-- [ ] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
+- [x] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
 
-- [ ] **Histos-shaped rehearsal.** A fixture with a library module and an assembly module, at release numbers, reaches `VALIDATED` and then `PUBLISHED` on the rehearsal portal. `publish release` in this repository refuses before any HTTP, because the catalog is still the manual snapshot. No Central upload and no tag.
+- [x] **Histos-shaped rehearsal.** A fixture with a library module and an assembly module, at release numbers, reaches `VALIDATED` and then `PUBLISHED` on the rehearsal portal. `publish release` in this repository refuses before any HTTP, because the catalog is still the manual snapshot. No Central upload and no tag.
 
 ### Assets
 
-- [ ] **Name the asset.** The assembly module names `dist/histos.jar` as an asset. The portal zip has no such entry. A library-only ship has no asset to upload.
+- [x] **Name the asset.** The assembly module names `dist/histos.jar` as an asset. The portal zip has no such entry. A library-only ship has no asset to upload.
 
-- [ ] **`publish assets`.** A loopback stand-in receives the jar only when `.histos/deployments/<ship>` records `VALIDATED`. A ship with no recorded deployment fails and uploads nothing. `--automatic` does not upload an asset. The stored bytes match the jar.
+- [x] **`publish assets`.** A loopback stand-in receives the jar only when `.histos/deployments/<ship>` records `VALIDATED`. A ship with no recorded deployment fails and uploads nothing. `--automatic` does not upload an asset. The stored bytes match the jar.
 
-- [ ] **Drop deletes the asset second.** The deployment is dropped first. The stand-in then shows the asset gone. When the asset call fails, the deployment stays dropped and the reported error is that failure.
+- [x] **Drop deletes the asset second.** The deployment is dropped first. The stand-in then shows the asset gone. When the asset call fails, the deployment stays dropped and the reported error is that failure.
 
-- [ ] **README.** Histos development: rehearse with `./histos portal`, install the asset after `VALIDATED`, promote on a later dispatch, and leave the launcher on the Maven pin. Other projects: use the same split when people install a tool and builds depend on a library. A library-only ship publishes no asset.
+- [x] **README.** Histos development: rehearse with `./histos portal`, install the asset after `VALIDATED`, promote on a later dispatch, and leave the launcher on the Maven pin. Other projects: use the same split when people install a tool and builds depend on a library. A library-only ship publishes no asset.
 
 ### Workflow
 
-- [ ] **Generated workflow.** A matching tag, or a named dispatch, runs `./histos publish release <ship>` and then `./histos publish assets <ship>`. A second dispatch runs `./histos publish promote`. The generated file does not pass `--automatic`. `./histos workflow --check` is the proof. No tag of Histos is created.
+- [x] **Generated workflow.** A matching tag, or a named dispatch, runs `./histos publish release <ship>` and then `./histos publish assets <ship>`. A second dispatch runs `./histos publish promote`. The generated file does not pass `--automatic`. `./histos workflow --check` is the proof. No tag of Histos is created.
 
 ### Ready
 
-- [ ] **One rehearsal, any Histos project.** A fixture that is not this repo's snapshot catalog publishes a library, an sbt 2 plugin, and an assembly, as two ships. One ship is refused for a snapshot dependency. The other reaches `VALIDATED` on the rehearsal portal, the asset lands on the GitHub stand-in, promote reaches `PUBLISHED`, and a later drop frees the version. A run with no `HISTOS_PORTAL` and no Sonatype secrets fails before a connection. `publish release` in this repository still refuses. The same commands are what another Histos project runs, and what this repository runs the day its catalog leaves `0.0.1-SNAPSHOT`.
+- [x] **One rehearsal, any Histos project.** A fixture that is not this repo's snapshot catalog publishes a library, an sbt 2 plugin, and an assembly, as two ships. One ship is refused for a snapshot dependency. The other reaches `VALIDATED` on the rehearsal portal, the asset lands on the GitHub stand-in, promote reaches `PUBLISHED`, and a later drop frees the version. A run with no `HISTOS_PORTAL` and no Sonatype secrets fails before a connection. `publish release` in this repository still refuses. Before this repository's catalog leaves the snapshot, an assembly may depend on a module that is not in the ship without publishing it, and the organization names a license, a developer, and an scm. The same commands are what another Histos project runs, and what this repository runs that day.
