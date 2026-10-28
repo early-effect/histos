@@ -63,7 +63,7 @@ On a miss, the previous input map for that action is diffed and the changed inpu
 
 Neither strategy is a `needs` of docs, deploy, or any job that does not compile. There is no snapshot restore in front of those jobs. A hit downloads that action's outputs. A miss compiles.
 
-`purge` on a pull request deletes `pr/<n>/` and does not read it. It still reads `main/`. A pull-request label cannot delete `main/`. `purge` on a push to `main` deletes `main/` before that run writes it back. Purge deletes index entries. It does not delete a blob that another namespace still names.
+`purge` on a pull request deletes `pr/<n>/` and does not read it. It still reads `main/`. A pull-request label cannot delete `main/`. `purge` on a push to `main` deletes `main/` before that run writes it back. Purge deletes index entries. It does not delete a blob that another namespace still names. The request is `DELETE /{namespace}/ac` for the caller's own namespace. A blob is never in that request. bazel-remote does not implement this delete. The loopback store does.
 
 ## Tests
 
@@ -123,7 +123,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Namespaces.** The prefix is on the index only. A write to `pr/1` is invisible to a read of `main`. A read of `pr/1` falls through to `main` on a miss. A pull-request writer cannot write `main`. Proof: the same loopback store. `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine` (515 passed, 1 ignored).
 
-- [ ] **purge.** `purge` deletes the index entries of one named namespace and does not delete a blob another namespace still names. A pull-request invocation cannot name `main`. Proof: the remote spec.
+- [x] **purge.** `purge` deletes the index entries of one named namespace and does not delete a blob another namespace still names. A pull-request invocation cannot name `main`. Proof: the remote spec. `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine` (522 passed, 1 ignored).
 
 - [ ] **bazel-remote, when docker is present.** One spec starts the pinned container, writes as `pr/1`, reads as `main` and misses, writes as `main`, and then reads a hit. The spec is ignored when docker is absent, so the default suite stays green without a daemon. The image pin lives next to the spec.
 

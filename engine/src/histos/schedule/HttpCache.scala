@@ -8,7 +8,8 @@ import zio.{Chunk, IO, URIO, ZIO}
 /** Bazel HTTP cache. `/cas/{sha256}` holds the output bytes. `/{namespace}/ac/{action}` holds the ActionResult that
   * names them. bazel-remote ignores an instance prefix on the blob and keeps the action cache per instance, so only the
   * index is prefixed. The blob is written first: a crash leaves an unreferenced blob, not an index entry for a missing
-  * one. A lookup walks the role's prefixes. Only a 404 tries the next one.
+  * one. A lookup walks the role's prefixes. Only a 404 tries the next one. `purge` sends `DELETE /{namespace}/ac` for
+  * this role and does not delete a blob.
   */
 object HttpCache:
   def make(origin: Url, mode: RemoteMode, namespace: CacheNamespace): URIO[Client, RemoteCache] =
@@ -43,6 +44,13 @@ object HttpCache:
           put(origin / "cas" / output.value, bytes) *>
             put(index(namespace, action), ActionResult.encode(output, bytes.length))
 
+    def purge: IO[RemoteError, Unit] =
+      mode match
+        case RemoteMode.Off   => ZIO.fail(RemoteError.Off)
+        case RemoteMode.Read  => ZIO.fail(RemoteError.ReadOnly)
+        case RemoteMode.Write =>
+          remove(indexRoot(namespace))
+
     private def lookup(rest: List[CacheNamespace], action: Digest): IO[RemoteError, Option[Chunk[Byte]]] =
       rest match
         case Nil               => ZIO.none
@@ -61,8 +69,11 @@ object HttpCache:
               if bytes.length.toLong == pointer.size && Digest.ofBytes(bytes) == pointer.output then ZIO.some(bytes)
               else ZIO.fail(RemoteError.Mismatch(action, pointer.output))
 
+    private def indexRoot(role: CacheNamespace): Url =
+      role.segments.foldLeft(origin)(_ / _) / "ac"
+
     private def index(role: CacheNamespace, action: Digest): Url =
-      role.segments.foldLeft(origin)(_ / _) / "ac" / action.value
+      indexRoot(role) / action.value
 
     private def get(url: Url): IO[RemoteError, Option[Chunk[Byte]]] =
       send(Request.get(url)).flatMap: response =>
@@ -73,6 +84,12 @@ object HttpCache:
 
     private def put(url: Url, bytes: Chunk[Byte]): IO[RemoteError, Unit] =
       send(Request(Method.PUT, url, body = Body.fromBytes(bytes))).flatMap: response =>
+        response.status.code match
+          case 200 | 204 => ZIO.unit
+          case code      => ZIO.fail(RemoteError.Status(code))
+
+    private def remove(url: Url): IO[RemoteError, Unit] =
+      send(Request(Method.DELETE, url)).flatMap: response =>
         response.status.code match
           case 200 | 204 => ZIO.unit
           case code      => ZIO.fail(RemoteError.Status(code))

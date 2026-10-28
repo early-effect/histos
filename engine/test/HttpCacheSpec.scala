@@ -369,6 +369,197 @@ object HttpCacheSpec extends ZIOSpecDefault:
             s"GET /main/ac/${action.value}",
             s"GET /cas/${output.value}",
           ),
+        )
+    ,
+    test("a pull request purge drops its index and leaves the blob main names"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          main  <- stand.cache(RemoteMode.Write, CacheNamespace.Main)
+          pr    <- stand.cache(RemoteMode.Write, pullRequest)
+          action = digest("shared-purge")
+          bytes  = utf8("shared")
+          output = Digest.ofBytes(bytes)
+          _     <- main.store(action, bytes)
+          _     <- pr.store(action, bytes)
+          _     <- pr.purge
+          found <- main.find(action)
+          again <- pr.find(action)
+          calls <- stand.calls
+          kept  <- stand.holdsBlob(output.value)
+        yield assertTrue(
+          found == Some(bytes),
+          again == Some(bytes),
+          kept,
+          calls == List(
+            s"PUT /cas/${output.value}",
+            s"PUT /main/ac/${action.value}",
+            s"PUT /cas/${output.value}",
+            s"PUT /pr/1/ac/${action.value}",
+            "DELETE /pr/1/ac",
+            s"GET /main/ac/${action.value}",
+            s"GET /cas/${output.value}",
+            s"GET /pr/1/ac/${action.value}",
+            s"GET /main/ac/${action.value}",
+            s"GET /cas/${output.value}",
+          ),
+        )
+    ,
+    test("a pull request purge leaves a blob no other index names"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          pr    <- stand.cache(RemoteMode.Write, pullRequest)
+          action = digest("orphan")
+          bytes  = utf8("only-pr")
+          output = Digest.ofBytes(bytes)
+          _     <- pr.store(action, bytes)
+          _     <- pr.purge
+          found <- pr.find(action)
+          calls <- stand.calls
+          kept  <- stand.holdsBlob(output.value)
+        yield assertTrue(
+          found == None,
+          kept,
+          calls == List(
+            s"PUT /cas/${output.value}",
+            s"PUT /pr/1/ac/${action.value}",
+            "DELETE /pr/1/ac",
+            s"GET /pr/1/ac/${action.value}",
+            s"GET /main/ac/${action.value}",
+          ),
+        )
+    ,
+    test("purging pr/1 leaves pr/11"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          one   <- stand.cache(RemoteMode.Write, pullRequest)
+          other <- stand.cache(RemoteMode.Write, CacheNamespace.PullRequest(PullRequestNumber("11")))
+          first  = digest("one")
+          second = digest("eleven")
+          left   = utf8("pr-1")
+          right  = utf8("pr-11")
+          _     <- one.store(first, left)
+          _     <- other.store(second, right)
+          _     <- one.purge
+          kept  <- other.find(second)
+          gone  <- one.find(first)
+          calls <- stand.calls
+        yield assertTrue(
+          kept == Some(right),
+          gone == None,
+          calls == List(
+            s"PUT /cas/${Digest.ofBytes(left).value}",
+            s"PUT /pr/1/ac/${first.value}",
+            s"PUT /cas/${Digest.ofBytes(right).value}",
+            s"PUT /pr/11/ac/${second.value}",
+            "DELETE /pr/1/ac",
+            s"GET /pr/11/ac/${second.value}",
+            s"GET /cas/${Digest.ofBytes(right).value}",
+            s"GET /pr/1/ac/${first.value}",
+            s"GET /main/ac/${first.value}",
+          ),
+        )
+    ,
+    test("a main purge leaves the pull request index"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          main  <- stand.cache(RemoteMode.Write, CacheNamespace.Main)
+          pr    <- stand.cache(RemoteMode.Write, pullRequest)
+          mainAction = digest("main-purge")
+          prAction   = digest("pr-kept")
+          mainBytes  = utf8("from-main-purge")
+          prBytes    = utf8("from-pr-kept")
+          _     <- pr.store(prAction, prBytes)
+          _     <- main.store(mainAction, mainBytes)
+          _     <- main.purge
+          kept  <- pr.find(prAction)
+          gone  <- main.find(mainAction)
+          calls <- stand.calls
+        yield assertTrue(
+          kept == Some(prBytes),
+          gone == None,
+          calls == List(
+            s"PUT /cas/${Digest.ofBytes(prBytes).value}",
+            s"PUT /pr/1/ac/${prAction.value}",
+            s"PUT /cas/${Digest.ofBytes(mainBytes).value}",
+            s"PUT /main/ac/${mainAction.value}",
+            "DELETE /main/ac",
+            s"GET /pr/1/ac/${prAction.value}",
+            s"GET /cas/${Digest.ofBytes(prBytes).value}",
+            s"GET /main/ac/${mainAction.value}",
+          ),
+        )
+    ,
+    test("a dev purge drops that index and leaves main"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          name  <- ZIO.fromEither(DevName.from("laptop"))
+          dev = CacheNamespace.Dev(name)
+          writer <- stand.cache(RemoteMode.Write, dev)
+          main   <- stand.cache(RemoteMode.Write, CacheNamespace.Main)
+          action = digest("dev-purge")
+          bytes  = utf8("laptop-purge")
+          output = Digest.ofBytes(bytes)
+          _     <- writer.store(action, bytes)
+          _     <- main.store(action, bytes)
+          _     <- writer.purge
+          found <- main.find(action)
+          calls <- stand.calls
+        yield assertTrue(
+          found == Some(bytes),
+          calls == List(
+            s"PUT /cas/${output.value}",
+            s"PUT /dev/laptop/ac/${action.value}",
+            s"PUT /cas/${output.value}",
+            s"PUT /main/ac/${action.value}",
+            "DELETE /dev/laptop/ac",
+            s"GET /main/ac/${action.value}",
+            s"GET /cas/${output.value}",
+          ),
+        )
+    ,
+    test("off and read refuse purge"):
+      ZIO.scoped:
+        for
+          stand       <- Stand.open
+          off         <- stand.cache(RemoteMode.Off, pullRequest)
+          read        <- stand.cache(RemoteMode.Read, pullRequest)
+          refusedOff  <- off.purge.either
+          refusedRead <- read.purge.either
+          calls       <- stand.calls
+        yield assertTrue(
+          refusedOff == Left(RemoteError.Off),
+          refusedRead == Left(RemoteError.ReadOnly),
+          calls.isEmpty,
+        )
+    ,
+    test("a refused purge leaves the index"):
+      ZIO.scoped:
+        for
+          stand <- Stand.open
+          pr    <- stand.cache(RemoteMode.Write, pullRequest)
+          action = digest("purge-status")
+          bytes  = utf8("kept")
+          output = Digest.ofBytes(bytes)
+          _       <- pr.store(action, bytes)
+          _       <- stand.fail(500)
+          refused <- pr.purge.either
+          found   <- pr.find(action)
+          calls   <- stand.calls
+        yield assertTrue(
+          refused == Left(RemoteError.Status(500)),
+          found == Some(bytes),
+          calls == List(
+            s"PUT /cas/${output.value}",
+            s"PUT /pr/1/ac/${action.value}",
+            "DELETE /pr/1/ac",
+            s"GET /pr/1/ac/${action.value}",
+            s"GET /cas/${output.value}",
+          ),
         ),
   )
 
@@ -415,6 +606,9 @@ object HttpCacheSpec extends ZIOSpecDefault:
 
     def fail(code: Int): UIO[Unit] =
       note.update(_.copy(fail = Some(code)))
+
+    def holdsBlob(hash: String): UIO[Boolean] =
+      note.get.map(_.cas.contains(hash))
   end Stand
 
   private object Stand:
@@ -446,6 +640,9 @@ object HttpCacheSpec extends ZIOSpecDefault:
         },
         Method.GET / "cas" / string("hash") -> { hash => read(note, Slot.Blob, hash) },
         Method.PUT / "cas" / string("hash") handle { (hash, request) => write(note, Slot.Blob, hash, request) },
+        Method.DELETE / "main" / "ac"                  -> { _ => drop(note, "main/ac") },
+        Method.DELETE / "pr" / string("number") / "ac" -> { number => drop(note, s"pr/$number/ac") },
+        Method.DELETE / "dev" / string("name") / "ac"  -> { name => drop(note, s"dev/$name/ac") },
       )
 
     private def read(note: Ref[Note], slot: Slot, hash: String) =
@@ -475,6 +672,13 @@ object HttpCacheSpec extends ZIOSpecDefault:
                 case Slot.Index(_) => Status.NoContent
               (Response.empty(status), stored.copy(calls = stored.calls :+ line)),
       )
+
+    private def drop(note: Ref[Note], prefix: String) =
+      note.modify: current =>
+        val line = s"DELETE /$prefix"
+        forced(current, line).getOrElse:
+          val kept = current.ac.filterNot((key, _) => key.startsWith(s"$prefix/"))
+          (Response.empty(Status.NoContent), current.copy(ac = kept, calls = current.calls :+ line))
 
     private def forced(current: Note, line: String): Option[(Response, Note)] =
       current.fail.map: code =>

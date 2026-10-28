@@ -33,6 +33,13 @@ private final class TestRemoteCache(
           )
         )
 
+  def purge: zio.IO[RemoteError, Unit] =
+    mode match
+      case RemoteMode.Off   => ZIO.fail(RemoteError.Off)
+      case RemoteMode.Read  => ZIO.fail(RemoteError.ReadOnly)
+      case RemoteMode.Write =>
+        state.update(current => current.copy(actions = Map.empty))
+
   def plant(action: Digest, bytes: Chunk[Byte]): UIO[Unit] =
     val output = Digest.ofBytes(bytes)
     state.update(current =>
