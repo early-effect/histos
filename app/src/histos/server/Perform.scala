@@ -28,17 +28,18 @@ object Perform:
   def needsGraph(call: Call): Boolean =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.Graph | Call.Run(_, _) | Call.Task(_, _) |
-          Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) | Call.PreviewTest(_) |
-          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) =>
+          Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
+          Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) |
+          Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) |
+          Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
         false
       case Call.Clean(_) | Call.PreviewClean(_) =>
         true
-      case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull |
-          Call.Reload | Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) |
-          Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCleanFull =>
+      case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot |
+          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.LauncherUpdate | Call.Watch(_) |
+          Call.Bsp | Call.PreviewCleanFull =>
         false
 
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
@@ -120,7 +121,7 @@ object Perform:
           case Call.PublishPromote(id) =>
             follow(Calls.promote(repo, machine, id, say))
           case Call.PublishDrop(id) =>
-            follow(Calls.drop(repo, machine, id, say))
+            held(build => follow(Calls.drop(repo, build.graph, machine, id, say)))
           case Call.PublishAssets(tokens) =>
             held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
           case Call.Assembly(destination) =>

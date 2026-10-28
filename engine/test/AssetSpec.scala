@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.central.{DeploymentId, DeploymentState}
+import histos.central.{DeploymentId, DeploymentState, Finding, Gav, PortalServer, PortalStore}
 import histos.version.{ManualVersion, ShipName}
 import histos.{Jvm, MainClass, Projects, ScalaVersion, asset, module}
 
@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Scope, ZIO}
+import zio.{Chunk, Ref, Scope, ZIO}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 import zio.durationInt
 
@@ -308,6 +308,185 @@ object AssetSpec extends ZIOSpecDefault:
           seen.uploads.isEmpty,
         )
 
+  private val removed =
+    test("drop deletes the uploaded asset after the deployment is gone"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          portal <- temp
+          graph  <- ZIO.fromEither(pair)
+          secret <- ZIO.fromEither(PortalServer.credentials(sonatype))
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          histos  = DeploymentFile.location(root, ShipName("histos"))
+          pages   = DeploymentFile.location(root, ShipName("pages"))
+          dropped = portal.resolve("deployments").resolve("dep-1")
+          kept    = portal.resolve("deployments").resolve("dep-2")
+          first <- Ref.make(false)
+          stand <- AssetStand.open(
+            "asset-token",
+            onDelete = ZIO
+              .attemptBlocking(!Files.exists(histos) && !Files.exists(dropped))
+              .orElseSucceed(false)
+              .flatMap(first.set),
+          )
+          github = portalEnv(bound.url, env(stand.base))
+          _          <- plant(root, "dist/histos.jar", jar)
+          _          <- plant(root, "dist/site.jar", other)
+          _          <- note(root, "histos", DeploymentState.Validated, "1.0.0", "dep-1")
+          _          <- note(root, "pages", DeploymentState.Validated, "1.0.0", "dep-2")
+          _          <- hold(portal, "dep-1")
+          _          <- hold(portal, "dep-2")
+          sent       <- AssetRun.publish(root, graph, Nil, github).either
+          before     <- stand.seen
+          ran        <- PublishRun.drop(root, graph, github, "dep-1").either
+          after      <- stand.seen
+          order      <- first.get
+          histosFile <- ZIO.attempt(Files.exists(histos))
+          pagesFile  <- ZIO.attempt(Files.readString(pages))
+          portalGone <- ZIO.attempt(Files.exists(dropped))
+          portalKept <- ZIO.attempt(Files.isDirectory(kept))
+        yield assertTrue(
+          sent == Right(AssetReport(Nil, List("histos histos.jar", "pages site.jar"))),
+          before.uploads.map(_.name) == List("histos.jar", "site.jar"),
+          ran == Right(()),
+          order,
+          !histosFile,
+          pagesFile.contains("state VALIDATED"),
+          !portalGone,
+          portalKept,
+          after.uploads == List(
+            AssetStand.Upload("early-effect", "histos", "site.jar", other, "application/octet-stream")
+          ),
+          after.tags.lastOption.contains("histos/v1.0.0"),
+        )
+
+  private val assetFailed =
+    test("a failed asset delete leaves the deployment dropped"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          portal <- temp
+          graph  <- ZIO.fromEither(one)
+          secret <- ZIO.fromEither(PortalServer.credentials(sonatype))
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          stand  <- AssetStand.open("asset-token")
+          _      <- plant(root, "dist/histos.jar", jar)
+          _      <- note(root, "histos", DeploymentState.Validated, "1.0.0")
+          _      <- hold(portal, "dep-1")
+          _      <- AssetRun.publish(root, graph, List("histos"), env(stand.base))
+          ran    <- PublishRun
+            .drop(root, graph, portalEnv(bound.url, env(stand.base, token = "s3cret")), "dep-1")
+            .either
+          seen <- stand.seen
+          file <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("histos"))))
+          gone <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
+          text = ran.fold(_.message, _ => "")
+        yield assertTrue(
+          ran == Left(ReleaseError.Asset(AssetError.Unauthorized)),
+          !text.contains("s3cret"),
+          !file,
+          !gone,
+          seen.uploads.map(_.name) == List("histos.jar"),
+          seen.requests == 3,
+        )
+
+  private val libraryDrop =
+    test("a ship with no asset drops without a release socket or a token"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          portal <- temp
+          graph  <- ZIO.fromEither(libs)
+          secret <- ZIO.fromEither(PortalServer.credentials(sonatype))
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          stand  <- AssetStand.open("asset-token")
+          _      <- note(root, "libs", DeploymentState.Validated, "1.0.0")
+          _      <- hold(portal, "dep-1")
+          ran    <- PublishRun
+            .drop(root, graph, portalEnv(bound.url, Map("HISTOS_GITHUB" -> stand.base)), "dep-1")
+            .either
+          seen <- stand.seen
+          file <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("libs"))))
+          gone <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
+        yield assertTrue(
+          ran == Right(()),
+          seen.requests == 0,
+          seen.uploads.isEmpty,
+          !file,
+          !gone,
+        )
+
+  private val noRecord =
+    test("a missing deployment file drops the portal and does not open a release socket"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          portal <- temp
+          graph  <- ZIO.fromEither(one)
+          secret <- ZIO.fromEither(PortalServer.credentials(sonatype))
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          stand  <- AssetStand.open("asset-token")
+          _      <- hold(portal, "dep-1")
+          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1").either
+          seen   <- stand.seen
+          gone   <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
+        yield assertTrue(
+          ran == Right(()),
+          seen.requests == 0,
+          seen.uploads.isEmpty,
+          !gone,
+        )
+
+  private val unreleased =
+    test("a missing release is not an asset and the deployment still drops"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          portal <- temp
+          graph  <- ZIO.fromEither(one)
+          secret <- ZIO.fromEither(PortalServer.credentials(sonatype))
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          stand  <- AssetStand.open("asset-token", present = false)
+          _      <- note(root, "histos", DeploymentState.Validated, "1.0.0")
+          _      <- hold(portal, "dep-1")
+          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1").either
+          seen   <- stand.seen
+          file   <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("histos"))))
+          gone   <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
+        yield assertTrue(
+          ran == Right(()),
+          seen.requests == 1,
+          seen.tags.isEmpty,
+          seen.uploads.isEmpty,
+          !file,
+          !gone,
+        )
+
+  private val unnamed =
+    test("a release that has no such asset still drops"):
+      ZIO.scoped:
+        for
+          root   <- temp
+          portal <- temp
+          graph  <- ZIO.fromEither(one)
+          secret <- ZIO.fromEither(PortalServer.credentials(sonatype))
+          bound  <- PortalServer.open(portal, secret, ZIO.unit)
+          stand  <- AssetStand.open("asset-token")
+          _      <- note(root, "histos", DeploymentState.Validated, "1.0.0")
+          _      <- hold(portal, "dep-1")
+          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1").either
+          seen   <- stand.seen
+          file   <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("histos"))))
+          gone   <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
+        yield assertTrue(
+          ran == Right(()),
+          seen.requests == 2,
+          seen.tags == List("v1.0.0"),
+          seen.uploads.isEmpty,
+          !file,
+          !gone,
+        )
+
   private val idle =
     test("no name with nothing validated uploads nothing"):
       ZIO.scoped:
@@ -342,6 +521,12 @@ object AssetSpec extends ZIOSpecDefault:
       mismatch,
       clash,
       idle,
+      removed,
+      assetFailed,
+      libraryDrop,
+      noRecord,
+      unreleased,
+      unnamed,
     ) @@ TestAspect.timeout(30.seconds)
 
   private def env(
@@ -358,10 +543,28 @@ object AssetSpec extends ZIOSpecDefault:
   private def shown(ran: Either[AssetError, AssetReport]): String =
     ran.fold(_.message, report => report.lines.mkString("\n"))
 
-  private def note(root: Path, ship: String, state: DeploymentState, version: String) =
+  private val sonatype =
+    Map(
+      "SONATYPE_USERNAME" -> "maven",
+      "SONATYPE_PASSWORD" -> "secret",
+    )
+
+  private def portalEnv(base: String, github: Map[String, String]): Map[String, String] =
+    sonatype.updated("HISTOS_PORTAL", base) ++ github
+
+  private def hold(root: Path, id: String) =
+    ZIO.fromEither(DeploymentId.from(id)).flatMap { parsed =>
+      PortalStore.create(
+        root,
+        parsed,
+        PortalStore.Record(DeploymentState.Validated, Chunk.empty[Finding], Chunk.empty[Gav]),
+      )
+    }
+
+  private def note(root: Path, ship: String, state: DeploymentState, version: String, id: String = "dep-1") =
     ZIO.fromEither(ShipName.from(ship)).flatMap { name =>
-      ZIO.fromEither(DeploymentId.from("dep-1")).flatMap { id =>
-        DeploymentFile.write(root, name, id, state, version)
+      ZIO.fromEither(DeploymentId.from(id)).flatMap { parsed =>
+        DeploymentFile.write(root, name, parsed, state, version)
       }
     }
 

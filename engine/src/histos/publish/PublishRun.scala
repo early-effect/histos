@@ -76,8 +76,9 @@ object PublishRun:
   def promote(repo: Path, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
     ReleaseRun.promote(repo, env, id)
 
-  def drop(repo: Path, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
-    ReleaseRun.drop(repo, env, id)
+  /** The graph is read for the asset name. `publish drop` still takes only a deployment id. */
+  def drop(repo: Path, graph: ProjectGraph, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
+    ReleaseRun.drop(repo, graph, env, id)
 
   /** The jar named on the assembly, for a ship whose deployment file says `VALIDATED`. */
   def assets(

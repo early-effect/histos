@@ -54,6 +54,7 @@ enum ReleaseError:
   case Client(error: PortalError)
   case Record(ship: String)
   case Io(path: String)
+  case Asset(error: AssetError)
 
   def message: String = this match
     case Credentials   => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
@@ -64,6 +65,7 @@ enum ReleaseError:
     case Client(error) => error.message
     case Record(ship)  => s"$ship deployment record is not readable"
     case Io(path)      => s"could not write $path"
+    case Asset(error)  => error.message
 end ReleaseError
 
 /** One staged release. `root` is the Maven directory. Upload has not run. */
@@ -132,21 +134,42 @@ private[publish] object ReleaseRun:
     )
 
   def promote(repo: Path, env: Map[String, String], raw: String): IO[ReleaseError, Unit] =
-    change(repo, env, raw, promote = true)
+    prepared(env, raw).flatMap { (base, secret, id) =>
+      use(base, secret, _.promote(id)) *> DeploymentFile.mark(repo, id, DeploymentState.Published)
+    }
 
-  def drop(repo: Path, env: Map[String, String], raw: String): IO[ReleaseError, Unit] =
-    change(repo, env, raw, promote = false)
+  /** Portal drop, then the local file, then the GitHub asset. The asset name and the tag's ship count are on the graph,
+    * not in the deployment file. A missing file, or a ship with no asset, does not open a release socket. An asset
+    * failure leaves the deployment dropped.
+    */
+  def drop(repo: Path, graph: ProjectGraph, env: Map[String, String], raw: String): IO[ReleaseError, Unit] =
+    prepared(env, raw).flatMap { (base, secret, id) =>
+      for
+        _     <- use(base, secret, _.drop(id))
+        taken <- DeploymentFile.remove(repo, id)
+        _     <- erase(graph, env, taken)
+      yield ()
+    }
 
-  private def change(repo: Path, env: Map[String, String], raw: String, promote: Boolean): IO[ReleaseError, Unit] =
+  private def prepared(
+      env: Map[String, String],
+      raw: String,
+  ): IO[ReleaseError, (PortalBase, RepositorySecret, DeploymentId)] =
     for
       secret <- ZIO.fromEither(credentials(env))
       base   <- ZIO.fromEither(Preflight.portal(env).left.map(ReleaseError.Portal(_)))
       id     <- ZIO.fromEither(DeploymentId.from(raw).left.map(ReleaseError.Client(_)))
-      _      <- use(base, secret, portal => if promote then portal.promote(id) else portal.drop(id))
-      _      <-
-        if promote then DeploymentFile.mark(repo, id, DeploymentState.Published)
-        else DeploymentFile.remove(repo, id)
-    yield ()
+    yield (base, secret, id)
+
+  private def erase(
+      graph: ProjectGraph,
+      env: Map[String, String],
+      taken: Option[(ShipName, DeploymentFile.Record)],
+  ): IO[ReleaseError, Unit] =
+    taken match
+      case None                 => ZIO.unit
+      case Some((ship, record)) =>
+        AssetRun.delete(graph, env, ship, record.version).mapError(ReleaseError.Asset(_))
 
   private def deliver(
       repo: Path,
@@ -410,12 +433,15 @@ private[publish] object DeploymentFile:
       case Some(ship, record) =>
         write(repo, ship, id, state, record.version)
 
-  def remove(repo: Path, id: DeploymentId): IO[ReleaseError, Unit] =
+  def remove(repo: Path, id: DeploymentId): IO[ReleaseError, Option[(ShipName, Record)]] =
     find(repo, id).flatMap:
-      case None          => ZIO.unit
-      case Some(ship, _) =>
+      case None               => ZIO.succeed(None)
+      case Some(ship, record) =>
         val path = location(repo, ship)
-        ZIO.attemptBlocking(Files.deleteIfExists(path)).mapError(_ => ReleaseError.Io(path.toString)).unit
+        ZIO
+          .attemptBlocking(Files.deleteIfExists(path))
+          .mapError(_ => ReleaseError.Io(path.toString))
+          .as(Some(ship -> record))
 
   private def parse(ship: ShipName, text: String): Either[ReleaseError, Option[Record]] =
     text.stripLineEnd.split("\n", -1).toList match

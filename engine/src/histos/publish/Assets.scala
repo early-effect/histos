@@ -22,6 +22,7 @@ enum AssetError:
   case Status(code: Int)
   case Missing(tag: String)
   case Report
+  case Inventory
 
   def message: String = this match
     case Credentials       => "GITHUB_TOKEN and GITHUB_REPOSITORY are required"
@@ -34,6 +35,7 @@ enum AssetError:
     case Status(code)      => s"the release host failed with HTTP $code"
     case Missing(tag)      => s"the release $tag was not found"
     case Report            => "the release did not name an upload"
+    case Inventory         => "the release asset list could not be read"
 end AssetError
 
 object AssetError:
@@ -109,6 +111,10 @@ end AssetToken
 trait Assets:
   def upload(tag: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit]
 
+  /** Delete one asset by file name. A missing release or a missing name was not uploaded. */
+  def delete(tag: String, name: String): IO[AssetError, Unit]
+end Assets
+
 object Assets:
   def layer(
       api: AssetBase,
@@ -133,6 +139,18 @@ private final class AssetClient(
   def upload(tag: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit] =
     lookup(tag).flatMap(id => post(id, name, bytes))
 
+  def delete(tag: String, name: String): IO[AssetError, Unit] =
+    lookup(tag).foldZIO(
+      {
+        case AssetError.Missing(_) => ZIO.unit
+        case other                 => ZIO.fail(other)
+      },
+      id =>
+        listed(id, name).flatMap:
+          case Some(asset) => erase(asset)
+          case None        => ZIO.unit,
+    )
+
   private def lookup(tag: String): IO[AssetError, String] =
     val url = api.root / "repos" / repository.owner / repository.name / "releases" / "tags" / tag
     exchange(Method.GET, url, Body.empty).flatMap: response =>
@@ -151,6 +169,32 @@ private final class AssetClient(
           case Some(id) => ZIO.succeed(id)
           case None     => ZIO.fail(AssetError.Report)
       case None => ZIO.fail(AssetError.Report)
+
+  /** `GET` the asset list on the API host and keep the numeric `id` whose `name` matches. */
+  private def listed(id: String, name: String): IO[AssetError, Option[String]] =
+    val url = api.root / "repos" / repository.owner / repository.name / "releases" / id / "assets"
+    exchange(Method.GET, url, Body.empty).flatMap: response =>
+      response.status.code match
+        case 200       => identified(response, name)
+        case 404       => ZIO.succeed(None)
+        case 401 | 403 => ZIO.fail(AssetError.Unauthorized)
+        case code      => ZIO.fail(AssetError.Status(code))
+
+  private def identified(response: Response, name: String): IO[AssetError, Option[String]] =
+    response.body.strict match
+      case Some(bytes) =>
+        val body = new String(bytes.toArray, java.nio.charset.StandardCharsets.UTF_8)
+        ZIO.succeed(assetId(body, name))
+      case None => ZIO.fail(AssetError.Inventory)
+
+  /** `DELETE /repos/{owner}/{repo}/releases/assets/{id}` on the API host. `404` is already gone. */
+  private def erase(id: String): IO[AssetError, Unit] =
+    val url = api.root / "repos" / repository.owner / repository.name / "releases" / "assets" / id
+    exchange(Method.DELETE, url, Body.empty).flatMap: response =>
+      response.status.code match
+        case 204 | 404 => ZIO.unit
+        case 401 | 403 => ZIO.fail(AssetError.Unauthorized)
+        case code      => ZIO.fail(AssetError.Status(code))
 
   private def post(id: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit] =
     val url = (uploads.root / "repos" / repository.owner / repository.name / "releases" / id / "assets")
@@ -195,6 +239,50 @@ private final class AssetClient(
         val rest = opened.drop(1)
         val end  = rest.indexOf('"')
         if end < 0 then None else Some(rest.substring(0, end))
+
+  private def assetId(body: String, name: String): Option[String] =
+    objects(body).iterator
+      .flatMap: obj =>
+        if field(obj, "name").contains(name) then numberField(obj, "id") else None
+      .nextOption()
+
+  /** Top-level objects. A string may contain braces. The asset list is one array of those objects. */
+  private def objects(body: String): List[String] =
+    def scan: List[String] =
+      val found  = List.newBuilder[String]
+      var index  = 0
+      var depth  = 0
+      var start  = 0
+      var quoted = false
+      var escape = false
+      while index < body.length do
+        val char = body.charAt(index)
+        if quoted then
+          if escape then escape = false
+          else if char == '\\' then escape = true
+          else if char == '"' then quoted = false
+        else if char == '"' then quoted = true
+        else if char == '{' then
+          if depth == 0 then start = index
+          depth += 1
+        else if char == '}' && depth > 0 then
+          depth -= 1
+          if depth == 0 then found += body.substring(start, index + 1)
+        index += 1
+      found.result()
+    scan
+
+  @tailrec
+  private def numberField(body: String, name: String, from: Int = 0): Option[String] =
+    val key = s""""$name""""
+    val at  = body.indexOf(key, from)
+    if at < 0 then None
+    else
+      val after = body.substring(at + key.length).dropWhile(_.isWhitespace)
+      if !after.startsWith(":") then numberField(body, name, at + key.length)
+      else
+        val digits = after.drop(1).dropWhile(_.isWhitespace).takeWhile(_.isDigit)
+        if digits.nonEmpty then Some(digits) else numberField(body, name, at + key.length)
 
   private def idAt(url: String): Option[String] =
     val marker = "/releases/"

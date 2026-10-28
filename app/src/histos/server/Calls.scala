@@ -229,8 +229,14 @@ object Calls:
   def promote(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
     changed(say, PublishRun.promote(repo, machine.env, id))
 
-  def drop(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
-    changed(say, PublishRun.drop(repo, machine.env, id))
+  def drop(
+      repo: Path,
+      graph: ProjectGraph,
+      machine: Machine,
+      id: String,
+      say: Say,
+  ): IO[ServerError, Unit] =
+    changed(say, PublishRun.drop(repo, graph, machine.env, id))
 
   def publishAssets(
       repo: Path,

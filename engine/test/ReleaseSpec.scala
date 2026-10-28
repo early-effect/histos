@@ -163,7 +163,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           second  <- publish(root, built, jdk, env, ReleaseMode.Automatic)
           stayed  <- deploymentIds(portal)
           dropped <- first.deployed match
-            case List(deployed) => PublishRun.drop(root, env, deployed.id.value).as(deployed.id.value)
+            case List(deployed) => PublishRun.drop(root, built, env, deployed.id.value).as(deployed.id.value)
             case _              => ZIO.succeed("")
           goneId   <- exists(portal.resolve("deployments").resolve(dropped))
           goneMark <- exists(published(portal, "core_3", "1.0.0"))

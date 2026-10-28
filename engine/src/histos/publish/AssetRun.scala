@@ -34,6 +34,34 @@ object AssetRun:
       sent <- deliver(env, ready)
     yield AssetReport(failed ++ sent.failed, sent.uploaded)
 
+  /** The deployment file does not record the upload. A missing release or name is success. A ship with no asset does
+    * not read credentials and does not open a socket.
+    */
+  private[publish] def delete(
+      graph: ProjectGraph,
+      env: Map[String, String],
+      ship: ShipName,
+      version: String,
+  ): IO[AssetError, Unit] =
+    graph.catalog.get(ship) match
+      case None         => ZIO.fail(AssetError.UnknownShip(ship.value))
+      case Some(chosen) =>
+        val names = assetsOf(graph, chosen).map(_._1).distinct
+        names match
+          case Nil => ZIO.unit
+          case _   =>
+            val tag = tagOf(graph.catalog.ships.length, ship, version)
+            for
+              access <- ZIO.fromEither(accessOf(env))
+              bases  <- ZIO.fromEither(basesOf(env))
+              _      <- erase(access, bases, tag, names)
+            yield ()
+
+  private def erase(access: Access, bases: Bases, tag: String, names: List[String]): IO[AssetError, Unit] =
+    ZIO
+      .serviceWithZIO[Assets](assets => ZIO.foreachDiscard(names)(name => assets.delete(tag, name)))
+      .provide(Assets.layer(bases.api, bases.uploads, access.token, access.repository))
+
   private def deliver(env: Map[String, String], ready: List[Pending]): IO[AssetError, Sent] =
     ready match
       case Nil => ZIO.succeed(Sent(Nil, Nil))
