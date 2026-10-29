@@ -145,7 +145,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 ### Bench
 
-These items are the other repository. They start after the Histos items they call are checked.
+These items are the other repository. They start after the Histos items they call are checked. Several checkouts against one cache are a scenario, recorded in [scenario-work-plan.md](scenario-work-plan.md). A scenario is not this bench.
 
 - [ ] **The graph.** Create `early-effect/histos-bench` with `core`, `service`, `app`, a Scala.js module that depends on `core`, an unrelated JVM module, and a Node or Firefox test. `histos.scala` and `build.sbt` (sbt 2, zipx) name that same graph. No Mill. No Native.
 
