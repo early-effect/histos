@@ -1,6 +1,6 @@
 # Test overhaul
 
-One item, then its proof. Slayer, Compiler, Process, Machine, Linkers, the trait audit, and the scenario helper are done. This file is the checklist.
+One item, then its proof. Slayer, Compiler, Process, Machine, Linkers, the trait audit, the scenario helper, and the algebra are done. This file is the checklist.
 
 ## Why
 
@@ -123,7 +123,7 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 - [x] **Scenario helper.** `Scenario` is how a test opens a checkout when the invariant needs one. It is not the setup for every test. `compile` and `test` take services from the environment, so the caller provides live `Compiler` and live `ContentStore` and stubs the rest. Oracles are values, including slayer call history. New clients do not call `Files.createTempDirectory`. Do not migrate old specs onto it. Proof: the existing two scenario laws, rewritten as clients of the finished helper, `./histos testOnly --module engine 'histos.ScenarioSpec'`. Behavior stays today's behavior. The miss across checkouts stays a miss until the repo-relative item. The compiler is live in this proof because the invariant is a real compile against a real store. `Process` is stubbed unless a law in this file is about a process.
 
-- [ ] **Algebra, fresh.** Keys, stamps, globs, graph shape, bundle refusals, suite patterns, error enums. Properties, not tables. Write the law from the type. If the law is not forced by the type, ask Russ before writing a test that guesses. Delete the old pure specs in the same item, after the new suite is green. Proof: `./histos test api` and the engine suites this item added.
+- [x] **Algebra, fresh.** Keys, stamps, globs, graph shape, bundle refusals, suite patterns, error enums. Properties, not tables. Write the law from the type. If the law is not forced by the type, ask Russ before writing a test that guesses. Delete the old pure specs in the same item, after the new suite is green. Proof: `./histos test api` and the engine suites this item added.
 
 - [ ] **Cache and compile laws, fresh.** From the why. The service under test is `GraphCompile`. `Compiler` is `stubbedTraced`. The store is stubbed when the law is about whether we call, and live when the law is about restored bytes. A comment does not call the compiler. A public signature calls the dependent and not an unrelated module. A hit does not call. A miss names the input that changed. Clean leaves the store and the next compile restores. One law, one test. Delete the old compile and zinc specs in this item once each law they were circling has either a new test or an explicit "not an invariant, ask answered." Proof: `./histos testOnly --module engine` on the new suite. No scalac, except the restore law if restored bytes are defined as what the live compiler wrote. If that law can be stated on a stubbed compiler plus a live store, do that. Ask Russ if it cannot.
 

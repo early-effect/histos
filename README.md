@@ -60,7 +60,7 @@ Histos does not install a JDK or Node. The running JVM must be JDK 21 or newer. 
 
 ## Plugins
 
-A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
+A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine.
 
 ## Scenarios
 
