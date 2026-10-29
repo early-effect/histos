@@ -8,6 +8,8 @@ Histos exists because compile, package, and link are expensive, and sbt does not
 
 The proof is a bench that builds the same graph with sbt and zipx and with Histos. Histos has to be faster where a change should not rebuild the world. Cold may tie. Caching Node, browsers, and the dependency resolve is part of the want and is not the gate. Mill is not in the comparison.
 
+A scenario is the building block for checking that inside this repository, and for checking Histos against itself. One store, several checkouts, the tree written in Scala, the oracle a value or a file. The decisions are [docs/scenario-work-plan.md](docs/scenario-work-plan.md). Read that file before a test that copies a project, shares a cache across checkouts, or decides a skip. Dogfood of this checkout stays `./histos test`. A scenario does not copy this checkout and does not run sbt. The bench still owns the other build tool and the clock. Do not check a bench box because a scenario passed.
+
 The decisions and the checklist are [docs/cache-work-plan.md](docs/cache-work-plan.md). Read that file before changing cache, compile identity, link, package, `testQuick`, or the generated workflow. Finish one checklist item and prove it before starting the next. Do not check a box the proof has not earned. A change that forgets this want is the wrong change.
 
 ## Watch the commands
@@ -65,3 +67,4 @@ Use ZIO Test the way the ZIO docs describe it. When a layer, a remainder, or a t
 - Tests do not call Central, GitHub, or a keyserver. Loopback stands in.
 - Read `docs/release-work-plan.md` before changing publish. Finish one checklist item and prove it before starting the next.
 - Read `docs/cache-work-plan.md` before changing cache, compile identity, link, package, `testQuick`, or the generated workflow. The same rule: one checklist item, then its proof.
+- Read `docs/scenario-work-plan.md` before a test that stands up a project, shares a cache across checkouts, or claims a skip. Finish one checklist item there and prove it. Do not add a command script. Do not shell `./histos` from a scenario. Do not check a bench box because a scenario passed.

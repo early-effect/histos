@@ -2,13 +2,13 @@
 
 ## Why
 
-A scenario is how a meta-build change is proved. Write a small project, run it, change a file, run it again, and assert the values the engine returned. The same shape covers a stamp, two checkouts on one cache, and the next feature that is wrong only when a build exists.
+A scenario is the building block for checking a build. One content store, one or more checkouts, the tree written in Scala, and an assertion on the values and the files the engine returned. That is how this repository checks Histos against itself: two copies of a project share a cache, a clean of one restores from that store, and a skip that hides a real change fails. The same shape is the Histos side of a comparison with another build tool. sbt and zipx stay in the bench. The scenario is what that comparison stands on.
 
 sbt scripted is a text file of `>` and `$` lines because an sbt plugin has no other seam. The only honest test is to launch sbt. Histos is a library. The engine already runs in the test process. A command script would throw away the typed result and then grep the log for `cached`, which is how a wrong skip becomes a pass.
 
-The stamp test is already a scenario. The copying is the problem, not the missing script language. A bench that stands up several checkouts against one cache is the same shape.
+The stamp test is already a scenario. The copying is the problem, not the missing script language.
 
-Scenarios live in this repository's tests. The same Scala API is what a plugin author gets later, when someone outside this repo needs it. Nothing is published in this work. There is no second language.
+Scenarios live in this repository's tests. [Scenario](../engine/test/Scenario.scala) is the code. [ScenarioSpec](../engine/test/ScenarioSpec.scala) is the proof. The same Scala API is what a plugin author gets later, when someone outside this repo needs it. Nothing is published in this work. There is no second language.
 
 ## What a scenario is
 
@@ -28,7 +28,7 @@ Dogfood stays `./histos test` of this repository. A scenario does not shell the 
 
 Plugin authors are a later customer of this same API. Nothing is published until a plugin cannot call the engine. That is not this work.
 
-The bench repository stays in [cache-work-plan.md](cache-work-plan.md). A scenario is how a Histos test simulates the checkouts that bench will compare. It is not the bench.
+The bench stays in [cache-work-plan.md](cache-work-plan.md). It runs sbt and zipx and it keeps the clock. A scenario is the Histos column of that comparison, and the way this repository checks several instances of one project against one cache. The bench items stay unchecked until that repository exists. A scenario does not run sbt.
 
 ## The source path
 

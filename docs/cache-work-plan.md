@@ -14,6 +14,7 @@ Russ's want, which every item below serves:
 - Unchanged tests run only when he asks for the full run. `testQuick` is that ask. A remote pass record is opt-in, per module, and a suite that needs the network does not get one.
 - The generated workflow caches the tools (Node, browsers, the dependency resolve) the way those tools are actually keyed, and a docs job does not wait on a product restore.
 - None of this counts until a bench builds the same graph with sbt and zipx and with Histos and shows the win. The must is the incremental case: a no-op compiles nothing, a comment does not rebuild dependents, a signature change rebuilds only the cone. Cold may tie. Winning the tool-install time is the want and is not the gate. Mill is not in the comparison.
+- A scenario is how that claim is checked inside this repository, and how Histos is checked against itself, before the other repository exists. One store, several checkouts, assertions on the feeds and the files. The bench is that shape with sbt and zipx on the other side. The decisions are in [scenario-work-plan.md](scenario-work-plan.md).
 
 A task that makes a command faster while skipping a real change has failed. A task that copies zipx's epoch, or its one-blob snapshot, has failed. A task that checks a box before the proof is green has failed.
 
@@ -85,6 +86,8 @@ The remote mode and the namespace come from the event. `CopyIndex` adds a siblin
 
 `early-effect/histos-bench` is a separate repository. One graph, two builds: `histos.scala`, and `build.sbt` on sbt 2 with zipx. No Mill. No Native.
 
+[Scenarios](scenario-work-plan.md) are the building block under this bench. [Scenario](../engine/test/Scenario.scala) opens one store and any number of checkouts. The test writes the sources and asserts the compile feed, the test feed, the digests, and the compiler starts. Two checkouts are two instances of one project sharing a cache. That is Histos against itself, and it is the Histos column of the comparison below. sbt and zipx, the clock, and the published table stay in `early-effect/histos-bench`. A scenario does not shell `./histos`, does not copy this checkout, and does not run sbt. Dogfood of this repository stays `./histos test`.
+
 The modules are `core`, `service` (`core`), `app` (`service`), one Scala.js module that depends on `core` and has a real link, one unrelated JVM module, and a Node or Firefox test so the tool cache is on the clock.
 
 The shared store is bazel-remote, with no hosted account. The image is `buchgr/bazel-remote-cache` at the multi-arch index the spec pins. The container is started with `--enable_ac_key_instance_mangling`. Without that flag the server stores the action cache by hash, so a write to `pr/1` is visible to `main`. Locally it is compose. On GitHub the same container listens on localhost, and only its data directory is saved with `actions/cache`, keyed by OS plus namespace. Histos and the sbt remote column both speak HTTP to that localhost. A hosted URI replaces the disk later without a client change. The Actions quota applies to that directory. A docs job never restores it.
@@ -145,13 +148,13 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 ### Bench
 
-These items are the other repository. They start after the Histos items they call are checked. Several checkouts against one cache are a scenario, recorded in [scenario-work-plan.md](scenario-work-plan.md). A scenario is not this bench.
+These items are the other repository. They start after the Histos items they call are checked. The Histos column of each gate is a scenario. The sbt and zipx columns, the clock, and the table stay here.
 
 - [ ] **The graph.** Create `early-effect/histos-bench` with `core`, `service`, `app`, a Scala.js module that depends on `core`, an unrelated JVM module, and a Node or Firefox test. `histos.scala` and `build.sbt` (sbt 2, zipx) name that same graph. No Mill. No Native.
 
 - [ ] **Compose.** bazel-remote on localhost. Histos and the sbt remote column both use that URI. The image is pinned.
 
-- [ ] **Three gates.** A script runs the no-op, the trailing comment, and the signature change. It fails on a wrong skip: the no-op compiles nothing, the comment does not relink `service`, `app`, or the Scala.js module, and the signature rebuilds that cone while the unrelated module stays a hit.
+- [ ] **Three gates.** A scenario of this graph is the Histos column. The sbt and zipx columns run the same three changes. A wrong skip fails the run: the no-op compiles nothing, the comment does not relink `service`, `app`, or the Scala.js module, and the signature rebuilds that cone while the unrelated module stays a hit.
 
 - [ ] **Both columns.** The sbt side runs as zipx `LocalDir` and as zipx against the same HTTP cache. Histos beats both on the three gates. Cold is recorded and may tie.
 
