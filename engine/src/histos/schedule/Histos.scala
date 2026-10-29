@@ -168,27 +168,32 @@ private final class HistosLive(
         events.offer(StepEvent.Stopped(skipped)).ignore *> ZIO.failCause(cause)
       ,
       value =>
-        val started = java.lang.System.nanoTime()
-        source.set(Source.Ran) *>
-          events.offer(StepEvent.Started(step.info.id)).ignore *>
-          limited(step.info, limits)(
-            step
-              .next(value)
-              .mapError(error => StepFailure.Failed(step.info.id, Cause.fail(error)))
-          ).tapBoth(
-            failure => events.offer(StepEvent.Stopped(failure)).ignore,
-            _ =>
-              source.get.flatMap: origin =>
-                events
-                  .offer(
-                    StepEvent.Finished(
-                      step.info.id,
-                      origin,
-                      Duration.fromNanos(java.lang.System.nanoTime() - started),
-                    )
-                  )
-                  .ignore,
-          ),
+        ZIO
+          .clockWith(_.nanoTime)
+          .flatMap: started =>
+            source.set(Source.Ran) *>
+              events.offer(StepEvent.Started(step.info.id)).ignore *>
+              limited(step.info, limits)(
+                step
+                  .next(value)
+                  .mapError(error => StepFailure.Failed(step.info.id, Cause.fail(error)))
+              ).tapBoth(
+                failure => events.offer(StepEvent.Stopped(failure)).ignore,
+                _ =>
+                  source.get.flatMap: origin =>
+                    ZIO
+                      .clockWith(_.nanoTime)
+                      .flatMap: ended =>
+                        events
+                          .offer(
+                            StepEvent.Finished(
+                              step.info.id,
+                              origin,
+                              Duration.fromNanos(ended - started),
+                            )
+                          )
+                          .ignore,
+              ),
     )
 
   private def runLeaf[R, E, A](
@@ -196,25 +201,30 @@ private final class HistosLive(
       limits: Limits,
       events: Queue[StepEvent[E]],
   ): ZIO[R, StepFailure[E], A] =
-    val started = java.lang.System.nanoTime()
-    source.set(Source.Ran) *>
-      events.offer(StepEvent.Started(leaf.info.id)).ignore *>
-      limited(leaf.info, limits)(
-        leaf.run.mapError(error => StepFailure.Failed(leaf.info.id, Cause.fail(error)))
-      ).tapBoth(
-        failure => events.offer(StepEvent.Stopped(failure)).ignore,
-        _ =>
-          source.get.flatMap: origin =>
-            events
-              .offer(
-                StepEvent.Finished(
-                  leaf.info.id,
-                  origin,
-                  Duration.fromNanos(java.lang.System.nanoTime() - started),
-                )
-              )
-              .ignore,
-      )
+    ZIO
+      .clockWith(_.nanoTime)
+      .flatMap: started =>
+        source.set(Source.Ran) *>
+          events.offer(StepEvent.Started(leaf.info.id)).ignore *>
+          limited(leaf.info, limits)(
+            leaf.run.mapError(error => StepFailure.Failed(leaf.info.id, Cause.fail(error)))
+          ).tapBoth(
+            failure => events.offer(StepEvent.Stopped(failure)).ignore,
+            _ =>
+              source.get.flatMap: origin =>
+                ZIO
+                  .clockWith(_.nanoTime)
+                  .flatMap: ended =>
+                    events
+                      .offer(
+                        StepEvent.Finished(
+                          leaf.info.id,
+                          origin,
+                          Duration.fromNanos(ended - started),
+                        )
+                      )
+                      .ignore,
+          )
 
   private def shared[R, E, A](
       id: StepId,

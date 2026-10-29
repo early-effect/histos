@@ -1,6 +1,6 @@
 # Test overhaul
 
-One item, then its proof. Slayer, Compiler, and Process are done. This file is the checklist.
+One item, then its proof. Slayer, Compiler, Process, and Machine are done. This file is the checklist.
 
 ## Why
 
@@ -115,7 +115,7 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 - [x] **Process.** `Process` is a trait. `ChildProcess` is the live layer. Proof: a miniature whose service under test is the caller, `Process` is `stubbedTraced`, exit and stdout are the stub, cancel is a recorded call. No real spawn. `ProcessBuilder` in old tests is not moved yet.
 
-- [ ] **Machine and clock.** `Machine` is the JDK, cache, OS, and arch value. The live layer reads `zio.System` once. `Histos` durations come from `Clock`, not `nanoTime`. Proof: a miniature on `TestSystem` and `TestClock`. No `withLiveSystem` and no `withLiveClock` on that suite.
+- [x] **Machine and clock.** `Machine` is the JDK, cache, OS, and arch value. The live layer reads `zio.System` once. `Histos` durations come from `Clock`, not `nanoTime`. Proof: a miniature on `TestSystem` and `TestClock`. No `withLiveSystem` and no `withLiveClock` on that suite.
 
 - [ ] **Linkers.** `Linker` and `NativeLinker`. Live layers may spawn, and a test provides that live layer only when the linker is the service under test. Proof of the skip law: the linker is `stubbedTraced`, a comment-sized input change records no call, a body change records one. No Node, no clang. Node's probe is a function of `Process` unless that lies, in which case stop and ask.
 

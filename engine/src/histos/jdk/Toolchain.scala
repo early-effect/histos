@@ -43,54 +43,46 @@ object Machine:
             case Left(error)   => NativeOrigin.Refused(error)
             case Right(source) => NativeOrigin.Chosen(source)
 
-  /** One read of the fiber's `zio.System`. `HISTOS_NATIVE` is `zio.Config` over that map. ZIO keeps `System` on the
-    * default-services fiber ref, so this effect's environment stays empty: tests swap the ref, they do not provide a
-    * layer.
+  /** One `envs` and one `properties`. `HISTOS_NATIVE` is config over that map. The environment stays empty: a test
+    * swaps the fiber's `System` instead of providing a layer.
     */
   def load(repo: Path): IO[ToolchainError, Machine] =
     ZIO.systemWith: system =>
       for
-        env  <- system.envs.mapError(_ => ToolchainError.Denied)
-        home <- system
-          .property("user.home")
-          .mapError(_ => ToolchainError.Denied)
-          .flatMap:
-            case Some(value) if value.nonEmpty => ZIO.succeed(value)
-            case _                             => ZIO.fail(ToolchainError.NoUserHome)
-        os <- system
-          .property("os.name")
-          .mapError(_ => ToolchainError.Denied)
-          .map:
-            case Some(name) if name.nonEmpty => Os.from(name)
-            case _                           => Os.Other
-        architecture <- system
-          .property("os.arch")
-          .mapError(_ => ToolchainError.Denied)
-          .flatMap:
-            case Some(raw) if raw.strip().nonEmpty =>
-              ZIO.succeed(Architecture.fromMachine(raw))
-            case _ => ZIO.fail(ToolchainError.NoArchitecture)
-        running <- system
-          .property("java.home")
-          .mapError(_ => ToolchainError.Denied)
-          .map: value =>
-            value.filter(_.nonEmpty).map(Path.of(_))
-        origin <- ZIO
+        env        <- system.envs.mapError(_ => ToolchainError.Denied)
+        properties <- system.properties.mapError(_ => ToolchainError.Denied)
+        origin     <- ZIO
           .config(native)
-          .provideLayer(
-            zio.Runtime.setConfigProvider(ConfigProvider.fromMap(env))
-          )
+          .provideLayer(zio.Runtime.setConfigProvider(ConfigProvider.fromMap(env)))
           .mapError(error => ToolchainError.Config(error))
-      yield Machine(
-        env,
-        home,
-        os,
-        architecture,
-        histos.cache.ContentStore.home(env.get("XDG_CACHE_HOME"), home),
-        repo,
-        running,
-        origin,
-      )
+        machine <- ZIO.fromEither(read(repo, env, properties, origin))
+      yield machine
+
+  private def read(
+      repo: Path,
+      env: Map[String, String],
+      properties: Map[String, String],
+      origin: NativeOrigin,
+  ): Either[ToolchainError, Machine] =
+    val home = properties.get("user.home").filter(_.nonEmpty)
+    val arch = properties.get("os.arch").filter(_.strip().nonEmpty)
+    (home, arch) match
+      case (None, _)                => Left(ToolchainError.NoUserHome)
+      case (_, None)                => Left(ToolchainError.NoArchitecture)
+      case (Some(home), Some(arch)) =>
+        val os = properties.get("os.name").filter(_.nonEmpty).fold(Os.Other)(Os.from)
+        Right(
+          Machine(
+            env,
+            home,
+            os,
+            Architecture.fromMachine(arch),
+            histos.cache.ContentStore.home(env.get("XDG_CACHE_HOME"), home),
+            repo,
+            properties.get("java.home").filter(_.nonEmpty).map(Path.of(_)),
+            origin,
+          )
+        )
 
   def layer(repo: Path): ZLayer[Any, ToolchainError, Machine] =
     ZLayer.fromZIO(load(repo))
