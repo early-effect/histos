@@ -7,6 +7,7 @@ import histos.testrun.Transcript
 import histos.workspace.{IoFailure, IoFault}
 
 import java.io.InputStream
+import java.lang.Process as OsProcess
 import java.nio.charset.{CharacterCodingException, CodingErrorAction, StandardCharsets}
 import java.nio.file.{Files, Path}
 
@@ -98,7 +99,7 @@ enum ChildError:
     case Io(failure)       => failure.message
 end ChildError
 
-object ChildProcess:
+object ChildProcess extends Process:
   private val EntryClass: MainClass = MainClass.trusted("subprocess.Entry")
 
   /** Calls `setpgid(0, 0)` before the user main, so children join that group. A parent cannot change the group after
@@ -178,7 +179,7 @@ object ChildProcess:
     collect(events(request))
 
   private def watched(
-      start: IO[ChildError, Process],
+      start: IO[ChildError, OsProcess],
       group: Group,
   ): ZStream[Any, ChildError, ChildEvent] =
     ZStream.unwrapScoped:
@@ -217,7 +218,7 @@ object ChildProcess:
     case Own, Inherited
 
   private final case class Child(
-      process: Process,
+      process: OsProcess,
       console: ZStream[Any, ChildError, ChildEvent],
   )
 
@@ -226,7 +227,7 @@ object ChildProcess:
     * `HaltStrategy.Both`: one pipe ending does not cancel the other. A failure does.
     */
   private def spawn(
-      start: IO[ChildError, Process],
+      start: IO[ChildError, OsProcess],
       group: Group,
   ): ZIO[Scope, ChildError, Child] =
     for
@@ -264,7 +265,7 @@ object ChildProcess:
 
   private def finish(
       request: ChildRequest,
-      process: Process,
+      process: OsProcess,
   ): IO[ChildError, ProcessExit] =
     for
       code <- wait(process)
@@ -358,7 +359,7 @@ object ChildProcess:
       source: Path,
       classes: Path,
       directory: Path,
-  ): IO[ChildError, Process] =
+  ): IO[ChildError, OsProcess] =
     ZIO
       .attemptBlocking {
         new ProcessBuilder(
@@ -506,7 +507,7 @@ object ChildProcess:
       argv: List[String],
       work: Path,
       environment: Map[String, String],
-  ): IO[ChildError, Process] =
+  ): IO[ChildError, OsProcess] =
     ZIO
       .attemptBlocking {
         val command =
@@ -524,7 +525,7 @@ object ChildProcess:
   private def start(
       request: ChildRequest,
       entry: Path,
-  ): IO[ChildError, Process] =
+  ): IO[ChildError, OsProcess] =
     ZIO
       .attemptBlocking {
         val entries = entry :: request.classpath.entries
@@ -551,7 +552,7 @@ object ChildProcess:
       if status.text.trim.toIntOption.contains(0) then ZIO.unit
       else ZIO.fail(ChildError.Group(GroupOp.Set))
 
-  private def wait(process: Process): IO[ChildError, ProcessExit] =
+  private def wait(process: OsProcess): IO[ChildError, ProcessExit] =
     ZIO
       .attemptBlockingInterrupt(process.waitFor())
       .mapBoth(_ => ChildError.Status, ProcessExit(_))
@@ -565,7 +566,7 @@ object ChildProcess:
     * `setpgid` ran before `exec`. That descendant closes its end of the pipe, so a read blocked in this process returns
     * on Linux as well as macOS.
     */
-  private def stop(process: Process, group: Group): UIO[Unit] =
+  private def stop(process: OsProcess, group: Group): UIO[Unit] =
     for
       tree <- ProcessTree.of(process)
       _    <- group match
@@ -579,7 +580,7 @@ object ChildProcess:
       }
     yield ()
 
-  private def killGroup(process: Process): UIO[Unit] =
+  private def killGroup(process: OsProcess): UIO[Unit] =
     ZIO.attempt {
       val pid = process.pid()
       if pid > 0 && pid <= Int.MaxValue then Posix.killGroup(pid.toInt)

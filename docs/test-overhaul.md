@@ -1,6 +1,6 @@
 # Test overhaul
 
-One item, then its proof. Slayer and Compiler are done. This file is the checklist.
+One item, then its proof. Slayer, Compiler, and Process are done. This file is the checklist.
 
 ## Why
 
@@ -113,7 +113,7 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 - [x] **Compiler.** `Compiler` is a trait, shaped so slayer can stub it. Depend on the `rocks.earlyeffect::slayer` release from the previous item, test scope only. Prove a stub expands in this 3.10.0 test compile. If it does not, fix slayer, release it, bump the pin. Do not vendor it and do not bump slayer to 3.10 without asking. The live layer is the Zinc package. `Analysis` does not leave that package. `GraphCompile` calls `Compiler` only on a miss. Proof: one miniature, `GraphCompile` is the service under test, `Compiler` is `stubbedTraced`. A hit records no call. A miss records one. A generated `CompileError` from the stub surfaces as the caller's typed error. No scalac. `TestRandom` only. If the failure's effect on a retry is not forced by the product, ask before asserting it. `./histos testOnly --module engine` on that suite. Old compile specs are not the proof and are not deleted here.
 
-- [ ] **Process.** `Process` is a trait. `ChildProcess` is the live layer. Proof: a miniature whose service under test is the caller, `Process` is `stubbedTraced`, exit and stdout are the stub, cancel is a recorded call. No real spawn. `ProcessBuilder` in old tests is not moved yet.
+- [x] **Process.** `Process` is a trait. `ChildProcess` is the live layer. Proof: a miniature whose service under test is the caller, `Process` is `stubbedTraced`, exit and stdout are the stub, cancel is a recorded call. No real spawn. `ProcessBuilder` in old tests is not moved yet.
 
 - [ ] **Machine and clock.** `Machine` is the JDK, cache, OS, and arch value. The live layer reads `zio.System` once. `Histos` durations come from `Clock`, not `nanoTime`. Proof: a miniature on `TestSystem` and `TestClock`. No `withLiveSystem` and no `withLiveClock` on that suite.
 

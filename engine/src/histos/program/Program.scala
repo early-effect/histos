@@ -7,7 +7,7 @@ import histos.native.{NativeLink, NativeLinkRequest, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
-import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
+import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildRequest, Process}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError, JvmCompile}
@@ -132,7 +132,7 @@ object Program:
       execute(
         Step.local[Chunk[ProgramFeed]](info)(
           one(run).runCollect.provideSome[Resolve](
-            zio.ZLayer.succeed(tools)
+            zio.ZLayer.succeed(tools) ++ Process.live
           )
         )
       )
@@ -194,7 +194,7 @@ object Program:
 
   private def one(
       run: CellRun
-  ): ZStream[Resolve & LockedTools, ProgramError, ProgramFeed] =
+  ): ZStream[Resolve & LockedTools & Process, ProgramError, ProgramFeed] =
     val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes) = run
     val env                                                             = runtimes.env
     val modules      = graph.projects.collect { case item: Module => item }
@@ -334,32 +334,25 @@ object Program:
             yield command(cell, List(program.toString), work, env)
     began ++ ran
 
-  private def events(
+  private[histos] def events(
       cell: histos.zinc.CompiledCell,
       request: ChildRequest,
-  ): ZStream[Any, ProgramError, ProgramFeed] =
-    ChildProcess
-      .events(request)
-      .mapError(error => ProgramError.Process(cell.module, cell.version, error.message))
-      .map:
-        case ChildEvent.Out(text)    => ProgramFeed.Out(text)
-        case ChildEvent.Err(text)    => ProgramFeed.Err(text)
-        case ChildEvent.Exited(code) =>
-          ProgramFeed.Exited(
-            cell.module,
-            cell.version,
-            cell.platform,
-            code.value,
-          )
+  ): ZStream[Process, ProgramError, ProgramFeed] =
+    ZStream.serviceWithStream[Process](process => heard(cell, process.events(request)))
 
-  private def command(
+  private[histos] def command(
       cell: histos.zinc.CompiledCell,
       argv: List[String],
       work: Path,
       env: Map[String, String],
+  ): ZStream[Process, ProgramError, ProgramFeed] =
+    ZStream.serviceWithStream[Process](process => heard(cell, process.command(argv, work, env)))
+
+  private def heard(
+      cell: histos.zinc.CompiledCell,
+      events: ZStream[Any, ChildError, ChildEvent],
   ): ZStream[Any, ProgramError, ProgramFeed] =
-    ChildProcess
-      .command(argv, work, env)
+    events
       .mapError(error => ProgramError.Process(cell.module, cell.version, error.message))
       .map:
         case ChildEvent.Out(text)    => ProgramFeed.Out(text)

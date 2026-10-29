@@ -1,5 +1,6 @@
 package histos.process
 
+import java.lang.Process as OsProcess
 import java.nio.charset.StandardCharsets
 
 import zio.{IO, UIO, ZIO}
@@ -12,7 +13,7 @@ object Child:
   /** The release kills the tree, and so does an interrupt while the child runs: a blocked pipe read ignores thread
     * interruption, so killing the writers is what ends it.
     */
-  def run[E](start: IO[E, Process], failed: E): IO[E, Ended] =
+  def run[E](start: IO[E, OsProcess], failed: E): IO[E, Ended] =
     ZIO.scoped:
       ZIO
         .acquireRelease(start)(stop)
@@ -27,6 +28,6 @@ object Child:
             }(stop(process))
             .orElseFail(failed)
 
-  private def stop(process: Process): UIO[Unit] =
+  private def stop(process: OsProcess): UIO[Unit] =
     ProcessTree.of(process).flatMap(_.destroy)
 end Child
