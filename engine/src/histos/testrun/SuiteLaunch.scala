@@ -580,7 +580,7 @@ private[testrun] object SuiteLaunch:
       ],
   ): ZIO[R, ModuleTestError, ZStream[Any, ModuleTestError, TestFeed]] =
     ZIO
-      .fromEither(SuiteCover.stored(ask))
+      .fromEither(SuiteCover.stored(repo, ask))
       .mapError(refused(cell, _))
       .flatMap: cover =>
         SuiteStamp
@@ -673,6 +673,8 @@ private[testrun] object SuiteLaunch:
         ModuleTestError.Lock(histos.resolve.ResolveError.LockDrift(module, version, platform, scope))
       case CoverGap.NoNode =>
         ModuleTestError.NoNode(cell.module, cell.version, NodeMiss.Absent(NodeToolchain.Floor))
+      case CoverGap.NoApi(module, version, platform) =>
+        ModuleTestError.Api(module, version, platform)
 
   /** The fingerprint is the digest of the classes that ran. A pass stores it. A failure deletes it.
     */

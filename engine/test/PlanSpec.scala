@@ -817,6 +817,7 @@ object PlanSpec extends ZIOSpecDefault:
           parsed  <- ZIO.fromEither(DependencyLock.parse(DependencyLock.render(lock)))
           stamp   <- ZIO.fromEither(
             SuiteCover.stored(
+              repo,
               SuiteAsk(
                 app,
                 List(app),
@@ -828,7 +829,7 @@ object PlanSpec extends ZIOSpecDefault:
                 machine.native,
                 jdk.identity,
                 None,
-              )
+              ),
             )
           )
           digest <- SuiteStamp.digest("demo.Foo", List(classes), stamp)

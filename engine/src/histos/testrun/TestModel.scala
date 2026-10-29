@@ -121,6 +121,7 @@ enum ModuleTestError:
   case Stamp(error: StampError)
   case Record(error: QuickError)
   case Pattern(error: SuitePatternError)
+  case Api(module: ProjectName, version: ScalaVersion, platform: Platform)
 
   def message: String = this match
     case Tool(_, _, error)               => error.message
@@ -157,9 +158,11 @@ enum ModuleTestError:
       s"'${module.value}' ${version.value} ${platform.token} failed to link\n$detail"
     case NoNode(module, version, miss) =>
       s"'${module.value}' ${version.value} js has no Node to run on: ${miss.message}"
-    case Stamp(error)   => error.message
-    case Record(error)  => error.message
-    case Pattern(error) => error.message
+    case Stamp(error)                   => error.message
+    case Record(error)                  => error.message
+    case Pattern(error)                 => error.message
+    case Api(module, version, platform) =>
+      s"'${module.value}' ${version.value} ${platform.token} has no readable API digest"
 end ModuleTestError
 
 /** One test invocation. The callback runs after a cell's tests compile. */

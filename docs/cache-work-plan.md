@@ -139,9 +139,9 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 ### Test results
 
-- [x] **TestStore.** A module is `Off` unless it says `Local` or `Remote`. `Remote` together with a `Need` fails at load. `test` on `Off` launches the suite. `test` on `Local` skips when the stored suite digest matches. That digest is the one a passing run already stores. The upstream API digest is the next item. `test` on `Remote` launches and does not upload, because the remote URI is configuration. Bench modules stay `Off`. Proof: `./histos testOnly --module engine 'histos.testrun.ModuleTestQuickSpec'` (11 passed) and `./histos testOnly --module app 'histos.report.SchemaSpec'` (2 passed).
+- [x] **TestStore.** A module is `Off` unless it says `Local` or `Remote`. `Remote` together with a `Need` fails at load. `test` on `Off` launches the suite. `test` on `Local` skips when the stored suite digest matches. That digest is the one a passing run already stores. `test` on `Remote` launches and does not upload, because the remote URI is configuration. Bench modules stay `Off`. Proof: `./histos testOnly --module engine 'histos.testrun.ModuleTestQuickSpec'` (11 passed) and `./histos testOnly --module app 'histos.report.SchemaSpec'` (2 passed).
 
-- [ ] **testQuick stamp.** The quick stamp includes the upstream API digest. A signature change in the upstream dirties the suite. A trailing comment does not. Proof: the quick spec.
+- [x] **testQuick stamp.** The quick stamp includes each upstream `api.sha256` that is on disk, as a sorted `module digest` line. A missing file adds no line. An unreadable file is `ModuleTestError.Api` and does not skip. A new public method on an unreferenced upstream class moves that digest and reruns the suite. A trailing comment keeps the digest and stays cached. `TestStore.Local` consults the same cover. Proof: `./histos testOnly --module engine 'histos.testrun.ModuleTestQuickSpec'` (12 passed) and `./histos testOnly --module engine 'histos.testrun.QuickSpec'` (20 passed).
 
 ### Bench
 

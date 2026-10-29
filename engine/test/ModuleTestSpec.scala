@@ -1411,6 +1411,54 @@ private[testrun] object ModuleTestSupport:
           storeOf(Right(built)).contains(TestStore.Remote),
           cached(first).isEmpty && out(first).contains("alpha"),
           cached(second).isEmpty && out(second).contains("alpha"),
+        )
+    ,
+    test("an unreferenced upstream comment stays cached and a new public method reruns the suite"):
+      ZIO.scoped:
+        for
+          root <- temp
+          core = module("core", Jvm)(scala3)
+          app  = module("app", Jvm)(scala3).dependsOn(core).test(TestMain("demo.Foo"))
+          built <- ZIO.fromEither(Projects(core, app))
+          _     <- ZIO.attempt {
+            write(root, "core/src/main/scala/demo/Lib.scala", lib("alpha"))
+            write(root, "core/src/main/scala/demo/Other.scala", libNamed("Other", "other"))
+            write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
+            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
+          }
+          first  <- feeds(root, built)
+          second <- feeds(root, built)
+          before <- apiText(root, ProjectName("core"))
+          _      <- ZIO.attempt(
+            write(
+              root,
+              "core/src/main/scala/demo/Other.scala",
+              libNamed("Other", "other") + "  // trailing note\n",
+            )
+          )
+          third     <- feeds(root, built)
+          commented <- apiText(root, ProjectName("core"))
+          _         <- ZIO.attempt(
+            write(
+              root,
+              "core/src/main/scala/demo/Other.scala",
+              """package demo
+                |
+                |object Other:
+                |  def word: String = "other"
+                |  def extra: Int = 1
+                |""".stripMargin,
+            )
+          )
+          fourth <- feeds(root, built)
+          signed <- apiText(root, ProjectName("core"))
+        yield assertTrue(
+          out(first).contains("alpha") && cached(first).isEmpty,
+          cached(second) == List("demo.Foo") && !out(second).contains("alpha"),
+          commented == before,
+          cached(third) == List("demo.Foo") && !out(third).contains("alpha"),
+          signed != before,
+          out(fourth).contains("alpha") && cached(fourth).isEmpty,
         ),
   )
 
@@ -1471,6 +1519,13 @@ private[testrun] object ModuleTestSupport:
   /** Stdout, then stderr. */
   private def text(report: TestReport): String =
     report.transcript.outText.text + report.transcript.errText.text
+
+  private def apiText(root: Path, name: ProjectName): ZIO[Any, Throwable, String] =
+    GraphCompile.analysisDirOf(GraphCompile.classesDir(root, name, scala3, Jvm)) match
+      case Some(dir) =>
+        ZIO.attempt(Files.readString(dir.resolve(histos.zinc.ApiDigest.fileName)).trim)
+      case None =>
+        ZIO.fail(new java.io.IOException(s"no analysis directory for ${name.value}"))
 
   private def lib(word: String): String = libNamed("Lib", word)
 

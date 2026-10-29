@@ -705,6 +705,6 @@ object Plan:
           ModuleTestError.Process(_, _, _) | ModuleTestError.Main(_) | ModuleTestError.Absent(_) |
           ModuleTestError.MissingUpstream(_, _, _) | ModuleTestError.Work(_) | ModuleTestError.Runner(_) |
           ModuleTestError.LinkFailed(_, _, _, _) | ModuleTestError.NoNode(_, _, _) | ModuleTestError.Stamp(_) |
-          ModuleTestError.Record(_) =>
+          ModuleTestError.Record(_) | ModuleTestError.Api(_, _, _) =>
         PreviewError.Sources(IoFailure(repo, IoFault.Stat))
 end Plan

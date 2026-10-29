@@ -108,6 +108,7 @@ object QuickAnswer:
                   runtime.flatMap: (jdk, node) =>
                     SuiteCover
                       .stored(
+                        repo,
                         SuiteAsk(
                           module,
                           modules,
@@ -119,7 +120,7 @@ object QuickAnswer:
                           machine.native,
                           jdk,
                           node,
-                        )
+                        ),
                       )
                       .toOption
 

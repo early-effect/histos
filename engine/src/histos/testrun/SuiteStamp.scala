@@ -25,10 +25,11 @@ enum StampError:
     case Missing(name) => s"stamp index has no $name"
 end StampError
 
-/** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, and the scalac flags.
-  * Each class is a fingerprint and the names it points at. The bytes are not kept. A class this suite does not
-  * reference is not part of the digest. Tool fingerprints and runtime-token hashes from [[SuiteCover]] are jar lines.
-  * This digest adds the upstream jars, the JDK token, and the flags.
+/** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, the scalac flags, and
+  * each upstream API digest. Each class is a fingerprint and the names it points at. The bytes are not kept. A class
+  * this suite does not reference is not part of that closure. The API digest still is: a public signature outside the
+  * closure moves the stamp, and a comment does not. Tool fingerprints and runtime-token hashes from [[SuiteCover]] are
+  * jar lines.
   */
 object SuiteStamp:
   /** Fingerprint of one class file, and the binary names it mentions. */
@@ -39,13 +40,14 @@ object SuiteStamp:
 
   /** Identity besides the referenced class files. `jars` are locked shas, tool fingerprints, and runtime-token hashes.
     * `upstream` are compile jars of upstream modules. `jdk` is the accepted runtime token. `flags` are the scalac
-    * arguments.
+    * arguments. `apis` are `module digest` lines for upstream API files that exist.
     */
   private[histos] final case class Cover(
       jars: List[String],
       upstream: List[String],
       jdk: String,
       flags: List[String],
+      apis: List[String],
   )
 
   def digest(
@@ -202,7 +204,8 @@ object SuiteStamp:
     cover.jars.sorted.map(jar => s"jar $jar") ++
       cover.upstream.sorted.map(jar => s"upstream $jar") ++
       List(s"jdk ${cover.jdk}") ++
-      cover.flags.map(flag => s"flag $flag")
+      cover.flags.map(flag => s"flag $flag") ++
+      cover.apis.sorted.map(api => s"api $api")
 
   private def hash(text: String): Sha256 =
     Sha256.of(
