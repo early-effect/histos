@@ -5,7 +5,7 @@ import histos.native.NativeOrigin
 import histos.resolve.{Resolve, ResolveError}
 import histos.testrun.{ModuleTest, ModuleTestError, TestFeed, TestMode, TestRun}
 import histos.workspace.{IoFailure, Workspace}
-import histos.zinc.{CompileFeed, CompilerStarts, GraphCompile, GraphCompileError}
+import histos.zinc.{CompileFeed, Compiler, GraphCompile, GraphCompileError}
 
 import java.nio.file.Path
 
@@ -26,32 +26,33 @@ final class Store private[histos] (content: ContentStore, starts: Ref[Int]):
   def opened: UIO[Int] = starts.get
 
   def checkout: ZIO[Scope, IoFailure, Checkout] =
-    Workspace.work("histos-scenario").map(root => Checkout(root, layer))
-
-  private def layer: ZLayer[histos.resolve.LockedTools, Nothing, Resolve & ContentStore & CompilerStarts] =
-    ZLayer.fromZIO(ZIO.serviceWith[histos.resolve.LockedTools](_.resolve)) ++
-      ZLayer.succeed(content) ++
-      ZLayer.succeed(CompilerStarts(starts))
+    Workspace.work("histos-scenario").map(root => Checkout(root, content, starts))
 end Store
 
 /** One work tree. `compile` and `test` use the scenario store. */
 final class Checkout private[histos] (
     val root: Path,
-    layer: ZLayer[histos.resolve.LockedTools, Nothing, Resolve & ContentStore & CompilerStarts],
+    content: ContentStore,
+    starts: Ref[Int],
 ):
   def write(relative: String, text: String): ZIO[Any, IoFailure, Unit] =
     Workspace.writeString(root.resolve(relative), text)
 
+  private def base: ZLayer[histos.resolve.LockedTools, Nothing, Resolve & ContentStore] =
+    ZLayer.fromZIO(ZIO.serviceWith[histos.resolve.LockedTools](_.resolve)) ++
+      ZLayer.succeed(content)
+
   def compile(
       graph: ProjectGraph
   ): ZIO[histos.resolve.LockedTools, GraphCompileError | ResolveError | IoFailure, Chunk[CompileFeed]] =
-    GraphCompile.jdkHere.flatMap: jdk =>
-      ToolFixture
-        .streamAt(root, graph)(
-          GraphCompile.consoleCounted(root, graph, Nil, jdk, NativeOrigin.Central, None)
-        )
-        .runCollect
-        .provideSomeLayer[histos.resolve.LockedTools](layer)
+    ZIO.scoped:
+      GraphCompile.jdkHere.flatMap: jdk =>
+        ToolFixture
+          .streamAt(root, graph)(
+            GraphCompile.consoleCounted(root, graph, Nil, jdk, NativeOrigin.Central, None)
+          )
+          .runCollect
+          .provideSomeLayer[histos.resolve.LockedTools & Scope](base ++ Compiler.counted(starts))
 
   /** Quick unless `mode` says otherwise. The record is written under this checkout. */
   def test(
@@ -70,6 +71,6 @@ final class Checkout private[histos] (
           ModuleTest.console(TestRun(root, graph, Nil, jdk, here, mode))
         )
         .runCollect
-        .provideSomeLayer[histos.resolve.LockedTools](layer)
+        .provideSomeLayer[histos.resolve.LockedTools](base)
     yield feeds
 end Checkout

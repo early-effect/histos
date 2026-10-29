@@ -1,6 +1,15 @@
 package histos.js
 
-import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JsLibraryMiss, JvmCompile, ScalaSeries}
+import histos.zinc.{
+  CompileCall,
+  CompileError,
+  CompileOutput,
+  CompileProblem,
+  CompileRequest,
+  JsLibraryMiss,
+  JvmCompile,
+  ScalaSeries,
+}
 import histos.{Dep, DepKind, JsEnv, JsVersion, Platform, ScalaVersion, ToolCatalog}
 import histos.resolve.{LockedTools, ToolRoot, ToolRequest, ToolId, ToolRole, ToolVariant, Repositories, Transitivity}
 
@@ -11,6 +20,8 @@ import zio.{IO, ZIO}
 /** Scala.js compile for the Scala 3 compiler's own backend. The library replaces `scala-library` on the user classpath.
   */
 object ScalaJs:
+  /** The Scala 3 backend flag. The module's own flags stay on the request. */
+  private val backend = "-scalajs"
 
   /** The jars the linker reads `.sjsir` from. The compiler uses the same list as its library classpath.
     */
@@ -25,19 +36,36 @@ object ScalaJs:
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
       revision: Option[JsVersion] = None,
-  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & histos.cache.ContentStore, CompileError, CompileOutput] =
+    prepared(request, extra, hear, revision).flatMap: (updated, libraries, flags) =>
+      JvmCompile.compileWith(updated, libraries, Nil, flags, hear)
+
+  /** The Scala.js library and flags, ready for a cache check. This does not compile. */
+  private[histos] def stage(
+      request: CompileRequest,
+      extra: List[String] = Nil,
+      hear: CompileProblem => Unit = _ => (),
+      revision: Option[JsVersion] = None,
+  ): ZIO[LockedTools, CompileError, CompileCall] =
+    prepared(request, extra, hear, revision).flatMap: (updated, libraries, flags) =>
+      JvmCompile.stage(updated, Nil, flags, hear, Some(libraries))
+
+  private def prepared(
+      request: CompileRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+      revision: Option[JsVersion],
+  ): ZIO[LockedTools, CompileError, (CompileRequest, List[Path], List[String])] =
     if request.toolchain.platform != Platform.Js then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else
       ScalaSeries.of(request.toolchain.version) match
         case Some(ScalaSeries.Scala3) =>
-          input(request.toolchain.version, revision).flatMap: selected =>
-            JvmCompile.compileWith(
+          input(request.toolchain.version, revision).map: selected =>
+            (
               request.copy(compilationTools = request.compilationTools :+ selected),
               selected.artifacts.map(_.path),
-              Nil,
-              List("-scalajs") ++ extra,
-              hear,
+              List(backend) ++ extra,
             )
         case _ =>
           ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))

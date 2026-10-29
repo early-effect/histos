@@ -102,8 +102,8 @@ final case class CompileSession(
 )
 
 object GraphCompile:
-  /** Resolve, the local CAS, and the compiler-start counter. Public entry points supply the counter. */
-  private[zinc] type Fed = Resolve & ContentStore & CompilerStarts
+  /** Resolve, the local CAS, and the compiler. Public entry points install the live compiler. */
+  private[zinc] type Fed = Resolve & ContentStore & Compiler
 
   def run(
       session: CompileSession,
@@ -132,32 +132,42 @@ object GraphCompile:
       names: List[ProjectName],
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    watch(
+    withCompiler(
       session.repo,
       session.graph,
-      choose(session.graph, names),
-      None,
-      platform,
-      session.jdk,
-      session.native,
-      captured = Some(session.lock),
-    ).provideSomeLayer(CompilerStarts.live)
+      watch(
+        session.repo,
+        session.graph,
+        choose(session.graph, names),
+        None,
+        platform,
+        session.jdk,
+        session.native,
+        captured = Some(session.lock),
+      ),
+      Some(session.lock),
+    )
   def cellFeed(
       session: CompileSession,
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
     val names = cells.map(_._1)
-    watch(
+    withCompiler(
       session.repo,
       session.graph,
-      choose(session.graph, names),
-      Some(cells.map(_._2.value).toSet),
-      Some(platform),
-      session.jdk,
-      session.native,
-      captured = Some(session.lock),
-    ).provideSomeLayer(CompilerStarts.live)
+      watch(
+        session.repo,
+        session.graph,
+        choose(session.graph, names),
+        Some(cells.map(_._2.value).toSet),
+        Some(platform),
+        session.jdk,
+        session.native,
+        captured = Some(session.lock),
+      ),
+      Some(session.lock),
+    )
 
   /** Compile every platform a module names, or only `platform` when that is set. Names pull in `dependsOn` upstreams
     * and not dependents. A cell starts when its own upstream cells finish.
@@ -184,9 +194,9 @@ object GraphCompile:
       native: NativeOrigin,
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    consoleCounted(repo, graph, names, jdk, native, platform).provideSomeLayer(CompilerStarts.live)
+    withCompiler(repo, graph, consoleCounted(repo, graph, names, jdk, native, platform))
 
-  /** The same console, with the caller holding the start counter. */
+  /** The same console, with the caller holding the compiler. */
   private[histos] def consoleCounted(
       repo: Path,
       graph: ProjectGraph,
@@ -196,6 +206,17 @@ object GraphCompile:
       platform: Option[Platform],
   ): ZStream[Fed, GraphCompileError, CompileFeed] =
     watch(repo, graph, choose(graph, names), None, platform, jdk, native)
+
+  /** `run`, with the caller holding the compiler. A cell failure is `GraphCompileError.Cells`. */
+  private[histos] def runCounted(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[ProjectName],
+      jdk: JdkRuntime,
+      native: NativeOrigin,
+      platform: Option[Platform],
+  ): ZIO[Fed, GraphCompileError, List[CompiledCell]] =
+    collected(consoleCounted(repo, graph, names, jdk, native, platform))
 
   /** Fails after the last event when a cell failed. Test runs keep the lenient stream so passing cells still test.
     */
@@ -228,15 +249,19 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    watch(
+    withCompiler(
       repo,
       graph,
-      pickCells(graph, cells, platform),
-      Some(cells.map(_._2.value).toSet),
-      Some(platform),
-      jdk,
-      native,
-    ).provideSomeLayer(CompilerStarts.live)
+      watch(
+        repo,
+        graph,
+        pickCells(graph, cells, platform),
+        Some(cells.map(_._2.value).toSet),
+        Some(platform),
+        jdk,
+        native,
+      ),
+    )
 
   private def collected[R](
       feeds: ZStream[R, GraphCompileError, CompileFeed]
@@ -274,8 +299,8 @@ object GraphCompile:
   ): IO[GraphCompileError, Option[Path]] =
     ZIO
       .attemptBlocking {
-        val named  = repo.resolve(module.baseDirectory).resolve("src")
-        val shared = repo.resolve("src")
+        val named  = repo.resolve(module.baseDirectory).resolve(Sources.sourceRoot)
+        val shared = repo.resolve(Sources.sourceRoot)
         if Files.isDirectory(named) then Some(named)
         else if modules.length == 1 && Files.isDirectory(shared) then Some(shared)
         else None
@@ -346,17 +371,40 @@ object GraphCompile:
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    watch(
+    withCompiler(
       repo,
       graph,
-      choose(graph, names),
-      None,
-      None,
-      jdk,
-      native,
-      hold,
-      Parallelism(64, 64, 64),
-    ).provideSomeLayer(CompilerStarts.live)
+      watch(
+        repo,
+        graph,
+        choose(graph, names),
+        None,
+        None,
+        jdk,
+        native,
+        hold,
+        Parallelism(64, 64, 64),
+      ),
+    )
+
+  /** One compiler pool for this stream, closed when the stream ends. The pool is built from `captured` when the caller
+    * already holds the lock.
+    */
+  private def withCompiler[R <: Resolve](
+      repo: Path,
+      graph: ProjectGraph,
+      open: ZStream[R & Compiler, GraphCompileError, CompileFeed],
+      captured: Option[DependencyLock] = None,
+  ): ZStream[R, GraphCompileError, CompileFeed] =
+    ZStream.unwrapScoped {
+      for
+        lock     <- captured.fold(readLock(repo))(ZIO.succeed(_))
+        tools    <- LockedTools.make(lock, graph)
+        compiler <- Compiler.live.build
+          .map(_.get[Compiler])
+          .provideSome[zio.Scope](ZLayer.succeed(tools))
+      yield open.provideSomeLayer[R](ZLayer.succeed(compiler))
+    }
 
   private def watch(
       repo: Path,
@@ -380,34 +428,30 @@ object GraphCompile:
             lock     <- captured.fold(readLock(repo))(ZIO.succeed(_))
             tools    <- LockedTools.make(lock, graph)
             outcome  <- ZIO.scoped {
-              CompilerPool.make
-                .provideSome[zio.Scope](ZLayer.succeed(tools))
-                .flatMap: pool =>
-                  val plan = CompilePlan(
-                    repo,
-                    modulesOf(graph),
-                    lock,
-                    jdk,
-                    native,
-                    BuildResolvers(graph.resolvers),
-                    pool,
-                    tools,
-                  )
-                  val goal = ScheduleCells.goal(
-                    plan,
-                    selected,
-                    only,
-                    platform,
-                    hold,
-                    offer,
-                  )
-                  ZIO
-                    .serviceWithZIO[Histos](_.start(goal))
-                    .provideSome[Fed & zio.Scope](
-                      ZLayer.succeed(parallelism),
-                      Histos.live,
-                    )
-                    .flatMap(_.outcome)
+              val plan = CompilePlan(
+                repo,
+                modulesOf(graph),
+                lock,
+                jdk,
+                native,
+                BuildResolvers(graph.resolvers),
+                tools,
+              )
+              val goal = ScheduleCells.goal(
+                plan,
+                selected,
+                only,
+                platform,
+                hold,
+                offer,
+              )
+              ZIO
+                .serviceWithZIO[Histos](_.start(goal))
+                .provideSome[Fed & zio.Scope](
+                  ZLayer.succeed(parallelism),
+                  Histos.live,
+                )
+                .flatMap(_.outcome)
             }
             _ <- outcome match
               case Outcome.Done(_)          => end(emit, None)
@@ -635,22 +679,41 @@ object GraphCompile:
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[ContentStore & CompilerStarts, CompileError, CompileOutput] =
-    val compiled = request.toolchain.platform match
+  ): ZIO[ContentStore & Compiler, CompileError, CompileOutput] =
+    staged(work, request, extra, hear).flatMap: call =>
+      for
+        store  <- ZIO.service[ContentStore]
+        hit    <- CompileReplay.load(store, call.key, call.request)
+        output <- hit match
+          case Some(found) =>
+            CompileInputs.remember(store, call.request.analysis, call.rows).as(found)
+          case None =>
+            CompileInputs
+              .explain(store, call.request.analysis, call.rows)
+              .flatMap: change =>
+                ZIO.serviceWithZIO[Compiler](_.compile(call)).map(_.copy(miss = Some(change)))
+      yield output
+
+  private def staged(
+      work: CellWork,
+      request: CompileRequest,
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): IO[CompileError, CompileCall] =
+    val ready = request.toolchain.platform match
       case Platform.Jvm =>
-        JvmCompile.compilePooled(work.plan.pool, request, extra, hear)
+        JvmCompile.stage(request, Nil, extra, hear, None)
       case Platform.Js =>
-        ScalaJs.compile(request, extra, hear, work.module.jsVersion)
+        ScalaJs.stage(request, extra, hear, work.module.jsVersion)
       case Platform.Native =>
-        NativeCompile.compile(
+        NativeCompile.stage(
           request,
-          work.module.nativeVersion
-            .getOrElse(work.plan.tools.catalog.native.revision),
+          work.module.nativeVersion.getOrElse(work.plan.tools.catalog.native.revision),
           work.plan.native,
           extra,
           hear,
         )
-    compiled.provideSome[ContentStore & CompilerStarts](ZLayer.succeed(work.plan.tools))
+    ready.provide(ZLayer.succeed(work.plan.tools))
 
   private def upstreamClasses(
       module: Module,

@@ -21,29 +21,25 @@ import scala.jdk.CollectionConverters.*
 import scala.jdk.OptionConverters.*
 import scala.util.control.NonFatal
 
-import sbt.internal.inc.FileAnalysisStore
+import sbt.internal.inc.{Analysis, FileAnalysisStore}
+import xsbti.T2
+import xsbti.compile.{CompileOrder, FileHash, MiniOptions, MiniSetup}
 
-import zio.{Chunk, IO, Ref, UIO, URIO, ZIO, ZLayer}
+import zio.{Chunk, IO, ZIO, ZLayer}
 
-/** Starts of the Scala compiler. A hit does not tick. The ref is shared across the fibers a compile forks. */
-final case class CompilerStarts(count: Ref[Int]):
-  def tick: UIO[Unit] = count.update(_ + 1)
-  def get: UIO[Int]   = count.get
+/** The analysis archive a compile writes and the next compile reads. */
+private[zinc] object AnalysisFile:
+  val name: String        = "inc.zip"
+  val order: CompileOrder = CompileOrder.Mixed
 
-object CompilerStarts:
-  val live: ZLayer[Any, Nothing, CompilerStarts] =
-    ZLayer.fromZIO(Ref.make(0).map(CompilerStarts(_)))
-
-  def tick: URIO[CompilerStarts, Unit] =
-    ZIO.serviceWithZIO[CompilerStarts](_.tick)
-end CompilerStarts
-
-/** Analysis and class files stored under the compile key. `a/inc.zip` is the analysis. `c/` is one file from the
+/** Analysis and class files stored under the compile key. `a/` is the analysis archive. `c/` is one file from the
   * classes directory. The prefix keeps one from being read as the other.
   */
 object CompileReplay:
-  private val Magic        = "HC1\n".getBytes(StandardCharsets.US_ASCII)
-  private val AnalysisName = "inc.zip"
+  private val Magic = "HC1\n".getBytes(StandardCharsets.US_ASCII)
+
+  /** An empty analysis has no companions entry for the store to write. */
+  private val emptyStoreApis = false
 
   /** A store that dies with this process. A layer that took `Scope` would change every resolver input. */
   def processStore: ZLayer[Any, Nothing, ContentStore] =
@@ -56,19 +52,21 @@ object CompileReplay:
     )
 
   /** One call, one store. A later call of the same key misses, so Zinc still sees the analysis on disk. */
-  def isolated[R, E, A](
-      effect: ZIO[R & ContentStore & CompilerStarts, E, A]
-  ): ZIO[R, E, A] =
+  def isolated[R, E, A](effect: ZIO[R & ContentStore, E, A]): ZIO[R, E, A] =
     ZIO.scoped:
       for
         dir <- ZIO.acquireRelease(
           ZIO.attemptBlocking(Files.createTempDirectory("histos-compile-cas")).orDie
         )(path => Workspace.delete(path).orDieWith(error => new java.io.IOException(error.message)))
-        starts <- Ref.make(0)
-        out    <- effect.provideSomeLayer(
-          ZLayer.succeed(ContentStore.in(dir)) ++ ZLayer.succeed(CompilerStarts(starts))
-        )
+        out <- effect.provideSomeLayer(ZLayer.succeed(ContentStore.in(dir)))
       yield out
+
+  /** An empty analysis stored under the call key. The next load of that key is a hit. `emptyStoreApis` keeps the
+    * companions entry out of the archive.
+    */
+  private[zinc] def seed(store: ContentStore, call: CompileCall): IO[CompileError, CompileOutput] =
+    ZIO.fromEither(plant(call.request)) *>
+      save(store, call.key, call.request).as(planted(call))
 
   def load(
       store: ContentStore,
@@ -95,6 +93,36 @@ object CompileReplay:
       now <- zio.Clock.ClockLive.instant
       _   <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
     yield ()
+
+  private def planted(call: CompileCall): CompileOutput =
+    CompileOutput(
+      call.request.classes,
+      0,
+      call.key,
+      changed = true,
+      sources = Some(SourceCount(0, call.request.sources.size)),
+      classesWritten = Some(0),
+      miss = None,
+    )
+
+  private def plant(request: CompileRequest): Either[CompileError, Unit] =
+    val fault = CompileError.Io(IoFailure(request.analysis, IoFault.Write))
+    try
+      Files.createDirectories(request.analysis)
+      Files.createDirectories(request.classes)
+      val setup = MiniSetup.of(
+        sbt.internal.inc.CompileOutput(request.classes),
+        MiniOptions.of(Array.empty[FileHash], Array.empty[String], Array.empty[String]),
+        request.toolchain.version.value,
+        AnalysisFile.order,
+        emptyStoreApis,
+        Array.empty[T2[String, String]],
+      )
+      FileAnalysisStore
+        .binary(request.analysis.resolve(AnalysisFile.name).toFile)
+        .set(xsbti.compile.AnalysisContents.create(Analysis.empty, setup))
+      Right(())
+    catch case NonFatal(_) => Left(fault)
 
   private def keyed(key: Sha256): IO[CompileError, Digest] =
     Digest.from(key.value) match
@@ -128,13 +156,13 @@ object CompileReplay:
           ZIO.fromEither(finish(id, key, request))
 
   private def archive(request: CompileRequest): Either[CompileError, Chunk[Byte]] =
-    val zip = request.analysis.resolve(AnalysisName)
+    val zip = request.analysis.resolve(AnalysisFile.name)
     try
       if !Files.isRegularFile(zip) then Left(CompileError.Io(IoFailure(zip, IoFault.Read)))
       else
         filesOf(request.classes).flatMap: paths =>
           val rows =
-            (s"a/$AnalysisName", Files.readAllBytes(zip)) :: paths.map: path =>
+            (s"a/${AnalysisFile.name}", Files.readAllBytes(zip)) :: paths.map: path =>
               val relative = request.classes.toAbsolutePath.normalize
                 .relativize(path.toAbsolutePath.normalize)
                 .iterator
@@ -222,7 +250,7 @@ object CompileReplay:
     catch case _: IOException => Left(ArchiveFault.Truncated)
 
   private def classify(path: String, body: Array[Byte]): Either[ArchiveFault, StoredKind] =
-    if path == s"a/$AnalysisName" then Right(StoredKind.Analysis(body))
+    if path == s"a/${AnalysisFile.name}" then Right(StoredKind.Analysis(body))
     else if path.startsWith("c/") && safe(path.drop(2)) then Right(StoredKind.Classes(path.drop(2), body))
     else if path.startsWith("c/") then Left(ArchiveFault.Path)
     else Left(ArchiveFault.Prefix)
@@ -234,7 +262,7 @@ object CompileReplay:
   private def install(request: CompileRequest, decoded: Decoded): Either[CompileError, Unit] =
     clear(request.analysis).flatMap: _ =>
       clear(request.classes).flatMap: _ =>
-        writeFile(request.analysis.resolve(AnalysisName), decoded.analysis).flatMap: _ =>
+        writeFile(request.analysis.resolve(AnalysisFile.name), decoded.analysis).flatMap: _ =>
           decoded.classes.foldLeft[Either[CompileError, Unit]](Right(())):
             case (Left(error), _)             => Left(error)
             case (Right(_), (relative, body)) =>
@@ -269,7 +297,7 @@ object CompileReplay:
       dir: Path,
       id: Digest,
   ): Either[CompileError, sbt.internal.inc.Analysis] =
-    val zip = dir.resolve(AnalysisName)
+    val zip = dir.resolve(AnalysisFile.name)
     try
       FileAnalysisStore.binary(zip.toFile).get().toScala match
         case Some(contents) =>

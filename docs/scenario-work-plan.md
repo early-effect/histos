@@ -34,7 +34,7 @@ The bench stays in [cache-work-plan.md](cache-work-plan.md). It runs sbt and zip
 
 [JvmCompile.hashSources](../engine/src/histos/zinc/JvmCompile.scala) mixes each source's absolute path into the source row of the compile key. Two checkouts of the same bytes miss. The same checkout, wiped and compiled again, hits, because the paths did not change.
 
-A second checkout sharing a compile hit is the want. It is not the behavior. The checklist item below is the change, and it is a product change: a file with the same repo-relative path and the same bytes becomes the same input, wherever the checkout sits. Do that item on its own, with the scenario spec rewritten from a miss to a hit. Do not slip it into another cache change.
+A second checkout sharing a compile hit is the want. It is not the behavior. The change is **Repo-relative sources** in [test-overhaul.md](test-overhaul.md). It is a product change: a file with the same repo-relative path and the same bytes becomes the same input, wherever the checkout sits. Do that item on its own, with the scenario spec rewritten from a miss to a hit. Do not slip it into another cache change. Until that item, the absolute path is still what the source row hashes.
 
 ## Checklist
 
@@ -42,9 +42,7 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 - [x] **Scenario.** `Scenario.open` is one store and a compiler-start count. `checkout` is a work tree. `write` puts a file in it. `compile` and `test` run that checkout against the scenario store. Two checkouts of the same bytes miss, because the source row still includes the absolute path, and the wiped checkout restores without a third compiler start. A quick hit stays in that checkout. Proof: `./histos testOnly --module engine 'histos.ScenarioSpec'` (2 passed).
 
-- [ ] **Stamp as a scenario.** The upstream comment and the new public method from [ModuleTestQuickSpec](../engine/test/ModuleTestSpec.scala) run through `Checkout.test`. The quick spec stays the proof until that move, then the scenario spec is the proof. A second checkout of the same test is not cached.
-
-- [ ] **Repo-relative sources.** The source row hashes the path relative to the checkout, then the bytes. Two checkouts of the same tree share a compile hit and the second does not start the compiler. A wiped checkout of either one still restores. Proof: `histos.ScenarioSpec`, with the miss assertion replaced by the hit.
+**Stamp as a scenario** and **Repo-relative sources** moved to [test-overhaul.md](test-overhaul.md). They are the last two product items there. Do not do them from this file.
 
 ## Out of scope
 

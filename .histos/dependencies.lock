@@ -183,6 +183,7 @@ direct org.ow2.asm asm-tree 9.11.1 java
 direct org.bouncycastle bcpg-jdk18on 1.86 java
 direct dev.zio zio-test 2.1.27 binary
 direct dev.zio zio-test-sbt 2.1.27 binary
+direct rocks.earlyeffect slayer 0.2.0 binary
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
@@ -195,6 +196,7 @@ artifact org.ow2.asm asm-tree 9.11.1 2b15c3c1b288a9fad3bb2cd6d988ba9521554914ed1
 artifact org.bouncycastle bcpg-jdk18on 1.86 8a52ea45b2063f6d41b8ca94409f255a1f4604922f7451c18a7cfd3a3c5b85ab central
 artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
 artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
+artifact rocks.earlyeffect slayer_3 0.2.0 4b1b5f90fce92cb8c0b537a6c3099152afdd5aa079085d91100423138faabe70 central
 artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
 artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
 artifact org.scala-lang scala3-library_3 3.10.0 4daaede24ddfeea082bbed096ba0c492d99e8428632e9fd3c38f82cf7aad4b63 central
@@ -258,6 +260,7 @@ evict org.ow2.asm asm-tree 9.10.1 9.11.1
 evict org.scala-lang scala-library 2.12.20 3.10.0
 evict org.scala-lang scala-library 2.13.4 3.10.0
 evict org.scala-lang scala3-compiler_3 3.3.8 3.10.0
+evict org.scala-lang scala3-compiler_3 3.9.0 3.10.0
 evict org.scala-lang scala3-library_3 3.0.2 3.10.0
 evict org.scala-lang scala3-library_3 3.1.0 3.10.0
 evict org.scala-lang scala3-library_3 3.3.3 3.10.0
@@ -267,6 +270,7 @@ evict org.scala-lang scala3-library_3 3.3.7 3.10.0
 evict org.scala-lang scala3-library_3 3.3.8 3.10.0
 evict org.scala-lang scala3-library_3 3.8.3 3.10.0
 evict org.scala-lang scala3-library_3 3.8.4 3.10.0
+evict org.scala-lang scala3-library_3 3.9.0 3.10.0
 evict org.scala-lang.modules scala-parser-combinators_3 2.1.0 2.5.0
 evict org.scala-sbt compiler-interface 1.12.0 2.0.4
 evict org.scala-sbt io_3 1.12.1 1.12.2

@@ -111,8 +111,17 @@ object Sources:
       case None          => false
       case Some(filters) => filters.forall(filter => SourceFilter.allows(filter, version, platform))
 
-  private val layout   = Set("src", "main")
-  private val language = Set("scala", "java")
+  /** The directory `sourceBase` looks for. `main` is layout after it. Neither name is a package. */
+  private[zinc] val sourceRoot = "src"
+  private val mainName         = "main"
+  private val scalaName        = "scala"
+  private val javaName         = "java"
+  private val layout           = Set(sourceRoot, mainName)
+  private val language         = Set(scalaName, javaName)
+
+  /** A main Scala file under a module directory. The walker selects this path. */
+  private[zinc] def mainFile(moduleDir: Path, file: String): Path =
+    moduleDir.resolve(sourceRoot).resolve(mainName).resolve(scalaName).resolve(file)
 
   private def entryName(root: Path, path: Path): String =
     val parts = root.relativize(path).iterator.asScala.map(_.toString).toList

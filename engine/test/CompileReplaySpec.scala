@@ -116,13 +116,13 @@ object CompileReplaySpec extends ZIOSpecDefault:
   private def held(store: ContentStore, count: Ref[Int]) =
     ZLayer.fromZIO(ZIO.serviceWith[histos.resolve.LockedTools](_.resolve)) ++
       ZLayer.succeed(store) ++
-      ZLayer.succeed(CompilerStarts(count))
+      Compiler.counted(count)
 
   private def cells(
       root: Path,
       built: histos.ProjectGraph,
       jdk: histos.jdk.JdkRuntime,
-      env: ZLayer[histos.resolve.LockedTools, Nothing, histos.resolve.Resolve & ContentStore & CompilerStarts],
+      env: ZLayer[histos.resolve.LockedTools, Nothing, histos.resolve.Resolve & ContentStore & Compiler],
   ) =
     histos.ToolFixture
       .streamAt(root, built)(

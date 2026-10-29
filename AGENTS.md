@@ -67,4 +67,5 @@ Use ZIO Test the way the ZIO docs describe it. When a layer, a remainder, or a t
 - Tests do not call Central, GitHub, or a keyserver. Loopback stands in.
 - Read `docs/release-work-plan.md` before changing publish. Finish one checklist item and prove it before starting the next.
 - Read `docs/cache-work-plan.md` before changing cache, compile identity, link, package, `testQuick`, or the generated workflow. The same rule: one checklist item, then its proof.
-- Read `docs/scenario-work-plan.md` before a test that stands up a project, shares a cache across checkouts, or claims a skip. Finish one checklist item there and prove it. Do not add a command script. Do not shell `./histos` from a scenario. Do not check a bench box because a scenario passed.
+- Read [docs/test-overhaul.md](docs/test-overhaul.md) before changing a test, a service boundary, or the suite. That checklist comes first. Finish one item and prove it before the next.
+- Read `docs/scenario-work-plan.md` before a test that stands up a project, shares a cache across checkouts, or claims a skip. Finish one checklist item there and prove it. Do not add a command script. Do not shell `./histos` from a scenario. Do not check a bench box because a scenario passed. The open scenario items now live in `docs/test-overhaul.md`.

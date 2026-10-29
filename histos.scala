@@ -6,6 +6,7 @@ object build extends HistosBuild:
     val zio        = dep"dev.zio::zio:2.1.27"
     val zioTest    = dep"dev.zio::zio-test:2.1.27"
     val zioTestSbt = dep"dev.zio::zio-test-sbt:2.1.27"
+    val slayer     = dep"rocks.earlyeffect::slayer:0.2.0"
     val api        = module("api", Jvm)(scala3)
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
@@ -29,7 +30,7 @@ object build extends HistosBuild:
         dep"org.ow2.asm:asm-tree:9.11.1",
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
       )
-      .testDependencies(zioTest, zioTestSbt)
+      .testDependencies(zioTest, zioTestSbt, slayer)
     val app = module("app", Jvm)(scala3)
       .artifact(artifact"histos")
       .assembly(MainClass("histos.cli.Main"))

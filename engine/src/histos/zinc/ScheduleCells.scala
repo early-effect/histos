@@ -19,7 +19,6 @@ final case class CompilePlan(
     jdk: JdkRuntime,
     native: histos.native.NativeOrigin,
     repositories: histos.resolve.Repositories,
-    pool: CompilerPool,
     tools: histos.resolve.LockedTools,
 )
 

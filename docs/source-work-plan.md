@@ -32,7 +32,7 @@ engine.dependsOn(upstream("core").at(checkout"../heddle"))
 
 `upstream` is a `ProjectDef`. It is not a `ModuleDef`. This file does not set its Scala version, its platforms, or its plugins.
 
-When that directory contains `histos.scala`, that file is the build. Load it for the named module and the modules it `dependsOn`. That load uses that build's plugins and that build's lock. This build's plugin classpath stays this build's. The named module joins the graph. Its compile key is the path relative to its tree, then the bytes, once [scenario-work-plan.md](scenario-work-plan.md) lands "Repo-relative sources".
+When that directory contains `histos.scala`, that file is the build. Load it for the named module and the modules it `dependsOn`. That load uses that build's plugins and that build's lock. This build's plugin classpath stays this build's. The named module joins the graph. Its compile key is the path relative to its tree, then the bytes, once [test-overhaul.md](test-overhaul.md) lands "Repo-relative sources".
 
 When the directory has no `histos.scala`, the upstream carries an overlay: the source directory, the Scala version, and the library dependencies. The overlay is the build. `build.sbt` beside those sources is unread. An overlay on a tree that already has `histos.scala` fails at load. An overlay missing the source directory or the Scala version fails at load.
 
@@ -157,7 +157,7 @@ The Sonatype wait that goes away is the one between two Histos builds. The produ
 
 - [x] **Choices.** Closed above.
 
-- [ ] **Repo-relative sources.** Owned by [scenario-work-plan.md](scenario-work-plan.md). Checked there. The checkout compile key waits while that box is open.
+- [ ] **Repo-relative sources.** Owned by [test-overhaul.md](test-overhaul.md). Checked there. The checkout compile key waits while that box is open.
 
 - [ ] **Checkout.** `upstream(name).at(checkout)` loads the named module from that directory when `histos.scala` is present. A missing module, a Scala mismatch, a platform mismatch, a cycle, and a library or application publication that takes the edge fail at load as typed errors. An unpublished module compiles against it. Proof: the api spec for the edge, and an engine spec that compiles the pair. No git.
 

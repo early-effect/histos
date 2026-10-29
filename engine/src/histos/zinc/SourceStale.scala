@@ -54,7 +54,7 @@ object SourceStale:
     ZIO.attemptBlocking(answer(dir, sources)).orDie
 
   private def answer(dir: Path, sources: List[Path]): FileStaleness =
-    val zip = dir.resolve("inc.zip")
+    val zip = dir.resolve(AnalysisFile.name)
     if !Files.exists(zip) then FileStaleness.Initial(sources)
     else
       load(zip) match
