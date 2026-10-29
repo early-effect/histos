@@ -4,7 +4,7 @@ import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
 import histos.resolve.LockedTools
 import histos.pack.MainClass
-import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
+import histos.process.{ChildClasspath, ChildProcess, ChildRequest, Process}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -126,7 +126,7 @@ object NativeLink:
   def link(
       request: NativeLinkRequest,
       sourcesRoot: Path,
-  ): ZIO[LockedTools, NativeError, Linked] =
+  ): ZIO[LockedTools & Process, NativeError, Linked] =
     val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
       request
     for
@@ -193,7 +193,7 @@ object NativeLink:
   def linkClasspath(
       request: NativeLinkRequest,
       classpath: List[Path],
-  ): ZIO[LockedTools, NativeError, Path] =
+  ): ZIO[LockedTools & Process, NativeError, Path] =
     val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
       request
     for

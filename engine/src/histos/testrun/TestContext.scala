@@ -1,6 +1,7 @@
 package histos.testrun
 
 import histos.jdk.{JdkRuntime, Sha256}
+import histos.process.Process
 import histos.resolve.{LockedTools, ResolveError, ToolInput}
 import histos.toolchain.{RuntimeIdentity, Runtimes}
 import histos.zinc.CompiledCell
@@ -25,7 +26,7 @@ object TestContext:
       cell: CompiledCell,
       jdk: JdkRuntime,
       runtimes: Runtimes,
-  ): ZIO[LockedTools, ModuleTestError, TestContext] =
+  ): ZIO[LockedTools & Process, ModuleTestError, TestContext] =
     ZIO.serviceWithZIO[LockedTools]: view =>
       for
         compilation <- view

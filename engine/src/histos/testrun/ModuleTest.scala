@@ -1,6 +1,9 @@
 package histos.testrun
 
 import histos.jdk.JdkRuntime
+import histos.js.Linker
+import histos.native.NativeLinker
+import histos.process.Process
 import histos.resolve.LockedTools
 import histos.jdk.Sha256
 import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
@@ -478,17 +481,27 @@ object ModuleTest:
                   module,
                   module.provider.getOrElse(TestProvider.Zio),
                 ))
-            val context = if executes then TestContext.make(module, cell, jdk, runtimes)
-            else ZIO.succeed(TestContext.empty)
+            val context =
+              if executes then
+                TestContext
+                  .make(module, cell, jdk, runtimes)
+                  .provideSomeLayer[LockedTools](Process.live)
+              else ZIO.succeed(TestContext.empty)
             context
               .flatMap(value =>
                 chosen.provideSome[Resolve & ProviderInstall & LockedTools](
-                  zio.ZLayer.succeed(value)
+                  zio.ZLayer.succeed(value) ++ linkers
                 )
               )
               .map(watch(matched, _))
       case _ =>
         ZIO.fail(ModuleTestError.Absent(cell.module))
+
+  /** Live linkers for a test cell. A stubbed linker is a different test. */
+  private def linkers: zio.ZLayer[LockedTools, Nothing, Process & Linker & NativeLinker] =
+    val tools   = zio.ZLayer.service[LockedTools]
+    val process = Process.live
+    tools ++ process ++ (tools >>> Linker.live) ++ ((tools ++ process) >>> NativeLinker.live)
 
   /** A passed or failed suite is a match. `unmatched` and `no tests` are not.
     */

@@ -2,8 +2,10 @@ package histos.native
 
 import histos.ClangMajor
 
+import histos.process.{ChildEvent, Process}
+import histos.workspace.Workspace
+
 import java.io.IOException
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, InvalidPathException, Path}
 
 import scala.annotation.tailrec
@@ -128,7 +130,7 @@ end ClangMiss
 
 object ClangProbe:
   /** The clang on `PATH`, with no major check. */
-  def found(env: Map[String, String]): IO[ClangMiss, Clang] =
+  def found(env: Map[String, String]): ZIO[Process, ClangMiss, Clang] =
     binary(env, "clang").flatMap:
       case None        => ZIO.fail(ClangMiss.Absent)
       case Some(clang) =>
@@ -146,7 +148,7 @@ object ClangProbe:
                     else ZIO.unit
                 yield Clang(clang, clangpp, cc.version, cc.target)
 
-  def resolve(wanted: ClangMajor, env: Map[String, String]): IO[ClangMiss, Clang] =
+  def resolve(wanted: ClangMajor, env: Map[String, String]): ZIO[Process, ClangMiss, Clang] =
     found(env)
       .flatMap: clang =>
         if clang.version.major == wanted then ZIO.succeed(clang)
@@ -155,20 +157,28 @@ object ClangProbe:
         case ClangMiss.Absent => ClangMiss.NotOnPath(wanted)
         case other            => other
 
-  private def report(binary: Path): IO[ClangMiss, ClangReport] =
-    ZIO
-      .attemptBlockingInterrupt {
-        val process = new ProcessBuilder(binary.toString, "--version").redirectErrorStream(true).start()
-        try
-          val text = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-          val code = process.waitFor()
-          (code, text)
-        finally process.destroy()
-      }
-      .mapError(_ => ClangMiss.Unreadable(binary))
-      .flatMap:
-        case (0, text) => ZIO.fromEither(ClangReport.parse(text)).mapError(ClangMiss.Text(binary, _))
-        case (code, _) => ZIO.fail(ClangMiss.Status(binary, code))
+  private def report(binary: Path): ZIO[Process, ClangMiss, ClangReport] =
+    ZIO.scoped:
+      for
+        work   <- Workspace.work("histos-clang-version").mapError(_ => ClangMiss.Unreadable(binary))
+        events <- ZIO
+          .serviceWithZIO[Process](
+            _.command(List(binary.toString, "--version"), work, Map.empty).runCollect
+          )
+          .mapError(_ => ClangMiss.Unreadable(binary))
+        code <- ZIO
+          .fromOption(events.collect { case ChildEvent.Exited(exit) => exit }.lastOption)
+          .orElseFail(ClangMiss.Unreadable(binary))
+        text = events
+          .collect {
+            case ChildEvent.Out(line) => line
+            case ChildEvent.Err(line) => line
+          }
+          .mkString("\n")
+        parsed <-
+          if code.value == 0 then ZIO.fromEither(ClangReport.parse(text)).mapError(ClangMiss.Text(binary, _))
+          else ZIO.fail(ClangMiss.Status(binary, code.value))
+      yield parsed
 
   private def binary(env: Map[String, String], name: String): IO[ClangMiss, Option[Path]] =
     checked(scan(entries(env), name))

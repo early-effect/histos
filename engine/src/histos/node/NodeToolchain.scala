@@ -1,6 +1,7 @@
 package histos.node
 
 import histos.jdk.{Machine, Os}
+import histos.process.Process
 import histos.toolchain.{LocalOverride, LocalOverrideError, RuntimeFiles, RuntimeIdentity}
 import histos.workspace.IoFailure
 
@@ -26,7 +27,7 @@ object NodeToolchain:
   val Floor: NodeVersion =
     NodeVersion.trusted("25", NodeMajor.trusted(25))
 
-  def explain(machine: Machine): IO[NodeMiss, NodeSurvey] =
+  def explain(machine: Machine): ZIO[Process, NodeMiss, NodeSurvey] =
     resolve(machine).map(runtime => NodeSurvey(runtime.binary, runtime.version, runtime.identity))
 
   def text(survey: NodeSurvey): String =
@@ -35,7 +36,7 @@ object NodeToolchain:
   /** `node` on `PATH`, or the home in `node.local`. A missing binary or one older than [[Floor]] fails. Histos does not
     * fetch Node.
     */
-  def resolve(machine: Machine): IO[NodeMiss, NodeRuntime] =
+  def resolve(machine: Machine): ZIO[Process, NodeMiss, NodeRuntime] =
     readOverride(machine.repo)
       .mapError(NodeMiss.Unresolved(_))
       .flatMap:
@@ -52,7 +53,7 @@ object NodeToolchain:
                   case None       => ZIO.fail(NodeMiss.Absent(Floor))
               case None => ZIO.fail(NodeMiss.Absent(Floor))
 
-  private def accept(path: Path): IO[NodeMiss, NodeRuntime] =
+  private def accept(path: Path): ZIO[Process, NodeMiss, NodeRuntime] =
     for
       home <- NodeProbe.home(path).mapError(NodeMiss.Unresolved(_))
       _    <- ZIO

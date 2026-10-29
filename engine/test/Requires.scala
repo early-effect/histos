@@ -1,6 +1,7 @@
 package histos
 
 import histos.native.ClangProbe
+import histos.process.Process
 
 import java.io.File
 import java.nio.file.{Files, Path}
@@ -34,8 +35,8 @@ object Requires:
       home  <- System.property("user.home").orElseSucceed(None)
       os    <- System.property("os.name").orElseSucceed(None)
       found <- tool match
-        case Tool.AnyClang                 => ClangProbe.found(env).isSuccess
-        case Tool.Clang(major)             => ClangProbe.resolve(major, env).isSuccess
+        case Tool.AnyClang                 => ClangProbe.found(env).provideLayer(Process.live).isSuccess
+        case Tool.Clang(major)             => ClangProbe.resolve(major, env).provideLayer(Process.live).isSuccess
         case Tool.Node                     => onPath(env, "node")
         case Tool.Npm                      => onPath(env, "npm")
         case Tool.Firefox                  => firefox(env, home, os)

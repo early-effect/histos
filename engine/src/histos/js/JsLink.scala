@@ -113,6 +113,14 @@ object JsLink:
           ZIO.fail(JsLinkError.Linker(shown(ran.out.text, ran.err.text)))
     yield JsLinked(script, JsKey.of(version, selected, kind, main, digests))
 
+  /** The key [[link]] stamps: product digests, the selected linker, the module kind, and the main. */
+  private[histos] def keyOf(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, Sha256] =
+    val JsLinkRequest(version, main, classpath, _, _, kind, revision) = request
+    for
+      view    <- ZIO.service[LockedTools]
+      digests <- productsOf(classpath)
+    yield JsKey.of(version, revision.getOrElse(view.catalog.js.revision), kind, main, digests)
+
   private def productsOf(classpath: List[Path]): IO[JsLinkError, List[Sha256]] =
     ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
       ZIO.fromEither(ProductDigest.read(dir)).mapError(JsLinkError.Product(_))

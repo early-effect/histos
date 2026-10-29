@@ -2,6 +2,7 @@ package histos.preview
 
 import histos.jdk.{Machine, Toolchain}
 import histos.node.NodeToolchain
+import histos.process.Process
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp}
 import histos.toolchain.RuntimeIdentity
@@ -139,6 +140,7 @@ object QuickAnswer:
             case Platform.Js                    =>
               NodeToolchain
                 .resolve(machine)
+                .provideLayer(Process.live)
                 .either
                 .map:
                   case Left(_)     => None

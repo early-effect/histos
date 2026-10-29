@@ -1,6 +1,8 @@
 package histos.native
 
 import histos.pack.MainClass
+import histos.process.Process
+import histos.resolve.LockedTools
 import histos.testrun.{ModuleTest, ModuleTestError, TestMode, TestRun}
 import histos.toolchain.Runtimes
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile}
@@ -99,6 +101,7 @@ object NativeSpec extends ZIOSpecDefault:
           _    <- ZIO.attempt(pair(root, "17.0.0"))
           out  <- ClangProbe
             .resolve(major21, Map("PATH" -> root.toString))
+            .provideLayer(Process.live)
             .either
         yield assertTrue(
           out == Left(ClangMiss.WrongMajor(v17, major21, root.resolve("clang")))
@@ -114,12 +117,14 @@ object NativeSpec extends ZIOSpecDefault:
           }
           out <- ClangProbe
             .resolve(major21, Map("PATH" -> root.toString))
+            .provideLayer(Process.live)
             .either
         yield assertTrue(out == Left(ClangMiss.Mismatched(v21, v17)))
     ,
     test("no clang on PATH names the major to install"):
       ClangProbe
         .resolve(major21, Map("PATH" -> ""))
+        .provideLayer(Process.live)
         .either
         .map: out =>
           assertTrue(out == Left(ClangMiss.NotOnPath(major21)))
@@ -127,6 +132,7 @@ object NativeSpec extends ZIOSpecDefault:
     test("a NUL PATH entry is not a path"):
       ClangProbe
         .resolve(major21, Map("PATH" -> "\u0000"))
+        .provideLayer(Process.live)
         .either
         .map: out =>
           assertTrue(out == Left(ClangMiss.BadPath("\u0000")))
@@ -138,6 +144,7 @@ object NativeSpec extends ZIOSpecDefault:
           _    <- ZIO.attempt(script(root, "clang", "21.0.0"))
           out  <- ClangProbe
             .resolve(major21, Map("PATH" -> root.toString))
+            .provideLayer(Process.live)
             .either
         yield assertTrue(out == Left(ClangMiss.NoClangPP(root.resolve("clang")))),
   )
@@ -276,21 +283,23 @@ object NativeSpec extends ZIOSpecDefault:
             write(root, "jvm/Skip.scala", "object Skip { def n = 1 }\n")
           )
           env    <- liveEnv
-          found  <- ClangProbe.found(env)
+          found  <- ClangProbe.found(env).provideLayer(Process.live)
           jdk    <- GraphCompile.jdkHere
           main   <- ZIO.fromEither(MainClass.from("Hello"))
-          linked <- NativeLink.link(
-            NativeLinkRequest(
-              found.version.major,
-              NativeToolchain.Release,
-              env,
-              root.resolve("work"),
-              jdk,
-              main,
-              histos.ScalaVersion("3.9.0"),
-            ),
-            root,
-          )
+          linked <- NativeLink
+            .link(
+              NativeLinkRequest(
+                found.version.major,
+                NativeToolchain.Release,
+                env,
+                root.resolve("work"),
+                jdk,
+                main,
+                histos.ScalaVersion("3.9.0"),
+              ),
+              root,
+            )
+            .provideSomeLayer[LockedTools](Process.live)
           ran <- ZIO.attemptBlocking {
             val process = new ProcessBuilder(linked.binary.toString)
               .redirectErrorStream(true)
@@ -402,6 +411,7 @@ object NativeSpec extends ZIOSpecDefault:
               ),
               Nil,
             )
+            .provideSomeLayer[LockedTools](Process.live)
             .either
         yield assertTrue(
           compiled == Left(

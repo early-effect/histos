@@ -14,6 +14,7 @@ import histos.zinc.{
 import java.nio.file.Path
 import histos.workspace.Workspace
 import histos.native.{NativeClasspath, NativeOrigin, NativeToolchain}
+import histos.process.Process
 import zio.{Chunk, IO, ZIO, ZLayer}
 import zio.test.*
 
@@ -125,7 +126,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
               jdk,
               runtimes,
             )
-            .provide(ZLayer.succeed(view))
+            .provide(ZLayer.succeed(view) ++ Process.live)
             .either
         yield assertTrue(
           result == Left(

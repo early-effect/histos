@@ -2,6 +2,7 @@ package histos.node
 
 import histos.jdk.{Machine, Os}
 import histos.native.NativeOrigin
+import histos.process.Process
 import histos.toolchain.{Architecture, RuntimeIdentity}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
@@ -28,7 +29,7 @@ object NodeSpec extends ZIOSpecDefault:
           root      <- Workspace.work("histos-node-floor")
           home      <- node(root.resolve("home"), "v25.2.0")
           canonical <- ZIO.attemptBlocking(home.toRealPath().normalize)
-          found     <- NodeToolchain.resolve(onPath(root, home))
+          found     <- NodeToolchain.resolve(onPath(root, home)).provideLayer(Process.live)
           fetched   <- ZIO.attemptBlocking(
             Files.exists(root.resolve("cache").resolve("nodes"))
           )
@@ -46,7 +47,7 @@ object NodeSpec extends ZIOSpecDefault:
           root      <- Workspace.work("histos-node-old")
           home      <- node(root.resolve("home"), "v22.14.0")
           canonical <- ZIO.attemptBlocking(home.toRealPath().normalize)
-          result    <- NodeToolchain.resolve(onPath(root, home)).either
+          result    <- NodeToolchain.resolve(onPath(root, home)).provideLayer(Process.live).either
           version   <- ZIO.fromEither(NodeVersion.from("22.14.0"))
         yield assertTrue(
           result == Left(
@@ -59,7 +60,7 @@ object NodeSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root   <- Workspace.work("histos-node-absent")
-          result <- NodeToolchain.resolve(machine(root, Map.empty)).either
+          result <- NodeToolchain.resolve(machine(root, Map.empty)).provideLayer(Process.live).either
         yield assertTrue(
           result == Left(NodeMiss.Absent(NodeToolchain.Floor)),
           result.left.exists(_.message.contains("25")),
@@ -77,6 +78,7 @@ object NodeSpec extends ZIOSpecDefault:
           )
           result <- NodeToolchain
             .resolve(onPath(root, good))
+            .provideLayer(Process.live)
             .either
           version <- ZIO.fromEither(NodeVersion.from("22.14.0"))
         yield assertTrue(

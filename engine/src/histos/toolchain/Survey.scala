@@ -3,9 +3,10 @@ package histos.toolchain
 import histos.jdk.{JdkSurvey, Machine, Toolchain, ToolchainError}
 import histos.native.{Clang, ClangMiss, ClangProbe, NativeDeclaration, NativeProject}
 import histos.node.{Node, NodeMiss, NodeSurvey, NodeToolchain}
+import histos.process.Process
 import histos.{ProjectGraph, ProjectName}
 
-import zio.{IO, ZIO}
+import zio.ZIO
 
 /** What `compile` would use: the JDK, Node when the graph has Js, and clang when it has Native.
   */
@@ -36,7 +37,7 @@ enum SurveyError:
 end SurveyError
 
 object Survey:
-  def read(machine: Machine, graph: ProjectGraph): IO[SurveyError, Survey] =
+  def read(machine: Machine, graph: ProjectGraph): ZIO[Process, SurveyError, Survey] =
     Toolchain
       .explain(machine)
       .mapError(SurveyError.Jdk(_))

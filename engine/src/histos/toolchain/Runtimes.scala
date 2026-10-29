@@ -3,11 +3,10 @@ package histos.toolchain
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.node.{NodeBinary, NodeMiss, NodeToolchain, NodeRuntime}
+import histos.process.Process
 import histos.Platform
 import histos.step.{Input, InputName, InputValue}
-import zio.{Chunk, ZIO}
-
-import zio.{IO, UIO}
+import zio.{Chunk, UIO, ZIO}
 
 /** What one command links and runs with, read once from [[Machine]]: the environment children start from, the Scala
   * Native origin, and Node. Node is chosen at the first Js launch and kept for the rest of the command, so a command
@@ -16,10 +15,10 @@ import zio.{IO, UIO}
 final class Runtimes private (
     val env: Map[String, String],
     val native: NativeOrigin,
-    val nodeRuntime: IO[NodeMiss, NodeRuntime],
+    val nodeRuntime: ZIO[Process, NodeMiss, NodeRuntime],
 ):
-  def node: IO[NodeMiss, NodeBinary]                         = nodeRuntime.map(_.binary)
-  def inputs(platform: Platform): IO[NodeMiss, Chunk[Input]] = platform match
+  def node: ZIO[Process, NodeMiss, NodeBinary]                         = nodeRuntime.map(_.binary)
+  def inputs(platform: Platform): ZIO[Process, NodeMiss, Chunk[Input]] = platform match
     case Platform.Js =>
       nodeRuntime.map(runtime =>
         Chunk(

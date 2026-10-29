@@ -422,6 +422,7 @@ object Calls:
   ): IO[ServerError, Unit] =
     Survey
       .read(machine, graph)
+      .provideLayer(histos.process.Process.live)
       .foldZIO(
         error => told(say, Survey.shown(error)) *> fault(say, BuildFault.Survey(error)),
         found => told(say, Survey.text(found)) *> ok(say),

@@ -1,6 +1,6 @@
 # Test overhaul
 
-One item, then its proof. Slayer, Compiler, Process, and Machine are done. This file is the checklist.
+One item, then its proof. Slayer, Compiler, Process, Machine, and Linkers are done. This file is the checklist.
 
 ## Why
 
@@ -117,7 +117,7 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 - [x] **Machine and clock.** `Machine` is the JDK, cache, OS, and arch value. The live layer reads `zio.System` once. `Histos` durations come from `Clock`, not `nanoTime`. Proof: a miniature on `TestSystem` and `TestClock`. No `withLiveSystem` and no `withLiveClock` on that suite.
 
-- [ ] **Linkers.** `Linker` and `NativeLinker`. Live layers may spawn, and a test provides that live layer only when the linker is the service under test. Proof of the skip law: the linker is `stubbedTraced`, a comment-sized input change records no call, a body change records one. No Node, no clang. Node's probe is a function of `Process` unless that lies, in which case stop and ask.
+- [x] **Linkers.** `Linker` and `NativeLinker`. Live layers may spawn, and a test provides that live layer only when the linker is the service under test. Proof of the skip law: the linker is `stubbedTraced`, a comment-sized input change records no call, a body change records one. No Node, no clang. Node's probe is a function of `Process` unless that lies, in which case stop and ask.
 
 - [ ] **Trait audit.** `Resolve`, `Signer`, `RemoteCache`, `Loader`, `BuildCompiler`, and the HTTP cache. Foreign types stay in the live layer. Heddle stays `Client`. A signature that has to change is a break, fixed at the call site, no shim. Proof: the miniature for each trait that changed, plus `./histos test` on engine for the traits that did not. Ask Russ if a public api type has to change.
 

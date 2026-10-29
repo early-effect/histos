@@ -2,8 +2,8 @@ package histos.program
 
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
-import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest}
-import histos.native.{NativeLink, NativeLinkRequest, NativeToolchain}
+import histos.js.{JsLinkRequest, JsRun, JsRunRequest, Linker}
+import histos.native.{NativeLinkRequest, NativeLinker, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
@@ -103,6 +103,7 @@ object Program:
         .mapError(ProgramError.Lock(_))
       inputs <- run.runtimes
         .inputs(run.cell.platform)
+        .provideLayer(Process.live)
         .mapError(error => ProgramError.NoNode(run.cell.module, run.cell.version, error))
     yield (tools, selected, inputs)).flatMap: (tools, selected, inputs) =>
       val info = StepInfo(
@@ -129,12 +130,15 @@ object Program:
         ),
         Set(Need.Process),
       )
+      val toolsLayer = zio.ZLayer.succeed(tools)
       execute(
-        Step.local[Chunk[ProgramFeed]](info)(
+        Step.local[Chunk[ProgramFeed]](info):
           one(run).runCollect.provideSome[Resolve](
-            zio.ZLayer.succeed(tools) ++ Process.live
+            toolsLayer ++
+              Process.live ++
+              (toolsLayer >>> Linker.live) ++
+              ((toolsLayer ++ Process.live) >>> NativeLinker.live)
           )
-        )
       )
 
   private def execute[A](
@@ -194,7 +198,7 @@ object Program:
 
   private def one(
       run: CellRun
-  ): ZStream[Resolve & LockedTools & Process, ProgramError, ProgramFeed] =
+  ): ZStream[Resolve & LockedTools & Process & Linker & NativeLinker, ProgramError, ProgramFeed] =
     val CellRun(repo, graph, module, binary, cell, lock, jdk, runtimes) = run
     val env                                                             = runtimes.env
     val modules      = graph.projects.collect { case item: Module => item }
@@ -240,9 +244,8 @@ object Program:
                 lock,
                 repositories,
               )
-              _      <- fresh(linkDir)
-              linked <- JsLink
-                .link(
+              linked <- Linker
+                .reuse(
                   JsLinkRequest(
                     cell.version,
                     binary,
@@ -310,18 +313,20 @@ object Program:
                     histos.toolchain.PlatformToolError.NativeOrigin(error),
                   )
                 )
-              program <- NativeLink
-                .linkClasspath(
-                  NativeLinkRequest(
-                    major,
-                    toolchain,
-                    env,
-                    linkDir,
-                    jdk,
-                    binary,
-                    cell.version,
-                  ),
-                  paths,
+              program <- ZIO
+                .serviceWithZIO[NativeLinker](
+                  _.linkClasspath(
+                    NativeLinkRequest(
+                      major,
+                      toolchain,
+                      env,
+                      linkDir,
+                      jdk,
+                      binary,
+                      cell.version,
+                    ),
+                    paths,
+                  )
                 )
                 .mapError(error =>
                   ProgramError.Tool(

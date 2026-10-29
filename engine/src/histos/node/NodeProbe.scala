@@ -1,6 +1,6 @@
 package histos.node
 
-import histos.process.{ChildEvent, ChildProcess}
+import histos.process.{ChildEvent, Process}
 
 import java.nio.file.{Files, Path}
 
@@ -33,7 +33,7 @@ object NodeProbe:
     else if Files.isRegularFile(windows) then Some(windows)
     else None
 
-  def home(dir: Path): IO[NodeError, NodeHome] =
+  def home(dir: Path): ZIO[Process, NodeError, NodeHome] =
     ZIO
       .attemptBlocking(launcher(dir))
       .mapError(_ =>
@@ -82,15 +82,16 @@ object NodeProbe:
                     ),
                 )
 
-  private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
+  private def versionOf(binary: Path): ZIO[Process, NodeError, NodeVersion] =
     ZIO.scoped:
       for
         work <- histos.workspace.Workspace
           .work("histos-node-version")
           .mapError(NodeError.Io(_))
-        events <- ChildProcess
-          .command(List(binary.toString, "--version"), work, Map.empty)
-          .runCollect
+        events <- ZIO
+          .serviceWithZIO[Process](
+            _.command(List(binary.toString, "--version"), work, Map.empty).runCollect
+          )
           .mapError(error => NodeError.Version(binary, NodeVersionError.Process(error)))
         code <- ZIO
           .fromOption(events.collect { case ChildEvent.Exited(code) =>

@@ -1140,6 +1140,7 @@ object Cli:
           case Right(loaded) =>
             Survey
               .read(machine, loaded.graph)
+              .provideLayer(histos.process.Process.live)
               .mapBoth(
                 err => held(Call.Toolchain, Survey.shown(err), CallResult.Fault(BuildFault.Survey(err))),
                 found => held(Call.Toolchain, Survey.text(found), CallResult.reported()),

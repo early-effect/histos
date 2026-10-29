@@ -4,11 +4,11 @@ import histos.jdk.{JdkRuntime, Sha256}
 import histos.js.{JsRun, JsRunRequest}
 
 import histos.resolve.LockedTools
-import histos.js.{JsLink, JsLinkError, JsLinkRequest, JsSuite, JsSuiteRequest, ScalaJs}
+import histos.js.{JsLinkRequest, JsSuite, JsSuiteRequest, Linker, ScalaJs}
 import histos.native.{
   NativeCompile,
-  NativeLink,
   NativeLinkRequest,
+  NativeLinker,
   NativeOrigin,
   NativeSuite,
   NativeSuiteRequest,
@@ -17,7 +17,7 @@ import histos.native.{
 import histos.node.{NodeBinary, NodeMiss, NodeToolchain}
 import histos.toolchain.Runtimes
 import histos.resolve.{DependencyLock, Repositories, Resolve}
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
+import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest, Process}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -69,7 +69,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & Process & Linker,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -109,9 +109,8 @@ private[testrun] object SuiteLaunch:
         _ =>
           for
             chosen <- node(cell, runtimes)
-            _      <- TestCompile.fresh(linkDir)
-            linked <- JsLink
-              .link(
+            linked <- Linker
+              .reuse(
                 JsLinkRequest(
                   cell.version,
                   binary,
@@ -167,7 +166,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & Process,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -179,7 +178,7 @@ private[testrun] object SuiteLaunch:
         selected: List[SuitePattern],
         linked: TestCompile.Linked,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext,
+      Resolve & ProviderInstall & LockedTools & TestContext & Process,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =
@@ -277,7 +276,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -319,18 +318,20 @@ private[testrun] object SuiteLaunch:
           for
             _         <- TestCompile.fresh(linkDir)
             toolchain <- nativeToolchain(module, cell, runtimes.native)
-            program   <- NativeLink
-              .linkClasspath(
-                NativeLinkRequest(
-                  major,
-                  toolchain,
-                  TestCompile.suiteEnv(repo, runtimes.env),
-                  linkDir,
-                  jdk,
-                  binary,
-                  histos.ScalaVersion("3.9.0"),
-                ),
-                classes :: linked.paths,
+            program   <- ZIO
+              .serviceWithZIO[NativeLinker](
+                _.linkClasspath(
+                  NativeLinkRequest(
+                    major,
+                    toolchain,
+                    TestCompile.suiteEnv(repo, runtimes.env),
+                    linkDir,
+                    jdk,
+                    binary,
+                    histos.ScalaVersion("3.9.0"),
+                  ),
+                  classes :: linked.paths,
+                )
               )
               .mapError(error =>
                 ModuleTestError.Tool(
@@ -373,7 +374,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -387,7 +388,7 @@ private[testrun] object SuiteLaunch:
         linked: TestCompile.Linked,
         major: histos.ClangMajor,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext,
+      Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =
@@ -400,18 +401,20 @@ private[testrun] object SuiteLaunch:
               _ <- TestCompile.fresh(linkDir)
               classpath = classes :: linked.paths
               toolchain <- nativeToolchain(module, cell, runtimes.native)
-              binary    <- NativeLink
-                .linkClasspath(
-                  NativeLinkRequest(
-                    major,
-                    toolchain,
-                    TestCompile.suiteEnv(repo, runtimes.env),
-                    linkDir,
-                    jdk,
-                    entry,
-                    histos.ScalaVersion("3.9.0"),
-                  ),
-                  classpath,
+              binary    <- ZIO
+                .serviceWithZIO[NativeLinker](
+                  _.linkClasspath(
+                    NativeLinkRequest(
+                      major,
+                      toolchain,
+                      TestCompile.suiteEnv(repo, runtimes.env),
+                      linkDir,
+                      jdk,
+                      entry,
+                      histos.ScalaVersion("3.9.0"),
+                    ),
+                    classpath,
+                  )
                 )
                 .mapError(error =>
                   ModuleTestError.Tool(
@@ -532,7 +535,7 @@ private[testrun] object SuiteLaunch:
   private[testrun] def node(
       cell: CompiledCell,
       runtimes: Runtimes,
-  ): IO[ModuleTestError, NodeBinary] =
+  ): ZIO[Process, ModuleTestError, NodeBinary] =
     runtimes.node.mapError(miss => ModuleTestError.NoNode(cell.module, cell.version, miss))
 
   private[testrun] def runCommand(
