@@ -34,21 +34,23 @@ object SourceWatch:
   private def one(root: Path): IO[WatchError, List[Entry]] =
     ZIO.attemptBlocking(entries(root)).mapError(_ => WatchError.Read(root))
 
-  /** Wait until a snapshot differs, and until a burst of writes has settled. The paths are the ones that differ from
-    * the snapshot taken at the start.
-    */
+  /** Wait until a snapshot differs from one taken now, and until a burst of writes has settled. */
   def changed(roots: List[Path]): IO[WatchError, List[Path]] =
-    take(roots).flatMap { start =>
-      def poll(seen: Snapshot): IO[WatchError, Snapshot] =
-        ZIO.sleep(Poll) *> take(roots).flatMap { now =>
-          if now == seen then poll(seen) else settle(now)
-        }
-      def settle(seen: Snapshot): IO[WatchError, Snapshot] =
-        ZIO.sleep(Settle) *> take(roots).flatMap { now =>
-          if now == seen then ZIO.succeed(now) else settle(now)
-        }
-      poll(start).map(done => woke(start, done))
-    }
+    take(roots).flatMap(since(roots, _))
+
+  /** Wait until a snapshot differs from `start`, and until a burst of writes has settled. The paths are the ones that
+    * differ from `start`.
+    */
+  def since(roots: List[Path], start: Snapshot): IO[WatchError, List[Path]] =
+    def poll(seen: Snapshot): IO[WatchError, Snapshot] =
+      ZIO.sleep(Poll) *> take(roots).flatMap { now =>
+        if now == seen then poll(seen) else settle(now)
+      }
+    def settle(seen: Snapshot): IO[WatchError, Snapshot] =
+      ZIO.sleep(Settle) *> take(roots).flatMap { now =>
+        if now == seen then ZIO.succeed(now) else settle(now)
+      }
+    poll(start).map(done => woke(start, done))
 
   private def woke(before: Snapshot, after: Snapshot): List[Path] =
     val previous = before.entries.map(entry => entry.path -> entry).toMap

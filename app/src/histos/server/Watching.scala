@@ -24,19 +24,26 @@ object Watching:
         running.set(true) *>
           run *>
           running.set(false) *>
-          Calls.tell(say, "watching") *>
           roots.flatMap { paths =>
+            // The baseline is taken before the line. A save during the walk is not the change that woke the watch.
             SourceWatch
-              .changed(paths)
+              .take(paths)
               .foldZIO(
                 error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
-                woke =>
-                  ZIO.foreachDiscard(woke)(path =>
-                    Calls.tell(
-                      say,
-                      Lines.watching(Lines.relative(repo, path)),
-                    )
-                  ) *> loop,
+                start =>
+                  Calls.tell(say, "watching") *>
+                    SourceWatch
+                      .since(paths, start)
+                      .foldZIO(
+                        error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
+                        woke =>
+                          ZIO.foreachDiscard(woke)(path =>
+                            Calls.tell(
+                              say,
+                              Lines.watching(Lines.relative(repo, path)),
+                            )
+                          ) *> loop,
+                      ),
               )
           }
       loop.foldCauseZIO(

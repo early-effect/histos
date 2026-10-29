@@ -1461,7 +1461,6 @@ object CliSpec extends ZIOSpecDefault:
             .provideSome[Scope](layers(dir))
             .forkScoped
           _ <- printed(line => line == "watching")
-          _ <- ZIO.sleep(1.second)
           _ <- ZIO
             .attempt(
               Files.writeString(
