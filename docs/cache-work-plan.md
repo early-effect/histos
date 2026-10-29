@@ -150,7 +150,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 These items are the other repository. They start after the Histos items they call are checked. The Histos column of each gate is a scenario. The sbt and zipx columns, the clock, and the table stay here.
 
-- [ ] **The graph.** Create `early-effect/histos-bench` with `core`, `service`, `app`, a Scala.js module that depends on `core`, an unrelated JVM module, and a Node or Firefox test. `histos.scala` and `build.sbt` (sbt 2, zipx) name that same graph. No Mill. No Native.
+- [x] **The graph.** Create `early-effect/histos-bench` with `core`, `service`, `app`, a Scala.js module that depends on `core`, an unrelated JVM module, and a Node or Firefox test. `histos.scala` and `build.sbt` (sbt 2, zipx) name that same graph. No Mill. No Native. `core` builds JVM and JS. `web` depends on `core`, links `bench.Web`, and its test runs on Node. `idle` is the unrelated JVM module. Scala is 3.9.0, because Scala.js 1.22 publishes no 3.10 compiler. Proof: https://github.com/early-effect/histos-bench (`bee580a`). `./histos compile`, `./histos test`, and `./histos run web` passed. `sbt testFull` and `web/fastLinkJS` passed.
 
 - [ ] **Compose.** bazel-remote on localhost. Histos and the sbt remote column both use that URI. The image is pinned.
 
