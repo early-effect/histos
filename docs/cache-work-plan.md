@@ -116,9 +116,9 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **Link and package key.** [JsKey](../engine/src/histos/js/JsKey.scala) mixes the product digest of each classes directory on the link classpath. [PackageKey](../engine/src/histos/pack/PackageKey.scala) mixes the product digest of each packed classes directory. A comment keeps the product digest, so it keeps these keys. A method body moves the product digest, so it moves them. The specs call the key functions. The linker and the publisher still run. Native is out of this item. Proof: `./histos testOnly --module engine 'histos.js.JsLinkSpec'`, `./histos testOnly --module engine 'histos.pack.JarSpec'`, and `./histos test engine`.
 
-- [x] **Replay after clean.** The local CAS stores `inc.zip` and the class files under the compile key. `./histos clean` deletes the product tree and leaves the CAS. The next compile of that key restores both and does not start the compiler. The spec counts compiler starts. `cleanFull` and `cache clean` keep their current jobs. Proof: `./histos testOnly --module engine 'histos.zinc.CompileReplaySpec'` and `./histos test engine`.
+- [x] **Replay after clean.** The local CAS stores `inc.zip` and the class files under the compile key. `./histos clean` deletes the product tree and leaves the CAS. The next compile of that key restores both and does not start the compiler. The spec counts compiler starts. `cleanFull` and `cache clean` keep their current jobs. Proof: `./histos testOnly --module engine 'histos.zinc.CompileLawSpec'` and `./histos test engine`.
 
-- [x] **Miss names the input.** Store the previous input map for the action id. On a miss, print the names whose values changed. With no stored map, print `no prior key`. The spec asserts that line. Proof: `./histos testOnly --module engine 'histos.zinc.CompileMissSpec'`, `./histos test engine`, and `./histos test app`.
+- [x] **Miss names the input.** Store the previous input map for the action id. On a miss, print the names whose values changed. With no stored map, print `no prior key`. The spec asserts that line. Proof: `./histos testOnly --module engine 'histos.zinc.CompileLawSpec'`, `./histos test engine`, and `./histos test app`.
 
 ### Remote
 
