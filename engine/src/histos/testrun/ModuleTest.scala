@@ -361,61 +361,62 @@ object ModuleTest:
               case (Nil, None, Some(provider)) =>
                 ZIO.fail(ModuleTestError.MissingProvider(cell.module, provider))
               case (_, Some(main), None) =>
-                if !SuitePattern.allows(patterns, main.value) then ZIO.succeed(ZStream.empty)
-                else
-                  val note = (facts: histos.zinc.CompileFacts) =>
-                    onTestCompile(
-                      cell.module,
-                      cell.version,
-                      cell.platform,
-                      facts,
-                    )
-                  cell.platform match
-                    case Platform.Jvm =>
-                      SuiteLaunch.execute(
-                        repo,
-                        modules,
-                        module,
-                        cell,
-                        sources,
-                        main,
-                        jdk,
-                        runtimes,
-                        lock,
-                        repositories,
-                        mode,
-                        note,
+                SuiteLaunch.pick(List(main.value), patterns) match
+                  case SuiteLaunch.Picked.NoneMatched => ZIO.succeed(ZStream.empty)
+                  case SuiteLaunch.Picked.Launch(_)   =>
+                    val note = (facts: histos.zinc.CompileFacts) =>
+                      onTestCompile(
+                        cell.module,
+                        cell.version,
+                        cell.platform,
+                        facts,
                       )
-                    case Platform.Js =>
-                      SuiteLaunch.runJs(
-                        repo,
-                        modules,
-                        module,
-                        cell,
-                        sources,
-                        main,
-                        jdk,
-                        runtimes,
-                        lock,
-                        repositories,
-                        mode,
-                        note,
-                      )
-                    case Platform.Native =>
-                      SuiteLaunch.runNative(
-                        repo,
-                        modules,
-                        module,
-                        cell,
-                        sources,
-                        main,
-                        jdk,
-                        runtimes,
-                        lock,
-                        repositories,
-                        mode,
-                        note,
-                      )
+                    cell.platform match
+                      case Platform.Jvm =>
+                        SuiteLaunch.execute(
+                          repo,
+                          modules,
+                          module,
+                          cell,
+                          sources,
+                          main,
+                          jdk,
+                          runtimes,
+                          lock,
+                          repositories,
+                          mode,
+                          note,
+                        )
+                      case Platform.Js =>
+                        SuiteLaunch.runJs(
+                          repo,
+                          modules,
+                          module,
+                          cell,
+                          sources,
+                          main,
+                          jdk,
+                          runtimes,
+                          lock,
+                          repositories,
+                          mode,
+                          note,
+                        )
+                      case Platform.Native =>
+                        SuiteLaunch.runNative(
+                          repo,
+                          modules,
+                          module,
+                          cell,
+                          sources,
+                          main,
+                          jdk,
+                          runtimes,
+                          lock,
+                          repositories,
+                          mode,
+                          note,
+                        )
               case (_, None, provider) =>
                 val framework = provider.getOrElse(TestProvider.Zio)
                 val note      = (facts: histos.zinc.CompileFacts) =>

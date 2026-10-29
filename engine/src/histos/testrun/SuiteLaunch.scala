@@ -17,7 +17,7 @@ import histos.native.{
 import histos.node.{NodeBinary, NodeMiss, NodeToolchain}
 import histos.toolchain.Runtimes
 import histos.resolve.{DependencyLock, Repositories, Resolve}
-import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest, Process}
+import histos.process.{ChildClasspath, ChildEvent, ChildRequest, Process}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -147,7 +147,8 @@ private[testrun] object SuiteLaunch:
                   histos.toolchain.PlatformToolError.JsRun(error),
                 )
               )
-          yield session(module.name, cell.version, None, asked, cell.platform),
+            ran <- session(module.name, cell.version, None, asked, cell.platform)
+          yield ran,
       )
     yield stream
 
@@ -213,13 +214,14 @@ private[testrun] object SuiteLaunch:
                     histos.toolchain.PlatformToolError.JsSuite(error),
                   )
                 )
-            yield session(
-              module.name,
-              cell.version,
-              Some(provider),
-              asked,
-              cell.platform,
-            )
+              ran <- session(
+                module.name,
+                cell.version,
+                Some(provider),
+                asked,
+                cell.platform,
+              )
+            yield ran
       yield stream
     for
       _ <- ZIO.unless(satisfied(module, provider))(
@@ -245,21 +247,20 @@ private[testrun] object SuiteLaunch:
           .flatMap:
             case SuiteNames.Found.Unseen        => launch(patterns, linked)
             case SuiteNames.Found.Suites(names) =>
-              val wanted =
-                names.filter(name => SuitePattern.allows(patterns, name))
-              if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
-              else if wanted.isEmpty then launch(patterns, linked)
-              else
-                remember(
-                  repo,
-                  cell,
-                  wanted,
-                  classes :: linked.paths,
-                  stamp,
-                  mode,
-                  module.testStore,
-                  dirty => launch(exact(dirty), linked),
-                )
+              pick(names, patterns) match
+                case Picked.NoneMatched    => ZIO.succeed(ZStream.empty)
+                case Picked.Launch(Nil)    => launch(patterns, linked)
+                case Picked.Launch(wanted) =>
+                  remember(
+                    repo,
+                    cell,
+                    wanted,
+                    classes :: linked.paths,
+                    stamp,
+                    mode,
+                    module.testStore,
+                    dirty => launch(exact(dirty), linked),
+                  )
     yield stream
 
   private[testrun] def runNative(
@@ -276,7 +277,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker,
+    Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker & Process,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -348,14 +349,15 @@ private[testrun] object SuiteLaunch:
                 cell.platform,
               )
             )
-          yield runCommand(
-            module.name,
-            cell.version,
-            cell.platform,
-            List(program.toString),
-            work,
-            TestCompile.suiteEnv(repo, runtimes.env),
-          ),
+            ran <- runCommand(
+              module.name,
+              cell.version,
+              cell.platform,
+              List(program.toString),
+              work,
+              TestCompile.suiteEnv(repo, runtimes.env),
+            )
+          yield ran,
       )
     yield stream
 
@@ -374,7 +376,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker,
+    Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker & Process,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -388,7 +390,7 @@ private[testrun] object SuiteLaunch:
         linked: TestCompile.Linked,
         major: histos.ClangMajor,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker,
+      Resolve & ProviderInstall & LockedTools & TestContext & NativeLinker & Process,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =
@@ -443,13 +445,14 @@ private[testrun] object SuiteLaunch:
                     histos.toolchain.PlatformToolError.NativeSuite(error),
                   )
                 )
-            yield session(
-              module.name,
-              cell.version,
-              Some(provider),
-              asked,
-              cell.platform,
-            )
+              ran <- session(
+                module.name,
+                cell.version,
+                Some(provider),
+                asked,
+                cell.platform,
+              )
+            yield ran
       yield stream
     for
       _ <- ZIO.unless(satisfied(module, provider))(
@@ -476,21 +479,20 @@ private[testrun] object SuiteLaunch:
           .flatMap:
             case SuiteNames.Found.Unseen        => launch(patterns, linked, major)
             case SuiteNames.Found.Suites(names) =>
-              val wanted =
-                names.filter(name => SuitePattern.allows(patterns, name))
-              if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
-              else if wanted.isEmpty then launch(patterns, linked, major)
-              else
-                remember(
-                  repo,
-                  cell,
-                  wanted,
-                  classes :: linked.paths,
-                  stamp,
-                  mode,
-                  module.testStore,
-                  dirty => launch(exact(dirty), linked, major),
-                )
+              pick(names, patterns) match
+                case Picked.NoneMatched    => ZIO.succeed(ZStream.empty)
+                case Picked.Launch(Nil)    => launch(patterns, linked, major)
+                case Picked.Launch(wanted) =>
+                  remember(
+                    repo,
+                    cell,
+                    wanted,
+                    classes :: linked.paths,
+                    stamp,
+                    mode,
+                    module.testStore,
+                    dirty => launch(exact(dirty), linked, major),
+                  )
     yield stream
 
   private[testrun] def nativeMajor(
@@ -545,12 +547,13 @@ private[testrun] object SuiteLaunch:
       argv: List[String],
       work: Path,
       env: Map[String, String],
-  ): ZStream[Any, ModuleTestError, TestFeed] =
-    ZStream.succeed(TestFeed.Begin(module, version, platform)) ++
-      ChildProcess
-        .command(argv, work, env)
-        .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapZIO(hear(module, version, platform, None, _))
+  ): ZIO[Process, Nothing, ZStream[Any, ModuleTestError, TestFeed]] =
+    ZIO.serviceWith[Process]: process =>
+      ZStream.succeed(TestFeed.Begin(module, version, platform)) ++
+        process
+          .command(argv, work, env)
+          .mapError(error => ModuleTestError.Process(module, version, error))
+          .mapZIO(hear(module, version, platform, None, _))
 
   private[testrun] def finished(
       cell: CompiledCell,
@@ -723,6 +726,15 @@ private[testrun] object SuiteLaunch:
           case _ => ZIO.unit
       case _ => ZIO.unit
 
+  private[testrun] enum Picked:
+    case NoneMatched
+    case Launch(names: List[String])
+
+  private[testrun] def pick(names: List[String], patterns: List[SuitePattern]): Picked =
+    val wanted = names.filter(name => SuitePattern.allows(patterns, name))
+    if patterns.nonEmpty && wanted.isEmpty then Picked.NoneMatched
+    else Picked.Launch(wanted)
+
   private[testrun] def exact(names: List[String]): List[SuitePattern] =
     names.flatMap(name => SuitePattern.from(name).toOption)
 
@@ -740,7 +752,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & Process,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -781,7 +793,7 @@ private[testrun] object SuiteLaunch:
               TestCompile
                 .testWork(repo, module.name, cell.version, cell.platform)
             )
-            .map { work =>
+            .flatMap { work =>
               session(
                 module.name,
                 cell.version,
@@ -816,7 +828,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & Process,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -826,7 +838,7 @@ private[testrun] object SuiteLaunch:
         selected: List[SuitePattern],
         linked: TestCompile.Linked,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext,
+      Resolve & ProviderInstall & LockedTools & TestContext & Process,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =
@@ -843,7 +855,7 @@ private[testrun] object SuiteLaunch:
                 TestCompile
                   .testWork(repo, module.name, cell.version, cell.platform)
               )
-              .map: work =>
+              .flatMap: work =>
                 val note =
                   ProviderNote(provider.framework.value, classes, selected)
                 // The runner is the program, so it precedes the test classes. Those classes can contain another subprocess.Provider.
@@ -889,21 +901,20 @@ private[testrun] object SuiteLaunch:
           ran <- found match
             case SuiteNames.Found.Unseen        => launch(patterns, linked)
             case SuiteNames.Found.Suites(names) =>
-              val wanted =
-                names.filter(name => SuitePattern.allows(patterns, name))
-              if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
-              else if wanted.isEmpty then launch(patterns, linked)
-              else
-                remember(
-                  repo,
-                  cell,
-                  wanted,
-                  classes :: linked.paths,
-                  stamp,
-                  mode,
-                  module.testStore,
-                  dirty => launch(exact(dirty), linked),
-                )
+              pick(names, patterns) match
+                case Picked.NoneMatched    => ZIO.succeed(ZStream.empty)
+                case Picked.Launch(Nil)    => launch(patterns, linked)
+                case Picked.Launch(wanted) =>
+                  remember(
+                    repo,
+                    cell,
+                    wanted,
+                    classes :: linked.paths,
+                    stamp,
+                    mode,
+                    module.testStore,
+                    dirty => launch(exact(dirty), linked),
+                  )
         yield ran
     yield stream
 
@@ -934,12 +945,13 @@ private[testrun] object SuiteLaunch:
       provider: Option[TestProvider],
       asked: ChildRequest,
       shown: Platform,
-  ): ZStream[Any, ModuleTestError, TestFeed] =
-    ZStream.succeed(TestFeed.Begin(module, version, shown)) ++
-      ChildProcess
-        .events(asked)
-        .mapError(error => ModuleTestError.Process(module, version, error))
-        .mapZIO(hear(module, version, shown, provider, _))
+  ): ZIO[Process, Nothing, ZStream[Any, ModuleTestError, TestFeed]] =
+    ZIO.serviceWith[Process]: process =>
+      ZStream.succeed(TestFeed.Begin(module, version, shown)) ++
+        process
+          .events(asked)
+          .mapError(error => ModuleTestError.Process(module, version, error))
+          .mapZIO(hear(module, version, shown, provider, _))
 
   private[testrun] def hear(
       module: ProjectName,
