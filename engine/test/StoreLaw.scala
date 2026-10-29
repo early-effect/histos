@@ -11,13 +11,15 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompiledCell, GraphCompile}
 import histos.{BuildError, Jvm, Module, Platform, ProjectGraph, ProjectName, Projects, ScalaVersion, TestStore, module}
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
+import java.nio.file.attribute.PosixFilePermissions
 
 import org.objectweb.asm.{ClassWriter, Opcodes}
 
 import slayer.{Stubbed, any, stub, stubbedTraced}
 
-import zio.{Ref, Scope, ZIO}
+import zio.{Chunk, Ref, Scope, ZIO}
 import zio.stream.ZStream
 import zio.test.{assertTrue, suite, test}
 
@@ -32,7 +34,7 @@ object StoreLaw:
     suite("load")(defaultStore, needed)
 
   def runner =
-    suite("runner")(off, local, remote)
+    suite("runner")(off, local, remote, mismatch, undigested, unreadable)
 
   private def defaultStore =
     test("Off is the default"):
@@ -95,6 +97,69 @@ object StoreLaw:
           seen.called == List("events", "events"),
           seen.held,
         )
+
+  private def mismatch =
+    test("a digest mismatch runs the suite"):
+      BuildCompiler.version.flatMap: version =>
+        prepared(version, TestStore.Local).flatMap: ready =>
+          checkout.flatMap: (repo, classes) =>
+            coverOf(repo, classes, ready).flatMap: digest =>
+              val other = Sha256.of(Chunk.fromArray("mismatch".getBytes(StandardCharsets.UTF_8)))
+              traced:
+                for
+                  _      <- QuickRecord.save(repo, ready.module.name, ready.version, Platform.Jvm, suiteName, other)
+                  exit   <- Ref.make(0)
+                  _      <- spoken(exit)
+                  ran    <- run(repo, classes, ready)
+                  called <- calls
+                yield assertTrue(
+                  digest.exists(_ != other),
+                  ran.toList == launched(ready),
+                  called == List("events"),
+                )
+
+  private def undigested =
+    test("a suite with no digest runs"):
+      BuildCompiler.version.flatMap: version =>
+        prepared(version, TestStore.Local).flatMap: ready =>
+          Workspace
+            .work("histos-store-law-classes")
+            .flatMap: classes =>
+              Workspace
+                .createDirectories(classes)
+                .flatMap: _ =>
+                  Workspace
+                    .work("histos-store-law")
+                    .flatMap: repo =>
+                      traced:
+                        for
+                          exit   <- Ref.make(0)
+                          _      <- spoken(exit)
+                          ran    <- run(repo, classes, ready)
+                          called <- calls
+                        yield assertTrue(ran.toList == launched(ready), called == List("events"))
+
+  private def unreadable =
+    test("an unreadable quick record fails the run"):
+      BuildCompiler.version.flatMap: version =>
+        prepared(version, TestStore.Local).flatMap: ready =>
+          checkout.flatMap: (repo, classes) =>
+            val path = QuickRecord.file(repo, ready.module.name, ready.version, Platform.Jvm, suiteName)
+            val kept = Sha256.of(Chunk.fromArray("kept".getBytes(StandardCharsets.UTF_8)))
+            QuickRecord
+              .save(repo, ready.module.name, ready.version, Platform.Jvm, suiteName, kept)
+              .flatMap: _ =>
+                deny(path).flatMap: _ =>
+                  traced:
+                    for
+                      exit   <- Ref.make(0)
+                      _      <- spoken(exit)
+                      ran    <- run(repo, classes, ready).either
+                      called <- calls
+                    yield assertTrue(
+                      ran == Left(ModuleTestError.Record(QuickError.Read(IoFailure(path, IoFault.Read)))),
+                      called.isEmpty,
+                    )
 
   private def twice(store: TestStore) =
     BuildCompiler.version.flatMap: version =>
@@ -202,6 +267,19 @@ object StoreLaw:
       classes <- Workspace.work("histos-store-law-classes")
       _       <- plant(classes)
     yield (repo, classes)
+
+  private def deny(path: Path): ZIO[Scope, IoFailure, Unit] =
+    ZIO
+      .acquireRelease(
+        ZIO
+          .attemptBlocking(Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("---------")))
+          .mapError(_ => IoFailure(path, IoFault.Write))
+      )(_ =>
+        ZIO
+          .attemptBlocking(Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------")))
+          .ignore
+      )
+      .unit
 
   private def plant(classes: Path): ZIO[Any, IoFailure, Unit] =
     val path = classes.resolve("keep").resolve("Suite.class")

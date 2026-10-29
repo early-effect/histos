@@ -3,7 +3,7 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.native.NativeOrigin
 import histos.resolve.{DependencyLock, LockedCell, LockedTools, Resolve, ResolveError}
-import histos.testrun.{ModuleTest, ModuleTestError, StoreLaw, TestCompile, TestMode, TestRun}
+import histos.testrun.{ModuleTest, ModuleTestError, StampLaw, StoreLaw, TestCompile, TestMode, TestRun}
 import histos.toolchain.BuildCompiler
 import histos.workspace.Workspace
 import histos.TestMachine
@@ -28,8 +28,8 @@ import slayer.{Stubbed, any, stub, stubbedTraced}
 import zio.{NonEmptyChunk, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-/** Layout, refusals, and the test store. The compiler is a stub. The runner's process is a stub. A call on a refusal is
-  * a failed law.
+/** Layout, refusals, the test store, and the suite stamp. The compiler is a stub. The runner's process is a stub. A
+  * call on a refusal is a failed law.
   */
 object BoundaryLawSpec extends histos.SuiteClock:
   private val app    = ProjectName("app")
@@ -52,6 +52,10 @@ object BoundaryLawSpec extends histos.SuiteClock:
       suite("store")(
         StoreLaw.load,
         StoreLaw.runner.provideSomeLayerShared[TestEnvironment & Scope](running),
+      ),
+      suite("stamp")(
+        StampLaw.laws,
+        StampLaw.gaps.provideSomeLayerShared[TestEnvironment & Scope](running),
       ),
       suiteFiles,
       repoTest,
