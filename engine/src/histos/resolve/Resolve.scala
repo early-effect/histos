@@ -54,12 +54,7 @@ object Resolve:
   /** Coursier's cache. A file already there is used. A missing coordinate is fetched into that cache.
     */
   def coursier: ULayer[Resolve] =
-    ZLayer.succeed(
-      CoursierResolve(
-        _root_.coursier.cache.CacheDefaults.location.toPath,
-        CacheMode.Retain,
-      )
-    )
+    ZLayer.succeed(CoursierResolve.retainedDefault)
 
   def lockPath(repo: Path): Path =
     repo.resolve(".histos").resolve("dependencies.lock")

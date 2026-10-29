@@ -1,7 +1,5 @@
 package histos.load
 
-import dotty.tools.dotc.Driver
-import dotty.tools.dotc.reporting.StoreReporter
 import histos.cache.ContentStore
 import histos.jdk.Sha256
 import histos.plugin.*
@@ -1283,30 +1281,26 @@ object LoadSpec extends histos.SuiteClock:
       classpath: List[Path],
       out: Path,
   ): IO[LoadError, Unit] =
-    ZIO
-      .attempt {
-        val reporter = new StoreReporter(null)
-        new Driver().process(
-          Array(
-            "-classpath",
-            classpath.map(_.toString).mkString(java.io.File.pathSeparator),
-            "-d",
-            out.toString,
-            "-color:never",
-            source.toString,
-          ),
-          reporter,
+    histos.zinc.Dotty
+      .process(
+        List(
+          "-classpath",
+          classpath.map(_.toString).mkString(java.io.File.pathSeparator),
+          "-d",
+          out.toString,
+          "-color:never",
+          source.toString,
         )
-        if reporter.hasErrors then Left(reporter.allErrors.map(_.message).mkString("\n"))
-        else Right(())
-      }
+      )
       .mapError(_ => LoadError.Io(IoFailure(Path.of("histos.scala"), IoFault.Write)))
       .flatMap:
-        case Left(text) =>
+        case histos.zinc.DottyReport.Failed(problems) =>
           ZIO.fail(
-            LoadError.CompileFailed(List(CompilerMessage.fromCompiler(text)))
+            LoadError.CompileFailed(
+              List(CompilerMessage.fromCompiler(problems.map(_.message).mkString("\n")))
+            )
           )
-        case Right(_) => ZIO.unit
+        case histos.zinc.DottyReport.Passed => ZIO.unit
 
   private def textJar(
       path: Path,

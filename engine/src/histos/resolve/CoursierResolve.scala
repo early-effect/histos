@@ -16,6 +16,10 @@ private[resolve] enum CacheMode:
   case Retain
   case Offline
 
+private[resolve] object CoursierResolve:
+  def retainedDefault: CoursierResolve =
+    CoursierResolve(coursier.cache.CacheDefaults.location.toPath, CacheMode.Retain)
+
 private[resolve] final class CoursierResolve(
     cache: Path,
     mode: CacheMode = CacheMode.Revalidate,

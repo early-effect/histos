@@ -5,7 +5,7 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.jdk.Sha256
 import histos.plugin.{ApiDigest, PluginIo, PluginLoadError}
 import histos.schedule.Digest
-import histos.zinc.Dotty
+import histos.zinc.{Dotty, DottyReport}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, LinkOption, Path, StandardCopyOption}
@@ -248,15 +248,14 @@ private[load] object PluginCompile:
             ) ++ sources.map(_.toString)
           )
           .mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write)))
-          .flatMap: reporter =>
-            if reporter.hasErrors then
+          .flatMap:
+            case DottyReport.Failed(problems) =>
               ZIO.fail(
                 LoadError.CompileFailed(
-                  reporter.allErrors
-                    .map(error => CompilerMessage.fromCompiler(error.message))
+                  problems.map(problem => CompilerMessage.fromCompiler(problem.message))
                 )
               )
-            else ZIO.unit
+            case DottyReport.Passed => ZIO.unit
 
   private def copyResources(from: Path, to: Path): IO[LoadError, Unit] =
     ZIO

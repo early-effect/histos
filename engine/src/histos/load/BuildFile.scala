@@ -1,6 +1,5 @@
 package histos.load
 
-import dotty.tools.dotc.reporting.StoreReporter
 import histos.cache.{CacheProject, ContentStore}
 import histos.jdk.Sha256
 import histos.plugin.{
@@ -24,7 +23,7 @@ import histos.resolve.{
   ResolvedArtifact,
 }
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.{CompileProblem, CompileSeverity, Dotty, PositionBase}
+import histos.zinc.{CompileProblem, Dotty, DottyReport}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -55,20 +54,20 @@ private[load] object BuildFile:
       classpath: List[Path],
       out: Path,
   ): IO[LoadError, Unit] =
-    drive(source, classpath, out).flatMap: reporter =>
-      if reporter.hasErrors then
+    drive(source, classpath, out).flatMap:
+      case DottyReport.Failed(problems) =>
         ZIO.fail(
           LoadError.CompileFailed(
-            reporter.allErrors.map(error => CompilerMessage.fromCompiler(rewrite(error.message, source)))
+            problems.map(problem => CompilerMessage.fromCompiler(rewrite(problem.message, source)))
           )
         )
-      else ZIO.unit
+      case DottyReport.Passed => ZIO.unit
 
   private[load] def drive(
       source: Path,
       classpath: List[Path],
       out: Path,
-  ): IO[LoadError, StoreReporter] =
+  ): IO[LoadError, DottyReport] =
     Dotty
       .process(
         List(
@@ -83,33 +82,18 @@ private[load] object BuildFile:
       .mapError(_ => LoadError.Io(IoFailure(out, IoFault.Write)))
 
   private[load] def notesOf(
-      reporter: StoreReporter,
+      report: DottyReport,
       display: Path,
       temp: Path,
   ): BuildNotes =
-    val problems = reporter.allErrors.map(error => noted(error, display, temp))
-    BuildNotes(reporter.hasErrors, problems)
+    report match
+      case DottyReport.Failed(problems) => BuildNotes(true, problems.map(noted(_, display, temp)))
+      case DottyReport.Passed           => BuildNotes(false, Nil)
 
-  private[load] def noted(
-      diagnostic: dotty.tools.dotc.reporting.Diagnostic,
-      display: Path,
-      temp: Path,
-  ): CompileProblem =
-    val pos      = diagnostic.pos
-    val severity = diagnostic.level match
-      case 2 => CompileSeverity.Error
-      case 1 => CompileSeverity.Warn
-      case _ => CompileSeverity.Info
-    val placed = pos.exists
-    CompileProblem(
-      rewrite(diagnostic.message, temp),
-      if placed then Some(display) else None,
-      severity,
-      if placed then Some(pos.startLine) else None,
-      if placed then Some(pos.startColumn) else None,
-      if placed then Some(pos.endLine) else None,
-      if placed then Some(pos.endColumn) else None,
-      PositionBase.Dotty,
+  private[load] def noted(problem: CompileProblem, display: Path, temp: Path): CompileProblem =
+    problem.copy(
+      message = rewrite(problem.message, temp),
+      path = problem.startLine.map(_ => display),
     )
 
   private[load] def rewrite(message: String, temp: Path): String =
