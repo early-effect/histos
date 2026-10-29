@@ -172,7 +172,7 @@ object SnapshotSpec extends ZIOSpecDefault:
           ZIO.succeed(Response.text("s3cret-body", Status.InternalServerError))
         })
         for
-          server <- Server.install(routes, Server.Config.default.copy(host = "127.0.0.1", port = Port(0)))
+          server <- listen(routes)
           port   <- server.port
           group = Organization("rocks.earlyeffect")
           name      <- ZIO.fromEither(ArtifactId.from("histos"))
@@ -207,6 +207,10 @@ object SnapshotSpec extends ZIOSpecDefault:
       name <- ZIO.fromEither(RepositoryUser.from(user))
     yield Publisher.snapshots(repo, RepositorySecret(name, Config.Secret(Chunk.fromArray(password.toCharArray))))
 
+  /** OriginDate sleeps on `Clock`. TestClock does not move, so the server runs on the live clock. */
+  private def listen[R](routes: Routes[R, Response]): ZIO[R & Scope, ServerError, Server] =
+    live(Server.install(routes, Server.Config.default.copy(host = "127.0.0.1", port = Port(0))))
+
   private def depot(user: String, password: String): ZIO[Scope, ServerError, (String, Ref[Map[String, Chunk[Byte]]])] =
     val expected = "Basic " + BasicCredentials.render(user, password)
     Ref.make(Map.empty[String, Chunk[Byte]]).flatMap { store =>
@@ -228,9 +232,7 @@ object SnapshotSpec extends ZIOSpecDefault:
             case _ =>
               ZIO.succeed(Response.methodNotAllowed("GET, PUT"))
       })
-      Server
-        .install(routes, Server.Config.default.copy(host = "127.0.0.1", port = Port(0)))
-        .flatMap(server => server.port.map(port => (s"http://127.0.0.1:$port/repo", store)))
+      listen(routes).flatMap(server => server.port.map(port => (s"http://127.0.0.1:$port/repo", store)))
     }
 
   def spec = publish

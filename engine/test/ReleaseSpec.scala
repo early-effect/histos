@@ -530,7 +530,7 @@ object ReleaseSpec extends ZIOSpecDefault:
     suite("release")(hold, automatic, failedBundle, missingSecrets, shaped, rehearsal, snapshotCatalog)
       .provideSomeLayerShared[zio.test.TestEnvironment & Scope](
         histos.ToolFixture.layer(Projects(module("library", Jvm)(scala3)))
-      ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(5.minutes)
+      ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(5.minutes)
 
   private def publish(
       root: Path,

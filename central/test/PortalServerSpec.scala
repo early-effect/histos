@@ -195,7 +195,7 @@ object PortalServerSpec extends ZIOSpecDefault:
             )
           case Right(deployment) =>
             assertTrue(deployment == Deployment(deployment.id, DeploymentState.Failed)),
-  ) @@ TestAspect.timeout(30.seconds)
+  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private final case class Child(code: Int, output: String)
 

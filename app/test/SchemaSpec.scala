@@ -7,6 +7,7 @@ import heddle.endpoint.{Schema, SchemaDoc, SchemaField}
 import histos.load.PluginFault
 import histos.native.NativeFetch
 import histos.publish.{LauncherField, LocalPublishError}
+import histos.testrun.ModuleTestError
 import histos.resolve.{ClasspathScope, LockField, ToolRole, Transitivity}
 import histos.schedule.ScheduleError
 import histos.version.TagRelation
@@ -22,6 +23,7 @@ object SchemaSpec extends ZIOSpecDefault:
       assertTrue(
         variants[BuildError].sorted == names[BuildError].sorted,
         variants[LocalPublishError].sorted == names[LocalPublishError].sorted,
+        variants[ModuleTestError].sorted == names[ModuleTestError].sorted,
         variants[BuildFault].sorted == names[BuildFault].sorted,
         variants[ScheduleError[PluginFault]].sorted == names[ScheduleError[PluginFault]].sorted,
         variants[NativeFetch].sorted == names[NativeFetch].sorted,

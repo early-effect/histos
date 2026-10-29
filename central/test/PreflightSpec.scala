@@ -267,7 +267,7 @@ object PreflightSpec extends ZIOSpecDefault:
           count == 0,
           calls.isEmpty,
         ),
-  ) @@ TestAspect.timeout(30.seconds)
+  ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private def upload(seen: Ref[Int]): ZIO[Any, PortalError, Deployment] =
     seen.update(_ + 1) *> ZIO.fromEither(DeploymentId.from("dep-1")).map(Deployment(_, DeploymentState.Validated))

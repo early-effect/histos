@@ -527,7 +527,7 @@ object AssetSpec extends ZIOSpecDefault:
       noRecord,
       unreleased,
       unnamed,
-    ) @@ TestAspect.timeout(30.seconds)
+    ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
 
   private def env(
       base: String,

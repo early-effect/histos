@@ -1005,8 +1005,149 @@ private object WireCall extends WireSupport:
   given JsonCodec[PlatformToolError] = JsonCodec.derived
   given Schema[PlatformToolError]    = Schema.derived
 
-  given JsonCodec[ModuleTestError] = JsonCodec.derived
-  given Schema[ModuleTestError]    = Schema.derived
+  // Each case is derived alone. Deriving this sum exceeds the inline limit, so the codec
+  // dispatches on the case name and the schema is written out. The shape stays {"Case": {fields}}.
+  private val testedTool: JsonCodec[ModuleTestError.Tool]                         = JsonCodec.derived
+  private val testedTarget: JsonCodec[ModuleTestError.Target]                     = JsonCodec.derived
+  private val testedCompile: JsonCodec[ModuleTestError.Compile]                   = JsonCodec.derived
+  private val testedLock: JsonCodec[ModuleTestError.Lock]                         = JsonCodec.derived
+  private val testedLockRead: JsonCodec[ModuleTestError.LockRead]                 = JsonCodec.derived
+  private val testedSources: JsonCodec[ModuleTestError.Sources]                   = JsonCodec.derived
+  private val testedMissingSources: JsonCodec[ModuleTestError.MissingSources]     = JsonCodec.derived
+  private val testedMissingProvider: JsonCodec[ModuleTestError.MissingProvider]   = JsonCodec.derived
+  private val testedProviderDependency: JsonCodec[ModuleTestError.ProviderDependency] =
+    JsonCodec.derived
+  private val testedNoneDiscovered: JsonCodec[ModuleTestError.NoneDiscovered]     = JsonCodec.derived
+  private val testedNoneMatched: JsonCodec[ModuleTestError.NoneMatched]           = JsonCodec.derived
+  private val testedMixed: JsonCodec[ModuleTestError.Mixed]                       = JsonCodec.derived
+  private val testedProcess: JsonCodec[ModuleTestError.Process]                   = JsonCodec.derived
+  private val testedMain: JsonCodec[ModuleTestError.Main]                         = JsonCodec.derived
+  private val testedAbsent: JsonCodec[ModuleTestError.Absent]                     = JsonCodec.derived
+  private val testedMissingUpstream: JsonCodec[ModuleTestError.MissingUpstream]   = JsonCodec.derived
+  private val testedWork: JsonCodec[ModuleTestError.Work]                         = JsonCodec.derived
+  private val testedRoot: JsonCodec[ModuleTestError.Root]                         = JsonCodec.derived
+  private val testedRunner: JsonCodec[ModuleTestError.Runner]                     = JsonCodec.derived
+  private val testedLinkFailed: JsonCodec[ModuleTestError.LinkFailed]             = JsonCodec.derived
+  private val testedNoNode: JsonCodec[ModuleTestError.NoNode]                     = JsonCodec.derived
+  private val testedStamp: JsonCodec[ModuleTestError.Stamp]                       = JsonCodec.derived
+  private val testedRecord: JsonCodec[ModuleTestError.Record]                     = JsonCodec.derived
+  private val testedPattern: JsonCodec[ModuleTestError.Pattern]                   = JsonCodec.derived
+  private val testedApi: JsonCodec[ModuleTestError.Api]                           = JsonCodec.derived
+
+  private def encodeTested(error: ModuleTestError): Json =
+    error match
+      case value @ ModuleTestError.Tool(_, _, _)               => nest("Tool", value, testedTool)
+      case value @ ModuleTestError.Target(_)                   => nest("Target", value, testedTarget)
+      case value @ ModuleTestError.Compile(_)                  => nest("Compile", value, testedCompile)
+      case value @ ModuleTestError.Lock(_)                     => nest("Lock", value, testedLock)
+      case value @ ModuleTestError.LockRead(_)                 => nest("LockRead", value, testedLockRead)
+      case value @ ModuleTestError.Sources(_, _, _)            => nest("Sources", value, testedSources)
+      case value @ ModuleTestError.MissingSources(_, _)        => nest("MissingSources", value, testedMissingSources)
+      case value @ ModuleTestError.MissingProvider(_, _)       => nest("MissingProvider", value, testedMissingProvider)
+      case value @ ModuleTestError.ProviderDependency(_, _)    =>
+        nest("ProviderDependency", value, testedProviderDependency)
+      case value @ ModuleTestError.NoneDiscovered(_, _)        => nest("NoneDiscovered", value, testedNoneDiscovered)
+      case value @ ModuleTestError.NoneMatched(_)              => nest("NoneMatched", value, testedNoneMatched)
+      case value @ ModuleTestError.Mixed(_)                    => nest("Mixed", value, testedMixed)
+      case value @ ModuleTestError.Process(_, _, _)            => nest("Process", value, testedProcess)
+      case value @ ModuleTestError.Main(_)                     => nest("Main", value, testedMain)
+      case value @ ModuleTestError.Absent(_)                   => nest("Absent", value, testedAbsent)
+      case value @ ModuleTestError.MissingUpstream(_, _, _)    => nest("MissingUpstream", value, testedMissingUpstream)
+      case value @ ModuleTestError.Work(_)                     => nest("Work", value, testedWork)
+      case value @ ModuleTestError.Root(_)                     => nest("Root", value, testedRoot)
+      case value @ ModuleTestError.Runner(_)                   => nest("Runner", value, testedRunner)
+      case value @ ModuleTestError.LinkFailed(_, _, _, _)      => nest("LinkFailed", value, testedLinkFailed)
+      case value @ ModuleTestError.NoNode(_, _, _)             => nest("NoNode", value, testedNoNode)
+      case value @ ModuleTestError.Stamp(_)                    => nest("Stamp", value, testedStamp)
+      case value @ ModuleTestError.Record(_)                   => nest("Record", value, testedRecord)
+      case value @ ModuleTestError.Pattern(_)                  => nest("Pattern", value, testedPattern)
+      case value @ ModuleTestError.Api(_, _, _)                => nest("Api", value, testedApi)
+
+  private def decodeTested(json: Json): Either[String, ModuleTestError] =
+    json match
+      case Json.Obj(fields) =>
+        fields.toList match
+          case (name, body) :: Nil =>
+            name match
+              case "Tool"               => readCase(body, testedTool)
+              case "Target"             => readCase(body, testedTarget)
+              case "Compile"            => readCase(body, testedCompile)
+              case "Lock"               => readCase(body, testedLock)
+              case "LockRead"           => readCase(body, testedLockRead)
+              case "Sources"            => readCase(body, testedSources)
+              case "MissingSources"     => readCase(body, testedMissingSources)
+              case "MissingProvider"    => readCase(body, testedMissingProvider)
+              case "ProviderDependency" => readCase(body, testedProviderDependency)
+              case "NoneDiscovered"     => readCase(body, testedNoneDiscovered)
+              case "NoneMatched"        => readCase(body, testedNoneMatched)
+              case "Mixed"              => readCase(body, testedMixed)
+              case "Process"            => readCase(body, testedProcess)
+              case "Main"               => readCase(body, testedMain)
+              case "Absent"             => readCase(body, testedAbsent)
+              case "MissingUpstream"    => readCase(body, testedMissingUpstream)
+              case "Work"               => readCase(body, testedWork)
+              case "Root"               => readCase(body, testedRoot)
+              case "Runner"             => readCase(body, testedRunner)
+              case "LinkFailed"         => readCase(body, testedLinkFailed)
+              case "NoNode"             => readCase(body, testedNoNode)
+              case "Stamp"              => readCase(body, testedStamp)
+              case "Record"             => readCase(body, testedRecord)
+              case "Pattern"            => readCase(body, testedPattern)
+              case "Api"                => readCase(body, testedApi)
+              case other                => Left(s"'$other' is not a module test failure")
+          case _ => Left("expected one module test failure")
+      case _ => Left("expected a module test failure object")
+
+  private val moduleTestCodec: JsonCodec[ModuleTestError] =
+    JsonCodec[Json].transformOrFail(decodeTested, encodeTested)
+
+  given JsonCodec[ModuleTestError]   = moduleTestCodec
+  given JsonEncoder[ModuleTestError] = moduleTestCodec.encoder
+  given JsonDecoder[ModuleTestError] = moduleTestCodec.decoder
+  given Schema[ModuleTestError]      = Schema.of(moduleTestDoc, Some("ModuleTestError"))
+
+  private def moduleTestDoc: SchemaDoc =
+    val project  = docOf[ProjectName]
+    val version  = docOf[ScalaVersion]
+    val platform = docOf[Platform]
+    val text     = SchemaDoc.Str(None)
+    val cell     = List(req("module", project), req("version", version))
+    wrapAll(
+      "ModuleTestError",
+      List(
+        wrap("Tool", cell :+ req("error", docOf[PlatformToolError])),
+        wrap("Target", List(req("error", docOf[SelectError]))),
+        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
+        wrap("Lock", List(req("error", docOf[ResolveError]))),
+        wrap("LockRead", List(req("path", docOf[Path]))),
+        wrap("Sources", cell :+ req("error", docOf[CompileError])),
+        wrap("MissingSources", List(req("module", project), req("main", docOf[TestMain]))),
+        wrap("MissingProvider", List(req("module", project), req("provider", docOf[TestProvider]))),
+        wrap("ProviderDependency", List(req("module", project), req("provider", docOf[TestProvider]))),
+        wrap("NoneDiscovered", List(req("module", project), req("provider", docOf[TestProvider]))),
+        wrap("NoneMatched", List(req("patterns", SchemaDoc.Array(docOf[SuitePattern])))),
+        wrap("Mixed", List(req("module", project))),
+        wrap("Process", cell :+ req("error", docOf[ChildError])),
+        wrap("Main", List(req("error", docOf[PackMainError]))),
+        wrap("Absent", List(req("module", project))),
+        wrap(
+          "MissingUpstream",
+          List(req("module", project), req("dependency", project), req("version", version)),
+        ),
+        wrap("Work", List(req("path", docOf[Path]))),
+        wrap("Root", List(req("path", docOf[Path]))),
+        wrap("Runner", List(req("path", docOf[Path]))),
+        wrap(
+          "LinkFailed",
+          cell ++ List(req("platform", platform), req("detail", text)),
+        ),
+        wrap("NoNode", cell :+ req("miss", docOf[NodeMiss])),
+        wrap("Stamp", List(req("error", docOf[StampError]))),
+        wrap("Record", List(req("error", docOf[QuickError]))),
+        wrap("Pattern", List(req("error", docOf[SuitePatternError]))),
+        wrap("Api", cell :+ req("platform", platform)),
+      ),
+    )
 
   given JsonCodec[ProgramError] = JsonCodec.derived
   given Schema[ProgramError]    = Schema.derived
@@ -1115,8 +1256,8 @@ private object WireCall extends WireSupport:
       case value @ LocalPublishError.MissingClasses(_, _, _) =>
         nest("MissingClasses", value, missingClassesCodec)
 
-  private def readCase[A <: LocalPublishError](body: Json, codec: JsonCodec[A]): Either[String, LocalPublishError] =
-    codec.decoder.fromJsonAST(body).map(value => value)
+  private def readCase[A](body: Json, codec: JsonCodec[A]): Either[String, A] =
+    codec.decoder.fromJsonAST(body)
 
   private def readEmpty(body: Json, value: LocalPublishError): Either[String, LocalPublishError] =
     body match
