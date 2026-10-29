@@ -13,7 +13,7 @@ import java.nio.charset.StandardCharsets
 import zio.{Chunk, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object HttpCacheSpec extends ZIOSpecDefault:
+object HttpCacheSpec extends histos.SuiteClock:
   private val pullRequest = CacheNamespace.PullRequest(PullRequestNumber("1"))
 
   private val encoded = suite("action result")(

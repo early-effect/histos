@@ -36,7 +36,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
-object PublishSpec extends ZIOSpecDefault:
+object PublishSpec extends histos.SuiteClock:
   private val publish = suite("local publish")(
     test("a manual library is a jar a second project can compile against"):
       ZIO.scoped:

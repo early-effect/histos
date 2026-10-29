@@ -29,7 +29,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object ZincSpec extends ZIOSpecDefault:
+object ZincSpec extends histos.SuiteClock:
   private val v21 = JdkVersion.trusted("21.0.2", JdkMajor.trusted(21))
   private val v17 = JdkVersion.trusted("17.0.9", JdkMajor.trusted(17))
   private val sha = Sha256.of(Chunk.fromArray("hello".getBytes))

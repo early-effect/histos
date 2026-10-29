@@ -7,7 +7,7 @@ import scala.compiletime.testing.typeCheckErrors
 import zio.{Chunk, ZIO, ZIOAspect}
 import zio.test.*
 
-object StepSpec extends ZIOSpecDefault:
+object StepSpec extends histos.SuiteClock:
   private val core: histos.ProjectName =
     histos.ProjectName.from("core") match
       case Right(name) => name

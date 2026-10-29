@@ -132,13 +132,15 @@ object GraphCompile:
       names: List[ProjectName],
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
+    val picked = choose(session.graph, names)
     withCompiler(
       session.repo,
       session.graph,
+      picked,
       watch(
         session.repo,
         session.graph,
-        choose(session.graph, names),
+        picked,
         None,
         platform,
         session.jdk,
@@ -152,14 +154,16 @@ object GraphCompile:
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    val names = cells.map(_._1)
+    val names  = cells.map(_._1)
+    val picked = choose(session.graph, names)
     withCompiler(
       session.repo,
       session.graph,
+      picked,
       watch(
         session.repo,
         session.graph,
-        choose(session.graph, names),
+        picked,
         Some(cells.map(_._2.value).toSet),
         Some(platform),
         session.jdk,
@@ -194,7 +198,12 @@ object GraphCompile:
       native: NativeOrigin,
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    withCompiler(repo, graph, consoleCounted(repo, graph, names, jdk, native, platform))
+    withCompiler(
+      repo,
+      graph,
+      choose(graph, names),
+      consoleCounted(repo, graph, names, jdk, native, platform),
+    )
 
   /** The same console, with the caller holding the compiler. */
   private[histos] def consoleCounted(
@@ -249,13 +258,15 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
+    val picked = pickCells(graph, cells, platform)
     withCompiler(
       repo,
       graph,
+      picked,
       watch(
         repo,
         graph,
-        pickCells(graph, cells, platform),
+        picked,
         Some(cells.map(_._2.value).toSet),
         Some(platform),
         jdk,
@@ -371,13 +382,15 @@ object GraphCompile:
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
+    val picked = choose(graph, names)
     withCompiler(
       repo,
       graph,
+      picked,
       watch(
         repo,
         graph,
-        choose(graph, names),
+        picked,
         None,
         None,
         jdk,
@@ -387,24 +400,28 @@ object GraphCompile:
       ),
     )
 
-  /** One compiler pool for this stream, closed when the stream ends. The pool is built from `captured` when the caller
-    * already holds the lock.
+  /** One compiler pool for this stream, closed when the stream ends. A refused selection fails before the lock is read.
+    * The pool is built from `captured` when the caller already holds the lock.
     */
   private def withCompiler[R <: Resolve](
       repo: Path,
       graph: ProjectGraph,
+      picked: Either[GraphCompileError, List[Module]],
       open: ZStream[R & Compiler, GraphCompileError, CompileFeed],
       captured: Option[DependencyLock] = None,
   ): ZStream[R, GraphCompileError, CompileFeed] =
-    ZStream.unwrapScoped {
-      for
-        lock     <- captured.fold(readLock(repo))(ZIO.succeed(_))
-        tools    <- LockedTools.make(lock, graph)
-        compiler <- Compiler.live.build
-          .map(_.get[Compiler])
-          .provideSome[zio.Scope](ZLayer.succeed(tools))
-      yield open.provideSomeLayer[R](ZLayer.succeed(compiler))
-    }
+    picked match
+      case Left(error) => ZStream.fail(error)
+      case Right(_)    =>
+        ZStream.unwrapScoped {
+          for
+            lock     <- captured.fold(readLock(repo))(ZIO.succeed(_))
+            tools    <- LockedTools.make(lock, graph)
+            compiler <- Compiler.live.build
+              .map(_.get[Compiler])
+              .provideSome[zio.Scope](ZLayer.succeed(tools))
+          yield open.provideSomeLayer[R](ZLayer.succeed(compiler))
+        }
 
   private def watch(
       repo: Path,

@@ -13,7 +13,7 @@ import zio.test.*
 /** One module. Omission is rebuild. `promote"copy-index"` is the other value. Any other token fails while the build
   * file is loading.
   */
-object PromoteSpec extends ZIOSpecDefault:
+object PromoteSpec extends histos.SuiteClock:
   private val omitted =
     """import histos.*
       |object build extends HistosBuild:

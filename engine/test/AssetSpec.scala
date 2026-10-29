@@ -13,7 +13,7 @@ import zio.{Chunk, Ref, Scope, ZIO}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 import zio.durationInt
 
-object AssetSpec extends ZIOSpecDefault:
+object AssetSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
   private val jar    = utf("histos-jar")
   private val other  = utf("site-jar")

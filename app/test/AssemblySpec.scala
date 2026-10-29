@@ -12,7 +12,7 @@ import scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object AssemblySpec extends ZIOSpecDefault:
+object AssemblySpec extends histos.SuiteClock:
   private val utf8 = StandardCharsets.UTF_8
 
   private val checks = suite("runtime assembly")(

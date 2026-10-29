@@ -8,7 +8,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, IO, Ref, ZIO, ZLayer}
 import zio.test.*
 
-object ToolCellsSpec extends ZIOSpecDefault:
+object ToolCellsSpec extends histos.SuiteClock:
   private val version = ScalaVersion("3.10.0")
   private val request =
     histos.zinc.CompilerRequests.compiler(version, Repositories.central)

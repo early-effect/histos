@@ -9,7 +9,7 @@ import java.nio.file.Path
 import zio.ZIO
 import zio.test.*
 
-object PublishSelectSpec extends ZIOSpecDefault:
+object PublishSelectSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
   private val repo   = Path.of(".")
   private val home   = ZIO.succeed(repo)

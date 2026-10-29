@@ -2,7 +2,7 @@ package histos
 
 import zio.test.*
 
-object ClangMajorSpec extends ZIOSpecDefault:
+object ClangMajorSpec extends histos.SuiteClock:
   def spec = suite("clang major")(
     test("a positive literal is that major, and zero or negative is NotPositive"):
       assertTrue(

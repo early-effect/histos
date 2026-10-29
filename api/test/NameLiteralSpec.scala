@@ -4,7 +4,7 @@ import histos.version.{PullRequestError, PullRequestNumber, ShipName, ShipNameEr
 
 import zio.test.*
 
-object NameLiteralSpec extends ZIOSpecDefault:
+object NameLiteralSpec extends histos.SuiteClock:
   def spec = suite("name literals")(
     test("a literal is the value it names, and a runtime string keeps the typed error"):
       assertTrue(

@@ -31,7 +31,7 @@ import zio.json.ast.Json
 import zio.{Ref, Scope, System, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object BspSpec extends ZIOSpecDefault:
+object BspSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
   private val scala2 = ScalaVersion("2.13.16")
 

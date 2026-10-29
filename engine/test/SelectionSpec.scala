@@ -16,7 +16,7 @@ import histos.{
 import zio.ZIO
 import zio.test.*
 
-object SelectionSpec extends ZIOSpecDefault:
+object SelectionSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
   private val at     = SourcePos("histos.scala", 1, 1)
 

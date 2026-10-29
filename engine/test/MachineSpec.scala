@@ -12,7 +12,7 @@ import java.time.Instant
 import zio.{Chunk, Duration, IO, Promise, Ref, System, Trace, UIO, ZIO, ZLayer}
 import zio.test.*
 
-object MachineSpec extends ZIOSpecDefault:
+object MachineSpec extends histos.SuiteClock:
   private val repo = Path.of("repo")
 
   private val token = Gen.string1(Gen.alphaNumericChar)

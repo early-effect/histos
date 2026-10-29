@@ -10,7 +10,7 @@ import scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
+object RuntimeTrustWindowsSpec extends histos.SuiteClock:
   def spec = suite("Windows physical ancestor trust")(
     test(
       "N1 runtime and updater reject owned junctions behind a shared physical parent"

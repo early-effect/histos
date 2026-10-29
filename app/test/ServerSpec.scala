@@ -22,7 +22,7 @@ import zio.json.*
 import zio.{Chunk, Promise, Ref, Scope, Semaphore, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object ServerSpec extends ZIOSpecDefault:
+object ServerSpec extends histos.SuiteClock:
   private val protocol = suite("record")(
     test("server is a command"):
       Cli

@@ -4,7 +4,7 @@ import _root_.scala.compiletime.testing.typeCheckErrors
 
 import zio.test.*
 
-object RunnerToolsSpec extends ZIOSpecDefault:
+object RunnerToolsSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.9.0")
   private val tools  = RunnerTools(
     Some(NodeFloor(25)),

@@ -14,7 +14,7 @@ import heddle.http.header.{BasicCredentials, Headers}
 import zio.{Chunk, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PortalServerSpec extends ZIOSpecDefault:
+object PortalServerSpec extends histos.SuiteClock:
   private val User     = "maven"
   private val Password = "secret"
   private val Group    = "com.example"

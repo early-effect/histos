@@ -41,7 +41,7 @@ import org.bouncycastle.util.encoders.Hex
 import zio.{Chunk, Scope, System, ZIO}
 import zio.test.*
 
-object SignerSpec extends ZIOSpecDefault:
+object SignerSpec extends histos.SuiteClock:
   private val passphrase = "test-passphrase"
   private val payload    = Chunk.fromArray("histos-signer".getBytes(StandardCharsets.UTF_8))
 

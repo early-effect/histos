@@ -15,7 +15,7 @@ import slayer.{Stubbed, any, stub, stubbedTraced}
 import zio.{Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object CompilerSpec extends ZIOSpecDefault:
+object CompilerSpec extends histos.SuiteClock:
   private val name    = ProjectName("core")
   private val refused = ScalaVersion("2.12.0")
 

@@ -61,7 +61,7 @@ final class Fixed(val id: PluginId, value: Contribution) extends HistosPlugin:
     ZIO.succeed(PluginOutput("fixed", Nil))
 end Fixed
 
-object PluginSpec extends ZIOSpecDefault:
+object PluginSpec extends histos.SuiteClock:
   private val digest = "ab" * 32
   private val other  = "cd" * 32
 

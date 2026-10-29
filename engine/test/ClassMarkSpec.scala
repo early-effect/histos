@@ -7,7 +7,7 @@ import zio.test.*
 
 /** A failed class-file mark is an unknown write count, not zero and not the directory census.
   */
-object ClassMarkSpec extends ZIOSpecDefault:
+object ClassMarkSpec extends histos.SuiteClock:
   private val earlier = FileTime.fromMillis(1_700_000_000_000L)
   private val later   = FileTime.fromMillis(1_700_000_030_000L)
 

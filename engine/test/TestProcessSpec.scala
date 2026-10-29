@@ -16,7 +16,7 @@ import scala.jdk.OptionConverters.*
 import zio.{Chunk, Ref, Scope, System, UIO, ZIO, durationInt}
 import zio.test.*
 
-object ChildProcessSpec extends ZIOSpecDefault:
+object ChildProcessSpec extends histos.SuiteClock:
   private val exitMain  = MainClass.trusted("demo.Exit")
   private val sleepMain = MainClass.trusted("demo.Sleeper")
 

@@ -37,7 +37,7 @@ import _root_.scala.jdk.CollectionConverters.*
 import zio.{Promise, Ref, Scope, UIO, URIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PluginRunSpec extends ZIOSpecDefault:
+object PluginRunSpec extends histos.SuiteClock:
   private val launcher = ApiDigest.trusted("ab" * 32)
   private val echoId   = PluginId("test.echo")
   private val otherId  = PluginId("test.other")

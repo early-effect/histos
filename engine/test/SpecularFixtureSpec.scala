@@ -24,7 +24,7 @@ import zio.durationInt
 import zio.test.*
 
 /** A temp-repo stand-in for a Specular plugin. Not the Specular repository, and not a root build plugin. */
-object SpecularFixtureSpec extends ZIOSpecDefault:
+object SpecularFixtureSpec extends histos.SuiteClock:
   private val coordinate = Dep("dev.earlyeffect::specular:0.2.0")
 
   private val marker = "not-a-workflow: fixture"

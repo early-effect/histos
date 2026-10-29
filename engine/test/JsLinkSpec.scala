@@ -7,7 +7,7 @@ import histos.{JsModuleKind, JsVersion, ScalaVersion}
 import zio.Chunk
 import zio.test.*
 
-object JsLinkSpec extends ZIOSpecDefault:
+object JsLinkSpec extends histos.SuiteClock:
   def spec = suite("js link")(
     test("a trailing comment keeps the link key, and a method body moves it"):
       val comment = Sha256.of(Chunk.fromArray("comment".getBytes))

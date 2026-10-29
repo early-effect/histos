@@ -2,7 +2,7 @@ package histos
 
 import zio.test.*
 
-object ProviderLibrarySpec extends ZIOSpecDefault:
+object ProviderLibrarySpec extends histos.SuiteClock:
   def spec = suite("provider library")(
     test("a literal is the library it names, and a runtime string keeps the typed error"):
       val named  = ProviderLibrary("dev.zio", "zio-test-sbt")

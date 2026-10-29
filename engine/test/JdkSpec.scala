@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 import zio.{IO, ZIO}
 import zio.test.*
 
-object JdkSpec extends ZIOSpecDefault:
+object JdkSpec extends histos.SuiteClock:
   def spec = suite("JDK floor")(
     test("numeric order treats a missing component as zero"):
       val floor    = Toolchain.Floor

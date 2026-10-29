@@ -8,7 +8,7 @@ import java.nio.file.attribute.PosixFilePermissions
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object WorkspaceSpec extends ZIOSpecDefault:
+object WorkspaceSpec extends histos.SuiteClock:
   def spec = suite("workspace")(
     test(
       "a missing dependency lock names the path, and an unreadable one is a read fault"

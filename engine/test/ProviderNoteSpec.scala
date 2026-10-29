@@ -5,7 +5,7 @@ import java.nio.file.Path
 import zio.ZIO
 import zio.test.*
 
-object ProviderNoteSpec extends ZIOSpecDefault:
+object ProviderNoteSpec extends histos.SuiteClock:
   def spec = suite("provider note")(
     test("a note is that child's environment"):
       for

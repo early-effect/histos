@@ -10,7 +10,7 @@ import histos.{Jvm, Projects, ScalaVersion, TestMain, module}
 import zio.{Chunk, Scope, ZIO, durationInt}
 import zio.test.*
 
-object ScenarioSpec extends ZIOSpecDefault:
+object ScenarioSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
 
   def spec = suite("scenarios")(

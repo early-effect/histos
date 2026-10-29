@@ -10,7 +10,7 @@ import zio.test.*
 /** The public compiler answers invalid sources by compiling. Reading that surface must not be described as a read-only
   * invalidation.
   */
-object ZincInvalidationSpec extends ZIOSpecDefault:
+object ZincInvalidationSpec extends histos.SuiteClock:
   private val asked = suite(
     "zinc answers invalid sources only by compiling"
   )(

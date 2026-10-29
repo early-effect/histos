@@ -17,7 +17,7 @@ import heddle.server.Port
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object PreflightSpec extends ZIOSpecDefault:
+object PreflightSpec extends histos.SuiteClock:
   private val Group    = "com.example"
   private val Artifact = "widget"
   private val Version  = "1.0.0"

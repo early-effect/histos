@@ -5,7 +5,7 @@ import histos.version.{Ship, ShipName, ShipNameError}
 import zio.{IO, ZIO}
 import zio.test.*
 
-object GraphSpec extends ZIOSpecDefault:
+object GraphSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.9.0")
   private val scala2 = ScalaVersion("2.13.16")
   private val zioDep = dep"dev.zio::zio:2.1.26"

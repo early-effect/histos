@@ -24,7 +24,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Promise, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object ProgramSpec extends ZIOSpecDefault:
+object ProgramSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
 
   private val ran = suite("entry")(

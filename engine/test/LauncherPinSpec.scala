@@ -15,7 +15,7 @@ import zio.test.*
 import zio.stream.ZStream
 import java.security.MessageDigest
 
-object LauncherPinSpec extends ZIOSpecDefault:
+object LauncherPinSpec extends histos.SuiteClock:
   private val version  = "0.0.1-SNAPSHOT"
   private val revision = "0.0.1-20261023.224241-14"
   private val bytes    =

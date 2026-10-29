@@ -14,7 +14,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object LazyValsSpec extends ZIOSpecDefault:
+object LazyValsSpec extends histos.SuiteClock:
   private val rewritten = suite("lazy vals")(
     test("a 3.3 lazy val becomes a VarHandle and still initializes"):
       val old = oldClass

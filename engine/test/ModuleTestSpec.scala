@@ -1564,7 +1564,7 @@ private[testrun] def moduleTests[R, E](group: Spec[R, E]): Spec[R, E] =
     TestAspect.withLiveSystem @@
     TestAspect.timeout(4.minutes)
 
-object ModuleTestJvmSpec extends ZIOSpecDefault:
+object ModuleTestJvmSpec extends histos.SuiteClock:
   def spec = moduleTests(ModuleTestSupport.subprocess)
     .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.ToolFixture.layer(
@@ -1578,7 +1578,7 @@ object ModuleTestJvmSpec extends ZIOSpecDefault:
       )
     )
 
-object ModuleTestProviderSpec extends ZIOSpecDefault:
+object ModuleTestProviderSpec extends histos.SuiteClock:
   def spec = moduleTests(ModuleTestSupport.providers)
     .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.ToolFixture.layer(
@@ -1598,13 +1598,13 @@ object ModuleTestProviderSpec extends ZIOSpecDefault:
       )
     )
 
-object ModuleTestRefusedSpec extends ZIOSpecDefault:
+object ModuleTestRefusedSpec extends histos.SuiteClock:
   def spec = moduleTests(ModuleTestSupport.refused)
     .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.ToolFixture.jvm(histos.ScalaVersion("3.10.0"))
     )
 
-object ModuleTestQuickSpec extends ZIOSpecDefault:
+object ModuleTestQuickSpec extends histos.SuiteClock:
   def spec = moduleTests(ModuleTestSupport.quick)
     .provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
       histos.ToolFixture.jvm(histos.ScalaVersion("3.10.0"))

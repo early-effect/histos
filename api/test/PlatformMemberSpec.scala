@@ -5,7 +5,7 @@ import _root_.scala.compiletime.testing.typeCheckErrors
 import zio.test.*
 
 /** What a build file sees. The snippets are not in package histos. */
-object PlatformMemberSpec extends ZIOSpecDefault:
+object PlatformMemberSpec extends histos.SuiteClock:
   private inline def messages(inline code: String): List[String] =
     typeCheckErrors(code).map(_.message).toList
 

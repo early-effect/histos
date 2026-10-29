@@ -5,7 +5,7 @@ import histos.step.{Need, Step, StepId, StepInfo, Stored, StoredError}
 import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object HistosSpec extends ZIOSpecDefault:
+object HistosSpec extends histos.SuiteClock:
   private val infoA = StepInfo(StepId.Work("a"), Chunk.empty, Set(Need.Cpu))
   private val infoB = StepInfo(StepId.Work("b"), Chunk.empty, Set(Need.Cpu))
 

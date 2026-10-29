@@ -4,7 +4,7 @@ import zio.{durationInt, Chunk, Promise, Queue, ZIO}
 import zio.stream.Take
 import zio.test.*
 
-object TestSpeakSpec extends ZIOSpecDefault:
+object TestSpeakSpec extends histos.SuiteClock:
   def spec = suite("test console")(
     test("the speaking cell is emitted before it ends"):
       ZIO.scoped:

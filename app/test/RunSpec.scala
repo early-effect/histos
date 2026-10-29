@@ -17,7 +17,7 @@ import zio.stream.Take
 import zio.{Chunk, Dequeue, IO, NonEmptyChunk, Promise, Queue, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object RunSpec extends ZIOSpecDefault:
+object RunSpec extends histos.SuiteClock:
   private val task    = "dev.example/hold"
   private val taskRun = RunId.trusted(task)
   private val call    = Call.Task(task, PluginArgs.empty)

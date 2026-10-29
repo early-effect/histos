@@ -10,7 +10,7 @@ import heddle.server.Port
 import zio.{Chunk, Config, Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
-object PortalSpec extends ZIOSpecDefault:
+object PortalSpec extends histos.SuiteClock:
   private val bytes = Chunk[Byte](0x50, 0x4b, 0x03, 0x04) ++ Chunk.fromArray("bundle".getBytes(StandardCharsets.UTF_8))
   private val Id    = "dep-1"
   private val User  = "maven"

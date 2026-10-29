@@ -5,7 +5,7 @@ import histos.*
 import zio.*
 import zio.test.*
 
-object TaskSpec extends ZIOSpecDefault:
+object TaskSpec extends histos.SuiteClock:
   private val graph: Either[BuildError, ProjectGraph] =
     Projects(module("core", Jvm)(scala"3.9.0"))
 

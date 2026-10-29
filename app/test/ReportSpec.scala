@@ -34,7 +34,7 @@ import WireJson.given JsonCodec[BuildEvent]
 import zio.test.*
 import zio.{Chunk, Fiber, Ref, Scope, ZIO, ZLayer}
 
-object ReportSpec extends ZIOSpecDefault:
+object ReportSpec extends histos.SuiteClock:
   private val version  = ScalaVersion("3.10.0")
   private val repoRoot = Path.of("/repo")
 

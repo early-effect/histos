@@ -18,7 +18,7 @@ import histos.process.Process
 import zio.{Chunk, IO, ZIO, ZLayer}
 import zio.test.*
 
-object SelectedToolsSpec extends ZIOSpecDefault:
+object SelectedToolsSpec extends histos.SuiteClock:
   private val version = ScalaVersion("3.10.0")
   private val digest  = Sha256.of(Chunk.fromArray(Array[Byte](1)))
   private val other   = Sha256.of(Chunk.fromArray(Array[Byte](2)))

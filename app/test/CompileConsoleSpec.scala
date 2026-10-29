@@ -26,7 +26,7 @@ import zio.*
 import zio.json.*
 import zio.test.*
 
-object CompileConsoleSpec extends ZIOSpecDefault:
+object CompileConsoleSpec extends histos.SuiteClock:
   private val repo    = Path.of("/repo")
   private val version = ScalaVersion("3.10.0")
 

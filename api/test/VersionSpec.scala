@@ -5,7 +5,7 @@ import histos.{ProjectName, ProjectNameError}
 import zio.{ConfigProvider, IO, ZIO}
 import zio.test.*
 
-object VersionSpec extends ZIOSpecDefault:
+object VersionSpec extends histos.SuiteClock:
   private val number       = ShipNumber("1.4.2")
   private val clientNumber = ShipNumber("0.3.0")
   private val sha          = CommitSha("1234567890abcdef1234567890abcdef12345678")

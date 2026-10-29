@@ -4,7 +4,7 @@ import histos.*
 
 import zio.test.*
 
-object OutsideSpec extends ZIOSpecDefault:
+object OutsideSpec extends histos.SuiteClock:
   private val outside = suite("a build file outside the histos package")(
     test("uses the literals and the builder"):
       val core = module("core", Jvm, Js)(scala"3.9.0", scala"2.13.16")

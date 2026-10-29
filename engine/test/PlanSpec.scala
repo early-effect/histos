@@ -41,7 +41,7 @@ import zio.test.*
 
 import java.nio.charset.StandardCharsets
 
-object PlanSpec extends ZIOSpecDefault:
+object PlanSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
   private val older  = ScalaVersion("3.8.0")
   private val at     = SourcePos("histos.scala", 1, 1)

@@ -12,7 +12,7 @@ import scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object CacheSpec extends ZIOSpecDefault:
+object CacheSpec extends histos.SuiteClock:
   private val at    = Instant.parse("2020-01-01T00:00:00Z")
   private val later = Instant.parse("2020-03-01T00:00:00Z")
 

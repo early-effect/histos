@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 import zio.{Task, ZIO}
 import zio.test.*
 
-object ProductsSpec extends ZIOSpecDefault:
+object ProductsSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
 
   private val products = suite("products")(

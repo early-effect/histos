@@ -7,7 +7,7 @@ import java.nio.charset.StandardCharsets
 import zio.{Chunk, Duration, NonEmptyChunk, Ref, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object StepEventSpec extends ZIOSpecDefault:
+object StepEventSpec extends histos.SuiteClock:
   private val infoA = StepInfo(StepId.Work("a"), Chunk.empty, Set(Need.Cpu))
   private val infoB = StepInfo(StepId.Work("b"), Chunk.empty, Set(Need.Cpu))
 

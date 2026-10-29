@@ -24,7 +24,7 @@ import slayer.{Stubbed, any, stub, stubbedTraced}
 import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
-object LinkerSpec extends ZIOSpecDefault:
+object LinkerSpec extends histos.SuiteClock:
   private val version  = ScalaVersion("3.9.0")
   private val jsLinker = JsVersion("1.22.0")
   private val main     = MainClass.trusted("demo.Hello")

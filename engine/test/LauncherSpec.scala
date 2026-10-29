@@ -21,7 +21,7 @@ import histos.workspace.Workspace
 import zio.{System, ZIO}
 import zio.test.*
 
-object LauncherSpec extends ZIOSpecDefault:
+object LauncherSpec extends histos.SuiteClock:
   private val version = "0.0.1-SNAPSHOT"
 
   private val checks = suite("launcher publish")(

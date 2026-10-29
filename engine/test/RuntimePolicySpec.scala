@@ -7,7 +7,7 @@ import java.nio.file.{Files, Path}
 import zio.ZIO
 import zio.test.*
 
-object RuntimePolicySpec extends ZIOSpecDefault:
+object RuntimePolicySpec extends histos.SuiteClock:
   private val build = "25.0.5+8-LTS"
 
   def spec = suite("runtime identity")(

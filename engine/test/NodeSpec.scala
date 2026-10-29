@@ -12,7 +12,7 @@ import java.nio.file.attribute.PosixFilePermissions
 import zio.{IO, ZIO}
 import zio.test.*
 
-object NodeSpec extends ZIOSpecDefault:
+object NodeSpec extends histos.SuiteClock:
   def spec = suite("Node floor")(
     test("25 satisfies the floor and 22 does not"):
       val older = NodeVersion.from("22.14.0")

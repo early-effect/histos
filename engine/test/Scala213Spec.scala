@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
-object Scala213Spec extends ZIOSpecDefault:
+object Scala213Spec extends histos.SuiteClock:
   private val v213 = histos.ScalaVersion("2.13.16")
   private val v390 = histos.ScalaVersion("3.9.0")
 

@@ -8,7 +8,7 @@ import zio.json.*
 import zio.json.ast.Json
 import zio.test.*
 
-object BspTargetSpec extends ZIOSpecDefault:
+object BspTargetSpec extends histos.SuiteClock:
   private val repo    = Path.of("/repo")
   private val version = ScalaVersion("3.10.0")
   private val modules = Set("app")

@@ -9,7 +9,7 @@ import org.objectweb.asm.{ClassWriter, Opcodes}
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object EntryPointsSpec extends ZIOSpecDefault:
+object EntryPointsSpec extends histos.SuiteClock:
   def spec = suite("entry points")(
     test("a public static main is reported, and a class without one is skipped"):
       ZIO.scoped:

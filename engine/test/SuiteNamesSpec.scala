@@ -11,7 +11,7 @@ import histos.workspace.Workspace
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object SuiteNamesSpec extends ZIOSpecDefault:
+object SuiteNamesSpec extends histos.SuiteClock:
   private val framework = "zio.test.sbt.ZTestFramework"
 
   def spec = suite("suite names")(

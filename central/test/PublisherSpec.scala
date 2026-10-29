@@ -10,7 +10,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
-object PublisherSpec extends ZIOSpecDefault:
+object PublisherSpec extends histos.SuiteClock:
   private val bytes = Chunk[Byte](0x50, 0x4b, 0x03, 0x04) ++ Chunk.fromArray("histos".getBytes)
 
   private final case class Fixture(

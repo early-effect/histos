@@ -11,7 +11,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object CompileMissSpec extends ZIOSpecDefault:
+object CompileMissSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.9.0")
   private val v21    = JdkVersion.trusted("21.0.2", JdkMajor.trusted(21))
   private val salt   = Sha256.of(Chunk.fromArray("salt".getBytes))

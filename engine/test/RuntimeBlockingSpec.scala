@@ -6,7 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import zio.*
 import zio.test.*
 
-object RuntimeBlockingSpec extends ZIOSpecDefault:
+object RuntimeBlockingSpec extends histos.SuiteClock:
   def spec = suite("runtime blocking scope miniature")(
     test("ordinary blocking work finishes before its scope finalizer"):
       ZIO.scoped:

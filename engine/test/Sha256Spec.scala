@@ -2,7 +2,7 @@ package histos.jdk
 
 import zio.test.*
 
-object Sha256Spec extends ZIOSpecDefault:
+object Sha256Spec extends histos.SuiteClock:
   private val hex = "ab" * 32
 
   def spec = suite("sha256")(

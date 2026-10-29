@@ -6,7 +6,7 @@ import scala.compiletime.testing.typeCheckErrors
 import zio.ZIO
 import zio.test.*
 
-object RuntimeHostSchemaSpec extends ZIOSpecDefault:
+object RuntimeHostSchemaSpec extends histos.SuiteClock:
   def spec = suite("host platform")(
     test("machine architecture aliases normalize"):
       assertTrue(

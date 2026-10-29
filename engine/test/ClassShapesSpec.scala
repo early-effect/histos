@@ -10,7 +10,7 @@ import histos.workspace.Workspace
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object ClassShapesSpec extends ZIOSpecDefault:
+object ClassShapesSpec extends histos.SuiteClock:
   def spec = suite("class shapes")(
     test("a directory of classes returns both shapes sorted by name"):
       ZIO.scoped:

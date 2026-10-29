@@ -15,7 +15,7 @@ import zio.test.*
 
 /** A public change in an upstream class file must not leave the downstream class calling the old descriptor.
   */
-object UpstreamInvalidationSpec extends ZIOSpecDefault:
+object UpstreamInvalidationSpec extends histos.SuiteClock:
   private val version = ScalaVersion("3.9.0")
 
   private val upstreamSource =

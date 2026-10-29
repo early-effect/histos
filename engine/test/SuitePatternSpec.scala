@@ -2,7 +2,7 @@ package histos.testrun
 
 import zio.test.*
 
-object SuitePatternSpec extends ZIOSpecDefault:
+object SuitePatternSpec extends histos.SuiteClock:
   private val patterns = suite("suite pattern")(
     test("a prefix matches each suite and not another package"):
       val pattern = SuitePattern.from("com.acme.Foo*")

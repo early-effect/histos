@@ -56,7 +56,7 @@ import org.bouncycastle.openpgp.operator.jcajce.{
 import zio.{Chunk, Ref, Scope, System, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object ReleaseSpec extends ZIOSpecDefault:
+object ReleaseSpec extends histos.SuiteClock:
   private val passphrase = "test-passphrase"
   private val password   = "secret"
 

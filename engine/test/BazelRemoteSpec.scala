@@ -17,7 +17,7 @@ import zio.test.*
 /** The real Bazel HTTP server, when a docker daemon is present. The pin is the multi-arch index of
   * `buchgr/bazel-remote-cache`, so a tag cannot move and each platform pulls its own manifest.
   */
-object BazelRemoteSpec extends ZIOSpecDefault:
+object BazelRemoteSpec extends histos.SuiteClock:
   private val image =
     "buchgr/bazel-remote-cache@sha256:10285c1183e606679eb450b725c2495c055a45eb532a6c80f6b6f9771f6d2f67"
 

@@ -14,7 +14,7 @@ import zio.ZIO
 import zio.json.*
 import zio.test.*
 
-object CallModeSpec extends ZIOSpecDefault:
+object CallModeSpec extends histos.SuiteClock:
   private val resolveMiss = ResolveActionError.Unknown("nope").message
   private val flowMiss    = WorkflowActionError.Unknown("nope").message
 

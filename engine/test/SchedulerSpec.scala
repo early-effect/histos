@@ -13,7 +13,7 @@ import java.security.MessageDigest
 import zio.{Chunk, IO, Promise, Ref, Scope, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object SchedulerSpec extends ZIOSpecDefault:
+object SchedulerSpec extends histos.SuiteClock:
   private def aid(raw: String): ActionId = ActionId.trusted(raw)
 
   private val a = aid("a")

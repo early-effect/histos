@@ -8,7 +8,7 @@ import zio.json.*
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object ConnectionSpec extends ZIOSpecDefault:
+object ConnectionSpec extends histos.SuiteClock:
   private val committed =
     s"""{
        |  "name": "${Bsp.ServerName}",

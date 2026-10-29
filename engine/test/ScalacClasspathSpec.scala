@@ -25,7 +25,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Scope, ZIO, durationInt}
 import zio.test.*
 
-object ScalacClasspathSpec extends ZIOSpecDefault:
+object ScalacClasspathSpec extends histos.SuiteClock:
   private val version = ScalaVersion("3.10.0")
 
   def spec = suite("scalac classpath")(

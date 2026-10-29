@@ -2,7 +2,7 @@ package histos
 
 import zio.test.*
 
-object PublicationFormSpec extends ZIOSpecDefault:
+object PublicationFormSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
 
   def spec = suite("publication form")(

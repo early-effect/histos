@@ -14,7 +14,7 @@ import heddle.server.Port
 import zio.{Chunk, Config, Ref, Scope, ZIO}
 import zio.test.*
 
-object SnapshotSpec extends ZIOSpecDefault:
+object SnapshotSpec extends histos.SuiteClock:
   private val bytes = Chunk[Byte](0x50, 0x4b, 0x03, 0x04) ++ Chunk.fromArray("histos".getBytes(StandardCharsets.UTF_8))
   private val instant = Instant.parse("2026-10-21T14:01:02Z")
 

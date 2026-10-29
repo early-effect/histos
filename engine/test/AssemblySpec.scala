@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object AssemblySpec extends ZIOSpecDefault:
+object AssemblySpec extends histos.SuiteClock:
   private val main = MainClass.trusted("demo.Entry")
   private val utf8 = StandardCharsets.UTF_8
 

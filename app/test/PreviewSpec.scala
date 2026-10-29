@@ -18,7 +18,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Ref, Scope, ZIO}
 import zio.test.*
 
-object PreviewSpec extends ZIOSpecDefault:
+object PreviewSpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.10.0")
 
   private val commands = suite("preview commands")(

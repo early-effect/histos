@@ -23,7 +23,7 @@ import zio.{Chunk, Promise, URIO, ZIO}
 import zio.stream.ZStream
 import zio.test.*
 
-object ProcessSpec extends ZIOSpecDefault:
+object ProcessSpec extends histos.SuiteClock:
   private val cell =
     CompiledCell(
       ProjectName("core"),

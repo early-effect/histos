@@ -8,7 +8,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO}
 import zio.test.*
 
-object SourceStaleSpec extends ZIOSpecDefault:
+object SourceStaleSpec extends histos.SuiteClock:
   private val asked = suite("source staleness from an existing analysis")(
     test("a missing analysis is every current source, and an unreadable file is unknown"):
       ZIO.scoped {

@@ -29,7 +29,7 @@ import _root_.scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object CliSpec extends ZIOSpecDefault:
+object CliSpec extends histos.SuiteClock:
   private val source =
     """import histos.*
       |object build extends HistosBuild:

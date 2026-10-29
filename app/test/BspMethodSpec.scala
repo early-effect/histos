@@ -2,7 +2,7 @@ package histos.bsp
 
 import zio.test.*
 
-object BspMethodSpec extends ZIOSpecDefault:
+object BspMethodSpec extends histos.SuiteClock:
   def spec = suite("bsp method")(
     test("each method has one wire, and an unknown wire is not a method"):
       val wires = Bsp.Method.all.map(_.wire)

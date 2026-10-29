@@ -8,7 +8,7 @@ import java.nio.file.Files
 import zio.{Chunk, ZIO}
 import zio.test.*
 
-object BspFaultSpec extends ZIOSpecDefault:
+object BspFaultSpec extends histos.SuiteClock:
   def spec = suite("bsp faults")(
     test("a file cannot be the parent of a directory"):
       ZIO.scoped {

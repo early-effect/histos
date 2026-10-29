@@ -3,7 +3,7 @@ package histos
 import _root_.scala.compiletime.testing.typeCheckErrors
 import zio.test.*
 
-object JsVersionSpec extends ZIOSpecDefault:
+object JsVersionSpec extends histos.SuiteClock:
   def spec = suite("Scala.js revision")(
     test("a build can pin its Scala.js toolchain"):
       val errors = typeCheckErrors("""import histos.*

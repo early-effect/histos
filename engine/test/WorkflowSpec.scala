@@ -40,7 +40,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, System, ZIO}
 import zio.test.*
 
-object WorkflowSpec extends ZIOSpecDefault:
+object WorkflowSpec extends histos.SuiteClock:
   private val v390           = ScalaVersion.trusted("3.9.0")
   private val core           = project("core")
   private val tests          = project("tests")

@@ -13,7 +13,7 @@ import zio.Chunk
 import zio.stream.ZStream
 import zio.test.*
 
-object BuildSpec extends ZIOSpecDefault:
+object BuildSpec extends histos.SuiteClock:
   private val missing = ResolveError.NotFound("o", "n", "1")
   private val lock    = GraphCompileError.Lock(missing)
 

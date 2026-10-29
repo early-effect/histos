@@ -32,7 +32,7 @@ import zio.{Chunk, Scope, ZIO}
 import zio.stream.ZStream
 import zio.test.*
 
-object QuickSpec extends ZIOSpecDefault:
+object QuickSpec extends histos.SuiteClock:
   private val jdkToken = "test-jdk"
   private val plain    = SuiteStamp.Cover(Nil, Nil, jdkToken, Nil, Nil)
 

@@ -8,7 +8,7 @@ import java.nio.file.Files
 import zio.test.*
 import zio.*
 
-object VersionTaskSpec extends ZIOSpecDefault:
+object VersionTaskSpec extends histos.SuiteClock:
   private val number = ShipNumber("1.4.2")
   private val sha    = CommitSha("1234567890abcdef1234567890abcdef12345678")
 

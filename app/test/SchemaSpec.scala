@@ -17,7 +17,7 @@ import WireJson.given
 
 import zio.test.*
 
-object SchemaSpec extends ZIOSpecDefault:
+object SchemaSpec extends histos.SuiteClock:
   def spec = suite("hand-written schemas")(
     test("a sum schema names every case"):
       assertTrue(

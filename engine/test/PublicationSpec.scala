@@ -29,7 +29,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
-object PublicationSpec extends ZIOSpecDefault:
+object PublicationSpec extends histos.SuiteClock:
   private val licenseValue =
     License(license"Apache-2.0", url"https://www.apache.org/licenses/LICENSE-2.0.txt")
   private val developerValue = Developer(developer"early-effect", pom"Early Effect")

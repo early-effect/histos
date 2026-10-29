@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
-object JarSpec extends ZIOSpecDefault:
+object JarSpec extends histos.SuiteClock:
   private val keys = suite("package key")(
     test("a trailing comment keeps the package key, and a method body moves it"):
       val comment = Sha256.of(Chunk.fromArray("comment".getBytes))

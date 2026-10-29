@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters.*
 
 import zio.test.*
 
-object LazyValsSpec extends ZIOSpecDefault:
+object LazyValsSpec extends histos.SuiteClock:
   private val zioCli = suite("zio-cli lazy vals")(
     test("Args.Both no longer calls getOffsetStatic"):
       jar("zio-cli_3-") match

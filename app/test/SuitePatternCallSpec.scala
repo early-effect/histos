@@ -10,7 +10,7 @@ import histos.{ProjectName, ProjectNameError}
 import zio.ZIO
 import zio.test.*
 
-object SuitePatternCallSpec extends ZIOSpecDefault:
+object SuitePatternCallSpec extends histos.SuiteClock:
   def spec = suite("suite pattern call")(
     test("an empty pattern is a suite-selection error"):
       assertTrue(SuitePattern.from("") == Left(SuitePatternError.Empty))

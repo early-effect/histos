@@ -12,7 +12,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Promise, Ref, Scope, ZIO, durationInt}
 import zio.test.*
 
-object GraphCompileSpec extends ZIOSpecDefault:
+object GraphCompileSpec extends histos.SuiteClock:
   private val compile = suite("cells")(
     test("one module compiles src at the repository root"):
       ZIO.scoped:

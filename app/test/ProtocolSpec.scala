@@ -41,7 +41,7 @@ import zio.json.ast.Json
 import histos.report.WireJson.given JsonCodec[BuildEvent]
 import zio.test.*
 
-object ProtocolSpec extends ZIOSpecDefault:
+object ProtocolSpec extends histos.SuiteClock:
   private object IdleResolve extends Resolve:
     def resolveTool(
         request: histos.resolve.ToolRequest

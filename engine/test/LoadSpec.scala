@@ -18,7 +18,7 @@ import scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object LoadSpec extends ZIOSpecDefault:
+object LoadSpec extends histos.SuiteClock:
   private val apiJar: ZIO[Scope, LoadError, Path] =
     ApiJar.locate
 

@@ -36,7 +36,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Scope, System, UIO, ZIO, durationInt}
 import zio.test.*
 
-object NativeSpec extends ZIOSpecDefault:
+object NativeSpec extends histos.SuiteClock:
   private val major21     = ClangMajor.trusted(21)
   private val major17     = ClangMajor.trusted(17)
   private val v21         = ClangVersion.trusted("21.0.0", major21)

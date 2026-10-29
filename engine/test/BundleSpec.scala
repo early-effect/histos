@@ -9,7 +9,7 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, Ref, Scope, ZIO}
 import zio.test.*
 
-object BundleSpec extends ZIOSpecDefault:
+object BundleSpec extends histos.SuiteClock:
   private val group    = "com/example/core_3/1.0.0"
   private val artifact = "core_3-1.0.0"
   private val pieces   = List(s"$artifact.jar", s"$artifact.pom", s"$artifact-sources.jar", s"$artifact-javadoc.jar")

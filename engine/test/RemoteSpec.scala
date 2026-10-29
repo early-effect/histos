@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets
 import zio.{Chunk, Ref, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object RemoteSpec extends ZIOSpecDefault:
+object RemoteSpec extends histos.SuiteClock:
   private val compileId = ActionId.trusted("compile")
 
   private val compiled: Action =

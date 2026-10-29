@@ -12,7 +12,7 @@ import _root_.scala.jdk.CollectionConverters.*
 import zio.{Scope, ZIO, durationInt}
 import zio.test.*
 
-object PublishHoldSpec extends ZIOSpecDefault:
+object PublishHoldSpec extends histos.SuiteClock:
   private val line = "libs compile 1.0.0-ci hold already-released"
   private val env  = Map(
     Session.Key       -> "snapshot",

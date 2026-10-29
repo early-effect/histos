@@ -13,7 +13,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-object CompileReplaySpec extends ZIOSpecDefault:
+object CompileReplaySpec extends histos.SuiteClock:
   private val scala3 = ScalaVersion("3.9.0")
 
   private final case class Saved(

@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import zio.*
 import zio.test.*
 
-object BootstrapSpec extends ZIOSpecDefault:
+object BootstrapSpec extends histos.SuiteClock:
   private val version  = "0.0.1-SNAPSHOT"
   private val revision = "0.0.1-20261023.224241-14"
   private val bytes    = "fixture launcher".getBytes(StandardCharsets.UTF_8)

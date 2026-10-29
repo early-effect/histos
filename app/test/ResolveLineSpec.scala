@@ -24,7 +24,7 @@ import java.nio.file.Path
 import zio.{Chunk, ZIO, ZLayer}
 import zio.test.*
 
-object ResolveLineSpec extends ZIOSpecDefault:
+object ResolveLineSpec extends histos.SuiteClock:
   private val digest      = Sha256.of(Chunk.fromArray(Array[Byte](1, 2, 3)))
   private val kept        = Eviction("dev.histos", "base", "1.0.0", "1.1.0")
   private val support     = Eviction("dev.histos", "support", "1.0.0", "1.1.0")

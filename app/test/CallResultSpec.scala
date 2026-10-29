@@ -15,7 +15,7 @@ import zio.test.*
 
 import WireJson.given
 
-object CallResultSpec extends ZIOSpecDefault:
+object CallResultSpec extends histos.SuiteClock:
   def spec = suite("call result")(
     test("no lock is 8 for compile and 5 for test and run"):
       val fault = CallResult.Fault(BuildFault.Resolve(ResolveError.NoLock(Path.of("lock"))))

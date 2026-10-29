@@ -6,7 +6,7 @@ import histos.version.{ManualVersion, ManualVersionError, ShipNumber, ShipNumber
 
 import zio.test.*
 
-object LiteralSpec extends ZIOSpecDefault:
+object LiteralSpec extends histos.SuiteClock:
   private val literals = suite("literals")(
     test("a maven repository is a file or https url"):
       val errors = typeCheckErrors("""maven"http://example.com"""")

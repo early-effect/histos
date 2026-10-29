@@ -14,7 +14,7 @@ import zio.json.ast.Json
 import zio.{Chunk, Promise, Queue, Ref, ZIO, durationInt}
 import zio.test.*
 
-object BspParallelSpec extends ZIOSpecDefault:
+object BspParallelSpec extends histos.SuiteClock:
   private enum Fault:
     case Json(text: String)
 

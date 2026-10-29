@@ -6,7 +6,7 @@ import histos.workspace.Workspace
 import zio.{Chunk, IO, Ref, ZIO, ZLayer}
 import zio.test.*
 
-object ToolFixtureSpec extends ZIOSpecDefault:
+object ToolFixtureSpec extends histos.SuiteClock:
   def spec = suite("scoped tool fixtures")(
     test(
       "the requested graph and file-only resolver policy reach the supplied adapter"
