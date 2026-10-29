@@ -10,6 +10,8 @@ The release path is open. The decisions are in [release-work-plan.md](release-wo
 
 The cache is why this tool exists. The decisions and the checklist are in [cache-work-plan.md](cache-work-plan.md).
 
+A module can compile against another checkout. A library can be built from a git commit instead of fetched from Central. The lock names the commit. A branch is an update input. The decisions are in [source-work-plan.md](source-work-plan.md).
+
 A scenario is how a cache claim is checked, including Histos against itself: one store, several checkouts, and an assertion on the values. The same shape is the Histos side of a comparison with sbt and zipx. The decisions are in [scenario-work-plan.md](scenario-work-plan.md). The code is [Scenario](../engine/test/Scenario.scala). It is a test, not a command.
 
 Closed until we reopen them: a Windows port, installing toolchains, matching sbt feature for feature, and a hermetic sandbox.
