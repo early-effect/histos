@@ -205,19 +205,6 @@ object SignerSpec extends histos.SuiteClock:
           !Files.exists(dir.resolve("argv")),
         )
 
-  private val roundTrip =
-    test("a real gpg signs and the public half verifies"):
-      ZIO.scoped:
-        for
-          path   <- Live.live(System.env("PATH").orElseSucceed(None))
-          result <- path match
-            case None       => ZIO.succeed(assertTrue(path.isDefined))
-            case Some(path) =>
-              Keys.binary(path) match
-                case None         => ZIO.succeed(assertTrue(false))
-                case Some(binary) => gpgRoundTrip(binary, path)
-        yield result
-
   def spec =
     suite("signer")(
       local,
@@ -233,15 +220,7 @@ object SignerSpec extends histos.SuiteClock:
       nonZero,
       missing,
       pathIgnored,
-      suite("gpg on this machine")(roundTrip).whenZIO(gpgPresent),
     )
-
-  private val gpgPresent =
-    Live
-      .live(System.env("PATH").orElseSucceed(None))
-      .flatMap:
-        case Some(path) => ZIO.attemptBlocking(Keys.binary(path).isDefined).orElseSucceed(false)
-        case None       => ZIO.succeed(false)
 
   private def signEnv(key: Generated, fingerprint: String) =
     Signer.fromEnv(env(key, fingerprint)).flatMap(_.sign(payload))
@@ -295,63 +274,6 @@ object SignerSpec extends histos.SuiteClock:
        |exit "$status"
        |""".stripMargin
 
-  private def gpgRoundTrip(binary: Path, path: String) =
-    for
-      home <- temp
-      _    <- ZIO.attemptBlocking:
-        Files.setPosixFilePermissions(home, PosixFilePermissions.fromString("rwx------"))
-      _ <- runGpg(
-        binary,
-        List(
-          "--homedir",
-          home.toString,
-          "--batch",
-          "--pinentry-mode",
-          "loopback",
-          "--passphrase-fd",
-          "0",
-          "--quick-gen-key",
-          "Histos Signer <signer@example.test>",
-          "ed25519",
-          "default",
-          "never",
-        ),
-        Some(passphrase),
-      )
-      exported <- runGpg(binary, List("--homedir", home.toString, "--batch", "--export", "--armor"), None)
-      signer   <- Signer.fromEnv(
-        Map(
-          "HISTOS_SIGNER"  -> "gpg",
-          "PGP_PASSPHRASE" -> passphrase,
-          "GNUPGHOME"      -> home.toString,
-          "PATH"           -> path,
-        )
-      )
-      armor <- signer.sign(payload)
-    yield assertTrue(Verify.ring(exported.getBytes(StandardCharsets.UTF_8), payload, armor) == Check.Verified)
-
-  private def runGpg(binary: Path, args: List[String], input: Option[String]) =
-    ZIO
-      .attemptBlocking {
-        val builder = new ProcessBuilder((binary.toString :: args).asJava)
-        builder.redirectOutput(ProcessBuilder.Redirect.PIPE)
-        builder.redirectError(ProcessBuilder.Redirect.PIPE)
-        builder.redirectInput(ProcessBuilder.Redirect.PIPE)
-        val process = builder.start()
-        val stdin   = process.getOutputStream
-        input.foreach: text =>
-          stdin.write(text.getBytes(StandardCharsets.UTF_8))
-          stdin.write("\n".getBytes(StandardCharsets.UTF_8))
-        stdin.close()
-        val stdout = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-        val stderr = new String(process.getErrorStream.readAllBytes, StandardCharsets.UTF_8)
-        val status = process.waitFor()
-        (status, stdout, stderr)
-      }
-      .flatMap: (status, stdout, stderr) =>
-        if status == 0 then ZIO.succeed(stdout)
-        else ZIO.fail(new IllegalStateException(s"gpg setup exited $status: $stderr"))
-
   private def text(path: Path) =
     ZIO.attemptBlocking(Files.readString(path, StandardCharsets.UTF_8))
 
@@ -380,26 +302,10 @@ object SignerSpec extends histos.SuiteClock:
     def unusable: ZIO[Any, Throwable, Generated] =
       ZIO.attemptBlocking(ring(KeyFlags.ENCRYPT_COMMS | KeyFlags.ENCRYPT_STORAGE, binding = false)).flatMap(found)
 
-    def binary(path: String): Option[Path] =
-      path
-        .split(java.io.File.pathSeparatorChar)
-        .iterator
-        .map(_.trim)
-        .filter(_.nonEmpty)
-        .map(executable)
-        .collectFirst:
-          case Some(binary) => binary
-
     private def found(generated: Option[Generated]): ZIO[Any, Throwable, Generated] =
       generated match
         case Some(key) => ZIO.succeed(key)
         case None      => ZIO.fail(new IllegalStateException("generated ring is missing its subkey"))
-
-    private def executable(dir: String): Option[Path] =
-      try
-        val binary = Path.of(dir, "gpg")
-        if Files.isExecutable(binary) then Some(binary) else None
-      catch case _: java.nio.file.InvalidPathException => None
 
     private def ring(subFlags: Int, binding: Boolean): Option[Generated] =
       val provider  = new BouncyCastleProvider()

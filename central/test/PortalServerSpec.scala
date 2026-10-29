@@ -151,30 +151,6 @@ object PortalServerSpec extends histos.SuiteClock:
           !gone,
         )
     ,
-    test("a second process promotes and drops the deployment on disk"):
-      ZIO.scoped:
-        for
-          (root, base, secret) <- serve
-          zip = bundle()
-          held       <- upload(base, secret, zip, ReleaseMode.Hold)
-          promoted   <- disk(root, "promote", held.id)
-          after      <- shown(base, secret, held.id)
-          marked     <- present(marker(root))
-          dropped    <- disk(root, "drop", held.id)
-          gone       <- raw(base, secret, held.id)
-          markerGone <- present(marker(root))
-          again      <- upload(base, secret, zip, ReleaseMode.Hold)
-        yield assertTrue(
-          held.state == DeploymentState.Validated,
-          promoted == Child(0, promoted.output),
-          after == Some((DeploymentState.Published, Chunk.empty)),
-          marked,
-          dropped == Child(0, dropped.output),
-          gone.status.code == 404,
-          !markerGone,
-          again.state == DeploymentState.Validated,
-        )
-    ,
     test("a wrong password is unauthorized and the message keeps the secret"):
       ZIO.scoped:
         for
@@ -196,8 +172,6 @@ object PortalServerSpec extends histos.SuiteClock:
           case Right(deployment) =>
             assertTrue(deployment == Deployment(deployment.id, DeploymentState.Failed)),
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(30.seconds)
-
-  private final case class Child(code: Int, output: String)
 
   private def serve: ZIO[Scope, PortalOpenError | Throwable, (Path, PortalBase, RepositorySecret)] =
     for
@@ -268,48 +242,6 @@ object PortalServerSpec extends histos.SuiteClock:
 
   private def inspect(bytes: Chunk[Byte]): Report =
     PortalReport.inspect(bytes, bytes.length.toLong, Set.empty)
-
-  private def disk(root: Path, action: String, id: DeploymentId): ZIO[Scope, Throwable, Child] =
-    ZIO
-      .attemptBlocking:
-        val java    = Path.of(System.getProperty("java.home"), "bin", "java")
-        val argfile = root.resolve(s"$action.args")
-        val log     = root.resolve(s"$action.log")
-        val lines   = List(
-          "-cp",
-          System.getProperty("java.class.path"),
-          "--enable-native-access=ALL-UNNAMED",
-          "histos.central.PortalDisk",
-          action,
-          root.toAbsolutePath.toString,
-          id.value,
-        )
-        Files.writeString(argfile, lines.map(quoteArg).mkString("\n") + "\n", StandardCharsets.UTF_8)
-        val builder = new ProcessBuilder(java.toString, s"@${argfile.toAbsolutePath}")
-        builder.environment().clear()
-        val path = System.getenv("PATH")
-        if path != null then builder.environment().put("PATH", path)
-        builder.redirectErrorStream(true)
-        builder.redirectOutput(ProcessBuilder.Redirect.to(log.toFile))
-        (builder, log)
-      .flatMap: (builder, log) =>
-        ZIO
-          .acquireRelease(ZIO.attemptBlocking(builder.start())): process =>
-            ZIO.attemptBlocking(process.destroyForcibly()).ignore
-          .flatMap: process =>
-            ZIO
-              .attemptBlockingInterrupt(process.waitFor())
-              .flatMap: code =>
-                ZIO.attempt(Files.readString(log, StandardCharsets.UTF_8)).map(output => Child(code, output))
-
-  private def quoteArg(line: String): String =
-    if line.exists(char => char.isWhitespace || char == '"' || char == '\\') then
-      val body = line.flatMap:
-        case '\\' => "\\\\"
-        case '"'  => "\\\""
-        case char => String.valueOf(char)
-      s"\"$body\""
-    else line
 
   private def bundle(
       version: String = Version,

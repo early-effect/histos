@@ -25,7 +25,8 @@ import histos.{
   SourcePos,
 }
 
-import java.io.ByteArrayOutputStream
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import javax.tools.ToolProvider
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 import java.security.MessageDigest
@@ -825,11 +826,8 @@ object ResolveSpec extends histos.SuiteClock:
       repo <- ZIO.attempt(
         Files.createDirectories(root.resolve("repo")).toRealPath()
       )
-      jdk      <- GraphCompile.jdkHere
-      compiled <- ZIO.attempt(
-        compileGreeting(root, jdk.home.resolve("bin").resolve("javac"))
-      )
-      _ <- ZIO.when(compiled.code == 0)(
+      compiled <- ZIO.attempt(compileGreeting(root))
+      _        <- ZIO.when(compiled.code == 0)(
         ZIO.attempt(publish(repo, compiled.bytes))
       )
     yield
@@ -846,22 +844,26 @@ object ResolveSpec extends histos.SuiteClock:
 
   private final case class Compiled(code: Int, text: String, bytes: Array[Byte])
 
-  private def compileGreeting(root: Path, javac: Path): Compiled =
+  private def compileGreeting(root: Path): Compiled =
     val sources = Files.createDirectories(root.resolve("java"))
     val classes = Files.createDirectories(root.resolve("jclasses"))
     val file    = sources.resolve("Greeting.java")
     Files.writeString(file, greetingSource)
-    val process = new ProcessBuilder(
-      javac.toString,
-      "-d",
-      classes.toString,
-      file.toString,
-    ).redirectErrorStream(true).start()
-    val text =
-      new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-    val code  = process.waitFor()
+    val sink = new ByteArrayOutputStream
+    val code = Option(ToolProvider.getSystemJavaCompiler) match
+      case None       => -1
+      case Some(tool) =>
+        tool.run(
+          new ByteArrayInputStream(Array.emptyByteArray),
+          sink,
+          sink,
+          "-d",
+          classes.toString,
+          file.toString,
+        )
+    val text  = sink.toString(StandardCharsets.UTF_8)
     val bytes = if code == 0 then jarBytes(classes) else Array.emptyByteArray
-    Compiled(code, text, bytes)
+    Compiled(code, if code == -1 && text.isEmpty then "no java compiler" else text, bytes)
 
   private def publish(root: Path, greeting: Array[Byte]): Unit =
     writeMaven(

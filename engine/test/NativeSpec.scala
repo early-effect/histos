@@ -272,52 +272,7 @@ object NativeSpec extends histos.SuiteClock:
         names.exists(_.startsWith("scala3lib_native0.5_3")),
         names.exists(_.startsWith("scalalib_native0.5_3")),
         !names.exists(_.startsWith("tools_3")),
-      )
-    ,
-    test("hello links with the clang on PATH and prints hi"):
-      ZIO.scoped:
-        for
-          root <- temp
-          _    <- ZIO.attempt(write(root, "native/Hello.scala", hello))
-          _    <- ZIO.attempt(
-            write(root, "jvm/Skip.scala", "object Skip { def n = 1 }\n")
-          )
-          env    <- liveEnv
-          found  <- ClangProbe.found(env).provideLayer(Process.live)
-          jdk    <- GraphCompile.jdkHere
-          main   <- ZIO.fromEither(MainClass.from("Hello"))
-          linked <- NativeLink
-            .link(
-              NativeLinkRequest(
-                found.version.major,
-                NativeToolchain.Release,
-                env,
-                root.resolve("work"),
-                jdk,
-                main,
-                histos.ScalaVersion("3.9.0"),
-              ),
-              root,
-            )
-            .provideSomeLayer[LockedTools](Process.live)
-          ran <- ZIO.attemptBlocking {
-            val process = new ProcessBuilder(linked.binary.toString)
-              .redirectErrorStream(true)
-              .start()
-            try
-              val text = new String(
-                process.getInputStream.readAllBytes,
-                StandardCharsets.UTF_8,
-              )
-              val code = process.waitFor()
-              (code, text)
-            finally process.destroy()
-          }
-          shown =
-            if Files.isRegularFile(linked.binary) then "file"
-            else linked.binary.toString
-        yield assertTrue(ran == (0, "hi\n"), shown == "file")
-    @@ Requires(Tool.AnyClang),
+      ),
   ) @@ TestAspect.withLiveSystem
 
   private val origin = suite("HISTOS_NATIVE")(
@@ -456,12 +411,6 @@ object NativeSpec extends histos.SuiteClock:
           ),
         )
   )
-
-  private val hello =
-    """object Hello:
-      |  def main(args: Array[String]): Unit =
-      |    println("hi")
-      |""".stripMargin
 
   private val liveEnv: UIO[Map[String, String]] =
     System.envs.orElseSucceed(Map.empty)

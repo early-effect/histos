@@ -133,6 +133,22 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 Also state, with a live child: a named main runs against main classes, and a module with nothing to run is not a pass. A named js main uses only its overridden linker revision and chosen Node. A js main with no Node to choose is a typed failure before the link. A named native main links and runs the binary. A non-zero main is a failed cell and its output is kept. ZIO Test is the default provider, and a failing spec is not a pass. A suite pattern runs the matching mains. A suite pattern runs one provider suite. A pattern that matches nothing fails the run. A js provider links the Scala.js bridge and runs on node, under jsdom, and under firefox. A native provider links TestMain and runs the binary.
 
+A compiled 2.13 main is not in this suite. Stop and ask before adding it.
+
+These are not on the allow-list, so they are not in the suite. A child the main left running dies with the group when the main returns. Closing a command kills the grandchild it started, and that grandchild is in the command's group. A large output arrives whole. Interrupting the bootstrap compile kills javac. Ask before adding any of them.
+
+A named js main on a linker revision other than the catalog is not in this suite. The offline cache has the catalog linker, and an empty stand-in jar is not a link. The live child proves the chosen Node.
+
+A js provider on node, under jsdom, and under firefox, and a native provider that links TestMain, are still this item. They are not in the suite yet.
+
+`MainClass.from` accepts `demo.Exit` and `demo.Exit$`, and refuses empty and `1bad`. The suite environment keeps `HISTOS_REPO`, `PATH`, `HOME`, and a non-empty `XDG_CACHE_HOME`, and drops every other variable.
+
+An in-flight run keeps one lock generation across compile and launch. An explicit platform runs only that platform. Those two spawn, and they are not on the allow-list.
+
+N1 runtime cache and the launcher updater reject an owned junction behind a shared physical parent. The junction is `mklink /J`. That spawn is not on the allow-list. It does not run on macOS or in CI.
+
+`BazelRemoteSpec` starts docker, `LauncherPinSpec` starts one Java child, and `BootstrapSpec` starts the shell script. Those spawns are not on the allow-list. Ask before folding any of them into this suite. The box stays open while they remain, and while a js provider and a native provider are still absent.
+
 - [ ] **Zinc boundaries.** No scalac and no spawn. The service under test is the pure function, or `GraphCompile` with `Compiler` stubbed. One law, one test. These are the laws the deleted compile and zinc specs circled that are not compile-call laws.
 
 Layout and refusals. One module takes sources at the repository root. A module directory wins over that shared root. Sources may live in a directory that is not the module name. A missing lock is refused. A module with no source root is refused. An empty source root is refused. Tests alone compile an empty main, and another platform's tests do not. `src/test` is the suite when the module has no main. A single module uses `test` at the repository root. Test sources without a provider library are refused. A named main without test sources is refused.
@@ -159,7 +175,7 @@ Also state, with the live compiler: a cached test success cannot bypass a corrup
 
 Proof: `histos.ScenarioSpec` and `./histos test engine`. Budget: this file is the compiler-start budget for the engine suite.
 
-- [ ] **App, central, publish, BSP.** Same rule. Name the service under test. Stub the rest with slayer. CLI parsing is algebra. A command's effect is a call on a service. A saved file changes the source snapshot and an untouched tree does not. That service is `SourceWatch`. BSP protocol is bytes, in process. One sentinel socket if, and only if, the socket is the service under test. Publish and portal talk to loopback, never Central, GitHub, or a keyserver. `Signer` is stubbed, unless the invariant is the live adapter's exit mapping, in which case that one test joins the counted-child allow-list and Russ is asked first. Delete the old specs as their laws land. Proof: `./histos test app` and `./histos test central`.
+- [ ] **App, central, publish, BSP.** Same rule. Name the service under test. Stub the rest with slayer. CLI parsing is algebra. A command's effect is a call on a service. A saved file changes the source snapshot and an untouched tree does not. That service is `SourceWatch`. BSP protocol is bytes, in process. One sentinel socket if, and only if, the socket is the service under test. Publish and portal talk to loopback, never Central, GitHub, or a keyserver. `Signer` is stubbed, unless the invariant is the live adapter's exit mapping, in which case that one test joins the counted-child allow-list and Russ is asked first. A real gpg signs and the public half verifies: that is the exit-mapping test, and it waits for that ask. The runtime jar prints the version text. That spawn is the allow-list's one `java -jar` and the engine suite already runs a stand-in jar, so this checkout's jar is not a second one. The jar still has to contain `histos/cli/Main.class`, name that main in the manifest, and contain no `scala/scalanative/` entry. A second process promotes and drops a held deployment on disk. That spawn is not on the allow-list. Delete the old specs as their laws land. Proof: `./histos test app` and `./histos test central`.
 
 - [ ] **Stamp as a scenario.** Stop and reconfirm with Russ. Then the upstream-comment and new-public-method laws run through `Checkout.test`. A second checkout of the same test is not cached. A stored success for one suite does not skip a different suite. A referenced class change reruns that suite and an unreferenced class does not. Selected JDK content is in the stamp and an unrelated tool is not. `engine/test/ModuleTestSpec.scala` and `engine/test/QuickSpec.scala` are already deleted. The scenario spec is the proof.
 
