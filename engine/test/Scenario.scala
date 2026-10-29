@@ -10,6 +10,7 @@ import histos.zinc.{CompileFeed, Compiler, GraphCompile, GraphCompileError}
 import java.nio.file.Path
 
 import zio.{Chunk, Ref, Scope, UIO, ZIO, ZLayer}
+import zio.stream.ZStream
 
 /** One content store and the checkouts that share it. Not [[histos.zinc.CompileReplay.processStore]]: that store is one
   * directory for the test JVM.
@@ -22,29 +23,29 @@ object Scenario:
     yield Store(ContentStore.in(dir), starts)
 
 /** The store for one scenario. Checkouts are separate work trees. */
-final class Store private[histos] (content: ContentStore, starts: Ref[Int]):
+final class Store private[histos] (val content: ContentStore, starts: Ref[Int]):
   def opened: UIO[Int] = starts.get
 
+  /** Live Zinc. Each start increments [[opened]]. */
+  def compiler: ZLayer[histos.resolve.LockedTools, Nothing, Compiler] =
+    Compiler.counted(starts)
+
   def checkout: ZIO[Scope, IoFailure, Checkout] =
-    Workspace.work("histos-scenario").map(root => Checkout(root, content, starts))
+    Workspace.work("histos-scenario").map(root => Checkout(root))
 end Store
 
-/** One work tree. `compile` and `test` use the scenario store. */
-final class Checkout private[histos] (
-    val root: Path,
-    content: ContentStore,
-    starts: Ref[Int],
-):
+/** One work tree. `compile` and `test` take their services from the environment. */
+final class Checkout private[histos] (val root: Path):
   def write(relative: String, text: String): ZIO[Any, IoFailure, Unit] =
     Workspace.writeString(root.resolve(relative), text)
 
-  private def base: ZLayer[histos.resolve.LockedTools, Nothing, Resolve & ContentStore] =
-    ZLayer.fromZIO(ZIO.serviceWith[histos.resolve.LockedTools](_.resolve)) ++
-      ZLayer.succeed(content)
-
   def compile(
       graph: ProjectGraph
-  ): ZIO[histos.resolve.LockedTools, GraphCompileError | ResolveError | IoFailure, Chunk[CompileFeed]] =
+  ): ZIO[
+    histos.resolve.LockedTools & Resolve & ContentStore & Compiler,
+    GraphCompileError | ResolveError | IoFailure,
+    Chunk[CompileFeed],
+  ] =
     ZIO.scoped:
       GraphCompile.jdkHere.flatMap: jdk =>
         ToolFixture
@@ -52,25 +53,29 @@ final class Checkout private[histos] (
             GraphCompile.consoleCounted(root, graph, Nil, jdk, NativeOrigin.Central, None)
           )
           .runCollect
-          .provideSomeLayer[histos.resolve.LockedTools & Scope](base ++ Compiler.counted(starts))
 
   /** Quick unless `mode` says otherwise. The record is written under this checkout. */
   def test(
       graph: ProjectGraph,
       mode: TestMode = TestMode.Quick,
   ): ZIO[
-    histos.resolve.LockedTools,
+    histos.resolve.LockedTools & Resolve & ContentStore & Compiler,
     ModuleTestError | ResolveError | IoFailure | GraphCompileError,
     Chunk[TestFeed],
   ] =
     for
-      jdk   <- GraphCompile.jdkHere
-      here  <- TestMachine.runtimes(root)
+      jdk  <- GraphCompile.jdkHere
+      here <- TestMachine.runtimes(root)
+      asked = TestRun(root, graph, Nil, jdk, here, mode)
       feeds <- ToolFixture
         .streamAt(root, graph)(
-          ModuleTest.console(TestRun(root, graph, Nil, jdk, here, mode))
+          ZStream.unwrap(
+            GraphCompile
+              .runCounted(root, graph, Nil, jdk, here.native, None)
+              .mapError(ModuleTestError.Compile(_))
+              .map(compiled => ModuleTest.suites(asked, compiled))
+          )
         )
         .runCollect
-        .provideSomeLayer[histos.resolve.LockedTools](base)
     yield feeds
 end Checkout

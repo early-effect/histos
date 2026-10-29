@@ -1,6 +1,6 @@
 # Test overhaul
 
-One item, then its proof. Slayer, Compiler, Process, Machine, Linkers, and the trait audit are done. This file is the checklist.
+One item, then its proof. Slayer, Compiler, Process, Machine, Linkers, the trait audit, and the scenario helper are done. This file is the checklist.
 
 ## Why
 
@@ -121,7 +121,7 @@ Finish one item and prove it before the next. The proof is the suite the item na
 
 - [x] **Trait audit.** `Resolve`, `Signer`, `RemoteCache`, `Loader`, `BuildCompiler`, and the HTTP cache. Foreign types stay in the live layer. Heddle stays `Client`. A signature that has to change is a break, fixed at the call site, no shim. Proof: the miniature for each trait that changed, plus `./histos test` on engine for the traits that did not. Ask Russ if a public api type has to change.
 
-- [ ] **Scenario helper.** `Scenario` is how a test opens a checkout when the invariant needs one. It is not the setup for every test. `compile` and `test` take services from the environment, so the caller provides live `Compiler` and live `ContentStore` and stubs the rest. Oracles are values, including slayer call history. New clients do not call `Files.createTempDirectory`. Do not migrate old specs onto it. Proof: the existing two scenario laws, rewritten as clients of the finished helper, `./histos testOnly --module engine 'histos.ScenarioSpec'`. Behavior stays today's behavior. The miss across checkouts stays a miss until the repo-relative item. The compiler is live in this proof because the invariant is a real compile against a real store. `Process` is stubbed unless a law in this file is about a process.
+- [x] **Scenario helper.** `Scenario` is how a test opens a checkout when the invariant needs one. It is not the setup for every test. `compile` and `test` take services from the environment, so the caller provides live `Compiler` and live `ContentStore` and stubs the rest. Oracles are values, including slayer call history. New clients do not call `Files.createTempDirectory`. Do not migrate old specs onto it. Proof: the existing two scenario laws, rewritten as clients of the finished helper, `./histos testOnly --module engine 'histos.ScenarioSpec'`. Behavior stays today's behavior. The miss across checkouts stays a miss until the repo-relative item. The compiler is live in this proof because the invariant is a real compile against a real store. `Process` is stubbed unless a law in this file is about a process.
 
 - [ ] **Algebra, fresh.** Keys, stamps, globs, graph shape, bundle refusals, suite patterns, error enums. Properties, not tables. Write the law from the type. If the law is not forced by the type, ask Russ before writing a test that guesses. Delete the old pure specs in the same item, after the new suite is green. Proof: `./histos test api` and the engine suites this item added.
 
