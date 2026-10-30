@@ -149,7 +149,7 @@ N1 runtime cache and the launcher updater reject an owned junction behind a shar
 
 `BazelRemoteSpec` starts docker, `LauncherPinSpec` starts one Java child, and `BootstrapSpec` starts the shell script. Those spawns are not on the allow-list. Ask before folding any of them into this suite. The box stays open while they remain, and while a js provider and a native provider are still absent.
 
-- [ ] **Zinc boundaries.** No scalac and no spawn. The service under test is the pure function, or `GraphCompile` with `Compiler` stubbed. One law, one test. These are the laws the deleted compile and zinc specs circled that are not compile-call laws.
+- [x] **Zinc boundaries.** No scalac and no spawn. The service under test is the pure function, or `GraphCompile` with `Compiler` stubbed. One law, one test. These are the laws the deleted compile and zinc specs circled that are not compile-call laws.
 
 Layout and refusals. One module takes sources at the repository root. A module directory wins over that shared root. Sources may live in a directory that is not the module name. A missing lock is refused. A module with no source root is refused. An empty source root is refused. Tests alone compile an empty main, and another platform's tests do not. `src/test` is the suite when the module has no main. A single module uses `test` at the repository root. Test sources without a provider library are refused. A named main without test sources is refused.
 
