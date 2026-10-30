@@ -28,8 +28,8 @@ import slayer.{Stubbed, any, stub, stubbedTraced}
 import zio.{NonEmptyChunk, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-/** Layout, refusals, the test store, and the suite stamp. The compiler is a stub. The runner's process is a stub. A
-  * call on a refusal is a failed law.
+/** Layout, refusals, the test store, the suite stamp, and scheduling. The compiler is a stub. The runner's process is a
+  * stub. A call on a refusal is a failed law.
   */
 object BoundaryLawSpec extends histos.SuiteClock:
   private val app    = ProjectName("app")
@@ -56,6 +56,9 @@ object BoundaryLawSpec extends histos.SuiteClock:
       suite("stamp")(
         StampLaw.laws,
         StampLaw.gaps.provideSomeLayerShared[TestEnvironment & Scope](running),
+      ),
+      suite("schedule")(
+        ScheduleLaw.laws.provideSomeLayerShared[TestEnvironment & Scope](running)
       ),
       suiteFiles,
       repoTest,
