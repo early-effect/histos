@@ -192,11 +192,12 @@ object LockedTools:
           .map(ResolveError.NativeOrigin(_))
           .map: toolchain =>
             List(histos.native.NativeRequests.linker(toolchain, catalog, repositories)) ++
-              Option
-                .when(provider)(
-                  histos.native.NativeRequests.suite(toolchain, catalog, repositories)
-                )
-                .toList ++ histos.zinc.CompilerRequests.supporting(
+              (if provider then
+                 List(
+                   histos.native.NativeRequests.suite(toolchain, catalog, repositories),
+                   histos.native.NativeRequests.testInterface(toolchain, catalog, repositories),
+                 )
+               else Nil) ++ histos.zinc.CompilerRequests.supporting(
                 List(catalog.native.bridgeScala),
                 catalog,
                 repositories,
@@ -273,6 +274,7 @@ object LockedTools:
               List(
                 histos.native.NativeRequests.linker(toolchain, catalog, repos),
                 histos.native.NativeRequests.suite(toolchain, catalog, repos),
+                histos.native.NativeRequests.testInterface(toolchain, catalog, repos),
               )
     yield
       val jsPlans = js.flatMap: module =>

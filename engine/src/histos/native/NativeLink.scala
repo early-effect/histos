@@ -108,6 +108,14 @@ object NativeProject:
             NativeDeclaration.Missing(missing)
           case (done, _) => done
 
+/** A program link refuses system threads. A test link adds `test-interface` and links with system threads.
+  * `scala.scalanative.testinterface.TestMain` runs on `ExecutionContext.global`, and an explicit
+  * `withMultithreading(false)` fails that link.
+  */
+enum NativeLinkKind:
+  case Program
+  case Tests
+
 /** Clang, the toolchain, and where the link runs. The sources or the classpath are the other argument.
   */
 final case class NativeLinkRequest(
@@ -118,6 +126,7 @@ final case class NativeLinkRequest(
     jdk: JdkRuntime,
     main: MainClass,
     version: ScalaVersion,
+    kind: NativeLinkKind,
 )
 
 object NativeLink:
@@ -127,13 +136,14 @@ object NativeLink:
       request: NativeLinkRequest,
       sourcesRoot: Path,
   ): ZIO[LockedTools & Process, NativeError, Linked] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version, kind) =
       request
     for
       view <- ZIO.service[LockedTools]
       libs <- NativeClasspath
         .fetch(toolchain, Some(version))
         .mapError(NativeError.Fetch(_))
+      extra   <- interfaceJars(kind, toolchain)
       clang   <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       sources <- histos.zinc.Sources
         .select(sourcesRoot, version, Platform.Native)
@@ -167,7 +177,8 @@ object NativeLink:
       binary <- invoke(
         clang,
         main,
-        compiled.classes :: libs.libraries,
+        kind,
+        compiled.classes :: (withoutLibraries(extra, libs.libraries) ++ libs.libraries),
         work,
         jdk,
         toolchain,
@@ -194,17 +205,19 @@ object NativeLink:
       request: NativeLinkRequest,
       classpath: List[Path],
   ): ZIO[LockedTools & Process, NativeError, Path] =
-    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version) =
+    val NativeLinkRequest(major, toolchain, env, work, jdk, main, version, kind) =
       request
     for
       libs <- NativeClasspath
         .fetch(toolchain, Some(version))
         .mapError(NativeError.Fetch(_))
+      extra  <- interfaceJars(kind, toolchain)
       clang  <- ClangProbe.resolve(major, env).mapError(NativeError.Clang(_))
       binary <- invoke(
         clang,
         main,
-        withoutLibraries(classpath, libs.libraries) ++ libs.libraries,
+        kind,
+        withoutLibraries(classpath ++ extra, libs.libraries) ++ libs.libraries,
         work,
         jdk,
         toolchain,
@@ -245,15 +258,26 @@ object NativeLink:
       )
     )
 
-  /** The toolchain appends its own native libraries. A resolved test jar of the same file is the same library.
+  /** The linker loads the first NIR it finds for a class. Every revision of a toolchain library is removed so the copy
+    * appended after this classpath is the one that loads. Ivy names the jar with the artifact id. Maven appends
+    * `-version`, and that version may contain hyphens. These artifact ids use underscores, so the first hyphen, when
+    * present, starts the version.
     */
-  private def withoutLibraries(
+  private[histos] def withoutLibraries(
       classpath: List[Path],
       libraries: List[Path],
   ): List[Path] =
-    val names =
-      libraries.flatMap(path => Option(path.getFileName).map(_.toString)).toSet
-    classpath.filterNot(path => Option(path.getFileName).exists(name => names.contains(name.toString)))
+    def fileName(path: Path): Option[String] =
+      Option(path.getFileName).map(_.toString)
+    val keys = libraries.flatMap(fileName).flatMap(nativeLibraryKey).toSet
+    classpath.filterNot(path => fileName(path).flatMap(nativeLibraryKey).exists(keys.contains))
+
+  private def nativeLibraryKey(fileName: String): Option[String] =
+    val stem = fileName.stripSuffix(".jar")
+    if stem == fileName || stem.isEmpty then None
+    else
+      val dash = stem.indexOf('-')
+      Some(if dash <= 0 then stem else stem.take(dash))
 
   /** The linker JVM is a fresh environment. Linux clang finds `ld` on `PATH`. An empty environment makes that exec
     * fail.
@@ -263,11 +287,30 @@ object NativeLink:
       case Some(path) => Map("PATH" -> path)
       case None       => Map.empty
 
+  /** The sbt plugin adds these jars on the test classpath. A program link does not. */
+  private def interfaceJars(
+      kind: NativeLinkKind,
+      toolchain: NativeToolchain,
+  ): ZIO[LockedTools, NativeError, List[Path]] =
+    kind match
+      case NativeLinkKind.Program => ZIO.succeed(Nil)
+      case NativeLinkKind.Tests   =>
+        ZIO.serviceWithZIO[LockedTools]: view =>
+          view
+            .materialize(
+              NativeRequests.testInterface(toolchain, view.catalog, view.repositories)
+            )
+            .mapBoth(
+              error => NativeError.Fetch(NativeFetch.Resolved(error)),
+              _.artifacts.map(_.path),
+            )
+
   /** Compiles the bridge against this revision's tools, then links in a child JVM.
     */
   private def invoke(
       clang: Clang,
       main: MainClass,
+      kind: NativeLinkKind,
       classpath: List[Path],
       work: Path,
       jdk: JdkRuntime,
@@ -294,6 +337,7 @@ object NativeLink:
           clang.clang,
           clang.clangpp,
           classpath,
+          kind,
         ),
       )
       _ <- JvmCompile

@@ -20,15 +20,26 @@ object Scenario:
     for
       dir    <- Workspace.work("histos-scenario-cas")
       starts <- Ref.make(0)
-    yield Store(ContentStore.in(dir), starts)
+      token  <- Ref.make(Option.empty[histos.zinc.PoolCount.Token])
+    yield Store(ContentStore.in(dir), starts, token)
 
 /** The store for one scenario. Checkouts are separate work trees. */
-final class Store private[histos] (val content: ContentStore, starts: Ref[Int]):
+final class Store private[histos] (
+    val content: ContentStore,
+    starts: Ref[Int],
+    token: Ref[Option[histos.zinc.PoolCount.Token]],
+):
   def opened: UIO[Int] = starts.get
+
+  /** Compilers the pool has constructed. A second compile of the same toolchain does not move this. */
+  def openings: UIO[Int] =
+    token.get.flatMap:
+      case Some(found) => found.openings
+      case None        => ZIO.succeed(0)
 
   /** Live Zinc. Each start increments [[opened]]. */
   def compiler: ZLayer[histos.resolve.LockedTools, Nothing, Compiler] =
-    Compiler.counted(starts)
+    histos.zinc.PoolCount.layer(starts, token)
 
   def checkout: ZIO[Scope, IoFailure, Checkout] =
     Workspace.work("histos-scenario").map(root => Checkout(root))

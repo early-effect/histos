@@ -3,7 +3,7 @@ package histos.program
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
 import histos.js.{JsLinkRequest, JsRun, JsRunRequest, Linker}
-import histos.native.{NativeLinkRequest, NativeLinker, NativeToolchain}
+import histos.native.{NativeLinkKind, NativeLinkRequest, NativeLinker, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
@@ -324,6 +324,7 @@ object Program:
                       jdk,
                       binary,
                       cell.version,
+                      NativeLinkKind.Program,
                     ),
                     paths,
                   )

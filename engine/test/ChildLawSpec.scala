@@ -1,6 +1,7 @@
 package histos.testrun
 
 import histos.jdk.{JdkRuntime, Toolchain}
+import histos.native.{NativeOrigin, NativeSource, NativeToolchain}
 import histos.pack.{Assembly, MainClass, MainClassError}
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildRequest, Process, ProcessExit}
 import histos.program.{Program, ProgramError, ProgramFeed}
@@ -13,13 +14,16 @@ import histos.{
   ClangMajor,
   Dep,
   Js,
+  JsEnv,
   Jvm,
   Native,
+  NativeVersion,
   Platform,
   ProjectGraph,
   ProjectName,
   Projects,
   Requires,
+  ScalaVersion,
   TestMain,
   Tool,
   ToolCatalog,
@@ -39,7 +43,8 @@ import zio.{Chunk, Scope, System, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 /** Live children. Process laws provide `Process` and the assembly jar is their one `java -jar`. Runner laws provide the
-  * toolchain: one main, one Node run, one Native link, and one provider.
+  * toolchain: one main, one Node run, one Native link, one JVM provider, a js provider on each environment, and a
+  * native provider.
   */
 object ChildLawSpec extends histos.SuiteClock:
   private val exitMain  = MainClass.trusted("demo.Exit")
@@ -63,6 +68,11 @@ object ChildLawSpec extends histos.SuiteClock:
         linked @@ Requires(Tool.Clang(ClangMajor(21))),
         discovered,
         missed,
+        matched,
+        bridged @@ Requires(Tool.Node),
+        dom @@ Requires(Tool.Node, Tool.Npm),
+        browser @@ Requires(Tool.Firefox, Tool.Node),
+        nativeSuite @@ Requires(Tool.Clang(ClangMajor(21))),
       ).provideSomeLayerShared[TestEnvironment & Scope](running) @@ TestAspect.timeout(4.minutes),
     ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem
 
@@ -432,6 +442,189 @@ object ChildLawSpec extends histos.SuiteClock:
             !Files.exists(TestCompile.testWork(root, app, version, Platform.Jvm)),
           )
 
+  private def matched =
+    test("a suite pattern runs the matching main"):
+      ZIO.scoped:
+        for
+          root    <- Workspace.work("histos-child-match")
+          version <- BuildCompiler.version
+          graph   <- ZIO.fromEither(Projects(module("app", Jvm)(version).test(TestMain("demo.Check"))))
+          _       <- Workspace.writeString(root.resolve("app/src/test/scala/demo/Check.scala"), matchSource)
+          jdk     <- GraphCompile.jdkHere
+          here    <- TestMachine.runtimes(root)
+          ran     <- SuitePattern.from("demo.*") match
+            case Left(_)        => ZIO.succeed(Left(ModuleTestError.Pattern(SuitePatternError.Empty)))
+            case Right(pattern) => runTests(root, graph, jdk, here, List(pattern)).either
+        yield
+          val feeds  = ran.fold(_ => Chunk.empty, identity)
+          val text   = feeds.collect { case TestFeed.Out(line) => line }.mkString("\n")
+          val status = feeds.collect { case TestFeed.Done(cell) => cell.status }
+          assertTrue(
+            ran.isRight,
+            status == Chunk(TestStatus.Passed),
+            text.contains("ran-match"),
+          )
+
+  private def bridged =
+    test("a js provider links the bridge and runs on node"):
+      runJs(JsEnv.Node, "node-ran", "org.scalajs.jsenv.nodejs.NodeJSEnv")
+
+  private def dom =
+    test("a js provider links the bridge and runs under jsdom"):
+      runJs(JsEnv.Jsdom, "dom-ran", "org.scalajs.jsenv.jsdomnodejs.JSDOMNodeJSEnv")
+
+  private def browser =
+    test("a js provider links the bridge and runs under firefox"):
+      runJs(JsEnv.Firefox, "firefox-ran", "chekhov.jsenv.ChekhovJSEnv")
+
+  /** ivy-local nativelib that can unwind a PAuthLR compact frame. The catalog nativelib aborts a multithreaded
+    * `TestMain` on macOS when a backtrace steps `thread_start`.
+    */
+  private val unwindFix = NativeVersion("0.5.13-SNAPSHOT")
+
+  private def unwindNativelib: UIO[Boolean] =
+    System
+      .property("user.home")
+      .orElseSucceed(None)
+      .flatMap:
+        case None      => ZIO.succeed(false)
+        case Some(dir) =>
+          val published =
+            Path.of(dir, ".ivy2", "local", "org.scala-native", "nativelib_native0.5_3", unwindFix.value)
+          ZIO.attemptBlocking(Files.exists(published)).orElseSucceed(false)
+
+  private def nativeSuite =
+    test("a native provider links TestMain and runs the binary"):
+      ZIO.scoped:
+        for
+          root <- Workspace.work("histos-child-native-provider")
+          version = ToolCatalog.default.native.bridgeScala
+          fixed <- unwindNativelib
+          declared =
+            val started = module("app", Native)(version).clang(ClangMajor(21))
+            if fixed then started.nativeVersion(unwindFix) else started
+          graph <- ZIO.fromEither(
+            Projects(
+              declared.testDependencies(
+                Dep("dev.zio::zio-test:2.1.27"),
+                Dep("dev.zio::zio-test-sbt:2.1.27"),
+              )
+            )
+          )
+          _ <- Workspace.writeString(root.resolve("app/src/test/scala/demo/Check.scala"), providerSource("native-ran"))
+          jdk  <- GraphCompile.jdkHere
+          env  <- System.envs.orElseSucceed(Map.empty)
+          here <- Runtimes.read(
+            TestMachine.at(root, if fixed then env.updated(NativeToolchain.Key, "ivy-local") else env)
+          )
+          origin = if fixed then NativeOrigin.Chosen(NativeSource.IvyLocal) else NativeOrigin.Central
+          ran    <- runTests(root, graph, jdk, here, Nil, origin).either
+          bridge <- readRelative(root, "subprocess/NativeBridge.scala")
+          binary <- binaryPresent(root, version)
+        yield
+          val feeds = ran.fold(_ => Chunk.empty, identity)
+          val text  = (feeds.collect { case TestFeed.Out(line) => line } ++ feeds.collect { case TestFeed.Err(line) =>
+            line
+          }).mkString("\n")
+          val status = feeds.collect { case TestFeed.Done(cell) => cell.status }
+          assertTrue(
+            ran.isRight,
+            status == Chunk(TestStatus.Passed),
+            text.contains("native-ran"),
+            bridge.contains(""".withMainClass(Some("scala.scalanative.testinterface.TestMain"))"""),
+            bridge.contains(".withMultithreading(true)"),
+            binary,
+          )
+
+  private def runJs(env: JsEnv, label: String, marker: String) =
+    ZIO.scoped:
+      for
+        root    <- Workspace.work(s"histos-child-js-${env.token}")
+        version <- BuildCompiler.version
+        graph   <- ZIO.fromEither(
+          Projects(
+            module("app", Js)(version)
+              .jsEnv(env)
+              .testDependencies(
+                Dep("dev.zio::zio-test:2.1.27"),
+                Dep("dev.zio::zio-test-sbt:2.1.27"),
+              )
+          )
+        )
+        _         <- Workspace.writeString(root.resolve("app/src/test/scala/demo/Check.scala"), providerSource(label))
+        installed <-
+          if env == JsEnv.Jsdom then installJsdom(root).map(Some(_))
+          else ZIO.succeed(None)
+        jdk    <- GraphCompile.jdkHere
+        here   <- TestMachine.runtimes(root)
+        ran    <- runTests(root, graph, jdk, here, Nil).either
+        bridge <- readRelative(root, "bridge/src/subprocess/JsSuite.scala")
+        files = listed(root)
+      yield
+        val feeds = ran.fold(_ => Chunk.empty, identity)
+        val text  = (feeds.collect { case TestFeed.Out(line) => line } ++ feeds.collect { case TestFeed.Err(line) =>
+          line
+        }).mkString("\n")
+        val status    = feeds.collect { case TestFeed.Done(cell) => cell.status }
+        val script    = files.exists(path => path.contains("/out/") && path.endsWith(".js"))
+        val npmExit   = installed.toList.flatMap(_.collect { case ChildEvent.Exited(code) => code }.toList)
+        val npmErr    = installed.toList.flatMap(_.collect { case ChildEvent.Err(line) => line }.toList).mkString
+        val npmExpect = if env == JsEnv.Jsdom then List(ProcessExit(0)) else Nil
+        val npmNote   = if npmExit == npmExpect then "" else npmErr
+        assertTrue(
+          npmNote.isEmpty,
+          npmExit == npmExpect,
+          ran.isRight,
+          status == Chunk(TestStatus.Passed),
+          text.contains(label),
+          bridge.contains("org.scalajs.testing.bridge.Bridge"),
+          bridge.contains(marker),
+          script,
+        )
+
+  /** The jsdom environment loads `jsdom` by walking up from the child directory, which sits under this checkout. */
+  private def installJsdom(root: Path) =
+    for
+      env    <- System.envs.orElseSucceed(Map.empty[String, String])
+      path   <- ZIO.fromOption(env.get("PATH").filter(_.nonEmpty)).orElseFail(IoFailure(root, IoFault.Stat))
+      events <- ZIO
+        .serviceWithZIO[Process](
+          _.command(
+            List(
+              "npm",
+              "install",
+              "--prefix",
+              root.toAbsolutePath.toString,
+              "--no-fund",
+              "--no-audit",
+              "--no-progress",
+              "jsdom@27",
+            ),
+            root,
+            Map("PATH" -> path),
+          ).runCollect
+        )
+        .provide(Process.live)
+    yield events
+
+  private def readRelative(root: Path, suffix: String): ZIO[Any, IoFailure, String] =
+    listed(root).find(_.endsWith(suffix)) match
+      case None           => ZIO.succeed("")
+      case Some(relative) =>
+        Workspace.readIfPresent(root.resolve(".histos").resolve(relative)).map(_.getOrElse(""))
+
+  private def binaryPresent(root: Path, version: ScalaVersion): ZIO[Any, IoFailure, Boolean] =
+    Workspace
+      .readIfPresent(
+        TestCompile.linkWork(root, app, version, Platform.Native).resolve("child").resolve("binary.path")
+      )
+      .flatMap:
+        case None      => ZIO.succeed(false)
+        case Some(raw) =>
+          val text = raw.trim
+          if text.isEmpty then ZIO.succeed(false)
+          else ZIO.attemptBlocking(Files.isRegularFile(Path.of(text))).orElseSucceed(false)
+
   private def runProgram(
       root: Path,
       graph: ProjectGraph,
@@ -454,11 +647,12 @@ object ChildLawSpec extends histos.SuiteClock:
       jdk: JdkRuntime,
       here: Runtimes,
       patterns: List[SuitePattern],
+      native: NativeOrigin = NativeOrigin.Central,
   ): ZIO[LockedTools, ModuleTestError | ResolveError | IoFailure, Chunk[TestFeed]] =
     val asked = TestRun(root, graph, List(app), jdk, here, TestMode.Run, patterns)
     (
       for
-        _     <- Resolve.update(root, graph, BuildResolvers(graph.resolvers))
+        _     <- Resolve.update(root, graph, BuildResolvers(graph.resolvers), native)
         feeds <- ModuleTest.console(asked).runCollect
       yield feeds
     ).provideSomeLayer[LockedTools](histos.ToolFixture.resolver)
@@ -687,6 +881,23 @@ object ChildLawSpec extends histos.SuiteClock:
       |object Fine extends ZIOSpecDefault:
       |  def spec = test("drop-ran")(assertTrue(true))
       |""".stripMargin
+
+  private val matchSource =
+    """package demo
+      |
+      |object Check:
+      |  def main(args: Array[String]): Unit =
+      |    println("ran-match")
+      |""".stripMargin
+
+  private def providerSource(label: String): String =
+    s"""package demo
+       |
+       |import zio.test.*
+       |
+       |object Check extends ZIOSpecDefault:
+       |  def spec = test("$label")(assertTrue(true))
+       |""".stripMargin
 
   private val missSource =
     """package demo

@@ -7,6 +7,7 @@ import histos.resolve.LockedTools
 import histos.js.{JsLinkRequest, JsSuite, JsSuiteRequest, Linker, ScalaJs}
 import histos.native.{
   NativeCompile,
+  NativeLinkKind,
   NativeLinkRequest,
   NativeLinker,
   NativeOrigin,
@@ -330,6 +331,7 @@ private[testrun] object SuiteLaunch:
                     jdk,
                     binary,
                     histos.ScalaVersion("3.9.0"),
+                    NativeLinkKind.Program,
                   ),
                   classes :: linked.paths,
                 )
@@ -414,6 +416,7 @@ private[testrun] object SuiteLaunch:
                       jdk,
                       entry,
                       histos.ScalaVersion("3.9.0"),
+                      NativeLinkKind.Tests,
                     ),
                     classpath,
                   )

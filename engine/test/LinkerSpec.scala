@@ -8,6 +8,7 @@ import histos.native.{
   LinkError,
   NativeError,
   NativeKey,
+  NativeLinkKind,
   NativeLinkRequest,
   NativeLinker,
   NativeToolchain,
@@ -128,7 +129,16 @@ object LinkerSpec extends histos.SuiteClock:
     JsLinkRequest(version, main, Nil, work, jdk)
 
   private def nativeRequest(work: Path): NativeLinkRequest =
-    NativeLinkRequest(ClangMajor(21), NativeToolchain.Release, Map.empty, work, jdk, main, version)
+    NativeLinkRequest(
+      ClangMajor(21),
+      NativeToolchain.Release,
+      Map.empty,
+      work,
+      jdk,
+      main,
+      version,
+      NativeLinkKind.Program,
+    )
 
   private def nativeKey(sources: Sha256): ZIO[Any, ClangText, Sha256] =
     for

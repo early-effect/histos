@@ -71,6 +71,30 @@ object NativeSpec extends histos.SuiteClock:
         NativeLink.linkerEnv(Map("PATH" -> "")).isEmpty,
       )
     ,
+    test("a different revision of a toolchain library is dropped"):
+      val ivy = List(
+        Path.of("javalib_native0.5_3.jar"),
+        Path.of("scala3lib_native0.5_3.jar"),
+      )
+      val maven = List(
+        Path.of("javalib_native0.5_3-0.5.13-SNAPSHOT.jar"),
+        Path.of("scala3lib_native0.5_3-3.9.0+0.5.13-SNAPSHOT.jar"),
+      )
+      val classpath = List(
+        Path.of("zio-test_native0.5_3-2.1.27.jar"),
+        Path.of("javalib_native0.5_3-0.5.12.jar"),
+        Path.of("scala3lib_native0.5_3-3.9.0+0.5.12.jar"),
+        Path.of("classes"),
+      )
+      val kept = List(
+        Path.of("zio-test_native0.5_3-2.1.27.jar"),
+        Path.of("classes"),
+      )
+      assertTrue(
+        NativeLink.withoutLibraries(classpath, ivy) == kept,
+        NativeLink.withoutLibraries(classpath, maven) == kept,
+      )
+    ,
     test("the link key changes when the clang version or the target changes"):
       val sources = histos.jdk.Sha256.of(
         zio.Chunk.fromArray("src".getBytes(StandardCharsets.UTF_8))
@@ -363,6 +387,7 @@ object NativeSpec extends histos.SuiteClock:
                 jdk,
                 main,
                 histos.ScalaVersion("3.9.0"),
+                NativeLinkKind.Program,
               ),
               Nil,
             )

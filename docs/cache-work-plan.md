@@ -128,7 +128,7 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **purge.** `purge` deletes the index entries of one named namespace and does not delete a blob another namespace still names. A pull-request invocation cannot name `main`. Proof: the remote spec. `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine` (522 passed, 1 ignored).
 
-- [x] **bazel-remote, when docker is present.** One spec starts the pinned container, writes as `pr/1`, reads as `main` and misses, writes as `main`, and then reads a hit. The spec is ignored when docker is absent, so the default suite stays green without a daemon. The image pin lives next to the spec. The run passes `--enable_ac_key_instance_mangling`. Proof: `./histos testOnly --module engine 'histos.schedule.BazelRemoteSpec'` (2 passed) and `./histos test engine` (524 passed, 1 ignored).
+- [x] **bazel-remote, when docker is present.** bazel-remote ignores an instance prefix on the blob and keeps one action cache unless instance mangling is on, so Histos prefixes only the index. The docker spec is deleted. A third-party server is not a Histos child. The namespace law is the loopback client. Proof: `./histos testOnly --module engine 'histos.schedule.HttpCacheSpec'` and `./histos test engine`.
 
 ### Promote and workflow
 

@@ -264,4 +264,35 @@ object NativeRequests:
       ),
       repos,
     )
+
+  /** `test-interface` and `test-interface-sbt-defs`, each alone. Their closure pulls another `scala3lib`. */
+  def testInterface(
+      toolchain: NativeToolchain,
+      catalog: ToolCatalog,
+      repos: Repositories,
+  ): ToolRequest =
+    val version                      = catalog.native.bridgeScala
+    val origin                       = nativeOrigin(toolchain.source)
+    def root(name: String): ToolRoot =
+      ToolRoot.of(
+        Dep.trusted(
+          "org.scala-native",
+          name,
+          toolchain.revision.value,
+          DepKind.Binary,
+        ),
+        version,
+        Platform.Native,
+        Transitivity.Single,
+        origin,
+      )
+    ToolRequest(
+      ToolId(
+        ToolRole.NativeTestInterface,
+        version,
+        ToolVariant.Native(toolchain.revision),
+      ),
+      List(root("test-interface"), root("test-interface-sbt-defs")),
+      repos,
+    )
 end NativeRequests

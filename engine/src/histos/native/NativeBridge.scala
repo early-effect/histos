@@ -6,8 +6,18 @@ import java.nio.file.Path
 object NativeBridge:
   val MainName: String = "subprocess.NativeBridge"
 
-  def source(module: String, main: String, clang: Path, clangpp: Path, classpath: List[Path]): String =
+  def source(
+      module: String,
+      main: String,
+      clang: Path,
+      clangpp: Path,
+      classpath: List[Path],
+      kind: NativeLinkKind,
+  ): String =
     val entries = classpath.map(path => s"""Path.of("${escape(path.toAbsolutePath.toString)}")""").mkString(", ")
+    val threads = kind match
+      case NativeLinkKind.Program => "false"
+      case NativeLinkKind.Tests   => "true"
     s"""package subprocess
        |
        |import scala.scalanative.build.{Build, Config, Logger, NativeConfig}
@@ -38,7 +48,7 @@ object NativeBridge:
        |            .withClangPP(Path.of("${escape(clangpp.toAbsolutePath.toString)}"))
        |            .withLinkStubs(true)
        |            .withOptimize(false)
-       |            .withMultithreading(false)
+       |            .withMultithreading($threads)
        |            .withCompileOptions(Seq("-Qunused-arguments"))
        |        )
        |      Build.buildCachedAwait(config)(using scope)
