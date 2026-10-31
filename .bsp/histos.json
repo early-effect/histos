@@ -1,7 +1,7 @@
 {
   "name": "histos",
   "argv": ["./histos", "bsp"],
-  "version": "0.0.1-SNAPSHOT",
+  "version": "0.0.1",
   "bspVersion": "2.2.0",
   "languages": ["scala"]
 }

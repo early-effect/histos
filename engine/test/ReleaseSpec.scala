@@ -482,22 +482,15 @@ object ReleaseSpec extends ZIOSpecDefault:
         )
       }
 
-  private val snapshotCatalog =
-    test("this repository's snapshot catalog refuses before any http"):
+  private val releaseCatalog =
+    test("this repository is release 0.0.1"):
       ZIO.scoped {
         for
-          jdk    <- GraphCompile.jdkHere
-          repo   <- repository
-          portal <- temp
-          work   <- temp
-          hits   <- Ref.make(0)
-          secret <- secretOf
-          bound  <- PortalServer.open(portal, secret, hits.update(_ + 1))
-          key    <- Keys.signing
-          _      <- ZIO.attempt {
+          repo <- repository
+          work <- temp
+          _    <- ZIO.attempt {
             Files.createDirectories(work.resolve("cache"))
             Files.createDirectories(work.resolve("store"))
-            Files.createDirectories(work.resolve("publish"))
           }
           api    <- ApiJar.locate.provideSomeLayer[Scope](ZLayer.succeed(System.SystemLive))
           loaded <- ZIO
@@ -507,27 +500,17 @@ object ReleaseSpec extends ZIOSpecDefault:
               ZLayer.succeed(ContentStore.in(work.resolve("store"))),
               Loader.live,
             )
-          report <- PublishRun
-            .release(work.resolve("publish"), loaded.graph, Nil, jdk, signing(bound.url, key.armor), ReleaseMode.Hold)
-            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
-          count  <- hits.get
-          record <- exists(deployment(work.resolve("publish"), "histos"))
           (library, assembly) = forms(loaded.graph)
         yield assertTrue(
-          snapshotShip(loaded.graph),
+          releaseShip(loaded.graph),
           organization(loaded.graph),
           library,
           assembly,
-          report.refused.contains("histos is 0.0.1-SNAPSHOT, which is not a release"),
-          report.failed.isEmpty,
-          report.deployed.isEmpty,
-          !record,
-          count == 0,
         )
       }
 
   def spec =
-    suite("release")(hold, automatic, failedBundle, missingSecrets, shaped, rehearsal, snapshotCatalog)
+    suite("release")(hold, automatic, failedBundle, missingSecrets, shaped, rehearsal, releaseCatalog)
       .provideSomeLayerShared[zio.test.TestEnvironment & Scope](
         histos.ToolFixture.layer(Projects(module("library", Jvm)(scala3)))
       ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(5.minutes)
@@ -698,7 +681,13 @@ object ReleaseSpec extends ZIOSpecDefault:
         found.url.value == "https://github.com/early-effect/histos" &&
         found.connection.value == "scm:git@github.com:early-effect/histos.git"
       case None => false
-    licenseOk && developerOk && scmOk
+    val descriptionOk = graph.facts.description match
+      case Some(found) => found.value == "Histos is a Scala build tool."
+      case None        => false
+    val urlOk = graph.facts.url match
+      case Some(found) => found.value == "https://github.com/early-effect/histos"
+      case None        => false
+    licenseOk && developerOk && scmOk && descriptionOk && urlOk
 
   private def lines(raw: String): Set[String] =
     raw.split('\n').iterator.filter(_.nonEmpty).toSet
@@ -729,10 +718,10 @@ object ReleaseSpec extends ZIOSpecDefault:
           case None      => ZIO.succeed("")
       case _ => ZIO.succeed("")
 
-  private def snapshotShip(graph: histos.ProjectGraph): Boolean =
+  private def releaseShip(graph: histos.ProjectGraph): Boolean =
     graph.catalog match
       case Catalog.Manual(ship :: rest) =>
-        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.1-SNAPSHOT"
+        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.1"
       case Catalog.Empty | Catalog.Lines(_) => false
 
   private def recorded(graph: histos.ProjectGraph): List[(String, Option[String])] =

@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 rem Generated from the manual ship. Finds java.exe and runs the pinned launcher jar.
 set "HISTOS_BOOT_ROOT=%~dp0"
-set "HISTOS_BOOT_VERSION=0.0.1-SNAPSHOT"
+set "HISTOS_BOOT_VERSION=0.0.1"
 for /f "delims=" %%T in ('powershell.exe -NoLogo -NoProfile -Command "[IO.Path]::Combine([IO.Path]::GetTempPath(), 'histos-' + [Guid]::NewGuid().ToString('N'))"') do set "HISTOS_BOOT_TEMP=%%T"
 if not defined HISTOS_BOOT_TEMP exit /b 1
 mkdir "%HISTOS_BOOT_TEMP%"
@@ -62,7 +62,7 @@ if ($jar) {
   foreach ($name in @('repository','version','revision','sha256')) {
     if (-not $fields.ContainsKey($name)) { Fail 'invalid launcher lock' }
   }
-  if ($fields['version'] -ne $version) { Fail 'launcher lock version does not match script' }
+  if ($fields['version'] -ne $version -and $fields['version'] -ne ($version + '-SNAPSHOT')) { Fail 'launcher lock version does not match script' }
   $expected = $fields['sha256'].ToLowerInvariant()
   if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid launcher lock' }
   $repository = $fields['repository']

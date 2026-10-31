@@ -22,7 +22,7 @@ Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `w
 
 `assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The next `./histos` in this checkout runs `dist/histos.jar` when that checksum matches.
 
-When the build file calls api the running jar does not contain:
+When the catalog is a snapshot and the build file calls api the running jar does not contain:
 
 ```
 ./histos assembly
@@ -30,9 +30,9 @@ When the build file calls api the running jar does not contain:
 ./histos launcher --update
 ```
 
-`publish snapshots` is the normal publish. It uploads the ship `histos`: the library `histos-api_3` and the assembly `rocks.earlyeffect:histos`. The catalog version stays `0.0.1-SNAPSHOT`. The repository stores a timestamped revision of that version. The command reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign, tag, or open a portal deployment. That is `publish release`, and this catalog still refuses it.
+The catalog is `manual("histos", manual"0.0.1")`. `publish snapshots` refuses that number, because it is a release. `publish release` signs the bundle and uploads it to the Central Portal. It reads `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, and `PGP_PASSPHRASE`. With no flag it holds at `VALIDATED`. `--automatic` publishes in that command. This checkout still boots from the snapshot pin in [.histos/launcher.lock](.histos/launcher.lock): the script version is the ship, and the lock is the snapshot of that same number.
 
-`launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Run it after `publish snapshots` so the latest revision is the assembly just uploaded. Commit the lock. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
+`launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Run it after a snapshot publish so the latest revision is the assembly just uploaded. This catalog refuses that publish until it is a snapshot again. Commit the lock. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
 
 ## A release
 
@@ -40,9 +40,11 @@ When the build file calls api the running jar does not contain:
 
 Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `HISTOS_PORTAL` to that URL. Unset, the client uses `https://central.sonatype.com`. [ReleaseSpec](engine/test/ReleaseSpec.scala) runs that client against [PortalServer](central/src/histos/central/PortalServer.scala) and does not call Central. The portal reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. Signing reads `PGP_SECRET` and `PGP_PASSPHRASE`.
 
-This catalog is still the manual snapshot in [histos.scala](histos.scala), so `publish release` in this checkout refuses before any HTTP. The launcher stays the Maven coordinate in [LauncherPin](engine/src/histos/publish/LauncherPin.scala) and the sha256 in [.histos/launcher.lock](.histos/launcher.lock). `./histos` does not download a GitHub asset.
+This catalog is `0.0.1` in [histos.scala](histos.scala). The launcher this checkout runs stays the Maven snapshot in [LauncherPin](engine/src/histos/publish/LauncherPin.scala) and the sha256 in [.histos/launcher.lock](.histos/launcher.lock). `./histos` does not download a GitHub asset.
 
-The ship `histos` publishes `api`, a library, and `app`, an assembly. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. After `VALIDATED`, `publish assets` uploads it to the GitHub release, before promote, so the jar is installable while the library version can still be dropped. Histos does not create the tag. One ship in the catalog is `v<version>`. More than one is `<ship>/v<version>`. The release has to exist already. Humans and other CI use `gh release download`. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub. `--automatic` does not upload an asset. The asset reads `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
+The ship `histos` publishes `api`, a library, and `app`, an assembly. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. The pom carries the organization description and url, which Central requires. After `VALIDATED`, `publish assets` uploads the jar to the GitHub release, before promote, so the jar is installable while the library version can still be dropped. Histos does not create the tag or the GitHub release. One ship in the catalog is `v<version>`. More than one is `<ship>/v<version>`. Create the release first (`gh release create v0.0.1`), which pushes the tag. The generated workflow then runs `publish release histos` and `publish assets histos`. A later dispatch runs `publish promote` with the deployment id. Humans and other CI use `gh release download`. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub. `--automatic` does not upload an asset. The asset reads `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
+
+`ci.yml` does not run on that tag. Tag a commit whose `ci` workflow is already green. The release job does not run the suite again. After the version is on Central, set the catalog to the next snapshot before `publish snapshots` will accept this repository.
 
 A library-only ship names no asset and uploads none. Another project uses this same split when people install a tool and builds depend on a library.
 

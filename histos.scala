@@ -58,6 +58,8 @@ object build extends HistosBuild:
           connection"scm:git@github.com:early-effect/histos.git",
         )
       )
+      .description(pom"Histos is a Scala build tool.")
+      .url(url"https://github.com/early-effect/histos")
       .runnerTools(
         RunnerTools(
           Some(NodeFloor(25)),
@@ -65,7 +67,7 @@ object build extends HistosBuild:
           Some(ToolRevision("1.62.1")),
         )
       )(
-        ships(manual("histos", manual"0.0.1-SNAPSHOT")(api, app)),
+        ships(manual("histos", manual"0.0.1")(api, app)),
         api,
         central,
         engine,
