@@ -88,7 +88,7 @@ object AssetSpec extends ZIOSpecDefault:
         )
 
   private val published =
-    test("a published deployment is not an upload"):
+    test("a published deployment uploads the jar and leaves the record"):
       ZIO.scoped:
         for
           root  <- temp
@@ -96,12 +96,20 @@ object AssetSpec extends ZIOSpecDefault:
           graph <- ZIO.fromEither(one)
           _     <- plant(root, "dist/histos.jar", jar)
           _     <- note(root, "histos", DeploymentState.Published, "1.0.0")
-          ran   <- AssetRun.publish(root, graph, List("histos"), env(stand.base)).either
-          seen  <- stand.seen
+          path = DeploymentFile.location(root, ShipName("histos"))
+          before <- ZIO.attempt(Files.readString(path))
+          ran    <- AssetRun.publish(root, graph, List("histos"), env(stand.base)).either
+          seen   <- stand.seen
+          after  <- ZIO.attempt(Files.readString(path))
         yield assertTrue(
-          ran == Right(AssetReport(List("histos is PUBLISHED, not VALIDATED"), Nil)),
-          seen.requests == 0,
-          seen.uploads.isEmpty,
+          ran == Right(AssetReport(Nil, List("histos histos.jar"))),
+          seen.requests == 2,
+          seen.tags == List("v1.0.0"),
+          seen.uploads == List(
+            AssetStand.Upload("early-effect", "histos", "histos.jar", jar, "application/octet-stream")
+          ),
+          before == after,
+          after.contains("state PUBLISHED"),
         )
 
   private val missingFile =

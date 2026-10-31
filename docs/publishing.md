@@ -55,7 +55,7 @@ Sona.layer(ReleaseMode.Automatic)
 Sona.layer(ReleaseMode.Hold)
 ```
 
-The snapshot branch ignores the mode. The release branch uses it. `--automatic` is on the request, so a wrapper and the stock both see it, and it forces Automatic for that run. There is no `--hold` flag. `followUp` is `Deployment` only for Hold, and that is the promote workflow. Automatic is `FollowUp.Finished`. Secrets are the five names, because the release branch signs: `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, `PGP_KEY_HEX`.
+The snapshot branch ignores the mode. The release branch uses it. Automatic polls until `PUBLISHED`. Hold polls until `VALIDATED`. `FAILED` stops the poll. `--automatic` is on the request, so a wrapper and the stock both see it, and it forces Automatic for that run. There is no `--hold` flag. `followUp` is `Deployment` only for Hold, and that is the promote workflow. Automatic is `FollowUp.Finished`. Secrets are the five names, because the release branch signs: `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, `PGP_KEY_HEX`.
 
 `publish snapshots` and `publish release` both provide `build.sona`. The ship version is what differs. This repository uses the default, so `0.0.1` portals and a snapshot coordinate PUTs, through the same layer.
 

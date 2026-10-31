@@ -36,7 +36,7 @@ The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish sn
 
 This catalog is `manual("histos", manual"0.0.1")`. That number is a release, so `publish snapshots` and `publish release` both sign it and portal it. A new launcher snapshot is a publish of a snapshot coordinate, then `launcher --update`.
 
-The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. A release bundle is published in that command, and `.histos/deployments/<ship>` is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` stops at `VALIDATED`. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
+The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 
 `publish release` does not stage a snapshot coordinate. It reports that ship and continues with the others. A ship that depends on a snapshot is reported and not uploaded. One ship's upload failure does not fail the others. Missing credentials, a missing signing key, or a portal base that cannot be read fails the whole invocation before compile, when the layer's secret names are the five below. `publish snapshots` checks the username and password only. A layer whose secret names differ skips the check.
 
@@ -46,7 +46,7 @@ Unset, `PGP_SECRET` is the key and `PGP_PASSPHRASE` unlocks it. `PGP_KEY_HEX`, w
 
 `publish promote <deployment>` publishes a `VALIDATED` deployment. `publish drop <deployment>` drops the deployment first, then deletes the GitHub asset when that ship names one. A failed delete leaves the deployment dropped.
 
-`publish assets` uploads the file named on an assembly. A named ship fails unless `.histos/deployments/<ship>` says `VALIDATED`. No name skips a ship with no file, or a file in another state. This repository writes `PUBLISHED`, and [histos-release.yml](.github/workflows/histos-release.yml) runs `./histos publish assets histos` after `./histos publish release histos`. That step fails: `histos is PUBLISHED, not VALIDATED`.
+`publish assets` uploads the file named on an assembly when `.histos/deployments/<ship>` says `VALIDATED` or `PUBLISHED`. A named ship in another state fails. No name skips a ship with no file, or a file in another state. This repository writes `PUBLISHED`, and [histos-release.yml](.github/workflows/histos-release.yml) runs `./histos publish assets histos` after `./histos publish release histos`.
 
 The workflow is dispatch only. A tag does not publish. A ship that names an asset runs `./histos assembly`, then `./histos publish release <ship>`, then `./histos publish assets <ship>`. A library ship runs `publish release` only. The file does not pass `--automatic`. This build is Automatic anyway, because that is the default layer. Hold is the build that also renders `histos-promote.yml`. That file's only input is the deployment id, and its command is `./histos publish promote`.
 
