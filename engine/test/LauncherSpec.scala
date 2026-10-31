@@ -25,6 +25,22 @@ object LauncherSpec extends ZIOSpecDefault:
   private val version = "0.0.1-SNAPSHOT"
 
   private val checks = suite("launcher publish")(
+    test("a release ship boots the snapshot pin of that number"):
+      val posix   = LauncherScript.posix("0.0.1")
+      val windows = LauncherScript.windows("0.0.1")
+      ZIO.succeed(
+        assertTrue(
+          LauncherScript.boots("0.0.1-SNAPSHOT", "0.0.1-SNAPSHOT"),
+          LauncherScript.boots("0.0.1", "0.0.1-SNAPSHOT"),
+          !LauncherScript.boots("0.0.1", "0.0.2-SNAPSHOT"),
+          !LauncherScript.boots("0.0.2-SNAPSHOT", "0.0.1-SNAPSHOT"),
+          posix.contains("""[ "$version" = "$locked_version" ] || [ "${version}-SNAPSHOT" = "$locked_version" ]"""),
+          windows.contains(
+            """if ($fields['version'] -ne $version -and $fields['version'] -ne ($version + '-SNAPSHOT'))"""
+          ),
+        )
+      )
+    ,
     test("the committed scripts are the manual ship"):
       for
         value <- System
@@ -37,9 +53,10 @@ object LauncherSpec extends ZIOSpecDefault:
         windows <- Workspace.readString(root.resolve("histos.bat"))
         pin     <- LauncherPin.read(root)
       yield assertTrue(
-        posix == LauncherScript.posix(version),
-        windows == LauncherScript.windows(version),
+        posix == LauncherScript.posix("0.0.1"),
+        windows == LauncherScript.windows("0.0.1"),
         pin.version == version,
+        LauncherScript.boots("0.0.1", pin.version),
       )
     ,
     test("the api name keeps the binary suffix and the assembly name does not"):

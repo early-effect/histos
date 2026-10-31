@@ -4,7 +4,7 @@
 set -eu
 umask 077
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-version=0.0.1-SNAPSHOT
+version=0.0.1
 cache=${XDG_CACHE_HOME:-${HOME:?HOME is unset}/.cache}/histos
 work=
 cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }
@@ -124,7 +124,7 @@ else
   [ -f "$root/.histos/launcher.lock" ] || fail "missing launcher.lock; restore the committed pin or use a source assembly"
   parse_lock "$root/.histos/launcher.lock"
   { IFS= read -r repository; IFS= read -r locked_version; IFS= read -r revision; IFS= read -r expected; } < "$work/fields"
-  [ "$version" = "$locked_version" ] || fail "launcher lock version does not match script"
+  [ "$version" = "$locked_version" ] || [ "${version}-SNAPSHOT" = "$locked_version" ] || fail "launcher lock version does not match script"
   valid_url "$repository" repository || fail "invalid launcher repository"
   local_jar=$root/.histos/launcher-cache/$expected/histos.jar
   dest=$cache/launchers/$revision/$expected

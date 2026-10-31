@@ -49,7 +49,7 @@ import zio.{Chunk, IO, Ref, UIO, ZIO}
 object Bsp:
   val BspVersion: String    = "2.2.0"
   val ServerName: String    = "histos"
-  val ServerVersion: String = "0.0.1-SNAPSHOT"
+  val ServerVersion: String = "0.0.1"
 
   enum Answer:
     case Reply(line: String)

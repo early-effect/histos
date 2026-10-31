@@ -23,7 +23,7 @@ object LauncherScript:
             .read(repo)
             .mapError(ScriptError.Pin(_))
             .flatMap: pin =>
-              if pin.version != version then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
+              if !boots(version, pin.version) then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
               else
                 agree(repo.resolve("histos"), posix(version)) *>
                   agree(repo.resolve("histos.bat"), windows(version))
@@ -38,7 +38,7 @@ object LauncherScript:
             .read(repo)
             .mapError(ScriptError.Pin(_))
             .flatMap: pin =>
-              if pin.version != version then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
+              if !boots(version, pin.version) then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
               else
                 write(
                   repo.resolve("histos"),
@@ -56,6 +56,10 @@ object LauncherScript:
 
   def windows(version: String): String =
     Windows.replace("__VERSION__", version)
+
+  /** The lock is the jar this checkout runs. A release ship still boots the snapshot of that same number. */
+  def boots(ship: String, pin: String): Boolean =
+    pin == ship || (!ship.endsWith("-SNAPSHOT") && pin == s"$ship-SNAPSHOT")
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     if !launcher(graph) then Right(None)
@@ -224,7 +228,7 @@ else
   [ -f "$root/.histos/launcher.lock" ] || fail "missing launcher.lock; restore the committed pin or use a source assembly"
   parse_lock "$root/.histos/launcher.lock"
   { IFS= read -r repository; IFS= read -r locked_version; IFS= read -r revision; IFS= read -r expected; } < "$work/fields"
-  [ "$version" = "$locked_version" ] || fail "launcher lock version does not match script"
+  [ "$version" = "$locked_version" ] || [ "${version}-SNAPSHOT" = "$locked_version" ] || fail "launcher lock version does not match script"
   valid_url "$repository" repository || fail "invalid launcher repository"
   local_jar=$root/.histos/launcher-cache/$expected/histos.jar
   dest=$cache/launchers/$revision/$expected
@@ -347,7 +351,7 @@ if ($jar) {
   foreach ($name in @('repository','version','revision','sha256')) {
     if (-not $fields.ContainsKey($name)) { Fail 'invalid launcher lock' }
   }
-  if ($fields['version'] -ne $version) { Fail 'launcher lock version does not match script' }
+  if ($fields['version'] -ne $version -and $fields['version'] -ne ($version + '-SNAPSHOT')) { Fail 'launcher lock version does not match script' }
   $expected = $fields['sha256'].ToLowerInvariant()
   if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid launcher lock' }
   $repository = $fields['repository']
