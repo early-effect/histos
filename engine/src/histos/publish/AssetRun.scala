@@ -18,7 +18,8 @@ final case class AssetReport(failed: List[String], uploaded: List[String]):
     failed.nonEmpty
 end AssetReport
 
-/** Upload each named asset whose deployment file says `VALIDATED`. Missing secrets fail before a socket. */
+/** Upload each named asset whose deployment file says `VALIDATED` or `PUBLISHED`. Missing secrets fail before a socket.
+  */
 object AssetRun:
   def publish(
       repo: Path,
@@ -118,6 +119,9 @@ object AssetRun:
                 record => decide(repo, graph, asked, version, files, record),
               )
 
+  private def uploadable(state: DeploymentState): Boolean =
+    state == DeploymentState.Validated || state == DeploymentState.Published
+
   private def decide(
       repo: Path,
       graph: ProjectGraph,
@@ -132,11 +136,11 @@ object AssetRun:
         asked match
           case Asked.Named(_) => ZIO.succeed(Judged.failed(s"$ship has no recorded deployment"))
           case Asked.Quiet(_) => ZIO.succeed(Judged.skip)
-      case Some(found) if found.state != DeploymentState.Validated =>
+      case Some(found) if !uploadable(found.state) =>
         asked match
           case Asked.Named(_) =>
             val token = DeploymentFile.token(found.state).getOrElse("recorded")
-            ZIO.succeed(Judged.failed(s"$ship is $token, not VALIDATED"))
+            ZIO.succeed(Judged.failed(s"$ship is $token, not VALIDATED or PUBLISHED"))
           case Asked.Quiet(_) => ZIO.succeed(Judged.skip)
       case Some(found) if found.version != version =>
         asked match
