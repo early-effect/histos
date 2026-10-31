@@ -283,11 +283,13 @@ object Workflow:
           case JobWhen.Always      => List(jobLines(plugin, job).mkString("\n"))
           case JobWhen.Schedule(_) => Nil
 
-  /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. */
+  /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A GitHub
+    * release is not part of this file.
+    */
   private def releaseWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
     graph.catalog.ships match
       case Nil   => None
-      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships, sona)))
+      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(ships, sona)))
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
   private def promoteWorkflow(sona: Publishing): Option[RenderedWorkflow] =
@@ -295,7 +297,7 @@ object Workflow:
       case FollowUp.Finished   => None
       case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument))
 
-  private def releaseDocument(graph: ProjectGraph, ships: List[Ship], sona: Publishing): String =
+  private def releaseDocument(ships: List[Ship], sona: Publishing): String =
     val lines = List(
       "name: release",
       "on:",
@@ -303,31 +305,20 @@ object Workflow:
       "permissions:",
       "  contents: read",
       "jobs:",
-    ) ++ ships.flatMap(ship => releaseJob(graph, ship, sona))
+    ) ++ ships.flatMap(ship => releaseJob(ship, sona))
     lines.mkString("\n") + "\n"
 
-  private def releaseJob(graph: ProjectGraph, ship: Ship, sona: Publishing): List[String] =
-    val name   = ship.name.value
-    val upload = namesAsset(graph, ship)
-    val access = if upload then "write" else "read"
+  private def releaseJob(ship: Ship, sona: Publishing): List[String] =
+    val name = ship.name.value
     List(
       s"  release-$name:",
       s"    runs-on: $Runner",
       "    permissions:",
-      s"      contents: $access",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ (if upload then List(s"      - run: ${quote("./histos assembly")}") else Nil) ++ List(
-      s"      - run: ${quote(s"./histos publish release $name")}"
-    ) ++ secretEnv(sona.secretNames) ++ (if upload then assetStep(name) else Nil)
-
-  private def assetStep(name: String): List[String] =
-    List(
-      s"      - run: ${quote(s"./histos publish assets $name")}",
-      "        env:",
-      "          GITHUB_TOKEN: ${{ github.token }}",
-      "          GITHUB_REPOSITORY: ${{ github.repository }}",
-    )
+      s"      - run: ${quote(s"./histos publish release $name")}",
+    ) ++ secretEnv(sona.secretNames)
 
   /** Promote does not sign, so this file does not list `secretNames`. */
   private val promoteSecrets: List[String] =
@@ -361,12 +352,6 @@ object Workflow:
 
   private def secret(name: String): String =
     s"          $name: $${{ secrets.$name }}"
-
-  private def namesAsset(graph: ProjectGraph, ship: Ship): Boolean =
-    ship.members.toList.exists: name =>
-      graph.get(name) match
-        case Some(module: Module) => module.asset.isDefined
-        case _                    => false
 
   private def scheduled(graph: ProjectGraph): List[RenderedWorkflow] =
     graph.plugins.flatMap: plugin =>

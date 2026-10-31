@@ -561,7 +561,7 @@ object WorkflowSpec extends ZIOSpecDefault:
     )
 
   private val release = suite("release")(
-    test("one ship publishes on dispatch and assembles the jar first"):
+    test("one ship publishes on dispatch and does not upload to GitHub"):
       val body = renderRelease(
         List(manual("histos", "0.0.1-SNAPSHOT", "app")),
         Set("app"),
@@ -596,7 +596,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             !promoteBody.contains("--automatic")
           case _ => false
     ,
-    test("two ships release by dispatch, and a library ship does not upload"):
+    test("two ships release by dispatch, and neither uploads to GitHub"):
       val rendered = renderRelease(
         List(line("libs", "1.0.0", "core"), line("tool", "2.0.0", "app")),
         Set("app"),
@@ -618,13 +618,11 @@ object WorkflowSpec extends ZIOSpecDefault:
             !body.contains("actions/cache") &&
             !body.contains("needs:") &&
             libsJob.contains("\"./histos publish release libs\"") &&
-            !libsJob.contains("publish assets") &&
-            !libsJob.contains("assembly") &&
-            !libsJob.contains("contents: write") &&
-            toolJob.contains("\"./histos assembly\"") &&
             toolJob.contains("\"./histos publish release tool\"") &&
-            toolJob.contains("\"./histos publish assets tool\"") &&
-            toolJob.contains("contents: write")
+            !body.contains("publish assets") &&
+            !body.contains("assembly") &&
+            !body.contains("contents: write") &&
+            !body.contains("GITHUB_TOKEN")
           case _ => false
     ,
     test("a schedule is rendered after the release file"):
@@ -702,10 +700,9 @@ object WorkflowSpec extends ZIOSpecDefault:
       |  release-histos:
       |    runs-on: ubuntu-26.04
       |    permissions:
-      |      contents: write
+      |      contents: read
       |    steps:
       |      - uses: actions/checkout@v7
-      |      - run: "./histos assembly"
       |      - run: "./histos publish release histos"
       |        env:
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -713,10 +710,6 @@ object WorkflowSpec extends ZIOSpecDefault:
       |          PGP_SECRET: ${{ secrets.PGP_SECRET }}
       |          PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
       |          PGP_KEY_HEX: ${{ secrets.PGP_KEY_HEX }}
-      |      - run: "./histos publish assets histos"
-      |        env:
-      |          GITHUB_TOKEN: ${{ github.token }}
-      |          GITHUB_REPOSITORY: ${{ github.repository }}
       |""".stripMargin
 
   private val holdPromote: String =

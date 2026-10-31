@@ -61,7 +61,7 @@ The snapshot branch ignores the mode. The release branch uses it. Automatic poll
 
 A narrower publisher is still a legal `Publishing`. A build that will never snapshot writes an effect that only portals, and that effect may fail `Version` if handed a snapshot. That fault belongs to that effect.
 
-Signing stays inside the Sonatype effect. The stage that both branches share packs unsigned files. `histos.central.Publisher` remains the Maven-file writer for the snapshot PUT. It is not this trait.
+Signing stays inside the Sonatype effect. `publishLocal`, `publish snapshots`, and `publish release` stage the same unsigned files: the jar, the pom, the sources jar, and the javadoc jar. A release signs them. A snapshot PUT and a local install do not. `histos.central.Publisher` remains the Maven-file writer for the snapshot PUT. It is not this trait.
 
 ## Local is Coursier
 
@@ -92,4 +92,4 @@ The modules a command names are the modules that effect publishes. There is no p
 
 The data trait `histos.Publisher`, `PublisherId`, `.publish`, and `.publishTo` are the old model. A destination was a value the engine matched by id. That match is gone. `publishLocal`, `publish snapshots`, and `publish release` remain the commands. Each one is `publish.provideLayer(...)`.
 
-Promote, drop, and the asset upload stay commands. They are not methods on `Publishing`. GitHub Packages and CodeArtifact are not implementations in this repository. A later one is another layer.
+Promote, drop, and the asset upload stay commands. They are not methods on `Publishing`. The release workflow runs `publish release` only. `publish assets` uploads a packaged file to a GitHub release when someone asks, and the release does not. GitHub Packages and CodeArtifact are not implementations in this repository. A later one is another layer.

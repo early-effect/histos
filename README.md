@@ -24,17 +24,19 @@ Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `w
 
 `launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Commit the lock after it changes. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
 
-The script version is the ship number. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's lock is `0.0.1-SNAPSHOT`. [histos.scala](histos.scala) calls `ScalacFlag.MaxInlines` on `app`. The jar named by the lock was published before that flag existed, so CI cannot load this build file until a launcher that contains it is the pin.
+The script version is the ship number, or the lock cannot boot. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's script stays `0.0.1` and the lock stays `0.0.1-SNAPSHOT`, which is the pin that contains `ScalacFlag.MaxInlines`. The ship number is `0.0.2`. A script of `0.0.2` waits until the pin is `0.0.2-SNAPSHOT`.
 
 ## Publishing
 
 The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish snapshots`, and `publish release` are three commands. The last two close the build's `sona` layer. The staged revision chooses the Sonatype branch. The command name does not.
 
-- A snapshot (`<ship>-SNAPSHOT`, or the unique `<ship>-<sha>-SNAPSHOT`) is a PUT to the Central snapshot repository. It needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign.
-- A release number is signed, then uploaded as one portal bundle.
+`publishLocal`, `publish snapshots`, and `publish release` stage the same files. A library module stages its jar. An assembly stages the packaged program. Each also stages the pom, the sources jar, and the javadoc jar. `publishLocal` writes those files where Coursier resolves `ivy2Local` and does not sign. A snapshot coordinate is a PUT of those files and does not sign. A release signs those files, then uploads one portal bundle.
+
+- A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
+- A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 - A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-This catalog is `manual("histos", manual"0.0.1")`. That number is a release, so `publish snapshots` and `publish release` both sign it and portal it. A new launcher snapshot is a publish of a snapshot coordinate, then `launcher --update`.
+This catalog is `manual("histos", manual"0.0.2")`. That number is a release, so `publish snapshots` and `publish release` both sign it and portal it. `0.0.1` is already on Central. A new launcher snapshot is a publish of a snapshot coordinate, then `launcher --update`.
 
 The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 
@@ -42,19 +44,19 @@ The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `pu
 
 Unset, `PGP_SECRET` is the key and `PGP_PASSPHRASE` unlocks it. `PGP_KEY_HEX`, when set, selects that fingerprint. `HISTOS_SIGNER=gpg` signs with gpg, and then the fingerprint is required. The release workflow lists `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 
-`publishLocal` installs where Coursier resolves `ivy2Local`. A token is a ship, an aggregate, or a module. No token publishes every ship the command can write. It does not take a directory, it does not write `~/.m2`, and it does not sign. It accepts a snapshot, a release, and a `-ci` coordinate.
+A token is a ship, an aggregate, or a module. No token publishes every ship the command can write. `publishLocal` does not take a directory and it does not write `~/.m2`. It accepts a snapshot, a release, and a `-ci` coordinate.
 
 `publish promote <deployment>` publishes a `VALIDATED` deployment. `publish drop <deployment>` drops the deployment first, then deletes the GitHub asset when that ship names one. A failed delete leaves the deployment dropped.
 
-`publish assets` uploads the file named on an assembly when `.histos/deployments/<ship>` says `VALIDATED` or `PUBLISHED`. A named ship in another state fails. No name skips a ship with no file, or a file in another state. This repository writes `PUBLISHED`, and [histos-release.yml](.github/workflows/histos-release.yml) runs `./histos publish assets histos` after `./histos publish release histos`.
+`publish assets` uploads the file named on an assembly when `.histos/deployments/<ship>` says `VALIDATED` or `PUBLISHED`, and a GitHub release for that tag already exists. A named ship in another state fails. No name skips a ship with no file, or a file in another state. The command does not create the release. The release workflow does not run it.
 
-The workflow is dispatch only. A tag does not publish. A ship that names an asset runs `./histos assembly`, then `./histos publish release <ship>`, then `./histos publish assets <ship>`. A library ship runs `publish release` only. The file does not pass `--automatic`. This build is Automatic anyway, because that is the default layer. Hold is the build that also renders `histos-promote.yml`. That file's only input is the deployment id, and its command is `./histos publish promote`.
+The workflow is dispatch only. A tag does not publish. Each ship runs `./histos publish release <ship>`, which signs the staged files and uploads that bundle. The file does not pass `--automatic`. This build is Automatic anyway, because that is the default layer. Hold is the build that also renders `histos-promote.yml`. That file's only input is the deployment id, and its command is `./histos publish promote`.
 
 Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `HISTOS_PORTAL` to that URL. Unset, the client uses `https://central.sonatype.com`. [ReleaseSpec](engine/test/ReleaseSpec.scala) runs that client against [PortalServer](central/src/histos/central/PortalServer.scala) and does not call Central.
 
-The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create the tag or the GitHub release. Humans create the GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
+The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The three publish commands package `app` the same way. A release signs that jar. `assembly` writes `dist/histos.jar` for this checkout. That file is the local launcher, not a second publication. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create a tag or a GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
 
-`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After `0.0.1` is on Central, the next development catalog is a snapshot. The lock stays a snapshot of the ship number so `./histos` still boots.
+`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After `0.0.2` is on Central, the next development catalog is a snapshot. The lock stays a snapshot of the ship number so `./histos` still boots.
 
 ## An operation
 

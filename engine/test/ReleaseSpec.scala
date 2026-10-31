@@ -475,7 +475,7 @@ object ReleaseSpec extends ZIOSpecDefault:
       }
 
   private val releaseCatalog =
-    test("this repository is release 0.0.1"):
+    test("this repository is release 0.0.2"):
       ZIO.scoped {
         for
           repo <- repository
@@ -719,7 +719,7 @@ object ReleaseSpec extends ZIOSpecDefault:
   private def releaseShip(graph: histos.ProjectGraph): Boolean =
     graph.catalog match
       case Catalog.Manual(ship :: rest) =>
-        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.1"
+        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.2"
       case Catalog.Empty | Catalog.Lines(_) => false
 
   private def recorded(graph: histos.ProjectGraph): List[(String, Option[String])] =

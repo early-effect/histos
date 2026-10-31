@@ -7,10 +7,9 @@ jobs:
   release-histos:
     runs-on: ubuntu-26.04
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
-      - run: "./histos assembly"
       - run: "./histos publish release histos"
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -18,7 +17,3 @@ jobs:
           PGP_SECRET: ${{ secrets.PGP_SECRET }}
           PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
           PGP_KEY_HEX: ${{ secrets.PGP_KEY_HEX }}
-      - run: "./histos publish assets histos"
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
