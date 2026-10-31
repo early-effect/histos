@@ -1,37 +1,16 @@
 name: release
 on:
-  push:
-    tags:
-      - "v0.0.1"
   workflow_dispatch:
-    inputs:
-      command:
-        description: release or promote
-        required: true
-        type: choice
-        options:
-          - release
-          - promote
-      ship:
-        description: ship
-        required: true
-        type: choice
-        options:
-          - "histos"
-      deployment:
-        description: deployment id
-        required: false
-        type: string
 permissions:
   contents: read
 jobs:
   release-histos:
-    if: github.ref == 'refs/tags/v0.0.1' || (inputs.command == 'release' && inputs.ship == 'histos')
     runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - run: "./histos assembly"
       - run: "./histos publish release histos"
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -43,12 +22,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-  promote:
-    if: github.event_name == 'workflow_dispatch' && inputs.command == 'promote'
-    runs-on: ubuntu-26.04
-    steps:
-      - uses: actions/checkout@v7
-      - run: "./histos publish promote ${{ inputs.deployment }}"
-        env:
-          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
-          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}

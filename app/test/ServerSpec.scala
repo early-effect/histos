@@ -155,6 +155,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Daemon.open(
                   root,
                   built,
+                  histos.HistosBuild.fixed(built),
                   jdk,
                   Cli.VersionText,
                   root.resolve("missing-api.jar"),
@@ -230,6 +231,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Daemon.open(
                   root,
                   built,
+                  histos.HistosBuild.fixed(built),
                   jdk,
                   Cli.VersionText,
                   root.resolve("missing-api.jar"),
@@ -306,6 +308,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Daemon.open(
                   root,
                   built,
+                  histos.HistosBuild.fixed(built),
                   jdk,
                   Cli.VersionText,
                   root.resolve("missing-api.jar"),
@@ -346,6 +349,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Daemon.open(
                   root,
                   built,
+                  histos.HistosBuild.fixed(built),
                   jdk,
                   Cli.VersionText,
                   root.resolve("missing-api.jar"),
@@ -376,6 +380,7 @@ object ServerSpec extends ZIOSpecDefault:
                 Daemon.open(
                   root,
                   built,
+                  histos.HistosBuild.fixed(built),
                   jdk,
                   Cli.VersionText,
                   root.resolve("missing-api.jar"),
@@ -741,6 +746,7 @@ object ServerSpec extends ZIOSpecDefault:
         Daemon.open(
           root,
           graph,
+          histos.HistosBuild.fixed(graph),
           jdk,
           Cli.VersionText,
           root.resolve("missing-api.jar"),

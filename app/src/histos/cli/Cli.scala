@@ -59,7 +59,7 @@ enum Command:
   case Clean(projects: List[ProjectName])
   case CleanFull
   case Assembly(destination: Option[String])
-  case PublishLocal(directory: Option[String], tokens: List[String])
+  case PublishLocal(tokens: List[String])
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(automatic: Boolean, tokens: List[String])
   case PublishPromote(id: String)
@@ -82,7 +82,7 @@ enum Command:
   case Cancel(id: RunId)
   case PreviewCompile(projects: List[ProjectName])
   case PreviewTest(projects: List[ProjectName])
-  case PreviewPublishLocal(directory: Option[String], tokens: List[String])
+  case PreviewPublishLocal(tokens: List[String])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
@@ -127,7 +127,8 @@ enum CliParseError:
     case Flag(error)                                    => error.message
     case Namespace(error)                               => error.message
     case WatchCommand(detail)                           => detail
-    case PublishForm                                    => "a directory belongs on publishLocal"
+    case PublishForm                                    =>
+      "publish is snapshots, release, assets, promote, or drop"
 end CliParseError
 
 enum CliExit:
@@ -193,9 +194,8 @@ object CliExit:
   private def failedCall(call: Call): CliExit =
     call match
       case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => CompileFailed
 
@@ -231,9 +231,8 @@ object CliExit:
   private def resolveExit(call: Call): CliExit =
     call match
       case Call.Compile(_) | Call.PreviewCompile(_) | Call.Assembly(_) => CompileFailed
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => ResolveFailed
 
@@ -241,9 +240,8 @@ object CliExit:
     call match
       case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
       case Call.Test(_, _, _) | Call.PreviewTest(_)                    => TestFailed
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => TaskFailed
 
@@ -253,8 +251,8 @@ object CliExit:
       case _                                                         =>
         call match
           case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
-          case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-              Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
+          case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+              Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) |
               Call.PreviewPublishSnapshots(_) =>
             PublishFailed
           case _ => CompileFailed
@@ -278,9 +276,8 @@ object CliExit:
     call match
       case Call.PreviewCompile(_) | Call.Compile(_) => CompileFailed
       case Call.PreviewTest(_) | Call.Test(_, _, _) => TestFailed
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case _ => TaskFailed
 
@@ -289,9 +286,8 @@ object CliExit:
     call match
       case Call.Test(_, _, _) | Call.Run(_, _)                         => ResolveFailed
       case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_, _) |
-          Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
+          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         PublishFailed
       case Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) => LoadFailed
       case _                                                                              => TaskFailed
@@ -363,13 +359,13 @@ object Cli:
         test(repo, apiJar, modules, patterns, TestMode.Run)
       case Command.TestQuick(modules, patterns) =>
         test(repo, apiJar, modules, patterns, TestMode.Quick)
-      case Command.Watch(inner, _)                 => watch(repo, apiJar, inner)
-      case Command.Compile(projects)               => compile(repo, apiJar, projects)
-      case Command.Clean(projects)                 => clean(repo, apiJar, projects)
-      case Command.CleanFull                       => cleanFull(repo)
-      case Command.Assembly(destination)           => assembly(repo, apiJar, destination)
-      case Command.PublishLocal(directory, tokens) =>
-        publishLocal(repo, apiJar, directory, tokens)
+      case Command.Watch(inner, _)       => watch(repo, apiJar, inner)
+      case Command.Compile(projects)     => compile(repo, apiJar, projects)
+      case Command.Clean(projects)       => clean(repo, apiJar, projects)
+      case Command.CleanFull             => cleanFull(repo)
+      case Command.Assembly(destination) => assembly(repo, apiJar, destination)
+      case Command.PublishLocal(tokens)  =>
+        publishLocal(repo, apiJar, tokens)
       case Command.PublishSnapshots(tokens) =>
         publishSnapshots(repo, apiJar, tokens)
       case Command.PublishRelease(automatic, tokens) =>
@@ -402,8 +398,8 @@ object Cli:
         preview(repo, apiJar, projects)
       case Command.PreviewTest(projects) =>
         previewTest(repo, apiJar, projects)
-      case Command.PreviewPublishLocal(directory, tokens) =>
-        previewPublishLocal(repo, apiJar, directory, tokens)
+      case Command.PreviewPublishLocal(tokens) =>
+        previewPublishLocal(repo, apiJar, tokens)
       case Command.PreviewPublishSnapshots(tokens) =>
         previewPublishSnapshots(repo, apiJar, tokens)
       case Command.PreviewClean(projects) =>
@@ -751,15 +747,14 @@ object Cli:
   private def previewPublishLocal(
       repo: Path,
       apiJar: Path,
-      directory: Option[String],
       tokens: List[String],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
-    val call = Call.PreviewPublishLocal(directory, tokens)
+    val call = Call.PreviewPublishLocal(tokens)
     ZIO.serviceWithZIO[Machine]: machine =>
       attach(
         repo,
         call,
-        loaded(repo, apiJar)(build => previewLocalPlan(repo, build, directory, tokens, machine.env, call)),
+        loaded(repo, apiJar)(build => previewLocalPlan(repo, build, tokens, machine.env, call)),
       )
 
   private def previewPublishSnapshots(
@@ -778,14 +773,12 @@ object Cli:
   private def previewLocalPlan(
       repo: Path,
       loaded: histos.load.LoadedBuild,
-      directory: Option[String],
       tokens: List[String],
       env: Map[String, String],
       call: Call,
   ): UIO[Completed] =
-    val home = histos.publish.PublishRun.home.mapError(error => PreviewError.Publish(error))
     Plan
-      .publishLocal(repo, loaded.graph, tokens, env, directory, home)
+      .publishLocal(repo, loaded.graph, tokens, env)
       .fold(
         error => held(call, "", CallResult.Fault(BuildFault.Preview(error))),
         plan => held(call, Plan.renderPublish(plan), CallResult.reported()),
@@ -894,10 +887,9 @@ object Cli:
   private def publishLocal(
       repo: Path,
       apiJar: Path,
-      directory: Option[String],
       tokens: List[String],
   ): URIO[Local, Completed] =
-    val call = Call.PublishLocal(directory, tokens)
+    val call = Call.PublishLocal(tokens)
     attach(repo, call, locally(repo, apiJar, call))
 
   private def publishSnapshots(
@@ -1106,7 +1098,8 @@ object Cli:
         case Right(loaded) =>
           val call = Call.Workflow(action)
           Calls
-            .workflowWork(repo, loaded.graph, action)
+            .sonaOf(loaded)
+            .flatMap(sona => Calls.workflowWork(repo, loaded.graph, sona, action))
             .fold(
               fault => held(call, "", CallResult.Fault(BuildFault.Workflow(fault))),
               file => held(call, file.toString, CallResult.reported()),
@@ -1388,6 +1381,7 @@ object Cli:
                             .open(
                               repo,
                               loaded.graph,
+                              loaded.build,
                               jdk,
                               VersionText,
                               apiJar,

@@ -40,13 +40,18 @@ import histos.step.{Need, Phase, Step, StepId, StepInfo}
 import zio.{Chunk, ZIO, ZLayer}
 
 final case class PublishedModule(
+    module: ProjectName,
     group: Organization,
     artifact: String,
     revision: String,
     jar: Option[Path],
+    pom: Option[Path],
+    sources: Option[Path],
+    javadoc: Option[Path],
     ship: ShipName,
     key: Sha256,
-    unique: Option[String] = None,
+    unique: Option[String],
+    dependencies: List[MavenDependency],
 ):
   /** A snapshot prints its unique version. A directory publish prints the jar under `root`.
     */
@@ -101,14 +106,13 @@ enum LocalPublishError:
   case UnknownShip(ship: ShipName)
   case NotPublished(module: ProjectName)
   case SnapshotDependency(ship: ShipName, dependency: String)
-  case Directory
-  case TwoDirectories
+  case Unknown(raw: String)
   case UnpublishedDependency(module: ProjectName, dependency: ProjectName)
   case Facts(missing: ::[PomFact])
   case BadDependency(organization: String, name: String, revision: String)
   case Credentials
-  case NoHome
-  case NotAPath(raw: String)
+  case Io(path: String)
+  case Stock(override val message: String)
   case Classpath(error: ResolveError)
   case Runtime(error: CompileError)
   case Pack(
@@ -140,8 +144,7 @@ enum LocalPublishError:
     case NotPublished(module)                 => s"'${module.value}' is not in a ship"
     case SnapshotDependency(ship, dependency) =>
       s"${ship.value} depends on snapshot $dependency, so it is not published"
-    case Directory                                 => "a directory belongs on publishLocal"
-    case TwoDirectories                            => "publishLocal takes one directory"
+    case Unknown(raw)                              => s"'$raw' is not a ship, an aggregate, or a module"
     case UnpublishedDependency(module, dependency) =>
       s"'${module.value}' depends on '${dependency.value}', which is not published"
     case Facts(missing) =>
@@ -149,8 +152,8 @@ enum LocalPublishError:
     case BadDependency(organization, name, revision) =>
       s"$organization:$name:$revision is not a publishable dependency"
     case Credentials                            => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
-    case NoHome                                 => "user.home is not set"
-    case NotAPath(raw)                          => s"'$raw' is not a path"
+    case Io(path)                               => s"could not write $path"
+    case Stock(message)                         => message
     case Classpath(error)                       => error.message
     case Runtime(error)                         => error.message
     case Pack(module, version, platform, error) =>
@@ -543,6 +546,7 @@ object LocalPublish:
         Some(sourceBytes),
         Some(javadocBytes),
         artifact,
+        cell.module,
         job.ship,
         PackageKey.of(products),
       )
@@ -595,6 +599,7 @@ object LocalPublish:
         Some(sourceBytes),
         Some(javadocBytes),
         artifact,
+        cell.module,
         job.ship,
         PackageKey.of(products),
       )
@@ -619,6 +624,7 @@ object LocalPublish:
       sources: Option[Chunk[Byte]],
       javadoc: Option[Chunk[Byte]],
       artifact: String,
+      module: ProjectName,
       ship: ShipName,
       key: Sha256,
   ): ZIO[Publisher, LocalPublishError, PublishedModule] =
@@ -628,8 +634,21 @@ object LocalPublish:
       )
       .mapError(LocalPublishError.Publish(_))
       .map: published =>
-        val (jarPath, unique) = placed(published)
-        PublishedModule(group, artifact, revision.render, jarPath, ship, key, unique)
+        val placedHere = placed(published)
+        PublishedModule(
+          module,
+          group,
+          artifact,
+          revision.render,
+          placedHere.jar,
+          placedHere.pom,
+          placedHere.sources,
+          placedHere.javadoc,
+          ship,
+          key,
+          placedHere.unique,
+          deps,
+        )
 
   private def moduleOf(
       graph: ProjectGraph,
@@ -719,10 +738,20 @@ object LocalPublish:
           )
     yield runtime ++ external.filterNot(path => runtime.contains(path))
 
-  private def placed(published: Published): (Option[Path], Option[String]) =
+  private final case class Placed(
+      jar: Option[Path],
+      pom: Option[Path],
+      sources: Option[Path],
+      javadoc: Option[Path],
+      unique: Option[String],
+  )
+
+  private def placed(published: Published): Placed =
     published match
-      case Published.Local(jar, _, _)    => (Some(jar), None)
-      case Published.Snapshot(unique, _) => (None, Some(unique.value))
+      case Published.Local(jar, pom, sources, javadoc, _) =>
+        Placed(Some(jar), Some(pom), sources, javadoc, None)
+      case Published.Snapshot(unique, _) =>
+        Placed(None, None, None, None, Some(unique.value))
 
   private def dependencies(
       graph: ProjectGraph,

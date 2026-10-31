@@ -49,7 +49,7 @@ object PreviewSpec extends ZIOSpecDefault:
         plugin  <- Cli.parse(List("preview", "run", "dev.example/echo"))
       yield assertTrue(
         tests == Command.PreviewTest(List(ProjectName("app"))),
-        publish == Command.PreviewPublishLocal(None, Nil),
+        publish == Command.PreviewPublishLocal(Nil),
         snaps == Command.PreviewPublishSnapshots(List("app")),
         clean == Command.PreviewClean(List(ProjectName("app"))),
         full == Command.PreviewCleanFull,
@@ -79,8 +79,8 @@ object PreviewSpec extends ZIOSpecDefault:
         HistosMcp.previewCall(args("test", "ignored", List("app"))) == Right(
           Call.PreviewTest(List(ProjectName("app")))
         ),
-        HistosMcp.previewCall(args("publishLocal", "", List("app"), Some("repo"))) == Right(
-          Call.PreviewPublishLocal(Some("repo"), List("app"))
+        HistosMcp.previewCall(args("publishLocal", "", List("app"))) == Right(
+          Call.PreviewPublishLocal(List("app"))
         ),
         HistosMcp.previewCall(args("publishSnapshots", "", List("app"))) == Right(
           Call.PreviewPublishSnapshots(List("app"))
@@ -156,17 +156,15 @@ object PreviewSpec extends ZIOSpecDefault:
             )
           )
           text <- Plan
-            .publishLocal(repo, graph, List("app"), Map.empty, Some("target/repo"), ZIO.succeed(repo))
+            .publishLocal(repo, graph, List("app"), Map.empty)
             .map(Plan.renderPublish)
-          heard <- ask(repo)(
-            Calls.previewPublishLocal(repo, graph, Some("target/repo"), List("app"), Map.empty, _)
-          )
-          kept <- same(planted)
+          heard <- ask(repo)(Calls.previewPublishLocal(repo, graph, List("app"), Map.empty, _))
+          kept  <- same(planted)
         yield assertTrue(
           heard.outs == Chunk(text),
           heard.done == Chunk(CallResult.reported()),
           text ==
-            """target/repo
+            """ivy2Local
               |core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,

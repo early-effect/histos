@@ -146,7 +146,7 @@ object BspParallelSpec extends ZIOSpecDefault:
     List(
       Call.Compile(Nil)                                           -> true,
       Call.Test(Nil, Nil, TestMode.Run)                           -> true,
-      Call.PublishLocal(Some("repo"), Nil)                        -> true,
+      Call.PublishLocal(Nil)                                      -> true,
       Call.PublishSnapshots(Nil)                                  -> true,
       Call.PublishRelease(Nil, false)                             -> true,
       Call.PublishPromote("abc")                                  -> false,
@@ -175,7 +175,7 @@ object BspParallelSpec extends ZIOSpecDefault:
       Call.Bsp                                                    -> false,
       Call.PreviewCompile(Nil)                                    -> false,
       Call.PreviewTest(Nil)                                       -> false,
-      Call.PreviewPublishLocal(None, Nil)                         -> false,
+      Call.PreviewPublishLocal(Nil)                               -> false,
       Call.PreviewPublishSnapshots(Nil)                           -> false,
       Call.PreviewClean(Nil)                                      -> false,
       Call.PreviewCleanFull                                       -> false,

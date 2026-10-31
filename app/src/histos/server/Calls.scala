@@ -11,10 +11,9 @@ import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
 import histos.jdk.Sha256
-import histos.load.{LoadError, Loader, PluginLink, PluginRuntime}
+import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
-import histos.central.ReleaseMode
 import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
 import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositories, Resolve, ResolveError}
 import histos.schedule.{CacheNamespace, RemoteCache, RemoteError}
@@ -23,7 +22,7 @@ import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
 import histos.workflow.{Workflow, WorkflowAction}
-import histos.{Platform, ProjectGraph, ProjectName}
+import histos.{Platform, ProjectGraph, ProjectName, Publishing, Sona}
 
 import zio.json.*
 import zio.{Chunk, Exit, Fiber, IO, Promise, Random, Ref, Scope, UIO, ZIO, ZLayer}
@@ -152,9 +151,9 @@ object Calls:
   def publishLocal(
       repo: Path,
       graph: ProjectGraph,
+      build: histos.HistosBuild,
       machine: Machine,
       jdk: JdkRuntime,
-      directory: Option[String],
       tokens: List[String],
       say: Say,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
@@ -166,10 +165,10 @@ object Calls:
         PublishRun.local(
           repo,
           graph,
+          build,
           tokens,
           jdk,
           machine.env,
-          directory,
           feed => speak(say, console, feed).ignore,
         ),
       )
@@ -178,6 +177,7 @@ object Calls:
   def publishSnapshots(
       repo: Path,
       graph: ProjectGraph,
+      build: histos.HistosBuild,
       machine: Machine,
       jdk: JdkRuntime,
       tokens: List[String],
@@ -191,6 +191,7 @@ object Calls:
         PublishRun.snapshots(
           repo,
           graph,
+          build,
           tokens,
           jdk,
           machine.env,
@@ -202,13 +203,13 @@ object Calls:
   def publishRelease(
       repo: Path,
       graph: ProjectGraph,
+      build: histos.HistosBuild,
       machine: Machine,
       jdk: JdkRuntime,
       tokens: List[String],
       automatic: Boolean,
       say: Say,
   ): ZIO[Resolve & ContentStore, ServerError, Unit] =
-    val mode = if automatic then ReleaseMode.Automatic else ReleaseMode.Hold
     CompileConsole.open(repo).flatMap { console =>
       released(
         repo,
@@ -217,10 +218,11 @@ object Calls:
         PublishRun.release(
           repo,
           graph,
+          build,
           tokens,
           jdk,
           machine.env,
-          mode,
+          automatic,
           feed => speak(say, console, feed).ignore,
         ),
       )
@@ -520,26 +522,34 @@ object Calls:
 
   def workflow(
       repo: Path,
-      graph: ProjectGraph,
+      loaded: LoadedBuild,
       action: WorkflowAction,
       say: Say,
   ): IO[ServerError, Unit] =
-    workflowWork(repo, graph, action).foldZIO(
-      why => fault(say, BuildFault.Workflow(why)),
-      file => told(say, file.toString) *> ok(say),
+    sonaOf(loaded).flatMap(sona =>
+      workflowWork(repo, loaded.graph, sona, action).foldZIO(
+        why => fault(say, BuildFault.Workflow(why)),
+        file => told(say, file.toString) *> ok(say),
+      )
     )
+
+  /** The build's `sona`, closed over the idle stock. Check and update read secrets and follow-up. They do not publish.
+    */
+  def sonaOf(loaded: LoadedBuild): UIO[Publishing] =
+    ZIO.service[Publishing].provideLayer(ZLayer.succeed(Sona.idle) >>> loaded.build.sona)
 
   /** Workflow files and launcher scripts. The pin is not advanced. */
   def workflowWork(
       repo: Path,
       graph: ProjectGraph,
+      sona: Publishing,
       action: WorkflowAction,
   ): IO[WorkflowFault, Path] =
     val rendered = action match
       case WorkflowAction.Check =>
-        Workflow.check(repo, graph).mapError(WorkflowFault.Files(_))
+        Workflow.check(repo, graph, sona).mapError(WorkflowFault.Files(_))
       case WorkflowAction.Update =>
-        Workflow.update(repo, graph).mapError(WorkflowFault.Files(_))
+        Workflow.update(repo, graph, sona).mapError(WorkflowFault.Files(_))
     val scripts = action match
       case WorkflowAction.Check =>
         LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
@@ -729,14 +739,12 @@ object Calls:
   def previewPublishLocal(
       repo: Path,
       graph: ProjectGraph,
-      directory: Option[String],
       tokens: List[String],
       env: Map[String, String],
       say: Say,
   ): IO[ServerError, Unit] =
-    val home = PublishRun.home.mapError(error => histos.preview.PreviewError.Publish(error))
     Plan
-      .publishLocal(repo, graph, tokens, env, directory, home)
+      .publishLocal(repo, graph, tokens, env)
       .foldZIO(
         error => fault(say, BuildFault.Preview(error)),
         plan => told(say, Plan.renderPublish(plan)) *> ok(say),

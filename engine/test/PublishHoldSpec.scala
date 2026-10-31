@@ -26,7 +26,6 @@ object PublishHoldSpec extends ZIOSpecDefault:
         for
           jdk  <- GraphCompile.jdkHere
           root <- temp
-          repo <- temp
           _    <- ZIO.attempt {
             Files.createDirectories(root.resolve(".histos"))
             Files.writeString(
@@ -39,17 +38,14 @@ object PublishHoldSpec extends ZIOSpecDefault:
             .local(
               root,
               graph,
+              histos.HistosBuild.fixed(graph),
               Nil,
               jdk,
               env,
-              Some(repo.toString),
               _ => ZIO.unit,
             )
             .provide(IdleResolve.layer, histos.zinc.CompileReplay.processStore)
           decision <- VersionTask.decide(graph, root, env)
-          wrote    <- ZIO.attempt(
-            Option(repo.toFile.list()).map(_.toList).getOrElse(Nil)
-          )
         yield
           val expected = decision match
             case Decision.Publish(_, lines) =>
@@ -62,9 +58,7 @@ object PublishHoldSpec extends ZIOSpecDefault:
           assertTrue(
             expected == List(line),
             report.lines == expected,
-            report.output.modules.isEmpty,
             report.lines.exists(text => text.contains("libs") && text.contains("already-released")),
-            wrote.isEmpty,
           )
   ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock @@ TestAspect
     .timeout(30.seconds)

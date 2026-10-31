@@ -45,9 +45,7 @@ object HistosMcp:
       mode: Option[String] = None,
   ) derives Schema,
         JsonCodec
-  final case class PublishLocalArgs(directory: Option[String] = None, projects: List[String] = Nil)
-      derives Schema,
-        JsonCodec
+  final case class PublishLocalArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class PublishSnapshotsArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class AssemblyArgs(destination: Option[String] = None) derives Schema, JsonCodec
   final case class CleanArgs(projects: List[String] = Nil) derives Schema, JsonCodec
@@ -59,7 +57,6 @@ object HistosMcp:
       operation: String,
       id: String,
       projects: List[String] = Nil,
-      directory: Option[String] = None,
   ) derives Schema,
         JsonCodec
 
@@ -188,11 +185,11 @@ object HistosMcp:
       )(args => ZIO.fromEither(testCall(args.projects, args.patterns, args.mode)).mapError(refused).flatMap(ask))
       publishing <- testing.tool[PublishLocalArgs](
         Names.publishLocal,
-        "Publish into a Maven directory. An absent directory is ~/.m2/repository. A token is a ship, an aggregate, or a module. An empty list publishes every ship. Nothing is signed and nothing is uploaded.",
-      )(args => ZIO.fromEither(publishLocalCall(args.directory, args.projects)).mapError(refused).flatMap(ask))
+        "Install into Coursier's ivy2Local. A token is a ship, an aggregate, or a module. An empty list publishes every ship. Nothing is signed and nothing is uploaded.",
+      )(args => ZIO.fromEither(publishLocalCall(args.projects)).mapError(refused).flatMap(ask))
       snapshots <- publishing.tool[PublishSnapshotsArgs](
         Names.publishSnapshots,
-        "Publish to the Central snapshot repository. A token is a ship, an aggregate, or a module. An empty list publishes every ship. A directory belongs on publishLocal.",
+        "Publish through the Sonatype layer. A snapshot coordinate is a PUT. A release coordinate is signed and uploaded to the Central Portal. A token is a ship, an aggregate, or a module. An empty list publishes every ship.",
       )(args => ZIO.fromEither(publishSnapshotsCall(args.projects)).mapError(refused).flatMap(ask))
       toolchain <- snapshots.tool[NoArgs](
         Names.toolchain,
@@ -267,7 +264,7 @@ object HistosMcp:
       )(args => Cli.watchCall(args.args, repo, apiJar).mapError(Session.CallProblem.Fault(_)).flatMap(ask))
       previewed <- ready.tool[PreviewArgs](
         Names.preview,
-        "Say what compile, test, publishLocal, publishSnapshots, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. publishLocal may set directory. An empty project list is the command's default. Writes nothing. Compile and test name stale sources from the last analysis.",
+        "Say what compile, test, publishLocal, publishSnapshots, clean, cleanFull, or run will do. id is required; run uses it and the others ignore it. An empty project list is the command's default. Writes nothing. Compile and test name stale sources from the last analysis.",
       )(args =>
         ZIO
           .fromEither(previewCall(args))
@@ -294,8 +291,8 @@ object HistosMcp:
       chosen <- TestMode.from(mode.getOrElse(TestMode.Run.token)).left.map(Rejection.TestMode(_))
     yield Call.Test(found, globs, chosen)
 
-  def publishLocalCall(directory: Option[String], projects: List[String]): Either[Rejection, Call] =
-    Right(Call.PublishLocal(directory, projects))
+  def publishLocalCall(projects: List[String]): Either[Rejection, Call] =
+    Right(Call.PublishLocal(projects))
 
   def publishSnapshotsCall(projects: List[String]): Either[Rejection, Call] =
     Right(Call.PublishSnapshots(projects))
@@ -317,7 +314,7 @@ object HistosMcp:
     args.operation match
       case "compile"          => names(args.projects).map(Call.PreviewCompile(_))
       case "test"             => names(args.projects).map(Call.PreviewTest(_))
-      case "publishLocal"     => Right(Call.PreviewPublishLocal(args.directory, args.projects))
+      case "publishLocal"     => Right(Call.PreviewPublishLocal(args.projects))
       case "publishSnapshots" => Right(Call.PreviewPublishSnapshots(args.projects))
       case "clean"            => names(args.projects).map(Call.PreviewClean(_))
       case "cleanFull"        =>

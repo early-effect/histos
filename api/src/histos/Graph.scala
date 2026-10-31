@@ -16,6 +16,8 @@ import histos.version.Catalog
 
 import _root_.scala.util.control.NonFatal
 
+import zio.ZLayer
+
 sealed trait Project:
   def name: ProjectName
   def position: SourcePos
@@ -187,6 +189,15 @@ end ProjectGraph
 
 trait HistosBuild:
   def graph: Either[BuildError, ProjectGraph]
+  def local: ZLayer[LocalPublish, Nothing, Publishing] = Local.layer
+  def sona: ZLayer[SonaPublish, Nothing, Publishing]   = Sona.layer(ReleaseMode.Automatic)
+
+object HistosBuild:
+  /** A build whose graph is already known. `local` and `sona` stay the trait defaults. */
+  def fixed(graph: ProjectGraph): HistosBuild =
+    val found = graph
+    new HistosBuild:
+      def graph: Either[BuildError, ProjectGraph] = Right(found)
 
 object Projects:
   def tools(catalog: ToolCatalog): Organized =

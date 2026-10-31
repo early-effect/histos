@@ -252,12 +252,12 @@ object PlanSpec extends ZIOSpecDefault:
           repo    <- keep("histos-preview-publish")
           planted <- plant(repo)
           graph   <- ZIO.fromEither(manualLibrary)
-          plan    <- Plan.publishLocal(repo, graph, List("app"), Map.empty, Some("target/repo"), ZIO.succeed(repo))
+          plan    <- Plan.publishLocal(repo, graph, List("app"), Map.empty)
           text = Plan.renderPublish(plan)
           kept <- same(planted)
         yield assertTrue(
           text ==
-            """target/repo
+            """ivy2Local
               |core libs 1.0.0 upstream
               |app libs 1.0.0 selected""".stripMargin,
           kept,
@@ -311,14 +311,14 @@ object PlanSpec extends ZIOSpecDefault:
           repo    <- keep("histos-preview-develop")
           planted <- plant(repo)
           graph   <- ZIO.fromEither(developShip)
-          local   <- Plan.publishLocal(repo, graph, Nil, Map.empty, Some("target/repo"), ZIO.succeed(repo))
+          local   <- Plan.publishLocal(repo, graph, Nil, Map.empty)
           remote  <- Plan.publishSnapshots(repo, graph, Nil, Map.empty)
           localText  = Plan.renderPublish(local)
           remoteText = Plan.renderPublish(remote)
           kept <- same(planted)
         yield assertTrue(
           localText ==
-            """target/repo
+            """ivy2Local
               |core libs 1.0.0-ci selected""".stripMargin,
           remoteText ==
             s"""${histos.central.SnapshotRepository.central.root.render}
@@ -359,14 +359,7 @@ object PlanSpec extends ZIOSpecDefault:
           idle    <- ZIO.fromEither(ProjectName.from("idle"))
           graph   <- ZIO.fromEither(withIdle)
           refused <- Plan
-            .publishLocal(
-              repo,
-              graph,
-              List("idle"),
-              Map.empty,
-              Some("target/repo"),
-              ZIO.succeed(repo),
-            )
+            .publishLocal(repo, graph, List("idle"), Map.empty)
             .either
           kept <- same(planted)
         yield assertTrue(

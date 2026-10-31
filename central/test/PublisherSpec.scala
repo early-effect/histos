@@ -264,17 +264,17 @@ object PublisherSpec extends ZIOSpecDefault:
 
   private def jarOf(published: Published): Option[Path] =
     published match
-      case Published.Local(jar, _, _) => Some(jar)
+      case Published.Local(jar, _, _, _, _) => Some(jar)
       case Published.Snapshot(_, _)   => None
 
   private def pomOf(published: Published): zio.Task[String] =
     published match
-      case Published.Local(_, pom, _) => ZIO.attempt(Files.readString(pom))
+      case Published.Local(_, pom, _, _, _) => ZIO.attempt(Files.readString(pom))
       case Published.Snapshot(_, _)   => ZIO.succeed("")
 
   private def readLocal(published: Published): zio.Task[Option[(String, Array[Byte], String, Path, Checksum)]] =
     published match
-      case Published.Local(jar, pom, sha256) =>
+      case Published.Local(jar, pom, _, _, sha256) =>
         for
           pomText <- ZIO.attempt(Files.readString(pom))
           stored  <- ZIO.attempt(Files.readAllBytes(jar))
@@ -284,7 +284,7 @@ object PublisherSpec extends ZIOSpecDefault:
 
   private def localJar(published: Published): zio.UIO[Path] =
     published match
-      case Published.Local(jar, _, _) => ZIO.succeed(jar)
+      case Published.Local(jar, _, _, _, _) => ZIO.succeed(jar)
       case Published.Snapshot(_, _)   => ZIO.dieMessage("local publish returned a snapshot")
 
   private def listed(jar: Path): zio.Task[List[String]] =

@@ -97,14 +97,12 @@ private[publish] object ReleaseRun:
       signer      <- Signer.fromEnv(env).mapError(ReleaseError.Signer(_))
       fingerprint <- signer.fingerprint.mapError(ReleaseError.Signer(_))
       base        <- ZIO.fromEither(Preflight.portal(env).left.map(ReleaseError.Portal(_)))
-      request     <- ZIO
-        .fromEither(
-          PublishSelect.resolve(graph, tokens, None, allowDirectory = false)
-        )
+      names <- ZIO
+        .fromEither(PublishSelect.resolve(graph, tokens))
         .mapError(ReleaseError.Stage(_))
       dir    <- ZIO.acquireRelease(directory("histos-release"))(deleteTree)
       output <- LocalPublish
-        .run(repo, graph, request.names, jdk, env, PublishWrite.Release, report)
+        .run(repo, graph, names, jdk, env, PublishWrite.Release, report)
         .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(dir))
         .mapError(ReleaseError.Stage(_))
     yield ReleaseStage(
@@ -339,7 +337,7 @@ private[publish] object ReleaseRun:
   private def credentials(env: Map[String, String]): Either[ReleaseError, RepositorySecret] =
     PublishWhere.snapshots(env) match
       case Right(PublishWhere.Snapshots(user, password)) => Right(RepositorySecret(user, password))
-      case _                                             => Left(ReleaseError.Credentials)
+      case Left(_)                                       => Left(ReleaseError.Credentials)
 
   private def readBytes(path: Path): IO[ReleaseError, Chunk[Byte]] =
     ZIO

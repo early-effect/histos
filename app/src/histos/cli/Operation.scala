@@ -45,8 +45,8 @@ object Operation:
       case Command.CleanFull             => Right(Call.CleanFull)
       case Command.Assembly(destination) =>
         Right(Call.Assembly(destination))
-      case Command.PublishLocal(directory, tokens) =>
-        Right(Call.PublishLocal(directory, tokens))
+      case Command.PublishLocal(tokens) =>
+        Right(Call.PublishLocal(tokens))
       case Command.PublishSnapshots(tokens) =>
         Right(Call.PublishSnapshots(tokens))
       case Command.PublishRelease(automatic, tokens) =>
@@ -72,8 +72,8 @@ object Operation:
         Right(Call.PreviewCompile(projects))
       case Command.PreviewTest(projects) =>
         Right(Call.PreviewTest(projects))
-      case Command.PreviewPublishLocal(directory, tokens) =>
-        Right(Call.PreviewPublishLocal(directory, tokens))
+      case Command.PreviewPublishLocal(tokens) =>
+        Right(Call.PreviewPublishLocal(tokens))
       case Command.PreviewPublishSnapshots(tokens) =>
         Right(Call.PreviewPublishSnapshots(tokens))
       case Command.PreviewClean(projects) =>

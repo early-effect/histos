@@ -143,7 +143,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
         links(matched, live),
         prepared.launcher,
       )
-    yield LoadedBuild(graph, runtime)
+    yield LoadedBuild(graph, runtime, build)
 
   private def prepare(
       repo: Path,

@@ -12,16 +12,15 @@ import zio.test.*
 object PublishSelectSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
   private val repo   = Path.of(".")
-  private val home   = ZIO.succeed(repo)
 
   private val selection = suite("publish selection")(
     test("a ship name publishes that ship"):
       for
         graph <- ZIO.fromEither(ships)
-        plan  <- Plan.publishLocal(repo, graph, List("libs"), Map.empty, Some("target/repo"), home)
+        plan  <- Plan.publishLocal(repo, graph, List("libs"), Map.empty)
       yield assertTrue(
         Plan.renderPublish(plan) ==
-          """target/repo
+          """ivy2Local
             |core libs 0.21.2 selected
             |site libs 0.21.2 selected""".stripMargin
       )
@@ -29,11 +28,11 @@ object PublishSelectSpec extends ZIOSpecDefault:
     test("an aggregate publishes listed modules at their own ship versions"):
       for
         graph <- ZIO.fromEither(ships)
-        plan  <- Plan.publishLocal(repo, graph, List("root"), Map.empty, Some("target/repo"), home)
+        plan  <- Plan.publishLocal(repo, graph, List("root"), Map.empty)
         text = Plan.renderPublish(plan)
       yield assertTrue(
         text ==
-          """target/repo
+          """ivy2Local
             |'stray' is not in a ship
             |core libs 0.21.2 selected
             |adapter extra 0.0.1 selected
@@ -45,35 +44,30 @@ object PublishSelectSpec extends ZIOSpecDefault:
       for
         graph   <- ZIO.fromEither(ships)
         stray   <- ZIO.fromEither(ProjectName.from("stray"))
-        refused <- Plan.publishLocal(repo, graph, List("libs", "stray"), Map.empty, Some("target/repo"), home).either
+        refused <- Plan.publishLocal(repo, graph, List("libs", "stray"), Map.empty).either
       yield assertTrue(
         refused == Left(PreviewError.Publish(LocalPublishError.NotPublished(stray)))
       )
     ,
-    test("a directory token is legal only on publishLocal"):
+    test("an unknown token is not a ship, an aggregate, or a module"):
       for
         graph  <- ZIO.fromEither(ships)
-        local  <- Plan.publishLocal(repo, graph, List("target/repo", "libs"), Map.empty, None, home)
+        local  <- Plan.publishLocal(repo, graph, List("target/repo", "libs"), Map.empty).either
         remote <- Plan.publishSnapshots(repo, graph, List("target/repo"), Map.empty).either
-        twice  <- ZIO.succeed(PublishSelect.resolve(graph, List("target/repo", "out"), None, allowDirectory = true))
-        both   <- ZIO.succeed(PublishSelect.resolve(graph, List("target/repo"), Some("out"), allowDirectory = true))
       yield assertTrue(
-        Plan.renderPublish(local).startsWith("target/repo\ncore libs 0.21.2 selected"),
-        remote == Left(PreviewError.Publish(LocalPublishError.Directory)),
-        LocalPublishError.Directory.message == "a directory belongs on publishLocal",
-        twice == Left(LocalPublishError.TwoDirectories),
-        both == Left(LocalPublishError.TwoDirectories),
-        LocalPublishError.TwoDirectories.message == "publishLocal takes one directory",
+        local == Left(PreviewError.Publish(LocalPublishError.Unknown("target/repo"))),
+        remote == Left(PreviewError.Publish(LocalPublishError.Unknown("target/repo"))),
+        LocalPublishError.Unknown("target/repo").message == "'target/repo' is not a ship, an aggregate, or a module",
       )
     ,
     test("a ship name wins when a module shares it"):
       for
         graph <- ZIO.fromEither(collision)
-        plan  <- Plan.publishLocal(repo, graph, List("core"), Map.empty, Some("target/repo"), home)
+        plan  <- Plan.publishLocal(repo, graph, List("core"), Map.empty)
         text = Plan.renderPublish(plan)
       yield assertTrue(
         text ==
-          """target/repo
+          """ivy2Local
             |adapter core 9.0.0 selected""".stripMargin,
         !text.contains("libs"),
         !text.contains("site"),
@@ -82,11 +76,11 @@ object PublishSelectSpec extends ZIOSpecDefault:
     test("no name publishes every ship and skips a module outside one"):
       for
         graph <- ZIO.fromEither(ships)
-        plan  <- Plan.publishLocal(repo, graph, Nil, Map.empty, Some("target/repo"), home)
+        plan  <- Plan.publishLocal(repo, graph, Nil, Map.empty)
         text = Plan.renderPublish(plan)
       yield assertTrue(
         text ==
-          """target/repo
+          """ivy2Local
             |core libs 0.21.2 selected
             |site libs 0.21.2 selected
             |adapter extra 0.0.1 selected
@@ -112,10 +106,10 @@ object PublishSelectSpec extends ZIOSpecDefault:
     test("a snapshot ship may depend on its own member"):
       for
         graph <- ZIO.fromEither(sameShip)
-        plan  <- Plan.publishLocal(repo, graph, Nil, Map.empty, Some("target/repo"), home)
+        plan  <- Plan.publishLocal(repo, graph, Nil, Map.empty)
       yield assertTrue(
         Plan.renderPublish(plan) ==
-          """target/repo
+          """ivy2Local
             |api histos 0.0.1-SNAPSHOT selected
             |engine histos 0.0.1-SNAPSHOT selected""".stripMargin
       )

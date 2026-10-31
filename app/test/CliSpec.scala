@@ -290,7 +290,7 @@ object CliSpec extends ZIOSpecDefault:
         both == Left(CliParseError.Rejected),
       )
     ,
-    test("publishLocal takes a directory and project names, and publish snapshots does not take a directory"):
+    test("publishLocal takes tokens, and bare publish is refused"):
       for
         named    <- Cli.parse(List("publishLocal", "repo", "core"))
         plain    <- Cli.parse(List("publishLocal"))
@@ -302,21 +302,21 @@ object CliSpec extends ZIOSpecDefault:
         looked   <- Cli.parse(List("preview", "publish", "snapshots"))
         rejected <- Cli.parse(List("preview", "publish", "repo")).either
       yield assertTrue(
-        named == Command.PublishLocal(None, List("repo", "core")),
-        plain == Command.PublishLocal(None, Nil),
+        named == Command.PublishLocal(List("repo", "core")),
+        plain == Command.PublishLocal(Nil),
         shipped == Command.PublishSnapshots(List("core")),
         all == Command.PublishSnapshots(Nil),
         bare == Left(CliParseError.PublishForm),
         folder == Left(CliParseError.PublishForm),
-        CliParseError.PublishForm.message == "a directory belongs on publishLocal",
-        preview == Command.PreviewPublishLocal(None, List("repo", "core")),
+        CliParseError.PublishForm.message == "publish is snapshots, release, assets, promote, or drop",
+        preview == Command.PreviewPublishLocal(List("repo", "core")),
         looked == Command.PreviewPublishSnapshots(Nil),
         rejected == Left(CliParseError.PublishForm),
-        Operation.call(named) == Right(Call.PublishLocal(None, List("repo", "core"))),
+        Operation.call(named) == Right(Call.PublishLocal(List("repo", "core"))),
         Operation.call(shipped) == Right(Call.PublishSnapshots(List("core"))),
       )
     ,
-    test("publish release holds unless automatic, and promote and drop take a deployment id"):
+    test("publish release records --automatic, and promote and drop take a deployment id"):
       for
         plain         <- Cli.parse(List("publish", "release"))
         named         <- Cli.parse(List("publish", "release", "core"))
@@ -541,7 +541,7 @@ object CliSpec extends ZIOSpecDefault:
     ,
     test("publish of an empty catalog writes nothing"):
       ZIO.scoped:
-        for done <- invoke(List("publishLocal", "repo"))
+        for done <- invoke(List("publishLocal"))
         yield assertTrue(
           done.exit == CliExit.PublishFailed && done.exit.code == 9 && done.err
             .contains("nothing publishes")
@@ -1145,6 +1145,7 @@ object CliSpec extends ZIOSpecDefault:
                 .open(
                   dir,
                   graph,
+                  histos.HistosBuild.fixed(graph),
                   jdk,
                   Cli.VersionText,
                   jar,
@@ -1191,7 +1192,8 @@ object CliSpec extends ZIOSpecDefault:
             .serviceWithZIO[Loader](_.load(dir, jar))
             .provideSome[Scope](stack)
             .mapError(_.message)
-          _     <- Workflow.update(dir, loaded.graph).mapError(_.message)
+          sona  <- Calls.sonaOf(loaded)
+          _     <- Workflow.update(dir, loaded.graph, sona).mapError(_.message)
           local <- Cli
             .execute(List("workflow"), dir, jar)
             .provideSome[Scope](stack)
@@ -1199,6 +1201,7 @@ object CliSpec extends ZIOSpecDefault:
             .open(
               dir,
               loaded.graph,
+              loaded.build,
               jdk,
               Cli.VersionText,
               jar,
@@ -1268,6 +1271,7 @@ object CliSpec extends ZIOSpecDefault:
             .open(
               dir,
               loaded.graph,
+              loaded.build,
               jdk,
               Cli.VersionText,
               jar,
@@ -1345,6 +1349,7 @@ object CliSpec extends ZIOSpecDefault:
                 .open(
                   dir,
                   graph,
+                  histos.HistosBuild.fixed(graph),
                   jdk,
                   Cli.VersionText,
                   jar,
@@ -1414,6 +1419,7 @@ object CliSpec extends ZIOSpecDefault:
                 .open(
                   dir,
                   graph,
+                  histos.HistosBuild.fixed(graph),
                   jdk,
                   Cli.VersionText,
                   jar,

@@ -3,7 +3,7 @@ package histos.preview
 import histos.clean.Products
 import histos.plugin.PluginTaskId
 import histos.central.SnapshotRepository
-import histos.publish.{LocalPublishError, PublishName, PublishSelect, PublishWhere, ShipWrite}
+import histos.publish.{LocalPublishError, PublishName, PublishSelect, ShipWrite}
 import histos.select.{SelectError, Selection}
 import histos.task.TaskId
 import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
@@ -145,32 +145,17 @@ object Plan:
   ): IO[PreviewError, TestPlan] =
     modulePlan(repo, graph, projects, Tree.Test).map(TestPlan(_))
 
-  /** Reads the version decision already in the tree. Writes no jar and opens no repository. An absent directory is
-    * `home/.m2/repository`.
-    */
+  /** Reads the version decision already in the tree. Writes no jar. The place is Coursier's `ivy2Local`. */
   def publishLocal(
       repo: Path,
       graph: ProjectGraph,
       tokens: List[String],
       env: Map[String, String],
-      directory: Option[String],
-      home: IO[PreviewError, Path],
   ): IO[PreviewError, PublishPlan] =
     ZIO
-      .fromEither(PublishSelect.resolve(graph, tokens, directory, allowDirectory = true))
+      .fromEither(PublishSelect.resolve(graph, tokens))
       .mapError(PreviewError.Publish(_))
-      .flatMap: request =>
-        val root = request.directory match
-          case Some(path) =>
-            ZIO
-              .fromEither(PublishWhere.localRoot(repo, Some(path), repo))
-              .mapError(PreviewError.Publish(_))
-          case None =>
-            home.flatMap: found =>
-              ZIO
-                .fromEither(PublishWhere.localRoot(repo, None, found))
-                .mapError(PreviewError.Publish(_))
-        root.flatMap(path => planned(repo, graph, request.names, env, Place.Local(path)))
+      .flatMap(names => planned(repo, graph, names, env, Place.Local))
 
   /** Reads the version decision already in the tree. Names Central. Writes no jar and opens no repository.
     */
@@ -181,9 +166,9 @@ object Plan:
       env: Map[String, String],
   ): IO[PreviewError, PublishPlan] =
     ZIO
-      .fromEither(PublishSelect.resolve(graph, tokens, None, allowDirectory = false))
+      .fromEither(PublishSelect.resolve(graph, tokens))
       .mapError(PreviewError.Publish(_))
-      .flatMap(request => planned(repo, graph, request.names, env, Place.Snapshots))
+      .flatMap(names => planned(repo, graph, names, env, Place.Snapshots))
 
   private def planned(
       repo: Path,
@@ -195,7 +180,7 @@ object Plan:
     VersionTask
       .decide(graph, repo, env)
       .mapError(PreviewError.Version(_))
-      .flatMap(decision => ZIO.fromEither(publishPlan(repo, graph, names, decision, place)))
+      .flatMap(decision => ZIO.fromEither(publishPlan(graph, names, decision, place)))
 
   /** Every product root. Does not read the graph and does not delete. */
   def cleanAll(repo: Path): CleanPlan =
@@ -404,16 +389,15 @@ object Plan:
     case Idle(ship: ShipName, compile: String)
 
   private enum Place:
-    case Local(path: Path)
+    case Local
     case Snapshots
 
-    def text(repo: Path): String = this match
-      case Local(path) => relative(repo, path)
-      case Snapshots   => SnapshotRepository.central.root.render
+    def text: String = this match
+      case Local     => "ivy2Local"
+      case Snapshots => SnapshotRepository.central.root.render
   end Place
 
   private def publishPlan(
-      repo: Path,
       graph: ProjectGraph,
       names: List[PublishName],
       decision: Decision,
@@ -423,7 +407,7 @@ object Plan:
       val idle       = found.collect { case word: ShipWord.Idle => word }
       val held       = found.collect { case word: ShipWord.Held => word }
       val publishing = found.collect { case word: ShipWord.Publish => word }
-      val shown      = place.text(repo)
+      val shown      = place.text
       if idle.nonEmpty then Right(PublishPlan(shown, idle.map(word => PublishUnit.Idle(word.ship, word.compile))))
       else if publishing.isEmpty then Right(PublishPlan(shown, heldUnits(held)))
       else
@@ -454,7 +438,7 @@ object Plan:
         place match
           case Place.Snapshots =>
             Right(lines.toList.map(line => ShipWord.Idle(line.ship, line.compile.render)))
-          case Place.Local(_) =>
+          case Place.Local =>
             lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
               acc.flatMap: seen =>
                 membersOf(catalog, line.ship).map: mods =>

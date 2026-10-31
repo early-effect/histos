@@ -88,7 +88,13 @@ end PublishError
 
 /** A directory publish names the files it wrote. A snapshot publish names the unique version it uploaded. */
 enum Published:
-  case Local(jar: Path, pom: Path, sha256: Checksum)
+  case Local(
+      jar: Path,
+      pom: Path,
+      sources: Option[Path],
+      javadoc: Option[Path],
+      sha256: Checksum,
+  )
   case Snapshot(unique: SnapshotVersion, sha256: Checksum)
 
 /** SHA-256 of a published jar, lowercase hex. */
