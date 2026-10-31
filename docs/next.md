@@ -6,7 +6,7 @@ The terminal, the server, and the agent share one request. Histos refuses to ins
 
 The build file rejects a setting for a platform the module does not build. Compile, test, run, package, and the editor call the same engine paths. A bad name, a bad pattern, and a bad flag are one typed error. Preview names the sources a compile would rebuild and the suites a quick run would skip, and it says when it does not know. A generated workflow names the tools the graph declared.
 
-The release path is open. The catalog is `0.0.1`. The decisions are in [release-work-plan.md](release-work-plan.md).
+Publishing is [publishing.md](publishing.md). The catalog is `manual("histos", manual"0.0.1")`. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here.
 
 The cache is why this tool exists. The decisions and the checklist are in [cache-work-plan.md](cache-work-plan.md).
 
