@@ -1,4 +1,4 @@
 repository https://central.sonatype.com/repository/maven-snapshots
 version 0.0.1-SNAPSHOT
-revision 0.0.1-20261031.141105-28
-sha256 e2cdf4ad774b786088b294281554e140eb32f388715c71d6d563bd92abd2a5df
+revision 0.0.1-20261031.143913-29
+sha256 9e16a6b74dc1416c4eba4cebadf20d8b01e5814d1a52ddb56a3a47cc2278c2d8
