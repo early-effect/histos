@@ -4,6 +4,10 @@ package histos
 enum ScalacFlag:
   case EncodingUtf8
 
+  /** The default inline budget cannot derive the wire sums. */
+  case MaxInlines
+end ScalacFlag
+
 opaque type ScalacFlags = List[ScalacFlag]
 
 object ScalacFlags:
@@ -17,10 +21,12 @@ object ScalacFlags:
       flags
         .map:
           case ScalacFlag.EncodingUtf8 => "encoding-utf8"
+          case ScalacFlag.MaxInlines   => "max-inlines"
         .mkString(",")
 
     def argv: List[String] =
       flags.flatMap:
         case ScalacFlag.EncodingUtf8 => List("-encoding", "UTF-8")
+        case ScalacFlag.MaxInlines   => List("-Xmax-inlines:128")
   end extension
 end ScalacFlags

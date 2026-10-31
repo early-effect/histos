@@ -10,7 +10,7 @@ What we still intend is [next](docs/next.md).
 
 ## A build
 
-A build file is a Scala program that returns a graph. A module names its platforms (`jvm`, `js`, `native`), its Scala versions, and its dependencies. A literal that is not a version, a dependency, or a name does not compile. This repository is built by [histos.scala](histos.scala). The literals are [Literals.scala](api/src/histos/Literals.scala).
+A build file is a Scala program that returns a graph. A module names its platforms (`jvm`, `js`, `native`), its Scala versions, and its dependencies. A version, a dependency, a path, a url, and a name are typed literals. A bad one does not compile the build file. This repository is built by [histos.scala](histos.scala). The literals are [Literals.scala](api/src/histos/Literals.scala).
 
 ## This repository
 
@@ -22,47 +22,67 @@ Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `w
 
 `assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The next `./histos` in this checkout runs `dist/histos.jar` when that checksum matches.
 
-When the catalog is a snapshot and the build file calls api the running jar does not contain:
+`launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Commit the lock after it changes. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
 
-```
-./histos assembly
-./histos publish snapshots
-./histos launcher --update
-```
+The script version is the ship number. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's lock is `0.0.1-SNAPSHOT`. [histos.scala](histos.scala) calls `ScalacFlag.MaxInlines` on `app`. The jar named by the lock was published before that flag existed, so CI cannot load this build file until a launcher that contains it is the pin.
 
-The catalog is `manual("histos", manual"0.0.1")`. `publish snapshots` refuses that number, because it is a release. `publish release` signs the bundle and uploads it to the Central Portal. It reads `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, and `PGP_PASSPHRASE`. With no flag it holds at `VALIDATED`. `--automatic` publishes in that command. This checkout still boots from the snapshot pin in [.histos/launcher.lock](.histos/launcher.lock): the script version is the ship, and the lock is the snapshot of that same number.
+## Publishing
 
-`launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Run it after a snapshot publish so the latest revision is the assembly just uploaded. This catalog refuses that publish until it is a snapshot again. Commit the lock. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
+The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish snapshots`, and `publish release` are three commands. The last two close the build's `sona` layer. The staged revision chooses the Sonatype branch. The command name does not.
 
-## A release
+- A snapshot (`<ship>-SNAPSHOT`, or the unique `<ship>-<sha>-SNAPSHOT`) is a PUT to the Central snapshot repository. It needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. It does not sign.
+- A release number is signed, then uploaded as one portal bundle.
+- A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-`publish release` signs one bundle per ship and uploads it to the Central Portal. With no flag it holds. The deployment stops at `VALIDATED`, and the id is written to `.histos/deployments/<ship>`. `--automatic` publishes in that same command, and the version is then immutable. `publish promote <deployment>` is a later step. It publishes a held deployment. `publish drop <deployment>` drops the deployment first, then deletes the GitHub asset when that ship names one. A failed delete leaves the deployment dropped.
+This catalog is `manual("histos", manual"0.0.1")`. That number is a release, so `publish snapshots` and `publish release` both sign it and portal it. A new launcher snapshot is a publish of a snapshot coordinate, then `launcher --update`.
 
-Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `HISTOS_PORTAL` to that URL. Unset, the client uses `https://central.sonatype.com`. [ReleaseSpec](engine/test/ReleaseSpec.scala) runs that client against [PortalServer](central/src/histos/central/PortalServer.scala) and does not call Central. The portal reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. Signing reads `PGP_SECRET` and `PGP_PASSPHRASE`.
+The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. A release bundle is published in that command, and `.histos/deployments/<ship>` is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` stops at `VALIDATED`. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 
-This catalog is `0.0.1` in [histos.scala](histos.scala). The launcher this checkout runs stays the Maven snapshot in [LauncherPin](engine/src/histos/publish/LauncherPin.scala) and the sha256 in [.histos/launcher.lock](.histos/launcher.lock). `./histos` does not download a GitHub asset.
+`publish release` does not stage a snapshot coordinate. It reports that ship and continues with the others. A ship that depends on a snapshot is reported and not uploaded. One ship's upload failure does not fail the others. Missing credentials, a missing signing key, or a portal base that cannot be read fails the whole invocation before compile, when the layer's secret names are the five below. `publish snapshots` checks the username and password only. A layer whose secret names differ skips the check.
 
-The ship `histos` publishes `api`, a library, and `app`, an assembly. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. The pom carries the organization description and url, which Central requires. After `VALIDATED`, `publish assets` uploads the jar to the GitHub release, before promote, so the jar is installable while the library version can still be dropped. Histos does not create the tag or the GitHub release. One ship in the catalog is `v<version>`. More than one is `<ship>/v<version>`. Create the release first (`gh release create v0.0.1`), which pushes the tag. The generated workflow then runs `publish release histos` and `publish assets histos`. A later dispatch runs `publish promote` with the deployment id. Humans and other CI use `gh release download`. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub. `--automatic` does not upload an asset. The asset reads `GITHUB_TOKEN` and `GITHUB_REPOSITORY`.
+Unset, `PGP_SECRET` is the key and `PGP_PASSPHRASE` unlocks it. `PGP_KEY_HEX`, when set, selects that fingerprint. `HISTOS_SIGNER=gpg` signs with gpg, and then the fingerprint is required. The release workflow lists `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 
-`ci.yml` does not run on that tag. Tag a commit whose `ci` workflow is already green. The release job does not run the suite again. After the version is on Central, set the catalog to the next snapshot before `publish snapshots` will accept this repository.
+`publishLocal` installs where Coursier resolves `ivy2Local`. A token is a ship, an aggregate, or a module. No token publishes every ship the command can write. It does not take a directory, it does not write `~/.m2`, and it does not sign. It accepts a snapshot, a release, and a `-ci` coordinate.
 
-A library-only ship names no asset and uploads none. Another project uses this same split when people install a tool and builds depend on a library.
+`publish promote <deployment>` publishes a `VALIDATED` deployment. `publish drop <deployment>` drops the deployment first, then deletes the GitHub asset when that ship names one. A failed delete leaves the deployment dropped.
+
+`publish assets` uploads the file named on an assembly. A named ship fails unless `.histos/deployments/<ship>` says `VALIDATED`. No name skips a ship with no file, or a file in another state. This repository writes `PUBLISHED`, and [histos-release.yml](.github/workflows/histos-release.yml) runs `./histos publish assets histos` after `./histos publish release histos`. That step fails: `histos is PUBLISHED, not VALIDATED`.
+
+The workflow is dispatch only. A tag does not publish. A ship that names an asset runs `./histos assembly`, then `./histos publish release <ship>`, then `./histos publish assets <ship>`. A library ship runs `publish release` only. The file does not pass `--automatic`. This build is Automatic anyway, because that is the default layer. Hold is the build that also renders `histos-promote.yml`. That file's only input is the deployment id, and its command is `./histos publish promote`.
+
+Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `HISTOS_PORTAL` to that URL. Unset, the client uses `https://central.sonatype.com`. [ReleaseSpec](engine/test/ReleaseSpec.scala) runs that client against [PortalServer](central/src/histos/central/PortalServer.scala) and does not call Central.
+
+The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The assembly names `dist/histos.jar`. That file is not a Maven artifact and it is not in the portal bundle. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create the tag or the GitHub release. Humans create the GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
+
+`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After `0.0.1` is on Central, the next development catalog is a snapshot. The lock stays a snapshot of the ship number so `./histos` still boots.
 
 ## An operation
 
-You ask for one thing: compile, test, run, publishLocal, publish snapshots, publish release, publish assets, publish promote, publish drop, assembly, clean, resolve, or a contributed plugin command. `testOnly` and `testQuick` are that same test operation. `preview` of compile, test, publishLocal, publish snapshots, clean, cleanFull, or run writes nothing. Compile and test name the sources the last analysis says are stale, and a test preview names the suites a quick run would skip. When that analysis or digest cannot be read, it says it does not know. `observe` reads the last tally and does not compile. `cancel` names the run id the command minted. `server` keeps a warm process. `mcp` and `bsp` open a transport. They are not operations.
+`version` prints the ship number. `graph` prints each project with its platforms and Scala versions, then each plugin. Environment values are left out. `toolchain` prints the JDK a compile would use, Node when a module is JavaScript, and clang when a module is native.
 
-The tally is source files, class files written this round, and modules.
+`compile` takes project names. No name compiles every module. `clean` takes project names too. No name wipes every product root under `.histos` and does not read the build. A name wipes that module. An aggregate expands to its modules, and upstream stays. Locks, the assembly, and the server stay. `cleanFull` takes no project. It wipes those products, then drops this project's content-store entries. `assembly` takes an optional path.
+
+`test` runs the suites. The default `testStore` is `Off`, so a full run launches every suite. `testQuick` skips a suite whose stored fingerprint still matches. `testOnly` takes `--module` and at least one pattern. `testQuick` takes the same flags, and its patterns may be empty. `Local` skips on `test` as well. `Remote` does not skip and does not upload. `run <name> [jvm|js|native]` runs that module. `run inspect` prints the project names. `run versions` prints the version decision. `run <plugin>/<task>` runs a plugin task.
+
+`publishLocal`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, and `publish drop` are the commands in Publishing. `preview` of `compile`, `test`, `publishLocal`, `publish snapshots`, `clean`, `cleanFull`, or `run` writes nothing. Compile and test name the sources the last analysis says are stale. A test preview names the suites a quick run would skip and the ones it would run. When the analysis cannot be read, the line says the staleness is unknown. When a digest cannot be read, the line says the suite is not known to be skippable.
+
+`~` runs a command again after a source save. The server does that when one is up. This process does it otherwise. `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested `~` are usage and do not start that loop. `observe` reads the stored tally and does not load the graph. `cancel` names the run id the command minted. `server` keeps a warm process. `reload` asks that process to load the build again, and fails when no server is up. `reboot` replaces a running server, or starts one. `mcp` and `bsp` open a transport.
+
+`cache path` prints the store. `cache list` prints each digest and its size. `cache clean` removes an entry older than 30 days that no project keeps. `--dry-run` names those entries and leaves them. `cache promote --from` and `--to` take `main`, `pr/<n>`, or `dev/<name>`. The remote cache is not configured, so that command reports `remote cache is not configured` and does not open a connection.
+
+`resolve` fetches what `.histos/dependencies.lock` recorded and checks each sha256. `resolve --update` solves and writes that file. `resolve --check` solves again and fails when the result is not the lock. `workflow` compares the rendered workflow files and the launcher scripts with the tree. `workflow --update` writes them. Neither publishes, and neither moves the launcher pin. `launcher --update` is the only command that writes [.histos/launcher.lock](.histos/launcher.lock).
+
+A word the grammar does not own is a plugin command, when the build registered it. A reserved root word cannot be one.
+
+The tally names files compiled, files skipped, modules, and classes written. A count that is unknown is omitted. A failure count is added when one happened.
 
 ## Tools already on the machine
 
 Histos does not install a JDK or Node. The running JVM must be JDK 21 or newer. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one.
 
-`resolve --update` solves dependencies and writes `.histos/dependencies.lock`. Later runs fetch what the lock recorded and check the checksums. `launcher --update` is the only command that moves [.histos/launcher.lock](.histos/launcher.lock).
-
 ## Plugins
 
-A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
+A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. A command name the grammar owns is reserved. `acp` is reserved and has no command. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
 
 ## Scenarios
 

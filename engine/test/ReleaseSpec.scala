@@ -100,11 +100,7 @@ object ReleaseSpec extends ZIOSpecDefault:
             "cell core 3.10.0 jvm\ncell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n",
           )
           env = signing(bound.url, key.armor)
-          report <- PublishRun
-            .release(root, built, Nil, jdk, env, ReleaseMode.Hold)
-            .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
-            )
+          report   <- publish(root, built, jdk, env, ReleaseMode.Hold)
           ids      <- deploymentIds(portal)
           record   <- text(deployment(root, "libs"))
           state    <- states(portal, ids)
@@ -118,11 +114,7 @@ object ReleaseSpec extends ZIOSpecDefault:
                   .zip(exists(published(portal, "core_3", "1.0.0")))
             case _ => ZIO.succeed(("", List.empty[(String, String)], false))
           (after, publishedState, marked) = promoted
-          again <- PublishRun
-            .release(root, built, Nil, jdk, env, ReleaseMode.Hold)
-            .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
-            )
+          again  <- publish(root, built, jdk, env, ReleaseMode.Hold)
           stayed <- deploymentIds(portal)
         yield assertTrue(
           report.refused.contains("snaps is 1.2.3-SNAPSHOT, which is not a release"),
@@ -522,8 +514,14 @@ object ReleaseSpec extends ZIOSpecDefault:
       env: Map[String, String],
       mode: ReleaseMode,
   ) =
+    val build = mode match
+      case ReleaseMode.Automatic => histos.HistosBuild.fixed(built)
+      case ReleaseMode.Hold      =>
+        new histos.HistosBuild:
+          def graph: Either[histos.BuildError, histos.ProjectGraph] = Right(built)
+          override def sona                                         = histos.Sona.layer(histos.ReleaseMode.Hold)
     PublishRun
-      .release(root, built, Nil, jdk, env, mode)
+      .release(root, built, build, Nil, jdk, env, automatic = false)
       .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
 
   private def signing(url: String, armor: Chunk[Byte]): Map[String, String] =

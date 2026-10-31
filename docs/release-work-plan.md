@@ -2,7 +2,7 @@
 
 Histos publishes the way it is meant to replace sbt and zipx. One catalog row is a ship. `publishLocal` writes this machine. `publish snapshots` uploads to the Central snapshot repository. `publish release` signs a bundle and uploads it to the Central Portal. A release is that bundle after an explicit promote. A tool people install can also be a GitHub release asset. The library version stays off Central until promote.
 
-This file is the decision. The catalog is `manual("histos", manual"0.0.1")`. Cutting that version is a tag and a promote. Editing this file does not upload it.
+This file is history. The decision is [publishing.md](publishing.md). Do not follow a sentence in this file that names a publisher id, a per-module publisher list, or `~/.m2/repository`. The catalog is `manual("histos", manual"0.0.1")`. Editing this file does not upload it.
 
 The build file says what a ship publishes. The invocation says which portal, which signer, and whether this run promotes. A mode stored on the ship would fire on the next real upload.
 

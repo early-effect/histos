@@ -135,7 +135,7 @@ import CallJson.given
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
-  case PublishLocal(directory: Option[String], tokens: List[String])
+  case PublishLocal(tokens: List[String])
   case PublishSnapshots(tokens: List[String])
   case PublishRelease(tokens: List[String], automatic: Boolean)
   case PublishPromote(id: String)
@@ -163,7 +163,7 @@ enum Call derives JsonCodec:
   case Bsp
   case PreviewCompile(projects: List[ProjectName])
   case PreviewTest(projects: List[ProjectName])
-  case PreviewPublishLocal(directory: Option[String], tokens: List[String])
+  case PreviewPublishLocal(tokens: List[String])
   case PreviewPublishSnapshots(tokens: List[String])
   case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
@@ -425,6 +425,7 @@ object Daemon:
   def open(
       repo: Path,
       graph: ProjectGraph,
+      histosBuild: histos.HistosBuild,
       jdk: JdkRuntime,
       version: String,
       apiJar: Path,
@@ -443,6 +444,7 @@ object Daemon:
       serving   <- run(
         repo,
         graph,
+        histosBuild,
         jdk,
         version,
         apiJar,
@@ -482,6 +484,7 @@ object Daemon:
   private def run(
       repo: Path,
       graph: ProjectGraph,
+      histosBuild: histos.HistosBuild,
       jdk: JdkRuntime,
       version: String,
       apiJar: Path,
@@ -513,7 +516,7 @@ object Daemon:
           uses        <- Ref.make[Uses](Uses.Live(0))
           graphs      <- Ref.make(graph)
           live        <- Ref.make(
-            Generation(graph, plugins, fingerprint, held, uses)
+            Generation(graph, plugins, histosBuild, fingerprint, held, uses)
           )
           reloading <- Semaphore.make(1)
           spliced   <- Ref.make(Set.empty[Bsp.Session])
@@ -574,6 +577,7 @@ object Daemon:
   private final case class Generation(
       graph: ProjectGraph,
       plugins: histos.load.PluginRuntime,
+      build: histos.HistosBuild,
       fingerprint: Fingerprint,
       scope: Scope.Closeable,
       uses: Ref[Uses],
@@ -801,7 +805,7 @@ object Daemon:
                   case Left(error) =>
                     Calls.finish(out, CallResult.Fault(BuildFault.Load(error)))
                   case Right(held) =>
-                    val have = Right(Some(LoadedBuild(held.graph, held.plugins)))
+                    val have = Right(Some(LoadedBuild(held.graph, held.plugins, held.build)))
                     val ran  =
                       target match
                         case Call.Bsp | Call.Reboot | Call.Reload =>
@@ -885,7 +889,7 @@ object Daemon:
           for
             _    <- Record.write(repo, version, now, bound)
             uses <- Ref.make[Uses](Uses.Live(1))
-            next = Generation(found.graph, found.plugins, now, scope, uses)
+            next = Generation(found.graph, found.plugins, found.build, now, scope, uses)
             previous <- warm.live.getAndSet(next)
             _        <- warm.graphs.set(found.graph)
             _        <- retire(previous)
@@ -928,15 +932,15 @@ object Daemon:
   /** Class-directory writers. Queries, preview, cache, and `Call.Task` stay out. */
   private[server] def writesOutputs(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
           Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
           Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.LauncherUpdate | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
-          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) |
-          Call.PreviewCleanFull | Call.PreviewRun(_, _) =>
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull |
+          Call.PreviewRun(_, _) =>
         false
 
   private[server] def occupy[R, E](permit: Semaphore, call: Call)(

@@ -27,10 +27,10 @@ object Perform:
   /** The arm reads the adopted graph. Version, cache, resolve, and an empty clean do not. */
   def needsGraph(call: Call): Boolean =
     call match
-      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_, _) | Call.PublishSnapshots(_) |
+      case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
           Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) |
-          Call.PreviewTest(_) | Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) |
+          Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
@@ -45,8 +45,8 @@ object Perform:
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
-      case Call.PublishLocal(_, _) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
-          Call.PreviewPublishLocal(_, _) | Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
+          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
       case Call.Test(_, _, _) | Call.PreviewTest(_) =>
         BuildFault.testStopped(ModuleTestError.Compile(error)) match
@@ -100,22 +100,26 @@ object Perform:
                 withJdk(jdk => Calls.test(repo, build.graph, projects, patterns, mode, jdk, machine, say))
               )
             )
-          case Call.PublishLocal(directory, projects) =>
+          case Call.PublishLocal(projects) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.publishLocal(repo, build.graph, machine, jdk, directory, projects, say))
+                withJdk(jdk =>
+                  Calls.publishLocal(repo, build.graph, build.build, machine, jdk, projects, say)
+                )
               )
             )
           case Call.PublishSnapshots(projects) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.publishSnapshots(repo, build.graph, machine, jdk, projects, say))
+                withJdk(jdk => Calls.publishSnapshots(repo, build.graph, build.build, machine, jdk, projects, say))
               )
             )
           case Call.PublishRelease(projects, automatic) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.publishRelease(repo, build.graph, machine, jdk, projects, automatic, say))
+                withJdk(jdk =>
+                  Calls.publishRelease(repo, build.graph, build.build, machine, jdk, projects, automatic, say)
+                )
               )
             )
           case Call.PublishPromote(id) =>
@@ -139,7 +143,7 @@ object Perform:
           case Call.Resolve(action) =>
             Calls.resolve(repo, apiJar, action, say, machine.native)
           case Call.Workflow(action) =>
-            held(build => Calls.workflow(repo, build.graph, action, say))
+            held(build => Calls.workflow(repo, build, action, say))
           case Call.Clean(Nil) =>
             Calls.wipe(repo, say)
           case Call.Clean(projects) =>
@@ -150,8 +154,8 @@ object Perform:
             held(build => Calls.previewCompile(repo, build.graph, projects, say))
           case Call.PreviewTest(projects) =>
             held(build => Calls.previewTest(repo, build.graph, projects, say))
-          case Call.PreviewPublishLocal(directory, projects) =>
-            held(build => Calls.previewPublishLocal(repo, build.graph, directory, projects, machine.env, say))
+          case Call.PreviewPublishLocal(projects) =>
+            held(build => Calls.previewPublishLocal(repo, build.graph, projects, machine.env, say))
           case Call.PreviewPublishSnapshots(projects) =>
             held(build => Calls.previewPublishSnapshots(repo, build.graph, projects, machine.env, say))
           case Call.PreviewClean(Nil) =>

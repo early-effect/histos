@@ -50,6 +50,13 @@ enum Revision:
   case Pointer(pointer: SnapshotPointer)
   case Release(version: ReleaseVersion)
 
+  def render: String = this match
+    case Ci(version)          => version.render
+    case Snapshot(coordinate) => coordinate.render
+    case Pointer(pointer)     => pointer.render
+    case Release(version)     => version.render
+end Revision
+
 object Revision:
   /** Stored snapshots are recognized before the pointer, so `<ship>-<sha>-SNAPSHOT` is not eaten as `<ship>-SNAPSHOT`.
     */

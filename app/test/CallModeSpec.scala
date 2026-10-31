@@ -56,7 +56,7 @@ object CallModeSpec extends ZIOSpecDefault:
         val core     = ProjectName("core")
         val compile  = Call.Compile(List(core))
         val tested   = Call.Test(List(core), List(pattern), TestMode.Quick)
-        val publish  = Call.PublishLocal(Some("repo"), List("core"))
+        val publish  = Call.PublishLocal(List("core"))
         val snaps    = Call.PublishSnapshots(List("core"))
         val release  = Call.PublishRelease(List("core"), true)
         val promoted = Call.PublishPromote("abc")
@@ -69,7 +69,7 @@ object CallModeSpec extends ZIOSpecDefault:
         val ran      = Call.Test(Nil, Nil, TestMode.Run)
         val removed  = Call.CacheClean(CacheCleanMode.Remove)
         val compiled = Call.PreviewCompile(List(core))
-        val shipped  = Call.PreviewPublishLocal(None, List("core"))
+        val shipped  = Call.PreviewPublishLocal(List("core"))
         val looked   = Call.PreviewPublishSnapshots(List("core"))
         val wiped    = Call.PreviewClean(List(core))
         assertTrue(

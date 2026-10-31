@@ -39,7 +39,7 @@ private final class LocalPublisher(root: Path) extends Publisher:
       _ <- stageOptional(paths.sources, sources)
       _ <- stageOptional(paths.javadoc, javadoc)
       _ <- stage(paths.pom, pom)
-    yield Published.Local(paths.jar, paths.pom, Checksum.sha256(jar))
+    yield Published.Local(paths.jar, paths.pom, paths.sources, paths.javadoc, Checksum.sha256(jar))
 
   private def accept(bytes: Option[Chunk[Byte]]): IO[PublishError, Option[Chunk[Byte]]] =
     bytes match

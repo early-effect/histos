@@ -22,51 +22,33 @@ final case class Picked(
     refused: List[LocalPublishError.SnapshotDependency],
 )
 
-/** The directory and the names in one publish invocation. Empty names are every ship. */
-final case class PublishRequest(directory: Option[String], names: List[PublishName])
-
-/** Publish names are not compile names. A ship, an aggregate, then a module. One directory, and only on a local
-  * publish. A snapshot dependency is another ship's snapshot coordinate, or a library revision ending in `-SNAPSHOT`. A
-  * module in the same ship is that ship's own version. An assembly may depend on a module that no ship owns: that
-  * module is compiled and packed, and it is not published. A library, an application, or an sbt plugin may not. An
-  * owned module that this run did not select is still unpublished.
+/** Publish names are not compile names. A ship, an aggregate, then a module. An unknown token is an error. A snapshot
+  * dependency is another ship's snapshot coordinate, or a library revision ending in `-SNAPSHOT`. A module in the same
+  * ship is that ship's own version. An assembly may depend on a module that no ship owns: that module is compiled and
+  * packed, and it is not published. A library, an application, or an sbt plugin may not. An owned module that this run
+  * did not select is still unpublished.
   */
 object PublishSelect:
   def snapshotCoordinate(revision: String): Boolean =
     revision.endsWith("-SNAPSHOT")
 
-  def resolve(
-      graph: ProjectGraph,
-      tokens: List[String],
-      explicit: Option[String],
-      allowDirectory: Boolean,
-  ): Either[LocalPublishError, PublishRequest] =
-    tokens
-      .foldLeft[Either[LocalPublishError, Acc]](Right(Acc(explicit, Nil))): (acc, token) =>
-        acc.flatMap: state =>
-          classify(graph, token) match
-            case Classified.Named(name) =>
-              if state.names.contains(name) then Left(duplicate(name))
-              else Right(state.copy(names = state.names :+ name))
-            case Classified.Directory(path) =>
-              if !allowDirectory then Left(LocalPublishError.Directory)
-              else
-                state.directory match
-                  case Some(_) => Left(LocalPublishError.TwoDirectories)
-                  case None    => Right(state.copy(directory = Some(path)))
-      .map(state => PublishRequest(state.directory, state.names))
+  def resolve(graph: ProjectGraph, tokens: List[String]): Either[LocalPublishError, List[PublishName]] =
+    tokens.foldLeft[Either[LocalPublishError, List[PublishName]]](Right(Nil)): (acc, token) =>
+      acc.flatMap: names =>
+        named(graph, token).flatMap: name =>
+          if names.contains(name) then Left(duplicate(name)) else Right(names :+ name)
 
-  /** Source roots for a watch. A directory token is not a module. An empty list is every module. */
+  /** Source roots for a watch. An unknown token is not a module. An empty list is every module. */
   def watch(graph: ProjectGraph, tokens: List[String]): Option[List[ProjectName]] =
     if tokens.isEmpty then None
     else
       Some(tokens.flatMap: token =>
-        classify(graph, token) match
-          case Classified.Named(PublishName.Ship(ship)) =>
+        named(graph, token) match
+          case Right(PublishName.Ship(ship)) =>
             graph.catalog.get(ship) match
               case Some(row) => row.members.toList
               case None      => Nil
-          case Classified.Named(PublishName.Aggregate(name)) =>
+          case Right(PublishName.Aggregate(name)) =>
             graph.get(name) match
               case Some(aggregate: Aggregate) =>
                 aggregate.children.flatMap: child =>
@@ -74,8 +56,8 @@ object PublishSelect:
                     case Some(module: Module) => List(module.name)
                     case _                    => Nil
               case _ => Nil
-          case Classified.Named(PublishName.Module(name)) => List(name)
-          case Classified.Directory(_)                    => Nil)
+          case Right(PublishName.Module(name)) => List(name)
+          case Left(_)                         => Nil)
 
   def pick(
       graph: ProjectGraph,
@@ -100,24 +82,18 @@ object PublishSelect:
         then Left(LocalPublishError.NothingToPublish)
         else Right(Picked(liveRoots, live, acc.skipped, refused))
 
-  private final case class Acc(directory: Option[String], names: List[PublishName])
-
-  private enum Classified:
-    case Named(name: PublishName)
-    case Directory(path: String)
-
-  private def classify(graph: ProjectGraph, token: String): Classified =
+  private def named(graph: ProjectGraph, token: String): Either[LocalPublishError, PublishName] =
     ShipName.from(token) match
       case Right(ship) if graph.catalog.get(ship).isDefined =>
-        Classified.Named(PublishName.Ship(ship))
+        Right(PublishName.Ship(ship))
       case _ =>
         ProjectName.from(token) match
           case Right(project) =>
             graph.get(project) match
-              case Some(_: Aggregate) => Classified.Named(PublishName.Aggregate(project))
-              case Some(_: Module)    => Classified.Named(PublishName.Module(project))
-              case None               => Classified.Directory(token)
-          case Left(_) => Classified.Directory(token)
+              case Some(_: Aggregate) => Right(PublishName.Aggregate(project))
+              case Some(_: Module)    => Right(PublishName.Module(project))
+              case None               => Left(LocalPublishError.Unknown(token))
+          case Left(_) => Left(LocalPublishError.Unknown(token))
 
   private def duplicate(name: PublishName): LocalPublishError =
     val raw = name match
@@ -126,7 +102,7 @@ object PublishSelect:
       case PublishName.Module(project)    => project.value
     ProjectName.from(raw) match
       case Right(project) => LocalPublishError.Target(SelectError.Duplicate(project))
-      case Left(_)        => LocalPublishError.Directory
+      case Left(_)        => LocalPublishError.Unknown(raw)
 
   private final case class Roots(roots: Set[ProjectName], skipped: List[ProjectName]):
     def add(name: ProjectName): Roots =

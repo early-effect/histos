@@ -1,6 +1,6 @@
 package histos.report
 
-import heddle.endpoint.{Schema, SchemaDoc, SchemaField}
+import heddle.endpoint.{Schema, SchemaDoc}
 import histos.jdk.{
   JdkError,
   JdkMajor,
@@ -195,11 +195,10 @@ import histos.{
 import java.nio.file.{InvalidPathException, Path}
 
 import zio.json.*
-import zio.json.ast.Json
 import zio.{Cause, Chunk, Config, FiberId, NonEmptyChunk}
 
 /** App-only codecs. Engine and api stay free of zio-json. A derived given is one type, so a parent summons it instead
-  * of inlining the tree. Cycles are a `Ref`, because `Schema.derived` on a recursive enum does not terminate.
+  * of inlining the tree.
   *
   * The givens are split across objects. One object overflows the JVM class constant pool.
   */
@@ -219,8 +218,6 @@ private trait WireSupport:
       write,
     )
 
-  protected def docOf[A](using schema: Schema[A]): SchemaDoc = schema.doc
-
   protected def actionIdMessage(error: ActionIdError): String = error match
     case ActionIdError.Empty => "an action id is not empty"
 
@@ -233,29 +230,15 @@ private trait WireSupport:
       case histos.DepKind.Binary => "::"
       case histos.DepKind.Full   => ":::"
     s"${dep.organization}$sep${dep.name}:${dep.revision}"
-
-  protected def wrap(label: String, fields: List[SchemaField]): SchemaDoc =
-    val required = fields.filterNot(_.optional).map(_.name)
-    val product  = SchemaDoc.Object(Some(label), fields, required)
-    SchemaDoc.Object(None, List(SchemaField(label, product, optional = false)), List(label))
-
-  protected def req(name: String, doc: SchemaDoc): SchemaField =
-    SchemaField(name, doc, optional = false)
-
-  protected def opt(name: String, doc: SchemaDoc): SchemaField =
-    SchemaField(name, doc, optional = true)
-
-  protected def wrapAll(title: String, cases: List[SchemaDoc]): SchemaDoc =
-    SchemaDoc.OneOf(Some(title), cases)
 end WireSupport
 
 private object WireLeaves extends WireSupport:
+  private def readPath(raw: String): Either[String, Path] =
+    try Right(Path.of(raw))
+    catch case _: InvalidPathException => Left(s"invalid path $raw")
+
   given JsonCodec[Path] =
-    JsonCodec.string.transformOrFail(
-      raw =>
-        try Right(Path.of(raw))
-        catch case _: InvalidPathException => Left(s"invalid path $raw"), _.toString,
-    )
+    JsonCodec.string.transformOrFail(readPath, _.toString)
 
   given Schema[Path] = Schema.of(SchemaDoc.Str(None), Some("Path"))
 
@@ -294,6 +277,9 @@ private object WireLeaves extends WireSupport:
   given [A: Schema]: Schema[NonEmptyChunk[A]] =
     Schema.of(SchemaDoc.Array(summon[Schema[A]].doc))
 
+  given [A: Schema]: Schema[Set[A]] =
+    Schema.of(SchemaDoc.Array(summon[Schema[A]].doc))
+
   given [A: JsonCodec]: JsonCodec[::[A]] =
     JsonCodec[List[A]].transformOrFail(
       {
@@ -306,6 +292,7 @@ private object WireLeaves extends WireSupport:
   given [A: Schema]: Schema[::[A]] =
     Schema.of(SchemaDoc.Array(summon[Schema[A]].doc))
 
+  // NonEmptyChunk is not one of heddle's deferred collections, so this cycle is a Ref.
   given Schema[NonEmptyChunk[GraphCompileError]] =
     Schema.of(SchemaDoc.Array(SchemaDoc.Ref("GraphCompileError")))
 
@@ -507,70 +494,32 @@ private object WireLeaves extends WireSupport:
   given Schema[Reject]          = Schema.derived
 
   given JsonCodec[Config.Error] =
-    summon[JsonCodec[WireConfig]].transform(wireConfig, configWire)
+    summon[JsonCodec[ConfigError]].transform(wireConfig, configWire)
 
-  given Schema[Config.Error] = Schema.of(configDoc, Some("ConfigError"))
+  // Config.Error carries Cause, which is not a derivable ADT. The document is the wire enum.
+  given Schema[Config.Error] =
+    new Schema[Config.Error]:
+      def doc: SchemaDoc                  = summon[Schema[ConfigError]].doc
+      override def named: Option[String]  = summon[Schema[ConfigError]].named
+      override def cases: List[SchemaDoc] = summon[Schema[ConfigError]].cases
 
-  private def configDoc: SchemaDoc =
-    val path                              = SchemaDoc.Array(SchemaDoc.Str(None))
-    val message                           = SchemaDoc.Str(None)
-    def located(label: String): SchemaDoc =
-      wrap(label, List(req("path", path), req("message", message)))
-    def pair(label: String): SchemaDoc =
-      wrap(label, List(req("left", SchemaDoc.Ref("ConfigError")), req("right", SchemaDoc.Ref("ConfigError"))))
-    val source = wrap(
-      "SourceUnavailable",
-      List(req("path", path), req("message", message), req("cause", causeDoc)),
-    )
-    SchemaDoc.OneOf(
-      Some("ConfigError"),
-      List(
-        located("InvalidData"),
-        located("MissingData"),
-        located("Unsupported"),
-        pair("And"),
-        pair("Or"),
-        source,
-      ),
-    )
-
-  private def causeDoc: SchemaDoc =
-    val kind                             = SchemaDoc.Str(None)
-    val message                          = SchemaDoc.Str(None)
-    def thrown(label: String): SchemaDoc =
-      wrap(label, List(req("kind", kind), req("message", message)))
-    def pair(label: String): SchemaDoc =
-      wrap(label, List(req("left", SchemaDoc.Ref("WireCause")), req("right", SchemaDoc.Ref("WireCause"))))
-    SchemaDoc.OneOf(
-      Some("WireCause"),
-      List(
-        wrap("Empty", Nil),
-        thrown("Fail"),
-        thrown("Die"),
-        wrap("Interrupt", Nil),
-        pair("Then"),
-        pair("Both"),
-        wrap("Stackless", List(req("cause", SchemaDoc.Ref("WireCause")), req("stackless", SchemaDoc.Boolean))),
-      ),
-    )
-
-  private def wireConfig(error: WireConfig): Config.Error = error match
-    case WireConfig.InvalidData(path, message)              => Config.Error.InvalidData(path, message)
-    case WireConfig.MissingData(path, message)              => Config.Error.MissingData(path, message)
-    case WireConfig.Unsupported(path, message)              => Config.Error.Unsupported(path, message)
-    case WireConfig.And(left, right)                        => Config.Error.And(wireConfig(left), wireConfig(right))
-    case WireConfig.Or(left, right)                         => Config.Error.Or(wireConfig(left), wireConfig(right))
-    case WireConfig.SourceUnavailable(path, message, cause) =>
+  private def wireConfig(error: ConfigError): Config.Error = error match
+    case ConfigError.InvalidData(path, message)              => Config.Error.InvalidData(path, message)
+    case ConfigError.MissingData(path, message)              => Config.Error.MissingData(path, message)
+    case ConfigError.Unsupported(path, message)              => Config.Error.Unsupported(path, message)
+    case ConfigError.And(left, right)                        => Config.Error.And(wireConfig(left), wireConfig(right))
+    case ConfigError.Or(left, right)                         => Config.Error.Or(wireConfig(left), wireConfig(right))
+    case ConfigError.SourceUnavailable(path, message, cause) =>
       Config.Error.SourceUnavailable(path, message, wireCause(cause))
 
-  private def configWire(error: Config.Error): WireConfig = error match
-    case Config.Error.InvalidData(path, message)              => WireConfig.InvalidData(path, message)
-    case Config.Error.MissingData(path, message)              => WireConfig.MissingData(path, message)
-    case Config.Error.Unsupported(path, message)              => WireConfig.Unsupported(path, message)
-    case Config.Error.And(left, right)                        => WireConfig.And(configWire(left), configWire(right))
-    case Config.Error.Or(left, right)                         => WireConfig.Or(configWire(left), configWire(right))
+  private def configWire(error: Config.Error): ConfigError = error match
+    case Config.Error.InvalidData(path, message)              => ConfigError.InvalidData(path, message)
+    case Config.Error.MissingData(path, message)              => ConfigError.MissingData(path, message)
+    case Config.Error.Unsupported(path, message)              => ConfigError.Unsupported(path, message)
+    case Config.Error.And(left, right)                        => ConfigError.And(configWire(left), configWire(right))
+    case Config.Error.Or(left, right)                         => ConfigError.Or(configWire(left), configWire(right))
     case Config.Error.SourceUnavailable(path, message, cause) =>
-      WireConfig.SourceUnavailable(path, message, causeWire(cause))
+      ConfigError.SourceUnavailable(path, message, causeWire(cause))
 
   private def wireCause(cause: WireCause): Cause[Throwable] = cause match
     case WireCause.Empty                       => Cause.empty
@@ -595,12 +544,12 @@ private object WireLeaves extends WireSupport:
   private def thrownText(thrown: Throwable): String =
     Option(thrown.getMessage).getOrElse("")
 
-  private enum WireConfig:
+  private enum ConfigError:
     case InvalidData(path: Chunk[String], message: String)
     case MissingData(path: Chunk[String], message: String)
     case Unsupported(path: Chunk[String], message: String)
-    case And(left: WireConfig, right: WireConfig)
-    case Or(left: WireConfig, right: WireConfig)
+    case And(left: ConfigError, right: ConfigError)
+    case Or(left: ConfigError, right: ConfigError)
     case SourceUnavailable(path: Chunk[String], message: String, cause: WireCause)
 
   private enum WireCause:
@@ -612,8 +561,10 @@ private object WireLeaves extends WireSupport:
     case Both(left: WireCause, right: WireCause)
     case Stackless(cause: WireCause, stackless: Boolean)
 
-  private given JsonCodec[WireCause]  = JsonCodec.derived
-  private given JsonCodec[WireConfig] = JsonCodec.derived
+  private given JsonCodec[WireCause]   = JsonCodec.derived
+  private given Schema[WireCause]      = Schema.derived
+  private given JsonCodec[ConfigError] = JsonCodec.derived
+  private given Schema[ConfigError]    = Schema.derived
 
   private final case class ConfigThrown(kind: String, detail: String) extends RuntimeException(detail)
 end WireLeaves
@@ -728,7 +679,7 @@ private object WireBuild extends WireSupport:
   given Schema[JsLibraryMiss]    = Schema.derived
 
   given JsonCodec[NativeFetch] = JsonCodec.derived
-  given Schema[NativeFetch]    = Schema.of(nativeFetchDoc, Some("NativeFetch"))
+  given Schema[NativeFetch]    = Schema.derived
 
   private val compileErrorCodec: JsonCodec[CompileError] = JsonCodec.derived
   private val compileErrorSchema: Schema[CompileError]   = Schema.derived
@@ -753,7 +704,7 @@ private object WireBuild extends WireSupport:
     enumeration("Need", List("network", "docker"))
 
   given JsonCodec[BuildError] = JsonCodec.derived
-  given Schema[BuildError]    = Schema.of(buildErrorDoc, Some("BuildError"))
+  given Schema[BuildError]    = Schema.derived
 
   given JsonCodec[LoadError] = JsonCodec.derived
   given Schema[LoadError]    = Schema.derived
@@ -827,122 +778,6 @@ private object WireBuild extends WireSupport:
   given JsonCodec[SurveyError] = JsonCodec.derived
   given Schema[SurveyError]    = Schema.derived
 
-  private def nativeFetchDoc: SchemaDoc =
-    val text = SchemaDoc.Str(None)
-    wrapAll(
-      "NativeFetch",
-      List(
-        wrap("Compiler", List(req("error", SchemaDoc.Ref("CompileError")))),
-        wrap("Resolved", List(req("error", docOf[ResolveError]))),
-        wrap("Missing", List(req("artifact", text), req("revision", text))),
-        wrap("Duplicated", List(req("artifact", text))),
-      ),
-    )
-
-  private def buildErrorDoc: SchemaDoc =
-    val position = docOf[SourcePos]
-    val project  = docOf[ProjectName]
-    val platform = docOf[Platform]
-    val version  = docOf[ScalaVersion]
-    val ship     = docOf[ShipName]
-    val plugin   = docOf[PluginId]
-    val task     = docOf[TaskName]
-    val command  = docOf[CommandName]
-    val job      = docOf[JobName]
-    val key      = docOf[NoteKey]
-    val text     = SchemaDoc.Str(None)
-    wrapAll(
-      "BuildError",
-      List(
-        wrap("EmptyName", List(req("position", position))),
-        wrap("BadName", List(req("raw", text), req("position", position))),
-        wrap("DuplicateName", List(req("name", project), req("first", position), req("second", position))),
-        wrap("DuplicatePlatform", List(req("name", project), req("platform", platform), req("position", position))),
-        wrap(
-          "DuplicateScalaVersion",
-          List(req("name", project), req("version", version), req("position", position)),
-        ),
-        wrap("DuplicateChild", List(req("name", project), req("child", project), req("position", position))),
-        wrap("AggregateIncludesItself", List(req("name", project), req("position", position))),
-        wrap("AggregateChild", List(req("aggregate", project), req("child", project), req("position", position))),
-        wrap("MissingProject", List(req("name", text), req("referencedFrom", position))),
-        wrap(
-          "DependsOnAggregate",
-          List(req("module", project), req("aggregate", project), req("position", position)),
-        ),
-        wrap("SelfDependency", List(req("name", project), req("position", position))),
-        wrap(
-          "DuplicateDependency",
-          List(req("module", project), req("dependency", project), req("position", position)),
-        ),
-        wrap(
-          "EdgeWithoutPlatform",
-          List(req("module", project), req("platform", platform), req("position", position)),
-        ),
-        wrap(
-          "UpstreamMissingPlatform",
-          List(
-            req("module", project),
-            req("dependency", project),
-            req("platform", platform),
-            req("position", position),
-          ),
-        ),
-        wrap("Cycle", List(req("platform", platform), req("path", docOf[List[ProjectName]]))),
-        wrap("MissingClang", List(req("name", project), req("position", position))),
-        wrap("EmptyShipName", List(req("position", position))),
-        wrap("BadShipName", List(req("raw", text), req("position", position))),
-        wrap("DuplicateShip", List(req("name", ship), req("first", position), req("second", position))),
-        wrap(
-          "RepeatedShipMember",
-          List(req("ship", ship), req("member", project), req("position", position)),
-        ),
-        wrap(
-          "AggregateShipMember",
-          List(req("ship", ship), req("aggregate", project), req("position", position)),
-        ),
-        wrap(
-          "MemberInTwoShips",
-          List(req("member", project), req("first", ship), req("second", ship), req("position", position)),
-        ),
-        wrap("MixedScheme", List(req("position", position))),
-        wrap("DuplicateResolver", List(req("token", text))),
-        wrap("MixedTest", List(req("name", project), req("position", position))),
-        wrap("DuplicateDirectory", List(req("name", project), req("other", project), req("directory", text))),
-        wrap("DuplicatePlugin", List(req("id", plugin))),
-        wrap("DuplicatePluginTask", List(req("plugin", plugin), req("name", task))),
-        wrap("DuplicateCommand", List(req("name", command))),
-        wrap("DuplicateJob", List(req("name", job))),
-        wrap("ReservedJob", List(req("name", job))),
-        wrap("DuplicateNote", List(req("module", project), req("plugin", plugin), req("key", key))),
-        wrap("MissingNote", List(req("module", project), req("plugin", plugin), req("key", key))),
-        wrap("PluginMissingModule", List(req("plugin", plugin), req("name", project))),
-        wrap(
-          "PluginMissingCell",
-          List(
-            req("plugin", plugin),
-            req("module", project),
-            opt("version", version),
-            opt("platform", platform),
-          ),
-        ),
-        wrap("UnknownPluginTask", List(req("plugin", plugin), req("name", task))),
-        wrap("CommandShadow", List(req("name", command))),
-        wrap("PluginDefect", List(req("plugin", plugin), req("binary", text))),
-        wrap("TwoPublications", List(req("name", project), req("position", position))),
-        wrap("AssemblyShape", List(req("name", project), req("position", position))),
-        wrap("AssetWithoutAssembly", List(req("name", project), req("position", position))),
-        wrap("TwoAssets", List(req("name", project), req("position", position))),
-        wrap(
-          "RemoteNeeds",
-          List(
-            req("name", project),
-            req("needs", SchemaDoc.Array(docOf[histos.plugin.Need])),
-            req("position", position),
-          ),
-        ),
-      ),
-    )
 end WireBuild
 
 private object WireCall extends WireSupport:
@@ -1005,149 +840,8 @@ private object WireCall extends WireSupport:
   given JsonCodec[PlatformToolError] = JsonCodec.derived
   given Schema[PlatformToolError]    = Schema.derived
 
-  // Each case is derived alone. Deriving this sum exceeds the inline limit, so the codec
-  // dispatches on the case name and the schema is written out. The shape stays {"Case": {fields}}.
-  private val testedTool: JsonCodec[ModuleTestError.Tool]                         = JsonCodec.derived
-  private val testedTarget: JsonCodec[ModuleTestError.Target]                     = JsonCodec.derived
-  private val testedCompile: JsonCodec[ModuleTestError.Compile]                   = JsonCodec.derived
-  private val testedLock: JsonCodec[ModuleTestError.Lock]                         = JsonCodec.derived
-  private val testedLockRead: JsonCodec[ModuleTestError.LockRead]                 = JsonCodec.derived
-  private val testedSources: JsonCodec[ModuleTestError.Sources]                   = JsonCodec.derived
-  private val testedMissingSources: JsonCodec[ModuleTestError.MissingSources]     = JsonCodec.derived
-  private val testedMissingProvider: JsonCodec[ModuleTestError.MissingProvider]   = JsonCodec.derived
-  private val testedProviderDependency: JsonCodec[ModuleTestError.ProviderDependency] =
-    JsonCodec.derived
-  private val testedNoneDiscovered: JsonCodec[ModuleTestError.NoneDiscovered]     = JsonCodec.derived
-  private val testedNoneMatched: JsonCodec[ModuleTestError.NoneMatched]           = JsonCodec.derived
-  private val testedMixed: JsonCodec[ModuleTestError.Mixed]                       = JsonCodec.derived
-  private val testedProcess: JsonCodec[ModuleTestError.Process]                   = JsonCodec.derived
-  private val testedMain: JsonCodec[ModuleTestError.Main]                         = JsonCodec.derived
-  private val testedAbsent: JsonCodec[ModuleTestError.Absent]                     = JsonCodec.derived
-  private val testedMissingUpstream: JsonCodec[ModuleTestError.MissingUpstream]   = JsonCodec.derived
-  private val testedWork: JsonCodec[ModuleTestError.Work]                         = JsonCodec.derived
-  private val testedRoot: JsonCodec[ModuleTestError.Root]                         = JsonCodec.derived
-  private val testedRunner: JsonCodec[ModuleTestError.Runner]                     = JsonCodec.derived
-  private val testedLinkFailed: JsonCodec[ModuleTestError.LinkFailed]             = JsonCodec.derived
-  private val testedNoNode: JsonCodec[ModuleTestError.NoNode]                     = JsonCodec.derived
-  private val testedStamp: JsonCodec[ModuleTestError.Stamp]                       = JsonCodec.derived
-  private val testedRecord: JsonCodec[ModuleTestError.Record]                     = JsonCodec.derived
-  private val testedPattern: JsonCodec[ModuleTestError.Pattern]                   = JsonCodec.derived
-  private val testedApi: JsonCodec[ModuleTestError.Api]                           = JsonCodec.derived
-
-  private def encodeTested(error: ModuleTestError): Json =
-    error match
-      case value @ ModuleTestError.Tool(_, _, _)               => nest("Tool", value, testedTool)
-      case value @ ModuleTestError.Target(_)                   => nest("Target", value, testedTarget)
-      case value @ ModuleTestError.Compile(_)                  => nest("Compile", value, testedCompile)
-      case value @ ModuleTestError.Lock(_)                     => nest("Lock", value, testedLock)
-      case value @ ModuleTestError.LockRead(_)                 => nest("LockRead", value, testedLockRead)
-      case value @ ModuleTestError.Sources(_, _, _)            => nest("Sources", value, testedSources)
-      case value @ ModuleTestError.MissingSources(_, _)        => nest("MissingSources", value, testedMissingSources)
-      case value @ ModuleTestError.MissingProvider(_, _)       => nest("MissingProvider", value, testedMissingProvider)
-      case value @ ModuleTestError.ProviderDependency(_, _)    =>
-        nest("ProviderDependency", value, testedProviderDependency)
-      case value @ ModuleTestError.NoneDiscovered(_, _)        => nest("NoneDiscovered", value, testedNoneDiscovered)
-      case value @ ModuleTestError.NoneMatched(_)              => nest("NoneMatched", value, testedNoneMatched)
-      case value @ ModuleTestError.Mixed(_)                    => nest("Mixed", value, testedMixed)
-      case value @ ModuleTestError.Process(_, _, _)            => nest("Process", value, testedProcess)
-      case value @ ModuleTestError.Main(_)                     => nest("Main", value, testedMain)
-      case value @ ModuleTestError.Absent(_)                   => nest("Absent", value, testedAbsent)
-      case value @ ModuleTestError.MissingUpstream(_, _, _)    => nest("MissingUpstream", value, testedMissingUpstream)
-      case value @ ModuleTestError.Work(_)                     => nest("Work", value, testedWork)
-      case value @ ModuleTestError.Root(_)                     => nest("Root", value, testedRoot)
-      case value @ ModuleTestError.Runner(_)                   => nest("Runner", value, testedRunner)
-      case value @ ModuleTestError.LinkFailed(_, _, _, _)      => nest("LinkFailed", value, testedLinkFailed)
-      case value @ ModuleTestError.NoNode(_, _, _)             => nest("NoNode", value, testedNoNode)
-      case value @ ModuleTestError.Stamp(_)                    => nest("Stamp", value, testedStamp)
-      case value @ ModuleTestError.Record(_)                   => nest("Record", value, testedRecord)
-      case value @ ModuleTestError.Pattern(_)                  => nest("Pattern", value, testedPattern)
-      case value @ ModuleTestError.Api(_, _, _)                => nest("Api", value, testedApi)
-
-  private def decodeTested(json: Json): Either[String, ModuleTestError] =
-    json match
-      case Json.Obj(fields) =>
-        fields.toList match
-          case (name, body) :: Nil =>
-            name match
-              case "Tool"               => readCase(body, testedTool)
-              case "Target"             => readCase(body, testedTarget)
-              case "Compile"            => readCase(body, testedCompile)
-              case "Lock"               => readCase(body, testedLock)
-              case "LockRead"           => readCase(body, testedLockRead)
-              case "Sources"            => readCase(body, testedSources)
-              case "MissingSources"     => readCase(body, testedMissingSources)
-              case "MissingProvider"    => readCase(body, testedMissingProvider)
-              case "ProviderDependency" => readCase(body, testedProviderDependency)
-              case "NoneDiscovered"     => readCase(body, testedNoneDiscovered)
-              case "NoneMatched"        => readCase(body, testedNoneMatched)
-              case "Mixed"              => readCase(body, testedMixed)
-              case "Process"            => readCase(body, testedProcess)
-              case "Main"               => readCase(body, testedMain)
-              case "Absent"             => readCase(body, testedAbsent)
-              case "MissingUpstream"    => readCase(body, testedMissingUpstream)
-              case "Work"               => readCase(body, testedWork)
-              case "Root"               => readCase(body, testedRoot)
-              case "Runner"             => readCase(body, testedRunner)
-              case "LinkFailed"         => readCase(body, testedLinkFailed)
-              case "NoNode"             => readCase(body, testedNoNode)
-              case "Stamp"              => readCase(body, testedStamp)
-              case "Record"             => readCase(body, testedRecord)
-              case "Pattern"            => readCase(body, testedPattern)
-              case "Api"                => readCase(body, testedApi)
-              case other                => Left(s"'$other' is not a module test failure")
-          case _ => Left("expected one module test failure")
-      case _ => Left("expected a module test failure object")
-
-  private val moduleTestCodec: JsonCodec[ModuleTestError] =
-    JsonCodec[Json].transformOrFail(decodeTested, encodeTested)
-
-  given JsonCodec[ModuleTestError]   = moduleTestCodec
-  given JsonEncoder[ModuleTestError] = moduleTestCodec.encoder
-  given JsonDecoder[ModuleTestError] = moduleTestCodec.decoder
-  given Schema[ModuleTestError]      = Schema.of(moduleTestDoc, Some("ModuleTestError"))
-
-  private def moduleTestDoc: SchemaDoc =
-    val project  = docOf[ProjectName]
-    val version  = docOf[ScalaVersion]
-    val platform = docOf[Platform]
-    val text     = SchemaDoc.Str(None)
-    val cell     = List(req("module", project), req("version", version))
-    wrapAll(
-      "ModuleTestError",
-      List(
-        wrap("Tool", cell :+ req("error", docOf[PlatformToolError])),
-        wrap("Target", List(req("error", docOf[SelectError]))),
-        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
-        wrap("Lock", List(req("error", docOf[ResolveError]))),
-        wrap("LockRead", List(req("path", docOf[Path]))),
-        wrap("Sources", cell :+ req("error", docOf[CompileError])),
-        wrap("MissingSources", List(req("module", project), req("main", docOf[TestMain]))),
-        wrap("MissingProvider", List(req("module", project), req("provider", docOf[TestProvider]))),
-        wrap("ProviderDependency", List(req("module", project), req("provider", docOf[TestProvider]))),
-        wrap("NoneDiscovered", List(req("module", project), req("provider", docOf[TestProvider]))),
-        wrap("NoneMatched", List(req("patterns", SchemaDoc.Array(docOf[SuitePattern])))),
-        wrap("Mixed", List(req("module", project))),
-        wrap("Process", cell :+ req("error", docOf[ChildError])),
-        wrap("Main", List(req("error", docOf[PackMainError]))),
-        wrap("Absent", List(req("module", project))),
-        wrap(
-          "MissingUpstream",
-          List(req("module", project), req("dependency", project), req("version", version)),
-        ),
-        wrap("Work", List(req("path", docOf[Path]))),
-        wrap("Root", List(req("path", docOf[Path]))),
-        wrap("Runner", List(req("path", docOf[Path]))),
-        wrap(
-          "LinkFailed",
-          cell ++ List(req("platform", platform), req("detail", text)),
-        ),
-        wrap("NoNode", cell :+ req("miss", docOf[NodeMiss])),
-        wrap("Stamp", List(req("error", docOf[StampError]))),
-        wrap("Record", List(req("error", docOf[QuickError]))),
-        wrap("Pattern", List(req("error", docOf[SuitePatternError]))),
-        wrap("Api", cell :+ req("platform", platform)),
-      ),
-    )
+  given JsonCodec[ModuleTestError] = JsonCodec.derived
+  given Schema[ModuleTestError]    = Schema.derived
 
   given JsonCodec[ProgramError] = JsonCodec.derived
   given Schema[ProgramError]    = Schema.derived
@@ -1190,162 +884,8 @@ private object WireCall extends WireSupport:
   given JsonDecoder[AssemblyError]                         = assemblyErrorCodec.decoder
   given Schema[AssemblyError]                              = assemblyErrorSchema
 
-  // Each case is derived alone. Deriving this sum exceeds the inline limit, so the codec
-  // dispatches on the case name and the schema is written out. The shape stays {"Case": {fields}}.
-  private val versionCodec: JsonCodec[LocalPublishError.Version]     = JsonCodec.derived
-  private val targetCodec: JsonCodec[LocalPublishError.Target]       = JsonCodec.derived
-  private val compileCodec: JsonCodec[LocalPublishError.Compile]     = JsonCodec.derived
-  private val jarCodec: JsonCodec[LocalPublishError.Jar]             = JsonCodec.derived
-  private val sourceCodec: JsonCodec[LocalPublishError.SourceRead]   = JsonCodec.derived
-  private val publishCodec: JsonCodec[LocalPublishError.Publish]     = JsonCodec.derived
-  private val factsCodec: JsonCodec[LocalPublishError.Facts]         = JsonCodec.derived
-  private val classpathCodec: JsonCodec[LocalPublishError.Classpath] = JsonCodec.derived
-  private val runtimeCodec: JsonCodec[LocalPublishError.Runtime]     = JsonCodec.derived
-  private val packCodec: JsonCodec[LocalPublishError.Pack]           = JsonCodec.derived
-
-  private val noSourcesCodec: JsonCodec[LocalPublishError.NoSources]                   = JsonCodec.derived
-  private val readCodec: JsonCodec[LocalPublishError.Read]                             = JsonCodec.derived
-  private val developmentCodec: JsonCodec[LocalPublishError.Development]               = JsonCodec.derived
-  private val unknownShipCodec: JsonCodec[LocalPublishError.UnknownShip]               = JsonCodec.derived
-  private val notPublishedCodec: JsonCodec[LocalPublishError.NotPublished]             = JsonCodec.derived
-  private val snapshotDependencyCodec: JsonCodec[LocalPublishError.SnapshotDependency] =
-    JsonCodec.derived
-  private val unpublishedCodec: JsonCodec[LocalPublishError.UnpublishedDependency] = JsonCodec.derived
-  private val badDependencyCodec: JsonCodec[LocalPublishError.BadDependency]       = JsonCodec.derived
-  private val notAPathCodec: JsonCodec[LocalPublishError.NotAPath]                 = JsonCodec.derived
-  private val missingClassesCodec: JsonCodec[LocalPublishError.MissingClasses]     = JsonCodec.derived
-
-  private def nest[A](name: String, value: A, codec: JsonCodec[A]): Json =
-    codec.encoder.toJsonAST(value) match
-      case Right(body) => Json.Obj(Chunk(name -> body))
-      case Left(_)     => Json.Obj(Chunk(name -> Json.Obj.empty))
-
-  private def emptyCase(name: String): Json =
-    Json.Obj(Chunk(name -> Json.Obj.empty))
-
-  private def encodePublish(error: LocalPublishError): Json =
-    error match
-      case value @ LocalPublishError.Version(_)             => nest("Version", value, versionCodec)
-      case value @ LocalPublishError.Target(_)              => nest("Target", value, targetCodec)
-      case value @ LocalPublishError.Compile(_)             => nest("Compile", value, compileCodec)
-      case value @ LocalPublishError.Jar(_, _, _, _)        => nest("Jar", value, jarCodec)
-      case value @ LocalPublishError.SourceRead(_, _, _, _) =>
-        nest("SourceRead", value, sourceCodec)
-      case value @ LocalPublishError.NoSources(_, _, _)       => nest("NoSources", value, noSourcesCodec)
-      case value @ LocalPublishError.Publish(_)               => nest("Publish", value, publishCodec)
-      case value @ LocalPublishError.Read(_)                  => nest("Read", value, readCodec)
-      case LocalPublishError.NoOrganization                   => emptyCase("NoOrganization")
-      case LocalPublishError.NothingToPublish                 => emptyCase("NothingToPublish")
-      case value @ LocalPublishError.Development(_, _)        => nest("Development", value, developmentCodec)
-      case value @ LocalPublishError.UnknownShip(_)           => nest("UnknownShip", value, unknownShipCodec)
-      case value @ LocalPublishError.NotPublished(_)          => nest("NotPublished", value, notPublishedCodec)
-      case value @ LocalPublishError.SnapshotDependency(_, _) =>
-        nest("SnapshotDependency", value, snapshotDependencyCodec)
-      case LocalPublishError.Directory                           => emptyCase("Directory")
-      case LocalPublishError.TwoDirectories                      => emptyCase("TwoDirectories")
-      case value @ LocalPublishError.UnpublishedDependency(_, _) =>
-        nest("UnpublishedDependency", value, unpublishedCodec)
-      case value @ LocalPublishError.Facts(_)                => nest("Facts", value, factsCodec)
-      case value @ LocalPublishError.BadDependency(_, _, _)  => nest("BadDependency", value, badDependencyCodec)
-      case LocalPublishError.Credentials                     => emptyCase("Credentials")
-      case LocalPublishError.NoHome                          => emptyCase("NoHome")
-      case value @ LocalPublishError.NotAPath(_)             => nest("NotAPath", value, notAPathCodec)
-      case value @ LocalPublishError.Classpath(_)            => nest("Classpath", value, classpathCodec)
-      case value @ LocalPublishError.Runtime(_)              => nest("Runtime", value, runtimeCodec)
-      case value @ LocalPublishError.Pack(_, _, _, _)        => nest("Pack", value, packCodec)
-      case value @ LocalPublishError.MissingClasses(_, _, _) =>
-        nest("MissingClasses", value, missingClassesCodec)
-
-  private def readCase[A](body: Json, codec: JsonCodec[A]): Either[String, A] =
-    codec.decoder.fromJsonAST(body)
-
-  private def readEmpty(body: Json, value: LocalPublishError): Either[String, LocalPublishError] =
-    body match
-      case Json.Obj(fields) if fields.isEmpty => Right(value)
-      case _                                  => Left("expected an empty object")
-
-  private def decodePublish(json: Json): Either[String, LocalPublishError] =
-    json match
-      case Json.Obj(fields) =>
-        fields.toList match
-          case (name, body) :: Nil =>
-            name match
-              case "Version"               => readCase(body, versionCodec)
-              case "Target"                => readCase(body, targetCodec)
-              case "Compile"               => readCase(body, compileCodec)
-              case "Jar"                   => readCase(body, jarCodec)
-              case "SourceRead"            => readCase(body, sourceCodec)
-              case "NoSources"             => readCase(body, noSourcesCodec)
-              case "Publish"               => readCase(body, publishCodec)
-              case "Read"                  => readCase(body, readCodec)
-              case "NoOrganization"        => readEmpty(body, LocalPublishError.NoOrganization)
-              case "NothingToPublish"      => readEmpty(body, LocalPublishError.NothingToPublish)
-              case "Development"           => readCase(body, developmentCodec)
-              case "UnknownShip"           => readCase(body, unknownShipCodec)
-              case "NotPublished"          => readCase(body, notPublishedCodec)
-              case "SnapshotDependency"    => readCase(body, snapshotDependencyCodec)
-              case "Directory"             => readEmpty(body, LocalPublishError.Directory)
-              case "TwoDirectories"        => readEmpty(body, LocalPublishError.TwoDirectories)
-              case "UnpublishedDependency" => readCase(body, unpublishedCodec)
-              case "Facts"                 => readCase(body, factsCodec)
-              case "BadDependency"         => readCase(body, badDependencyCodec)
-              case "Credentials"           => readEmpty(body, LocalPublishError.Credentials)
-              case "NoHome"                => readEmpty(body, LocalPublishError.NoHome)
-              case "NotAPath"              => readCase(body, notAPathCodec)
-              case "Classpath"             => readCase(body, classpathCodec)
-              case "Runtime"               => readCase(body, runtimeCodec)
-              case "Pack"                  => readCase(body, packCodec)
-              case "MissingClasses"        => readCase(body, missingClassesCodec)
-              case other                   => Left(s"'$other' is not a publish failure")
-          case _ => Left("expected one publish failure")
-      case _ => Left("expected a publish failure object")
-
-  private val publishFailureCodec: JsonCodec[LocalPublishError] =
-    JsonCodec[Json].transformOrFail(decodePublish, encodePublish)
-
-  given JsonCodec[LocalPublishError]   = publishFailureCodec
-  given JsonEncoder[LocalPublishError] = publishFailureCodec.encoder
-  given JsonDecoder[LocalPublishError] = publishFailureCodec.decoder
-  given Schema[LocalPublishError]      = Schema.of(publishErrorDoc, Some("LocalPublishError"))
-
-  private def publishErrorDoc: SchemaDoc =
-    val project  = docOf[ProjectName]
-    val version  = docOf[ScalaVersion]
-    val platform = docOf[Platform]
-    val ship     = docOf[ShipName]
-    val text     = SchemaDoc.Str(None)
-    val cell     = List(req("module", project), req("version", version), req("platform", platform))
-    wrapAll(
-      "LocalPublishError",
-      List(
-        wrap("Version", List(req("error", docOf[VersionError]))),
-        wrap("Target", List(req("error", docOf[SelectError]))),
-        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
-        wrap("Jar", cell :+ req("error", docOf[JarError])),
-        wrap("SourceRead", cell :+ req("error", docOf[CompileError])),
-        wrap("NoSources", cell),
-        wrap("Publish", List(req("error", docOf[PublishError]))),
-        wrap("Read", List(req("path", docOf[Path]))),
-        wrap("NoOrganization", Nil),
-        wrap("NothingToPublish", Nil),
-        wrap("Development", List(req("ship", ship), req("compile", docOf[CiVersion]))),
-        wrap("UnknownShip", List(req("ship", ship))),
-        wrap("NotPublished", List(req("module", project))),
-        wrap("SnapshotDependency", List(req("ship", ship), req("dependency", text))),
-        wrap("Directory", Nil),
-        wrap("TwoDirectories", Nil),
-        wrap("UnpublishedDependency", List(req("module", project), req("dependency", project))),
-        wrap("Facts", List(req("missing", docOf[::[PomFact]]))),
-        wrap("BadDependency", List(req("organization", text), req("name", text), req("revision", text))),
-        wrap("Credentials", Nil),
-        wrap("NoHome", Nil),
-        wrap("NotAPath", List(req("raw", text))),
-        wrap("Classpath", List(req("error", docOf[ResolveError]))),
-        wrap("Runtime", List(req("error", docOf[CompileError]))),
-        wrap("Pack", cell :+ req("error", docOf[AssemblyError])),
-        wrap("MissingClasses", cell),
-      ),
-    )
+  given JsonCodec[LocalPublishError] = JsonCodec.derived
+  given Schema[LocalPublishError]    = Schema.derived
 
   given JsonCodec[PreviewError] = JsonCodec.derived
   given Schema[PreviewError]    = Schema.derived
@@ -1424,7 +964,7 @@ private object WireCall extends WireSupport:
   given JsonCodec[LauncherError] = JsonCodec.derived
   given Schema[LauncherError]    = Schema.derived
 
-  given Schema[ScheduleError[PluginFault]] = Schema.of(scheduleDoc, Some("ScheduleError"))
+  given Schema[ScheduleError[PluginFault]] = Schema.derived
 
   given JsonCodec[ScheduleError[PluginFault]] = JsonCodec.derived
 
@@ -1437,65 +977,11 @@ private object WireCall extends WireSupport:
   given JsonCodec[Rejection] = JsonCodec.derived
   given Schema[Rejection]    = Schema.derived
 
-  // Deriving this sum exceeds the inline limit, so the schema is written out.
-  // The codec stays derived. The shape stays {"Case": {fields}}.
   given JsonCodec[BuildFault] = JsonCodec.derived
-  given Schema[BuildFault]    = Schema.of(buildFaultDoc, Some("BuildFault"))
-
-  private def buildFaultDoc: SchemaDoc =
-    val text = SchemaDoc.Str(None)
-    wrapAll(
-      "BuildFault",
-      List(
-        wrap("Load", List(req("error", docOf[LoadError]))),
-        wrap("Resolve", List(req("error", docOf[ResolveError]))),
-        wrap("Toolchain", List(req("error", docOf[ToolchainError]))),
-        wrap("Survey", List(req("error", docOf[SurveyError]))),
-        wrap("Select", List(req("error", docOf[SelectError]))),
-        wrap("Pattern", List(req("error", docOf[SuitePatternError]))),
-        wrap("Compile", List(req("error", docOf[GraphCompileError]))),
-        wrap("Test", List(req("error", docOf[ModuleTestError]))),
-        wrap("Publish", List(req("error", docOf[LocalPublishError]))),
-        wrap("Release", List(req("detail", text))),
-        wrap("Workflow", List(req("error", docOf[WorkflowFault]))),
-        wrap("Program", List(req("error", docOf[ProgramError]))),
-        wrap("Platform", List(req("error", docOf[PlatformError]))),
-        wrap("Task", List(req("error", docOf[TaskError]))),
-        wrap("Plugin", List(req("error", docOf[PluginFault]))),
-        wrap("PluginTask", List(req("error", docOf[PluginTaskError]))),
-        wrap("Preview", List(req("error", docOf[PreviewError]))),
-        wrap("Assemble", List(req("error", docOf[AssembleError]))),
-        wrap("Launcher", List(req("error", docOf[LauncherError]))),
-        wrap("Cache", List(req("error", docOf[CacheError]))),
-        wrap("Remote", List(req("error", docOf[RemoteError]))),
-        wrap("Store", List(req("failure", docOf[IoFailure]))),
-        wrap("Io", List(req("failure", docOf[IoFailure]))),
-        wrap("Version", List(req("error", docOf[VersionError]))),
-        wrap("Watch", List(req("error", docOf[WatchError]))),
-        wrap("Interrupted", Nil),
-        wrap("Rejected", List(req("rejection", docOf[Rejection]))),
-      ),
-    )
+  given Schema[BuildFault]    = Schema.derived
 
   given JsonCodec[CallResult] = JsonCodec.derived
   given Schema[CallResult]    = Schema.derived
-
-  private def scheduleDoc: SchemaDoc =
-    val id   = summon[Schema[ActionId]].doc
-    val name = summon[Schema[InputName]].doc
-    wrapAll(
-      "ScheduleError",
-      List(
-        wrap("UnknownAction", List(req("id", id))),
-        wrap("DuplicateAction", List(req("id", id))),
-        wrap("MissingDependency", List(req("action", id), req("missing", id))),
-        wrap("Cycle", List(req("path", SchemaDoc.Array(id)))),
-        wrap("DuplicateInput", List(req("action", id), req("name", name))),
-        wrap("Failed", List(req("action", id), req("error", SchemaDoc.Ref("PluginFault")))),
-        wrap("Cache", List(req("error", summon[Schema[CacheError]].doc))),
-        wrap("Remote", List(req("error", summon[Schema[RemoteError]].doc))),
-      ),
-    )
 
   private final case class WireLibrary(organization: String, name: String)
 

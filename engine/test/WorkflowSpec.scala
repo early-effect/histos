@@ -24,9 +24,12 @@ import histos.{
   ProjectDep,
   ProjectGraph,
   ProjectName,
+  Publishing,
+  ReleaseMode,
   RunnerTools,
   ScalaVersion,
   ScalaVersions,
+  Sona,
   SourcePos,
   Splits,
   ToolRevision,
@@ -47,6 +50,8 @@ object WorkflowSpec extends ZIOSpecDefault:
   private val nodeOnly       = RunnerTools(Some(NodeFloor(22)), None, None)
   private val llvmOnly       = RunnerTools(None, Some(ToolRevision("20.1.8")), None)
   private val playwrightOnly = RunnerTools(None, None, Some(ToolRevision("1.49.0")))
+  private val automatic      = Sona.described(ReleaseMode.Automatic)
+  private val hold           = Sona.described(ReleaseMode.Hold)
 
   private val render = suite("render")(
     test("the empty split set is one aggregate test job"):
@@ -108,14 +113,14 @@ object WorkflowSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root  <- temp
-          file  <- Workflow.update(root, graph(Splits.aggregate))
+          file  <- Workflow.update(root, graph(Splits.aggregate), automatic)
           read  <- ZIO.attempt(Files.readString(file))
-          again <- Workflow.check(root, graph(Splits.aggregate))
+          again <- Workflow.check(root, graph(Splits.aggregate), automatic)
           wrote = Files.isRegularFile(file)
           _       <- ZIO.attempt(Files.writeString(file, read + "\n"))
-          drifted <- Workflow.check(root, graph(Splits.aggregate)).either
+          drifted <- Workflow.check(root, graph(Splits.aggregate), automatic).either
           gone    <- Workflow
-            .check(root.resolve("absent"), graph(Splits.aggregate))
+            .check(root.resolve("absent"), graph(Splits.aggregate), automatic)
             .either
         yield assertTrue(
           file == Workflow.path(root) && wrote,
@@ -385,7 +390,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         JobWhen.Schedule(Cron("0 6 * * 1")),
       )
       val built = withJobs(List(nightly))
-      val all   = Workflow.renderAll(built)
+      val all   = Workflow.renderAll(built, automatic)
       val one   = Workflow.render(built)
       val plain = Workflow.render(graph(Splits.aggregate))
       assertTrue:
@@ -465,7 +470,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         JobWhen.Schedule(Cron("0 6 * * 1")),
         JobPermissions.ContentsWrite,
       )
-      val rendered = Workflow.renderAll(withJobs(List(job)))
+      val rendered = Workflow.renderAll(withJobs(List(job)), automatic)
       assertTrue:
         rendered match
           case Right(
@@ -480,13 +485,13 @@ object WorkflowSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          _    <- Workflow.update(root, graph(Splits.aggregate))
+          _    <- Workflow.update(root, graph(Splits.aggregate), automatic)
           nightly = CiJob(
             JobName("nightly"),
             TaskName("site"),
             JobWhen.Schedule(Cron("0 6 * * 1")),
           )
-          checked <- Workflow.check(root, withJobs(List(nightly))).either
+          checked <- Workflow.check(root, withJobs(List(nightly)), automatic).either
           ci      <- ZIO.attempt(Files.readString(Workflow.path(root)))
           plain   <- ZIO.fromEither(Workflow.render(graph(Splits.aggregate)))
         yield assertTrue(checked == Left(CiError.Drift), ci == plain)
@@ -502,18 +507,18 @@ object WorkflowSpec extends ZIOSpecDefault:
             TaskName("site"),
             JobWhen.Schedule(Cron("0 6 * * 1")),
           )
-          _ <- Workflow.update(root, withJobs(List(nightly)))
+          _ <- Workflow.update(root, withJobs(List(nightly)), automatic)
           orphan = Workflow.file(root, "histos-retired.yml")
           other  = Workflow.file(root, "release.yml")
           _       <- ZIO.attempt(Files.writeString(orphan, "orphan\n"))
           _       <- ZIO.attempt(Files.writeString(other, "release\n"))
-          drifted <- Workflow.check(root, withJobs(List(nightly))).either
-          _       <- Workflow.update(root, graph(Splits.aggregate))
+          drifted <- Workflow.check(root, withJobs(List(nightly)), automatic).either
+          _       <- Workflow.update(root, graph(Splits.aggregate), automatic)
           gone = !Files.exists(
             Workflow.file(root, "histos-nightly.yml")
           ) && !Files.exists(orphan)
           kept  <- ZIO.attempt(Files.readString(other))
-          clean <- Workflow.check(root, graph(Splits.aggregate))
+          clean <- Workflow.check(root, graph(Splits.aggregate), automatic)
         yield assertTrue(
           drifted == Left(CiError.Drift),
           gone && kept == "release\n",
@@ -556,42 +561,70 @@ object WorkflowSpec extends ZIOSpecDefault:
     )
 
   private val release = suite("release")(
-    test("one ship holds, uploads the named jar, and promote is the other dispatch"):
-      val body = renderRelease(List(manual("histos", "0.0.1-SNAPSHOT", "app")), Set("app")).flatMap:
+    test("one ship publishes on dispatch and assembles the jar first"):
+      val body = renderRelease(
+        List(manual("histos", "0.0.1-SNAPSHOT", "app")),
+        Set("app"),
+        automatic,
+      ).flatMap:
         case RenderedWorkflow("ci.yml", ci) :: RenderedWorkflow(name, text) :: Nil
             if name == Workflow.releaseName && !ci.contains("publish") && !ci.contains("tags:") =>
           Right(text)
         case other => Left(other.toString)
       assertTrue(body == Right(oneShipRelease))
     ,
-    test("two ships prefix the tag, and a library ship does not upload"):
+    test("hold renders a promote file and does not pass --automatic"):
+      val rendered = renderRelease(
+        List(manual("histos", "0.0.1-SNAPSHOT", "app")),
+        Set("app"),
+        hold,
+      )
+      assertTrue:
+        rendered match
+          case Right(
+                RenderedWorkflow("ci.yml", _) :: RenderedWorkflow(releaseFile, releaseBody) :: RenderedWorkflow(
+                  promoteFile,
+                  promoteBody,
+                ) :: Nil
+              ) =>
+            releaseFile == Workflow.releaseName &&
+            releaseBody == oneShipRelease &&
+            !releaseBody.contains("--automatic") &&
+            promoteFile == "histos-promote.yml" &&
+            promoteBody == holdPromote &&
+            !promoteBody.contains("publish release") &&
+            !promoteBody.contains("--automatic")
+          case _ => false
+    ,
+    test("two ships release by dispatch, and a library ship does not upload"):
       val rendered = renderRelease(
         List(line("libs", "1.0.0", "core"), line("tool", "2.0.0", "app")),
         Set("app"),
+        automatic,
       )
       assertTrue:
         rendered match
           case Right(_ :: RenderedWorkflow("histos-release.yml", body) :: Nil) =>
-            val libsAt    = body.indexOf("  release-libs:")
-            val toolAt    = body.indexOf("  release-tool:")
-            val promoteAt = body.indexOf("  promote:")
-            val libsJob   = if libsAt >= 0 && toolAt > libsAt then body.substring(libsAt, toolAt) else ""
-            val toolJob   = if toolAt >= 0 && promoteAt > toolAt then body.substring(toolAt, promoteAt) else ""
-            body.contains("- \"libs/v1.0.0\"") &&
-            body.contains("- \"tool/v2.0.0\"") &&
-            !body.contains("- \"v1.0.0\"") &&
-            !body.contains("- \"v2.0.0\"") &&
-            libsJob.contains("\"./histos publish release libs\"") &&
-            !libsJob.contains("publish assets") &&
-            !libsJob.contains("contents: write") &&
-            toolJob.contains("\"./histos publish release tool\"") &&
-            toolJob.contains("\"./histos publish assets tool\"") &&
-            toolJob.contains("contents: write") &&
-            body.contains("\"./histos publish promote ${{ inputs.deployment }}\"") &&
+            val libsAt  = body.indexOf("  release-libs:")
+            val toolAt  = body.indexOf("  release-tool:")
+            val libsJob = if libsAt >= 0 && toolAt > libsAt then body.substring(libsAt, toolAt) else ""
+            val toolJob = if toolAt >= 0 then body.substring(toolAt) else ""
+            !body.contains("tags:") &&
+            !body.contains("inputs:") &&
+            !body.contains("if:") &&
+            !body.contains("publish promote") &&
             !body.contains("--automatic") &&
             !body.contains(CacheNamespace.Key) &&
             !body.contains("actions/cache") &&
-            !body.contains("needs:")
+            !body.contains("needs:") &&
+            libsJob.contains("\"./histos publish release libs\"") &&
+            !libsJob.contains("publish assets") &&
+            !libsJob.contains("assembly") &&
+            !libsJob.contains("contents: write") &&
+            toolJob.contains("\"./histos assembly\"") &&
+            toolJob.contains("\"./histos publish release tool\"") &&
+            toolJob.contains("\"./histos publish assets tool\"") &&
+            toolJob.contains("contents: write")
           case _ => false
     ,
     test("a schedule is rendered after the release file"):
@@ -603,6 +636,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       val rendered = renderRelease(
         List(manual("histos", "0.0.1-SNAPSHOT", "app")),
         Set("app"),
+        automatic,
         List(registered(List(nightly))),
       )
       assertTrue:
@@ -621,60 +655,57 @@ object WorkflowSpec extends ZIOSpecDefault:
         for
           root    <- temp
           built   <- ZIO.fromEither(releaseGraph(List(manual("histos", "0.0.1-SNAPSHOT", "app")), Set("app")))
-          _       <- Workflow.update(root, built)
+          _       <- Workflow.update(root, built, automatic)
           text    <- ZIO.attempt(Files.readString(Workflow.file(root, Workflow.releaseName)))
-          again   <- Workflow.check(root, built)
+          again   <- Workflow.check(root, built, automatic)
           _       <- ZIO.attempt(Files.delete(Workflow.file(root, Workflow.releaseName)))
-          missing <- Workflow.check(root, built).either
-          stale = Workflow.file(root, Workflow.releaseName)
+          missing <- Workflow.check(root, built, automatic).either
+          stale   = Workflow.file(root, Workflow.releaseName)
+          promote = Workflow.file(root, "histos-promote.yml")
           _ <- ZIO.attempt(Files.writeString(stale, "stale\n"))
-          _ <- Workflow.update(root, graph(Splits.aggregate))
-          gone = !Files.exists(stale)
-          clean <- Workflow.check(root, graph(Splits.aggregate))
+          _ <- ZIO.attempt(Files.writeString(promote, "stale promote\n"))
+          _ <- Workflow.update(root, graph(Splits.aggregate), automatic)
+          gone = !Files.exists(stale) && !Files.exists(promote)
+          clean       <- Workflow.check(root, graph(Splits.aggregate), automatic)
+          _           <- Workflow.update(root, built, hold)
+          heldRelease <- ZIO.attempt(Files.readString(Workflow.file(root, Workflow.releaseName)))
+          heldPromote <- ZIO.attempt(Files.readString(promote))
+          heldCheck   <- Workflow.check(root, built, hold)
+          early       <- Workflow.check(root, built, automatic).either
+          _           <- Workflow.update(root, built, automatic)
+          dropped = !Files.exists(promote)
+          kept  <- ZIO.attempt(Files.readString(Workflow.file(root, Workflow.releaseName)))
+          after <- Workflow.check(root, built, automatic)
         yield assertTrue(
           text == oneShipRelease,
           again == Workflow.path(root),
           missing == Left(CiError.Drift),
           gone,
           clean == Workflow.path(root),
+          heldRelease == oneShipRelease,
+          heldPromote == holdPromote,
+          heldCheck == Workflow.path(root),
+          early == Left(CiError.Drift),
+          dropped,
+          kept == oneShipRelease,
+          after == Workflow.path(root),
         ),
   )
 
   private val oneShipRelease: String =
     """name: release
       |on:
-      |  push:
-      |    tags:
-      |      - "v0.0.1-SNAPSHOT"
       |  workflow_dispatch:
-      |    inputs:
-      |      command:
-      |        description: release or promote
-      |        required: true
-      |        type: choice
-      |        options:
-      |          - release
-      |          - promote
-      |      ship:
-      |        description: ship
-      |        required: true
-      |        type: choice
-      |        options:
-      |          - "histos"
-      |      deployment:
-      |        description: deployment id
-      |        required: false
-      |        type: string
       |permissions:
       |  contents: read
       |jobs:
       |  release-histos:
-      |    if: github.ref == 'refs/tags/v0.0.1-SNAPSHOT' || (inputs.command == 'release' && inputs.ship == 'histos')
       |    runs-on: ubuntu-26.04
       |    permissions:
       |      contents: write
       |    steps:
       |      - uses: actions/checkout@v7
+      |      - run: "./histos assembly"
       |      - run: "./histos publish release histos"
       |        env:
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -686,8 +717,21 @@ object WorkflowSpec extends ZIOSpecDefault:
       |        env:
       |          GITHUB_TOKEN: ${{ github.token }}
       |          GITHUB_REPOSITORY: ${{ github.repository }}
+      |""".stripMargin
+
+  private val holdPromote: String =
+    """name: promote
+      |on:
+      |  workflow_dispatch:
+      |    inputs:
+      |      deployment:
+      |        description: deployment id
+      |        required: true
+      |        type: string
+      |permissions:
+      |  contents: read
+      |jobs:
       |  promote:
-      |    if: github.event_name == 'workflow_dispatch' && inputs.command == 'promote'
       |    runs-on: ubuntu-26.04
       |    steps:
       |      - uses: actions/checkout@v7
@@ -700,9 +744,10 @@ object WorkflowSpec extends ZIOSpecDefault:
   private def renderRelease(
       rows: List[Either[String, Ship]],
       assets: Set[String],
+      sona: Publishing,
       plugins: List[RegisteredPlugin] = Nil,
   ): Either[String, List[RenderedWorkflow]] =
-    releaseGraph(rows, assets, plugins).flatMap(graph => Workflow.renderAll(graph).left.map(_.message))
+    releaseGraph(rows, assets, plugins).flatMap(graph => Workflow.renderAll(graph, sona).left.map(_.message))
 
   private def releaseGraph(
       rows: List[Either[String, Ship]],

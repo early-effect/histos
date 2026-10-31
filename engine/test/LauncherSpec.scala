@@ -80,16 +80,12 @@ object LauncherSpec extends ZIOSpecDefault:
             graph.organization.map(_.value) == Some("rocks.earlyeffect"),
           )
     ,
-    test("snapshots need both sonatype variables, and a path stays a directory"):
-      val repo    = Path.of("/tmp/histos-publish")
-      val home    = Path.of("/fixtures/home")
+    test("snapshots need both sonatype variables"):
       val missing = PublishWhere.snapshots(Map.empty)
       val present = PublishWhere.snapshots(
         Map("SONATYPE_USERNAME" -> "maven", "SONATYPE_PASSWORD" -> "secret")
       )
-      val directory = PublishWhere.directory(repo, Some("target/repo"), home)
-      val absent    = PublishWhere.directory(repo, None, home)
-      val authed    = present match
+      val authed = present match
         case Right(where: PublishWhere.Snapshots) =>
           where.user.value == "maven" &&
           where.password == zio.Config.Secret(
@@ -98,15 +94,7 @@ object LauncherSpec extends ZIOSpecDefault:
           !where.password.toString.contains("secret") &&
           !where.toString.contains("secret")
         case _ => false
-      val folder = directory match
-        case Right(PublishWhere.Directory(path)) =>
-          path.endsWith(Path.of("target", "repo"))
-        case _ => false
-      val maven = absent match
-        case Right(PublishWhere.Directory(path)) =>
-          path == home.resolve(".m2").resolve("repository")
-        case _ => false
-      assertTrue(missing == Left(LocalPublishError.Credentials), authed, folder, maven),
+      assertTrue(missing == Left(LocalPublishError.Credentials), authed),
   )
 
   private val opened =
@@ -124,22 +112,8 @@ object LauncherSpec extends ZIOSpecDefault:
         app,
       )
 
-  private val homes = suite("maven home")(
-    test("user.home names the default directory, and an empty home is refused"):
-      for
-        _       <- TestSystem.putProperty("user.home", "/fixtures/home")
-        found   <- PublishRun.home
-        _       <- TestSystem.putProperty("user.home", "")
-        missing <- PublishRun.home.either
-      yield assertTrue(
-        found == Path.of("/fixtures/home"),
-        missing == Left(LocalPublishError.NoHome),
-      )
-  )
-
   def spec = suite("launcher")(
-    checks @@ TestAspect.withLiveSystem,
-    homes,
+    checks @@ TestAspect.withLiveSystem
   )
 end LauncherSpec
 

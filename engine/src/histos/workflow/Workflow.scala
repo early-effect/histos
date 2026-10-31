@@ -3,16 +3,18 @@ package histos.workflow
 import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin}
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
-import histos.version.{Catalog, ReleaseTag, Ship}
+import histos.version.{Catalog, Ship}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
   Axis,
+  FollowUp,
   Module,
   NodeFloor,
   Platform,
   ProjectGraph,
   ProjectName,
+  Publishing,
   RunnerTools,
   ScalaVersion,
   Splits,
@@ -105,6 +107,10 @@ object Workflow:
   /** Owned like a scheduled `histos-*.yml`. An empty catalog does not emit it, so update deletes a stale copy. */
   val releaseName: String = "histos-release.yml"
 
+  /** `histos-` so update deletes a stale copy when `followUp` is Finished, on the same orphan pass as the release file.
+    */
+  val promoteName: String = "histos-promote.yml"
+
   def path(repo: Path): Path =
     file(repo, fileName)
 
@@ -144,25 +150,32 @@ object Workflow:
   def render(graph: ProjectGraph): Either[CiError, String] =
     plan(graph, CiEvent.Other).map(jobs => document(graph, jobs))
 
-  /** `ci.yml`, `histos-release.yml` when the catalog names a ship, then one `histos-<job>.yml` per schedule. */
-  def renderAll(graph: ProjectGraph): Either[CiError, List[RenderedWorkflow]] =
+  /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
+    * is Deployment, then one `histos-<job>.yml` per schedule.
+    */
+  def renderAll(graph: ProjectGraph, sona: Publishing): Either[CiError, List[RenderedWorkflow]] =
     render(graph).map: body =>
-      RenderedWorkflow(fileName, body) :: releaseWorkflow(graph).toList ++ scheduled(graph)
+      val release = releaseWorkflow(graph, sona).toList
+      val promote =
+        release match
+          case Nil => Nil
+          case _   => promoteWorkflow(sona).toList
+      RenderedWorkflow(fileName, body) :: release ++ promote ++ scheduled(graph)
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
 
-  def check(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
+  def check(repo: Path, graph: ProjectGraph, sona: Publishing): IO[CiError, Path] =
     for
-      rendered <- ZIO.fromEither(renderAll(graph))
+      rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.when(extra.nonEmpty)(ZIO.fail(CiError.Drift))
     yield path(repo)
 
-  def update(repo: Path, graph: ProjectGraph): IO[CiError, Path] =
+  def update(repo: Path, graph: ProjectGraph, sona: Publishing): IO[CiError, Path] =
     for
-      rendered <- ZIO.fromEither(renderAll(graph))
+      rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.foreachDiscard(extra): orphan =>
@@ -270,63 +283,43 @@ object Workflow:
           case JobWhen.Always      => List(jobLines(plugin, job).mkString("\n"))
           case JobWhen.Schedule(_) => Nil
 
-  /** Hold, then the asset when the ship names one. Promote is the other dispatch. No `--automatic`. */
-  private def releaseWorkflow(graph: ProjectGraph): Option[RenderedWorkflow] =
+  /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. */
+  private def releaseWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
     graph.catalog.ships match
       case Nil   => None
-      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships)))
+      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships, sona)))
 
-  private def releaseDocument(graph: ProjectGraph, ships: List[Ship]): String =
-    val count = ships.length
+  /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
+  private def promoteWorkflow(sona: Publishing): Option[RenderedWorkflow] =
+    sona.followUp match
+      case FollowUp.Finished   => None
+      case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument))
+
+  private def releaseDocument(graph: ProjectGraph, ships: List[Ship], sona: Publishing): String =
     val lines = List(
       "name: release",
       "on:",
-      "  push:",
-      "    tags:",
-    ) ++ ships.map(ship => s"      - ${quote(ReleaseTag.of(count, ship.name, stated(ship)))}") ++ List(
       "  workflow_dispatch:",
-      "    inputs:",
-      "      command:",
-      "        description: release or promote",
-      "        required: true",
-      "        type: choice",
-      "        options:",
-      "          - release",
-      "          - promote",
-      "      ship:",
-      "        description: ship",
-      "        required: true",
-      "        type: choice",
-      "        options:",
-    ) ++ ships.map(ship => s"          - ${quote(ship.name.value)}") ++ List(
-      "      deployment:",
-      "        description: deployment id",
-      "        required: false",
-      "        type: string",
       "permissions:",
       "  contents: read",
       "jobs:",
-    ) ++ ships.flatMap(ship => releaseJob(graph, count, ship)) ++ promoteJob
+    ) ++ ships.flatMap(ship => releaseJob(graph, ship, sona))
     lines.mkString("\n") + "\n"
 
-  private def releaseJob(graph: ProjectGraph, count: Int, ship: Ship): List[String] =
+  private def releaseJob(graph: ProjectGraph, ship: Ship, sona: Publishing): List[String] =
     val name   = ship.name.value
-    val tag    = ReleaseTag.of(count, ship.name, stated(ship))
     val upload = namesAsset(graph, ship)
-    val guard  =
-      s"github.ref == 'refs/tags/$tag' || (inputs.command == 'release' && inputs.ship == '$name')"
     val access = if upload then "write" else "read"
     List(
       s"  release-$name:",
-      s"    if: $guard",
       s"    runs-on: $Runner",
       "    permissions:",
       s"      contents: $access",
       "    steps:",
       s"      - uses: $Checkout",
-      s"      - run: ${quote(s"./histos publish release $name")}",
-      "        env:",
-    ) ++ portalEnv ++ signingEnv ++ (if upload then assetStep(name) else Nil)
+    ) ++ (if upload then List(s"      - run: ${quote("./histos assembly")}") else Nil) ++ List(
+      s"      - run: ${quote(s"./histos publish release $name")}"
+    ) ++ secretEnv(sona.secretNames) ++ (if upload then assetStep(name) else Nil)
 
   private def assetStep(name: String): List[String] =
     List(
@@ -336,30 +329,38 @@ object Workflow:
       "          GITHUB_REPOSITORY: ${{ github.repository }}",
     )
 
-  private def promoteJob: List[String] =
-    List(
+  /** Promote does not sign, so this file does not list `secretNames`. */
+  private val promoteSecrets: List[String] =
+    List("SONATYPE_USERNAME", "SONATYPE_PASSWORD")
+
+  private def promoteDocument: String =
+    val lines = List(
+      "name: promote",
+      "on:",
+      "  workflow_dispatch:",
+      "    inputs:",
+      "      deployment:",
+      "        description: deployment id",
+      "        required: true",
+      "        type: string",
+      "permissions:",
+      "  contents: read",
+      "jobs:",
       "  promote:",
-      "    if: github.event_name == 'workflow_dispatch' && inputs.command == 'promote'",
       s"    runs-on: $Runner",
       "    steps:",
       s"      - uses: $Checkout",
       "      - run: \"./histos publish promote ${{ inputs.deployment }}\"",
-      "        env:",
-    ) ++ portalEnv
+    ) ++ secretEnv(promoteSecrets)
+    lines.mkString("\n") + "\n"
 
-  private def portalEnv: List[String] =
-    List(secret("SONATYPE_USERNAME"), secret("SONATYPE_PASSWORD"))
-
-  private def signingEnv: List[String] =
-    List("PGP_SECRET", "PGP_PASSPHRASE", "PGP_KEY_HEX").map(secret)
+  private def secretEnv(names: List[String]): List[String] =
+    names match
+      case Nil => Nil
+      case _   => "        env:" :: names.map(secret)
 
   private def secret(name: String): String =
     s"          $name: $${{ secrets.$name }}"
-
-  private def stated(ship: Ship): String =
-    ship match
-      case line: Ship.Line     => line.number.render
-      case manual: Ship.Manual => manual.version.value
 
   private def namesAsset(graph: ProjectGraph, ship: Ship): Boolean =
     ship.members.toList.exists: name =>

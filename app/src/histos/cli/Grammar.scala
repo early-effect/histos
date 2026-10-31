@@ -241,7 +241,7 @@ object Grammar:
       case Wire.Assembly(destination) =>
         ZIO.succeed(Command.Assembly(destination))
       case Wire.PublishLocal(tokens) =>
-        ZIO.succeed(Command.PublishLocal(None, tokens))
+        ZIO.succeed(Command.PublishLocal(tokens))
       case Wire.PublishSnapshots(tokens) =>
         ZIO.succeed(Command.PublishSnapshots(tokens))
       case Wire.PublishRelease(automatic, tokens) =>
@@ -257,7 +257,7 @@ object Grammar:
       case Wire.PreviewTest(projects) =>
         projectList("preview test", projects).map(Command.PreviewTest(_))
       case Wire.PreviewPublishLocal(tokens) =>
-        ZIO.succeed(Command.PreviewPublishLocal(None, tokens))
+        ZIO.succeed(Command.PreviewPublishLocal(tokens))
       case Wire.PreviewPublishSnapshots(tokens) =>
         ZIO.succeed(Command.PreviewPublishSnapshots(tokens))
       case Wire.PreviewClean(projects) =>

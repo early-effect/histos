@@ -40,7 +40,7 @@ object BuildSpec extends ZIOSpecDefault:
       val compile = Perform.jdkMissed(Call.Compile(Nil), lock)
       val test    = Perform.jdkMissed(Call.Test(Nil, Nil, TestMode.Run), lock)
       val run     = Perform.jdkMissed(Call.Run("app", None), lock)
-      val publish = Perform.jdkMissed(Call.PublishLocal(Some("local"), Nil), lock)
+      val publish = Perform.jdkMissed(Call.PublishLocal(Nil), lock)
       val snaps   = Perform.jdkMissed(Call.PublishSnapshots(Nil), lock)
       val release = Perform.jdkMissed(Call.PublishRelease(Nil, false), lock)
       assertTrue(
@@ -52,7 +52,7 @@ object BuildSpec extends ZIOSpecDefault:
         CliExit.from(Call.Run("app", None), run) == CliExit.ResolveFailed,
         publish == CallResult.Fault(BuildFault.Compile(lock)),
         snaps == CallResult.Fault(BuildFault.Compile(lock)),
-        CliExit.from(Call.PublishLocal(Some("local"), Nil), publish) == CliExit.PublishFailed,
+        CliExit.from(Call.PublishLocal(Nil), publish) == CliExit.PublishFailed,
         CliExit.from(Call.PublishSnapshots(Nil), snaps) == CliExit.PublishFailed,
         release == CallResult.Fault(BuildFault.Compile(lock)),
         CliExit.from(Call.PublishRelease(Nil, false), release) == CliExit.PublishFailed,
