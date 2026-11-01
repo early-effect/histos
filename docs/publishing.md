@@ -2,7 +2,7 @@
 
 `publish` is an effect. It requires a `Publishing`. A command closes that requirement with `provideLayer`. Anything larger is `flatMap` of those effects. The engine does not look up a publisher by name.
 
-This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. The catalog is `manual("histos", manual"0.0.1")`. Editing this file does not upload it.
+This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. The catalog is `manual("histos", manual"0.0.2-SNAPSHOT")`. Editing this file does not upload it.
 
 ## The effect
 

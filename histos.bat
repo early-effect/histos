@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 rem Generated from the manual ship. Finds java.exe and runs the pinned launcher jar.
 set "HISTOS_BOOT_ROOT=%~dp0"
-set "HISTOS_BOOT_VERSION=0.0.1"
+set "HISTOS_BOOT_VERSION=0.0.2-SNAPSHOT"
 for /f "delims=" %%T in ('powershell.exe -NoLogo -NoProfile -Command "[IO.Path]::Combine([IO.Path]::GetTempPath(), 'histos-' + [Guid]::NewGuid().ToString('N'))"') do set "HISTOS_BOOT_TEMP=%%T"
 if not defined HISTOS_BOOT_TEMP exit /b 1
 mkdir "%HISTOS_BOOT_TEMP%"
