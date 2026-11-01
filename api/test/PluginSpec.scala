@@ -269,7 +269,7 @@ object PluginSpec extends ZIOSpecDefault:
         PluginArgs.empty.require(ParamName("out")) == Left(
           PluginRunError.MissingArg(ParamName("out"))
         ),
-        HistosPlugin.entryResource == "META-INF/histos/plugin",
+        HistosPlugin.EntryResourceName == "META-INF/histos/plugin",
       ),
   )
 

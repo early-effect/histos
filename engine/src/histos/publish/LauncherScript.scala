@@ -8,9 +8,9 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and
-  * runs the pinned launcher jar. JVM arguments come from a repository `.jvmopts`, one per line. Histos does not install
-  * a JDK.
+/** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and,
+  * when the checkout has no local assembly, asks `cs fetch` for `.histos/build.properties`. JVM arguments come from a
+  * repository `.jvmopts`, one per line. Histos does not install a JDK or Coursier.
   */
 object LauncherScript:
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
@@ -57,9 +57,10 @@ object LauncherScript:
   def windows(version: String): String =
     Windows.replace("__VERSION__", version)
 
-  /** The lock is the jar this checkout runs. A release ship still boots the snapshot of that same number. */
-  def boots(ship: String, pin: String): Boolean =
-    pin == ship || (!ship.endsWith("-SNAPSHOT") && pin == s"$ship-SNAPSHOT")
+  /** A pointer or a timestamp boots when its channel is the script version, or the snapshot of a release ship. */
+  def boots(ship: String, line: String): Boolean =
+    LauncherPin.channel(line).exists: pointer =>
+      pointer == ship || (!ship.endsWith("-SNAPSHOT") && pointer == s"$ship-SNAPSHOT")
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     if !launcher(graph) then Right(None)
@@ -104,115 +105,42 @@ object LauncherScript:
 
   private val Posix: String = """#!/bin/sh
 # Generated from the manual ship. `histos workflow --update` rewrites this file.
-# Source assemblies and remote launchers have independent committed digests.
+# A local assembly is checked against .histos/assembly.sha256. Otherwise `cs fetch` reads the version file.
 set -eu
-umask 077
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 version=__VERSION__
-cache=${XDG_CACHE_HOME:-${HOME:?HOME is unset}/.cache}/histos
-work=
-cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }
-trap cleanup EXIT
-trap 'exit 1' HUP INT TERM
 fail() { echo "histos $version: $*" >&2; exit 1; }
 hash_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 valid_sha() { printf '%s\n' "$1" | awk 'length($0)==64 && $0 !~ /[^0-9a-fA-F]/ {ok=1} END {exit !ok}'; }
-file_mode() {
-  if stat -c '%u %a' "$1" >/dev/null 2>&1; then stat -c '%u %a' "$1"; else stat -f '%u %Lp' "$1"; fi
-}
-private_dir() {
-  [ ! -L "$1" ] || fail "unsafe cache link: $1"
-  mkdir -p "$1"
-  file_mode "$1" | awk -v uid="$(id -u)" '{g=substr($2,length($2)-1,1)+0; o=substr($2,length($2),1)+0; if($1!=uid || int(g/2)%2 || int(o/2)%2) exit 1}' || fail "cache is not owner-private: $1"
-  chmod 700 "$1"
-  ancestor=$(CDPATH= cd -P -- "$(dirname "$1")" && pwd) || fail "invalid cache ancestor"
-  while :; do
-    if stat -Lc '%u %a' "$ancestor" >/dev/null 2>&1; then info=$(stat -Lc '%u %a' "$ancestor"); else info=$(stat -Lf '%u %Lp' "$ancestor"); fi
-    printf '%s\n' "$info" | awk -v uid="$(id -u)" '{m=$2; g=substr(m,length(m)-1,1)+0; o=substr(m,length(m),1)+0; special=length(m)>3 ? substr(m,length(m)-3,1)+0 : 0; if(($1!=uid && $1!=0) || ((int(g/2)%2 || int(o/2)%2) && special%2!=1)) exit 1}' || fail "unsafe cache ancestor: $ancestor"
-    [ "$ancestor" != / ] || break
-    ancestor=$(dirname "$ancestor")
-  done
-}
-present() { [ -e "$1" ] || [ -L "$1" ]; }
-regular() { [ -f "$1" ] && [ -r "$1" ] || fail "invalid file path: $1"; }
-valid_url() {
-  printf '%s\n' "$1" | LC_ALL=C awk -v kind="$2" '
-    function ipv4(s, p,n,i) {n=split(s,p,"."); if(n!=4) return 0; for(i=1;i<=4;i++) if(p[i]!~/^[0-9]+$/ || p[i]+0>255) return 0; return 1}
-    function hostok(s,p,n,i,c,compressed) {
-      if(substr(s,1,1)=="[") {
-        if(substr(s,length(s),1)!="]") return 0
-        s=substr(s,2,length(s)-2); compressed=index(s,"::"); if(compressed && index(substr(s,compressed+2),"::")) return 0
-        n=split(s,p,":"); c=0
-        for(i=1;i<=n;i++) if(p[i]!="") {if(index(p[i],".")) {if(i!=n || !ipv4(p[i])) return 0; c+=2} else {if(length(p[i])>4 || p[i]!~/^[0-9a-fA-F]+$/) return 0; c++}}
-        return compressed ? c<8 : c==8 && substr(s,1,1)!=":" && substr(s,length(s),1)!=":"
-      }
-      if(s~/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) return ipv4(s)
-      sub(/\.$/,"",s); n=split(s,p,"."); for(i=1;i<=n;i++) if(p[i]!~/^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$/) return 0
-      return n>0
+java_guide='A JDK 21 or newer is required. Histos does not install it.
+macOS: brew install --cask temurin@21
+Linux and Windows: https://adoptium.net/temurin/releases?version=21'
+cs_guide='The cs command from Coursier 2.1 or newer is required. Histos does not install it.
+macOS: brew install coursier/formulas/coursier
+The Homebrew core formula provides coursier and does not.
+Linux and Windows: https://get-coursier.io/docs/cli-installation and put the cs binary on PATH.'
+java_bin=$(command -v java) || fail "java is not on PATH
+$java_guide"
+java_text=$("$java_bin" -version 2>&1 || true)
+if ! java_found=$(printf '%s\n' "$java_text" | awk '
+  /version "/ {
+    if (match($0, /"[^"]+"/)) {
+      print substr($0, RSTART + 1, RLENGTH - 2)
+      found = 1
+      exit
     }
-    {
-      if($0 ~ /[^!-~]/ || $0 ~ /["<>\\^`{|}#]/) exit 1
-      raw=$0
-      for(i=1;i<=length(raw);i++) if(substr(raw,i,1)=="%") {if(substr(raw,i+1,2)!~/^[0-9a-fA-F][0-9a-fA-F]$/) exit 1; i+=2}
-      scheme=raw; sub(/:.*/,"",scheme)
-      if(scheme!="https" && !(scheme=="http" && kind=="repository")) exit 1
-      rest=raw; if(rest!~/^[a-z]+:\/\//) exit 1; sub(/^[a-z]+:\/\//,"",rest)
-      authority=rest; sub(/[\/?].*$/,"",authority); suffix=substr(rest,length(authority)+1)
-      if(authority ~ /[@%]/ || suffix~/[\[\]]/) exit 1
-      host=authority; port=""
-      if(substr(host,1,1)=="[") {bracket=index(host,"]"); if(!bracket) exit 1; port=substr(host,bracket+1); host=substr(host,1,bracket)}
-      else if(index(host,":")) {port=substr(host,index(host,":")); host=substr(host,1,index(host,":")-1)}
-      if(port!="" && (port!~/^:[0-9]+$/ || substr(port,2)+0<1 || substr(port,2)+0>65535)) exit 1
-      if(!hostok(host)) exit 1
-      if(scheme=="http" && host!="localhost" && host!="127.0.0.1" && host!="[::1]") exit 1
-      if(kind=="repository" && (suffix~/[?%]/ || suffix~/(^|\/)\.\.(\/|$)/)) exit 1
-      ok=1
-    }
-    END {exit !ok}'
-}
-parse_lock() {
-  LC_ALL=C awk '
-    function bad() {failed=1; exit 1}
-    function integer(s) {return s ~ /^[+]?[0-9]+$/ && s+0>0 && s+0<=2147483647}
-    function stamp(s, y,m,d,h,n,t,days) {
-      if(length(s)!=15 || substr(s,9,1)!="." || substr(s,1,8) !~ /^[0-9]+$/ || substr(s,10,6) !~ /^[0-9]+$/) return 0
-      y=substr(s,1,4)+0; m=substr(s,5,2)+0; d=substr(s,7,2)+0
-      h=substr(s,10,2)+0; n=substr(s,12,2)+0; t=substr(s,14,2)+0
-      days=(m==2 ? 28+(y%4==0 && (y%100!=0 || y%400==0)) : (m==4 || m==6 || m==9 || m==11 ? 30 : 31))
-      return y>=1 && m>=1 && m<=12 && d>=1 && d<=days && h<24 && n<60 && t<60
-    }
-    {sub(/^[ \t\r]+/,""); sub(/[ \t\r]+$/,"")}
-    /^$/ || /^#/ {next}
-    {
-      if($0 !~ /^[a-z0-9]+[ \t]+[^ \t].*$/) bad()
-      name=$1; value=$0; sub(/^[^ \t]+[ \t]+/,"",value)
-      if(name!="repository" && name!="version" && name!="revision" && name!="sha256") bad()
-      if(seen[name]++) bad()
-      fields[name]=value
-    }
-    END {
-      if(failed) exit 1
-      if(length(fields["sha256"])!=64 || fields["sha256"] ~ /[^0-9a-fA-F]/) exit 1
-      if(fields["repository"]=="" || fields["version"] !~ /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$/) exit 1
-      base=fields["version"]; sub(/-SNAPSHOT$/,"",base); prefix=base "-"
-      if(substr(fields["revision"],1,length(prefix))!=prefix) exit 1
-      tail=substr(fields["revision"],length(prefix)+1); build=substr(tail,17)
-      if(substr(tail,16,1)!="-" || build !~ /^[1-9][0-9]*$/ || !integer(build) || !stamp(substr(tail,1,15))) exit 1
-      print fields["repository"]; print fields["version"]; print fields["revision"]; print tolower(fields["sha256"])
-    }' "$1" > "$work/fields" || fail "invalid launcher lock"
-}
-private_dir "$cache"
-work=$(mktemp -d "$cache/.bootstrap.XXXXXX")
-fetch() {
-  valid_url "$1" repository || fail "invalid download url"
-  curl -fsSL --proto '=https,http' --proto-redir '=https' "$1" -o "$2"
-}
-if present "$root/.histos"; then
-  [ -d "$root/.histos" ] && [ -r "$root/.histos" ] && [ -x "$root/.histos" ] || fail "invalid configuration directory"
+  }
+  END { if (!found) exit 1 }
+'); then
+  fail "java version is unreadable
+$java_guide"
 fi
+java_major=$(printf '%s\n' "$java_found" | awk -F. '{ if ($1 == "1" && NF >= 2) print $2 + 0; else print $1 + 0 }')
+[ "$java_major" -ge 21 ] || fail "java $java_found is older than 21
+$java_guide"
 if [ -n "${HISTOS_ASSEMBLY:-}" ]; then jar=$HISTOS_ASSEMBLY
 elif [ -f "$root/dist/histos.jar" ]; then jar=$root/dist/histos.jar
 else jar=; fi
@@ -224,25 +152,99 @@ if [ -n "$jar" ]; then
   [ -f "$jar" ] || fail "no assembly at $jar"
   [ "$(hash_of "$jar")" = "$expected" ] || fail "checksum mismatch"
 else
-  regular "$root/.histos/launcher.lock"
-  [ -f "$root/.histos/launcher.lock" ] || fail "missing launcher.lock; restore the committed pin or use a source assembly"
-  parse_lock "$root/.histos/launcher.lock"
-  { IFS= read -r repository; IFS= read -r locked_version; IFS= read -r revision; IFS= read -r expected; } < "$work/fields"
-  [ "$version" = "$locked_version" ] || [ "${version}-SNAPSHOT" = "$locked_version" ] || fail "launcher lock version does not match script"
-  valid_url "$repository" repository || fail "invalid launcher repository"
-  local_jar=$root/.histos/launcher-cache/$expected/histos.jar
-  dest=$cache/launchers/$revision/$expected
-  private_dir "$dest"
-  jar=$dest/histos.jar
-  if [ -f "$local_jar" ] && [ "$(hash_of "$local_jar")" = "$expected" ]; then jar=$local_jar
-  elif [ ! -f "$jar" ] || [ "$(hash_of "$jar")" != "$expected" ]; then
-    fetch "${repository%/}/rocks/earlyeffect/histos/$locked_version/histos-$revision.jar" "$work/launcher.jar" || fail "launcher download failed"
-    [ "$(hash_of "$work/launcher.jar")" = "$expected" ] || fail "launcher checksum mismatch"
-    mv -f "$work/launcher.jar" "$jar"
+  props=$root/.histos/build.properties
+  [ -f "$props" ] || fail "missing build.properties; restore the committed version or use a source assembly"
+  parse_version() {
+    LC_ALL=C awk -v version="$version" '
+      function bad() { failed = 1; exit 1 }
+      function pointer(s) {
+        return s ~ /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$/
+      }
+      function stamp_ok(s, y, m, d, h, n, t, days) {
+        if (length(s) != 15 || substr(s, 9, 1) != ".") return 0
+        if (substr(s, 1, 8) !~ /^[0-9]+$/ || substr(s, 10, 6) !~ /^[0-9]+$/) return 0
+        y = substr(s, 1, 4) + 0; m = substr(s, 5, 2) + 0; d = substr(s, 7, 2) + 0
+        h = substr(s, 10, 2) + 0; n = substr(s, 12, 2) + 0; t = substr(s, 14, 2) + 0
+        days = (m == 2 ? 28 + (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) : (m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31))
+        return y >= 1 && m >= 1 && m <= 12 && d >= 1 && d <= days && h < 24 && n < 60 && t < 60
+      }
+      function channel_of(s, rest, stamp, ship) {
+        if (pointer(s)) return s
+        if (match(s, /-[1-9][0-9]*$/)) {
+          rest = substr(s, 1, RSTART - 1)
+          if (length(rest) >= 16 && substr(rest, length(rest) - 15, 1) == "-") {
+            stamp = substr(rest, length(rest) - 14)
+            ship = substr(rest, 1, length(rest) - 16)
+            if (stamp_ok(stamp) && pointer(ship "-SNAPSHOT")) return ship "-SNAPSHOT"
+          }
+        }
+        return ""
+      }
+      { sub(/^[ \t\r]+/, ""); sub(/[ \t\r]+$/, "") }
+      /^$/ || /^#/ { next }
+      {
+        eq = index($0, "=")
+        if (eq <= 1) bad()
+        key = substr($0, 1, eq - 1)
+        value = substr($0, eq + 1)
+        gsub(/^[ \t]+|[ \t]+$/, "", key)
+        gsub(/^[ \t]+|[ \t]+$/, "", value)
+        if (key != "histos.version" || value == "") bad()
+        if (seen++) bad()
+        line = value
+      }
+      END {
+        if (failed || line == "") exit 1
+        ch = channel_of(line)
+        if (ch == "") exit 1
+        if (!(ch == version || (version !~ /-SNAPSHOT$/ && ch == version "-SNAPSHOT"))) exit 1
+        print line
+        if (line ~ /-SNAPSHOT$/) print "pointer"
+        else print "revision"
+      }
+    ' "$1"
+  }
+  if ! parsed=$(parse_version "$props"); then fail "invalid build.properties"; fi
+  line=$(printf '%s\n' "$parsed" | awk 'NR==1 { print; exit }')
+  kind=$(printf '%s\n' "$parsed" | awk 'NR==2 { print; exit }')
+  [ -n "$line" ] && [ -n "$kind" ] || fail "invalid build.properties"
+  repo=${HISTOS_LAUNCHER_REPO:-https://central.sonatype.com/repository/maven-snapshots}
+  case $repo in
+    *[[:space:]]*) fail "launcher repository is not a supported base: $repo" ;;
+    https://*|http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://localhost|http://localhost/*|http://localhost:*|file:///*) ;;
+    *) fail "launcher repository is not a supported base: $repo" ;;
+  esac
+  cs_bin=$(command -v cs) || fail "coursier is not on PATH
+$cs_guide"
+  cs_text=$("$cs_bin" version 2>&1 || true)
+  if ! cs_found=$(printf '%s\n' "$cs_text" | awk '
+    match($0, /[0-9]+\.[0-9]+(\.[0-9]+)?/) { print substr($0, RSTART, RLENGTH); found = 1; exit }
+    END { if (!found) exit 1 }
+  '); then
+    fail "coursier version is unreadable
+$cs_guide"
   fi
-  [ "$(hash_of "$jar")" = "$expected" ] || fail "launcher checksum mismatch"
+  cs_major=$(printf '%s\n' "$cs_found" | awk -F. '{ print $1 + 0 }')
+  cs_minor=$(printf '%s\n' "$cs_found" | awk -F. '{ print $2 + 0 }')
+  if [ "$cs_major" -lt 2 ] || { [ "$cs_major" -eq 2 ] && [ "$cs_minor" -lt 1 ]; }; then
+    fail "coursier $cs_found is older than 2.1
+$cs_guide"
+  fi
+  if ! output=$(
+    if [ "$kind" = pointer ]; then
+      COURSIER_TTL=0s
+      export COURSIER_TTL
+    else
+      unset COURSIER_TTL
+    fi
+    "$cs_bin" fetch --no-default -r "$repo" "rocks.earlyeffect:histos:$line"
+  ); then
+    fail "launcher fetch failed"
+  fi
+  paths=$(printf '%s\n' "$output" | awk 'NF { c++ } END { print c + 0 }')
+  [ "$paths" -eq 1 ] || fail "launcher fetch did not print one jar"
+  jar=$(printf '%s\n' "$output" | awk 'NF { print; exit }')
 fi
-java_bin=$(command -v java) || fail "java is not on PATH"
 shell_quote() {
   out="'"
   rest=$1
@@ -264,14 +266,14 @@ opts=$root/.jvmopts
 if [ -e "$opts" ] || [ -L "$opts" ]; then
   [ -f "$opts" ] && [ -r "$opts" ] || fail "invalid file path: $opts"
   cr=$(printf '\r')
-  while IFS= read -r line || [ -n "$line" ]; do
-    line=${line%"$cr"}
-    case $line in
+  while IFS= read -r opt || [ -n "$opt" ]; do
+    opt=${opt%"$cr"}
+    case $opt in
       ''|\#*) continue ;;
-      -jar|-m|--module) fail "jvm option selects the program: $line" ;;
-      @*) fail "jvm option selects the program: $line" ;;
+      -jar|-m|--module) fail "jvm option selects the program: $opt" ;;
+      @*) fail "jvm option selects the program: $opt" ;;
     esac
-    jvm_extra="$jvm_extra $(shell_quote "$line")"
+    jvm_extra="$jvm_extra $(shell_quote "$opt")"
   done < "$opts"
 fi
 quoted_args=
@@ -282,14 +284,12 @@ while [ "$i" -le "$#" ]; do
   i=$((i + 1))
 done
 eval "set -- ${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
-cleanup
-trap - EXIT HUP INT TERM
 exec "$java_bin" "$@"
 """
 
   private val Windows: String = """@echo off
 setlocal EnableExtensions
-rem Generated from the manual ship. Finds java.exe and runs the pinned launcher jar.
+rem Generated from the manual ship. Finds java.exe and, without a local assembly, asks cs fetch.
 set "HISTOS_BOOT_ROOT=%~dp0"
 set "HISTOS_BOOT_VERSION=__VERSION__"
 for /f "delims=" %%T in ('powershell.exe -NoLogo -NoProfile -Command "[IO.Path]::Combine([IO.Path]::GetTempPath(), 'histos-' + [Guid]::NewGuid().ToString('N'))"') do set "HISTOS_BOOT_TEMP=%%T"
@@ -309,21 +309,38 @@ $ErrorActionPreference = 'Stop'
 $launchArgs = $args
 $root = $env:HISTOS_BOOT_ROOT
 $version = $env:HISTOS_BOOT_VERSION
+$javaGuide = "A JDK 21 or newer is required. Histos does not install it.`nmacOS: brew install --cask temurin@21`nLinux and Windows: https://adoptium.net/temurin/releases?version=21"
+$csGuide = "The cs command from Coursier 2.1 or newer is required. Histos does not install it.`nmacOS: brew install coursier/formulas/coursier`nThe Homebrew core formula provides coursier and does not.`nLinux and Windows: https://get-coursier.io/docs/cli-installation and put the cs binary on PATH."
 function Fail([string] $message) {
   [Console]::Error.WriteLine('histos ' + $version + ': ' + $message)
   exit 1
 }
 function Hash([string] $path) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Pointer([string] $value) {
+  return $value -match '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$'
+}
+function StampOk([string] $value) {
+  if ($value -notmatch '^(\d{4})(\d{2})(\d{2})\.(\d{2})(\d{2})(\d{2})$') { return $false }
+  try { $parsed = [datetime]::ParseExact($value, 'yyyyMMdd.HHmmss', $null); return $parsed.Year -gt 0 } catch { return $false }
+}
 $java = $null
 if ($env:JAVA_HOME) {
   $candidate = Join-Path $env:JAVA_HOME 'bin\java.exe'
   if (Test-Path -LiteralPath $candidate -PathType Leaf) { $java = $candidate }
 }
 if (-not $java) {
-  $found = Get-Command java.exe -ErrorAction SilentlyContinue
-  if ($found) { $java = $found.Source }
+  $foundJava = Get-Command java.exe -ErrorAction SilentlyContinue
+  if ($foundJava) { $java = $foundJava.Source }
 }
-if (-not $java) { Fail 'java is not on PATH' }
+if (-not $java) { Fail "java is not on PATH`n$javaGuide" }
+$javaText = & $java -version 2>&1 | Out-String
+if ($javaText -match 'version "([^"]+)"') {
+  $javaFound = $Matches[1]
+  if ($javaFound -match '^1\.(\d+)') { $javaMajor = [int]$Matches[1] }
+  elseif ($javaFound -match '^(\d+)') { $javaMajor = [int]$Matches[1] }
+  else { Fail "java version is unreadable`n$javaGuide" }
+  if ($javaMajor -lt 21) { Fail "java $javaFound is older than 21`n$javaGuide" }
+} else { Fail "java version is unreadable`n$javaGuide" }
 $jar = $null
 if ($env:HISTOS_ASSEMBLY) { $jar = $env:HISTOS_ASSEMBLY }
 elseif (Test-Path -LiteralPath (Join-Path $root 'dist\histos.jar') -PathType Leaf) {
@@ -336,55 +353,61 @@ if ($jar) {
   if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid assembly checksum' }
   if ((Hash $jar) -ne $expected) { Fail 'checksum mismatch' }
 } else {
-  $lockPath = Join-Path $root '.histos\launcher.lock'
-  if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
-    Fail 'missing launcher.lock; restore the committed pin or use a source assembly'
+  $props = Join-Path $root '.histos\build.properties'
+  if (-not (Test-Path -LiteralPath $props -PathType Leaf)) {
+    Fail 'missing build.properties; restore the committed version or use a source assembly'
   }
-  $fields = @{}
-  foreach ($line in [IO.File]::ReadAllLines($lockPath)) {
-    $trim = $line.Trim()
+  $line = $null
+  foreach ($raw in [IO.File]::ReadAllLines($props)) {
+    $trim = $raw.Trim().TrimEnd([char]13)
     if ($trim -eq '' -or $trim.StartsWith('#')) { continue }
-    $parts = $trim -split '\s+', 2
-    if ($parts.Count -ne 2 -or $fields.ContainsKey($parts[0])) { Fail 'invalid launcher lock' }
-    $fields[$parts[0]] = $parts[1]
+    $eq = $trim.IndexOf('=')
+    if ($eq -le 0) { Fail 'invalid build.properties' }
+    $key = $trim.Substring(0, $eq).Trim()
+    $value = $trim.Substring($eq + 1).Trim()
+    if ($key -ne 'histos.version' -or $value -eq '' -or $null -ne $line) { Fail 'invalid build.properties' }
+    $line = $value
   }
-  foreach ($name in @('repository','version','revision','sha256')) {
-    if (-not $fields.ContainsKey($name)) { Fail 'invalid launcher lock' }
+  if (-not $line) { Fail 'invalid build.properties' }
+  $channel = $null
+  if (Pointer $line) { $channel = $line }
+  elseif ($line -match '^(.+)-(\d{8}\.\d{6})-([1-9]\d*)$' -and (StampOk $Matches[2]) -and (Pointer ($Matches[1] + '-SNAPSHOT'))) {
+    $channel = $Matches[1] + '-SNAPSHOT'
   }
-  if ($fields['version'] -ne $version -and $fields['version'] -ne ($version + '-SNAPSHOT')) { Fail 'launcher lock version does not match script' }
-  $expected = $fields['sha256'].ToLowerInvariant()
-  if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid launcher lock' }
-  $repository = $fields['repository']
-  if ($repository -notmatch '^https://' -and $repository -notmatch '^http://(127\.0\.0\.1|localhost|\[::1\])([:/]|$)') {
-    Fail 'invalid launcher repository'
+  if (-not $channel) { Fail 'invalid build.properties' }
+  $release = -not $version.EndsWith('-SNAPSHOT')
+  if (-not ($channel -eq $version -or ($release -and $channel -eq ($version + '-SNAPSHOT')))) {
+    Fail 'invalid build.properties'
   }
-  $cacheRoot = if ($env:XDG_CACHE_HOME) { $env:XDG_CACHE_HOME } else { Join-Path $env:USERPROFILE '.cache' }
-  $dest = Join-Path (Join-Path (Join-Path $cacheRoot 'histos\launchers') $fields['revision']) $expected
-  $cached = Join-Path $dest 'histos.jar'
-  $staged = Join-Path (Join-Path (Join-Path $root '.histos\launcher-cache') $expected) 'histos.jar'
-  if ((Test-Path -LiteralPath $staged -PathType Leaf) -and (Hash $staged) -eq $expected) { $jar = $staged }
-  elseif ((Test-Path -LiteralPath $cached -PathType Leaf) -and (Hash $cached) -eq $expected) { $jar = $cached }
-  else {
-    New-Item -ItemType Directory -Force -Path $dest | Out-Null
-    $part = Join-Path $dest 'histos.jar.partial'
-    $address = $repository.TrimEnd('/') + '/rocks/earlyeffect/histos/' + $fields['version'] + '/histos-' + $fields['revision'] + '.jar'
-    Invoke-WebRequest -Uri $address -OutFile $part
-    if ((Hash $part) -ne $expected) {
-      Remove-Item -LiteralPath $part -Force
-      Fail 'launcher checksum mismatch'
-    }
-    Move-Item -LiteralPath $part -Destination $cached -Force
-    $jar = $cached
+  $repo = if ($env:HISTOS_LAUNCHER_REPO) { $env:HISTOS_LAUNCHER_REPO } else { 'https://central.sonatype.com/repository/maven-snapshots' }
+  if ($repo -match '\s' -or -not ($repo -match '^https://' -or $repo -match '^http://127\.0\.0\.1(:|/|$)' -or $repo -match '^http://localhost(:|/|$)' -or $repo -match '^file:///')) {
+    Fail "launcher repository is not a supported base: $repo"
   }
-  if ((Hash $jar) -ne $expected) { Fail 'launcher checksum mismatch' }
+  $csCmd = Get-Command cs -ErrorAction SilentlyContinue
+  if (-not $csCmd) { Fail "coursier is not on PATH`n$csGuide" }
+  $csText = & $csCmd.Source version 2>&1 | Out-String
+  if ($csText -match '(\d+)\.(\d+)') {
+    $csMajor = [int]$Matches[1]
+    $csMinor = [int]$Matches[2]
+    $csFound = $Matches[0]
+    if ($csText -match '(\d+\.\d+\.\d+)') { $csFound = $Matches[1] }
+    if ($csMajor -lt 2 -or ($csMajor -eq 2 -and $csMinor -lt 1)) { Fail "coursier $csFound is older than 2.1`n$csGuide" }
+  } else { Fail "coursier version is unreadable`n$csGuide" }
+  if ($line.EndsWith('-SNAPSHOT')) { $env:COURSIER_TTL = '0s' } else { Remove-Item Env:COURSIER_TTL -ErrorAction SilentlyContinue }
+  $coord = 'rocks.earlyeffect:histos:' + $line
+  $raw = & $csCmd.Source fetch --no-default -r $repo $coord | Out-String
+  if ($LASTEXITCODE -ne 0) { Fail 'launcher fetch failed' }
+  $paths = @($raw -split "`r?`n" | Where-Object { $_.Trim() -ne '' })
+  if ($paths.Count -ne 1) { Fail 'launcher fetch did not print one jar' }
+  $jar = $paths[0].Trim()
 }
 $jvmArgs = @()
 $opts = Join-Path $root '.jvmopts'
 if (Test-Path -LiteralPath $opts) {
   if (-not (Test-Path -LiteralPath $opts -PathType Leaf)) { Fail "invalid file path: $opts" }
   try { $lines = [IO.File]::ReadAllLines($opts) } catch { Fail "invalid file path: $opts" }
-  foreach ($line in $lines) {
-    $text = $line.TrimEnd([char]13)
+  foreach ($optLine in $lines) {
+    $text = $optLine.TrimEnd([char]13)
     if ($text -eq '' -or $text.StartsWith('#')) { continue }
     if ($text -eq '-jar' -or $text -eq '-m' -or $text -eq '--module' -or $text.StartsWith('@')) {
       Fail "jvm option selects the program: $text"

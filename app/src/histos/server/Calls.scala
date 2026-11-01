@@ -612,13 +612,14 @@ object Calls:
   def cachePromote(from: CacheNamespace, to: CacheNamespace, say: Say): IO[ServerError, Unit] =
     fault(say, BuildFault.Remote(RemoteError.Off))
 
-  def launcherUpdate(repo: Path, say: Say): IO[ServerError, Unit] =
-    LauncherPin
-      .update(repo)
-      .foldZIO(
-        error => fault(say, BuildFault.Launcher(error)),
-        pin => told(say, s"${pin.revision} ${pin.sha256.value}") *> ok(say),
-      )
+  def launcher(repo: Path, action: LauncherAction, say: Say): IO[ServerError, Unit] =
+    val wrote = action match
+      case LauncherAction.Update => LauncherPin.update(repo)
+      case LauncherAction.Latest => LauncherPin.latest(repo)
+    wrote.foldZIO(
+      error => fault(say, BuildFault.Launcher(error)),
+      pin => told(say, pin.shown) *> ok(say),
+    )
 
   def assembly(
       repo: Path,

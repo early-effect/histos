@@ -1,6 +1,7 @@
 package histos.bsp
 
 import histos.cli.{Cli, Command}
+import histos.publish.LauncherPin
 import histos.resolve.Resolve
 import histos.server.Calls
 import histos.toolchain.Runtimes
@@ -48,14 +49,17 @@ object BspSpec extends ZIOSpecDefault:
       Cli.parse(List("bsp")).map(parsed => assertTrue(parsed == Command.Bsp))
     ,
     test("discovery names ./histos bsp"):
-      discovery.map: json =>
-        assertTrue(
-          string(json, "name").contains(Bsp.ServerName),
-          string(json, "version").contains(Bsp.ServerVersion),
-          string(json, "bspVersion").contains(Bsp.BspVersion),
-          strings(json, "argv") == List("./histos", "bsp"),
-          strings(json, "languages") == List("scala"),
-        )
+      for
+        json <- discovery
+        root <- System.env("HISTOS_REPO").someOrFail(FixtureFault.Discovery)
+        pin  <- LauncherPin.read(Path.of(root)).mapError(_ => FixtureFault.Discovery)
+      yield assertTrue(
+        string(json, "name").contains(Bsp.ServerName),
+        string(json, "version") == Some(pin.version),
+        string(json, "bspVersion").contains(Bsp.BspVersion),
+        strings(json, "argv") == List("./histos", "bsp"),
+        strings(json, "languages") == List("scala"),
+      )
     ,
     test("a swapped target list marks created, changed, and deleted"):
       val events = Bsp.events(List("a", "b"), List("b", "c"))
@@ -145,7 +149,7 @@ object BspSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           cache  <- temp
-          result <- run.provide(Resolve.live(cache), histos.zinc.CompileReplay.processStore)
+          result <- run.provideSome[Scope](Resolve.live(cache), histos.zinc.CompileReplay.processStore)
         yield result,
   )
 
@@ -714,14 +718,15 @@ object BspSpec extends ZIOSpecDefault:
   )
 
   private def opened: ZIO[
-    Any,
-    BuildError | histos.zinc.GraphCompileError | histos.resolve.ResolveError,
+    Scope,
+    BuildError | histos.zinc.GraphCompileError | histos.resolve.ResolveError | Throwable,
     Bsp.Session,
   ] =
     for
+      repo  <- temp
       built <- ZIO.fromEither(Projects(module("demo", Jvm)(scala3)))
       jdk   <- GraphCompile.jdkHere
-      open  <- runtimes.flatMap(found => Bsp.open(Path.of("."), built, jdk, found))
+      open  <- runtimes.flatMap(found => Bsp.open(repo, built, jdk, found))
     yield open
 
   private val runtimes: UIO[Runtimes] =
@@ -990,7 +995,15 @@ object BspSpec extends ZIOSpecDefault:
     Files.writeString(path, text)
 
   private def temp: ZIO[Scope, Throwable, Path] =
-    ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-bsp"))): dir =>
+    ZIO.acquireRelease(ZIO.attempt {
+      val dir = Files.createTempDirectory("histos-bsp")
+      Files.createDirectories(dir.resolve(".histos"))
+      Files.writeString(
+        dir.resolve(".histos").resolve("build.properties"),
+        "histos.version=0.0.2-SNAPSHOT\n",
+      )
+      dir
+    }): dir =>
       ZIO.attempt {
         if Files.exists(dir) then
           val walk  = Files.walk(dir)

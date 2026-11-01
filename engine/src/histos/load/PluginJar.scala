@@ -55,7 +55,7 @@ private[load] object PluginJar:
       coordinate: PluginCoordinate,
       classes: Path,
   ): Either[PluginLoadError, EntryName] =
-    val file = classes.resolve(HistosPlugin.entryResource)
+    val file = classes.resolve(HistosPlugin.EntryResourceName)
     if !Files.isRegularFile(file) then Left(PluginLoadError.NoEntry(coordinate.render))
     else
       named(
@@ -72,7 +72,7 @@ private[load] object PluginJar:
       zip: ZipFile,
       coordinate: PluginCoordinate,
   ): Either[PluginLoadError, EntryName] =
-    lines(zip, HistosPlugin.entryResource) match
+    lines(zip, HistosPlugin.EntryResourceName) match
       case None        => Left(PluginLoadError.NoEntry(coordinate.render))
       case Some(found) => named(coordinate, found)
 

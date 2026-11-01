@@ -17,6 +17,7 @@ import histos.resolve.{
   ResolveError,
 }
 import histos.program.{EntryPoints, Program, ProgramError}
+import histos.publish.LauncherPin
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.testrun.{ModuleTest, SuiteNames, TestCompile}
 import histos.toolchain.Runtimes
@@ -47,9 +48,8 @@ import zio.{Chunk, IO, Ref, UIO, ZIO}
 /** BSP 2.2 for Metals. One target per cell the module builds, a build-file target, and diagnostics.
   */
 object Bsp:
-  val BspVersion: String    = "2.2.0"
-  val ServerName: String    = "histos"
-  val ServerVersion: String = "0.0.2"
+  val BspVersion: String = "2.2.0"
+  val ServerName: String = "histos"
 
   enum Answer:
     case Reply(line: String)
@@ -377,7 +377,16 @@ object Bsp:
         case (_, Some(Method.Exit), _) =>
           ZIO.succeed(Answer.Stop(if current == Phase.Shutdown then 0 else 1))
         case (Phase.New, Some(Method.Initialize), false) =>
-          phase.set(Phase.Ready).as(Answer.Reply(Rpc.ok(id, initialize)))
+          Connection.version(repo).flatMap {
+            case Some(value) =>
+              phase.set(Phase.Ready).as(Answer.Reply(Rpc.ok(id, initialize(value))))
+            case None =>
+              ZIO.succeed(
+                Answer.Reply(
+                  failure(id, BspError.Io(IoFailure(repo.resolve(LauncherPin.file), IoFault.Read)))
+                )
+              )
+          }
         case (Phase.New, _, true) =>
           ZIO.succeed(Answer.Quiet)
         case (Phase.New, _, _) =>
@@ -1276,10 +1285,10 @@ object Bsp:
     private def buildUri: String =
       Bsp.buildUri(repo)
 
-    private def initialize: Rpc.InitializeResult =
+    private def initialize(version: String): Rpc.InitializeResult =
       Rpc.InitializeResult(
         ServerName,
-        ServerVersion,
+        version,
         BspVersion,
         Rpc.Capabilities(
           Rpc.CompileProvider(List("scala")),

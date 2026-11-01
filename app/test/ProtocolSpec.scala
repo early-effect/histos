@@ -91,6 +91,15 @@ object ProtocolSpec extends ZIOSpecDefault:
       _ <- ZIO
         .attempt(Files.writeString(dir.resolve("histos.scala"), source))
         .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
+      _ <- ZIO
+        .attempt {
+          Files.createDirectories(dir.resolve(".histos"))
+          Files.writeString(
+            dir.resolve(".histos").resolve("build.properties"),
+            "histos.version=0.0.2-SNAPSHOT\n",
+          )
+        }
+        .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
     yield dir
 
   private def delete(root: Path): UIO[Unit] =
@@ -368,7 +377,7 @@ object ProtocolSpec extends ZIOSpecDefault:
           usage   <- tool(heard, 5)
         yield assertTrue(
           CliExit.from(Call.Version, CallResult.Reported(printed)) == CliExit.Success,
-          printed.out == Chunk(Cli.VersionText),
+          printed.out == Chunk("histos 0.0.2-SNAPSHOT"),
           CliExit.from(Call.CachePath, CallResult.Reported(stored)) == CliExit.Success,
           stored.out == Chunk(dir.resolve("cache").toString),
           needs.failed,
@@ -437,9 +446,9 @@ object ProtocolSpec extends ZIOSpecDefault:
           events  <- ZIO.fromEither(eventNotes(heard))
           printed <- report(heard, 2)
         yield assertTrue(
-          notes == List(Notice.LogLine(Notice.Level.Info, Notice.Logger, Cli.VersionText)),
-          events == List(BuildEvent.Out(Cli.VersionText)),
-          printed.out == Chunk(Cli.VersionText),
+          notes == List(Notice.LogLine(Notice.Level.Info, Notice.Logger, "histos 0.0.2-SNAPSHOT")),
+          events == List(BuildEvent.Out("histos 0.0.2-SNAPSHOT")),
+          printed.out == Chunk("histos 0.0.2-SNAPSHOT"),
         ),
   ) @@ TestAspect.timeout(15.seconds)
 

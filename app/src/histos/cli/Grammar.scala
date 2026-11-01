@@ -3,7 +3,7 @@ package histos.cli
 import histos.cache.CacheCleanMode
 import histos.plugin.{CommandName, PluginTaskId}
 import histos.schedule.CacheNamespace
-import histos.server.ResolveAction
+import histos.server.{LauncherAction, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction
@@ -46,7 +46,7 @@ object Grammar:
     case CacheClean(mode: CacheCleanMode)
     case CachePromote(from: String, to: String)
     case Resolve(action: ResolveAction)
-    case LauncherUpdate
+    case Launcher(action: LauncherAction)
     case Workflow(action: WorkflowAction)
     case PreviewCompile(projects: List[String])
     case PreviewTest(projects: List[String])
@@ -130,13 +130,12 @@ object Grammar:
   private val workflow =
     CliCommand("workflow", workflowAction).map(Wire.Workflow(_))
   private val launcherFlag =
-    Options
-      .boolean("update")
-      .mapOrFail:
-        case true  => Right(())
-        case false => refused
+    (Options.boolean("update") ++ Options.boolean("latest")).mapOrFail:
+      case (true, false) => Right(LauncherAction.Update)
+      case (false, true) => Right(LauncherAction.Latest)
+      case _             => refused
   private val launcher =
-    CliCommand("launcher", launcherFlag).map(_ => Wire.LauncherUpdate)
+    CliCommand("launcher", launcherFlag).map(Wire.Launcher(_))
   private val previewCompile =
     CliCommand("compile", Args.text("project").*).map(names => Wire.PreviewCompile(names.toList))
   private val previewTest =
@@ -216,7 +215,7 @@ object Grammar:
           Command.CachePromote(source, dest)
         }
       case Wire.Resolve(action)  => ZIO.succeed(Command.Resolve(action))
-      case Wire.LauncherUpdate   => ZIO.succeed(Command.LauncherUpdate)
+      case Wire.Launcher(action) => ZIO.succeed(Command.Launcher(action))
       case Wire.Workflow(action) => ZIO.succeed(Command.Workflow(action))
       case Wire.Test(projects)   =>
         projectList("test", projects).map(Command.Test(_))

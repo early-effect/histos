@@ -39,8 +39,8 @@ object ServerSpec extends ZIOSpecDefault:
           }
           fingerprint <- Fingerprint.read(root)
           socket = root.resolve("missing.sock").toAbsolutePath.normalize
-          _       <- Record.write(root, Cli.VersionText, fingerprint, socket)
-          matched <- Attach.decide(root, Cli.VersionText)
+          _       <- Record.write(root, runVersion, fingerprint, socket)
+          matched <- Attach.decide(root, runVersion)
           version <- Attach.decide(root, "0.0.0")
           _       <- ZIO.attempt(
             write(
@@ -49,9 +49,9 @@ object ServerSpec extends ZIOSpecDefault:
               "cell demo 3.10.0 jvm\nchanged\n",
             )
           )
-          drifted <- Attach.decide(root, Cli.VersionText)
+          drifted <- Attach.decide(root, runVersion)
           bare    <- temp
-          absent  <- Attach.decide(bare, Cli.VersionText)
+          absent  <- Attach.decide(bare, runVersion)
         yield assertTrue(
           matched match
             case Decision.Open(found) => found == socket
@@ -80,8 +80,8 @@ object ServerSpec extends ZIOSpecDefault:
           }
           fingerprint <- Fingerprint.read(root)
           socket = root.resolve("missing.sock").toAbsolutePath.normalize
-          _           <- Record.write(root, Cli.VersionText, fingerprint, socket)
-          matched     <- Attach.decide(root, Cli.VersionText)
+          _           <- Record.write(root, runVersion, fingerprint, socket)
+          matched     <- Attach.decide(root, runVersion)
           beforeScala <- ZIO.attempt(
             Files.readString(root.resolve("histos.scala"))
           )
@@ -93,7 +93,7 @@ object ServerSpec extends ZIOSpecDefault:
           _ <- ZIO.attempt(
             write(root, "tools/docs/Echo.scala", "object Echo\n// edited\n")
           )
-          drifted    <- Attach.decide(root, Cli.VersionText)
+          drifted    <- Attach.decide(root, runVersion)
           afterScala <- ZIO.attempt(
             Files.readString(root.resolve("histos.scala"))
           )
@@ -157,7 +157,7 @@ object ServerSpec extends ZIOSpecDefault:
                   built,
                   histos.HistosBuild.fixed(built),
                   jdk,
-                  Cli.VersionText,
+                  runVersion,
                   root.resolve("missing-api.jar"),
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
@@ -233,7 +233,7 @@ object ServerSpec extends ZIOSpecDefault:
                   built,
                   histos.HistosBuild.fixed(built),
                   jdk,
-                  Cli.VersionText,
+                  runVersion,
                   root.resolve("missing-api.jar"),
                   Nil,
                   ZIO.succeed(histos.load.BuildNotes(false, Nil)),
@@ -310,7 +310,7 @@ object ServerSpec extends ZIOSpecDefault:
                   built,
                   histos.HistosBuild.fixed(built),
                   jdk,
-                  Cli.VersionText,
+                  runVersion,
                   root.resolve("missing-api.jar"),
                   Nil,
                   ZIO.succeed(histos.load.BuildNotes(false, Nil)),
@@ -343,7 +343,10 @@ object ServerSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(
                 Projects(module("demo", Jvm)(ScalaVersion("3.10.0")))
               )
-              _       <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
+              _ <- ZIO.attempt {
+                write(root, "histos.scala", "object build\n")
+                write(root, ".histos/build.properties", "histos.version=0.0.2-SNAPSHOT\n")
+              }
               jdk     <- GraphCompile.jdkHere
               running <- histos.AppToolFixture.at(root, built)(
                 Daemon.open(
@@ -351,7 +354,7 @@ object ServerSpec extends ZIOSpecDefault:
                   built,
                   histos.HistosBuild.fixed(built),
                   jdk,
-                  Cli.VersionText,
+                  runVersion,
                   root.resolve("missing-api.jar"),
                   Nil,
                   ZIO.succeed(histos.load.BuildNotes(false, Nil)),
@@ -382,7 +385,7 @@ object ServerSpec extends ZIOSpecDefault:
                   built,
                   histos.HistosBuild.fixed(built),
                   jdk,
-                  Cli.VersionText,
+                  runVersion,
                   root.resolve("missing-api.jar"),
                   Nil,
                   ZIO.succeed(histos.load.BuildNotes(false, Nil)),
@@ -501,7 +504,7 @@ object ServerSpec extends ZIOSpecDefault:
               !socket,
             )
           program
-            .provideSome[Scope & histos.resolve.LockedTools](liveLayers(root))
+            .provideSome[histos.resolve.LockedTools](liveLayers(root))
     ,
     test(
       "reboot starts a successor, and the old server stops with an idle connection open"
@@ -736,19 +739,26 @@ object ServerSpec extends ZIOSpecDefault:
       }
       .mapError(_ => histos.workspace.IoFailure(executable, histos.workspace.IoFault.Write))
 
+  private val runVersion = "histos 0.0.2-SNAPSHOT"
+
   private def daemon(
       root: Path,
       graph: ProjectGraph,
       relaunch: Path => zio.IO[ServerError, Unit] = _ => ZIO.unit,
   ) =
-    GraphCompile.jdkHere.flatMap: jdk =>
+    ZIO.attempt {
+      val path = root.resolve(".histos").resolve("build.properties")
+      if !Files.isRegularFile(path) then
+        Files.createDirectories(root.resolve(".histos"))
+        Files.writeString(path, "histos.version=0.0.2-SNAPSHOT\n")
+    } *> GraphCompile.jdkHere.flatMap: jdk =>
       histos.AppToolFixture.at(root, graph)(
         Daemon.open(
           root,
           graph,
           histos.HistosBuild.fixed(graph),
           jdk,
-          Cli.VersionText,
+          runVersion,
           root.resolve("missing-api.jar"),
           Nil,
           ZIO.succeed(BuildNotes(false, Nil)),

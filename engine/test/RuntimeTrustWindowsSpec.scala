@@ -13,7 +13,7 @@ import zio.test.*
 object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
   def spec = suite("Windows physical ancestor trust")(
     test(
-      "N1 runtime and updater reject owned junctions behind a shared physical parent"
+      "N1 runtime rejects an owned junction behind a shared physical parent"
     ):
       ZIO.scoped:
         for
@@ -83,7 +83,6 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
           )(_ => ZIO.attemptBlocking(view.setAcl(original)).ignore)
           cache = alias.resolve("new/cache")
           runtime  <- RuntimeCache.prepare(cache).either
-          updater  <- LauncherFiles.privateDirectory(cache).either
           physical <- ZIO
             .attemptBlocking(shared.toRealPath())
             .mapError(_ => IoFailure(shared, IoFault.Stat))
@@ -92,7 +91,6 @@ object RuntimeTrustWindowsSpec extends ZIOSpecDefault:
             .mapError(_ => IoFailure(target, IoFault.Stat))
         yield assertTrue(
           runtime == Left(RuntimeCacheError.Shared(physical)),
-          updater == Left(LauncherError.Cache(cache)),
           !created,
         )
   ) @@ TestAspect.windows @@ TestAspect.withLiveSystem @@ TestAspect.timeout(

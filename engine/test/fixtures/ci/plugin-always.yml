@@ -11,6 +11,9 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
+      - uses: coursier/setup-action@v3.0.4
+        with:
+          apps: ""
       - uses: actions/cache@v6
         with:
           path: "~/.cache/coursier/v1"
@@ -24,9 +27,15 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      - uses: coursier/setup-action@v3.0.4
+        with:
+          apps: ""
       - run: "./histos run dev.example/site"
   workflow:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
+      - uses: coursier/setup-action@v3.0.4
+        with:
+          apps: ""
       - run: "./histos workflow --check"

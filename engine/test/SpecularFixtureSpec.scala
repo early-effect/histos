@@ -227,8 +227,8 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
       pluginPacked <- pack(
         work.resolve("specular.jar"),
         List(
-          HistosPlugin.entryResource -> "dev.earlyeffect.specular.SpecularPlugin$\n",
-          ApiDigest.resource         -> s"$hex\n",
+          HistosPlugin.EntryResourceName -> "dev.earlyeffect.specular.SpecularPlugin$\n",
+          ApiDigest.resource             -> s"$hex\n",
         ),
         Some(pluginClasses),
       )

@@ -249,7 +249,7 @@ object RunSpec extends ZIOSpecDefault:
                 built,
                 histos.HistosBuild.fixed(built),
                 jdk,
-                Cli.VersionText,
+                "histos 0.0.2-SNAPSHOT",
                 root.resolve("missing-api.jar"),
                 Nil,
                 ZIO.succeed(BuildNotes(false, Nil)),

@@ -22,9 +22,8 @@ object ProductsSpec extends ZIOSpecDefault:
           _    <- Products.wipe(repo)
           kept = List(
             ".histos/dependencies.lock",
-            ".histos/launcher.lock",
+            ".histos/build.properties",
             ".histos/assembly.sha256",
-            ".histos/launcher-cache/pin.jar",
             ".histos/toolchain.local",
             ".histos/node.local",
             ".histos/server.json",

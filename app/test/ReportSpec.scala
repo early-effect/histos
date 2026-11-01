@@ -192,6 +192,10 @@ object ReportSpec extends ZIOSpecDefault:
           repo  <- Workspace.work("histos-report-version")
           loads <- Ref.make(0)
           _     <- Workspace.writeString(
+            repo.resolve(".histos").resolve("build.properties"),
+            "histos.version=0.0.2-SNAPSHOT\n",
+          )
+          _ <- Workspace.writeString(
             repo.resolve(".histos").resolve("server.json"),
             """{"version":"other","fingerprint":"abc","socket":"/tmp/nope"}""",
           )
@@ -216,7 +220,11 @@ object ReportSpec extends ZIOSpecDefault:
     test("version is a report with no run id"):
       ZIO.scoped {
         for
-          repo   <- Workspace.work("histos-report-plain")
+          repo <- Workspace.work("histos-report-plain")
+          _    <- Workspace.writeString(
+            repo.resolve(".histos").resolve("build.properties"),
+            "histos.version=0.0.2-SNAPSHOT\n",
+          )
           loads  <- Ref.make(0)
           desk   <- Session.desk
           result <- Session
@@ -238,7 +246,7 @@ object ReportSpec extends ZIOSpecDefault:
               report.diagnostics.isEmpty &&
               report.tests.isEmpty &&
               report.program.isEmpty &&
-              report.out == Chunk(Cli.VersionText) &&
+              report.out == Chunk("histos 0.0.2-SNAPSHOT") &&
               report.err.isEmpty
             case CallResult.Fault(_) => false
           ,

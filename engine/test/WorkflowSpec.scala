@@ -420,6 +420,9 @@ object WorkflowSpec extends ZIOSpecDefault:
                   |      contents: read
                   |    steps:
                   |      - uses: actions/checkout@v7
+                  |      - uses: coursier/setup-action@v3.0.4
+                  |        with:
+                  |          apps: ""
                   |      - run: "./histos run dev.example/site"
                   |""".stripMargin &&
               !body.contains("schedule:") && !body.contains("cron:")
@@ -703,6 +706,9 @@ object WorkflowSpec extends ZIOSpecDefault:
       |      contents: read
       |    steps:
       |      - uses: actions/checkout@v7
+      |      - uses: coursier/setup-action@v3.0.4
+      |        with:
+      |          apps: ""
       |      - run: "./histos publish release histos"
       |        env:
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -728,6 +734,9 @@ object WorkflowSpec extends ZIOSpecDefault:
       |    runs-on: ubuntu-26.04
       |    steps:
       |      - uses: actions/checkout@v7
+      |      - uses: coursier/setup-action@v3.0.4
+      |        with:
+      |          apps: ""
       |      - run: "./histos publish promote ${{ inputs.deployment }}"
       |        env:
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}

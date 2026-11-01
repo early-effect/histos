@@ -16,7 +16,20 @@ import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
 import histos.build.BuildEvent
 import histos.report.{BuildFault, CallResult, Rejection}
-import histos.server.{Attach, Call, Calls, Client, Daemon, Decision, Feed, Message, Record, ResolveAction, ServerError}
+import histos.server.{
+  Attach,
+  Call,
+  Calls,
+  Client,
+  Daemon,
+  Decision,
+  Feed,
+  LauncherAction,
+  Message,
+  Record,
+  ResolveAction,
+  ServerError,
+}
 import histos.zinc.{CompileFeed, GraphCompile}
 import histos.Dep
 import histos.*
@@ -226,7 +239,7 @@ object CliSpec extends ZIOSpecDefault:
     test("version does not touch the build"):
       for parsed <- Cli.parse(List("version"))
       yield assertTrue(
-        parsed == Command.Version && Cli.VersionText.startsWith("histos ")
+        parsed == Command.Version
       )
     ,
     test("cache clean takes --dry-run"):
@@ -506,14 +519,19 @@ object CliSpec extends ZIOSpecDefault:
         ),
       )
     ,
-    test("launcher requires --update"):
+    test("launcher takes exactly one of --update and --latest"):
       for
         bare   <- Cli.parse(List("launcher")).either
+        both   <- Cli.parse(List("launcher", "--update", "--latest")).either
         update <- Cli.parse(List("launcher", "--update"))
+        latest <- Cli.parse(List("launcher", "--latest"))
       yield assertTrue(
         bare == Left(CliParseError.Rejected),
-        update == Command.LauncherUpdate,
-        Operation.call(update) == Right(Call.LauncherUpdate),
+        both == Left(CliParseError.Rejected),
+        update == Command.Launcher(LauncherAction.Update),
+        latest == Command.Launcher(LauncherAction.Latest),
+        Operation.call(update) == Right(Call.Launcher(LauncherAction.Update)),
+        Operation.call(latest) == Right(Call.Launcher(LauncherAction.Latest)),
       )
     ,
     test("portal is a loopback command and missing secrets fail before it binds"):
@@ -1141,13 +1159,14 @@ object CliSpec extends ZIOSpecDefault:
                   )
                 }
                 .mapError(_.toString)
-              _ <- Daemon
+              shown <- runVersion(dir)
+              _     <- Daemon
                 .open(
                   dir,
                   graph,
                   histos.HistosBuild.fixed(graph),
                   jdk,
-                  Cli.VersionText,
+                  shown,
                   jar,
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
@@ -1203,7 +1222,7 @@ object CliSpec extends ZIOSpecDefault:
               loaded.graph,
               loaded.build,
               jdk,
-              Cli.VersionText,
+              "histos 0.0.1-SNAPSHOT",
               jar,
               Nil,
               ZIO.succeed(BuildNotes(false, Nil)),
@@ -1273,7 +1292,7 @@ object CliSpec extends ZIOSpecDefault:
               loaded.graph,
               loaded.build,
               jdk,
-              Cli.VersionText,
+              s"histos ${localPin.version}",
               jar,
               Nil,
               ZIO.succeed(BuildNotes(false, Nil)),
@@ -1301,14 +1320,12 @@ object CliSpec extends ZIOSpecDefault:
           assertTrue(
             launcher(loaded.graph),
             pin.version == "0.0.1-SNAPSHOT",
-            pin.revision == "0.0.1-20261024.203501-20",
             local.exit == CliExit.Success,
             local.err.isEmpty,
             localPosix == posix,
             localWindows == windows,
             localWorkflow == workflow,
             localLock == lockBytes,
-            localPin.revision == pin.revision,
             localPin.version == pin.version,
             remote.exit == CliExit.Success,
             remote.err.isEmpty,
@@ -1316,7 +1333,6 @@ object CliSpec extends ZIOSpecDefault:
             remoteWindows == windows,
             remoteWorkflow == workflow,
             remoteLock == lockBytes,
-            remotePin.revision == pin.revision,
             remotePin.version == pin.version,
           )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
@@ -1345,13 +1361,14 @@ object CliSpec extends ZIOSpecDefault:
                   )
                 }
                 .mapError(_.toString)
-              _ <- Daemon
+              shown <- runVersion(dir)
+              _     <- Daemon
                 .open(
                   dir,
                   graph,
                   histos.HistosBuild.fixed(graph),
                   jdk,
-                  Cli.VersionText,
+                  shown,
                   jar,
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
@@ -1415,13 +1432,14 @@ object CliSpec extends ZIOSpecDefault:
                   )
                 }
                 .mapError(_.toString)
-              _ <- Daemon
+              shown <- runVersion(dir)
+              _     <- Daemon
                 .open(
                   dir,
                   graph,
                   histos.HistosBuild.fixed(graph),
                   jdk,
-                  Cli.VersionText,
+                  shown,
                   jar,
                   Nil,
                   ZIO.succeed(BuildNotes(false, Nil)),
@@ -1510,7 +1528,8 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar    <- apiJar
           dir    <- repo
-          absent <- Attach.decide(dir, Cli.VersionText)
+          shown  <- runVersion(dir)
+          absent <- Attach.decide(dir, shown)
           fiber  <- Cli
             .execute(List("reboot"), dir, jar)
             .provideSome[Scope](layers(dir))
@@ -1533,7 +1552,7 @@ object CliSpec extends ZIOSpecDefault:
             absent == Decision.Absent,
             detail.isEmpty,
             heard.exists {
-              case Feed.Event(BuildEvent.Out(text)) => text == Cli.VersionText
+              case Feed.Event(BuildEvent.Out(text)) => text == shown
               case _                                => false
             },
             heard.exists {
@@ -1545,12 +1564,18 @@ object CliSpec extends ZIOSpecDefault:
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
   )
 
-  private val launcherLock =
-    """repository https://central.sonatype.com/repository/maven-snapshots
-      |version 0.0.1-SNAPSHOT
-      |revision 0.0.1-20261024.203501-20
-      |sha256 73fa77d97aca68cab6aa0ba0ba0ac779193b400bbb1d3b297b81a06bbede827b
-      |""".stripMargin
+  private val launcherLock = "histos.version=0.0.1-SNAPSHOT\n"
+
+  /** The version a temp checkout runs. Plants the pointer when the file is not there yet. */
+  private def runVersion(dir: Path): IO[String, String] =
+    ZIO
+      .attempt {
+        val path = dir.resolve(LauncherPin.file)
+        if !Files.isRegularFile(path) then
+          Files.createDirectories(dir.resolve(".histos"))
+          Files.writeString(path, launcherLock)
+      }
+      .mapError(_.toString) *> Cli.versionText(dir).mapError(_.message)
 
   private def stageFile(path: Path, text: Option[String]): IO[String, Unit] =
     ZIO

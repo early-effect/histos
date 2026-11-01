@@ -143,6 +143,7 @@ end BuildFault
 enum Rejection:
   case ResolveAction(raw: String)
   case WorkflowAction(raw: String)
+  case LauncherAction(raw: String)
   case AssemblyDestination(raw: String)
   case TaskArguments(id: String)
   case NotATool
@@ -165,6 +166,7 @@ enum Rejection:
   def message: String = this match
     case ResolveAction(raw)     => s"'$raw' is not a resolve action"
     case WorkflowAction(raw)    => s"'$raw' is not a workflow action"
+    case LauncherAction(raw)    => s"'$raw' is not a launcher action"
     case AssemblyDestination(_) => "assembly path is not a path"
     case TaskArguments(id)      => s"run $id does not take arguments"
     case NotATool               => "not a tool"

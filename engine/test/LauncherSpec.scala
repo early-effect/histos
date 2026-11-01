@@ -25,19 +25,24 @@ object LauncherSpec extends ZIOSpecDefault:
   private val version = "0.0.2-SNAPSHOT"
 
   private val checks = suite("launcher publish")(
-    test("a release ship boots the snapshot pin of that number"):
+    test("a release ship boots the snapshot channel of that number"):
       val posix   = LauncherScript.posix("0.0.1")
       val windows = LauncherScript.windows("0.0.1")
       ZIO.succeed(
         assertTrue(
           LauncherScript.boots("0.0.1-SNAPSHOT", "0.0.1-SNAPSHOT"),
+          LauncherScript.boots("0.0.1-SNAPSHOT", "0.0.1-20261101.030257-1"),
           LauncherScript.boots("0.0.1", "0.0.1-SNAPSHOT"),
+          LauncherScript.boots("0.0.1", "0.0.1-20261101.030257-1"),
           !LauncherScript.boots("0.0.1", "0.0.2-SNAPSHOT"),
+          !LauncherScript.boots("0.0.1", "0.0.2"),
           !LauncherScript.boots("0.0.2-SNAPSHOT", "0.0.1-SNAPSHOT"),
-          posix.contains("""[ "$version" = "$locked_version" ] || [ "${version}-SNAPSHOT" = "$locked_version" ]"""),
-          windows.contains(
-            """if ($fields['version'] -ne $version -and $fields['version'] -ne ($version + '-SNAPSHOT'))"""
-          ),
+          posix.contains("cs fetch"),
+          posix.contains("build.properties"),
+          posix.contains("COURSIER_TTL=0s"),
+          windows.contains("cs fetch"),
+          windows.contains("build.properties"),
+          windows.contains("COURSIER_TTL"),
         )
       )
     ,

@@ -64,7 +64,7 @@ object Operation:
       case Command.CachePromote(from, to)   => Right(Call.CachePromote(from, to))
       case Command.Resolve(action)          => Right(Call.Resolve(action))
       case Command.Workflow(action)         => Right(Call.Workflow(action))
-      case Command.LauncherUpdate           => Right(Call.LauncherUpdate)
+      case Command.Launcher(action)         => Right(Call.Launcher(action))
       case Command.Reload                   => Right(Call.Reload)
       case Command.Reboot                   => Right(Call.Reboot)
       case Command.Cancel(id)               => Right(Call.Cancel(id))

@@ -10,6 +10,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
+      - uses: coursier/setup-action@v3.0.4
+        with:
+          apps: ""
       - run: "./histos publish release histos"
         env:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}

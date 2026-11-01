@@ -12,4 +12,4 @@ trait HistosPlugin:
 
 object HistosPlugin:
   /** One line in the direct jar: the entry object's binary name. Transitive jars are not read. */
-  val entryResource: String = "META-INF/histos/plugin"
+  val EntryResourceName: String = "META-INF/histos/plugin"

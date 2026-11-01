@@ -30,9 +30,9 @@ enum PluginLoadError:
     case BadCoordinate(raw)         => s"'$raw' is not an exact plugin coordinate"
     case Misplaced(line)            => s"plugin(...) on line $line is outside the header"
     case Unlocked(coordinate)       => s"plugin $coordinate is not in the lock"
-    case NoEntry(coordinate)        => s"plugin $coordinate does not contain ${HistosPlugin.entryResource}"
+    case NoEntry(coordinate)        => s"plugin $coordinate does not contain ${HistosPlugin.EntryResourceName}"
     case AmbiguousEntry(coordinate) =>
-      s"plugin $coordinate has more than one line in ${HistosPlugin.entryResource}"
+      s"plugin $coordinate has more than one line in ${HistosPlugin.EntryResourceName}"
     case Unversioned(coordinate) => s"plugin $coordinate does not contain ${ApiDigest.resource}"
     case VersionMismatch(dependency, pluginApi, launcher) =>
       val coordinate = PluginCoordinate.Published(dependency).render

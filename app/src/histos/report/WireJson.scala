@@ -77,9 +77,6 @@ import histos.process.{ChildError, GroupOp, ProcessOutput}
 import histos.program.ProgramError
 import histos.publish.{
   LauncherError,
-  LauncherField,
-  LauncherMetadataError,
-  LauncherPayload,
   LocalPublishError,
   ScriptError,
 }
@@ -947,16 +944,6 @@ private object WireCall extends WireSupport:
 
   given JsonCodec[ScriptError] = JsonCodec.derived
   given Schema[ScriptError]    = Schema.derived
-
-  given JsonCodec[LauncherField] =
-    JsonCodec.string.transformOrFail(raw => LauncherField.named(raw).left.map(_.message), _.name)
-  given Schema[LauncherField] = enumeration("LauncherField", List("repository", "version", "revision", "sha256"))
-
-  given JsonCodec[LauncherMetadataError] = JsonCodec.derived
-  given Schema[LauncherMetadataError]    = Schema.derived
-
-  given JsonCodec[LauncherPayload] = JsonCodec.derived
-  given Schema[LauncherPayload]    = Schema.derived
 
   given JsonCodec[AssembleError] = JsonCodec.derived
   given Schema[AssembleError]    = Schema.derived

@@ -20,14 +20,21 @@ object AssemblySpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           repo    <- System.env("HISTOS_REPO")
-          xdg     <- System.env("XDG_CACHE_HOME")
           home    <- System.property("user.home")
-          found   <- ZIO.attemptBlocking(runtimeJars(repo, xdg, home).find(path => Files.isRegularFile(path)))
+          found   <- ZIO.attemptBlocking(runtimeJars(repo, home).find(path => Files.isRegularFile(path)))
           checked <- found match
             case None      => ZIO.succeed(assertTrue(found.nonEmpty))
             case Some(jar) =>
               for
-                root     <- temp
+                root <- temp
+                _    <- ZIO.attempt {
+                  val work = root.resolve("work")
+                  Files.createDirectories(work.resolve(".histos"))
+                  Files.writeString(
+                    work.resolve(".histos").resolve("build.properties"),
+                    "histos.version=0.0.2-SNAPSHOT\n",
+                  )
+                }
                 ran      <- ZIO.attempt(exec(jar, root.resolve("work"), javaBin))
                 names    <- ZIO.attempt(namesOf(jar))
                 manifest <- ZIO.attempt(manifestOf(jar))
@@ -36,7 +43,7 @@ object AssemblySpec extends ZIOSpecDefault:
                 assertTrue(
                   ran.finished,
                   ran.code == 0,
-                  lines == List(Cli.VersionText),
+                  lines == List("histos 0.0.2-SNAPSHOT"),
                   names.contains("histos/cli/Main.class"),
                   !names.exists(_.startsWith("scala/scalanative/")),
                   manifest.contains("Main-Class: histos.cli.Main"),
@@ -50,23 +57,32 @@ object AssemblySpec extends ZIOSpecDefault:
       Path.of("..").resolve(name),
     )
 
-  /** `dist/histos.jar` when assembly wrote it, then the jar `./dogfood` packs, then a downloaded launcher. */
-  private def runtimeJars(repo: Option[String], xdg: Option[String], home: Option[String]): List[Path] =
-    rooted(repo, "dist/histos.jar") ++
-      rooted(repo, ".histos/dogfood/histos.jar") ++
-      cachedLaunchers(xdg, home)
+  /** `dist/histos.jar` when assembly wrote it, then the jar Coursier cached for this coordinate. */
+  private def runtimeJars(repo: Option[String], home: Option[String]): List[Path] =
+    rooted(repo, "dist/histos.jar") ++ coursierJars(home)
 
-  /** The launcher `./histos` downloaded when `dist/histos.jar` is not in the checkout. */
-  private def cachedLaunchers(xdg: Option[String], home: Option[String]): List[Path] =
-    val cache = xdg.filter(_.nonEmpty).map(Path.of(_)).orElse(home.filter(_.nonEmpty).map(Path.of(_).resolve(".cache")))
-    cache.toList.flatMap: root =>
-      val launchers = root.resolve("histos").resolve("launchers")
-      if !Files.isDirectory(launchers) then Nil
+  private def coursierJars(home: Option[String]): List[Path] =
+    val roots = home
+      .filter(_.nonEmpty)
+      .map(Path.of(_))
+      .toList
+      .flatMap: root =>
+        List(
+          root.resolve(".cache").resolve("coursier").resolve("v1"),
+          root.resolve("Library").resolve("Caches").resolve("Coursier").resolve("v1"),
+        )
+    roots.flatMap: cache =>
+      if !Files.isDirectory(cache) then Nil
       else
-        val walk = Files.walk(launchers)
+        val walk = Files.walk(cache)
         try
           walk.iterator.asScala
-            .filter(path => Files.isRegularFile(path) && Option(path.getFileName).exists(_.toString == "histos.jar"))
+            .filter: path =>
+              val name     = Option(path.getFileName).map(_.toString).getOrElse("")
+              val launcher = Path.of("rocks", "earlyeffect", "histos").toString + java.io.File.separator
+              Files.isRegularFile(path) && name.startsWith("histos-") && name.endsWith(".jar") &&
+              !name.startsWith("histos-api") && !name.contains("-sources") && !name.contains("-javadoc") &&
+              path.toString.contains(launcher)
             .toList
             .sortBy(path => -Files.getLastModifiedTime(path).toMillis)
         finally walk.close()

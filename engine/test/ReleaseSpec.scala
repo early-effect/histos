@@ -660,7 +660,6 @@ object ReleaseSpec extends ZIOSpecDefault:
   private def repository: ZIO[Any, Throwable, Path] =
     System
       .env("HISTOS_REPO")
-      .provide(ZLayer.succeed(System.SystemLive))
       .flatMap: named =>
         val cwd  = Path.of("").toAbsolutePath.normalize
         val root = named.filter(_.nonEmpty).fold(cwd)(Path.of(_))
@@ -725,7 +724,7 @@ object ReleaseSpec extends ZIOSpecDefault:
   private def releaseShip(graph: histos.ProjectGraph): Boolean =
     graph.catalog match
       case Catalog.Manual(ship :: rest) =>
-        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.2"
+        rest.isEmpty && ship.name.value == "histos" && ship.version.value == "0.0.2-SNAPSHOT"
       case Catalog.Empty | Catalog.Lines(_) => false
 
   private def recorded(graph: histos.ProjectGraph): List[(String, Option[String])] =

@@ -6,7 +6,7 @@ import scala.deriving.Mirror
 import heddle.endpoint.{Schema, SchemaDoc, SchemaField}
 import histos.load.PluginFault
 import histos.native.NativeFetch
-import histos.publish.{LauncherField, LocalPublishError}
+import histos.publish.LocalPublishError
 import histos.testrun.ModuleTestError
 import histos.resolve.{ClasspathScope, LockField, ToolRole, Transitivity}
 import histos.schedule.ScheduleError
@@ -38,7 +38,6 @@ object SchemaSpec extends ZIOSpecDefault:
         enumerated[ClasspathScope] == ClasspathScope.values.toList.map(_.header),
         enumerated[LockField] == LockField.values.toList.map(LockField.token),
         enumerated[TagRelation] == TagRelation.values.toList.map(relationToken),
-        enumerated[LauncherField] == LauncherField.values.toList.map(_.name),
         enumerated[Severity] == Severity.values.toList.map(_.token),
       ),
   )

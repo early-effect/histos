@@ -14,19 +14,25 @@ A build file is a Scala program that returns a graph. A module names its platfor
 
 ## This repository
 
-Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds a JVM and starts one jar.
+Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds `java` and, when this checkout has no local assembly, asks `cs fetch` for the version in [.histos/build.properties](.histos/build.properties).
 
-`HISTOS_ASSEMBLY`, when set, is that jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through to the lock. With neither jar, the script downloads the snapshot named in [.histos/launcher.lock](.histos/launcher.lock) and checks its sha256. `dist/` and `.histos/assembly.sha256` stay uncommitted, so CI has neither jar and every job runs the pin. A local jar can compile [histos.scala](histos.scala) while CI still runs that pin. `workflow --check` compares the files this jar renders with the files in the tree, so the two jars can disagree. Do not hand-edit the lock.
+A JDK 21 or newer, and the `cs` command from Coursier 2.1 or newer, have to be on `PATH`. Histos does not install either. When one is missing or too old, the script prints the floor and how to install it.
+
+A JDK 21 or newer is required. On macOS: `brew install --cask temurin@21`. On Linux and Windows: https://adoptium.net/temurin/releases?version=21
+
+The `cs` command from Coursier 2.1 or newer is required. On macOS: `brew install coursier/formulas/coursier`. The Homebrew core formula provides `coursier` and does not. On Linux and Windows: https://get-coursier.io/docs/cli-installation and put the `cs` binary on `PATH`.
+
+`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through to Coursier. That path does not call `cs`. `dist/` and `.histos/assembly.sha256` stay uncommitted, so CI has neither jar and every job runs the version line. A local jar can compile [histos.scala](histos.scala) while CI still runs that line. `workflow --check` compares the files this jar renders with the files in the tree, so the two jars can disagree.
 
 [histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` packed inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
 
 `assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The next `./histos` in this checkout runs `dist/histos.jar` when that checksum matches.
 
-`launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Commit the lock after it changes. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
+`histos.version=0.0.2-SNAPSHOT` follows the snapshot. A timestamp such as `0.0.2-20261101.030257-1` freezes that channel. `launcher --update` resolves the channel and writes the timestamp Coursier selected. `launcher --latest` writes the pointer and does not fetch. Either line may be hand-edited. A bad line fails at boot. CI installs `cs` and runs the committed line, so a pointer moves when a snapshot is published.
 
-The script version is the ship number, or the lock cannot boot. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's script and lock are `0.0.2-SNAPSHOT`.
+The script version is the ship number, or the version line cannot boot. A timestamp boots when its channel is that number. This checkout's script and version line are `0.0.2-SNAPSHOT`.
 
-`./dogfood` is a scala-cli script for this checkout. It compiles the sources and runs that jar. There is no Windows script, and `workflow --update` does not write it. Use it to `publish snapshots` when the pinned launcher cannot build this tree. CI runs `./histos` and the lock.
+`.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails.
 
 ## Publishing
 
@@ -58,7 +64,7 @@ Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `H
 
 The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The three publish commands package `app` the same way. A release signs that jar. `assembly` writes `dist/histos.jar` for this checkout. That file is the local launcher, not a second publication. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create a tag or a GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
 
-`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After a release is on Central, the next development catalog is a snapshot. The lock stays a snapshot of the ship number so `./histos` still boots.
+`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After a release is on Central, the next development catalog is a snapshot. The version line stays a snapshot of the ship number so `./histos` still boots.
 
 ## An operation
 
@@ -74,7 +80,7 @@ The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` a
 
 `cache path` prints the store. `cache list` prints each digest and its size. `cache clean` removes an entry older than 30 days that no project keeps. `--dry-run` names those entries and leaves them. `cache promote --from` and `--to` take `main`, `pr/<n>`, or `dev/<name>`. The remote cache is not configured, so that command reports `remote cache is not configured` and does not open a connection.
 
-`resolve` fetches what `.histos/dependencies.lock` recorded and checks each sha256. `resolve --update` solves and writes that file. `resolve --check` solves again and fails when the result is not the lock. `workflow` compares the rendered workflow files and the launcher scripts with the tree. `workflow --update` writes them. Neither publishes, and neither moves the launcher pin. `launcher --update` is the only command that writes [.histos/launcher.lock](.histos/launcher.lock).
+`resolve` fetches what `.histos/dependencies.lock` recorded and checks each sha256. `resolve --update` solves and writes that file. `resolve --check` solves again and fails when the result is not the lock. `workflow` compares the rendered workflow files and the launcher scripts with the tree. `workflow --update` writes them. Neither publishes, and neither changes the version line. `launcher --update` writes the timestamp. `launcher --latest` writes the snapshot pointer.
 
 A word the grammar does not own is a plugin command, when the build registered it. A reserved root word cannot be one.
 
@@ -82,7 +88,7 @@ The tally names files compiled, files skipped, modules, and classes written. A c
 
 ## Tools already on the machine
 
-Histos does not install a JDK or Node. The running JVM must be JDK 21 or newer. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one.
+Histos does not install a JDK, Coursier, or Node. The running JVM must be JDK 21 or newer, and `cs` must be Coursier 2.1 or newer. The launcher script prints the same install lines as [This repository](#this-repository). A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one.
 
 ## Plugins
 

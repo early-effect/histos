@@ -7,7 +7,8 @@ import histos.load.{LoadError, LoadedBuild, Loader}
 import histos.mcp.Notice
 import histos.plugin.PluginArgs
 import histos.report.{BuildFault, CallResult, Rejection, Report}
-import histos.server.{Attach, Call, Calls, Decision, Feed, Fingerprint, Perform, Say, ServerError, Watching}
+import histos.publish.LauncherError
+import histos.server.{Attach, Call, Calls, Decision, Feed, Fingerprint, Message, Perform, Say, ServerError, Watching}
 import histos.task.{RunId, TaskId}
 import histos.Platform
 
@@ -60,30 +61,43 @@ object Session:
       desk: Desk,
       call: Call,
   ): ZIO[Env, SessionError, CallResult] =
-    Attach.decide(repo, Cli.VersionText).flatMap {
-      case Decision.DifferentVersion =>
-        drop(desk) *> ZIO.fail(SessionError.DifferentVersion)
-      case Decision.Open(socket) =>
-        drop(desk) *>
-          Build
-            .attached(socket)
-            .perform(call)
-            .tap {
-              case Beat.Heard(event) => Notice.show(repo, event)
-              case Beat.Finished(_)  => ZIO.unit
-            }
-            .runCollect
-            .foldZIO(
-              {
-                case ServerError.Unreachable(_) =>
-                  locally(repo, apiJar, machine, desk, call)
-                case other => ZIO.fail(SessionError.Remote(other))
-              },
-              beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
-            )
-      case Decision.Absent =>
-        locally(repo, apiJar, machine, desk, call)
-    }
+    Cli
+      .versionText(repo)
+      .foldZIO(
+        {
+          case absent: LauncherError.Absent =>
+            call match
+              case Call.Version => ZIO.succeed(CallResult.Fault(BuildFault.Launcher(absent)))
+              case _            => locally(repo, apiJar, machine, desk, call, "")
+          case error =>
+            ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
+        },
+        text =>
+          Attach.decide(repo, text).flatMap {
+            case Decision.DifferentVersion =>
+              drop(desk) *> ZIO.fail(SessionError.DifferentVersion)
+            case Decision.Open(socket) =>
+              drop(desk) *>
+                Build
+                  .attached(socket)
+                  .perform(call)
+                  .tap {
+                    case Beat.Heard(event) => Notice.show(repo, event)
+                    case Beat.Finished(_)  => ZIO.unit
+                  }
+                  .runCollect
+                  .foldZIO(
+                    {
+                      case ServerError.Unreachable(_) =>
+                        locally(repo, apiJar, machine, desk, call, text)
+                      case other => ZIO.fail(SessionError.Remote(other))
+                    },
+                    beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
+                  )
+            case Decision.Absent =>
+              locally(repo, apiJar, machine, desk, call, text)
+          },
+      )
 
   /** A report is the tool value, including a compile or test that ran and failed. A fault fails the tool. */
   def deliver[R](call: ZIO[R, SessionError, CallResult]): ZIO[R, CallProblem, Report] =
@@ -140,6 +154,7 @@ object Session:
       machine: Machine,
       desk: Desk,
       call: Call,
+      shown: String,
   ): ZIO[Env, SessionError, CallResult] =
     val build =
       Build.here[Env](
@@ -148,7 +163,7 @@ object Session:
         machine,
         desk.runs,
         track = true,
-        Cli.VersionText,
+        shown,
         prepared(repo, apiJar, desk, _),
         sessionEdges(repo, apiJar, machine, desk),
         {
@@ -172,6 +187,29 @@ object Session:
       call: Call,
       say: Say,
   ): ZIO[Env, ServerError, Unit] =
+    Cli
+      .versionText(repo)
+      .foldZIO(
+        {
+          case absent: LauncherError.Absent if call == Call.Version =>
+            say(Message.Done(CallResult.Fault(BuildFault.Launcher(absent))))
+          case _: LauncherError.Absent =>
+            answered(repo, apiJar, machine, desk, call, say, "")
+          case error =>
+            say(Message.Done(CallResult.Fault(BuildFault.Launcher(error))))
+        },
+        text => answered(repo, apiJar, machine, desk, call, say, text),
+      )
+
+  private def answered(
+      repo: Path,
+      apiJar: Path,
+      machine: Machine,
+      desk: Desk,
+      call: Call,
+      say: Say,
+      shown: String,
+  ): ZIO[Env, ServerError, Unit] =
     prepared(repo, apiJar, desk, call).flatMap { loaded =>
       Perform.run(
         repo,
@@ -180,7 +218,7 @@ object Session:
         machine,
         desk.runs,
         track = true,
-        Cli.VersionText,
+        shown,
         call,
         say,
         sessionEdges(repo, apiJar, machine, desk)(say),

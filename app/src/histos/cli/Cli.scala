@@ -13,6 +13,7 @@ import histos.server.{
   Daemon,
   Decision,
   Feed,
+  LauncherAction,
   Message,
   Perform,
   ResolveAction,
@@ -29,6 +30,7 @@ import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
 import histos.preview.{Plan, PreviewError}
 import histos.program.ProgramError
+import histos.publish.{LauncherError, LauncherPin}
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
 import histos.select.SelectError
 import histos.toolchain.{Runtimes, Survey}
@@ -76,7 +78,7 @@ enum Command:
   case CachePromote(from: CacheNamespace, to: CacheNamespace)
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
-  case LauncherUpdate
+  case Launcher(action: LauncherAction)
   case Reload
   case Reboot
   case Cancel(id: RunId)
@@ -312,10 +314,19 @@ final case class Completed(
 )
 
 object Cli:
-  val VersionText: String = "histos 0.0.2"
+  /** The version this checkout runs, as `histos version` prints it. */
+  def versionText(repo: Path): IO[LauncherError, String] =
+    LauncherPin.read(repo).map(pin => s"histos ${pin.version}")
+
+  /** A missing file is no run version. A bad line fails. */
+  private def versionOf(repo: Path): IO[LauncherError, Option[String]] =
+    versionText(repo)
+      .map(Some(_))
+      .catchSome:
+        case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher --update | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -344,10 +355,14 @@ object Cli:
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     command match
       case Command.Version =>
-        attach(
-          repo,
-          Call.Version,
-          ZIO.succeed(held(Call.Version, VersionText, CallResult.reported())),
+        versionText(repo).foldZIO(
+          error => ZIO.succeed(held(Call.Version, "", CallResult.Fault(BuildFault.Launcher(error)))),
+          text =>
+            attach(
+              repo,
+              Call.Version,
+              ZIO.succeed(held(Call.Version, text, CallResult.reported())),
+            ),
         )
       case Command.Graph                  => graph(repo, apiJar)
       case Command.Run(id, platform)      => run(repo, apiJar, id, platform)
@@ -389,8 +404,8 @@ object Cli:
         attach(repo, Call.CachePromote(from, to), cachePromote(from, to))
       case Command.Resolve(action)  => resolve(repo, apiJar, action)
       case Command.Workflow(action) => workflow(repo, apiJar, action)
-      case Command.LauncherUpdate   =>
-        attach(repo, Call.LauncherUpdate, launcherLocal(repo))
+      case Command.Launcher(action) =>
+        attach(repo, Call.Launcher(action), launcherLocal(repo, action))
       case Command.Reload                   => reload(repo)
       case Command.Reboot                   => reboot(repo, apiJar)
       case Command.Cancel(id)               => cancel(repo, id)
@@ -511,35 +526,37 @@ object Cli:
       case other =>
         ZIO.serviceWithZIO[Machine] { machine =>
           Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
-            val build =
-              Build.here[Local](
-                repo,
-                apiJar,
-                machine,
-                runs,
-                track = false,
-                Cli.VersionText,
-                adopted(repo, apiJar, _),
-                cliEdges(repo, apiJar, _),
-                heard(repo, _),
-              )
-            build
-              .perform(other)
-              .runCollect
-              .foldCauseZIO(
-                cause =>
-                  if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Interrupted, "", "", Playback.Heard))
-                  else
-                    cause.failureOrCause match
-                      case Left(error) =>
-                        ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message, Playback.Held))
-                      case Right(rest) => ZIO.failCause(rest),
-                beats =>
-                  val feeds = beats.map(Build.feed)
-                  val done  = completed(repo, other, feeds)
-                  if finished(feeds) then ZIO.succeed(done)
-                  else sayError("the call did not finish").as(done),
-              )
+            versionText(repo).orElseSucceed("").flatMap { shown =>
+              val build =
+                Build.here[Local](
+                  repo,
+                  apiJar,
+                  machine,
+                  runs,
+                  track = false,
+                  shown,
+                  adopted(repo, apiJar, _),
+                  cliEdges(repo, apiJar, _),
+                  heard(repo, _),
+                )
+              build
+                .perform(other)
+                .runCollect
+                .foldCauseZIO(
+                  cause =>
+                    if cause.isInterruptedOnly then ZIO.succeed(Completed(CliExit.Interrupted, "", "", Playback.Heard))
+                    else
+                      cause.failureOrCause match
+                        case Left(error) =>
+                          ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message, Playback.Held))
+                        case Right(rest) => ZIO.failCause(rest),
+                  beats =>
+                    val feeds = beats.map(Build.feed)
+                    val done  = completed(repo, other, feeds)
+                    if finished(feeds) then ZIO.succeed(done)
+                    else sayError("the call did not finish").as(done),
+                )
+            }
           }
         }
 
@@ -556,19 +573,21 @@ object Cli:
       case other =>
         ZIO.serviceWithZIO[Machine] { machine =>
           Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
-            adopted(repo, apiJar, other).flatMap { loaded =>
-              Perform.run(
-                repo,
-                apiJar,
-                loaded,
-                machine,
-                runs,
-                track = false,
-                Cli.VersionText,
-                other,
-                say,
-                cliEdges(repo, apiJar, say),
-              )
+            versionText(repo).orElseSucceed("").flatMap { shown =>
+              adopted(repo, apiJar, other).flatMap { loaded =>
+                Perform.run(
+                  repo,
+                  apiJar,
+                  loaded,
+                  machine,
+                  runs,
+                  track = false,
+                  shown,
+                  other,
+                  say,
+                  cliEdges(repo, apiJar, say),
+                )
+              }
             }
           }
         }
@@ -1152,20 +1171,109 @@ object Cli:
           _ => Completed(CliExit.Success, "", "", Playback.Held),
         )
 
+  private def launcherFailed(call: Call, error: LauncherError): Completed =
+    held(call, "", CallResult.Fault(BuildFault.Launcher(error)))
+
+  private def pinned[R](
+      repo: Path,
+      call: Call,
+      missing: URIO[R, Completed],
+  )(present: String => URIO[R, Completed]): URIO[R, Completed] =
+    versionOf(repo).foldZIO(
+      error => ZIO.succeed(launcherFailed(call, error)),
+      {
+        case None       => missing
+        case Some(text) => present(text)
+      },
+    )
+
   private def bsp(
       repo: Path,
       apiJar: Path,
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
-    Attach
-      .decide(repo, VersionText)
-      .flatMap:
-        case Decision.Open(socket) =>
-          Client
-            .splice(socket)
-            .foldZIO(
+    pinned(repo, Call.Bsp, bspLocal(repo, apiJar))(text =>
+      Attach
+        .decide(repo, text)
+        .flatMap {
+          case Decision.Open(socket) =>
+            Client
+              .splice(socket)
+              .foldZIO(
+                {
+                  case ServerError.Unreachable(_) =>
+                    bspLocal(repo, apiJar)
+                  case error =>
+                    ZIO.succeed(
+                      Completed(
+                        CliExit.LoadFailed,
+                        "",
+                        error.message,
+                        Playback.Held,
+                      )
+                    )
+                },
+                code =>
+                  ZIO.succeed(
+                    Completed(
+                      if code == 0 then CliExit.Success else CliExit.TaskFailed,
+                      "",
+                      "",
+                      Playback.Held,
+                    )
+                  ),
+              )
+          case Decision.DifferentVersion =>
+            ZIO.succeed(
+              Completed(
+                CliExit.LoadFailed,
+                "",
+                ServerError.DifferentVersion.message,
+                Playback.Held,
+              )
+            )
+          case Decision.Absent => bspLocal(repo, apiJar)
+        }
+    )
+
+  private def reload(repo: Path): UIO[Completed] =
+    pinned(
+      repo,
+      Call.Reload,
+      ZIO.succeed(Completed(CliExit.LoadFailed, "", ServerError.NoServer.message, Playback.Held)),
+    )(text =>
+      Attach
+        .decide(repo, text)
+        .flatMap {
+          case Decision.DifferentVersion =>
+            ZIO.succeed(
+              Completed(
+                CliExit.LoadFailed,
+                "",
+                ServerError.DifferentVersion.message,
+                Playback.Held,
+              )
+            )
+          case Decision.Absent =>
+            ZIO.succeed(
+              Completed(
+                CliExit.LoadFailed,
+                "",
+                ServerError.NoServer.message,
+                Playback.Held,
+              )
+            )
+          case Decision.Open(socket) =>
+            remote(repo, socket, Call.Reload).foldZIO(
               {
                 case ServerError.Unreachable(_) =>
-                  bspLocal(repo, apiJar)
+                  ZIO.succeed(
+                    Completed(
+                      CliExit.LoadFailed,
+                      "",
+                      ServerError.NoServer.message,
+                      Playback.Held,
+                    )
+                  )
                 case error =>
                   ZIO.succeed(
                     Completed(
@@ -1176,81 +1284,20 @@ object Cli:
                     )
                   )
               },
-              code =>
-                ZIO.succeed(
-                  Completed(
-                    if code == 0 then CliExit.Success else CliExit.TaskFailed,
-                    "",
-                    "",
-                    Playback.Held,
-                  )
-                ),
+              done => ZIO.succeed(done),
             )
-        case Decision.DifferentVersion =>
-          ZIO.succeed(
-            Completed(
-              CliExit.LoadFailed,
-              "",
-              ServerError.DifferentVersion.message,
-              Playback.Held,
-            )
-          )
-        case Decision.Absent => bspLocal(repo, apiJar)
+        }
+    )
 
-  private def reload(repo: Path): UIO[Completed] =
-    Attach
-      .decide(repo, VersionText)
-      .flatMap:
-        case Decision.DifferentVersion =>
-          ZIO.succeed(
-            Completed(
-              CliExit.LoadFailed,
-              "",
-              ServerError.DifferentVersion.message,
-              Playback.Held,
-            )
-          )
-        case Decision.Absent =>
-          ZIO.succeed(
-            Completed(
-              CliExit.LoadFailed,
-              "",
-              ServerError.NoServer.message,
-              Playback.Held,
-            )
-          )
-        case Decision.Open(socket) =>
-          remote(repo, socket, Call.Reload).foldZIO(
-            {
-              case ServerError.Unreachable(_) =>
-                ZIO.succeed(
-                  Completed(
-                    CliExit.LoadFailed,
-                    "",
-                    ServerError.NoServer.message,
-                    Playback.Held,
-                  )
-                )
-              case error =>
-                ZIO.succeed(
-                  Completed(
-                    CliExit.LoadFailed,
-                    "",
-                    error.message,
-                    Playback.Held,
-                  )
-                )
-            },
-            done => ZIO.succeed(done),
-          )
-
-  private def launcherLocal(repo: Path): UIO[Completed] =
-    histos.publish.LauncherPin
-      .update(repo)
-      .fold(
-        error => held(Call.LauncherUpdate, "", CallResult.Fault(BuildFault.Launcher(error))),
-        pin => held(Call.LauncherUpdate, s"${pin.revision} ${pin.sha256.value}", CallResult.reported()),
-      )
+  private def launcherLocal(repo: Path, action: LauncherAction): UIO[Completed] =
+    val call  = Call.Launcher(action)
+    val wrote = action match
+      case LauncherAction.Update => histos.publish.LauncherPin.update(repo)
+      case LauncherAction.Latest => histos.publish.LauncherPin.latest(repo)
+    wrote.fold(
+      error => held(call, "", CallResult.Fault(BuildFault.Launcher(error))),
+      pin => held(call, pin.shown, CallResult.reported()),
+    )
 
   /** The id is the run id the server minted. No server has no runs. */
   private def cancel(repo: Path, id: RunId): UIO[Completed] =
@@ -1325,34 +1372,37 @@ object Cli:
       repo: Path,
       apiJar: Path,
   ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
-    Attach
-      .decide(repo, VersionText)
-      .flatMap:
-        case Decision.Open(socket) =>
-          remote(repo, socket, Call.Reboot).foldZIO(
-            {
-              case ServerError.Unreachable(_) | ServerError.DifferentVersion =>
-                serve(repo, apiJar)
-              case error =>
-                ZIO.succeed(
-                  Completed(
-                    CliExit.LoadFailed,
-                    "",
-                    error.message,
-                    Playback.Held,
+    pinned(repo, Call.Reboot, serve(repo, apiJar))(text =>
+      Attach
+        .decide(repo, text)
+        .flatMap:
+          case Decision.Open(socket) =>
+            remote(repo, socket, Call.Reboot).foldZIO(
+              {
+                case ServerError.Unreachable(_) | ServerError.DifferentVersion =>
+                  serve(repo, apiJar)
+                case error =>
+                  ZIO.succeed(
+                    Completed(
+                      CliExit.LoadFailed,
+                      "",
+                      error.message,
+                      Playback.Held,
+                    )
                   )
-                )
-            },
-            done => ZIO.succeed(done),
-          )
-        case Decision.Absent | Decision.DifferentVersion =>
-          serve(repo, apiJar)
+              },
+              done => ZIO.succeed(done),
+            )
+          case Decision.Absent | Decision.DifferentVersion =>
+            serve(repo, apiJar)
+    )
 
   private enum Boot:
     case Up
     case Load(error: LoadError)
     case Jdk(error: GraphCompileError)
     case Transport(error: ServerError)
+    case Pin(error: LauncherError)
 
   /** Start a server in this process. The socket line is printed here. The effect waits until the server stops. */
   private def boot(
@@ -1377,29 +1427,37 @@ object Cli:
                       .foldZIO(
                         error => ZIO.succeed(Boot.Load(error)),
                         classpath =>
-                          Daemon
-                            .open(
-                              repo,
-                              loaded.graph,
-                              loaded.build,
-                              jdk,
-                              VersionText,
-                              apiJar,
-                              classpath,
-                              loader.reportBuild(repo, apiJar).provideEnvironment(env),
-                              loaded.plugins,
-                              machine,
-                            )
-                            .flatMap { running =>
-                              say(running.record.socket.toString) *> running.done
-                            }
-                            .foldCauseZIO(
-                              cause =>
-                                cause.failureOrCause match
-                                  case Left(error) => ZIO.succeed(Boot.Transport(error))
-                                  case Right(rest) => ZIO.failCause(rest),
-                              _ => ZIO.succeed(Boot.Up),
-                            ),
+                          versionOf(repo).foldZIO(
+                            error => ZIO.succeed(Boot.Pin(error)),
+                            {
+                              case None =>
+                                ZIO.succeed(Boot.Pin(LauncherError.Absent(repo.resolve(LauncherPin.file))))
+                              case Some(text) =>
+                                Daemon
+                                  .open(
+                                    repo,
+                                    loaded.graph,
+                                    loaded.build,
+                                    jdk,
+                                    text,
+                                    apiJar,
+                                    classpath,
+                                    loader.reportBuild(repo, apiJar).provideEnvironment(env),
+                                    loaded.plugins,
+                                    machine,
+                                  )
+                                  .flatMap { running =>
+                                    say(running.record.socket.toString) *> running.done
+                                  }
+                                  .foldCauseZIO(
+                                    cause =>
+                                      cause.failureOrCause match
+                                        case Left(error) => ZIO.succeed(Boot.Transport(error))
+                                        case Right(rest) => ZIO.failCause(rest),
+                                    _ => ZIO.succeed(Boot.Up),
+                                  )
+                            },
+                          ),
                       ),
                 ),
           )
@@ -1414,6 +1472,7 @@ object Cli:
       case Boot.Up               => Completed(CliExit.Success, "", "", Playback.Held)
       case Boot.Load(error)      => held(Call.Reboot, "", CallResult.Fault(BuildFault.Load(error)))
       case Boot.Jdk(error)       => held(Call.Reboot, "", Perform.jdkMissed(Call.Reboot, error))
+      case Boot.Pin(error)       => launcherFailed(Call.Reboot, error)
       case Boot.Transport(error) =>
         Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
 
@@ -1426,6 +1485,7 @@ object Cli:
       case Boot.Up               => ZIO.succeed(CallResult.reported())
       case Boot.Load(error)      => ZIO.succeed(CallResult.Fault(BuildFault.Load(error)))
       case Boot.Jdk(error)       => ZIO.succeed(Perform.jdkMissed(Call.Reboot, error))
+      case Boot.Pin(error)       => ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
       case Boot.Transport(error) => ZIO.fail(error)
 
   /** A matching server runs the command. Anything else, including a dead socket, runs here.
@@ -1435,35 +1495,38 @@ object Cli:
       call: Call,
       local: URIO[R, Completed],
   ): URIO[R, Completed] =
-    Attach
-      .decide(repo, VersionText)
-      .flatMap:
-        case Decision.Open(socket) =>
-          remote(repo, socket, call).foldZIO(
-            {
-              case ServerError.Unreachable(_) => local
-              case error                      =>
-                ZIO.succeed(
-                  Completed(
-                    CliExit.LoadFailed,
-                    "",
-                    error.message,
-                    Playback.Held,
+    pinned(repo, call, local)(text =>
+      Attach
+        .decide(repo, text)
+        .flatMap {
+          case Decision.Open(socket) =>
+            remote(repo, socket, call).foldZIO(
+              {
+                case ServerError.Unreachable(_) => local
+                case error                      =>
+                  ZIO.succeed(
+                    Completed(
+                      CliExit.LoadFailed,
+                      "",
+                      error.message,
+                      Playback.Held,
+                    )
                   )
-                )
-            },
-            done => ZIO.succeed(done),
-          )
-        case Decision.DifferentVersion =>
-          ZIO.succeed(
-            Completed(
-              CliExit.LoadFailed,
-              "",
-              ServerError.DifferentVersion.message,
-              Playback.Held,
+              },
+              done => ZIO.succeed(done),
             )
-          )
-        case Decision.Absent => local
+          case Decision.DifferentVersion =>
+            ZIO.succeed(
+              Completed(
+                CliExit.LoadFailed,
+                "",
+                ServerError.DifferentVersion.message,
+                Playback.Held,
+              )
+            )
+          case Decision.Absent => local
+        }
+    )
 
   private def remote(
       repo: Path,

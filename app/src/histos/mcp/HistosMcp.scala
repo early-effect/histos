@@ -12,7 +12,7 @@ import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.resolve.Resolve
-import histos.server.{Call, ResolveAction}
+import histos.server.{Call, LauncherAction, ResolveAction}
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.workflow.WorkflowAction
@@ -51,6 +51,7 @@ object HistosMcp:
   final case class CleanArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class ResolveArgs(action: String = "verify") derives Schema, JsonCodec
   final case class WorkflowArgs(action: String = "check") derives Schema, JsonCodec
+  final case class LauncherArgs(action: String) derives Schema, JsonCodec
   final case class CacheCleanArgs(mode: Option[String] = None) derives Schema, JsonCodec
   final case class WatchArgs(args: List[String] = Nil) derives Schema, JsonCodec
   final case class PreviewArgs(
@@ -254,10 +255,19 @@ object HistosMcp:
         Names.cacheClean,
         "Remove old content store entries. mode is remove or dry-run. An absent mode removes them. dry-run lists them and deletes nothing.",
       )(args => ZIO.fromEither(cacheCall(args.mode)).mapError(refused).flatMap(ask))
-      launcher <- cacheClean.tool[NoArgs](
+      launcher <- cacheClean.tool[LauncherArgs](
         Names.launcherUpdate,
-        "Update the launcher pin. Does not load the graph.",
-      )(_ => ask(Call.LauncherUpdate))
+        "update resolves the channel and writes the timestamp. latest writes the snapshot pointer and does not fetch. Does not load the graph.",
+      )(args =>
+        ZIO
+          .fromEither(
+            LauncherAction
+              .from(args.action)
+              .left
+              .map(_ => Session.CallProblem.Fault(BuildFault.Rejected(Rejection.LauncherAction(args.action))))
+          )
+          .flatMap(action => ask(Call.Launcher(action)))
+      )
       ready <- launcher.tool[WatchArgs](
         Names.watch,
         "Run a command again after a source save. args are the histos command, without the tilde.",

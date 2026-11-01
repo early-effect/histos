@@ -333,9 +333,9 @@ object LoadSpec extends ZIOSpecDefault:
           packed <- textJar(
             dir.resolve("echo.jar"),
             List(
-              HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource         -> s"$wrong\n",
-              "dev/example/Echo$.class"  -> "not a class",
+              HistosPlugin.EntryResourceName -> "dev.example.Echo$\n",
+              ApiDigest.resource             -> s"$wrong\n",
+              "dev/example/Echo$.class"      -> "not a class",
             ),
           )
           repo <- withRepo(pluginBuild)
@@ -369,7 +369,7 @@ object LoadSpec extends ZIOSpecDefault:
           packed <- textJar(
             dir.resolve("echo.jar"),
             List(
-              HistosPlugin.entryResource       -> "dev.example.Echo$\n",
+              HistosPlugin.EntryResourceName   -> "dev.example.Echo$\n",
               ApiDigest.resource               -> s"$hex\n",
               "histos/schedule/Sendable.class" -> "not a class",
             ),
@@ -536,8 +536,8 @@ object LoadSpec extends ZIOSpecDefault:
           packed <- textJar(
             dir.resolve("echo.jar"),
             List(
-              HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource         -> s"$wrong\n",
+              HistosPlugin.EntryResourceName -> "dev.example.Echo$\n",
+              ApiDigest.resource             -> s"$wrong\n",
             ),
           )
           sources <- textJar(
@@ -588,8 +588,8 @@ object LoadSpec extends ZIOSpecDefault:
           packed <- textJar(
             dir.resolve("echo.jar"),
             List(
-              HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource         -> s"$wrong\n",
+              HistosPlugin.EntryResourceName -> "dev.example.Echo$\n",
+              ApiDigest.resource             -> s"$wrong\n",
             ),
           )
           sources <- textJar(
@@ -627,8 +627,8 @@ object LoadSpec extends ZIOSpecDefault:
           packed <- textJar(
             dir.resolve("echo.jar"),
             List(
-              HistosPlugin.entryResource -> "dev.example.Echo$\n",
-              ApiDigest.resource         -> s"$wrong\n",
+              HistosPlugin.EntryResourceName -> "dev.example.Echo$\n",
+              ApiDigest.resource             -> s"$wrong\n",
             ),
           )
           repo      <- withRepo(pluginBuild)
@@ -1271,8 +1271,8 @@ object LoadSpec extends ZIOSpecDefault:
       packed <- textJar(
         dir.resolve("echo.jar"),
         List(
-          HistosPlugin.entryResource -> "dev.example.Echo$\n",
-          ApiDigest.resource         -> s"$hex\n",
+          HistosPlugin.EntryResourceName -> "dev.example.Echo$\n",
+          ApiDigest.resource             -> s"$hex\n",
         ),
         Some(classes),
       )

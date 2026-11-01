@@ -317,6 +317,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
+    ) ++ coursierCli ++ List(
       s"      - run: ${quote(s"./histos publish release $name")}",
     ) ++ secretEnv(sona.secretNames)
 
@@ -341,6 +342,7 @@ object Workflow:
       s"    runs-on: $Runner",
       "    steps:",
       s"      - uses: $Checkout",
+    ) ++ coursierCli ++ List(
       "      - run: \"./histos publish promote ${{ inputs.deployment }}\"",
     ) ++ secretEnv(promoteSecrets)
     lines.mkString("\n") + "\n"
@@ -378,6 +380,7 @@ object Workflow:
       s"      contents: ${access(job.permissions)}",
       "    steps:",
       s"      - uses: $Checkout",
+    ) ++ coursierCli ++ List(
       s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")}",
     )
 
@@ -407,7 +410,8 @@ object Workflow:
     * only when `cached` is the string `true`, which `cache-hit` is for this key alone. Chekhov reads Playwright from
     * `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. Coursier is
     * the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` is the lock digest, so the
-    * file is not baked into the key. No step sets `restore-keys`.
+    * file is not baked into the key. No step sets `restore-keys`. Every job that runs `./histos` installs `cs` and
+    * does not install a JDK.
     */
   private def steps(tools: RunnerTools): List[String] =
     nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright) ++ coursierStep
@@ -443,6 +447,16 @@ object Workflow:
 
   private def coursierStep: List[String] =
     cacheStep(None, List(CoursierCache), coursierKey)
+
+  /** `apps` empty skips `sbtn`. Runners already have `JAVA_HOME`, so this step does not install a JDK. */
+  private val CoursierCli = "coursier/setup-action@v3.0.4"
+
+  private def coursierCli: List[String] =
+    List(
+      s"      - uses: $CoursierCli",
+      "        with:",
+      s"          apps: ${quote("")}",
+    )
 
   private def nodeStep(floor: Option[NodeFloor]): List[String] =
     floor match
@@ -494,7 +508,7 @@ object Workflow:
           s"    runs-on: $Runner",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ prepare ++ testRun(argv(aggregate).mkString(" "))
+        ) ++ coursierCli ++ prepare ++ testRun(argv(aggregate).mkString(" "))
       case _ =>
         List(
           "  test:",
@@ -506,7 +520,7 @@ object Workflow:
         ) ++ jobs.flatMap(include) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ prepare ++ testRun("${{ matrix.command }}")
+        ) ++ coursierCli ++ prepare ++ testRun("${{ matrix.command }}")
 
   private def include(job: TestJob): List[String] =
     List(
@@ -561,6 +575,9 @@ object Workflow:
       |    runs-on: $Runner
       |    steps:
       |      - uses: $Checkout
+      |      - uses: $CoursierCli
+      |        with:
+      |          apps: ""
       |      - run: "./histos run versions"""".stripMargin
 
   private val workflowJob: String =
@@ -568,6 +585,9 @@ object Workflow:
       |    runs-on: $Runner
       |    steps:
       |      - uses: $Checkout
+      |      - uses: $CoursierCli
+      |        with:
+      |          apps: ""
       |      - run: "./histos workflow --check"""".stripMargin
 
   private def quote(text: String): String =

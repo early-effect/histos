@@ -170,7 +170,7 @@ object BspParallelSpec extends ZIOSpecDefault:
       Call.CacheList                                              -> false,
       Call.CacheClean(CacheCleanMode.DryRun)                      -> false,
       Call.CachePromote(CacheNamespace.Main, CacheNamespace.Main) -> false,
-      Call.LauncherUpdate                                         -> false,
+      Call.Launcher(LauncherAction.Update)                        -> false,
       Call.Watch(Call.Graph)                                      -> false,
       Call.Bsp                                                    -> false,
       Call.PreviewCompile(Nil)                                    -> false,
