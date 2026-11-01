@@ -43,6 +43,7 @@ object PublishHoldSpec extends ZIOSpecDefault:
               jdk,
               env,
               _ => ZIO.unit,
+              _ => ZIO.unit,
             )
             .provide(IdleResolve.layer, histos.zinc.CompileReplay.processStore)
           decision <- VersionTask.decide(graph, root, env)

@@ -8,7 +8,7 @@ import heddle.client.Client
 import heddle.http.{Body, FormField, Method, Path, QueryParams, Request, Response, Scheme, Url}
 import heddle.http.header.{BasicCredentials, Headers}
 
-import zio.{Chunk, Config, Duration, IO, ZIO, ZLayer, durationInt}
+import zio.{Chunk, Config, Duration, IO, UIO, ZIO, ZLayer, durationInt}
 
 /** Hold polls until `VALIDATED`. Automatic polls until `PUBLISHED`. */
 enum ReleaseMode:
@@ -121,20 +121,53 @@ trait Portal:
 object Portal:
   private[central] val interval: Duration = 1.second
 
-  def layer(base: PortalBase, credentials: RepositorySecret): ZLayer[Any, PortalError, Portal] =
+  /** Quiet status reads between progress lines. The read stays at `interval` so a terminal state is not delayed. */
+  private[central] val reportEvery: Int = 30
+
+  /** How long a post or a status read may sit before the next progress line. */
+  private[central] val keepEvery: Duration = 30.seconds
+
+  private[central] enum PollChange:
+    case Same, Changed
+
+  private[central] enum PollNote:
+    case Say, Wait
+
+  private[central] def beat(quiet: Int, change: PollChange): (PollNote, Int) =
+    change match
+      case PollChange.Changed                          => (PollNote.Say, 0)
+      case PollChange.Same if quiet + 1 >= reportEvery => (PollNote.Say, 0)
+      case PollChange.Same                             => (PollNote.Wait, quiet + 1)
+
+  /** Say `line` after `keepEvery`, and again on that period, until `body` finishes. A fast body says nothing. */
+  def keep[R, E, A](note: String => UIO[Unit], line: String)(body: ZIO[R, E, A]): ZIO[R, E, A] =
+    ZIO.scoped:
+      ZIO.sleep(keepEvery).zipRight(note(line)).forever.forkScoped *> body
+
+  def layer(
+      base: PortalBase,
+      credentials: RepositorySecret,
+      note: String => UIO[Unit],
+  ): ZLayer[Any, PortalError, Portal] =
     val http =
       ZLayer.succeed(Client.Config.default) >>>
         Client.layer.mapError(error => PortalError.Transport(TransportFault.from(error)))
-    http >>> ZLayer.fromFunction((client: Client) => PortalClient(base, credentials, client))
+    http >>> ZLayer.fromFunction((client: Client) => PortalClient(base, credentials, client, note))
 end Portal
 
-private final class PortalClient(base: PortalBase, credentials: RepositorySecret, client: Client) extends Portal:
+private final class PortalClient(
+    base: PortalBase,
+    credentials: RepositorySecret,
+    client: Client,
+    note: String => UIO[Unit],
+) extends Portal:
   private val token =
     "Bearer " + BasicCredentials.render(credentials.user.value, new String(credentials.password.value.toArray))
 
   def upload(bundle: Chunk[Byte], mode: ReleaseMode): IO[PortalError, Deployment] =
     for
-      id    <- posted(bundle, mode)
+      _     <- note("uploading bundle to the portal")
+      id    <- Portal.keep(note, "uploading...")(posted(bundle, mode).tapError(error => note(error.message)))
       state <- until(id, ready(mode))
     yield Deployment(id, state)
 
@@ -153,11 +186,32 @@ private final class PortalClient(base: PortalBase, credentials: RepositorySecret
     }
 
   private def until(id: DeploymentId, ready: DeploymentState): IO[PortalError, DeploymentState] =
+    poll(id, ready, None, 0)
+
+  private def poll(
+      id: DeploymentId,
+      ready: DeploymentState,
+      previous: Option[DeploymentState],
+      quiet: Int,
+  ): IO[PortalError, DeploymentState] =
     state(id).flatMap { found =>
-      if found == DeploymentState.Failed then ZIO.fail(PortalError.Failed(id))
-      else if found == ready then ZIO.succeed(found)
-      else ZIO.sleep(Portal.interval) *> until(id, ready)
+      val change = previous match
+        case Some(seen) if seen == found => Portal.PollChange.Same
+        case _                           => Portal.PollChange.Changed
+      val (decision, next) = Portal.beat(quiet, change)
+      val spoken           = decision match
+        case Portal.PollNote.Say  => note(progress(id, found, ready))
+        case Portal.PollNote.Wait => ZIO.unit
+      spoken *>
+        (if found == DeploymentState.Failed then ZIO.fail(PortalError.Failed(id))
+         else if found == ready then ZIO.succeed(found)
+         else ZIO.sleep(Portal.interval) *> poll(id, ready, Some(found), next))
     }
+
+  private def progress(id: DeploymentId, found: DeploymentState, ready: DeploymentState): String =
+    val token = wire(found)
+    if found == DeploymentState.Failed || found == ready then s"portal ${id.value} is $token"
+    else s"portal ${id.value} is $token, waiting for ${wire(ready)}"
 
   private def completed(method: Method, id: DeploymentId): IO[PortalError, Unit] =
     exchange(method, base.root / "api" / "v1" / "publisher" / "deployment" / id.value, Body.empty).flatMap { response =>
@@ -179,6 +233,9 @@ private final class PortalClient(base: PortalBase, credentials: RepositorySecret
       case None        => ZIO.fail(PortalError.Unnamed)
 
   private def state(id: DeploymentId): IO[PortalError, DeploymentState] =
+    Portal.keep(note, s"reading portal ${id.value}")(fetched(id)).tapError(error => note(error.message))
+
+  private def fetched(id: DeploymentId): IO[PortalError, DeploymentState] =
     val url = (base.root / "api" / "v1" / "publisher" / "status")
       .copy(query = QueryParams.of("id" -> id.value))
     exchange(Method.POST, url, Body.empty).flatMap { response =>
@@ -243,4 +300,13 @@ private final class PortalClient(base: PortalBase, credentials: RepositorySecret
       case "PUBLISHED"  => Some(DeploymentState.Published)
       case "FAILED"     => Some(DeploymentState.Failed)
       case _            => None
+
+  private def wire(state: DeploymentState): String =
+    state match
+      case DeploymentState.Pending    => "PENDING"
+      case DeploymentState.Validating => "VALIDATING"
+      case DeploymentState.Validated  => "VALIDATED"
+      case DeploymentState.Publishing => "PUBLISHING"
+      case DeploymentState.Published  => "PUBLISHED"
+      case DeploymentState.Failed     => "FAILED"
 end PortalClient

@@ -5,6 +5,7 @@ import histos.central.{
   ArtifactId,
   DependencyVersion,
   MavenDependency,
+  Portal,
   PortalBase,
   Preflight,
   PublishError,
@@ -30,11 +31,11 @@ import histos.{
 
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, IO, ULayer, ZIO, ZLayer}
+import zio.{Chunk, IO, UIO, ULayer, ZIO, ZLayer}
 
 object SonaStock:
-  def layer(env: Map[String, String]): ULayer[SonaPublish] =
-    ZLayer.succeed(Live(env))
+  def layer(env: Map[String, String], note: String => UIO[Unit]): ULayer[SonaPublish] =
+    ZLayer.succeed(Live(env, note))
 
   /** Credentials, then the signing key, then the portal base. No socket. */
   def gate(env: Map[String, String]): IO[ReleaseError, Unit] =
@@ -63,7 +64,7 @@ object SonaStock:
   private def mode(automatic: Boolean): CentralRelease =
     if automatic then CentralRelease.Automatic else CentralRelease.Hold
 
-  private final class Live(env: Map[String, String]) extends SonaPublish:
+  private final class Live(env: Map[String, String], note: String => UIO[Unit]) extends SonaPublish:
     def publish(request: PublishRequest): IO[PublishFault, PublishReceipt] =
       request.revision match
         case ShipRevision.Ci(_) =>
@@ -101,11 +102,13 @@ object SonaStock:
         deps    <- ZIO.fromEither(dependencies(module.dependencies))
         name <- ZIO.fromEither(ArtifactId.from(module.artifact).left.map(_ => PublishFault.Artifact(module.artifact)))
         artifact = Artifact(module.group, name, revision, jar, deps, sources = sources, javadoc = javadoc)
-        done <- ZIO
-          .serviceWithZIO[Publisher](_.publish(artifact))
-          .mapError(centralFault(request, _))
+        done <- note(s"uploading ${module.artifact} ${module.revision}") *>
+          Portal
+            .keep(note, "uploading...")(ZIO.serviceWithZIO[Publisher](_.publish(artifact)))
+            .tapError(error => note(centralFault(request, error).message))
+            .mapError(centralFault(request, _))
         unique <- done match
-          case Published.Snapshot(unique, _) => ZIO.succeed(unique.value)
+          case Published.Snapshot(unique, _)  => ZIO.succeed(unique.value)
           case Published.Local(_, _, _, _, _) => ZIO.fail(PublishFault.Remote)
       yield PublishedModule(
         module.module,
@@ -140,7 +143,8 @@ object SonaStock:
               env,
             )
             ReleaseRun
-              .upload(request.checkout, staged, mode(request.automatic))
+              .upload(request.checkout, staged, mode(request.automatic), note)
+              .tapError(error => note(error.message))
               .mapError(releaseFault)
               .map: report =>
                 PublishReceipt(

@@ -24,7 +24,9 @@ Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `w
 
 `launcher --update` is the only command that writes the lock. It reads the repository already named there, takes the latest snapshot revision of `rocks.earlyeffect:histos` from Maven metadata, and writes that revision and the published jar's sha256. It does not hash `dist/histos.jar`. Commit the lock after it changes. The next CI run uses that jar, and [histos.scala](histos.scala) compiles against the api packed inside it.
 
-The script version is the ship number, or the lock cannot boot. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's script stays `0.0.1` and the lock stays `0.0.1-SNAPSHOT`, which is the pin that contains `ScalacFlag.MaxInlines`. The ship number is `0.0.2`. A script of `0.0.2` waits until the pin is `0.0.2-SNAPSHOT`.
+The script version is the ship number, or the lock cannot boot. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's script and lock are `0.0.2-SNAPSHOT`.
+
+`./dogfood` is a scala-cli script for this checkout. It compiles the sources and runs that jar. There is no Windows script, and `workflow --update` does not write it. Use it to `publish snapshots` when the pinned launcher cannot build this tree. CI runs `./histos` and the lock.
 
 ## Publishing
 
@@ -36,9 +38,9 @@ The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish sn
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 - A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-This catalog is `manual("histos", manual"0.0.2")`. That number is a release, so `publish snapshots` and `publish release` both sign it and portal it. `0.0.1` is already on Central. A new launcher snapshot is a publish of a snapshot coordinate, then `launcher --update`.
+This catalog is `manual("histos", manual"0.0.2-SNAPSHOT")`. `publish snapshots` PUTs that coordinate. `publish release` does not stage it. `0.0.1` is already on Central. A new launcher snapshot is that PUT, then `launcher --update`.
 
-The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
+The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. The client prints each step as it happens: `building`, `staged`, `signing`, `bundling`, `uploading`, and `installing`. A local install prints `installing`. A snapshot prints `uploading <artifact> <revision>`. A release prints `signing`, `bundling`, and `uploading <ship> to the portal`. The portal post then prints `uploading bundle to the portal`, and `uploading...` if that post is still running after 30 seconds. Each status is `portal <id> is <STATE>`. Until the waited state arrives, the line names it. The first read, a changed state, and every thirty quiet reads print. A status read that has not returned prints `reading portal <id>` after that same wait. A failure is printed when it happens. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 
 `publish release` does not stage a snapshot coordinate. It reports that ship and continues with the others. A ship that depends on a snapshot is reported and not uploaded. One ship's upload failure does not fail the others. Missing credentials, a missing signing key, or a portal base that cannot be read fails the whole invocation before compile, when the layer's secret names are the five below. `publish snapshots` checks the username and password only. A layer whose secret names differ skips the check.
 
@@ -56,7 +58,7 @@ Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `H
 
 The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The three publish commands package `app` the same way. A release signs that jar. `assembly` writes `dist/histos.jar` for this checkout. That file is the local launcher, not a second publication. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create a tag or a GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
 
-`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After `0.0.2` is on Central, the next development catalog is a snapshot. The lock stays a snapshot of the ship number so `./histos` still boots.
+`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After a release is on Central, the next development catalog is a snapshot. The lock stays a snapshot of the ship number so `./histos` still boots.
 
 ## An operation
 

@@ -346,7 +346,7 @@ object AssetSpec extends ZIOSpecDefault:
           _          <- hold(portal, "dep-2")
           sent       <- AssetRun.publish(root, graph, Nil, github).either
           before     <- stand.seen
-          ran        <- PublishRun.drop(root, graph, github, "dep-1").either
+          ran        <- PublishRun.drop(root, graph, github, "dep-1", _ => ZIO.unit).either
           after      <- stand.seen
           order      <- first.get
           histosFile <- ZIO.attempt(Files.exists(histos))
@@ -383,7 +383,13 @@ object AssetSpec extends ZIOSpecDefault:
           _      <- hold(portal, "dep-1")
           _      <- AssetRun.publish(root, graph, List("histos"), env(stand.base))
           ran    <- PublishRun
-            .drop(root, graph, portalEnv(bound.url, env(stand.base, token = "s3cret")), "dep-1")
+            .drop(
+              root,
+              graph,
+              portalEnv(bound.url, env(stand.base, token = "s3cret")),
+              "dep-1",
+              _ => ZIO.unit,
+            )
             .either
           seen <- stand.seen
           file <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("histos"))))
@@ -411,7 +417,7 @@ object AssetSpec extends ZIOSpecDefault:
           _      <- note(root, "libs", DeploymentState.Validated, "1.0.0")
           _      <- hold(portal, "dep-1")
           ran    <- PublishRun
-            .drop(root, graph, portalEnv(bound.url, Map("HISTOS_GITHUB" -> stand.base)), "dep-1")
+            .drop(root, graph, portalEnv(bound.url, Map("HISTOS_GITHUB" -> stand.base)), "dep-1", _ => ZIO.unit)
             .either
           seen <- stand.seen
           file <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("libs"))))
@@ -435,7 +441,7 @@ object AssetSpec extends ZIOSpecDefault:
           bound  <- PortalServer.open(portal, secret, ZIO.unit)
           stand  <- AssetStand.open("asset-token")
           _      <- hold(portal, "dep-1")
-          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1").either
+          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1", _ => ZIO.unit).either
           seen   <- stand.seen
           gone   <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
         yield assertTrue(
@@ -457,7 +463,7 @@ object AssetSpec extends ZIOSpecDefault:
           stand  <- AssetStand.open("asset-token", present = false)
           _      <- note(root, "histos", DeploymentState.Validated, "1.0.0")
           _      <- hold(portal, "dep-1")
-          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1").either
+          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1", _ => ZIO.unit).either
           seen   <- stand.seen
           file   <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("histos"))))
           gone   <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))
@@ -482,7 +488,7 @@ object AssetSpec extends ZIOSpecDefault:
           stand  <- AssetStand.open("asset-token")
           _      <- note(root, "histos", DeploymentState.Validated, "1.0.0")
           _      <- hold(portal, "dep-1")
-          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1").either
+          ran    <- PublishRun.drop(root, graph, portalEnv(bound.url, env(stand.base)), "dep-1", _ => ZIO.unit).either
           seen   <- stand.seen
           file   <- ZIO.attempt(Files.exists(DeploymentFile.location(root, ShipName("histos"))))
           gone   <- ZIO.attempt(Files.exists(portal.resolve("deployments").resolve("dep-1")))

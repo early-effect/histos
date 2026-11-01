@@ -4,7 +4,7 @@
 set -eu
 umask 077
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-version=0.0.1
+version=0.0.2-SNAPSHOT
 cache=${XDG_CACHE_HOME:-${HOME:?HOME is unset}/.cache}/histos
 work=
 cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }

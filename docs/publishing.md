@@ -2,7 +2,7 @@
 
 `publish` is an effect. It requires a `Publishing`. A command closes that requirement with `provideLayer`. Anything larger is `flatMap` of those effects. The engine does not look up a publisher by name.
 
-This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. The catalog is `manual("histos", manual"0.0.1")`. Editing this file does not upload it.
+This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. The catalog is `manual("histos", manual"0.0.2-SNAPSHOT")`. Editing this file does not upload it.
 
 ## The effect
 
@@ -55,7 +55,7 @@ Sona.layer(ReleaseMode.Automatic)
 Sona.layer(ReleaseMode.Hold)
 ```
 
-The snapshot branch ignores the mode. The release branch uses it. Automatic polls until `PUBLISHED`. Hold polls until `VALIDATED`. `FAILED` stops the poll. `--automatic` is on the request, so a wrapper and the stock both see it, and it forces Automatic for that run. There is no `--hold` flag. `followUp` is `Deployment` only for Hold, and that is the promote workflow. Automatic is `FollowUp.Finished`. Secrets are the five names, because the release branch signs: `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, `PGP_KEY_HEX`.
+The snapshot branch ignores the mode. The release branch uses it. Automatic polls until `PUBLISHED`. Hold polls until `VALIDATED`. `FAILED` stops the poll. The lines go to the client, the same channel as a compile line, because the server process discards its own stdout. `building <name>` is printed before that name is staged, and `staged <artifact> <revision>` after the files exist. A local install prints `installing <artifact> <revision>`. A snapshot prints `uploading <artifact> <revision>` and `uploading...` every 30 seconds while the PUT is in flight. A release prints `signing <ship>`, `bundling <ship>`, `bundled <ship>, <n> bytes`, and `uploading <ship> to the portal`. The portal post prints `uploading bundle to the portal` when it starts, and `uploading...` if it is still running after 30 seconds. Each status is `portal <id> is <STATE>`, and it names the waited state until that state arrives. The first read, a changed state, and every thirty quiet reads print. The read itself stays at one second, so a terminal state is not delayed for the quiet interval. A status read that has not returned prints `reading portal <id>` after 30 seconds. `promoting <id>` and `dropping <id>` print before those calls. A sign, bundle, upload, or credential failure is printed when it happens, and the summary still prints when the command returns. `--automatic` is on the request, so a wrapper and the stock both see it, and it forces Automatic for that run. There is no `--hold` flag. `followUp` is `Deployment` only for Hold, and that is the promote workflow. Automatic is `FollowUp.Finished`. Secrets are the five names, because the release branch signs: `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, `PGP_KEY_HEX`.
 
 `publish snapshots` and `publish release` both provide `build.sona`. The ship version is what differs. This repository uses the default, so `0.0.1` portals and a snapshot coordinate PUTs, through the same layer.
 

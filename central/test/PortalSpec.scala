@@ -7,7 +7,7 @@ import heddle.client.ClientError
 import heddle.error.ServerError
 import heddle.server.Port
 
-import zio.{Chunk, Config, Ref, Scope, ZIO, durationInt}
+import zio.{Chunk, Config, Ref, Scope, UIO, ZIO, durationInt}
 import zio.test.*
 
 object PortalSpec extends ZIOSpecDefault:
@@ -21,6 +21,28 @@ object PortalSpec extends ZIOSpecDefault:
     """{"note":"see \"deploymentState\" now","deploymentState":"VALIDATED"}"""
 
   private val checks = suite("portal client")(
+    test("an unchanged portal state is reported again after thirty quiet reads"):
+      val (first, quiet0) = Portal.beat(0, Portal.PollChange.Changed)
+      val (notes, quiet)  =
+        List.fill(Portal.reportEvery - 1)(Portal.PollChange.Same).foldLeft((List.empty[Portal.PollNote], quiet0)) {
+          case ((seen, soFar), change) =>
+            val (note, next) = Portal.beat(soFar, change)
+            (seen :+ note, next)
+        }
+      val (due, reset)        = Portal.beat(quiet, Portal.PollChange.Same)
+      val (early, earlyQuiet) = Portal.beat(4, Portal.PollChange.Changed)
+      assertTrue(
+        first == Portal.PollNote.Say,
+        quiet0 == 0,
+        notes.forall(_ == Portal.PollNote.Wait),
+        notes.length == Portal.reportEvery - 1,
+        quiet == Portal.reportEvery - 1,
+        due == Portal.PollNote.Say,
+        reset == 0,
+        early == Portal.PollNote.Say,
+        earlyQuiet == 0,
+      )
+    ,
     test("the default portal is central and http stays on loopback"):
       val trust = PortalError.Transport(TransportFault.from(ClientError.InvalidTrust("s3cret")))
       val down  = PortalError.Transport(TransportFault.Connect("example.test", 443))
@@ -47,14 +69,21 @@ object PortalSpec extends ZIOSpecDefault:
           open <- server(User, Password, Chunk("PENDING", "VALIDATED"))
           (base, seen) = open
           id    <- ZIO.fromEither(DeploymentId.from(Id))
-          built <- layer(base, User, Password)
+          notes <- Ref.make(List.empty[String])
+          built <- layer(base, User, Password, line => notes.update(_ :+ line))
           got   <- ZIO.serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Hold)).provide(built)
           calls <- seen.get
+          lines <- notes.get
         yield assertTrue(
           got == Deployment(id, DeploymentState.Validated),
           loopback(calls, bearer(User, Password)),
           posted(calls, "USER_MANAGED", bytes),
           statuses(calls, Id) == 2,
+          lines == List(
+            "uploading bundle to the portal",
+            s"portal $Id is PENDING, waiting for VALIDATED",
+            s"portal $Id is VALIDATED",
+          ),
         )
     ,
     test("a deploymentState inside another string is not the state"):
@@ -92,13 +121,21 @@ object PortalSpec extends ZIOSpecDefault:
           open <- server(User, Password, Chunk("PENDING", "VALIDATED", "PUBLISHED"))
           (base, seen) = open
           id    <- ZIO.fromEither(DeploymentId.from(Id))
-          built <- layer(base, User, Password)
+          notes <- Ref.make(List.empty[String])
+          built <- layer(base, User, Password, line => notes.update(_ :+ line))
           got   <- ZIO.serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Automatic)).provide(built)
           calls <- seen.get
+          lines <- notes.get
         yield assertTrue(
           got == Deployment(id, DeploymentState.Published),
           posted(calls, "AUTOMATIC", bytes),
           statuses(calls, Id) == 3,
+          lines == List(
+            "uploading bundle to the portal",
+            s"portal $Id is PENDING, waiting for PUBLISHED",
+            s"portal $Id is VALIDATED, waiting for PUBLISHED",
+            s"portal $Id is PUBLISHED",
+          ),
         )
     ,
     test("FAILED stops the poll"):
@@ -107,15 +144,22 @@ object PortalSpec extends ZIOSpecDefault:
           open <- server(User, Password, Chunk("PENDING", "FAILED"))
           (base, seen) = open
           id      <- ZIO.fromEither(DeploymentId.from(Id))
-          built   <- layer(base, User, Password)
+          notes   <- Ref.make(List.empty[String])
+          built   <- layer(base, User, Password, line => notes.update(_ :+ line))
           refused <- ZIO.serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Automatic)).provide(built).either
           calls   <- seen.get
+          lines   <- notes.get
           _       <- ZIO.sleep(Portal.interval) *> ZIO.sleep(250.millis)
           after   <- seen.get
         yield assertTrue(
           refused == Left(PortalError.Failed(id)),
           statuses(calls, Id) == 2,
           after.length == calls.length,
+          lines == List(
+            "uploading bundle to the portal",
+            s"portal $Id is PENDING, waiting for PUBLISHED",
+            s"portal $Id is FAILED",
+          ),
         )
     ,
     test("promote posts and drop deletes the deployment"):
@@ -209,11 +253,11 @@ object PortalSpec extends ZIOSpecDefault:
   private def bearer(user: String, password: String): String =
     "Bearer " + BasicCredentials.render(user, password)
 
-  private def layer(base: String, user: String, password: String) =
+  private def layer(base: String, user: String, password: String, note: String => UIO[Unit] = _ => ZIO.unit) =
     for
       url  <- ZIO.fromEither(PortalBase.from(base))
       name <- ZIO.fromEither(RepositoryUser.from(user))
-    yield Portal.layer(url, RepositorySecret(name, Config.Secret(Chunk.fromArray(password.toCharArray))))
+    yield Portal.layer(url, RepositorySecret(name, Config.Secret(Chunk.fromArray(password.toCharArray))), note)
 
   private def loopback(calls: Chunk[Call], token: String): Boolean =
     calls.nonEmpty && calls.forall { call =>

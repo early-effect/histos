@@ -22,7 +22,7 @@ import zio.{System, ZIO}
 import zio.test.*
 
 object LauncherSpec extends ZIOSpecDefault:
-  private val version = "0.0.1-SNAPSHOT"
+  private val version = "0.0.2-SNAPSHOT"
 
   private val checks = suite("launcher publish")(
     test("a release ship boots the snapshot pin of that number"):
@@ -53,10 +53,10 @@ object LauncherSpec extends ZIOSpecDefault:
         windows <- Workspace.readString(root.resolve("histos.bat"))
         pin     <- LauncherPin.read(root)
       yield assertTrue(
-        posix == LauncherScript.posix("0.0.1"),
-        windows == LauncherScript.windows("0.0.1"),
+        posix == LauncherScript.posix(version),
+        windows == LauncherScript.windows(version),
         pin.version == version,
-        LauncherScript.boots("0.0.1", pin.version),
+        LauncherScript.boots(version, pin.version),
       )
     ,
     test("the api name keeps the binary suffix and the assembly name does not"):

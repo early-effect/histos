@@ -170,6 +170,7 @@ object Calls:
           jdk,
           machine.env,
           feed => speak(say, console, feed).ignore,
+          hear(say),
         ),
       )
     }
@@ -196,6 +197,7 @@ object Calls:
           jdk,
           machine.env,
           feed => speak(say, console, feed).ignore,
+          hear(say),
         ),
       )
     }
@@ -224,12 +226,13 @@ object Calls:
           machine.env,
           automatic,
           feed => speak(say, console, feed).ignore,
+          hear(say),
         ),
       )
     }
 
   def promote(repo: Path, machine: Machine, id: String, say: Say): IO[ServerError, Unit] =
-    changed(say, PublishRun.promote(repo, machine.env, id))
+    changed(say, PublishRun.promote(repo, machine.env, id, hear(say)))
 
   def drop(
       repo: Path,
@@ -238,7 +241,7 @@ object Calls:
       id: String,
       say: Say,
   ): IO[ServerError, Unit] =
-    changed(say, PublishRun.drop(repo, graph, machine.env, id))
+    changed(say, PublishRun.drop(repo, graph, machine.env, id, hear(say)))
 
   def publishAssets(
       repo: Path,
@@ -1072,6 +1075,9 @@ object Calls:
 
   def finish(say: Say, result: CallResult): IO[ServerError, Unit] =
     done(say, result)
+
+  private def hear(say: Say): String => UIO[Unit] =
+    text => told(say, text).ignore
 
   private def told(say: Say, text: String): IO[ServerError, Unit] =
     if text.isEmpty then ZIO.unit else say(Message.Event(BuildEvent.Out(text)))
