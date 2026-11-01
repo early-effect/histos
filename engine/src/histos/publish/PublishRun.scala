@@ -24,13 +24,14 @@ object PublishRun:
       tokens: List[String],
       jdk: JdkRuntime,
       env: Map[String, String],
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
+      report: CompileFeed => UIO[Unit],
+      note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
     ZIO.scoped:
       for
-        names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens))
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, report)
-        lines  <- localLines(repo, staged, LocalStock.layer >>> build.local)
+        names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, report, note)
+        lines  <- localLines(repo, staged, LocalStock.layer(note) >>> build.local)
       yield Report(show(staged, lines))
 
   def snapshots(
@@ -40,16 +41,19 @@ object PublishRun:
       tokens: List[String],
       jdk: JdkRuntime,
       env: Map[String, String],
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
+      report: CompileFeed => UIO[Unit],
+      note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
-    val layer = sonaLayer(env, build)
+    val layer = sonaLayer(env, build, note)
     ZIO.scoped:
       for
         publishing <- opened(layer)
-        names      <- ZIO.fromEither(PublishSelect.resolve(graph, tokens))
-        _          <- ZIO.when(sonaSecrets(publishing))(ZIO.fromEither(PublishWhere.snapshots(env)).unit)
-        staged     <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, report)
-        lines      <- localLines(repo, staged, layer)
+        names      <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
+        _          <- ZIO.when(sonaSecrets(publishing))(
+          ZIO.fromEither(PublishWhere.snapshots(env)).tapError(error => note(error.message)).unit
+        )
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, report, note)
+        lines  <- localLines(repo, staged, layer)
       yield Report(show(staged, lines))
 
   def release(
@@ -60,16 +64,22 @@ object PublishRun:
       jdk: JdkRuntime,
       env: Map[String, String],
       automatic: Boolean,
-      report: CompileFeed => UIO[Unit] = _ => ZIO.unit,
+      report: CompileFeed => UIO[Unit],
+      note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, ReleaseError, ReleaseReport] =
-    val layer = sonaLayer(env, build)
+    val layer = sonaLayer(env, build, note)
     ZIO.scoped:
       for
         publishing <- opened(layer)
-        _          <- ZIO.when(sonaSecrets(publishing))(SonaStock.gate(env))
-        names      <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).mapError(ReleaseError.Stage(_))
-        staged     <- stage(repo, graph, names, jdk, env, PublishWrite.Release, report).mapError(ReleaseError.Stage(_))
-        pieces     <- releasePieces(repo, staged, automatic, layer)
+        _          <- ZIO.when(sonaSecrets(publishing))(SonaStock.gate(env).tapError(error => note(error.message)))
+        names      <- ZIO
+          .fromEither(PublishSelect.resolve(graph, tokens))
+          .tapError(error => note(error.message))
+          .mapError(ReleaseError.Stage(_))
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, report, note).mapError(
+          ReleaseError.Stage(_)
+        )
+        pieces <- releasePieces(repo, staged, automatic, layer)
       yield ReleaseReport(
         staged.output.refused ++ pieces.refused,
         staged.output.held ++ pieces.held,
@@ -77,12 +87,18 @@ object PublishRun:
         pieces.deployed,
       )
 
-  def promote(repo: Path, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
-    ReleaseRun.promote(repo, env, id)
+  def promote(repo: Path, env: Map[String, String], id: String, note: String => UIO[Unit]): IO[ReleaseError, Unit] =
+    ReleaseRun.promote(repo, env, id, note)
 
   /** The graph is read for the asset name. `publish drop` still takes only a deployment id. */
-  def drop(repo: Path, graph: ProjectGraph, env: Map[String, String], id: String): IO[ReleaseError, Unit] =
-    ReleaseRun.drop(repo, graph, env, id)
+  def drop(
+      repo: Path,
+      graph: ProjectGraph,
+      env: Map[String, String],
+      id: String,
+      note: String => UIO[Unit],
+  ): IO[ReleaseError, Unit] =
+    ReleaseRun.drop(repo, graph, env, id, note)
 
   /** The jar named on the assembly, for a ship whose deployment file says `VALIDATED`. */
   def assets(
@@ -97,8 +113,12 @@ object PublishRun:
     staged.output.skipped ++ staged.output.refused ++ staged.output.held ++ lines
 
   /** Idle refuses every revision. Workflow reads that stock. A command supplies `SonaStock`. */
-  private def sonaLayer(env: Map[String, String], build: histos.HistosBuild): ZLayer[Any, Nothing, histos.Publishing] =
-    SonaStock.layer(env) >>> build.sona
+  private def sonaLayer(
+      env: Map[String, String],
+      build: histos.HistosBuild,
+      note: String => UIO[Unit],
+  ): ZLayer[Any, Nothing, histos.Publishing] =
+    SonaStock.layer(env, note) >>> build.sona
 
   private def opened(layer: ZLayer[Any, Nothing, histos.Publishing]): UIO[histos.Publishing] =
     ZIO.service[histos.Publishing].provideLayer(layer)
@@ -116,8 +136,10 @@ object PublishRun:
       env: Map[String, String],
       write: PublishWrite,
       report: CompileFeed => UIO[Unit],
+      note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, LocalPublishError, StagedTree] =
     for
+      _    <- ZIO.foreachDiscard(names)(name => note(s"building ${shown(name)}"))
       root <- ZIO.acquireRelease(
         ZIO
           .attemptBlocking(Files.createTempDirectory("histos-stage"))
@@ -125,8 +147,16 @@ object PublishRun:
       )(deleteTree)
       output <- LocalPublish
         .run(repo, graph, names, jdk, env, write, report)
+        .tapError(error => note(error.message))
         .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(root))
+      _ <- ZIO.foreachDiscard(output.modules)(module => note(s"staged ${module.artifact} ${module.revision}"))
     yield StagedTree(root, output)
+
+  private def shown(name: PublishName): String =
+    name match
+      case PublishName.Ship(ship)           => ship.value
+      case PublishName.Aggregate(aggregate) => aggregate.value
+      case PublishName.Module(module)       => module.value
 
   private def localLines(
       checkout: Path,

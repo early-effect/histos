@@ -137,12 +137,12 @@ object PortalServerSpec extends ZIOSpecDefault:
         for
           (root, base, secret) <- serve
           held                 <- upload(base, secret, bundle(), ReleaseMode.Hold)
-          _                    <- ZIO.serviceWithZIO[Portal](_.promote(held.id)).provide(Portal.layer(base, secret))
-          after                <- shown(base, secret, held.id)
-          marked               <- present(marker(root))
-          _                    <- ZIO.serviceWithZIO[Portal](_.drop(held.id)).provide(Portal.layer(base, secret))
-          dropped              <- raw(base, secret, held.id)
-          gone                 <- present(marker(root))
+          _       <- ZIO.serviceWithZIO[Portal](_.promote(held.id)).provide(Portal.layer(base, secret, _ => ZIO.unit))
+          after   <- shown(base, secret, held.id)
+          marked  <- present(marker(root))
+          _       <- ZIO.serviceWithZIO[Portal](_.drop(held.id)).provide(Portal.layer(base, secret, _ => ZIO.unit))
+          dropped <- raw(base, secret, held.id)
+          gone    <- present(marker(root))
         yield assertTrue(
           held.state == DeploymentState.Validated,
           after == Some((DeploymentState.Published, Chunk.empty)),
@@ -184,7 +184,7 @@ object PortalServerSpec extends ZIOSpecDefault:
           )
           refused <- ZIO
             .serviceWithZIO[Portal](_.upload(bundle(), ReleaseMode.Hold))
-            .provide(Portal.layer(base, bad))
+            .provide(Portal.layer(base, bad, _ => ZIO.unit))
             .either
         yield refused match
           case Left(error) =>
@@ -220,7 +220,7 @@ object PortalServerSpec extends ZIOSpecDefault:
       }.ignore
 
   private def upload(base: PortalBase, secret: RepositorySecret, zip: Chunk[Byte], mode: ReleaseMode) =
-    ZIO.serviceWithZIO[Portal](_.upload(zip, mode)).provide(Portal.layer(base, secret))
+    ZIO.serviceWithZIO[Portal](_.upload(zip, mode)).provide(Portal.layer(base, secret, _ => ZIO.unit))
 
   private def refused(
       base: PortalBase,
@@ -230,7 +230,7 @@ object PortalServerSpec extends ZIOSpecDefault:
     for
       result <- ZIO
         .serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Hold))
-        .provide(Portal.layer(base, secret))
+        .provide(Portal.layer(base, secret, _ => ZIO.unit))
         .either
       read <- result match
         case Left(PortalError.Failed(id)) =>

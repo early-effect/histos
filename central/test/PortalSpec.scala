@@ -69,16 +69,18 @@ object PortalSpec extends ZIOSpecDefault:
           open <- server(User, Password, Chunk("PENDING", "VALIDATED"))
           (base, seen) = open
           id    <- ZIO.fromEither(DeploymentId.from(Id))
-          built <- layer(base, User, Password)
+          notes <- Ref.make(List.empty[String])
+          built <- layer(base, User, Password, line => notes.update(_ :+ line))
           got   <- ZIO.serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Hold)).provide(built)
           calls <- seen.get
-          lines <- said
+          lines <- notes.get
         yield assertTrue(
           got == Deployment(id, DeploymentState.Validated),
           loopback(calls, bearer(User, Password)),
           posted(calls, "USER_MANAGED", bytes),
           statuses(calls, Id) == 2,
           lines == List(
+            "uploading bundle to the portal",
             s"portal $Id is PENDING, waiting for VALIDATED",
             s"portal $Id is VALIDATED",
           ),
@@ -119,15 +121,17 @@ object PortalSpec extends ZIOSpecDefault:
           open <- server(User, Password, Chunk("PENDING", "VALIDATED", "PUBLISHED"))
           (base, seen) = open
           id    <- ZIO.fromEither(DeploymentId.from(Id))
-          built <- layer(base, User, Password)
+          notes <- Ref.make(List.empty[String])
+          built <- layer(base, User, Password, line => notes.update(_ :+ line))
           got   <- ZIO.serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Automatic)).provide(built)
           calls <- seen.get
-          lines <- said
+          lines <- notes.get
         yield assertTrue(
           got == Deployment(id, DeploymentState.Published),
           posted(calls, "AUTOMATIC", bytes),
           statuses(calls, Id) == 3,
           lines == List(
+            "uploading bundle to the portal",
             s"portal $Id is PENDING, waiting for PUBLISHED",
             s"portal $Id is VALIDATED, waiting for PUBLISHED",
             s"portal $Id is PUBLISHED",
@@ -140,10 +144,11 @@ object PortalSpec extends ZIOSpecDefault:
           open <- server(User, Password, Chunk("PENDING", "FAILED"))
           (base, seen) = open
           id      <- ZIO.fromEither(DeploymentId.from(Id))
-          built   <- layer(base, User, Password)
+          notes   <- Ref.make(List.empty[String])
+          built   <- layer(base, User, Password, line => notes.update(_ :+ line))
           refused <- ZIO.serviceWithZIO[Portal](_.upload(bytes, ReleaseMode.Automatic)).provide(built).either
           calls   <- seen.get
-          lines   <- said
+          lines   <- notes.get
           _       <- ZIO.sleep(Portal.interval) *> ZIO.sleep(250.millis)
           after   <- seen.get
         yield assertTrue(
@@ -151,6 +156,7 @@ object PortalSpec extends ZIOSpecDefault:
           statuses(calls, Id) == 2,
           after.length == calls.length,
           lines == List(
+            "uploading bundle to the portal",
             s"portal $Id is PENDING, waiting for PUBLISHED",
             s"portal $Id is FAILED",
           ),
@@ -242,19 +248,16 @@ object PortalSpec extends ZIOSpecDefault:
           assertTrue(refused == Left(PortalError.Report), named),
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.seconds)
 
-  private def said: UIO[List[String]] =
-    TestConsole.output.map(_.map(_.stripSuffix("\n")).toList)
-
   private def deploymentPath: String = s"/api/v1/publisher/deployment/$Id"
 
   private def bearer(user: String, password: String): String =
     "Bearer " + BasicCredentials.render(user, password)
 
-  private def layer(base: String, user: String, password: String) =
+  private def layer(base: String, user: String, password: String, note: String => UIO[Unit] = _ => ZIO.unit) =
     for
       url  <- ZIO.fromEither(PortalBase.from(base))
       name <- ZIO.fromEither(RepositoryUser.from(user))
-    yield Portal.layer(url, RepositorySecret(name, Config.Secret(Chunk.fromArray(password.toCharArray))))
+    yield Portal.layer(url, RepositorySecret(name, Config.Secret(Chunk.fromArray(password.toCharArray))), note)
 
   private def loopback(calls: Chunk[Call], token: String): Boolean =
     calls.nonEmpty && calls.forall { call =>

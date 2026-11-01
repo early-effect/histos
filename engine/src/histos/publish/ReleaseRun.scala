@@ -97,7 +97,7 @@ private[publish] object ReleaseRun:
       signer      <- Signer.fromEnv(env).mapError(ReleaseError.Signer(_))
       fingerprint <- signer.fingerprint.mapError(ReleaseError.Signer(_))
       base        <- ZIO.fromEither(Preflight.portal(env).left.map(ReleaseError.Portal(_)))
-      names <- ZIO
+      names       <- ZIO
         .fromEither(PublishSelect.resolve(graph, tokens))
         .mapError(ReleaseError.Stage(_))
       dir    <- ZIO.acquireRelease(directory("histos-release"))(deleteTree)
@@ -118,12 +118,17 @@ private[publish] object ReleaseRun:
       env,
     )
 
-  def upload(repo: Path, staged: ReleaseStage, mode: ReleaseMode): IO[ReleaseError, ReleaseReport] =
+  def upload(
+      repo: Path,
+      staged: ReleaseStage,
+      mode: ReleaseMode,
+      note: String => UIO[Unit],
+  ): IO[ReleaseError, ReleaseReport] =
     val ships = grouped(staged.modules)
     for
       decided <- ZIO.foreach(ships)(ship => hold(repo, ship))
       pending = decided.collect { case Decision.Upload(ship) => ship }
-      sent <- deliver(repo, staged, pending, mode)
+      sent <- deliver(repo, staged, pending, mode, note)
     yield ReleaseReport(
       staged.refused,
       staged.held ++ decided.collect { case Decision.Held(line) => line } ++ sent.held,
@@ -131,23 +136,36 @@ private[publish] object ReleaseRun:
       sent.deployed,
     )
 
-  def promote(repo: Path, env: Map[String, String], raw: String): IO[ReleaseError, Unit] =
-    prepared(env, raw).flatMap { (base, secret, id) =>
-      use(base, secret, _.promote(id)) *> DeploymentFile.mark(repo, id, DeploymentState.Published)
-    }
+  def promote(repo: Path, env: Map[String, String], raw: String, note: String => UIO[Unit]): IO[ReleaseError, Unit] =
+    note(s"promoting $raw") *>
+      prepared(env, raw)
+        .flatMap { (base, secret, id) =>
+          use(base, secret, note, "promoting...", _.promote(id)) *>
+            DeploymentFile.mark(repo, id, DeploymentState.Published)
+        }
+        .tapError(error => note(error.message))
 
   /** Portal drop, then the local file, then the GitHub asset. The asset name and the tag's ship count are on the graph,
     * not in the deployment file. A missing file, or a ship with no asset, does not open a release socket. An asset
     * failure leaves the deployment dropped.
     */
-  def drop(repo: Path, graph: ProjectGraph, env: Map[String, String], raw: String): IO[ReleaseError, Unit] =
-    prepared(env, raw).flatMap { (base, secret, id) =>
-      for
-        _     <- use(base, secret, _.drop(id))
-        taken <- DeploymentFile.remove(repo, id)
-        _     <- erase(graph, env, taken)
-      yield ()
-    }
+  def drop(
+      repo: Path,
+      graph: ProjectGraph,
+      env: Map[String, String],
+      raw: String,
+      note: String => UIO[Unit],
+  ): IO[ReleaseError, Unit] =
+    note(s"dropping $raw") *>
+      prepared(env, raw)
+        .flatMap { (base, secret, id) =>
+          for
+            _     <- use(base, secret, note, "dropping...", _.drop(id))
+            taken <- DeploymentFile.remove(repo, id)
+            _     <- erase(graph, env, taken)
+          yield ()
+        }
+        .tapError(error => note(error.message))
 
   private def prepared(
       env: Map[String, String],
@@ -174,30 +192,44 @@ private[publish] object ReleaseRun:
       staged: ReleaseStage,
       ships: List[ShipBundle],
       mode: ReleaseMode,
+      note: String => UIO[Unit],
   ): IO[ReleaseError, Sent] =
     ships match
       case Nil => ZIO.succeed(Sent(Nil, Nil, Nil))
       case _   =>
         for
-          ready <- ZIO.foreach(ships)(ship => prepare(staged, ship))
+          ready <- ZIO.foreach(ships)(ship => prepare(staged, ship, note))
           bodies = ready.collect { case Right(body) => body }
           failed = ready.collect { case Left(line) => line }
           sent <- bodies match
             case Nil => ZIO.succeed(Sent(Nil, failed, Nil))
             case _   =>
               ZIO
-                .serviceWithZIO[Portal](portal => ZIO.foreach(bodies)(body => push(repo, staged, portal, body, mode)))
-                .provide(Portal.layer(staged.base, staged.secret).mapError(ReleaseError.Client(_)))
+                .serviceWithZIO[Portal](portal =>
+                  ZIO.foreach(bodies)(body => push(repo, staged, portal, body, mode, note))
+                )
+                .provide(Portal.layer(staged.base, staged.secret, note).mapError(ReleaseError.Client(_)))
                 .map: rows =>
                   Sent(rows.flatMap(_.held), failed ++ rows.flatMap(_.failed), rows.flatMap(_.deployed))
         yield sent
 
-  private def prepare(staged: ReleaseStage, ship: ShipBundle): UIO[Either[String, Body]] =
+  private def prepare(staged: ReleaseStage, ship: ShipBundle, note: String => UIO[Unit]): UIO[Either[String, Body]] =
     ZIO
       .scoped {
-        sign(staged.signer, ship) *> bundle(staged.root, ship)
+        note(s"signing ${ship.ship.value}") *>
+          sign(staged.signer, ship) *>
+          note(s"bundling ${ship.ship.value}") *>
+          bundle(staged.root, ship).flatMap { body =>
+            note(s"bundled ${ship.ship.value}, ${body.bytes.length} bytes").as(body)
+          }
       }
-      .fold(error => Left(s"${ship.ship.value} ${error.message}"), body => Right(body))
+      .foldZIO(
+        error =>
+          val line = s"${ship.ship.value} ${error.message}"
+          note(line).as(Left(line))
+        ,
+        body => ZIO.succeed(Right(body)),
+      )
 
   private def push(
       repo: Path,
@@ -205,27 +237,34 @@ private[publish] object ReleaseRun:
       portal: Portal,
       body: Body,
       mode: ReleaseMode,
+      note: String => UIO[Unit],
   ): UIO[Sent] =
     val gavs = Chunk.fromIterable(
       body.ship.modules.map(module => Gav(module.group.value, module.artifact, module.revision))
     )
-    Preflight
-      .release(staged.env, gavs, staged.fingerprint, portal.upload(body.bytes, mode))
-      .foldZIO(
-        error => ZIO.succeed(sentOf(body.ship.ship, error)),
-        deployment =>
-          DeploymentFile
-            .write(repo, body.ship.ship, deployment.id, deployment.state, body.ship.version)
-            .fold(
-              error => Sent(Nil, List(error.message), Nil),
-              _ =>
-                Sent(
-                  Nil,
-                  Nil,
-                  List(Deployed(body.ship.ship, deployment.id, deployment.state, body.ship.version)),
-                ),
-            ),
-      )
+    note(s"uploading ${body.ship.ship.value} to the portal") *>
+      Preflight
+        .release(staged.env, gavs, staged.fingerprint, portal.upload(body.bytes, mode))
+        .foldZIO(
+          error =>
+            val sent = sentOf(body.ship.ship, error)
+            ZIO.foreachDiscard(sent.failed ++ sent.held)(note).as(sent)
+          ,
+          deployment =>
+            DeploymentFile
+              .write(repo, body.ship.ship, deployment.id, deployment.state, body.ship.version)
+              .foldZIO(
+                error => note(error.message).as(Sent(Nil, List(error.message), Nil)),
+                _ =>
+                  ZIO.succeed(
+                    Sent(
+                      Nil,
+                      Nil,
+                      List(Deployed(body.ship.ship, deployment.id, deployment.state, body.ship.version)),
+                    )
+                  ),
+              ),
+        )
 
   private def sentOf(ship: ShipName, error: PreflightError): Sent =
     error match
@@ -327,12 +366,14 @@ private[publish] object ReleaseRun:
   private def use(
       base: PortalBase,
       secret: RepositorySecret,
+      note: String => UIO[Unit],
+      waiting: String,
       body: Portal => IO[PortalError, Unit],
   ): IO[ReleaseError, Unit] =
     ZIO
-      .serviceWithZIO[Portal](body)
+      .serviceWithZIO[Portal](portal => Portal.keep(note, waiting)(body(portal)))
       .mapError(ReleaseError.Client(_))
-      .provide(Portal.layer(base, secret).mapError(ReleaseError.Client(_)))
+      .provide(Portal.layer(base, secret, note).mapError(ReleaseError.Client(_)))
 
   private def credentials(env: Map[String, String]): Either[ReleaseError, RepositorySecret] =
     PublishWhere.snapshots(env) match

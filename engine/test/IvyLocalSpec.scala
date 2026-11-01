@@ -13,7 +13,7 @@ import zio.test.*
 object IvyLocalSpec extends ZIOSpecDefault:
   def spec = suite("ivy local")(
     test("default repositories fetch the jar publishLocal installed"):
-      installed.provideLayer(LocalStock.layer)
+      installed.provideLayer(LocalStock.layer(_ => ZIO.unit))
   )
 
   private val installed =

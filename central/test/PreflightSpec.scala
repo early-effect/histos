@@ -205,7 +205,7 @@ object PreflightSpec extends ZIOSpecDefault:
               ZIO.serviceWithZIO[Portal](_.upload(bundle(), ReleaseMode.Hold)),
               stand.hosts,
             )
-            .provideSome[Scope](Portal.layer(base, secret))
+            .provideSome[Scope](Portal.layer(base, secret, _ => ZIO.unit))
           during <- stand.hits.get
           repo   <- probe(stand.origin, Method.HEAD, pom(Artifact, Version))
           looked <- probe(

@@ -108,7 +108,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           releases <- exists(root.resolve(".histos").resolve("releases"))
           promoted <- report.deployed match
             case List(deployed) =>
-              PublishRun.promote(root, env, deployed.id.value) *>
+              PublishRun.promote(root, env, deployed.id.value, _ => ZIO.unit) *>
                 text(deployment(root, "libs"))
                   .zip(states(portal, ids))
                   .zip(exists(published(portal, "core_3", "1.0.0")))
@@ -163,8 +163,9 @@ object ReleaseSpec extends ZIOSpecDefault:
           second  <- publish(root, built, jdk, env, ReleaseMode.Automatic)
           stayed  <- deploymentIds(portal)
           dropped <- first.deployed match
-            case List(deployed) => PublishRun.drop(root, built, env, deployed.id.value).as(deployed.id.value)
-            case _              => ZIO.succeed("")
+            case List(deployed) =>
+              PublishRun.drop(root, built, env, deployed.id.value, _ => ZIO.unit).as(deployed.id.value)
+            case _ => ZIO.succeed("")
           goneId   <- exists(portal.resolve("deployments").resolve(dropped))
           goneMark <- exists(published(portal, "core_3", "1.0.0"))
           goneFile <- exists(deployment(root, "libs"))
@@ -221,8 +222,10 @@ object ReleaseSpec extends ZIOSpecDefault:
               histos.ToolFixture.resolver
             )
           pom = staged.root.resolve("com/example/site_3/2.0.0/site_3-2.0.0.pom")
+          heard    <- Ref.make(List.empty[String])
           _        <- ZIO.attempt(Files.writeString(pom, ""))
-          report   <- ReleaseRun.upload(root, staged, ReleaseMode.Hold)
+          report   <- ReleaseRun.upload(root, staged, ReleaseMode.Hold, line => heard.update(_ :+ line))
+          lines    <- heard.get
           ids      <- deploymentIds(portal)
           found    <- ZIO.foreach(ids)(id => token(portal, id).map(id -> _))
           good     <- text(deployment(root, "libs"))
@@ -241,6 +244,9 @@ object ReleaseSpec extends ZIOSpecDefault:
             good == file(held, "VALIDATED", "1.0.0"),
             !extra,
             !releases,
+            lines.exists(_.startsWith("signing ")),
+            lines.exists(_.startsWith("bundling ")),
+            lines.exists(_.startsWith("uploading ")),
           )
       }
 
@@ -310,7 +316,7 @@ object ReleaseSpec extends ZIOSpecDefault:
             case List(deployed) => Some(deployed.id.value)
             case _              => None
           _ <- id match
-            case Some(value) => PublishRun.promote(root, env, value)
+            case Some(value) => PublishRun.promote(root, env, value, _ => ZIO.unit)
             case None        => ZIO.unit
           after <- id match
             case Some(_) => text(deployment(root, "histos"))
@@ -410,10 +416,10 @@ object ReleaseSpec extends ZIOSpecDefault:
           sent      <- stand.seen
           _         <-
             if id.isEmpty then ZIO.unit
-            else idBox.set(id) *> PublishRun.promote(root, env, id)
+            else idBox.set(id) *> PublishRun.promote(root, env, id, _ => ZIO.unit)
           marked    <- exists(published(portal, "tool", "1.0.0"))
           libMarked <- exists(published(portal, "core_3", "1.0.0"))
-          _         <- if id.isEmpty then ZIO.unit else PublishRun.drop(root, built, env, id)
+          _         <- if id.isEmpty then ZIO.unit else PublishRun.drop(root, built, env, id, _ => ZIO.unit)
           goneId    <- exists(portal.resolve("deployments").resolve(id))
           goneTool  <- exists(published(portal, "tool", "1.0.0"))
           goneLib   <- exists(published(portal, "core_3", "1.0.0"))
@@ -521,7 +527,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           def graph: Either[histos.BuildError, histos.ProjectGraph] = Right(built)
           override def sona                                         = histos.Sona.layer(histos.ReleaseMode.Hold)
     PublishRun
-      .release(root, built, build, Nil, jdk, env, automatic = false)
+      .release(root, built, build, Nil, jdk, env, false, _ => ZIO.unit, _ => ZIO.unit)
       .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
 
   private def signing(url: String, armor: Chunk[Byte]): Map[String, String] =
