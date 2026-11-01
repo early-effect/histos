@@ -26,6 +26,8 @@ Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `w
 
 The script version is the ship number, or the lock cannot boot. The lock version is that number, or that number with `-SNAPSHOT` appended. This checkout's script stays `0.0.1` and the lock stays `0.0.1-SNAPSHOT`, which is the pin that contains `ScalacFlag.MaxInlines`. The ship number is `0.0.2`. A script of `0.0.2` waits until the pin is `0.0.2-SNAPSHOT`.
 
+`./dogfood` is a scala-cli script, the macOS and Linux meta-build. It compiles this checkout with scala-cli and runs that jar. There is no Windows script. It is not a consumer launcher, and `workflow --update` does not write it. A stamp of the script, `.histos/dependencies.lock`, and `api/src`, `central/src`, `engine/src`, and `app/src` decides the compile. A match runs `.histos/dogfood/histos.jar` with the same arguments. The jar carries `bootstrap/histos-api.jar`, so [histos.scala](histos.scala) compiles against this commit. It does not write `dist/histos.jar`, `.histos/assembly.sha256`, or the launcher lock. `.github/workflows/dogfood.yml` installs scala-cli and runs that check. `ci.yml` still runs the pin.
+
 ## Publishing
 
 The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish snapshots`, and `publish release` are three commands. The last two close the build's `sona` layer. The staged revision chooses the Sonatype branch. The command name does not.

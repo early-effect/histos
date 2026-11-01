@@ -10,6 +10,7 @@ target/
 .histos/toolchain.local
 .histos/node.local
 .histos/assembly.sha256
+.histos/dogfood/
 .histos/launcher-cache/
 .histos/launcher-update.lock
 .histos/.launcher-*.tmp

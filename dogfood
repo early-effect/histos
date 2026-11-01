@@ -1,0 +1,434 @@
+#!/usr/bin/env -S scala-cli shebang --jvm system --server=false --auto-setup-bsp=false
+
+// This checkout's meta-build, for macOS and Linux. There is no Windows script.
+// `workflow --update` does not write this file.
+
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Path, Paths, StandardCopyOption}
+import java.security.MessageDigest
+import java.util.Locale
+import scala.jdk.CollectionConverters.*
+
+enum Keep:
+  case Cell(name: String)
+  case Skip
+
+final case class Artifact(cell: String, group: String, name: String, version: String, sha: String)
+final case class Lock(scalaVersion: Map[String, String], artifacts: Vector[Artifact])
+final case class Step(module: String, cells: List[String], upstream: List[String], flags: List[String])
+
+final case class Layout(
+  root: Path,
+  out: Path,
+  lib: Path,
+  classes: Path,
+  jar: Path,
+  stampFile: Path,
+  lockFile: Path,
+)
+
+val Modules = List("api", "central", "engine", "app")
+val Steps = List(
+  Step("api", List("api"), Nil, Nil),
+  Step("central", List("api", "central"), List("api"), Nil),
+  Step("engine", List("api", "central", "engine"), List("api", "central"), Nil),
+  Step(
+    "app",
+    List("api", "central", "engine", "app"),
+    List("api", "central", "engine"),
+    List("-Xmax-inlines:128"),
+  ),
+)
+
+def fail(message: String): Nothing =
+  System.err.println(s"dogfood: $message")
+  sys.exit(1)
+
+def say(message: String): Unit =
+  println(s"dogfood: $message")
+
+def onPath(name: String): Unit =
+  val dirs = Option(System.getenv("PATH")).getOrElse("")
+  val found = dirs.split(java.io.File.pathSeparator).exists { dir =>
+    dir.nonEmpty && Files.isExecutable(Paths.get(dir).resolve(name))
+  }
+  if !found then fail(s"$name is not on PATH")
+
+def sha256(path: Path): String =
+  val digest = MessageDigest.getInstance("SHA-256")
+  val input = Files.newInputStream(path)
+  try
+    val buffer = new Array[Byte](65536)
+    var n = input.read(buffer)
+    while n >= 0 do
+      if n > 0 then digest.update(buffer, 0, n)
+      n = input.read(buffer)
+  finally input.close()
+  hex(digest.digest())
+
+def sha256Text(text: String): String =
+  val digest = MessageDigest.getInstance("SHA-256")
+  hex(digest.digest(text.getBytes(StandardCharsets.UTF_8)))
+
+def hex(bytes: Array[Byte]): String =
+  val out = new java.lang.StringBuilder(bytes.length * 2)
+  bytes.foreach { byte =>
+    val value = byte & 0xff
+    out.append(Character.forDigit(value >> 4, 16))
+    out.append(Character.forDigit(value & 0xf, 16))
+  }
+  out.toString
+
+def fileName(path: Path): String =
+  if path.getNameCount == 0 then "" else path.getFileName.toString
+
+def isVisible(base: Path, file: Path): Boolean =
+  !base.relativize(file).iterator.asScala.exists(part => fileName(part).startsWith("."))
+
+def visibleFiles(base: Path): List[Path] =
+  if !Files.isDirectory(base) then Nil
+  else
+    val stream = Files.walk(base)
+    try
+      stream.iterator.asScala.filter { path =>
+        Files.isRegularFile(path) && isVisible(base, path)
+      }.toList
+    finally stream.close()
+
+def deleteTree(path: Path): Unit =
+  if Files.isRegularFile(path) || Files.isSymbolicLink(path) then Files.deleteIfExists(path)
+  else if Files.isDirectory(path) then
+    val stream = Files.walk(path)
+    val paths =
+      try stream.iterator.asScala.toList
+      finally stream.close()
+    paths.sortBy(_.getNameCount).reverse.foreach(Files.deleteIfExists(_))
+
+def copyInto(from: Path, to: Path): Unit =
+  if !Files.isDirectory(from) then fail(s"missing $from")
+  val stream = Files.walk(from)
+  val paths =
+    try stream.iterator.asScala.toList
+    finally stream.close()
+  paths.sortBy(_.getNameCount).foreach { path =>
+    val dest = to.resolve(from.relativize(path).toString)
+    if Files.isDirectory(path) then Files.createDirectories(dest)
+    else Files.copy(path, dest, StandardCopyOption.REPLACE_EXISTING)
+  }
+
+def run(layout: Layout, command: List[String]): Int =
+  val process =
+    try
+      new ProcessBuilder(command.asJava).directory(layout.root.toFile).inheritIO().start()
+    catch case _: java.io.IOException => fail(s"could not run ${command.mkString(" ")}")
+  process.waitFor()
+
+def capture(layout: Layout, command: List[String]): String =
+  val process =
+    try
+      new ProcessBuilder(command.asJava)
+        .directory(layout.root.toFile)
+        .redirectError(ProcessBuilder.Redirect.INHERIT)
+        .start()
+    catch case _: java.io.IOException => fail(s"could not run ${command.mkString(" ")}")
+  val output = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+  val code = process.waitFor()
+  if code != 0 then fail(s"${command.mkString(" ")} failed ($code)")
+  output
+
+def fields(line: String): List[String] =
+  line.split("\\s+").toList.filter(_.nonEmpty)
+
+def checkSha(group: String, name: String, version: String, raw: String): String =
+  val sha = raw.toLowerCase(Locale.ROOT)
+  val hexDigits = sha.forall(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))
+  if sha.length == 64 && hexDigits then sha
+  else fail(s"bad sha for $group:$name:$version")
+
+def parse(text: String): Lock =
+  val lines = text.split("\n", -1).toList.map(_.stripSuffix("\r")).filter(_.nonEmpty)
+  def loop(rest: List[String], mode: Keep, versions: Map[String, String], artifacts: Vector[Artifact]): Lock =
+    rest match
+      case Nil => Lock(versions, artifacts)
+      case line :: tail =>
+        fields(line) match
+          case "cell" :: name :: version :: "jvm" :: Nil if Modules.contains(name) =>
+            if versions.contains(name) then fail(s"duplicate $name cell")
+            loop(tail, Keep.Cell(name), versions.updated(name, version), artifacts)
+          case "cell" :: name :: _ :: platform :: Nil if Modules.contains(name) =>
+            fail(s"$name is $platform, not jvm")
+          case "cell" :: _ :: _ :: _ :: Nil =>
+            loop(tail, Keep.Skip, versions, artifacts)
+          case "cell" :: _ =>
+            fail(s"bad cell line: $line")
+          case "test" :: _ =>
+            loop(tail, Keep.Skip, versions, artifacts)
+          case "artifact" :: group :: name :: version :: sha :: "central" :: Nil =>
+            mode match
+              case Keep.Skip => loop(tail, mode, versions, artifacts)
+              case Keep.Cell(cell) =>
+                val checked = checkSha(group, name, version, sha)
+                val artifact = Artifact(cell, group, name, version, checked)
+                loop(tail, mode, versions, artifacts :+ artifact)
+          case "artifact" :: group :: name :: version :: _ :: repo :: Nil =>
+            mode match
+              case Keep.Skip => loop(tail, mode, versions, artifacts)
+              case Keep.Cell(_) => fail(s"$group:$name:$version is in '$repo', not central")
+          case "artifact" :: _ =>
+            mode match
+              case Keep.Skip => loop(tail, mode, versions, artifacts)
+              case Keep.Cell(_) => fail(s"bad artifact line: $line")
+          case _ =>
+            loop(tail, mode, versions, artifacts)
+  val parsed = loop(lines, Keep.Skip, Map.empty, Vector.empty)
+  Modules.foreach { name =>
+    if !parsed.scalaVersion.contains(name) then fail(s"lock has no $name cell")
+  }
+  parsed
+
+def isStdlib(name: String): Boolean =
+  name == "scala-library" || name == "scala3-library_3"
+
+def scalaVersion(lock: Lock, module: String): String =
+  lock.scalaVersion.get(module) match
+    case Some(version) => version
+    case None => fail(s"lock has no $module cell")
+
+def runtimeSha(lock: Lock): String =
+  val version = scalaVersion(lock, "engine")
+  val compiler = lock.artifacts.exists(artifact => artifact.cell == "engine" && artifact.name == "scala3-compiler_3")
+  if !compiler then fail("engine cell has no scala3-compiler_3")
+  lock.artifacts.collectFirst {
+    case artifact
+        if artifact.cell == "engine" && artifact.name == "scala-library" && artifact.version == version =>
+      artifact.sha
+  } match
+    case Some(sha) => sha
+    case None => fail(s"engine cell has no scala-library $version")
+
+def mavenUrl(artifact: Artifact): String =
+  val group = artifact.group.replace('.', '/')
+  val name = artifact.name
+  val version = artifact.version
+  s"https://repo1.maven.org/maven2/$group/$name/$version/$name-$version.jar"
+
+def fetch(layout: Layout, artifact: Artifact): Unit =
+  val dest = layout.lib.resolve(s"${artifact.sha}.jar")
+  if Files.isRegularFile(dest) && sha256(dest) == artifact.sha then ()
+  else
+    say(s"fetching ${artifact.group}:${artifact.name}:${artifact.version}")
+    val partial = layout.lib.resolve(s".partial-${artifact.sha}")
+    val code = run(
+      layout,
+      List(
+        "curl",
+        "-fsSL",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        mavenUrl(artifact),
+        "-o",
+        partial.toString,
+      ),
+    )
+    if code != 0 then
+      Files.deleteIfExists(partial)
+      fail(s"download failed: ${artifact.group}:${artifact.name}:${artifact.version}")
+    val got = sha256(partial)
+    if got != artifact.sha then
+      Files.deleteIfExists(partial)
+      fail(s"checksum mismatch: ${artifact.group}:${artifact.name}:${artifact.version}")
+    Files.move(partial, dest, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+
+def compileClasspath(layout: Layout, lock: Lock, step: Step): String =
+  val dirs = step.upstream.map(name => layout.classes.resolve(name).toString)
+  val jars = step.cells.flatMap { cell =>
+    lock.artifacts.collect {
+      case artifact if artifact.cell == cell && !isStdlib(artifact.name) =>
+        layout.lib.resolve(s"${artifact.sha}.jar").toString
+    }
+  }.distinct
+  (dirs ++ jars).mkString(java.io.File.pathSeparator)
+
+def copyResources(src: Path, dest: Path): Unit =
+  visibleFiles(src).filter(path => !fileName(path).endsWith(".scala")).foreach { file =>
+    val rel = src.relativize(file)
+    val target = dest.resolve(rel.toString)
+    if rel.getNameCount > 1 then Files.createDirectories(dest.resolve(rel.getParent.toString))
+    Files.copy(file, target, StandardCopyOption.REPLACE_EXISTING)
+  }
+
+def compileOne(layout: Layout, lock: Lock, step: Step): Int =
+  say(s"compiling ${step.module}")
+  val dest = layout.classes.resolve(step.module)
+  deleteTree(dest)
+  Files.createDirectories(dest)
+  val src = layout.root.resolve(step.module).resolve("src")
+  val sources = visibleFiles(src).filter(path => fileName(path).endsWith(".scala")).sortBy(_.toString)
+  if sources.isEmpty then fail(s"${step.module} has no sources")
+  val workspace = layout.out.resolve("workspace").resolve(step.module)
+  Files.createDirectories(workspace)
+  val classpath = compileClasspath(layout, lock, step)
+  val classpathArgs = if classpath.isEmpty then Nil else List("--classpath", classpath)
+  // One directory input. A file list makes scala-cli warn and pick the first file's parent as the root.
+  val command = List(
+    "scala-cli",
+    "compile",
+    "--server=false",
+    "--jvm",
+    "system",
+    "--scala",
+    scalaVersion(lock, step.module),
+    "--auto-setup-bsp=false",
+    "--workspace",
+    workspace.toString,
+    "-d",
+    dest.toString,
+  ) ++ classpathArgs ++ step.flags ++ List(src.toString)
+  val code = run(layout, command)
+  if code == 0 then copyResources(src, dest)
+  code
+
+def runtimeNames(lock: Lock, runtime: String): List[String] =
+  val rest = List("app", "engine", "central", "api").flatMap { cell =>
+    lock.artifacts.collect {
+      case artifact if artifact.cell == cell && !isStdlib(artifact.name) => artifact.sha
+    }
+  }
+  (runtime :: rest).distinct
+
+def manifestText(names: List[String]): String =
+  val nl = "\r\n"
+  val written = new java.lang.StringBuilder
+  def emit(line: String, text: String): String =
+    if line.length + text.length <= 72 then line + text
+    else
+      val room = 72 - line.length
+      if room <= 0 then
+        written.append(line).append(nl)
+        emit(" ", text)
+      else
+        written.append(line).append(text.substring(0, room)).append(nl)
+        emit(" ", text.substring(room))
+  def fixed(line: String): Unit =
+    written.append(line).append(nl)
+  fixed("Manifest-Version: 1.0")
+  fixed("Main-Class: histos.cli.Main")
+  fixed("Enable-Native-Access: ALL-UNNAMED")
+  val tail = names.foldLeft("Class-Path:")((line, sha) => emit(line, s" lib/$sha.jar"))
+  written.append(tail).append(nl).append(nl)
+  written.toString
+
+def packIn(layout: Layout, work: Path, lock: Lock, runtime: String, stamp: String): Option[String] =
+  val stage = work.resolve("stage")
+  Files.createDirectories(stage.resolve("bootstrap"))
+  Modules.foreach(module => copyInto(layout.classes.resolve(module), stage))
+  val apiJar = work.resolve("histos-api.jar")
+  val apiClasses = layout.classes.resolve("api").toString
+  if run(layout, List("jar", "cf", apiJar.toString, "-C", apiClasses, ".")) != 0 then
+    Some("could not pack bootstrap/histos-api.jar")
+  else
+    Files.copy(
+      apiJar,
+      stage.resolve("bootstrap").resolve("histos-api.jar"),
+      StandardCopyOption.REPLACE_EXISTING,
+    )
+    val manifestPath = work.resolve("manifest.mf")
+    Files.writeString(manifestPath, manifestText(runtimeNames(lock, runtime)), StandardCharsets.UTF_8)
+    val tmp = layout.out.resolve("histos.jar.tmp")
+    Files.deleteIfExists(tmp)
+    val packed = run(layout, List("jar", "cfm", tmp.toString, manifestPath.toString, "-C", stage.toString, "."))
+    if packed != 0 then Some("could not pack the jar")
+    else
+      val entries = capture(layout, List("jar", "tf", tmp.toString)).linesIterator.map(_.stripSuffix("\r")).toSet
+      if !entries.contains("histos/cli/Main.class") then Some("jar has no histos.cli.Main")
+      else if !entries.contains("bootstrap/histos-api.jar") then Some("jar has no bootstrap/histos-api.jar")
+      else
+        Files.move(tmp, layout.jar, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        val stampTmp = layout.out.resolve("stamp.tmp")
+        Files.writeString(stampTmp, stamp + "\n", StandardCharsets.UTF_8)
+        Files.move(stampTmp, layout.stampFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+        deleteTree(layout.classes)
+        None
+
+def pack(layout: Layout, lock: Lock, runtime: String, stamp: String): Unit =
+  say("packing")
+  Files.createDirectories(layout.out)
+  val work = Files.createTempDirectory(layout.out, ".work-")
+  val error =
+    try packIn(layout, work, lock, runtime, stamp)
+    finally deleteTree(work)
+  error match
+    case None => ()
+    case Some(message) => fail(message)
+
+def jvmOpts(layout: Layout): List[String] =
+  val file = layout.root.resolve(".jvmopts")
+  if !Files.isRegularFile(file) then Nil
+  else
+    Files.readAllLines(file, StandardCharsets.UTF_8).asScala.toList.flatMap { line =>
+      line match
+        case "" => None
+        case comment if comment.startsWith("#") => None
+        case "-jar" | "-m" | "--module" => fail(s"jvm option selects the program: $line")
+        case at if at.startsWith("@") => fail(s"jvm option selects the program: $line")
+        case opt => Some(opt)
+    }
+
+def currentStamp(layout: Layout): String =
+  val found = Modules.flatMap { module =>
+    visibleFiles(layout.root.resolve(module).resolve("src"))
+  }.sortBy(_.toString)
+  val files = layout.root.resolve("dogfood") :: layout.lockFile :: found
+  val body = files.map { file =>
+    if !Files.isRegularFile(file) then fail(s"missing $file")
+    s"${layout.root.relativize(file)} ${sha256(file)}\n"
+  }.mkString
+  sha256Text(body)
+
+def storedStamp(layout: Layout): Option[String] =
+  if !Files.isRegularFile(layout.stampFile) then None
+  else
+    val text = Files.readString(layout.stampFile, StandardCharsets.UTF_8).filterNot(_.isWhitespace)
+    if text.isEmpty then None else Some(text)
+
+def build(layout: Layout, stamp: String): Unit =
+  val lock = parse(Files.readString(layout.lockFile, StandardCharsets.UTF_8))
+  Files.createDirectories(layout.lib)
+  lock.artifacts.distinctBy(_.sha).foreach(artifact => fetch(layout, artifact))
+  val runtime = runtimeSha(lock)
+  Files.createDirectories(layout.classes)
+  val code = Steps.foldLeft(0) { (soFar, step) =>
+    if soFar != 0 then soFar else compileOne(layout, lock, step)
+  }
+  if code != 0 then sys.exit(code)
+  pack(layout, lock, runtime, stamp)
+
+val script = Paths.get(scriptPath).toAbsolutePath.normalize
+val root = if script.getNameCount == 0 then fail(s"script has no directory: $scriptPath") else script.getParent
+val out = root.resolve(".histos").resolve("dogfood")
+val layout = Layout(
+  root,
+  out,
+  out.resolve("lib"),
+  out.resolve("classes"),
+  out.resolve("histos.jar"),
+  out.resolve("stamp"),
+  root.resolve(".histos").resolve("dependencies.lock"),
+)
+
+onPath("java")
+onPath("jar")
+onPath("curl")
+onPath("scala-cli")
+if !Files.isRegularFile(layout.lockFile) then fail("missing .histos/dependencies.lock")
+val stamp = currentStamp(layout)
+val opts = jvmOpts(layout)
+if storedStamp(layout).contains(stamp) && Files.isRegularFile(layout.jar) then say("current")
+else build(layout, stamp)
+val status = run(
+  layout,
+  List("java") ++ opts ++ List("--enable-native-access=ALL-UNNAMED", "-jar", layout.jar.toString) ++ args.toList,
+)
+sys.exit(status)
