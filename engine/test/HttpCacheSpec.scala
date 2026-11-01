@@ -18,10 +18,10 @@ object HttpCacheSpec extends ZIOSpecDefault:
 
   private val encoded = suite("action result")(
     test("a zero size is omitted and a non-zero size is a varint"):
-      val empty  = Digest.ofBytes(Chunk.empty)
+      val empty  = ActionDigest.ofBytes(Chunk.empty)
       val text   = Chunk.fromArray("hi".getBytes(StandardCharsets.UTF_8))
-      val output = Digest.ofBytes(text)
-      val wide   = Digest.ofBytes(Chunk.single(9.toByte))
+      val output = ActionDigest.ofBytes(text)
+      val wide   = ActionDigest.ofBytes(Chunk.single(9.toByte))
       val zero   = framed(empty.value, Array.empty)
       val two    = framed(output.value, Array(0x10.toByte, 2.toByte))
       val big    = framed(wide.value, Array(0x10.toByte, 0xc8.toByte, 0x01.toByte))
@@ -103,7 +103,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           cache <- stand.cache(RemoteMode.Write, CacheNamespace.Main)
           action = digest("action")
           bytes  = utf8("compile")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- cache.store(action, bytes)
           found <- cache.find(action)
           calls <- stand.calls
@@ -123,7 +123,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           stand <- Stand.open
           cache <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
           action  = digest("dangling")
-          missing = Digest.ofBytes(Chunk.single(7.toByte))
+          missing = ActionDigest.ofBytes(Chunk.single(7.toByte))
           _     <- stand.plantAc("main/ac", action.value, ActionResult.encode(missing, 1))
           found <- cache.find(action).either
           calls <- stand.calls
@@ -151,7 +151,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           reader <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
           action = digest("read")
           bytes  = utf8("from-remote")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _       <- writer.store(action, bytes)
           found   <- reader.find(action)
           refused <- reader.store(action, bytes).either
@@ -184,7 +184,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           cache <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
           action = digest("mismatch")
           bytes  = utf8("right")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- stand.plantCas(output.value, utf8("nope"))
           _     <- stand.plantAc("main/ac", action.value, ActionResult.encode(output, bytes.length))
           found <- cache.find(action).either
@@ -211,7 +211,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           cache <- stand.cache(RemoteMode.Write, CacheNamespace.Main)
           action = digest("status")
           bytes  = utf8("blob")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _       <- stand.fail(500)
           refused <- cache.store(action, bytes).either
           found   <- cache.find(action)
@@ -230,7 +230,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           reader <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
           action = digest("pr-only")
           bytes  = utf8("pull-request")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- writer.store(action, bytes)
           found <- reader.find(action)
           calls <- stand.calls
@@ -251,7 +251,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           reader <- stand.cache(RemoteMode.Read, pullRequest)
           action = digest("shared")
           bytes  = utf8("from-main")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- writer.store(action, bytes)
           found <- reader.find(action)
           calls <- stand.calls
@@ -273,7 +273,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           cache <- stand.cache(RemoteMode.Write, pullRequest)
           action = digest("pr-hit")
           bytes  = utf8("own")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- cache.store(action, bytes)
           found <- cache.find(action)
           calls <- stand.calls
@@ -293,9 +293,9 @@ object HttpCacheSpec extends ZIOSpecDefault:
           stand <- Stand.open
           cache <- stand.cache(RemoteMode.Read, pullRequest)
           action  = digest("pr-dangling")
-          missing = Digest.ofBytes(Chunk.single(7.toByte))
+          missing = ActionDigest.ofBytes(Chunk.single(7.toByte))
           kept    = utf8("on-main")
-          output  = Digest.ofBytes(kept)
+          output  = ActionDigest.ofBytes(kept)
           _     <- stand.plantCas(output.value, kept)
           _     <- stand.plantAc("main/ac", action.value, ActionResult.encode(output, kept.length))
           _     <- stand.plantAc("pr/1/ac", action.value, ActionResult.encode(missing, 1))
@@ -313,7 +313,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           cache <- stand.cache(RemoteMode.Read, pullRequest)
           action = digest("pr-index")
           bytes  = utf8("on-main")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- stand.plantCas(output.value, bytes)
           _     <- stand.plantAc("main/ac", action.value, ActionResult.encode(output, bytes.length))
           _     <- stand.plantAc("pr/1/ac", action.value, utf8("nope"))
@@ -331,7 +331,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           cache <- stand.cache(RemoteMode.Read, pullRequest)
           action = digest("pr-status")
           bytes  = utf8("on-main")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- stand.plantCas(output.value, bytes)
           _     <- stand.plantAc("main/ac", action.value, ActionResult.encode(output, bytes.length))
           _     <- stand.fail(500)
@@ -352,7 +352,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           reader <- stand.cache(RemoteMode.Read, CacheNamespace.Main)
           action = digest("dev-only")
           bytes  = utf8("laptop")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- writer.store(action, bytes)
           found <- reader.find(action)
           calls <- stand.calls
@@ -375,7 +375,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           reader <- stand.cache(RemoteMode.Read, dev)
           action = digest("dev-shared")
           bytes  = utf8("from-main")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- writer.store(action, bytes)
           found <- reader.find(action)
           calls <- stand.calls
@@ -398,7 +398,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           pr    <- stand.cache(RemoteMode.Write, pullRequest)
           action = digest("shared-purge")
           bytes  = utf8("shared")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- main.store(action, bytes)
           _     <- pr.store(action, bytes)
           _     <- pr.purge
@@ -431,7 +431,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           pr    <- stand.cache(RemoteMode.Write, pullRequest)
           action = digest("orphan")
           bytes  = utf8("only-pr")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- pr.store(action, bytes)
           _     <- pr.purge
           found <- pr.find(action)
@@ -469,13 +469,13 @@ object HttpCacheSpec extends ZIOSpecDefault:
           kept == Some(right),
           gone == None,
           calls == List(
-            s"PUT /cas/${Digest.ofBytes(left).value}",
+            s"PUT /cas/${ActionDigest.ofBytes(left).value}",
             s"PUT /pr/1/ac/${first.value}",
-            s"PUT /cas/${Digest.ofBytes(right).value}",
+            s"PUT /cas/${ActionDigest.ofBytes(right).value}",
             s"PUT /pr/11/ac/${second.value}",
             "DELETE /pr/1/ac",
             s"GET /pr/11/ac/${second.value}",
-            s"GET /cas/${Digest.ofBytes(right).value}",
+            s"GET /cas/${ActionDigest.ofBytes(right).value}",
             s"GET /pr/1/ac/${first.value}",
             s"GET /main/ac/${first.value}",
           ),
@@ -501,13 +501,13 @@ object HttpCacheSpec extends ZIOSpecDefault:
           kept == Some(prBytes),
           gone == None,
           calls == List(
-            s"PUT /cas/${Digest.ofBytes(prBytes).value}",
+            s"PUT /cas/${ActionDigest.ofBytes(prBytes).value}",
             s"PUT /pr/1/ac/${prAction.value}",
-            s"PUT /cas/${Digest.ofBytes(mainBytes).value}",
+            s"PUT /cas/${ActionDigest.ofBytes(mainBytes).value}",
             s"PUT /main/ac/${mainAction.value}",
             "DELETE /main/ac",
             s"GET /pr/1/ac/${prAction.value}",
-            s"GET /cas/${Digest.ofBytes(prBytes).value}",
+            s"GET /cas/${ActionDigest.ofBytes(prBytes).value}",
             s"GET /main/ac/${mainAction.value}",
           ),
         )
@@ -522,7 +522,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           main   <- stand.cache(RemoteMode.Write, CacheNamespace.Main)
           action = digest("dev-purge")
           bytes  = utf8("laptop-purge")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _     <- writer.store(action, bytes)
           _     <- main.store(action, bytes)
           _     <- writer.purge
@@ -563,7 +563,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
           pr    <- stand.cache(RemoteMode.Write, pullRequest)
           action = digest("purge-status")
           bytes  = utf8("kept")
-          output = Digest.ofBytes(bytes)
+          output = ActionDigest.ofBytes(bytes)
           _       <- pr.store(action, bytes)
           _       <- stand.fail(500)
           refused <- pr.purge.either
@@ -615,9 +615,9 @@ object HttpCacheSpec extends ZIOSpecDefault:
           bytesL = utf8("left-bytes")
           bytesR = utf8("right-bytes")
           bytesE = utf8("eleven-bytes")
-          outL   = Digest.ofBytes(bytesL)
-          outR   = Digest.ofBytes(bytesR)
-          outE   = Digest.ofBytes(bytesE)
+          outL   = ActionDigest.ofBytes(bytesL)
+          outR   = ActionDigest.ofBytes(bytesR)
+          outE   = ActionDigest.ofBytes(bytesE)
           _        <- pr.store(left, bytesL)
           _        <- pr.store(right, bytesR)
           _        <- eleven.store(other, bytesE)
@@ -705,7 +705,7 @@ object HttpCacheSpec extends ZIOSpecDefault:
   )
 
   private def digest(label: String): Digest =
-    Digest.ofBytes(utf8(label))
+    ActionDigest.ofBytes(utf8(label))
 
   private def utf8(text: String): Chunk[Byte] =
     Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))

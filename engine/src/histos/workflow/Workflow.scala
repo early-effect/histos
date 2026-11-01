@@ -56,50 +56,8 @@ enum TestJob:
   case Aggregate(target: TestTarget)
   case Split(module: ModuleRef, platform: PlatformRef, version: VersionRef)
 
-/** What `histos workflow` does. The command token is `check` or `update`. */
-enum WorkflowAction:
-  case Check, Update
-
-  def token: String = this match
-    case Check  => "check"
-    case Update => "update"
-end WorkflowAction
-
-object WorkflowAction:
-  private val known: List[WorkflowAction] = List(Check, Update)
-
-  def from(raw: String): Either[WorkflowActionError, WorkflowAction] =
-    known.find(_.token == raw).toRight(WorkflowActionError.Unknown(raw))
-end WorkflowAction
-
-enum WorkflowActionError:
-  case Unknown(raw: String)
-
-  def message: String = this match
-    case Unknown(raw) => s"'$raw' is not a workflow action"
-end WorkflowActionError
-
 /** One file `renderAll` emits. `name` is the file name under `.github/workflows`, not a path. */
 final case class RenderedWorkflow(name: String, body: String)
-
-enum CiError:
-  case BadName(raw: String)
-  case Unknown(name: ProjectName)
-  case NotModule(name: ProjectName)
-  case Duplicate(name: ProjectName)
-  case Missing(path: Path)
-  case Drift
-  case Io(failure: IoFailure)
-
-  def message: String = this match
-    case BadName(raw)    => s"'$raw' is not a project name"
-    case Unknown(name)   => s"'${name.value}' is not a project"
-    case NotModule(name) => s"'${name.value}' is not a module"
-    case Duplicate(name) => s"'${name.value}' is listed twice"
-    case Missing(path)   => s"no workflow at $path"
-    case Drift           => "workflow does not match the graph"
-    case Io(failure)     => failure.message
-end CiError
 
 object Workflow:
   val fileName: String = "ci.yml"
@@ -318,7 +276,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ List(
-      s"      - run: ${quote(s"./histos publish release $name")}",
+      s"      - run: ${quote(s"./histos publish release $name")}"
     ) ++ secretEnv(sona.secretNames)
 
   /** Promote does not sign, so this file does not list `secretNames`. */
@@ -343,7 +301,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ List(
-      "      - run: \"./histos publish promote ${{ inputs.deployment }}\"",
+      "      - run: \"./histos publish promote ${{ inputs.deployment }}\""
     ) ++ secretEnv(promoteSecrets)
     lines.mkString("\n") + "\n"
 
@@ -381,7 +339,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ List(
-      s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")}",
+      s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")}"
     )
 
   private def access(permissions: JobPermissions): String =
@@ -410,8 +368,8 @@ object Workflow:
     * only when `cached` is the string `true`, which `cache-hit` is for this key alone. Chekhov reads Playwright from
     * `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. Coursier is
     * the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` is the lock digest, so the
-    * file is not baked into the key. No step sets `restore-keys`. Every job that runs `./histos` installs `cs` and
-    * does not install a JDK.
+    * file is not baked into the key. No step sets `restore-keys`. Every job that runs `./histos` installs `cs` and does
+    * not install a JDK.
     */
   private def steps(tools: RunnerTools): List[String] =
     nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright) ++ coursierStep

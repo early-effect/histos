@@ -90,8 +90,8 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             CompileConsole.Line.Out(
               "app 3.10.0 jvm skipped unchanged files compiled: 0 skipped: 3 classes: 0"
             ),
-            CompileConsole.Line.Err(Lines.diagnostic(repo, warn)),
-            CompileConsole.Line.Err(Lines.diagnostic(repo, dotty)),
+            CompileConsole.Line.Err(Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, warn))),
+            CompileConsole.Line.Err(Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, dotty))),
             CompileConsole.Line.Out(
               "core 3.10.0 jvm files compiled: 2 skipped: 1 classes: 4"
             ),
@@ -432,9 +432,9 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           val report = Report(
             Chunk.empty,
             Chunk(
-              Lines.diagnostic(repo, warn),
-              Lines.diagnostic(repo, dotty),
-              Lines.diagnostic(repo, bare),
+              Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, warn)),
+              Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, dotty)),
+              Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, bare)),
             ),
             None,
             None,
@@ -444,9 +444,9 @@ object CompileConsoleSpec extends ZIOSpecDefault:
           )
           assertTrue(
             lines == Chunk(
-              CompileConsole.Line.Err(Lines.diagnostic(repo, warn)),
-              CompileConsole.Line.Err(Lines.diagnostic(repo, dotty)),
-              CompileConsole.Line.Err(Lines.diagnostic(repo, bare)),
+              CompileConsole.Line.Err(Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, warn))),
+              CompileConsole.Line.Err(Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, dotty))),
+              CompileConsole.Line.Err(Lines.cell(core, version, Platform.Jvm, Lines.diagnostic(repo, bare))),
             ),
             Lines.diagnostic(repo, warn) == "core/src/Core.scala:4:2: warn: unused",
             Lines.diagnostic(repo, dotty) == "core/src/Core.scala:4:1: error: missing",
@@ -518,7 +518,18 @@ object CompileConsoleSpec extends ZIOSpecDefault:
             assertTrue(
               found == Right(
                 CallResult.Reported(
-                  Report(Chunk.empty, Chunk(zinc, missing), None, None, expected, Chunk.empty, None)
+                  Report(
+                    Chunk.empty,
+                    Chunk(
+                      Lines.cell(core, version, Platform.Jvm, zinc),
+                      Lines.cell(core, version, Platform.Jvm, missing),
+                    ),
+                    None,
+                    None,
+                    expected,
+                    Chunk.empty,
+                    None,
+                  )
                 )
               ),
               zinc == "core/src/Core.scala:4:2: warn: unused",

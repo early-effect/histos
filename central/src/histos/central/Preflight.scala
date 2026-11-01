@@ -151,7 +151,7 @@ object Preflight:
 
   private def clientLayer: ZLayer[Any, PreflightError, Client] =
     ZLayer.succeed(Client.Config.default) >>>
-      Client.layer.mapError(error => PreflightError.Client(TransportFault.from(error)))
+      Client.layer.mapError(error => PreflightError.Client(TransportFaults.from(error)))
 
   private def located(gavs: Chunk[Gav]): Either[PreflightError, Chunk[(Gav, String)]] =
     gavs.foldLeft[Either[PreflightError, Chunk[(Gav, String)]]](Right(Chunk.empty)):
@@ -169,7 +169,7 @@ object Preflight:
   private def head(client: Client, base: Registry, gav: Gav, path: String): IO[PreflightError, Unit] =
     client
       .batched(Request(Method.HEAD, under(base.root, path), Agent, Body.empty))
-      .mapError(error => PreflightError.RepositoryDown(gav, TransportFault.from(error)))
+      .mapError(error => PreflightError.RepositoryDown(gav, TransportFaults.from(error)))
       .flatMap { response =>
         response.status.code match
           case 404                               => ZIO.unit
@@ -184,7 +184,7 @@ object Preflight:
     )
     client
       .batched(Request(Method.GET, url, Agent, Body.empty))
-      .mapError(error => PreflightError.KeyDown(TransportFault.from(error)))
+      .mapError(error => PreflightError.KeyDown(TransportFaults.from(error)))
       .flatMap { response =>
         response.status.code match
           case 200 if armored(response) => ZIO.unit

@@ -5,6 +5,7 @@ import histos.resolve.{
   LockedTools,
   ResolveError,
   ToolRoot,
+  ToolRoots,
   ToolRequest,
   ToolId,
   ToolRole,
@@ -72,21 +73,6 @@ enum NativeComponent:
     case Scala3Lib  => "scala3lib"
     case Plugin     => "nscplugin"
 end NativeComponent
-
-enum NativeFetch:
-  case Compiler(error: histos.zinc.CompileError)
-  case Resolved(error: ResolveError)
-  case Missing(artifact: String, revision: String)
-  case Duplicated(artifact: String)
-
-  def message: String = this match
-    case Compiler(error)             => error.message
-    case Resolved(error)             => error.message
-    case Missing(artifact, revision) =>
-      s"the Scala Native toolchain has no $artifact $revision"
-    case Duplicated(artifact) =>
-      s"the Scala Native toolchain has more than one $artifact"
-end NativeFetch
 
 /** Plugin jar, then the native libraries a program may see. `tools` is not here.
   */
@@ -204,7 +190,7 @@ object NativeRequests:
         ToolVariant.Native(toolchain.revision),
       ),
       roots,
-      repos,
+      reposFor(toolchain, repos),
     )
 
   def linker(
@@ -220,7 +206,7 @@ object NativeRequests:
         ToolVariant.Native(toolchain.revision),
       ),
       List("tools", "nir", "util").map(name =>
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted(
             "org.scala-native",
             name,
@@ -233,7 +219,7 @@ object NativeRequests:
           nativeOrigin(toolchain.source),
         )
       ),
-      repos,
+      reposFor(toolchain, repos),
     )
 
   def suite(
@@ -249,7 +235,7 @@ object NativeRequests:
         ToolVariant.Native(toolchain.revision),
       ),
       List(
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted(
             "org.scala-native",
             "test-runner",
@@ -262,6 +248,17 @@ object NativeRequests:
           nativeOrigin(toolchain.source),
         )
       ),
-      repos,
+      reposFor(toolchain, repos),
     )
+
+  private val Snapshots: Repository =
+    Repository.Maven(
+      RepoUrl.trusted("https://central.sonatype.com/repository/maven-snapshots/")
+    )
+
+  /** A snapshot revision is published to Central's snapshot repository. The release repository stays in the list. */
+  private def reposFor(toolchain: NativeToolchain, repos: Repositories): Repositories =
+    if toolchain.source != NativeSource.Central || !toolchain.revision.value.endsWith("-SNAPSHOT") then repos
+    else if repos.all.contains(Snapshots) then repos
+    else Repositories(Snapshots, repos.all)
 end NativeRequests

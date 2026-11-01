@@ -22,7 +22,7 @@ object Publisher:
   ): ZLayer[Any, PublishError, Publisher] =
     val http =
       ZLayer.succeed(heddle.client.Client.Config.default) >>>
-        heddle.client.Client.layer.mapError(error => PublishError.Transport(TransportFault.from(error)))
+        heddle.client.Client.layer.mapError(error => PublishError.Transport(TransportFaults.from(error)))
     http >>> ZLayer.fromFunction((client: heddle.client.Client) => SnapshotPublisher(repository, credentials, client))
 end Publisher
 

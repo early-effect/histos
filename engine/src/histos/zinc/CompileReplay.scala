@@ -44,6 +44,7 @@ end CompilerStarts
 object CompileReplay:
   private val Magic        = "HC1\n".getBytes(StandardCharsets.US_ASCII)
   private val AnalysisName = "inc.zip"
+  private val Marker       = "replay.key"
 
   /** A store that dies with this process. A layer that took `Scope` would change every resolver input. */
   def processStore: ZLayer[Any, Nothing, ContentStore] =
@@ -70,6 +71,12 @@ object CompileReplay:
         )
       yield out
 
+  /** Products already written for `key`. Does not read the store and does not walk the class files. */
+  def recall(request: CompileRequest, key: Sha256): IO[CompileError, Option[CompileOutput]] =
+    ZIO
+      .attemptBlocking(installed(request, key))
+      .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Stat)))
+
   def load(
       store: ContentStore,
       key: Sha256,
@@ -81,7 +88,7 @@ object CompileReplay:
         .mapError(CompileError.Stored(_))
         .flatMap:
           case None        => ZIO.none
-          case Some(bytes) => restore(id, bytes, key, request).map(Some(_))
+          case Some(bytes) => restore(id, bytes, key, request).tap(_ => stamp(request, key)).map(Some(_))
 
   def save(
       store: ContentStore,
@@ -94,7 +101,43 @@ object CompileReplay:
       // File mtime. TestClock.instant arms a warning unless the test moves the clock.
       now <- zio.Clock.ClockLive.instant
       _   <- store.put(id, bytes, now).mapError(CompileError.Stored(_))
+      _   <- stamp(request, key)
     yield ()
+
+  private def installed(request: CompileRequest, key: Sha256): Option[CompileOutput] =
+    val marker = request.analysis.resolve(Marker)
+    val zip    = request.analysis.resolve(AnalysisName)
+    if !Files.isRegularFile(marker) || !Files.isRegularFile(zip) || !occupied(request.classes) then None
+    else if Files.readString(marker).trim != key.value then None
+    else
+      Some(
+        CompileOutput(
+          request.classes,
+          0,
+          key,
+          changed = false,
+          sources = Some(SourceCount(0, request.sources.size)),
+          classesWritten = Some(0),
+          miss = None,
+        )
+      )
+
+  /** One directory entry is enough. A full walk is the data a hit does not use. */
+  private def occupied(classes: Path): Boolean =
+    if !Files.isDirectory(classes) then false
+    else
+      val stream = Files.newDirectoryStream(classes)
+      try stream.iterator.hasNext
+      finally stream.close()
+
+  private def stamp(request: CompileRequest, key: Sha256): IO[CompileError, Unit] =
+    ZIO
+      .attemptBlocking {
+        Files.createDirectories(request.analysis)
+        Files.writeString(request.analysis.resolve(Marker), key.value + "\n")
+      }
+      .mapError(_ => CompileError.Io(IoFailure(request.analysis, IoFault.Write)))
+      .unit
 
   private def keyed(key: Sha256): IO[CompileError, Digest] =
     Digest.from(key.value) match

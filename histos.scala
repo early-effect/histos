@@ -6,16 +6,22 @@ object build extends HistosBuild:
     val zio        = dep"dev.zio::zio:2.1.27"
     val zioTest    = dep"dev.zio::zio-test:2.1.27"
     val zioTestSbt = dep"dev.zio::zio-test-sbt:2.1.27"
-    val api        = module("api", Jvm)(scala3)
+    val api        = module("api", Jvm, Native)(scala3)
+      .clang(ClangMajor(21))
       .artifact(artifact"histos-api")
       .libraryDependencies(zio)
       .testDependencies(zioTest, zioTestSbt)
-    val central = module("central", Jvm)(scala3)
+    val zioJson = dep"dev.zio::zio-json:1.1.1"
+    val wire    = module("wire", Jvm, Native)(scala3)
+      .clang(ClangMajor(21))
       .dependsOn(api)
+      .libraryDependencies(zio, zioJson)
+    val central = module("central", Jvm)(scala3)
+      .dependsOn(api, wire)
       .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.14.2")
       .testDependencies(zioTest, zioTestSbt)
     val engine = module("engine", Jvm)(scala3)
-      .dependsOn(central, api)
+      .dependsOn(central, api, wire)
       .libraryDependencies(
         zio,
         dep"dev.zio::zio-streams:2.1.27",
@@ -30,12 +36,17 @@ object build extends HistosBuild:
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
       )
       .testDependencies(zioTest, zioTestSbt)
+    val client = module("client", Native)(scala3)
+      .clang(ClangMajor(21))
+      .dependsOn(wire)
+      .libraryDependencies(zio, zioJson)
+      .main(MainClass("histos.client.Main"))
     val app = module("app", Jvm)(scala3)
       .scalac(ScalacFlag.MaxInlines)
       .artifact(artifact"histos")
       .assembly(MainClass("histos.cli.Main"))
       .asset(asset"dist/histos.jar")
-      .dependsOn(engine, central, api)
+      .dependsOn(engine, central, api, wire)
       .libraryDependencies(
         zio,
         dep"rocks.earlyeffect::heddle-mcp:0.14.2",
@@ -70,6 +81,8 @@ object build extends HistosBuild:
       )(
         ships(manual("histos", manual"0.0.2-SNAPSHOT")(api, app)),
         api,
+        wire,
+        client,
         central,
         engine,
         app,

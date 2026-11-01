@@ -26,28 +26,6 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, Scope, UIO, ZIO}
 
-enum AssembleError:
-  case Toolchain(error: histos.zinc.CompileError)
-  case Compile(error: GraphCompileError)
-  case Resolve(error: ResolveError)
-  case Jar(error: JarError)
-  case Pack(error: AssemblyError)
-  case NoModule(name: String)
-  case NoClasses(module: ProjectName, version: ScalaVersion)
-  case Io(path: Path)
-
-  def message: String = this match
-    case Toolchain(error)           => error.message
-    case Compile(error)             => error.message
-    case Resolve(error)             => error.message
-    case Jar(error)                 => error.message
-    case Pack(error)                => error.message
-    case NoModule(name)             => s"'$name' is not a module"
-    case NoClasses(module, version) =>
-      s"'${module.value}' has no ${version.value} classes"
-    case Io(path) => s"could not write $path"
-end AssembleError
-
 object Assemble:
   val ApiEntry: String = BuildClasspath.Entry
   private val Program  = MainClass.trusted("histos.cli.Main")

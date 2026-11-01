@@ -25,6 +25,27 @@ final case class LockedTools(
     request
   ).map(classpath => ToolInput(request.id, classpath.artifacts))
 
+  /** The lock's identity for `request`. The fingerprint matches a fetched [[ToolInput]]. The paths are not files. */
+  def pinned(request: ToolRequest): Option[ToolInput] =
+    lock.tools.find(_.id == request.id).flatMap { cell =>
+      LockedTools.validate(request, cell).toOption.map { _ =>
+        ToolInput(
+          request.id,
+          cell.artifacts.map { artifact =>
+            ResolvedArtifact(
+              artifact.organization,
+              artifact.name,
+              artifact.revision,
+              Path.of(""),
+              artifact.sha256,
+              artifact.repository,
+              artifact.classifier,
+            )
+          },
+        )
+      }
+    }
+
   def compilationRequests(
       module: Module,
       version: ScalaVersion,

@@ -1,6 +1,6 @@
 package histos.server
 
-import histos.bsp.{Frame, Rpc}
+import histos.bsp.{Connection, Frame, Rpc}
 import histos.build.BuildEvent
 import histos.cli.{Cli, CliExit, Command, CompileConsole, Lines, Show}
 import histos.jdk.{Machine, Os}
@@ -533,6 +533,33 @@ object ServerSpec extends ZIOSpecDefault:
           program
             .provideSome[Scope & histos.resolve.LockedTools](liveLayers(root))
     ,
+    test("a bsp session stamps the connection when the build changes, and the next session lists the new target"):
+      ZIO.scoped:
+        temp
+          .zip(demoAndExtra)
+          .flatMap: (root, grown) =>
+            val program =
+              for
+                built   <- demo
+                _       <- ZIO.attempt(write(root, "histos.scala", "object build\n"))
+                before  <- Fingerprint.read(root)
+                running <- daemon(root, built)
+                _       <- bspSession(running.record.socket)
+                _       <- ZIO.attempt(write(root, "histos.scala", "object build\n// edited\n"))
+                stamped <- awaitGraph(root, before)
+                now     <- Fingerprint.read(root)
+                next    <- bspSession(running.record.socket)
+                heard   <- next.ask(2, "workspace/buildTargets")
+                targets <- decoded[Rpc.RpcOk[Rpc.BuildTargetsResult]](Some(heard.reply))
+              yield assertTrue(
+                stamped.version == "0.0.2-SNAPSHOT",
+                stamped.graph == now.value,
+                targets.result.targets.exists(_.id.uri.contains("extra")),
+              )
+            program.provideSome[Scope & histos.resolve.LockedTools](
+              layers(root, ZLayer.succeed(reloading(grown)))
+            )
+    ,
     test("a bsp session reloads a changed build and announces the new targets"):
       ZIO.scoped:
         temp
@@ -670,13 +697,13 @@ object ServerSpec extends ZIOSpecDefault:
               alphaRan,
               !betaRan,
               tests.exists {
-                case TestFeed.Out(text) => text.contains("alpha")
-                case _                  => false
+                case TestFeed.Out(_, _, _, text) => text.contains("alpha")
+                case _                           => false
               },
               !tests.exists {
-                case TestFeed.Out(text) => text.contains("beta")
-                case TestFeed.Err(text) => text.contains("beta")
-                case _                  => false
+                case TestFeed.Out(_, _, _, text) => text.contains("beta")
+                case TestFeed.Err(_, _, _, text) => text.contains("beta")
+                case _                           => false
               },
               !outs.exists(_.contains("beta")),
               events.exists {
@@ -902,6 +929,25 @@ object ServerSpec extends ZIOSpecDefault:
           marker <- Frame.read(input).flatMap(decoded[Message])
         yield Heard(init.result, marker)
       }
+
+  /** The live session rewrites `.bsp/histos.json` after the build file changes. */
+  private def awaitGraph(root: Path, before: Fingerprint): ZIO[Any, ServerError | Fixture, Connection] =
+    def poll(left: Int): ZIO[Any, ServerError | Fixture, Connection] =
+      if left <= 0 then ZIO.fail(Fixture.Shape)
+      else
+        Fingerprint.read(root).flatMap { now =>
+          ZIO
+            .attempt(Files.readString(root.resolve(".bsp").resolve("histos.json")))
+            .orElseSucceed("")
+            .flatMap { text =>
+              text.fromJson[Connection] match
+                case Right(found) if found.graph == now.value && found.graph != before.value =>
+                  ZIO.succeed(found)
+                case _ =>
+                  ZIO.sleep(100.millis) *> poll(left - 1)
+            }
+        }
+    poll(50)
 
   private def decoded[A: JsonDecoder](
       frame: Option[String]

@@ -12,6 +12,7 @@ import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
+import zio.stream.ZStream
 
 /** Compiles every `TaskDep.Compile` cell before the plugin task is hashed, then reads the classpath that compile wrote.
   */
@@ -67,11 +68,20 @@ private[load] object PluginCells:
   ): ZIO[Resolve & histos.cache.ContentStore, PluginFault, Unit] =
     val histos.zinc.CompileSession(repo, graph, jdk, origin, lock) = session
     for
-      _ <- GraphCompile
-        .cellFeed(
-          session,
-          List(cell.module.name -> cell.version),
-          cell.platform,
+      _ <- ZStream
+        .unwrapScoped(
+          (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.map { env =>
+            GraphCompile
+              .cellFeed(
+                session,
+                List(cell.module.name -> cell.version),
+                cell.platform,
+              )
+              .provideSomeLayer(
+                zio.ZLayer.succeed(env.get[histos.zinc.Compilers]) ++
+                  zio.ZLayer.succeed(env.get[histos.zinc.CompileMemo])
+              )
+          }
         )
         .runCollect
         .mapError(error => PluginFault.Compiled(error))

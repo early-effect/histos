@@ -52,7 +52,7 @@ object HttpCache:
         case RemoteMode.Off   => ZIO.fail(RemoteError.Off)
         case RemoteMode.Read  => ZIO.fail(RemoteError.ReadOnly)
         case RemoteMode.Write =>
-          val output = Digest.ofBytes(bytes)
+          val output = ActionDigest.ofBytes(bytes)
           put(origin / "cas" / output.value, bytes) *>
             put(index(namespace, action), ActionResult.encode(output, bytes.length))
 
@@ -87,7 +87,8 @@ object HttpCache:
           get(origin / "cas" / pointer.output.value).flatMap:
             case None        => ZIO.fail(RemoteError.Dangling(action, pointer.output))
             case Some(bytes) =>
-              if bytes.length.toLong == pointer.size && Digest.ofBytes(bytes) == pointer.output then ZIO.some(bytes)
+              if bytes.length.toLong == pointer.size && ActionDigest.ofBytes(bytes) == pointer.output then
+                ZIO.some(bytes)
               else ZIO.fail(RemoteError.Mismatch(action, pointer.output))
 
     private def indexRoot(role: CacheNamespace): Url =

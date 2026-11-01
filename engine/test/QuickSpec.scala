@@ -729,7 +729,7 @@ object QuickSpec extends ZIOSpecDefault:
   private def ran(module: ProjectName, status: TestStatus): Chunk[TestFeed] =
     Chunk(
       TestFeed.Begin(module, scala3, Jvm),
-      TestFeed.Out(suiteName.value),
+      TestFeed.Out(module, scala3, Jvm, suiteName.value),
       TestFeed.Done(TestedCell(module, scala3, Jvm, status)),
     )
 
@@ -764,7 +764,7 @@ object QuickSpec extends ZIOSpecDefault:
             ZStream.fromIterable(
               List(
                 TestFeed.Begin(module, scala3, Jvm),
-                TestFeed.Out(names.mkString(" ")),
+                TestFeed.Out(module, scala3, Jvm, names.mkString(" ")),
                 TestFeed.Done(TestedCell(module, scala3, Jvm, status)),
               )
             )

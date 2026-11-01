@@ -7,7 +7,8 @@ import heddle.mcp.protocol.ToolName
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.cli.Cli
 import histos.client.{ClientJson, Session}
-import histos.report.{BuildFault, Rejection, Stored}
+import histos.report.{BuildFault, Rejection, Stored, WireSchema}
+import WireSchema.given
 import histos.jdk.Machine
 import histos.load.Loader
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}

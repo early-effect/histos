@@ -11,20 +11,6 @@ import histos.workspace.{IoFailure, IoFault}
 
 import zio.{Chunk, IO, ZIO}
 
-/** Why a suite digest could not be built. A missing suite class is not one of these: that digest is absent and the
-  * suite runs.
-  */
-enum StampError:
-  case Io(failure: IoFailure)
-  case Class(path: Path)
-  case Missing(name: String)
-
-  def message: String = this match
-    case Io(failure)   => failure.message
-    case Class(path)   => s"could not read class $path"
-    case Missing(name) => s"stamp index has no $name"
-end StampError
-
 /** Digest of one suite, the classes it references, the locked jars, the upstream jars, the JDK, the scalac flags, and
   * each upstream API digest. Each class is a fingerprint and the names it points at. The bytes are not kept. A class
   * this suite does not reference is not part of that closure. The API digest still is: a public signature outside the

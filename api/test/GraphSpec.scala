@@ -411,6 +411,9 @@ object GraphSpec extends ZIOSpecDefault:
         native.map(_.projects.collect { case item: Module =>
           item.nativeVersion.map(_.value)
         }) == Right(List(Some("0.5.13-SNAPSHOT"))),
+        NativeVersion.from("0.5.13-20261030-eb3f3b8-SNAPSHOT") == Right(
+          NativeVersion("0.5.13-20261030-eb3f3b8-SNAPSHOT")
+        ),
         NativeVersion.from("0.5") == Left(NativeVersionError.Bad("0.5")),
         NativeVersion.from("latest") == Left(NativeVersionError.Bad("latest")),
       )

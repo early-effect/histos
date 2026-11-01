@@ -20,6 +20,7 @@ import histos.schedule.Histos.given
 import histos.schedule.{
   Action,
   ActionCache,
+  ActionDigest,
   ActionId,
   Digest,
   Histos,
@@ -242,7 +243,7 @@ object PluginRuntime:
             text <- scheduler
               .cached(
                 action,
-                Digest.of(action, Map.empty),
+                ActionDigest.of(action, Map.empty),
                 local,
                 Sendable.ofAction,
               )

@@ -14,6 +14,7 @@ import histos.version.PullRequestNumber
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.resolve.{LockedArtifact, Repositories, Repository, RepositoryIo, Resolve, ResolveCell, ResolveError}
+import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.server.{
@@ -28,12 +29,15 @@ import histos.server.{
   Message,
   Record,
   ResolveAction,
+  Say,
   ServerError,
 }
 import histos.zinc.{CompileFeed, GraphCompile}
 import histos.Dep
 import histos.*
 
+import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
+import java.nio.channels.{Channels, ServerSocketChannel}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, StandardOpenOption}
 
@@ -166,6 +170,47 @@ object CliSpec extends ZIOSpecDefault:
           .reverse
           .foreach(path => Files.deleteIfExists(path))
     }.ignore
+
+  private def plant(dir: Path): UIO[Unit] =
+    ZIO
+      .attempt {
+        Files.createDirectories(dir.resolve(".histos"))
+        Files.writeString(dir.resolve(".histos").resolve("build.properties"), "histos.version=0.0.2-SNAPSHOT\n")
+      }
+      .orDie
+      .unit
+
+  private def writeRecord(dir: Path, version: String, socket: Path): Unit =
+    val rendered = socket.toAbsolutePath.toString.replace("\\", "\\\\").replace("\"", "\\\"")
+    Files.writeString(
+      dir.resolve(".histos").resolve("server.json"),
+      s"""{"version":"$version","fingerprint":"client","socket":"$rendered"}""",
+    )
+
+  /** One compile answer. The accept runs beside the client. Closing the server unblocks it. */
+  private def answer(socket: Path): ZIO[Scope, Throwable, Unit] =
+    ZIO
+      .acquireRelease(
+        ZIO.attempt {
+          Files.deleteIfExists(socket)
+          val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+          server.bind(UnixDomainSocketAddress.of(socket))
+          server
+        }
+      )(server => ZIO.attempt(server.close()).ignore)
+      .flatMap { server =>
+        val talked =
+          for
+            channel <- ZIO.attempt(server.accept())
+            input  = Channels.newInputStream(channel)
+            output = Channels.newOutputStream(channel)
+            _ <- Frame.read(input)
+            _ <- Frame.write(output, Say.wire(Message.Ready))
+            _ <- Frame.write(output, Say.wire(Message.Done(CallResult.reported())))
+            _ <- ZIO.attempt(channel.close()).ignore
+          yield ()
+        talked.exit.forkScoped.unit
+      }
 
   private def invoke(args: List[String]): ZIO[Scope, LoadError, Completed] =
     for
@@ -1562,6 +1607,58 @@ object CliSpec extends ZIOSpecDefault:
             },
           )
     @@ TestAspect.withLiveClock @@ TestAspect.timeout(45.seconds),
+    test("an open socket does not run the compile miss"):
+      ZIO.scoped:
+        for
+          dir   <- bare
+          built <- Ref.make(0)
+          _     <- plant(dir)
+          text  <- Cli.versionText(dir).catchAll(err => ZIO.dieMessage(err.message))
+          sock = dir.resolve(".histos").resolve("answered.sock")
+          _    <- answer(sock)
+          _    <- ZIO.attempt(writeRecord(dir, text, sock)).orDie
+          done <- Cli.compileAt(
+            dir,
+            Nil,
+            built.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
+          )
+          n <- built.get
+        yield assertTrue(n == 0, done.exit == CliExit.Success, done.out.isEmpty)
+    ,
+    test("a dead socket runs the compile miss"):
+      ZIO.scoped:
+        for
+          dir   <- bare
+          built <- Ref.make(0)
+          _     <- plant(dir)
+          text  <- Cli.versionText(dir).catchAll(err => ZIO.dieMessage(err.message))
+          _     <- ZIO.attempt(writeRecord(dir, text, dir.resolve(".histos").resolve("missing.sock"))).orDie
+          done  <- Cli.compileAt(
+            dir,
+            Nil,
+            built.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
+          )
+          n <- built.get
+        yield assertTrue(n == 1, done.out == "miss")
+    ,
+    test("launch compile on an open socket does not compile this checkout"):
+      ZIO.scoped:
+        for
+          dir  <- bare
+          _    <- plant(dir)
+          text <- Cli.versionText(dir).catchAll(err => ZIO.dieMessage(err.message))
+          sock = dir.resolve(".histos").resolve("answered.sock")
+          _    <- answer(sock)
+          _    <- ZIO.attempt(writeRecord(dir, text, sock)).orDie
+          done <- Cli.launch(List("compile"), dir)
+        yield assertTrue(done.exit == CliExit.Success)
+    ,
+    test("launch compile with no server is the local miss"):
+      ZIO.scoped:
+        for
+          dir  <- bare
+          done <- Cli.launch(List("compile"), dir)
+        yield assertTrue(done.exit == CliExit.LoadFailed),
   )
 
   private val launcherLock = "histos.version=0.0.1-SNAPSHOT\n"

@@ -13,7 +13,7 @@ import histos.schedule.ScheduleError
 import histos.version.TagRelation
 import histos.{BuildError, JsEnv, Platform}
 
-import WireJson.given
+import WireSchema.given
 
 import zio.test.*
 

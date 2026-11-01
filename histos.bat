@@ -126,5 +126,21 @@ if (Test-Path -LiteralPath $opts) {
     $jvmArgs += $text
   }
 }
+$client = Join-Path $root 'dist\histos-client'
+$jarClient = $true
+if ($launchArgs.Count -ge 1) {
+  switch ($launchArgs[0]) {
+    { $_ -in 'server','bsp','mcp' } { $jarClient = $true }
+    default { if (Test-Path -LiteralPath $client -PathType Leaf) { $jarClient = $false } }
+  }
+}
+if (-not $jarClient) {
+  $env:HISTOS_JAVA = $java
+  $env:HISTOS_JAR = $jar
+  $env:HISTOS_ROOT = $root
+  $env:HISTOS_VERSION = 'histos ' + $version
+  & $client @launchArgs
+  exit $LASTEXITCODE
+}
 & $java @jvmArgs --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE

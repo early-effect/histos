@@ -211,17 +211,21 @@ object Session:
       shown: String,
   ): ZIO[Env, ServerError, Unit] =
     prepared(repo, apiJar, desk, call).flatMap { loaded =>
-      Perform.run(
-        repo,
-        apiJar,
-        loaded,
-        machine,
-        desk.runs,
-        track = true,
-        shown,
-        call,
-        say,
-        sessionEdges(repo, apiJar, machine, desk)(say),
+      histos.zinc.CompileMemo.provide(
+        histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+          Perform.run(
+            repo,
+            apiJar,
+            loaded,
+            machine,
+            desk.runs,
+            track = true,
+            shown,
+            call,
+            say,
+            sessionEdges(repo, apiJar, machine, desk)(say),
+          )
+        )
       )
     }
 

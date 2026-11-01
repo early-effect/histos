@@ -3,7 +3,7 @@ package histos.zinc
 import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
 import histos.jdk.Sha256
-import histos.js.ScalaJs
+import histos.js.{JsRequests, ScalaJs}
 import histos.native.{NativeCompile, NativeOrigin, NativeToolchain}
 import histos.resolve.LockedTools
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Resolve, ResolveError}
@@ -18,81 +18,6 @@ import scala.jdk.CollectionConverters.*
 import zio.{Chunk, IO, NonEmptyChunk, UIO, ZIO, ZLayer}
 import zio.stream.ZStream
 
-final case class CompiledCell(
-    module: ProjectName,
-    version: ScalaVersion,
-    platform: Platform,
-    classes: Path,
-    /** `.class`, `.sjsir`, and `.nir` currently in `classes`, including leftovers.
-      */
-    classFiles: Int,
-    key: Option[Sha256],
-    changed: Boolean,
-    sources: Option[SourceCount],
-    /** Class files this round wrote. Absent when that set is not known. */
-    classesWritten: Option[Int],
-)
-
-/** One cell's console. Diagnostics stay with that cell. Parallel cells are not interleaved.
-  */
-enum CompileFeed:
-  case Began(module: ProjectName, version: ScalaVersion, platform: Platform)
-  case Diagnostic(
-      module: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-      problem: CompileProblem,
-  )
-  case Miss(module: ProjectName, version: ScalaVersion, platform: Platform, change: KeyMiss)
-  case Done(cell: CompiledCell)
-  case Failed(error: GraphCompileError)
-
-enum GraphCompileError:
-  case Runtime(error: histos.jdk.ToolchainError)
-  case Target(error: SelectError)
-  case UnknownCell(module: ProjectName, version: ScalaVersion)
-  case NoRoot(module: ProjectName)
-  case NoSources(module: ProjectName, root: Path)
-  case MissingUpstream(
-      module: ProjectName,
-      dependency: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-  )
-  case Cycle(module: ProjectName)
-  case Lock(error: ResolveError)
-  case LockRead(path: Path)
-  case RootRead(path: Path)
-  case Output(path: Path)
-  case Failed(
-      module: ProjectName,
-      version: ScalaVersion,
-      platform: Platform,
-      error: CompileError,
-  )
-  case Cells(errors: NonEmptyChunk[GraphCompileError])
-
-  def message: String = this match
-    case Runtime(error)               => error.message
-    case Target(error)                => error.message
-    case UnknownCell(module, version) =>
-      s"'${module.value}' ${version.value} is not a cell on the requested platform"
-    case NoRoot(module) =>
-      s"'${module.value}' has no source root. Expected ${module.value}/src, or src when it is the only module"
-    case NoSources(module, root) =>
-      s"'${module.value}' has no main or test sources under $root"
-    case MissingUpstream(module, dependency, version, platform) =>
-      s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} ${platform.token} classes"
-    case Cycle(module)                            => s"'${module.value}' is in a compile cycle"
-    case Lock(error)                              => error.message
-    case LockRead(path)                           => s"could not read $path"
-    case RootRead(path)                           => s"could not read source roots under $path"
-    case Output(path)                             => s"could not write $path"
-    case Failed(module, version, platform, error) =>
-      s"'${module.value}' ${version.value} ${platform.token} failed to compile\n${error.message}"
-    case Cells(errors) => errors.map(_.message).mkString("\n")
-end GraphCompileError
-
 final case class CompileSession(
     repo: Path,
     graph: ProjectGraph,
@@ -102,8 +27,8 @@ final case class CompileSession(
 )
 
 object GraphCompile:
-  /** Resolve, the local CAS, and the compiler-start counter. Public entry points supply the counter. */
-  private[zinc] type Fed = Resolve & ContentStore & CompilerStarts
+  /** Resolve, the local CAS, the start counter, the compiler services, and the input memo. */
+  private[zinc] type Fed = Resolve & ContentStore & CompilerStarts & Compilers & CompileMemo
 
   def run(
       session: CompileSession,
@@ -132,21 +57,42 @@ object GraphCompile:
       names: List[ProjectName],
       platform: Option[Platform],
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
+    fresh(Parallelism.default.cpu)(
+      watch(
+        session.repo,
+        session.graph,
+        choose(session.graph, names),
+        None,
+        platform,
+        session.jdk,
+        session.native,
+        captured = Some(session.lock),
+      ).provideSomeLayer(CompilerStarts.live)
+    )
+
+  /** `hold` runs before that cell compiles. A test spec uses it to keep one cell out of the way.
+    */
+  private[histos] def held(
+      session: CompileSession,
+      names: List[ProjectName],
+      hold: ProjectName => UIO[Unit],
+  ): ZStream[Resolve & ContentStore & Compilers & CompileMemo, GraphCompileError, CompileFeed] =
     watch(
       session.repo,
       session.graph,
       choose(session.graph, names),
       None,
-      platform,
+      None,
       session.jdk,
       session.native,
+      hold,
       captured = Some(session.lock),
     ).provideSomeLayer(CompilerStarts.live)
   def cellFeed(
       session: CompileSession,
       cells: List[(ProjectName, ScalaVersion)],
       platform: Platform,
-  ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore & Compilers & CompileMemo, GraphCompileError, CompileFeed] =
     val names = cells.map(_._1)
     watch(
       session.repo,
@@ -186,7 +132,7 @@ object GraphCompile:
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
     consoleCounted(repo, graph, names, jdk, native, platform).provideSomeLayer(CompilerStarts.live)
 
-  /** The same console, with the caller holding the start counter. */
+  /** The same console, with the caller holding the start counter. The compilers die with the stream. */
   private[histos] def consoleCounted(
       repo: Path,
       graph: ProjectGraph,
@@ -194,8 +140,22 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       platform: Option[Platform],
-  ): ZStream[Fed, GraphCompileError, CompileFeed] =
+  ): ZStream[Resolve & ContentStore & CompilerStarts, GraphCompileError, CompileFeed] =
+    fresh(Parallelism.default.cpu)(
+      watch(repo, graph, choose(graph, names), None, platform, jdk, native)
+    )
+
+  /** The daemon's compile. The caller keeps the compiler services. */
+  private[histos] def resident(
+      repo: Path,
+      graph: ProjectGraph,
+      names: List[ProjectName],
+      jdk: JdkRuntime,
+      native: NativeOrigin,
+      platform: Option[Platform],
+  ): ZStream[Resolve & ContentStore & Compilers & CompileMemo, GraphCompileError, CompileFeed] =
     watch(repo, graph, choose(graph, names), None, platform, jdk, native)
+      .provideSomeLayer(CompilerStarts.live)
 
   /** Fails after the last event when a cell failed. Test runs keep the lenient stream so passing cells still test.
     */
@@ -228,15 +188,17 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    watch(
-      repo,
-      graph,
-      pickCells(graph, cells, platform),
-      Some(cells.map(_._2.value).toSet),
-      Some(platform),
-      jdk,
-      native,
-    ).provideSomeLayer(CompilerStarts.live)
+    fresh(Parallelism.default.cpu)(
+      watch(
+        repo,
+        graph,
+        pickCells(graph, cells, platform),
+        Some(cells.map(_._2.value).toSet),
+        Some(platform),
+        jdk,
+        native,
+      ).provideSomeLayer(CompilerStarts.live)
+    )
 
   private def collected[R](
       feeds: ZStream[R, GraphCompileError, CompileFeed]
@@ -345,18 +307,34 @@ object GraphCompile:
       jdk: JdkRuntime,
       native: NativeOrigin,
       hold: ProjectName => UIO[Unit],
+      inside: ProjectName => UIO[Unit] = _ => ZIO.unit,
   ): ZStream[Resolve & ContentStore, GraphCompileError, CompileFeed] =
-    watch(
-      repo,
-      graph,
-      choose(graph, names),
-      None,
-      None,
-      jdk,
-      native,
-      hold,
-      Parallelism(64, 64, 64),
-    ).provideSomeLayer(CompilerStarts.live)
+    fresh(64)(
+      watch(
+        repo,
+        graph,
+        choose(graph, names),
+        None,
+        None,
+        jdk,
+        native,
+        hold,
+        Parallelism(64, 64, 64),
+        inside = inside,
+      ).provideSomeLayer(CompilerStarts.live)
+    )
+
+  /** Compilers that close when the stream does. The daemon does not use this. */
+  private def fresh[R, A](width: Int)(
+      stream: ZStream[R & Compilers & CompileMemo, GraphCompileError, A]
+  ): ZStream[R, GraphCompileError, A] =
+    ZStream.unwrapScoped[R](
+      (Compilers.live(width) ++ CompileMemo.live).build.map { env =>
+        stream.provideSomeLayer(
+          ZLayer.succeed(env.get[Compilers]) ++ ZLayer.succeed(env.get[CompileMemo])
+        )
+      }
+    )
 
   private def watch(
       repo: Path,
@@ -369,6 +347,7 @@ object GraphCompile:
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
       parallelism: Parallelism = Parallelism.default,
       captured: Option[DependencyLock] = None,
+      inside: ProjectName => UIO[Unit] = _ => ZIO.unit,
   ): ZStream[Fed, GraphCompileError, CompileFeed] =
     ZStream.asyncScoped[Fed, GraphCompileError, CompileFeed](
       emit =>
@@ -377,38 +356,38 @@ object GraphCompile:
           for
             selected <- ZIO.fromEither(picked)
             _        <- ZIO.fromEither(layersOf(selected))
-            lock     <- captured.fold(readLock(repo))(ZIO.succeed(_))
-            tools    <- LockedTools.make(lock, graph)
-            outcome  <- ZIO.scoped {
-              CompilerPool.make
-                .provideSome[zio.Scope](ZLayer.succeed(tools))
-                .flatMap: pool =>
-                  val plan = CompilePlan(
-                    repo,
-                    modulesOf(graph),
-                    lock,
-                    jdk,
-                    native,
-                    BuildResolvers(graph.resolvers),
-                    pool,
-                    tools,
-                  )
-                  val goal = ScheduleCells.goal(
-                    plan,
-                    selected,
-                    only,
-                    platform,
-                    hold,
-                    offer,
-                  )
-                  ZIO
-                    .serviceWithZIO[Histos](_.start(goal))
-                    .provideSome[Fed & zio.Scope](
-                      ZLayer.succeed(parallelism),
-                      Histos.live,
-                    )
-                    .flatMap(_.outcome)
-            }
+            stamped  <- ZIO.serviceWithZIO[CompileMemo]: memo =>
+              captured match
+                case Some(lock) => memo.note(repo, lock)
+                case None       => memo.lock(repo)
+            tools   <- LockedTools.make(stamped.lock, graph)
+            outcome <-
+              val plan = CompilePlan(
+                repo,
+                modulesOf(graph),
+                stamped.lock,
+                jdk,
+                native,
+                BuildResolvers(graph.resolvers),
+                tools,
+                stamped.stamp,
+                inside,
+              )
+              val goal = ScheduleCells.goal(
+                plan,
+                selected,
+                only,
+                platform,
+                hold,
+                offer,
+              )
+              ZIO
+                .serviceWithZIO[Histos](_.start(goal))
+                .provideSome[Fed & zio.Scope](
+                  ZLayer.succeed(parallelism),
+                  Histos.live,
+                )
+                .flatMap(_.outcome)
             _ <- outcome match
               case Outcome.Done(_)          => end(emit, None)
               case Outcome.Failed(failures) =>
@@ -520,6 +499,52 @@ object GraphCompile:
 
   private final case class CellResult(cell: CompiledCell, miss: Option[KeyMiss])
 
+  /** Lock checksums and source bytes. A hit does not fetch jars or open a compiler. A deleted source is not a hit: the
+    * path memo drops it, so the key no longer matches.
+    */
+  private def recall(
+      work: CellWork,
+      sources: List[Path],
+      apis: List[Sha256],
+      classes: Path,
+      recorded: Path,
+  ): ZIO[CompileMemo, CompileError, Option[CompileOutput]] =
+    val CellWork(plan, module, version, platform, _, _) = work
+    ZIO.serviceWithZIO[CompileMemo]: memo =>
+      memo
+        .hashes(plan.lock, plan.modules, module, version, platform, ClasspathScope.Compile, plan.stamp)
+        .flatMap:
+          case None         => ZIO.none
+          case Some(hashes) =>
+            val compiler = plan.tools.pinned(CompilerRequests.compiler(version, plan.tools.repositories))
+            val tools    = platform match
+              case Platform.Js =>
+                val revision = module.jsVersion.getOrElse(plan.tools.catalog.js.revision)
+                plan.tools
+                  .pinned(JsRequests.libraries(version, revision, plan.tools.repositories, plan.tools.catalog))
+                  .map(List(_))
+              case _ => Some(Nil)
+            (compiler, tools) match
+              case (Some(compilerInput), Some(compilation)) =>
+                memo.digest(sources).flatMap { digest =>
+                  val request = CompileRequest(
+                    CompileToolchain(version, platform, plan.jdk, module.flags),
+                    sources,
+                    Nil,
+                    classes,
+                    recorded,
+                    hashes,
+                    apis,
+                    compilation,
+                  )
+                  val key = CompileKey.withTools(
+                    CompileKey.of(request, digest),
+                    List(compilerInput.fingerprint),
+                  )
+                  CompileReplay.recall(request, key)
+                }
+              case _ => ZIO.none
+
   private def compileOf(
       work: CellWork,
       hear: CompileProblem => Unit,
@@ -528,50 +553,59 @@ object GraphCompile:
     val failed = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
     val chain  = Module.chain(module, plan.modules, platform)
     for
-      sources  <- Sources.select(base, version, platform).mapError(failed)
-      tests    <- Sources.tests(base, version, platform).mapError(failed)
+      sources  <- ZIO.serviceWithZIO[CompileMemo](_.sources(base, version, platform)).mapError(failed)
+      tests    <- ZIO.serviceWithZIO[CompileMemo](_.tests(base, version, platform)).mapError(failed)
       compiled <-
         if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))
         else if sources.isEmpty then vacant(plan.repo, module.name, version, platform)
         else
+          val classes  = classesDir(plan.repo, module.name, version, platform)
+          val analysis = this.analysis(plan.repo, module.name, version, platform)
           for
-            upstreamClasses <- ZIO.fromEither(
-              upstreamClasses(module, chain, version, platform, done)
-            )
-            apis <- ZIO
+            paths <- ZIO.fromEither(upstreamClasses(module, chain, version, platform, done))
+            apis  <- ZIO
               .foreach(chain): dependency =>
                 ZIO.fromEither(
-                  ApiDigest.read(analysis(plan.repo, dependency.name, version, platform))
+                  ApiDigest.read(this.analysis(plan.repo, dependency.name, version, platform))
                 )
               .mapError(failed)
-            assembled <- ScalacClasspath
-              .of(
-                plan.repo,
-                plan.modules,
-                module,
-                version,
-                platform,
-                plan.lock,
-                plan.repositories,
-                ClasspathScope.Compile,
-              )
-              .provideSomeLayer(ZLayer.succeed(plan.tools))
-            classes = classesDir(plan.repo, module.name, version, platform)
-            request = CompileRequest(
-              CompileToolchain(version, platform, plan.jdk, module.flags),
-              sources,
-              upstreamClasses ++ assembled.jars,
-              classes,
-              analysis(plan.repo, module.name, version, platform),
-              assembled.hashes,
-              apis,
-            )
-            compiled <- compile(
-              work,
-              request,
-              SemanticDb.argv(plan.repo, version),
-              hear,
-            ).mapError(failed)
+            known    <- recall(work, sources, apis, classes, analysis).mapError(failed)
+            compiled <- known match
+              case Some(output) => ZIO.succeed(output)
+              case None         =>
+                for
+                  assembled <- ZIO
+                    .serviceWithZIO[CompileMemo](
+                      _.classpath(
+                        plan.repo,
+                        plan.modules,
+                        module,
+                        version,
+                        platform,
+                        plan.lock,
+                        plan.repositories,
+                        ClasspathScope.Compile,
+                        plan.stamp,
+                      )
+                    )
+                    .provideSomeLayer(ZLayer.succeed(plan.tools))
+                  request = CompileRequest(
+                    CompileToolchain(version, platform, plan.jdk, module.flags),
+                    sources,
+                    paths ++ assembled.jars,
+                    classes,
+                    analysis,
+                    assembled.hashes,
+                    apis,
+                  )
+                  compiled <- compile(
+                    work,
+                    request,
+                    SemanticDb.argv(plan.repo, version),
+                    hear,
+                    plan.admitted(module.name),
+                  ).mapError(failed)
+                yield compiled
           yield CellResult(
             CompiledCell(
               module.name,
@@ -635,10 +669,11 @@ object GraphCompile:
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[ContentStore & CompilerStarts, CompileError, CompileOutput] =
+      admitted: UIO[Unit],
+  ): ZIO[ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     val compiled = request.toolchain.platform match
       case Platform.Jvm =>
-        JvmCompile.compilePooled(work.plan.pool, request, extra, hear)
+        JvmCompile.compilePooled(request, extra, hear, admitted)
       case Platform.Js =>
         ScalaJs.compile(request, extra, hear, work.module.jsVersion)
       case Platform.Native =>
@@ -650,7 +685,7 @@ object GraphCompile:
           extra,
           hear,
         )
-    compiled.provideSome[ContentStore & CompilerStarts](ZLayer.succeed(work.plan.tools))
+    compiled.provideSome[ContentStore & CompilerStarts & Compilers](ZLayer.succeed(work.plan.tools))
 
   private def upstreamClasses(
       module: Module,
@@ -672,14 +707,6 @@ object GraphCompile:
                 platform,
               )
             )
-
-  private def readLock(repo: Path): IO[GraphCompileError, DependencyLock] =
-    Resolve
-      .readLock(repo)
-      .mapError:
-        case ResolveError.Io(failure) =>
-          GraphCompileError.LockRead(failure.path)
-        case other => GraphCompileError.Lock(other)
 
   /** Classpath root written for one JVM cell. Test compile and the test subprocess read this directory.
     */

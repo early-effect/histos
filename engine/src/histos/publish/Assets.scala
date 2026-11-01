@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.central.TransportFault
+import histos.central.{TransportFault, TransportFaults}
 
 import scala.annotation.tailrec
 
@@ -124,7 +124,7 @@ object Assets:
   ): ZLayer[Any, AssetError, Assets] =
     val http =
       ZLayer.succeed(Client.Config.default) >>>
-        Client.layer.mapError(error => AssetError.Transport(TransportFault.from(error)))
+        Client.layer.mapError(error => AssetError.Transport(TransportFaults.from(error)))
     http >>> ZLayer.fromFunction((client: Client) => AssetClient(api, uploads, token, repository, client))
 
 private final class AssetClient(
@@ -213,7 +213,7 @@ private final class AssetClient(
       .add("Accept", "application/vnd.github+json")
     client
       .batched(Request(method, url, headers, body))
-      .mapError(error => AssetError.Transport(TransportFault.from(error)))
+      .mapError(error => AssetError.Transport(TransportFaults.from(error)))
 
   /** The first `"upload_url"` that is a key. A mention inside another string is skipped. */
   private def releaseId(body: String): Option[String] =

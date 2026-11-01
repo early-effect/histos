@@ -45,9 +45,16 @@ object Scala213:
       compiler :: reflect :: support
     private[zinc] def openLoader(): URLClassLoader =
       new URLClassLoader(
-        (compiler :: reflect :: library :: support).map(_.toUri.toURL).toArray,
+        loaderJars.map(_.toUri.toURL).toArray,
         ClassLoader.getPlatformClassLoader,
       )
+
+    /** Jars the compiler loader sees, in order. A resident compiler opens these, not a later resolve. */
+    private[zinc] def loaderJars: List[Path] =
+      compiler :: reflect :: library :: support
+
+    private[zinc] def boundary: LoaderBoundary = LoaderBoundary.Platform
+  end Toolchain
 
   private[zinc] def jars(
       scalaVersion: ScalaVersion

@@ -1,7 +1,7 @@
 package histos.cache
 
 import histos.jdk.Sha256
-import histos.schedule.{Action, ActionId, CacheError, Digest, Input, InputName, InputValue}
+import histos.schedule.{Action, ActionDigest, ActionId, CacheError, Digest, Input, InputName, InputValue}
 import histos.workspace.{IoFailure, IoFault}
 import java.nio.file.{Files, Path}
 import java.nio.file.attribute.FileTime
@@ -19,7 +19,7 @@ object CacheSpec extends ZIOSpecDefault:
   private def digest(label: String): Digest =
     ActionId.from(label) match
       case Right(id) =>
-        Digest.of(
+        ActionDigest.of(
           Action(
             id,
             List(Input(InputName.trusted("n"), InputValue.Text(label))),
@@ -27,7 +27,7 @@ object CacheSpec extends ZIOSpecDefault:
           ),
           Map.empty,
         )
-      case Left(_) => Digest.of(Action(idOf("n"), Nil, Nil), Map.empty)
+      case Left(_) => ActionDigest.of(Action(idOf("n"), Nil, Nil), Map.empty)
 
   private def idOf(label: String): ActionId =
     ActionId.from(label) match

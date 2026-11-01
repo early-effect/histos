@@ -5,15 +5,6 @@ import histos.{Aggregate, Module, ProjectGraph, ProjectName}
 /** The modules a compile, test, or publish name asked for. `expanded` came from an aggregate. */
 final case class Selected(modules: List[Module], expanded: Set[ProjectName])
 
-enum SelectError:
-  case Duplicate(name: ProjectName)
-  case Unknown(name: ProjectName)
-
-  def message: String = this match
-    case Duplicate(name) => s"'${name.value}' is listed twice"
-    case Unknown(name)   => s"'${name.value}' is not a project"
-end SelectError
-
 object Selection:
   /** Empty names are every module, in graph order. A module name is that module. An aggregate name is its direct module
     * children. A repeated name is `SelectError.Duplicate`. A token that is not a project name never reaches here.

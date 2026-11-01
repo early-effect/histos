@@ -3,7 +3,7 @@ package histos.native
 import histos.jdk.JdkRuntime
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
-import histos.testrun.SuitePattern
+import histos.testrun.{SuiteMatch, SuitePattern}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -222,7 +222,7 @@ object NativeSuite:
       |    def trace(thrown: Throwable): Unit = thrown.printStackTrace(System.err)
       |
       |final class Shape(val name: String, val module: Boolean, val parents: Array[String])
-      |""".stripMargin.replace("__SUITES__", SuitePattern.embed(patterns))
+      |""".stripMargin.replace("__SUITES__", SuiteMatch.embed(patterns))
 
   private def write(path: Path, text: String): IO[NativeSuiteError, Unit] =
     Workspace
@@ -232,18 +232,3 @@ object NativeSuite:
   private def empty(path: Path): IO[NativeSuiteError, Unit] =
     Workspace.recreate(path).mapError(_ => NativeSuiteError.Write(path)).unit
 end NativeSuite
-
-enum NativeSuiteError:
-  case Resolved(error: ResolveError)
-  case Unavailable
-  case Shapes(error: ClassShapeError)
-  case Compile(error: CompileError)
-  case Write(path: Path)
-
-  def message: String = this match
-    case Resolved(error) => error.message
-    case Unavailable     => "the Scala Native test runner could not be fetched"
-    case Shapes(error)   => error.message
-    case Compile(error)  => error.message
-    case Write(path)     => s"could not write $path"
-end NativeSuiteError

@@ -4,9 +4,19 @@ import histos.jdk.JdkRuntime
 import histos.assembly.Assemble
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.build.BuildEvent
-import histos.cli.{Cli, CompileConsole, GraphText}
-import histos.report.{BuildFault, CallResult, Diagnostic, Observation, Rejection, Report, Stored, WorkflowFault}
-import histos.testrun.{ModuleTest, ModuleTestError, SuitePattern, TestFeed, TestMode, TestRun, TestStatus, TestedCell}
+import histos.cli.{Cli, CompileConsole, GraphText, Lines, Show, TestLogs}
+import histos.report.{BuildFault, CallResult, Diagnostic, Observation, Rejection, Report, Stored, Tally, WorkflowFault}
+import histos.testrun.{
+  ModuleTest,
+  ModuleTestError,
+  SessionFeed,
+  SuitePattern,
+  TestFeed,
+  TestMode,
+  TestRun,
+  TestStatus,
+  TestedCell,
+}
 import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
@@ -369,7 +379,7 @@ object Calls:
                       case histos.program.ProgramError.Compile(_) =>
                         console.announce(text => told(say, text))
                       case _ => ZIO.unit
-                    val result = BuildFault.programStopped(error) match
+                    val result = Faults.programStopped(error) match
                       case Some(why) => CallResult.Fault(why)
                       case None      => CallResult.reported(error.message)
                     announced *> finishNoted(
@@ -645,7 +655,7 @@ object Calls:
             )
             .foldZIO(
               error =>
-                val result = BuildFault.assembleStopped(error) match
+                val result = Faults.assembleStopped(error) match
                   case Some(why) => CallResult.Fault(why)
                   case None      => CallResult.reported(error.message)
                 console.announce(text => told(say, text)) *>
@@ -682,12 +692,12 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
-  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       GraphCompile
         .strict(
           GraphCompile
-            .console(
+            .resident(
               repo,
               graph,
               projects,
@@ -701,7 +711,7 @@ object Calls:
         .foldZIO(
           {
             case error: GraphCompileError =>
-              val result = BuildFault.compileStopped(error) match
+              val result = Faults.compileStopped(error) match
                 case Some(why) => CallResult.Fault(why)
                 case None      => CallResult.reported(Cli.compileFailure(error))
               console.announce(text => told(say, text)) *>
@@ -800,13 +810,15 @@ object Calls:
       case Left(error) => fault(say, BuildFault.Preview(error))
       case Right(plan) => told(say, Plan.renderRun(plan)) *> ok(say)
 
-  /** No names wipe every product root and do not read `graph`. */
+  /** No names wipe every product root and do not read `graph`. The resident memo and compiler go with the products. A
+    * deleted source is not still a hit.
+    */
   def clean(
       repo: Path,
       graph: ProjectGraph,
       projects: List[ProjectName],
       say: Say,
-  ): IO[ServerError, Unit] =
+  ): ZIO[histos.zinc.CompileMemo & histos.zinc.Compilers, ServerError, Unit] =
     val removed =
       if projects.isEmpty then histos.clean.Products.wipe(repo).as(histos.clean.Products.line(Nil))
       else
@@ -815,33 +827,42 @@ object Calls:
           .map(histos.clean.Products.line)
     removed.foldZIO(
       error => fault(say, cleanFault(error)),
-      line => told(say, line) *> ok(say),
+      line => release *> told(say, line) *> ok(say),
     )
 
-  def wipe(repo: Path, say: Say): IO[ServerError, Unit] =
+  def wipe(repo: Path, say: Say): ZIO[histos.zinc.CompileMemo & histos.zinc.Compilers, ServerError, Unit] =
     histos.clean.Products
       .wipe(repo)
       .foldZIO(
         error => fault(say, BuildFault.Io(error)),
-        _ => told(say, histos.clean.Products.line(Nil)) *> ok(say),
+        _ => release *> told(say, histos.clean.Products.line(Nil)) *> ok(say),
       )
 
   /** Products go first. A store failure is exit 3 and does not claim success.
     */
-  def cleanFull(repo: Path, say: Say): ZIO[ContentStore, ServerError, Unit] =
+  def cleanFull(repo: Path, say: Say): ZIO[
+    ContentStore & histos.zinc.CompileMemo & histos.zinc.Compilers,
+    ServerError,
+    Unit,
+  ] =
     histos.clean.Products
       .wipe(repo)
       .foldZIO(
         error => fault(say, BuildFault.Io(error)),
         _ =>
-          ZIO
-            .serviceWithZIO[ContentStore]: store =>
-              zio.Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
-            .foldZIO(
-              error => fault(say, BuildFault.Cache(error)),
-              entries => told(say, histos.clean.Products.forgotten(entries)) *> ok(say),
-            ),
+          release *>
+            ZIO
+              .serviceWithZIO[ContentStore]: store =>
+                zio.Clock.instant.flatMap(now => store.forget(histos.cache.CacheProject.of(repo), now))
+              .foldZIO(
+                error => fault(say, BuildFault.Cache(error)),
+                entries => told(say, histos.clean.Products.forgotten(entries)) *> ok(say),
+              ),
       )
+
+  /** Products are gone, or the build was reloaded. Drop remembered inputs and the resident compiler. */
+  def release: zio.URIO[histos.zinc.CompileMemo & histos.zinc.Compilers, Unit] =
+    histos.zinc.CompileMemo.forget *> ZIO.serviceWithZIO[histos.zinc.Compilers](_.drop)
 
   def test(
       repo: Path,
@@ -852,89 +873,82 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
-  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Unit] =
     CompileConsole.open(repo).flatMap { console =>
       CompileConsole.notes.flatMap { notes =>
         Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
           Ref.make(List.empty[String]).flatMap { missed =>
-            val ran =
-              for
-                runtimes <- Runtimes.read(machine)
-                _        <- ZIO
-                  .fromEither(histos.select.Selection.select(graph, projects))
-                  .mapError(ModuleTestError.Target(_))
-                lock  <- Resolve.readLock(repo).mapError(ModuleTestError.Lock(_))
-                cells <- GraphCompile
-                  .console(
-                    histos.zinc
-                      .CompileSession(repo, graph, jdk, runtimes.native, lock),
-                    projects,
-                    None,
-                  )
-                  .mapError(ModuleTestError.Compile(_))
-                  .mapZIO { feed =>
-                    val sent = feed match
-                      case CompileFeed.Failed(error) =>
-                        missed.update(_ :+ error.message) *>
-                          speak(say, console, feed)
-                      case _ => speak(say, console, feed)
-                    sent.as(compiled(feed))
+            Ref.make(SuiteCount.empty).flatMap { totals =>
+              val close =
+                console.announce(text => told(say, text)) *>
+                  notes.announce(text => told(say, text)) *>
+                  totals.get.flatMap { count =>
+                    ZIO.foreachDiscard(Lines.suites(count.passed, count.failed, count.cached, count.modules.size))(
+                      line => told(say, line)
+                    )
                   }
-                  .collectSome
-                  .runCollect
-                _ <- console.announce(text => told(say, text))
-                _ <- ModuleTest
-                  .suitesLocked(
-                    TestRun(
-                      repo,
-                      graph,
-                      projects,
-                      jdk,
-                      runtimes,
-                      mode,
-                      patterns,
-                      (module, version, platform, facts) =>
-                        notes(module, version, platform, facts)
-                          .flatMap(line => told(say, line).ignore),
-                    ),
-                    cells.toList,
-                    lock,
-                  )
-                  .foreach { feed =>
-                    val sent = say(Message.Event(BuildEvent.Test(feed)))
-                    feed match
-                      case TestFeed.Done(cell) => ranCells.update(_ :+ cell) *> sent
-                      case TestFeed.Begin(_, _, _) | TestFeed.Out(_) | TestFeed.Err(_) | TestFeed.Cached(_, _, _, _) =>
-                        sent
-                  }
-                compileErrors <- missed.get
-                cells         <- ranCells.get
-              yield CallResult.reported(compileErrors.mkString("\n"), cells)
-            ran.foldZIO(
-              {
-                case error: ServerError     => ZIO.fail(error)
-                case error: ModuleTestError =>
-                  console.announce(text => told(say, text)) *>
-                    notes.announce(text => told(say, text)) *>
-                    missed.get.flatMap { compileErrors =>
-                      val summary = error match
-                        case ModuleTestError.NoneMatched(_) if compileErrors.nonEmpty =>
-                          compileErrors.mkString("\n")
-                        case other => other.message
-                      val result = BuildFault.testStopped(error) match
-                        case Some(why) => CallResult.Fault(why)
-                        case None      => CallResult.reported(summary)
-                      finishNoted(
+              val ran =
+                for
+                  runtimes <- Runtimes.read(machine)
+                  _        <- ZIO
+                    .fromEither(histos.select.Selection.select(graph, projects))
+                    .mapError(ModuleTestError.Target(_))
+                  _ <- ModuleTest
+                    .sessionOn(
+                      TestRun(
                         repo,
-                        say,
-                        console,
-                        List(console.observation, notes.observation),
-                        result,
+                        graph,
+                        projects,
+                        jdk,
+                        runtimes,
+                        mode,
+                        patterns,
+                        (module, version, platform, facts) =>
+                          notes(module, version, platform, facts)
+                            .flatMap(line => told(say, line).ignore),
                       )
+                    )
+                    .foreach {
+                      case SessionFeed.Compile(feed) =>
+                        feed match
+                          case CompileFeed.Failed(error) =>
+                            missed.update(_ :+ error.message) *> speak(say, console, feed)
+                          case _ => speak(say, console, feed)
+                      case SessionFeed.Test(feed) =>
+                        remember(totals, feed) *>
+                          logTest(repo, graph, feed) *>
+                          say(Message.Event(BuildEvent.Test(feed))) *>
+                          (feed match
+                            case TestFeed.Done(cell) => ranCells.update(_ :+ cell)
+                            case _                   => ZIO.unit)
                     }
-              },
-              result =>
-                notes.announce(text => told(say, text)) *>
+                  _             <- close
+                  compileErrors <- missed.get
+                  cells         <- ranCells.get
+                yield CallResult.reported(compileErrors.mkString("\n"), cells)
+              ran.foldZIO(
+                {
+                  case error: ServerError     => ZIO.fail(error)
+                  case error: ModuleTestError =>
+                    close *>
+                      missed.get.flatMap { compileErrors =>
+                        val summary = error match
+                          case ModuleTestError.NoneMatched(_) if compileErrors.nonEmpty =>
+                            compileErrors.mkString("\n")
+                          case other => other.message
+                        val result = Faults.testStopped(error) match
+                          case Some(why) => CallResult.Fault(why)
+                          case None      => CallResult.reported(summary)
+                        finishNoted(
+                          repo,
+                          say,
+                          console,
+                          List(console.observation, notes.observation),
+                          result,
+                        )
+                      }
+                },
+                result =>
                   finishNoted(
                     repo,
                     say,
@@ -942,7 +956,8 @@ object Calls:
                     List(console.observation, notes.observation),
                     result,
                   ),
-            )
+              )
+            }
           }
         }
       }
@@ -1057,13 +1072,42 @@ object Calls:
   ): IO[ServerError, Unit] =
     console.hear(feed) *> say(Message.Event(BuildEvent.Compile(feed)))
 
-  private def compiled(feed: CompileFeed): Option[histos.zinc.CompiledCell] =
+  private def remember(totals: Ref[SuiteCount], feed: TestFeed): UIO[Unit] =
     feed match
-      case CompileFeed.Done(cell)             => Some(cell)
-      case CompileFeed.Began(_, _, _)         => None
-      case CompileFeed.Diagnostic(_, _, _, _) => None
-      case CompileFeed.Miss(_, _, _, _)       => None
-      case CompileFeed.Failed(_)              => None
+      case TestFeed.Done(cell) =>
+        val name = cell.module.value
+        cell.status match
+          case TestStatus.Passed =>
+            totals.update(count => count.copy(passed = count.passed + 1, modules = count.modules + name))
+          case TestStatus.Failed(_) =>
+            totals.update(count => count.copy(failed = count.failed + 1, modules = count.modules + name))
+          case TestStatus.NoTests | TestStatus.Unmatched => ZIO.unit
+      case TestFeed.Cached(module, _, _, _) =>
+        totals.update(count => count.copy(cached = count.cached + 1, modules = count.modules + module.value))
+      case TestFeed.Begin(_, _, _) | TestFeed.Out(_, _, _, _) | TestFeed.Err(_, _, _, _) =>
+        ZIO.unit
+
+  /** The file gets the same plain lines the console prints. The status line is the last line of that cell.
+    */
+  private def logTest(repo: Path, graph: ProjectGraph, feed: TestFeed): UIO[Unit] =
+    if !graph.testLog then ZIO.unit
+    else
+      val (module, version, platform) = feed match
+        case TestFeed.Begin(module, version, platform)     => (module, version, platform)
+        case TestFeed.Out(module, version, platform, _)    => (module, version, platform)
+        case TestFeed.Err(module, version, platform, _)    => (module, version, platform)
+        case TestFeed.Done(cell)                           => (cell.module, cell.version, cell.platform)
+        case TestFeed.Cached(module, version, platform, _) => (module, version, platform)
+      val lines = Show(repo, BuildEvent.Test(feed)).collect {
+        case CompileConsole.Line.Out(text) if text.nonEmpty => text
+        case CompileConsole.Line.Err(text) if text.nonEmpty => text
+      }
+      ZIO.foreachDiscard(lines)(line => TestLogs.append(repo, module, version, platform, line))
+
+  private final case class SuiteCount(passed: Int, failed: Int, cached: Int, modules: Set[String])
+
+  private object SuiteCount:
+    val empty: SuiteCount = SuiteCount(0, 0, 0, Set.empty)
 
   private def failedSuite(status: TestStatus): Boolean =
     status match
@@ -1125,7 +1169,7 @@ object Calls:
       result: CallResult,
   ): IO[ServerError, Unit] =
     ZIO.foreach(parts)(identity).flatMap { found =>
-      val observation = Observation.combine(found)
+      val observation = Tally.combine(found)
       val remembered  = observation match
         case Some(value) => say.keep(value)
         case None        => say.forget

@@ -9,26 +9,6 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import zio.{IO, ZIO}
 
-/** A stored success could not be written, read, or removed, or the text was not a success digest. A missing record is
-  * not one of these: [[QuickRecord.hit]] treats that as a miss.
-  */
-enum QuickError:
-  case Save(failure: IoFailure)
-  case Clear(failure: IoFailure)
-  case Read(failure: IoFailure)
-  case Shape(path: Path)
-  case Hash(path: Path, error: Sha256Error)
-  case Suite(error: SuiteNameError)
-
-  def message: String = this match
-    case Save(failure)     => failure.message
-    case Clear(failure)    => failure.message
-    case Read(failure)     => failure.message
-    case Shape(path)       => s"quick record $path is not a stored success"
-    case Hash(path, error) => s"quick record $path ${error.message}"
-    case Suite(error)      => error.message
-end QuickError
-
 /** A stored success. A missing record, or a different digest, is not a success. An unreadable record, or a record that
   * is not `success` plus a sha256, is [[QuickError]]. A failed save or clear is [[QuickError]].
   */

@@ -18,8 +18,12 @@ object NodeSpec extends ZIOSpecDefault:
       val newer = NodeVersion.from("25.2.0")
       assertTrue(
         NodeToolchain.Floor.value == "25",
-        newer.exists(_.atLeast(NodeToolchain.Floor)),
-        older.exists(!_.atLeast(NodeToolchain.Floor)),
+        newer.exists(found =>
+          histos.toolchain.VersionOrder.atLeast(found.value, NodeToolchain.Floor.value, stripJavaOne = false)
+        ),
+        older.exists(found =>
+          !histos.toolchain.VersionOrder.atLeast(found.value, NodeToolchain.Floor.value, stripJavaOne = false)
+        ),
       )
     ,
     test("a present Node 25 is accepted and nothing is fetched"):

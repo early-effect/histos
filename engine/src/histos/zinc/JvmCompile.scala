@@ -21,115 +21,19 @@ import scala.util.control.NonFatal
 
 import sbt.internal.inc.{FileAnalysisStore, IncrementalCompilerImpl, Locate, MappedFileConverter, Stamps}
 import sbt.util.Logger
-import xsbti.compile.{CompileAnalysis, CompileOrder, IncOptions, PerClasspathEntryLookup, PreviousResult}
+import xsbti.compile.{
+  AnalysisContents,
+  CompileAnalysis,
+  CompileOrder,
+  IncOptions,
+  PerClasspathEntryLookup,
+  PreviousResult,
+}
 
-import zio.{Chunk, IO, ZIO}
+import zio.{Chunk, IO, UIO, ZIO}
 
 export histos.ScalacFlag
 export histos.ScalacFlags
-
-enum ClasspathBan:
-  case Scala3Compiler
-  case Scala2Compiler
-  case Histos
-
-  def label: String = this match
-    case Scala3Compiler => "the Scala 3 compiler"
-    case Scala2Compiler => "the Scala 2 compiler"
-    case Histos         => "histos"
-end ClasspathBan
-
-/** A line the compiler produced. It is text because the compiler speaks text.
-  */
-opaque type CompileDiagnostic = String
-
-object CompileDiagnostic:
-  def fromCompiler(raw: String): CompileDiagnostic           = raw
-  extension (diagnostic: CompileDiagnostic) def text: String = diagnostic
-
-/** A jar the Scala 2.13 toolchain must contain exactly once. */
-enum CompilerPart:
-  case Library, Compiler, Reflect, Bridge, Scala3Compiler, Scala3Bridge,
-    Scala3Library
-
-  def label: String = this match
-    case Library        => "scala-library"
-    case Compiler       => "scala-compiler"
-    case Reflect        => "scala-reflect"
-    case Bridge         => "scala2-sbt-bridge"
-    case Scala3Compiler => "scala3-compiler"
-    case Scala3Bridge   => "scala3-sbt-bridge"
-    case Scala3Library  => "scala3-library"
-end CompilerPart
-
-/** Why the compiler a module named could not be loaded. */
-enum ToolchainMiss:
-  case Fetch(version: ScalaVersion)
-  case Missing(version: ScalaVersion, part: CompilerPart)
-  case Duplicated(version: ScalaVersion, part: CompilerPart)
-  case Unexpected(version: ScalaVersion, jars: List[Path])
-  case Library(requested: ScalaVersion, found: ScalaVersion)
-  case Plugin(version: ScalaVersion)
-
-  def message: String = this match
-    case Fetch(version)  => s"the ${version.value} compiler could not be fetched"
-    case Plugin(version) =>
-      s"semanticdb-scalac for ${version.value} could not be fetched"
-    case Missing(version, part) =>
-      s"the ${version.value} fetch has no ${part.label}"
-    case Duplicated(version, part) =>
-      s"the ${version.value} fetch has more than one ${part.label}"
-    case Unexpected(version, jars) =>
-      val names = jars.map(path => Option(path.getFileName).map(_.toString).getOrElse(path.toString))
-      s"the ${version.value} fetch included ${names.mkString(", ")}"
-    case Library(requested, found) =>
-      s"the ${requested.value} fetch brought Scala library ${found.value}"
-end ToolchainMiss
-
-enum CompileError:
-  case Resolved(error: ResolveError)
-  case UnsupportedPlatform(platform: Platform)
-  case UnsupportedScala(version: ScalaVersion)
-  case NoSources
-  case Banned(path: Path, ban: ClasspathBan)
-  case Failed(diagnostics: List[CompileDiagnostic])
-  case Toolchain(miss: ToolchainMiss)
-  case Io(failure: histos.workspace.IoFailure)
-  case JsLibrary(miss: JsLibraryMiss)
-  case NativeFetch(error: histos.native.NativeFetch)
-  case NativeOrigin(error: histos.native.NativeToolchainError)
-  case NativeLibrary(text: String)
-  case Stored(error: CacheError)
-
-  def message: String = this match
-    case Resolved(error)               => error.message
-    case UnsupportedPlatform(platform) => s"compile does not support $platform"
-    case UnsupportedScala(version)     =>
-      s"compile supports Scala 3 and Scala 2.13, not ${version.value}"
-    case NoSources         => "compile has no sources"
-    case Banned(path, ban) =>
-      s"$path is ${ban.label} and is not a user dependency"
-    case Failed(diagnostics) => diagnostics.map(_.text).mkString("\n")
-    case Toolchain(miss)     => miss.message
-    case Io(failure)         => failure.message
-    case JsLibrary(miss)     => miss.message
-    case NativeFetch(error)  => error.message
-    case NativeOrigin(error) => error.message
-    case NativeLibrary(text) => text
-    case Stored(error)       => error.message
-end CompileError
-
-/** Why the Scala.js standard library did not arrive. The compiler's `-scalajs` backend needs it instead of
-  * `scala-library`.
-  */
-enum JsLibraryMiss:
-  case Unavailable
-  case Empty
-
-  def message: String = this match
-    case Unavailable => "the Scala.js library could not be fetched"
-    case Empty       => "the Scala.js library resolve was empty"
-end JsLibraryMiss
 
 final case class CompileToolchain(
     version: ScalaVersion,
@@ -150,16 +54,6 @@ final case class CompileRequest(
     compilerPlugins: List[histos.resolve.ToolInput] = Nil,
 )
 
-/** Source files Zinc compiled or left unchanged this round. */
-final case class SourceCount(compiled: Int, skipped: Int)
-
-/** What one compile decided. Absent counts are unknown, not zero. */
-final case class CompileFacts(
-    changed: Boolean,
-    sources: Option[SourceCount],
-    classesWritten: Option[Int],
-)
-
 final case class CompileOutput(
     classes: Path,
     classFiles: Int,
@@ -172,28 +66,7 @@ final case class CompileOutput(
   def facts: CompileFacts =
     CompileFacts(changed, sources, classesWritten)
 
-/** Zinc positions are 1-based. Dotty positions are already 0-based. */
-enum PositionBase:
-  case Zinc
-  case Dotty
-
-enum CompileSeverity:
-  case Error, Warn, Info
-
-/** One compiler message. A missing path is a log line, not a squiggle. */
-final case class CompileProblem(
-    message: String,
-    path: Option[Path],
-    severity: CompileSeverity,
-    startLine: Option[Int],
-    startColumn: Option[Int],
-    endLine: Option[Int],
-    endColumn: Option[Int],
-    base: PositionBase,
-):
-  def text: String = message
-
-object CompileProblem:
+object ZincProblem:
   def text(message: String): CompileProblem =
     CompileProblem(
       message,
@@ -227,7 +100,7 @@ object CompileProblem:
 
   private def opt(value: java.util.Optional[Integer]): Option[Int] =
     value.toScala.map(_.intValue)
-end CompileProblem
+end ZincProblem
 
 /** SemanticDB flags beside `ScalacFlags.argv`. They are not flag cases: `-sourceroot` carries a path.
   */
@@ -294,13 +167,13 @@ object JvmCompile:
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
     else CompileReplay.isolated(compilePrepared(request, Nil, extra, hear))
 
-  /** Uses the batch's compiler pool when a compile is already inside one. */
+  /** Uses the compiler service in the environment. The service keeps the pool. */
   private[zinc] def compilePooled(
-      pool: CompilerPool,
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
+      admitted: UIO[Unit] = ZIO.unit,
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     val tool = request.toolchain
     if tool.platform != Platform.Jvm then ZIO.fail(CompileError.UnsupportedPlatform(tool.platform))
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
@@ -315,7 +188,7 @@ object JvmCompile:
             None,
             CompileInputs.declared(request, digest),
             CompileKey.of(request, digest),
-            Some(pool),
+            admitted,
           )
 
   /** Compile with the Scala compiler the request names. Plugins are not user dependencies. `hear` is called on the
@@ -327,6 +200,14 @@ object JvmCompile:
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
   ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
+    ZIO.scoped(prepared(request, plugins, extra, hear).provideSomeLayer(Compilers.live(1)))
+
+  private def prepared(
+      request: CompileRequest,
+      plugins: List[Path],
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
        else
@@ -444,7 +325,16 @@ object JvmCompile:
       plugins: List[Path],
       extra: List[String],
       hear: CompileProblem => Unit = _ => (),
-  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+    compileWithService(request, stdlib, plugins, extra, hear)
+
+  private def compileWithService(
+      request: CompileRequest,
+      stdlib: List[Path],
+      plugins: List[Path],
+      extra: List[String],
+      hear: CompileProblem => Unit,
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
       ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned) *>
@@ -468,24 +358,19 @@ object JvmCompile:
       stdlib: Option[List[Path]] = None,
       rows: List[CompileRow],
       key: Sha256,
-      pool: Option[CompilerPool] = None,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
-    pool match
-      case Some(found) => drive(found, request, extra, hear, stdlib, rows, key)
-      case None        =>
-        ZIO.scoped(
-          CompilerPool.make.flatMap(drive(_, request, extra, hear, stdlib, rows, key))
-        )
+      admitted: UIO[Unit] = ZIO.unit,
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
+    drive(request, extra, hear, stdlib, rows, key, admitted)
 
   private def drive(
-      pool: CompilerPool,
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,
       stdlib: Option[List[Path]],
       rows: List[CompileRow],
       key: Sha256,
-  ): ZIO[LockedTools & ContentStore & CompilerStarts, CompileError, CompileOutput] =
+      admitted: UIO[Unit],
+  ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     val version = request.toolchain.version
     ZIO.serviceWithZIO[LockedTools]: tools =>
       for
@@ -503,18 +388,20 @@ object JvmCompile:
                   compiler :: request.compilerPlugins ++ request.compilationTools
                 val prints = (compiler :: request.compilerPlugins).map(_.fingerprint)
                 cached(
-                  pool,
                   request,
                   CompilerArtifacts(
                     stdlib.getOrElse(toolchain.runtime),
                     toolchain.compilerClasspath,
                     toolchain.bridgeJar,
                     inputs,
+                    toolchain.loaderJars,
+                    toolchain.boundary,
                   ),
                   extra,
                   hear,
                   CompileInputs.withCompiler(rows, prints),
                   CompileKey.withTools(key, prints),
+                  admitted,
                 )
           case Some(ScalaSeries.Scala2(13)) =>
             for
@@ -532,18 +419,20 @@ object JvmCompile:
               ) ++ request.compilerPlugins ++ request.compilationTools
               prints = (List(compiler, semantic) ++ request.compilerPlugins).map(_.fingerprint)
               compiled <- cached(
-                pool,
                 request,
                 CompilerArtifacts(
                   jars.runtime,
                   jars.compilerClasspath,
                   jars.bridgeJar,
                   inputs,
+                  jars.loaderJars,
+                  jars.boundary,
                 ),
                 s"-Xplugin:${plugin.toAbsolutePath.normalize}" :: extra,
                 hear,
                 CompileInputs.withCompiler(rows, prints),
                 CompileKey.withTools(key, prints),
+                admitted,
               )
             yield compiled
           case _ => ZIO.fail(CompileError.UnsupportedScala(version))
@@ -551,14 +440,14 @@ object JvmCompile:
 
   /** A stored key is restored before the pool opens a compiler. A miss ticks, compiles, then stores. */
   private def cached(
-      pool: CompilerPool,
       request: CompileRequest,
       artifacts: CompilerArtifacts,
       extra: List[String],
       hear: CompileProblem => Unit,
       rows: List[CompileRow],
       key: Sha256,
-  ): ZIO[ContentStore & CompilerStarts, CompileError, CompileOutput] =
+      admitted: UIO[Unit],
+  ): ZIO[ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     for
       store  <- ZIO.service[ContentStore]
       hit    <- CompileReplay.load(store, key, request)
@@ -569,8 +458,8 @@ object JvmCompile:
           for
             change  <- CompileInputs.explain(store, request.analysis, rows)
             written <- CompilerStarts.tick *>
-              pool
-                .compile(request, artifacts, extra, hear, key)
+              ZIO
+                .serviceWithZIO[Compilers](_.compile(request, artifacts, extra, hear, key, admitted))
                 .tap: done =>
                   CompileReplay.save(store, done.key, request) *>
                     CompileInputs.remember(store, request.analysis, rows)
@@ -585,7 +474,8 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
       key: Sha256,
-  ): Either[CompileError, CompileOutput] =
+      known: Map[Path, AnalysisContents],
+  ): Either[CompileError, (CompileOutput, Option[AnalysisContents])] =
     val zinc        = new IncrementalCompilerImpl
     val converter   = MappedFileConverter.empty
     val reporter    = CollectingReporter(hear)
@@ -593,11 +483,11 @@ object JvmCompile:
     val ownAnalysis = request.analysis.toAbsolutePath.normalize
     val lookup      = new PerClasspathEntryLookup:
       def analysis(entry: xsbti.VirtualFile) =
-        classpathAnalysis(converter.toPath(entry), ownClasses, ownAnalysis)
+        classpathAnalysis(converter.toPath(entry), ownClasses, ownAnalysis, known)
       def definesClass(entry: xsbti.VirtualFile) = Locate.definesClass(entry)
     Files.createDirectories(request.classes)
     Files.createDirectories(request.analysis)
-    val (previous, prior) = priorResult(zinc, request.analysis)
+    val (previous, prior) = priorResult(zinc, request.analysis, known)
     val setup             = zinc.setup(
       lookup,
       false,
@@ -651,14 +541,17 @@ object JvmCompile:
                 ProductDigest.write(request.analysis, request.classes).map(_ => sourceCount(prior, found))
           case _ => Right(None)
         recorded.map: files =>
-          CompileOutput(
-            request.classes,
-            countClasses(request.classes),
-            key,
-            result.hasModified,
-            files,
-            writtenClasses(before, request.classes),
-            None,
+          (
+            CompileOutput(
+              request.classes,
+              countClasses(request.classes),
+              key,
+              result.hasModified,
+              files,
+              writtenClasses(before, request.classes),
+              None,
+            ),
+            Some(result),
           )
     catch
       case _: xsbti.CompileFailed =>
@@ -672,16 +565,26 @@ object JvmCompile:
       entry: Path,
       ownClasses: Path,
       ownAnalysis: Path,
+      known: Map[Path, AnalysisContents],
   ): Optional[CompileAnalysis] =
     val path = entry.toAbsolutePath.normalize
     if path == ownClasses || !Files.isDirectory(path) then Optional.empty
     else
       GraphCompile.analysisDirOf(path) match
         case Some(dir) if dir.toAbsolutePath.normalize != ownAnalysis =>
-          val zip = dir.resolve("inc.zip")
-          if Files.isRegularFile(zip) then storedAnalysis(zip)
-          else Optional.empty
+          val normal = dir.toAbsolutePath.normalize
+          known.get(normal) match
+            case Some(contents) => analysisOf(contents)
+            case None           =>
+              val zip = normal.resolve("inc.zip")
+              if Files.isRegularFile(zip) then storedAnalysis(zip)
+              else Optional.empty
         case _ => Optional.empty
+
+  private def analysisOf(contents: AnalysisContents): Optional[CompileAnalysis] =
+    contents.getAnalysis match
+      case analysis: sbt.internal.inc.Analysis => Optional.of(analysis)
+      case _                                   => Optional.empty
 
   private def storedAnalysis(zip: Path): Optional[CompileAnalysis] =
     FileAnalysisStore.binary(zip.toFile).get().toScala match
@@ -702,15 +605,24 @@ object JvmCompile:
   private def priorResult(
       zinc: IncrementalCompilerImpl,
       dir: Path,
+      known: Map[Path, AnalysisContents],
   ): (PreviousResult, Prior) =
-    val got = FileAnalysisStore.binary(dir.resolve("inc.zip").toFile).get()
-    got.toScala match
-      case None           => (zinc.emptyPreviousResult, Prior.Absent)
-      case Some(contents) =>
-        val prior = contents.getAnalysis match
-          case analysis: sbt.internal.inc.Analysis => Prior.Known(analysis)
-          case _                                   => Prior.Unreadable
-        (zinc.previousResult(contents), prior)
+    known.get(dir.toAbsolutePath.normalize) match
+      case Some(contents) => remembered(zinc, contents)
+      case None           =>
+        val got = FileAnalysisStore.binary(dir.resolve("inc.zip").toFile).get()
+        got.toScala match
+          case None           => (zinc.emptyPreviousResult, Prior.Absent)
+          case Some(contents) => remembered(zinc, contents)
+
+  private def remembered(
+      zinc: IncrementalCompilerImpl,
+      contents: AnalysisContents,
+  ): (PreviousResult, Prior) =
+    val prior = contents.getAnalysis match
+      case analysis: sbt.internal.inc.Analysis => Prior.Known(analysis)
+      case _                                   => Prior.Unreadable
+    (zinc.previousResult(contents), prior)
 
   /** Sources attributed to compilations that were not in the previous analysis. None when a new cycle exists and no
     * source can be named.
@@ -851,6 +763,6 @@ private final class CollectingReporter(hear: CompileProblem => Unit) extends xsb
   def problems(): Array[xsbti.Problem]  = found.iterator.asScala.toArray
   def log(problem: xsbti.Problem): Unit =
     found.add(problem)
-    hear(CompileProblem.fromZinc(problem))
+    hear(ZincProblem.fromZinc(problem))
   def comment(position: xsbti.Position, message: String): Unit = ()
 end CollectingReporter

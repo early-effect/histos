@@ -178,5 +178,23 @@ while [ "$i" -le "$#" ]; do
   quoted_args="$quoted_args $(shell_quote "$one")"
   i=$((i + 1))
 done
+client=$root/dist/histos-client
+jar_client=1
+if [ "$#" -ge 1 ]; then
+  case $1 in
+    server|bsp|mcp) jar_client=1 ;;
+    *)
+      if [ -f "$client" ] && [ -x "$client" ]; then jar_client=0; fi
+      ;;
+  esac
+fi
+if [ "$jar_client" -eq 0 ]; then
+  HISTOS_JAVA=$java_bin
+  HISTOS_JAR=$jar
+  HISTOS_ROOT=$root
+  HISTOS_VERSION="histos $version"
+  export HISTOS_JAVA HISTOS_JAR HISTOS_ROOT HISTOS_VERSION
+  exec "$client" "$@"
+fi
 eval "set -- ${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
 exec "$java_bin" "$@"

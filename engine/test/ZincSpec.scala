@@ -489,11 +489,15 @@ object ZincSpec extends ZIOSpecDefault:
           jdk    <- running
           source <- ZIO.attempt(write(root, "Hello.scala", hello))
           req = liveRequest(root, source, jdk)
-          pool   <- CompilerPool.make
-          _      <- CompileReplay.isolated(JvmCompile.compilePooled(pool, req, Nil, _ => ()))
-          opened <- pool.openings
-          _      <- CompileReplay.isolated(JvmCompile.compilePooled(pool, req, Nil, _ => ()))
-          again  <- pool.openings
+          compilers <- Compilers.live(1).build.map(_.get[Compilers])
+          _         <- CompileReplay
+            .isolated(JvmCompile.compilePooled(req, Nil, _ => ()))
+            .provideSomeLayer(ZLayer.succeed(compilers))
+          opened <- compilers.openings
+          _      <- CompileReplay
+            .isolated(JvmCompile.compilePooled(req, Nil, _ => ()))
+            .provideSomeLayer(ZLayer.succeed(compilers))
+          again <- compilers.openings
         yield assertTrue(opened == 1 && again == 1)
     ,
     test("user code cannot see the compiler"):

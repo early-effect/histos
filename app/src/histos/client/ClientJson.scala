@@ -2,6 +2,7 @@ package histos.client
 
 import heddle.endpoint.Schema
 import histos.report.WireJson.given
+import histos.report.WireSchema.given
 import histos.server.{ServerError, ServerIo}
 
 import zio.json.JsonCodec
@@ -16,4 +17,3 @@ object ClientJson:
   given Schema[Session.SessionError]    = Schema.derived
   given JsonCodec[Session.CallProblem]  = JsonCodec.derived
   given Schema[Session.CallProblem]     = Schema.derived
-end ClientJson

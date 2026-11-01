@@ -42,7 +42,7 @@ object PreflightSpec extends ZIOSpecDefault:
   private val checks = suite("preflights")(
     test("an unset portal is central, and the public registries are repo1 and the ubuntu keyserver"):
       val gav    = Widget
-      val trust  = TransportFault.from(ClientError.InvalidTrust("s3cret"))
+      val trust  = TransportFaults.from(ClientError.InvalidTrust("s3cret"))
       val down   = PreflightError.RepositoryDown(gav, trust)
       val key    = PreflightError.KeyDown(trust)
       val spaced = ("ab" * 20).grouped(4).mkString(" ")

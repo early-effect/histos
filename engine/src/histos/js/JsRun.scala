@@ -146,16 +146,3 @@ object JsRun:
   private def empty(path: Path): IO[JsRunError, Unit] =
     Workspace.recreate(path).mapError(_ => JsRunError.Write(path)).unit
 end JsRun
-
-enum JsRunError:
-  case Resolved(error: ResolveError)
-  case Unavailable
-  case Compile(error: CompileError)
-  case Write(path: Path)
-
-  def message: String = this match
-    case Resolved(error) => error.message
-    case Unavailable     => "the JavaScript environment could not be fetched"
-    case Compile(error)  => error.message
-    case Write(path)     => s"could not write $path"
-end JsRunError

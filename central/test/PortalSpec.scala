@@ -44,7 +44,7 @@ object PortalSpec extends ZIOSpecDefault:
       )
     ,
     test("the default portal is central and http stays on loopback"):
-      val trust = PortalError.Transport(TransportFault.from(ClientError.InvalidTrust("s3cret")))
+      val trust = PortalError.Transport(TransportFaults.from(ClientError.InvalidTrust("s3cret")))
       val down  = PortalError.Transport(TransportFault.Connect("example.test", 443))
       assertTrue(
         PortalBase.from("https://central.sonatype.com") == Right(PortalBase.central),

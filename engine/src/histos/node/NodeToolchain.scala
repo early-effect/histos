@@ -8,13 +8,6 @@ import java.nio.file.Path
 
 import zio.{IO, ZIO}
 
-/** The Node a Js launch will run. */
-final case class NodeSurvey(
-    binary: NodeBinary,
-    version: NodeVersion,
-    identity: RuntimeIdentity,
-)
-
 final case class NodeRuntime(
     binary: NodeBinary,
     version: NodeVersion,
@@ -63,7 +56,9 @@ object NodeToolchain:
         .mapError(error => NodeMiss.Rejected(path, NodeReject.UnreadableVersion(error)))
       _ <- ZIO
         .fail(NodeMiss.TooOld(Floor, version, path))
-        .unless(version.atLeast(Floor))
+        .unless(
+          histos.toolchain.VersionOrder.atLeast(version.value, Floor.value, stripJavaOne = false)
+        )
       binary   <- NodeProbe.binary(path).mapError(NodeMiss.Unresolved(_))
       identity <- RuntimeFiles
         .identity(path, version.value)

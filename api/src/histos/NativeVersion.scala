@@ -2,13 +2,15 @@ package histos
 
 import _root_.scala.annotation.publicInBinary
 
-/** A Scala Native toolchain revision, such as `0.5.12` or `0.5.13-SNAPSHOT`. Not an ABI suffix. */
+/** A Scala Native toolchain revision, such as `0.5.12`, `0.5.13-SNAPSHOT`, or a nightly
+  * `0.5.13-20261030-eb3f3b8-SNAPSHOT`. Not an ABI suffix.
+  */
 opaque type NativeVersion = String
 
 object NativeVersion:
   given CanEqual[NativeVersion, NativeVersion] = CanEqual.derived
 
-  private val Full = """\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?""".r
+  private val Full = """\d+\.\d+\.\d+(-[0-9A-Za-z.]+)*""".r
 
   inline def apply(inline raw: String): NativeVersion = ${ NativeVersionMacro.literal('raw) }
 

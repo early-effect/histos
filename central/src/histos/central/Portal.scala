@@ -151,7 +151,7 @@ object Portal:
   ): ZLayer[Any, PortalError, Portal] =
     val http =
       ZLayer.succeed(Client.Config.default) >>>
-        Client.layer.mapError(error => PortalError.Transport(TransportFault.from(error)))
+        Client.layer.mapError(error => PortalError.Transport(TransportFaults.from(error)))
     http >>> ZLayer.fromFunction((client: Client) => PortalClient(base, credentials, client, note))
 end Portal
 
@@ -257,7 +257,7 @@ private final class PortalClient(
     val headers = Headers.empty.add("Authorization", token).add("User-Agent", "histos")
     client
       .batched(Request(method, url, headers, body))
-      .mapError(error => PortalError.Transport(TransportFault.from(error)))
+      .mapError(error => PortalError.Transport(TransportFaults.from(error)))
 
   private def publishingType(mode: ReleaseMode): String =
     mode match

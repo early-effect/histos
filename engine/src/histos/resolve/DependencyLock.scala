@@ -23,16 +23,6 @@ final case class LockedArtifact(
     classifier: Option[JarClassifier] = None,
 )
 
-/** Which classpath a lock cell is. Compile is published. Test is not. */
-enum ClasspathScope:
-  case Compile
-  case Test
-
-  def header: String = this match
-    case Compile => "cell"
-    case Test    => "test"
-end ClasspathScope
-
 /** One module, Scala version, platform, and classpath. An aggregate has no cell.
   */
 final case class LockedCell(
@@ -64,12 +54,6 @@ final case class DependencyLock(
     plugins: List[LockedPlugin] = Nil,
     tools: List[LockedTool] = Nil,
 )
-
-object PlatformToken:
-  def render(platform: Platform): String = platform.token
-
-  def parse(raw: String): Option[Platform] = Platform.from(raw).toOption
-end PlatformToken
 
 object LinkToken:
   def render(link: LinkStrategy): String =

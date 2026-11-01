@@ -85,71 +85,23 @@ end RepositoryUser
 /** Basic credentials. `password` renders as `Secret(<redacted>)`. */
 final case class RepositorySecret(user: RepositoryUser, password: Config.Secret)
 
-/** Why no HTTP response arrived. The case carries the target, never a throwable or its message. */
-enum TransportFault:
-  case Target(raw: String)
-  case Connect(host: String, port: Int)
-  case ConnectTimeout(host: String, port: Int)
-  case Tls(host: String, port: Int)
-  case ReadTimeout(host: String, port: Int)
-  case Io(host: String, port: Int)
-  case Protocol(host: String, port: Int)
-  case Pool(host: String, port: Int)
-  case Trust
-  case Body
-
-  def message: String = this match
-    case Target(raw)                => s"could not reach the snapshot repository: '$raw' is not a target"
-    case Connect(host, port)        => s"could not connect to the snapshot repository at $host:$port"
-    case ConnectTimeout(host, port) => s"the snapshot repository at $host:$port did not accept a connection"
-    case Tls(host, port)            => s"tls failed with the snapshot repository at $host:$port"
-    case ReadTimeout(host, port)    => s"the snapshot repository at $host:$port stopped answering"
-    case Io(host, port)             => s"the snapshot repository at $host:$port closed the exchange"
-    case Protocol(host, port)       => s"the snapshot repository at $host:$port sent an invalid response"
-    case Pool(host, port)           => s"no free connection to the snapshot repository at $host:$port"
-    case Trust                      => "the snapshot repository trust material is unusable"
-    case Body                       => "the snapshot repository response body failed"
-end TransportFault
-
-object TransportFault:
+object TransportFaults:
   def from(error: ClientError): TransportFault = error match
-    case ClientError.InvalidTarget(target, _)       => Target(target)
-    case ClientError.Connect(authority, _)          => at(authority, Connect.apply)
-    case ClientError.ConnectTimeout(authority)      => at(authority, ConnectTimeout.apply)
-    case ClientError.Tls(authority, _)              => at(authority, Tls.apply)
-    case ClientError.ReadTimeout(authority)         => at(authority, ReadTimeout.apply)
-    case ClientError.Io(authority, _)               => at(authority, Io.apply)
-    case ClientError.Protocol(authority, _)         => at(authority, Protocol.apply)
-    case ClientError.PoolExhausted(authority)       => at(authority, Pool.apply)
-    case ClientError.NotAnEventStream(authority, _) => at(authority, Protocol.apply)
-    case ClientError.InvalidTrust(_)                => Trust
-    case ClientError.BodyFailed(_)                  => Body
+    case ClientError.InvalidTarget(target, _)       => TransportFault.Target(target)
+    case ClientError.Connect(authority, _)          => at(authority, TransportFault.Connect.apply)
+    case ClientError.ConnectTimeout(authority)      => at(authority, TransportFault.ConnectTimeout.apply)
+    case ClientError.Tls(authority, _)              => at(authority, TransportFault.Tls.apply)
+    case ClientError.ReadTimeout(authority)         => at(authority, TransportFault.ReadTimeout.apply)
+    case ClientError.Io(authority, _)               => at(authority, TransportFault.Io.apply)
+    case ClientError.Protocol(authority, _)         => at(authority, TransportFault.Protocol.apply)
+    case ClientError.PoolExhausted(authority)       => at(authority, TransportFault.Pool.apply)
+    case ClientError.NotAnEventStream(authority, _) => at(authority, TransportFault.Protocol.apply)
+    case ClientError.InvalidTrust(_)                => TransportFault.Trust
+    case ClientError.BodyFailed(_)                  => TransportFault.Body
 
   private def at(authority: Authority, make: (String, Int) => TransportFault): TransportFault =
     make(authority.host, authority.port)
-end TransportFault
-
-/** Why snapshot metadata could not name the next build. */
-enum MetadataFault:
-  case MissingBuild
-  case BadBuild
-  case Saturated
-  case Unread
-
-  def message: String = this match
-    case MissingBuild => "snapshot metadata has no build number"
-    case BadBuild     => "snapshot metadata build number is not a positive int"
-    case Saturated    => "snapshot metadata build number cannot increase"
-    case Unread       => "snapshot metadata was not a complete body"
-end MetadataFault
-
-/** A revision that is not a `-SNAPSHOT`. */
-enum SnapshotRevisionError:
-  case NotSnapshot(revision: String)
-
-  def message: String = this match
-    case NotSnapshot(revision) => s"'$revision' is not a snapshot"
-end SnapshotRevisionError
+end TransportFaults
 
 /** The text before `-SNAPSHOT`. */
 opaque type SnapshotBase = String
@@ -381,7 +333,7 @@ private[central] final class SnapshotPublisher(
             .add("User-Agent", "histos")
             .add("Content-Type", "application/octet-stream")
     val request = Request(method, url, headers, body.fold(Body.empty)(Body.fromBytes(_)))
-    client.batched(request).mapError(error => PublishError.Transport(TransportFault.from(error)))
+    client.batched(request).mapError(error => PublishError.Transport(TransportFaults.from(error)))
 
   private final case class Planned(
       group: Organization,

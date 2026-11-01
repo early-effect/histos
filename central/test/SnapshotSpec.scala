@@ -48,14 +48,14 @@ object SnapshotSpec extends ZIOSpecDefault:
     ,
     test("http is only a repository on loopback, and a bad url fails before a publish"):
       val central = "https://central.sonatype.com/repository/maven-snapshots"
-      val trust   = TransportFault.from(ClientError.InvalidTrust("s3cret"))
+      val trust   = TransportFaults.from(ClientError.InvalidTrust("s3cret"))
       assertTrue(
         SnapshotRepository.from(central) == Right(SnapshotRepository.central),
         SnapshotRepository.from(s"$central/") == Right(SnapshotRepository.central),
         SnapshotRepository.from("http://127.0.0.1:9/repo").isRight,
         SnapshotRepository.from("http://example.com/maven") == Left(SnapshotRepository.Error.Insecure("example.com")),
         SnapshotRepository.from("not a url") == Left(SnapshotRepository.Error.Malformed("not a url")),
-        TransportFault.from(ClientError.ConnectTimeout(Authority("central.sonatype.com", 443))) ==
+        TransportFaults.from(ClientError.ConnectTimeout(Authority("central.sonatype.com", 443))) ==
           TransportFault.ConnectTimeout("central.sonatype.com", 443),
         trust == TransportFault.Trust,
         !trust.message.contains("s3cret"),

@@ -25,7 +25,7 @@ import histos.server.{
 import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.schedule.{CacheNamespace, NamespaceError, RemoteError}
-import histos.jdk.{Machine, Toolchain}
+import histos.jdk.{Machine, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
 import histos.preview.{Plan, PreviewError}
@@ -133,174 +133,6 @@ enum CliParseError:
       "publish is snapshots, release, assets, promote, or drop"
 end CliParseError
 
-enum CliExit:
-  case Success, TaskFailed, Usage, LoadFailed, ToolchainFailed, ResolveFailed,
-    WorkflowFailed, TestFailed, CompileFailed, PublishFailed
-  case Program(status: Int)
-  case Interrupted
-
-  def code: Int = this match
-    case Success         => 0
-    case TaskFailed      => 1
-    case Program(status) => status
-    case Interrupted     => 130
-    case Usage           => 2
-    case LoadFailed      => 3
-    case ToolchainFailed => 4
-    case ResolveFailed   => 5
-    case WorkflowFailed  => 6
-    case TestFailed      => 7
-    case CompileFailed   => 8
-    case PublishFailed   => 9
-end CliExit
-
-object CliExit:
-  def fromCode(code: Int): CliExit =
-    code match
-      case 0     => Success
-      case 1     => TaskFailed
-      case 2     => Usage
-      case 3     => LoadFailed
-      case 4     => ToolchainFailed
-      case 5     => ResolveFailed
-      case 6     => WorkflowFailed
-      case 7     => TestFailed
-      case 8     => CompileFailed
-      case 9     => PublishFailed
-      case 130   => Interrupted
-      case other => Program(other)
-
-  /** Histos's own process status. The report does not store it. */
-  def from(call: Call, result: CallResult): CliExit =
-    result match
-      case CallResult.Reported(report) => fromReport(call, report)
-      case CallResult.Fault(fault)     => fromFault(call, fault)
-
-  private def fromReport(call: Call, report: Report): CliExit =
-    report.program match
-      case Some(code) if code != 0 => fromCode(code)
-      case _                       =>
-        if report.tests.exists(failedTest) then TestFailed
-        else if failedFacts(report) then failedCall(call)
-        else Success
-
-  private def failedTest(cell: histos.testrun.TestedCell): Boolean =
-    cell.status match
-      case TestStatus.Failed(_)                                          => true
-      case TestStatus.NoTests | TestStatus.Unmatched | TestStatus.Passed => false
-
-  private def failedFacts(report: Report): Boolean =
-    report.err.nonEmpty || report.diagnostics.exists(_.severity == Severity.Error)
-
-  /** A report that already failed. Publish is 9, test is 7, and every other call is 8. */
-  private def failedCall(call: Call): CliExit =
-    call match
-      case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
-        PublishFailed
-      case _ => CompileFailed
-
-  private def fromFault(call: Call, fault: BuildFault): CliExit =
-    fault match
-      case BuildFault.Load(_)                            => LoadFailed
-      case BuildFault.Resolve(_)                         => resolveExit(call)
-      case BuildFault.Toolchain(_)                       => ToolchainFailed
-      case BuildFault.Survey(_)                          => ToolchainFailed
-      case BuildFault.Select(_)                          => selectExit(call)
-      case BuildFault.Pattern(_)                         => Usage
-      case BuildFault.Compile(error)                     => compileExit(call, error)
-      case BuildFault.Test(error)                        => testFaultExit(error)
-      case BuildFault.Publish(_) | BuildFault.Release(_) => PublishFailed
-      case BuildFault.Workflow(_)                        => WorkflowFailed
-      case BuildFault.Program(error)                     => programFaultExit(error)
-      case BuildFault.Platform(_)                        => TaskFailed
-      case BuildFault.Task(_)                            => TaskFailed
-      case BuildFault.Plugin(_)                          => TaskFailed
-      case BuildFault.PluginTask(_)                      => TaskFailed
-      case BuildFault.Preview(_)                         => previewExit(call)
-      case BuildFault.Assemble(_)                        => CompileFailed
-      case BuildFault.Launcher(_)                        => ResolveFailed
-      case BuildFault.Cache(_) | BuildFault.Remote(_)    => LoadFailed
-      case BuildFault.Store(_)                           => LoadFailed
-      case BuildFault.Io(_)                              => ioExit(call)
-      case BuildFault.Version(_)                         => TaskFailed
-      case BuildFault.Watch(_)                           => TaskFailed
-      case BuildFault.Interrupted                        => Interrupted
-      case BuildFault.Rejected(rejection)                => rejectedExit(rejection)
-
-  /** No lock is 8 for compile and assembly, 9 for publish, and 5 for test, run, and resolve. */
-  private def resolveExit(call: Call): CliExit =
-    call match
-      case Call.Compile(_) | Call.PreviewCompile(_) | Call.Assembly(_) => CompileFailed
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
-        PublishFailed
-      case _ => ResolveFailed
-
-  private def selectExit(call: Call): CliExit =
-    call match
-      case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
-      case Call.Test(_, _, _) | Call.PreviewTest(_)                    => TestFailed
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
-        PublishFailed
-      case _ => TaskFailed
-
-  private def compileExit(call: Call, error: GraphCompileError): CliExit =
-    error match
-      case GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) => resolveExit(call)
-      case _                                                         =>
-        call match
-          case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
-          case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-              Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) |
-              Call.PreviewPublishSnapshots(_) =>
-            PublishFailed
-          case _ => CompileFailed
-
-  private def testFaultExit(error: ModuleTestError): CliExit =
-    error match
-      case ModuleTestError.Pattern(_)                                                         => Usage
-      case ModuleTestError.Lock(_) | ModuleTestError.LockRead(_)                              => ResolveFailed
-      case ModuleTestError.Compile(GraphCompileError.Lock(_) | GraphCompileError.LockRead(_)) =>
-        ResolveFailed
-      case _ => TestFailed
-
-  private def programFaultExit(error: ProgramError): CliExit =
-    error match
-      case ProgramError.Compile(GraphCompileError.Lock(_) | GraphCompileError.LockRead(_)) => ResolveFailed
-      case ProgramError.Lock(_) | ProgramError.LockRead(_)                                 => ResolveFailed
-      case ProgramError.Compile(_)                                                         => CompileFailed
-      case _                                                                               => TaskFailed
-
-  private def previewExit(call: Call): CliExit =
-    call match
-      case Call.PreviewCompile(_) | Call.Compile(_) => CompileFailed
-      case Call.PreviewTest(_) | Call.Test(_, _, _) => TestFailed
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
-        PublishFailed
-      case _ => TaskFailed
-
-  /** A missing lock file read on test or run is 5. Cache is 3. Clean is 1. */
-  private def ioExit(call: Call): CliExit =
-    call match
-      case Call.Test(_, _, _) | Call.Run(_, _)                         => ResolveFailed
-      case Call.Compile(_) | Call.Assembly(_) | Call.PreviewCompile(_) => CompileFailed
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
-          Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
-        PublishFailed
-      case Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) => LoadFailed
-      case _                                                                              => TaskFailed
-
-  private def rejectedExit(rejection: Rejection): CliExit =
-    rejection match
-      case Rejection.AssemblyDestination(_)                                          => CompileFailed
-      case Rejection.TaskArguments(_) | Rejection.RunFailed | Rejection.WatchStopped => TaskFailed
-      case _                                                                         => Usage
-end CliExit
-
 /** Heard text is already on the console. Held text is printed by finish. */
 enum Playback:
   case Heard
@@ -346,6 +178,20 @@ object Cli:
             )
         },
         command => perform(repo, apiJar, command),
+      )
+
+  /** The process entry. A socket hit names none of the compile services. Each miss provides only what that miss uses.
+    */
+  private[histos] def launch(args: List[String], repo: Path): URIO[Scope, Completed] =
+    Connection.ensure(repo).ignore *>
+      parse(args).foldZIO(
+        {
+          case CliParseError.UnknownRoot =>
+            inProcess(repo)((api, machine) => withLocal(machine)(contributed(args, repo, api)))
+          case detail =>
+            ZIO.succeed(Completed(CliExit.Usage, "", detail.message, Playback.Held))
+        },
+        command => route(repo, command),
       )
 
   private def perform(
@@ -575,17 +421,21 @@ object Cli:
           Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
             versionText(repo).orElseSucceed("").flatMap { shown =>
               adopted(repo, apiJar, other).flatMap { loaded =>
-                Perform.run(
-                  repo,
-                  apiJar,
-                  loaded,
-                  machine,
-                  runs,
-                  track = false,
-                  shown,
-                  other,
-                  say,
-                  cliEdges(repo, apiJar, say),
+                histos.zinc.CompileMemo.provide(
+                  histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                    Perform.run(
+                      repo,
+                      apiJar,
+                      loaded,
+                      machine,
+                      runs,
+                      track = false,
+                      shown,
+                      other,
+                      say,
+                      cliEdges(repo, apiJar, say),
+                    )
+                  )
                 )
               }
             }
@@ -702,9 +552,105 @@ object Cli:
       repo: Path,
       apiJar: Path,
       projects: List[ProjectName],
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
+  ): URIO[Local, Completed] =
+    compileAt(repo, projects, locally(repo, apiJar, Call.Compile(projects)))
+
+  /** `miss` is forced only when the socket is missing or dead, so a hit never builds [[compileServices]]. */
+  private[histos] def compileAt[R](
+      repo: Path,
+      projects: List[ProjectName],
+      miss: => URIO[R, Completed],
+  ): URIO[R, Completed] =
     val call = Call.Compile(projects)
-    attach(repo, call, locally(repo, apiJar, call))
+    pinned(repo, call, miss)(text =>
+      Attach
+        .decide(repo, text)
+        .flatMap {
+          case Decision.Open(socket) =>
+            remote(repo, socket, call).foldZIO(
+              {
+                case ServerError.Unreachable(_) => miss
+                case error                      => ZIO.succeed(stopped(error))
+              },
+              done => ZIO.succeed(done),
+            )
+          case Decision.DifferentVersion =>
+            ZIO.succeed(stopped(ServerError.DifferentVersion))
+          case Decision.Absent =>
+            ensureServer(repo).flatMap {
+              case Left(error)         => ZIO.succeed(stopped(error))
+              case Right(None)         => miss
+              case Right(Some(socket)) =>
+                remote(repo, socket, call).foldZIO(
+                  error => ZIO.succeed(stopped(error)),
+                  done => ZIO.succeed(done),
+                )
+            }
+        }
+    )
+
+  /** No `./histos` means compile here. A script starts one server and this command attaches to it. */
+  private def ensureServer(repo: Path): UIO[Either[ServerError, Option[Path]]] =
+    val script = repo.resolve("histos")
+    ZIO
+      .attemptBlocking(Files.isRegularFile(script))
+      .orDie
+      .flatMap: present =>
+        if present then startServer(repo).either.map(_.map(Some(_)))
+        else ZIO.succeed(Right(None))
+
+  private def startServer(repo: Path): IO[ServerError, Path] =
+    val home = repo.resolve(".histos")
+    val gate = home.resolve("server.starting")
+    val log  = home.resolve("server.log")
+    ZIO.acquireReleaseWith(
+      ZIO
+        .attemptBlocking {
+          Files.createDirectories(home)
+          java.nio.channels.FileChannel.open(
+            gate,
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.WRITE,
+          )
+        }
+        .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
+    )(channel => ZIO.attemptBlocking(channel.close()).ignore) { channel =>
+      ZIO
+        .attemptBlocking(Option(channel.tryLock()))
+        .mapError(_ => ServerError.Io(ServerIo.Bind(gate)))
+        .flatMap {
+          case None    => awaitServer(repo)
+          case Some(_) => spawnServer(repo, log) *> awaitServer(repo)
+        }
+    }
+
+  private def spawnServer(repo: Path, log: Path): IO[ServerError, Unit] =
+    ZIO
+      .attemptBlocking {
+        Files.createDirectories(log.getParent)
+        if !Files.exists(log) then Files.createFile(log)
+        new ProcessBuilder("./histos", "server")
+          .directory(repo.toFile)
+          .redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile))
+          .redirectErrorStream(true)
+          .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
+          .start()
+        ()
+      }
+      .mapError(_ => ServerError.Io(ServerIo.Bind(log)))
+
+  private def awaitServer(repo: Path): IO[ServerError, Path] =
+    val attempts                               = 1200
+    def poll(left: Int): IO[ServerError, Path] =
+      histos.server.Record.read(repo).flatMap {
+        case Some(written)     => ZIO.succeed(written.socket)
+        case None if left <= 0 => ZIO.fail(ServerError.Unreachable(histos.server.Record.socket(repo)))
+        case None              => ZIO.sleep(50.millis) *> poll(left - 1)
+      }
+    poll(attempts)
+
+  private def stopped(error: ServerError): Completed =
+    Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
 
   /** Only the local path loads. A matching server already holds the graph. */
   private def loaded[R](repo: Path, apiJar: Path)(
@@ -953,10 +899,10 @@ object Cli:
     attach(repo, call, locally(repo, apiJar, call))
 
   private def say(text: String): UIO[Unit] =
-    Console.printLine(text).orElseSucceed(())
+    Paint.render(text).flatMap(line => Console.printLine(line).orElseSucceed(()))
 
   private def sayError(text: String): UIO[Unit] =
-    Console.printLineError(text).orElseSucceed(())
+    Paint.render(text).flatMap(line => Console.printLineError(line).orElseSucceed(()))
 
   private def cachePath: URIO[ContentStore, Completed] =
     ZIO.serviceWith[ContentStore](store => held(Call.CachePath, store.root.toString, CallResult.reported()))
@@ -1177,7 +1123,7 @@ object Cli:
   private def pinned[R](
       repo: Path,
       call: Call,
-      missing: URIO[R, Completed],
+      missing: => URIO[R, Completed],
   )(present: String => URIO[R, Completed]): URIO[R, Completed] =
     versionOf(repo).foldZIO(
       error => ZIO.succeed(launcherFailed(call, error)),
@@ -1187,11 +1133,11 @@ object Cli:
       },
     )
 
-  private def bsp(
-      repo: Path,
-      apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
-    pinned(repo, Call.Bsp, bspLocal(repo, apiJar))(text =>
+  private def bsp(repo: Path, apiJar: Path): URIO[Local, Completed] =
+    bspAt(repo, bspLocal(repo, apiJar))
+
+  private def bspAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R, Completed] =
+    pinned(repo, Call.Bsp, miss)(text =>
       Attach
         .decide(repo, text)
         .flatMap {
@@ -1200,17 +1146,8 @@ object Cli:
               .splice(socket)
               .foldZIO(
                 {
-                  case ServerError.Unreachable(_) =>
-                    bspLocal(repo, apiJar)
-                  case error =>
-                    ZIO.succeed(
-                      Completed(
-                        CliExit.LoadFailed,
-                        "",
-                        error.message,
-                        Playback.Held,
-                      )
-                    )
+                  case ServerError.Unreachable(_) => miss
+                  case error                      => ZIO.succeed(stopped(error))
                 },
                 code =>
                   ZIO.succeed(
@@ -1223,15 +1160,8 @@ object Cli:
                   ),
               )
           case Decision.DifferentVersion =>
-            ZIO.succeed(
-              Completed(
-                CliExit.LoadFailed,
-                "",
-                ServerError.DifferentVersion.message,
-                Playback.Held,
-              )
-            )
-          case Decision.Absent => bspLocal(repo, apiJar)
+            ZIO.succeed(stopped(ServerError.DifferentVersion))
+          case Decision.Absent => miss
         }
     )
 
@@ -1368,33 +1298,23 @@ object Cli:
         Completed(CliExit.TaskFailed, out, "the call did not finish", Playback.Heard)
 
   /** A running server replaces itself. No server starts one. */
-  private[histos] def reboot(
-      repo: Path,
-      apiJar: Path,
-  ): URIO[Loader & Scope & ContentStore & Resolve & Machine, Completed] =
-    pinned(repo, Call.Reboot, serve(repo, apiJar))(text =>
+  private[histos] def reboot(repo: Path, apiJar: Path): URIO[Local, Completed] =
+    rebootAt(repo, serve(repo, apiJar))
+
+  private def rebootAt[R](repo: Path, miss: => URIO[R, Completed]): URIO[R, Completed] =
+    pinned(repo, Call.Reboot, miss)(text =>
       Attach
         .decide(repo, text)
         .flatMap:
           case Decision.Open(socket) =>
             remote(repo, socket, Call.Reboot).foldZIO(
               {
-                case ServerError.Unreachable(_) | ServerError.DifferentVersion =>
-                  serve(repo, apiJar)
-                case error =>
-                  ZIO.succeed(
-                    Completed(
-                      CliExit.LoadFailed,
-                      "",
-                      error.message,
-                      Playback.Held,
-                    )
-                  )
+                case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
+                case error                                                     => ZIO.succeed(stopped(error))
               },
               done => ZIO.succeed(done),
             )
-          case Decision.Absent | Decision.DifferentVersion =>
-            serve(repo, apiJar)
+          case Decision.Absent | Decision.DifferentVersion => miss
     )
 
   private enum Boot:
@@ -1488,12 +1408,12 @@ object Cli:
       case Boot.Pin(error)       => ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
       case Boot.Transport(error) => ZIO.fail(error)
 
-  /** A matching server runs the command. Anything else, including a dead socket, runs here.
+  /** A matching server runs the command. `local` is forced only when the socket is missing or dead.
     */
   private def attach[R](
       repo: Path,
       call: Call,
-      local: URIO[R, Completed],
+      local: => URIO[R, Completed],
   ): URIO[R, Completed] =
     pinned(repo, call, local)(text =>
       Attach
@@ -1617,43 +1537,51 @@ object Cli:
                                     )
                                   )
                                 case Right(session) =>
-                                  speak(session).foldZIO(
-                                    error =>
-                                      ZIO.succeed(
-                                        Completed(
-                                          CliExit.LoadFailed,
-                                          "",
-                                          error.message,
-                                          Playback.Held,
-                                        )
-                                      ),
-                                    code =>
-                                      ZIO.succeed(
-                                        Completed(
-                                          if code == 0 then CliExit.Success
-                                          else CliExit.TaskFailed,
-                                          "",
-                                          "",
-                                          Playback.Held,
-                                        )
-                                      ),
-                                  ),
+                                  histos.zinc.CompileMemo
+                                    .provide(
+                                      histos.zinc.Compilers
+                                        .provide(histos.schedule.Parallelism.default.cpu)(speak(session))
+                                    )
+                                    .foldZIO(
+                                      error =>
+                                        ZIO.succeed(
+                                          Completed(
+                                            CliExit.LoadFailed,
+                                            "",
+                                            error.message,
+                                            Playback.Held,
+                                          )
+                                        ),
+                                      code =>
+                                        ZIO.succeed(
+                                          Completed(
+                                            if code == 0 then CliExit.Success
+                                            else CliExit.TaskFailed,
+                                            "",
+                                            "",
+                                            Playback.Held,
+                                          )
+                                        ),
+                                    ),
                     ),
               ),
         )
 
   /** Same reader and writer as a server splice. Stdio has no histos exit marker. */
-  private def speak(session: Bsp.Session): ZIO[Resolve & ContentStore & Scope, ServerError, Int] =
+  private def speak(
+      session: Bsp.Session
+  ): ZIO[Resolve & ContentStore & Scope & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Int] =
     val stdin  = Path.of("stdin")
     val stdout = Path.of("stdout")
     val send   =
       (line: String) => Frame.write(java.lang.System.out, line).mapError(_ => ServerError.Io(ServerIo.Write(stdout)))
     val next = Frame.read(java.lang.System.in).mapError(_ => ServerError.Io(ServerIo.Read(stdin)))
-    Daemon.outbox(send).flatMap { box =>
-      Daemon
-        .requests(next, box.offer, payload => session.answer(payload), box.done)
-        .flatMap(code => box.close.as(code))
-    }
+    session.follow *>
+      Daemon.outbox(send).flatMap { box =>
+        Daemon
+          .requests(next, box.offer, payload => session.answer(payload), box.done)
+          .flatMap(code => box.close.as(code))
+      }
 
   private def contributed(
       args: List[String],
@@ -1744,80 +1672,291 @@ object Cli:
   ): URIO[Local, Completed] =
     val call = Call.Task(id.render, args)
     attach(repo, call, locally(repo, apiJar, call))
+
+  /** The call a batch command sends. Other commands stay on the JVM route. */
+  private[histos] def callOf(command: Command): Option[Call] =
+    command match
+      case Command.Compile(projects) => Some(Call.Compile(projects))
+      case Command.Test(projects)    => Some(Call.Test(projects, Nil, TestMode.Run))
+      case Command.Run(id, platform) =>
+        Some(
+          if id == TaskId.Inspect || id == TaskId.Versions then Call.Task(id.value, PluginArgs.empty)
+          else Call.Run(id.value, platform)
+        )
+      case Command.Clean(projects) => Some(Call.Clean(projects))
+      case Command.CleanFull       => Some(Call.CleanFull)
+      case _                       => None
+
+  private def dispatched(command: Command)(use: Call => URIO[Scope, Completed]): URIO[Scope, Completed] =
+    callOf(command) match
+      case Some(call) => use(call)
+      case None       => ZIO.succeed(Completed(CliExit.Usage, "", "histos could not build that call", Playback.Held))
+
+  private def route(repo: Path, command: Command): URIO[Scope, Completed] =
+    command match
+      case Command.Version =>
+        versionText(repo).foldZIO(
+          error => ZIO.succeed(held(Call.Version, "", CallResult.Fault(BuildFault.Launcher(error)))),
+          text => attach(repo, Call.Version, ZIO.succeed(held(Call.Version, text, CallResult.reported()))),
+        )
+      case Command.Graph =>
+        attach(repo, Call.Graph, inProcessReady(repo)((api, machine) => withLoader(machine)(graphLocal(repo, api))))
+      case Command.Run(_, _) =>
+        dispatched(command)(call => served(repo, call))
+      case Command.Plugin(id, pluginArgs) =>
+        served(repo, Call.Task(id.render, pluginArgs))
+      case Command.Test(_) =>
+        dispatched(command)(call => served(repo, call))
+      case Command.TestOnly(modules, patterns) =>
+        served(repo, Call.Test(modules, patterns, TestMode.Run))
+      case Command.TestQuick(modules, patterns) =>
+        served(repo, Call.Test(modules, patterns, TestMode.Quick))
+      case Command.Watch(inner, _) =>
+        Operation.operation(inner) match
+          case Left(error) => ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
+          case Right(call) =>
+            attach(
+              repo,
+              Call.Watch(call),
+              inProcessReady(repo)((api, machine) => withLocal(machine)(watchLocal(repo, api, call))),
+            )
+      case Command.Compile(projects) =>
+        dispatched(command)(call => compileAt(repo, projects, compileServices(repo, call)))
+      case Command.Clean(projects) =>
+        dispatched(command)(call =>
+          attach(
+            repo,
+            call,
+            if projects.isEmpty then cleanLocal(repo)
+            else
+              inProcess(repo)((api, machine) => withLoader(machine)(loaded(repo, api)(cleanNamed(repo, _, projects)))),
+          )
+        )
+      case Command.CleanFull =>
+        dispatched(command)(call =>
+          attach(repo, call, machineOf(repo)(machine => storeOf(machine)(cleanFullLocal(repo))))
+        )
+      case Command.Assembly(destination) =>
+        served(repo, Call.Assembly(destination))
+      case Command.PublishLocal(tokens) =>
+        served(repo, Call.PublishLocal(tokens))
+      case Command.PublishSnapshots(tokens) =>
+        served(repo, Call.PublishSnapshots(tokens))
+      case Command.PublishRelease(automatic, tokens) =>
+        served(repo, Call.PublishRelease(tokens, automatic))
+      case Command.PublishPromote(id) =>
+        served(repo, Call.PublishPromote(id))
+      case Command.PublishDrop(id) =>
+        served(repo, Call.PublishDrop(id))
+      case Command.PublishAssets(tokens) =>
+        served(repo, Call.PublishAssets(tokens))
+      case Command.Mcp =>
+        inProcessReady(repo)((api, machine) => withLocal(machine)(mcp(repo, api)))
+      case Command.Bsp =>
+        bspAt(repo, inProcessReady(repo)((api, machine) => withLocal(machine)(bspLocal(repo, api))))
+      case Command.Server =>
+        inProcessReady(repo)((api, machine) => withLocal(machine)(serve(repo, api)))
+      case Command.Portal =>
+        machineReady(repo)(machine => portal(repo).provideSome[Scope](ZLayer.succeed(machine)))
+      case Command.Toolchain =>
+        attach(
+          repo,
+          Call.Toolchain,
+          inProcess(repo)((api, machine) => withLocal(machine)(toolchainLocal(repo, api))),
+        )
+      case Command.CachePath =>
+        attach(repo, Call.CachePath, machineReady(repo)(machine => storeOf(machine)(cachePath)))
+      case Command.CacheList =>
+        attach(repo, Call.CacheList, machineReady(repo)(machine => storeOf(machine)(cacheList)))
+      case Command.CacheClean(mode) =>
+        attach(repo, Call.CacheClean(mode), machineReady(repo)(machine => storeOf(machine)(cacheClean(mode))))
+      case Command.CachePromote(from, to) =>
+        cachePromote(from, to)
+      case Command.Resolve(action) =>
+        attach(
+          repo,
+          Call.Resolve(action),
+          inProcessReady(repo)((api, machine) => withLocal(machine)(resolveLocal(repo, api, action))),
+        )
+      case Command.Workflow(action) =>
+        attach(
+          repo,
+          Call.Workflow(action),
+          inProcessReady(repo)((api, machine) => withLoader(machine)(workflowLocal(repo, api, action))),
+        )
+      case Command.Launcher(action) =>
+        attach(repo, Call.Launcher(action), launcherLocal(repo, action))
+      case Command.Reload =>
+        reload(repo)
+      case Command.Reboot =>
+        rebootAt(repo, inProcessReady(repo)((api, machine) => withLocal(machine)(serve(repo, api))))
+      case Command.Cancel(id) =>
+        cancel(repo, id)
+      case Command.PreviewCompile(projects) =>
+        attach(
+          repo,
+          Call.PreviewCompile(projects),
+          loadedMiss(repo)(previewLocal(repo, _, projects)),
+        )
+      case Command.PreviewTest(projects) =>
+        attach(repo, Call.PreviewTest(projects), loadedMiss(repo)(previewTestLocal(repo, _, projects)))
+      case Command.PreviewPublishLocal(tokens) =>
+        val call = Call.PreviewPublishLocal(tokens)
+        attach(
+          repo,
+          call,
+          inProcessReady(repo) { (api, machine) =>
+            withLoader(machine)(loaded(repo, api)(build => previewLocalPlan(repo, build, tokens, machine.env, call)))
+          },
+        )
+      case Command.PreviewPublishSnapshots(tokens) =>
+        val call = Call.PreviewPublishSnapshots(tokens)
+        attach(
+          repo,
+          call,
+          inProcessReady(repo) { (api, machine) =>
+            withLoader(machine)(
+              loaded(repo, api)(build => previewSnapshotPlan(repo, build, tokens, machine.env, call))
+            )
+          },
+        )
+      case Command.PreviewClean(projects) =>
+        attach(
+          repo,
+          Call.PreviewClean(projects),
+          if projects.isEmpty then previewCleanAll(repo)
+          else loadedMiss(repo)(previewCleanLocal(repo, _, projects)),
+        )
+      case Command.PreviewCleanFull =>
+        attach(repo, Call.PreviewCleanFull, previewCleanFullLocal(repo))
+      case Command.PreviewRun(id, platform) =>
+        attach(
+          repo,
+          Call.PreviewRun(id.value, platform),
+          loadedMiss(repo)(previewRunLocal(_, id.value, platform)),
+        )
+      case Command.PreviewPlugin(id) =>
+        attach(repo, Call.PreviewRun(id.render, None), loadedMiss(repo)(previewRunLocal(_, id.render, None)))
+      case Command.Observe =>
+        observe(repo)
+
+  /** A call the server can answer. The local build runs only when the socket does not. */
+  private def served(repo: Path, call: Call): URIO[Scope, Completed] =
+    attach(repo, call, compileServices(repo, call))
+
+  /** Loader, resolve, the toolchain, and the compiler. Built only when this effect runs. */
+  private def compileServices(repo: Path, call: Call): URIO[Scope, Completed] =
+    inProcessReady(repo)((api, machine) => withLocal(machine)(locally(repo, api, call)))
+
+  private def loadedMiss(repo: Path)(use: histos.load.LoadedBuild => UIO[Completed]): URIO[Scope, Completed] =
+    inProcessReady(repo)((api, machine) => withLoader(machine)(loaded(repo, api)(use)))
+
+  /** Jars and the machine, then `use`. Nothing here runs until the caller runs this effect. */
+  private def inProcess(repo: Path)(use: (Path, Machine) => URIO[Scope, Completed]): URIO[Scope, Completed] =
+    apiAndMachine(repo).flatMap:
+      case Left(done)            => ZIO.succeed(done)
+      case Right((api, machine)) => use(api, machine)
+
+  private def inProcessReady(repo: Path)(use: (Path, Machine) => URIO[Scope, Completed]): URIO[Scope, Completed] =
+    inProcess(repo) { (api, machine) =>
+      Toolchain
+        .prepare(machine)
+        .foldZIO(
+          err => ZIO.succeed(toolchainFailed(err)),
+          _ => use(api, machine),
+        )
+    }
+
+  private def machineOf(repo: Path)(use: Machine => URIO[Scope, Completed]): URIO[Scope, Completed] =
+    Machine.load(repo).foldZIO(err => ZIO.succeed(toolchainFailed(err)), use)
+
+  private def machineReady(repo: Path)(use: Machine => URIO[Scope, Completed]): URIO[Scope, Completed] =
+    machineOf(repo): machine =>
+      Toolchain
+        .prepare(machine)
+        .foldZIO(
+          err => ZIO.succeed(toolchainFailed(err)),
+          _ => use(machine),
+        )
+
+  private def withLocal(machine: Machine)(body: URIO[Local, Completed]): URIO[Scope, Completed] =
+    body.provideSome[Scope](
+      Loader.live,
+      ZLayer.succeed(ContentStore.in(machine.cache)),
+      ZLayer.succeed(machine),
+      Resolve.coursier,
+    )
+
+  private def withLoader(
+      machine: Machine
+  )(body: URIO[Loader & ContentStore & Resolve & Scope, Completed]): URIO[Scope, Completed] =
+    body.provideSome[Scope](
+      Loader.live,
+      ZLayer.succeed(ContentStore.in(machine.cache)),
+      Resolve.coursier,
+    )
+
+  private def storeOf(machine: Machine)(body: URIO[ContentStore, Completed]): URIO[Scope, Completed] =
+    body.provide(ZLayer.succeed(ContentStore.in(machine.cache)))
+
+  private def apiAndMachine(repo: Path): UIO[Either[Completed, (Path, Machine)]] =
+    jars.foldZIO(
+      err => ZIO.succeed(Left(loadFailed(err))),
+      api =>
+        Machine
+          .load(repo)
+          .foldZIO(
+            err => ZIO.succeed(Left(toolchainFailed(err))),
+            machine => ZIO.succeed(Right((api, machine))),
+          ),
+    )
+
+  private def toolchainFailed(err: ToolchainError): Completed =
+    Completed(CliExit.ToolchainFailed, "", err.message, Playback.Held)
+
+  private def loadFailed(err: LoadError): Completed =
+    Completed(CliExit.LoadFailed, "", err.message, Playback.Held)
+
+  private def jars: IO[LoadError, Path] =
+    located.flatMap: program =>
+      cacheHome.flatMap: cache =>
+        BuildClasspath(program, cache)
+
+  private def located: IO[LoadError, Path] =
+    val location = Option(classOf[histos.HistosBuild].getProtectionDomain)
+      .flatMap(domain => Option(domain.getCodeSource))
+      .flatMap(source => Option(source.getLocation))
+    location match
+      case None      => ZIO.fail(LoadError.MissingFile(Path.of("histos-api.jar")))
+      case Some(url) =>
+        ZIO
+          .attempt(Path.of(url.toURI))
+          .orElseFail(LoadError.Io(IoFailure(Path.of(url.toString), histos.workspace.IoFault.Read)))
+
+  private def cacheHome: IO[LoadError, Path] =
+    for
+      xdg <- System
+        .env("XDG_CACHE_HOME")
+        .orElseFail(LoadError.Io(IoFailure(Path.of("XDG_CACHE_HOME"), histos.workspace.IoFault.Read)))
+      home <- System
+        .property("user.home")
+        .orElseFail(LoadError.Io(IoFailure(Path.of("user.home"), histos.workspace.IoFault.Read)))
+      root <- (xdg.filter(_.nonEmpty), home.filter(_.nonEmpty)) match
+        case (Some(dir), _) => ZIO.succeed(Path.of(dir, "histos"))
+        case (_, Some(dir)) => ZIO.succeed(Path.of(dir, ".cache", "histos"))
+        case _              => ZIO.fail(LoadError.NoHome)
+    yield root
 end Cli
 
 object Main extends ZIOAppDefault:
+  override val bootstrap =
+    zio.Runtime.enableLoomBasedExecutor ++ zio.Runtime.enableLoomBasedBlockingExecutor
+
   def run =
-    jars.foldZIO(
-      error =>
-        Console.printLineError(error.message).ignore *> stop(
-          CliExit.LoadFailed.code
-        ),
-      found =>
-        for
-          args <- getArgs.map(_.toList)
-          _    <- dispatch(args, Path.of("").toAbsolutePath, found)
-        yield (),
-    )
-
-  private def dispatch(
-      args: List[String],
-      repo: Path,
-      jars: Jars,
-  ): URIO[Scope, Unit] =
-    Machine
-      .load(repo)
-      .foldZIO(
-        err =>
-          finish(
-            Completed(CliExit.ToolchainFailed, "", err.message, Playback.Held)
-          ),
-        machine =>
-          Cli
-            .parse(args)
-            .either
-            .flatMap:
-              case Left(_) => runCommand(args, repo, jars.api, machine)
-              case Right(
-                    Command.Toolchain | Command.Clean(_) | Command.CleanFull
-                  ) =>
-                runCommand(args, repo, jars.api, machine)
-              case Right(_) =>
-                Toolchain
-                  .prepare(machine)
-                  .foldZIO(
-                    err =>
-                      finish(
-                        Completed(
-                          CliExit.ToolchainFailed,
-                          "",
-                          err.message,
-                          Playback.Held,
-                        )
-                      ),
-                    _ => runCommand(args, repo, jars.api, machine),
-                  ),
-      )
-
-  private final case class Jars(program: Path, api: Path)
-
-  private def runCommand(
-      args: List[String],
-      repo: Path,
-      jar: Path,
-      machine: Machine,
-  ): URIO[Scope, Unit] =
-    ZIO
-      .scoped:
-        Cli
-          .execute(args, repo, jar)
-          .provideSome[Scope](
-            Loader.live,
-            ZLayer.succeed(ContentStore.in(machine.cache)),
-            ZLayer.succeed(machine),
-            Resolve.coursier,
-          )
-      .flatMap(finish)
+    for
+      args <- getArgs.map(_.toList)
+      _    <- Cli.launch(args, Path.of("").toAbsolutePath).flatMap(finish)
+    yield ()
 
   /** A successful `run` is process status 0. `exit` is the status the operating system sees.
     */
@@ -1831,51 +1970,4 @@ object Main extends ZIOAppDefault:
         Console.printLine(done.out).when(done.out.nonEmpty).ignore *>
           Console.printLineError(done.err).when(done.err.nonEmpty).ignore
     pending *> stop(done.exit.code)
-
-  private def jars: IO[LoadError, Jars] =
-    located.flatMap: program =>
-      cacheHome.flatMap: cache =>
-        BuildClasspath(program, cache).map(api => Jars(program, api))
-
-  private def located: IO[LoadError, Path] =
-    val location = Option(classOf[histos.HistosBuild].getProtectionDomain)
-      .flatMap(domain => Option(domain.getCodeSource))
-      .flatMap(source => Option(source.getLocation))
-    location match
-      case None      => ZIO.fail(LoadError.MissingFile(Path.of("histos-api.jar")))
-      case Some(url) =>
-        ZIO
-          .attempt(Path.of(url.toURI))
-          .orElseFail(
-            LoadError.Io(
-              histos.workspace
-                .IoFailure(Path.of(url.toString), histos.workspace.IoFault.Read)
-            )
-          )
-
-  private def cacheHome: IO[LoadError, Path] =
-    for
-      xdg <- System
-        .env("XDG_CACHE_HOME")
-        .orElseFail(
-          LoadError.Io(
-            histos.workspace.IoFailure(
-              Path.of("XDG_CACHE_HOME"),
-              histos.workspace.IoFault.Read,
-            )
-          )
-        )
-      home <- System
-        .property("user.home")
-        .orElseFail(
-          LoadError.Io(
-            histos.workspace
-              .IoFailure(Path.of("user.home"), histos.workspace.IoFault.Read)
-          )
-        )
-      root <- (xdg.filter(_.nonEmpty), home.filter(_.nonEmpty)) match
-        case (Some(dir), _) => ZIO.succeed(Path.of(dir, "histos"))
-        case (_, Some(dir)) => ZIO.succeed(Path.of(dir, ".cache", "histos"))
-        case _              => ZIO.fail(LoadError.NoHome)
-    yield root
 end Main

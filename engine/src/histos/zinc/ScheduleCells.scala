@@ -19,8 +19,9 @@ final case class CompilePlan(
     jdk: JdkRuntime,
     native: histos.native.NativeOrigin,
     repositories: histos.resolve.Repositories,
-    pool: CompilerPool,
     tools: histos.resolve.LockedTools,
+    stamp: LockStamp,
+    admitted: ProjectName => UIO[Unit] = _ => ZIO.unit,
 )
 
 /** One cell, the class directories it may use, and where its feeds go. */

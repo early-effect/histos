@@ -1,6 +1,7 @@
 package histos.bsp
 
 import histos.publish.LauncherPin
+import histos.server.Fingerprint
 import histos.workspace.Workspace
 
 import java.nio.file.{Files, Path}
@@ -15,29 +16,41 @@ object ConnectionSpec extends ZIOSpecDefault:
       for
         root <- System.env("HISTOS_REPO").some
         repo = Path.of(root)
-        pin  <- LauncherPin.read(repo)
-        text <- ZIO.attempt(Files.readString(repo.resolve(".bsp").resolve("histos.json")))
+        pin   <- LauncherPin.read(repo)
+        graph <- Fingerprint.read(repo)
+        text  <- ZIO.attempt(Files.readString(repo.resolve(".bsp").resolve("histos.json")))
       yield assertTrue(
-        text.fromJson[Connection] == Right(Connection.here(List("./histos", "bsp"), pin.version))
+        text.fromJson[Connection] == Right(Connection.here(List("./histos", "bsp"), pin.version, graph.value))
       )
     ,
     test("a project without a wrapper is launched from PATH"):
-      written(wrapper = false).map: text =>
-        assertTrue(text.fromJson[Connection] == Right(Connection.here(List("histos", "bsp"), pinned)))
+      written(wrapper = false).flatMap: (repo, text) =>
+        Fingerprint
+          .read(repo)
+          .map: graph =>
+            assertTrue(text.fromJson[Connection] == Right(Connection.here(List("histos", "bsp"), pinned, graph.value)))
     ,
     test("a project with the wrapper uses ./histos"):
-      written(wrapper = true).map: text =>
-        assertTrue(text.fromJson[Connection] == Right(Connection.here(List("./histos", "bsp"), pinned)))
+      written(wrapper = true).flatMap: (repo, text) =>
+        Fingerprint
+          .read(repo)
+          .map: graph =>
+            assertTrue(
+              text.fromJson[Connection] == Right(Connection.here(List("./histos", "bsp"), pinned, graph.value))
+            )
     ,
     test("build.properties supplies the connection version"):
       ZIO.scoped:
         for
-          repo <- work
-          _    <- plant(repo, "histos.version=0.0.2-SNAPSHOT\n")
-          _    <- ZIO.attempt(Files.writeString(repo.resolve("histos"), ""))
-          text <- writtenAt(repo)
+          repo  <- work
+          _     <- plant(repo, "histos.version=0.0.2-SNAPSHOT\n")
+          _     <- ZIO.attempt(Files.writeString(repo.resolve("histos"), ""))
+          text  <- writtenAt(repo)
+          graph <- Fingerprint.read(repo)
         yield assertTrue(
-          text.fromJson[Connection] == Right(Connection.here(List("./histos", "bsp"), "0.0.2-SNAPSHOT"))
+          text.fromJson[Connection] == Right(
+            Connection.here(List("./histos", "bsp"), "0.0.2-SNAPSHOT", graph.value)
+          )
         )
     ,
     test("a bad version line does not write the connection"):
@@ -64,13 +77,13 @@ object ConnectionSpec extends ZIOSpecDefault:
 
   private val pinned = "0.0.2-SNAPSHOT"
 
-  private def written(wrapper: Boolean): ZIO[Scope, Any, String] =
+  private def written(wrapper: Boolean): ZIO[Scope, Any, (Path, String)] =
     for
       repo <- work
       _    <- plant(repo, s"histos.version=$pinned\n")
       _    <- ZIO.when(wrapper)(ZIO.attempt(Files.writeString(repo.resolve("histos"), "")))
       text <- writtenAt(repo)
-    yield text
+    yield (repo, text)
 
   private def writtenAt(repo: Path): ZIO[Any, Any, String] =
     Connection.ensure(repo) *> ZIO.attempt(Files.readString(repo.resolve(".bsp").resolve("histos.json")))

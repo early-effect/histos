@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.jdk.Sha256
-import histos.resolve.{Classpath, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell}
+import histos.resolve.{Classpath, ClasspathScope, DependencyLock, LockedArtifact, Repositories, Resolve, ResolveCell}
 import histos.{Dep, Module, Platform, ScalaVersion}
 
 import java.nio.file.Path
@@ -18,6 +18,40 @@ import zio.ZIO
 final case class ScalacClasspath(paths: List[Path], jars: List[Path], hashes: List[Sha256])
 
 object ScalacClasspath:
+  /** Checksums already in the lock, in the order [[of]] would fetch them. Nothing is opened. None when a cell is
+    * absent, so the caller fetches instead of inventing a key.
+    */
+  private[zinc] def lockHashes(
+      lock: DependencyLock,
+      modules: List[Module],
+      module: Module,
+      version: ScalaVersion,
+      platform: Platform,
+      scope: ClasspathScope,
+  ): Option[List[histos.jdk.Sha256]] =
+    val chain = Module.chain(module, modules, platform)
+    val asked = chain.map(item => item -> ClasspathScope.Compile) :+ (module -> scope)
+    val found = asked.map: (item, itemScope) =>
+      lock.cells.find: cell =>
+        cell.module == item.name &&
+          cell.scalaVersion == version &&
+          cell.platform == platform &&
+          cell.scope == itemScope
+    if found.exists(_.isEmpty) then None
+    else
+      val artifacts = found.flatMap(_.toList.flatMap(_.artifacts))
+      val unique    = artifacts
+        .foldLeft((List.empty[LockedArtifact], Set.empty[String])):
+          case ((kept, seen), artifact) =>
+            val id =
+              s"${artifact.organization}\n${artifact.name}\n${artifact.revision}\n${artifact.classifier}\n${artifact.sha256.value}"
+            if seen.contains(id) then (kept, seen) else (kept :+ artifact, seen + id)
+      val kept = if platform == Platform.Jvm then unique._1.filterNot(standardLibrary) else unique._1
+      Some(kept.map(_.sha256))
+
+  private def standardLibrary(artifact: LockedArtifact): Boolean =
+    artifact.name == "scala-library" || artifact.name.startsWith("scala3-library_")
+
   def of(
       repo: Path,
       modules: List[Module],

@@ -101,7 +101,9 @@ private[testrun] object ModuleTestSupport:
             entries(root.resolve(".histos/test-classes/app/3.10.0/jvm"))
           )
         yield assertTrue(
-          cells.map(report => (report.cell.module.value, report.cell.status.label)) == List(
+          cells
+            .map(report => (report.cell.module.value, report.cell.status.label))
+            .sortBy(_._1) == List(
             ("app", "passed"),
             ("core", "no tests"),
             ("extra", "no tests"),
@@ -457,14 +459,14 @@ private[testrun] object ModuleTestSupport:
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver
             )
-        yield assertTrue(
-          cells.map(report => (report.cell.module.value, report.cell.status)) == List(
-            ("bad", TestStatus.Failed(1)),
-            ("core", TestStatus.Passed),
-          ),
-          cells.headOption.map(text).exists(_.contains("nope")),
-          cells.lastOption.exists(_.transcript.outText.text.contains("adds")),
-        )
+        yield
+          val named = cells.map(report => report.cell.module.value -> report).toMap
+          assertTrue(
+            named.get("bad").exists(_.cell.status == TestStatus.Failed(1)),
+            named.get("core").exists(_.cell.status == TestStatus.Passed),
+            named.get("bad").exists(report => text(report).contains("nope")),
+            named.get("core").exists(report => text(report).contains("adds")),
+          )
     ,
     test("a suite pattern runs one provider suite"):
       ZIO.scoped:
@@ -1488,7 +1490,7 @@ private[testrun] object ModuleTestSupport:
         )
 
   private def out(feeds: zio.Chunk[TestFeed]): String =
-    feeds.collect { case TestFeed.Out(text) => text }.mkString("\n")
+    feeds.collect { case TestFeed.Out(_, _, _, text) => text }.mkString("\n")
 
   private def cached(feeds: zio.Chunk[TestFeed]): List[String] =
     feeds.collect { case TestFeed.Cached(_, _, _, suite) => suite }.toList

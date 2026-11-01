@@ -38,7 +38,7 @@ object NativeBridge:
        |            .withClangPP(Path.of("${escape(clangpp.toAbsolutePath.toString)}"))
        |            .withLinkStubs(true)
        |            .withOptimize(false)
-       |            .withMultithreading(false)
+       |            .withMultithreading(true)
        |            .withCompileOptions(Seq("-Qunused-arguments"))
        |        )
        |      Build.buildCachedAwait(config)(using scope)

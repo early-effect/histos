@@ -132,6 +132,7 @@ final case class ProjectGraph private (
     runnerTools: RunnerTools = RunnerTools.empty,
     facts: OrganizationFacts = OrganizationFacts.empty,
     promote: Promote = Promote.Rebuild,
+    testLog: Boolean = false,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -172,6 +173,7 @@ object ProjectGraph:
       runnerTools: RunnerTools = RunnerTools.empty,
       facts: OrganizationFacts = OrganizationFacts.empty,
       promote: Promote = Promote.Rebuild,
+      testLog: Boolean = false,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -184,6 +186,7 @@ object ProjectGraph:
       runnerTools,
       facts,
       promote,
+      testLog,
     )
 end ProjectGraph
 
@@ -206,6 +209,11 @@ object Projects:
   /** Empty installs nothing. A build that never calls this asks the runner for no tools. */
   def runnerTools(tools: RunnerTools): Organized =
     Organized(None, Nil, runnerTools = tools)
+
+  /** Plain test logs under `.histos/tests`. Off unless a build asks.
+    */
+  def testLog: Organized =
+    Organized(None, Nil, logged = true)
 
   /** Every published module uses this organization. A build that does not publish omits it.
     */
@@ -280,6 +288,7 @@ object Projects:
       runnerTools: RunnerTools = RunnerTools.empty,
       facts: OrganizationFacts = OrganizationFacts.empty,
       promote: Promote = Promote.Rebuild,
+      testLog: Boolean = false,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -292,6 +301,7 @@ object Projects:
       runnerTools,
       facts,
       promote,
+      testLog,
     )
 
   private def build(
@@ -305,6 +315,7 @@ object Projects:
       runnerTools: RunnerTools = RunnerTools.empty,
       facts: OrganizationFacts = OrganizationFacts.empty,
       promote: Promote = Promote.Rebuild,
+      testLog: Boolean = false,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -329,6 +340,7 @@ object Projects:
       runnerTools,
       facts,
       promote,
+      testLog,
     )
 
   private def uniqueResolvers(
@@ -813,12 +825,13 @@ final class Organized(
     runnerTools: RunnerTools = RunnerTools.empty,
     facts: OrganizationFacts = OrganizationFacts.empty,
     promote: Promote = Promote.Rebuild,
+    logged: Boolean = false,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -828,13 +841,19 @@ final class Organized(
       runnerTools,
       facts,
       promote,
+      logged,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote)
+    Organized(organization, resolvers, tools, value, facts, promote, logged)
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value)
+    Organized(organization, resolvers, tools, runnerTools, facts, value, logged)
+
+  /** Plain test logs under `.histos/tests`. Off unless a build asks.
+    */
+  def testLog: Organized =
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged = true)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -857,7 +876,7 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote)
+    Organized(organization, resolvers, tools, runnerTools, value, promote, logged)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -870,6 +889,7 @@ final class Organized(
       runnerTools = runnerTools,
       facts = facts,
       promote = promote,
+      testLog = logged,
     )
 
   def apply(
@@ -886,6 +906,7 @@ final class Organized(
       runnerTools = runnerTools,
       facts = facts,
       promote = promote,
+      testLog = logged,
     )
 
   def apply(
@@ -902,6 +923,7 @@ final class Organized(
       runnerTools = runnerTools,
       facts = facts,
       promote = promote,
+      testLog = logged,
     )
 
   def apply(
@@ -919,6 +941,7 @@ final class Organized(
       runnerTools = runnerTools,
       facts = facts,
       promote = promote,
+      testLog = logged,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -933,6 +956,7 @@ final class Organized(
       runnerTools,
       facts,
       promote,
+      logged,
     )
 
   def apply(
@@ -951,6 +975,7 @@ final class Organized(
       runnerTools,
       facts,
       promote,
+      logged,
     )
 
   def apply(
@@ -969,6 +994,7 @@ final class Organized(
       runnerTools,
       facts,
       promote,
+      logged,
     )
 
   def apply(
@@ -988,5 +1014,6 @@ final class Organized(
       runnerTools,
       facts,
       promote,
+      logged,
     )
 end Organized

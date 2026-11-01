@@ -38,153 +38,6 @@ enum Decision:
   case DifferentVersion
   case Open(socket: Path)
 
-enum ServerError:
-  case Toolchain(error: histos.jdk.ToolchainError)
-  case Compiled(error: histos.zinc.GraphCompileError)
-  case Resolve(error: histos.resolve.ResolveError)
-  case Unreachable(path: Path)
-  case DifferentVersion
-  case NoServer
-  case Protocol
-  case Address(path: Path)
-  case Io(op: ServerIo)
-
-  def message: String = this match
-    case Toolchain(error)  => error.message
-    case Compiled(error)   => error.message
-    case Resolve(error)    => error.message
-    case Unreachable(path) => s"histos server at $path is not listening"
-    case DifferentVersion  =>
-      "histos server is a different version. Run histos reboot"
-    case NoServer => "no histos server is running"
-    case Protocol =>
-      "histos server sent a frame this client does not understand"
-    case Address(path) => s"histos server socket path is too long: $path"
-    case Io(op)        => s"histos server failed while ${op.label}"
-end ServerError
-
-enum ServerIo:
-  case Bind(path: Path)
-  case Accept(path: Path)
-  case Read(path: Path)
-  case Write(path: Path)
-  case Save(path: Path)
-
-  def label: String = this match
-    case Bind(_)   => "binding"
-    case Accept(_) => "accepting"
-    case Read(_)   => "reading"
-    case Write(_)  => "writing"
-    case Save(_)   => "writing the server record"
-end ServerIo
-
-/** One event from a command running in the daemon. */
-enum Feed:
-  case Event(event: BuildEvent)
-  case Done(result: CallResult)
-
-private object CallJson:
-  given JsonCodec[ParamName] = JsonCodec.string.transformOrFail(
-    raw => ParamName.from(raw).left.map(_.message),
-    _.value,
-  )
-  given JsonCodec[FlagName] = JsonCodec.string.transformOrFail(
-    raw => FlagName.from(raw).left.map(_.message),
-    _.value,
-  )
-  given JsonCodec[NamedText]     = JsonCodec.derived
-  given JsonCodec[PluginArgs]    = JsonCodec.derived
-  given JsonCodec[ResolveAction] =
-    JsonCodec.string.transformOrFail(
-      raw => ResolveAction.from(raw).left.map(_.message),
-      _.token,
-    )
-  given JsonCodec[WorkflowAction] =
-    JsonCodec.string.transformOrFail(
-      raw => WorkflowAction.from(raw).left.map(_.message),
-      _.token,
-    )
-  given JsonCodec[LauncherAction] =
-    JsonCodec.string.transformOrFail(
-      raw => LauncherAction.from(raw).left.map(_.message),
-      _.token,
-    )
-  given JsonCodec[SuitePattern] =
-    JsonCodec.string.transformOrFail(
-      raw => SuitePattern.from(raw).left.map(_.message),
-      _.value,
-    )
-  given JsonCodec[RunId] =
-    JsonCodec.string.transformOrFail(
-      raw => RunId.from(raw).left.map(_.message),
-      _.value,
-    )
-  given JsonCodec[TestMode] =
-    JsonCodec.string.transformOrFail(
-      raw => TestMode.from(raw).left.map(_.message),
-      _.token,
-    )
-  given JsonCodec[CacheCleanMode] =
-    JsonCodec.string.transformOrFail(
-      raw => CacheCleanMode.from(raw).left.map(_.message),
-      _.token,
-    )
-  given JsonCodec[CacheNamespace] =
-    JsonCodec.string.transformOrFail(
-      raw => CacheNamespace.from(raw).left.map(_.message),
-      _.token,
-    )
-
-import CallJson.given
-
-enum Call derives JsonCodec:
-  case Compile(projects: List[ProjectName])
-  case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
-  case PublishLocal(tokens: List[String])
-  case PublishSnapshots(tokens: List[String])
-  case PublishRelease(tokens: List[String], automatic: Boolean)
-  case PublishPromote(id: String)
-  case PublishDrop(id: String)
-  case PublishAssets(tokens: List[String])
-  case Graph
-  case Run(id: String, platform: Option[Platform])
-  case Task(id: String, args: PluginArgs)
-  case Cancel(id: RunId)
-  case Toolchain
-  case Resolve(action: ResolveAction)
-  case Workflow(action: WorkflowAction)
-  case Assembly(destination: Option[String])
-  case Clean(projects: List[ProjectName])
-  case CleanFull
-  case Reload
-  case Reboot
-  case Version
-  case CachePath
-  case CacheList
-  case CacheClean(mode: CacheCleanMode)
-  case CachePromote(from: CacheNamespace, to: CacheNamespace)
-  case Launcher(action: LauncherAction)
-  case Watch(inner: Call)
-  case Bsp
-  case PreviewCompile(projects: List[ProjectName])
-  case PreviewTest(projects: List[ProjectName])
-  case PreviewPublishLocal(tokens: List[String])
-  case PreviewPublishSnapshots(tokens: List[String])
-  case PreviewClean(projects: List[ProjectName])
-  case PreviewCleanFull
-  case PreviewRun(id: String, platform: Option[Platform])
-
-object Call:
-  /** The codec is on [[Call]]. A case value does not carry it. */
-  def encode(call: Call): String =
-    call.toJson
-
-enum Message derives JsonCodec:
-  case Ready
-  case Event(event: BuildEvent)
-  case Done(result: CallResult)
-  case Marker(histosExit: Int)
-
 opaque type Fingerprint = String
 
 object Fingerprint:
@@ -199,6 +52,20 @@ object Fingerprint:
     yield Sha256.of(built ++ Chunk.single(0.toByte) ++ lock ++ extra).value
 
   private[server] def trusted(raw: String): Fingerprint = raw
+
+  /** The files [[read]] hashes. A header that does not parse contributes no plugin directories. */
+  def roots(repo: Path): UIO[List[Path]] =
+    val build = repo.resolve("histos.scala")
+    val lock  = repo.resolve(".histos").resolve("dependencies.lock")
+    ZIO
+      .attemptBlocking {
+        val plugins =
+          if Files.isRegularFile(build) then
+            HeaderScan.paths(Files.readString(build)).map(path => repo.resolve(path.value))
+          else Nil
+        (build :: lock :: plugins).distinct
+      }
+      .orElseSucceed(List(build, lock))
 
   extension (fingerprint: Fingerprint) def value: String = fingerprint
 
@@ -537,20 +404,24 @@ object Daemon:
               )
             )
             .unit
-          _ <- accept(
-            channel,
-            repo,
-            jdk,
-            version,
-            apiJar,
-            socket,
-            life,
-            warm,
-            permit,
-            runs,
-            machine,
-            buildClasspath,
-            build,
+          _ <- histos.zinc.CompileMemo.provide(
+            histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+              accept(
+                channel,
+                repo,
+                jdk,
+                version,
+                apiJar,
+                socket,
+                life,
+                warm,
+                permit,
+                runs,
+                machine,
+                buildClasspath,
+                build,
+              )
+            )
           )
         yield ()
       }
@@ -612,12 +483,14 @@ object Daemon:
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[
-    Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.zinc.CompileMemo,
     ServerError,
     Unit,
   ] =
     def loop: ZIO[
-      Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+      Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+        histos.zinc.CompileMemo,
       ServerError,
       Unit,
     ] =
@@ -667,7 +540,8 @@ object Daemon:
       buildClasspath: List[Path],
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.zinc.CompileMemo,
     ServerError,
     Unit,
   ] =
@@ -693,7 +567,8 @@ object Daemon:
               def edges(
                   out: Say
               ): Perform.Edges[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo
               ] =
                 Perform.Edges(
                   watch = (inner, edge) => watched(inner, edge),
@@ -721,7 +596,8 @@ object Daemon:
                   loaded: Either[BuildFault, Option[LoadedBuild]],
                   chosen: histos.jdk.Machine,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo,
                 ServerError,
                 Unit,
               ] =
@@ -742,7 +618,8 @@ object Daemon:
                   target: Call,
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo,
                 ServerError,
                 Unit,
               ] =
@@ -762,7 +639,8 @@ object Daemon:
                   inner: Call,
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo,
                 ServerError,
                 Unit,
               ] =
@@ -778,7 +656,8 @@ object Daemon:
                     )
 
               def watchRoots(call: Call): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo,
                 ServerError,
                 List[Path],
               ] =
@@ -797,7 +676,8 @@ object Daemon:
                   target: Call,
                   out: Say,
               ): ZIO[
-                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo,
                 ServerError,
                 Unit,
               ] =
@@ -840,7 +720,8 @@ object Daemon:
       bound: Path,
       warm: Warm,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.zinc.CompileMemo,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -861,7 +742,8 @@ object Daemon:
       bound: Path,
       warm: Warm,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.zinc.CompileMemo,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -879,7 +761,8 @@ object Daemon:
       warm: Warm,
       now: Fingerprint,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.zinc.CompileMemo,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -897,6 +780,7 @@ object Daemon:
             next = Generation(found.graph, found.plugins, found.build, now, scope, uses)
             previous <- warm.live.getAndSet(next)
             _        <- warm.graphs.set(found.graph)
+            _        <- Calls.release
             _        <- retire(previous)
             _        <- warm.spliced.get.flatMap(
               ZIO.foreachDiscard(_)(_.changed(previous.graph, found.graph))
@@ -987,7 +871,8 @@ object Daemon:
       input: InputStream,
       output: OutputStream,
   ): ZIO[
-    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
+    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+      histos.zinc.CompileMemo,
     ServerError,
     Unit,
   ] =
@@ -1023,6 +908,7 @@ object Daemon:
                     session.answer(gen.graph, payload).ensuring(release(gen))
                   }
               warm.spliced.update(_ + session) *>
+                session.follow *>
                 requests(next, box.offer, adopted, box.done)
                   .flatMap(code => box.offer(wire(Message.Marker(code))) *> box.close)
                   .ensuring(warm.spliced.update(_ - session))

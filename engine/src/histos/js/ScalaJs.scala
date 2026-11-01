@@ -2,7 +2,17 @@ package histos.js
 
 import histos.zinc.{CompileError, CompileOutput, CompileProblem, CompileRequest, JsLibraryMiss, JvmCompile, ScalaSeries}
 import histos.{Dep, DepKind, JsEnv, JsVersion, Platform, ScalaVersion, ToolCatalog}
-import histos.resolve.{LockedTools, ToolRoot, ToolRequest, ToolId, ToolRole, ToolVariant, Repositories, Transitivity}
+import histos.resolve.{
+  LockedTools,
+  ToolRoot,
+  ToolRoots,
+  ToolRequest,
+  ToolId,
+  ToolRole,
+  ToolVariant,
+  Repositories,
+  Transitivity,
+}
 
 import java.nio.file.Path
 
@@ -25,7 +35,11 @@ object ScalaJs:
       extra: List[String] = Nil,
       hear: CompileProblem => Unit = _ => (),
       revision: Option[JsVersion] = None,
-  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts, CompileError, CompileOutput] =
+  ): ZIO[
+    LockedTools & histos.cache.ContentStore & histos.zinc.CompilerStarts & histos.zinc.Compilers,
+    CompileError,
+    CompileOutput,
+  ] =
     if request.toolchain.platform != Platform.Js then
       ZIO.fail(CompileError.UnsupportedPlatform(request.toolchain.platform))
     else
@@ -71,7 +85,7 @@ object JsRequests:
   ): ToolRequest =
     val single = Transitivity.Single
     val roots  = List(
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted(
           "org.scala-lang",
           "scala-library",
@@ -83,7 +97,7 @@ object JsRequests:
         single,
         None,
       ),
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted(
           "org.scala-lang",
           "scala3-library",
@@ -95,7 +109,7 @@ object JsRequests:
         single,
         None,
       ),
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted(
           "org.scala-lang",
           "scala3-library",
@@ -107,7 +121,7 @@ object JsRequests:
         single,
         None,
       ),
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted(
           "org.scala-js",
           "scalajs-library",
@@ -119,7 +133,7 @@ object JsRequests:
         single,
         None,
       ),
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted(
           "org.scala-js",
           "scalajs-scalalib",
@@ -131,7 +145,7 @@ object JsRequests:
         single,
         None,
       ),
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted(
           "org.scala-js",
           "scalajs-javalib",
@@ -185,7 +199,7 @@ object JsRequests:
     ToolRequest(
       ToolId(ToolRole.JsEnvironment, version, variant),
       List(
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted(org, name, revision.value, DepKind.Binary),
           version,
           Platform.Jvm,
@@ -204,7 +218,7 @@ object JsRequests:
     ToolRequest(
       ToolId(ToolRole.JsLinker, version, ToolVariant.Js(revision)),
       List(
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted(
             "org.scala-js",
             "scalajs-linker",
@@ -231,7 +245,7 @@ object JsRequests:
       "scalajs-linker",
       "scalajs-sbt-test-adapter",
     ).map(name =>
-      ToolRoot.of(
+      ToolRoots.of(
         Dep.trusted("org.scala-js", name, revision.value, DepKind.Binary),
         version,
         Platform.Jvm,
@@ -255,7 +269,7 @@ object JsRequests:
     ToolRequest(
       ToolId(ToolRole.JsTestBridge, version, ToolVariant.Js(revision)),
       List(
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted(
             "org.scala-js",
             "scalajs-test-bridge",

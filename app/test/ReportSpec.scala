@@ -31,6 +31,7 @@ import java.nio.file.Path
 
 import zio.json.*
 import WireJson.given JsonCodec[BuildEvent]
+import WireSchema.given
 import zio.test.*
 import zio.{Chunk, Fiber, Ref, Scope, ZIO, ZLayer}
 
@@ -298,7 +299,12 @@ object ReportSpec extends ZIOSpecDefault:
           say = Say.record(repo, feeds)
           _ <- Calls
             .compile(repo, built, Nil, jdk, Calls.idleMachine, say)
-            .provide(ZLayer.succeed(DeadResolve), histos.zinc.CompileReplay.processStore)
+            .provideSome[Scope](
+              ZLayer.succeed(DeadResolve),
+              histos.zinc.CompileReplay.processStore,
+              histos.zinc.Compilers.live,
+              histos.zinc.CompileMemo.live,
+            )
           read        <- Stored.read(repo).either
           observation <- say.observation
           chunk       <- feeds.get

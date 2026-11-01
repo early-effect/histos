@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Promise, Ref, Scope, ZIO, durationInt}
+import zio.{Chunk, Promise, Ref, Scope, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 object GraphCompileSpec extends ZIOSpecDefault:
@@ -70,6 +70,212 @@ object GraphCompileSpec extends ZIOSpecDefault:
               ),
             )
           )
+    ,
+    test("a second compile on the resident service opens no compiler"):
+      ZIO.scoped:
+        for
+          jdk  <- GraphCompile.jdkHere
+          root <- temp
+          _    <- ZIO.attempt {
+            write(root, "histos.scala", oneModule)
+            write(
+              root,
+              "src/main/scala/demo/Hello.scala",
+              "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
+            )
+            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+          }
+          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _         <- histos.ToolFixture.seed(root, built)
+          tools     <- ZIO.service[histos.resolve.LockedTools]
+          compilers <- Compilers.live(1).build.map(_.get[Compilers])
+          memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
+          first     <- temp
+          second    <- temp
+          run = (store: histos.cache.ContentStore) =>
+            GraphCompile
+              .resident(root, built, Nil, jdk, NativeOrigin.Central, None)
+              .runCollect
+              .provide(
+                ZLayer.succeed(compilers),
+                ZLayer.succeed(memo),
+                ZLayer.succeed(tools.resolve),
+                ZLayer.succeed(store),
+              )
+          firstFeeds  <- run(histos.cache.ContentStore.in(first))
+          opened      <- compilers.openings
+          secondFeeds <- run(histos.cache.ContentStore.in(second))
+          again       <- compilers.openings
+          failed = (firstFeeds ++ secondFeeds).collect { case CompileFeed.Failed(error) => error.message }
+        yield assertTrue(failed.isEmpty, opened == 1, again == 1)
+    ,
+    test("a second compile through one store does not rewrite class files"):
+      ZIO.scoped:
+        for
+          jdk  <- GraphCompile.jdkHere
+          root <- temp
+          _    <- ZIO.attempt {
+            write(root, "histos.scala", oneModule)
+            write(
+              root,
+              "src/main/scala/demo/Hello.scala",
+              "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
+            )
+            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+          }
+          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _         <- histos.ToolFixture.seed(root, built)
+          tools     <- ZIO.service[histos.resolve.LockedTools]
+          compilers <- Compilers.live(1).build.map(_.get[Compilers])
+          memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
+          store     <- temp
+          run = GraphCompile
+            .resident(root, built, Nil, jdk, NativeOrigin.Central, None)
+            .runCollect
+            .provide(
+              ZLayer.succeed(compilers),
+              ZLayer.succeed(memo),
+              ZLayer.succeed(tools.resolve),
+              ZLayer.succeed(histos.cache.ContentStore.in(store)),
+            )
+          first  <- run
+          opened <- compilers.openings
+          classes = root.resolve(".histos").resolve("classes").resolve("core").resolve("3.9.0").resolve("jvm")
+          marked <- ZIO
+            .attempt {
+              val walk  = Files.walk(classes)
+              val found =
+                try walk.iterator.asScala.find(path => String.valueOf(path.getFileName).endsWith(".class"))
+                finally walk.close()
+              found
+            }
+            .flatMap(path => ZIO.fromOption(path))
+          before <- ZIO.attempt(Files.getLastModifiedTime(marked))
+          second <- run
+          after  <- ZIO.attempt(Files.getLastModifiedTime(marked))
+          again  <- compilers.openings
+          _      <- compilers.drop
+          idle   <- compilers.openings
+          failed  = (first ++ second).collect { case CompileFeed.Failed(error) => error.message }
+          skipped = second.collect { case CompileFeed.Done(cell) => cell.sources }
+        yield assertTrue(
+          failed.isEmpty,
+          opened == 1,
+          again == 1,
+          before == after,
+          idle == 0,
+          skipped == Chunk(Some(SourceCount(0, 1))),
+        )
+    ,
+    test("a changed file keeps the resident analysis after inc.zip is removed"):
+      ZIO.scoped:
+        for
+          jdk  <- GraphCompile.jdkHere
+          root <- temp
+          _    <- ZIO.attempt {
+            write(root, "histos.scala", oneModule)
+            write(
+              root,
+              "src/main/scala/demo/Hello.scala",
+              "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
+            )
+            write(
+              root,
+              "src/main/scala/demo/Other.scala",
+              "package demo\n\nobject Other:\n  def rest: Int = 1\n",
+            )
+            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+          }
+          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _         <- histos.ToolFixture.seed(root, built)
+          tools     <- ZIO.service[histos.resolve.LockedTools]
+          compilers <- Compilers.live(1).build.map(_.get[Compilers])
+          memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
+          store     <- temp
+          run = GraphCompile
+            .resident(root, built, Nil, jdk, NativeOrigin.Central, None)
+            .runCollect
+            .provide(
+              ZLayer.succeed(compilers),
+              ZLayer.succeed(memo),
+              ZLayer.succeed(tools.resolve),
+              ZLayer.succeed(histos.cache.ContentStore.in(store)),
+            )
+          _ <- run
+          zip = root
+            .resolve(".histos")
+            .resolve("analysis")
+            .resolve("core")
+            .resolve("3.9.0")
+            .resolve("jvm")
+            .resolve("inc.zip")
+          _ <- ZIO.attempt(Files.delete(zip))
+          _ <- ZIO.attempt {
+            write(
+              root,
+              "src/main/scala/demo/Hello.scala",
+              "package demo\n\nobject Hello:\n  def greet: String = \"hello\"\n",
+            )
+          }
+          second <- run
+          opened <- compilers.openings
+          counted = second.collect { case CompileFeed.Done(cell) => cell.sources }
+          failed  = second.collect { case CompileFeed.Failed(error) => error.message }
+        yield assertTrue(failed.isEmpty, opened == 1, counted == Chunk(Some(SourceCount(1, 1))))
+    ,
+    test("a deleted source is not a hit"):
+      ZIO.scoped:
+        for
+          jdk  <- GraphCompile.jdkHere
+          root <- temp
+          _    <- ZIO.attempt {
+            write(root, "histos.scala", oneModule)
+            write(
+              root,
+              "src/main/scala/demo/Hello.scala",
+              "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
+            )
+            write(
+              root,
+              "src/main/scala/demo/Other.scala",
+              "package demo\n\nobject Other:\n  def rest: Int = 1\n",
+            )
+            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+          }
+          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _         <- histos.ToolFixture.seed(root, built)
+          tools     <- ZIO.service[histos.resolve.LockedTools]
+          compilers <- Compilers.live(1).build.map(_.get[Compilers])
+          memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
+          store     <- temp
+          classes = root.resolve(".histos").resolve("classes").resolve("core").resolve("3.9.0").resolve("jvm")
+          run     = GraphCompile
+            .resident(root, built, Nil, jdk, NativeOrigin.Central, None)
+            .runCollect
+            .provide(
+              ZLayer.succeed(compilers),
+              ZLayer.succeed(memo),
+              ZLayer.succeed(tools.resolve),
+              ZLayer.succeed(histos.cache.ContentStore.in(store)),
+            )
+          _      <- run
+          second <- run
+          hit = second.collect { case CompileFeed.Done(cell) => cell.sources }
+          _     <- ZIO.attempt(Files.delete(root.resolve("src/main/scala/demo/Other.scala")))
+          third <- run
+          names <- ZIO.attempt(entries(classes))
+          counted  = third.collect { case CompileFeed.Done(cell) => cell.sources }
+          failed   = third.collect { case CompileFeed.Failed(error) => error.message }
+          remained = counted.collect:
+            case Some(SourceCount(compiled, skipped)) if compiled + skipped == 1 => true
+          classFiles = names.filter(_.endsWith(".class"))
+        yield assertTrue(
+          failed.isEmpty,
+          hit == Chunk(Some(SourceCount(0, 2))),
+          remained == Chunk(true),
+          classFiles.exists(_.contains("Hello")),
+          !classFiles.exists(_.contains("Other")),
+        )
     ,
     test("a scala 2.13 cell writes semanticdb"):
       ZIO.scoped:
@@ -340,6 +546,58 @@ object GraphCompileSpec extends ZIOSpecDefault:
           _       <- release.succeed(())
           _       <- fiber.join
         yield assertTrue(started.isDefined)
+    ,
+    test("two independent cells are inside the compiler before either leaves"):
+      ZIO.scoped:
+        for
+          jdk     <- GraphCompile.jdkHere
+          root    <- temp
+          release <- Promise.make[Nothing, Unit]
+          both    <- Promise.make[Nothing, Unit]
+          entered <- Ref.make(Set.empty[String])
+          early   <- Ref.make(false)
+          built   <- ZIO
+            .attempt {
+              val slow  = module("slow", Jvm)(ScalaVersion("3.9.0"))
+              val fast  = module("fast", Jvm)(ScalaVersion("3.9.0"))
+              val after = module("after", Jvm)(ScalaVersion("3.9.0")).dependsOn(slow)
+              write(root, "slow/src/main/scala/Slow.scala", "object Slow:\n  def n: Int = 1\n")
+              write(root, "fast/src/main/scala/Fast.scala", "object Fast:\n  def n: Int = 1\n")
+              write(root, "after/src/main/scala/After.scala", "object After:\n  def n: Int = Slow.n\n")
+              write(
+                root,
+                ".histos/dependencies.lock",
+                "cell slow 3.9.0 jvm\ncell fast 3.9.0 jvm\ncell after 3.9.0 jvm\n",
+              )
+              Projects(slow, fast, after)
+            }
+            .flatMap(ZIO.fromEither(_))
+          _     <- histos.ToolFixture.seed(root, built)
+          fiber <- GraphCompile
+            .gated(
+              root,
+              built,
+              Nil,
+              jdk,
+              NativeOrigin.Central,
+              _ => ZIO.unit,
+              name =>
+                entered.updateAndGet(_ + name.value).flatMap { names =>
+                  ZIO.when(names.contains("slow") && names.contains("fast"))(both.succeed(()).unit) *>
+                    (name.value match
+                      case "slow"  => release.await
+                      case "after" => early.set(true)
+                      case _       => ZIO.unit)
+                },
+            )
+            .runDrain
+            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
+            .forkScoped
+          overlapped <- Live.live(both.await.timeout(90.seconds))
+          sneaked    <- early.get
+          _          <- release.succeed(())
+          _          <- fiber.join
+        yield assertTrue(overlapped.isDefined, !sneaked)
     ,
     test("a compile diagnostic is on the console before the cell fails"):
       ZIO.scoped:

@@ -1,7 +1,7 @@
 package histos.bsp
 
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.zinc.CompileProblem
+import histos.zinc.{CompileProblem, ZincProblem}
 
 import java.nio.file.Files
 
@@ -24,8 +24,8 @@ object BspFaultSpec extends ZIOSpecDefault:
       }
     ,
     test("a failed compile keeps heard problems in order"):
-      val first  = CompileProblem.text("one")
-      val second = CompileProblem.text("two")
+      val first  = ZincProblem.text("one")
+      val second = ZincProblem.text("two")
       Bsp
         .problems { hear =>
           ZIO.succeed(hear(first)) *> ZIO.succeed(hear(second)) *> ZIO.fail(Bsp.BspError.UnknownTarget)

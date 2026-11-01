@@ -6,7 +6,7 @@ import histos.{Dep, Platform, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
-import zio.{Chunk, IO, ZIO}
+import zio.{Chunk, IO, Ref, ULayer, ZIO, ZLayer}
 
 /** Coursier is linked as a library. `coursier.util.Task` runs on `Future`, and `eitherResult` is that library's runner.
   * Callers see [[ResolveError]]. The Scala 2.13 toolchain is fetched separately and is not a user dependency.
@@ -16,9 +16,19 @@ private[resolve] enum CacheMode:
   case Retain
   case Offline
 
+private[resolve] final case class FetchKey(
+    organization: String,
+    name: String,
+    revision: String,
+    classifier: String,
+    sha256: String,
+    repository: String,
+)
+
 private[resolve] final class CoursierResolve(
     cache: Path,
-    mode: CacheMode = CacheMode.Revalidate,
+    mode: CacheMode,
+    fetched: Ref[Map[FetchKey, ResolvedArtifact]],
 ) extends Resolve:
   def resolve(cell: ResolveCell): IO[ResolveError, Classpath] =
     Resolve.prepare(cell) *> {
@@ -88,6 +98,21 @@ private[resolve] final class CoursierResolve(
     yield Classpath(artifacts, evictions(result.resolution))
 
   def fetch(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
+    val key = FetchKey(
+      artifact.organization,
+      artifact.name,
+      artifact.revision,
+      artifact.classifier.fold("")(_.value),
+      artifact.sha256.value,
+      Repository.token(artifact.repository),
+    )
+    fetched.get.flatMap { have =>
+      have.get(key) match
+        case Some(found) => ZIO.succeed(found)
+        case None        => fetchNew(artifact).tap(found => fetched.update(_.updated(key, found)))
+    }
+
+  private def fetchNew(artifact: LockedArtifact): IO[ResolveError, ResolvedArtifact] =
     val policy =
       if mode == CacheMode.Offline then CacheUse.Offline else CacheUse.Locked
     for
@@ -406,3 +431,9 @@ private[resolve] final class CoursierResolve(
   )
 
 end CoursierResolve
+
+private[resolve] object CoursierResolve:
+  def layer(cache: Path, mode: CacheMode): ULayer[Resolve] =
+    ZLayer.fromZIO(
+      Ref.make(Map.empty[FetchKey, ResolvedArtifact]).map(ref => new CoursierResolve(cache, mode, ref))
+    )

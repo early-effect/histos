@@ -25,7 +25,7 @@ private final class TestRemoteCache(
       case RemoteMode.Off   => ZIO.fail(RemoteError.Off)
       case RemoteMode.Read  => ZIO.fail(RemoteError.ReadOnly)
       case RemoteMode.Write =>
-        val output = Digest.ofBytes(bytes)
+        val output = ActionDigest.ofBytes(bytes)
         state.update(current =>
           current.copy(
             actions = current.actions + (action -> output),
@@ -41,7 +41,7 @@ private final class TestRemoteCache(
         state.update(current => current.copy(actions = Map.empty))
 
   def plant(action: Digest, bytes: Chunk[Byte]): UIO[Unit] =
-    val output = Digest.ofBytes(bytes)
+    val output = ActionDigest.ofBytes(bytes)
     state.update(current =>
       current.copy(
         actions = current.actions + (action -> output),
@@ -50,7 +50,7 @@ private final class TestRemoteCache(
     )
 
   def plantDangling(action: Digest): UIO[Digest] =
-    val output = Digest.ofBytes(Chunk.single(1.toByte))
+    val output = ActionDigest.ofBytes(Chunk.single(1.toByte))
     state
       .update(current => current.copy(actions = current.actions + (action -> output)))
       .as(output)

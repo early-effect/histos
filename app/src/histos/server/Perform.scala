@@ -30,8 +30,7 @@ object Perform:
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
           Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) |
-          Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
-          Call.PreviewRun(_, _) =>
+          Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
         false
@@ -45,15 +44,15 @@ object Perform:
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
   def jdkMissed(call: Call, error: GraphCompileError): CallResult =
     call match
-      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) |
-          Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
+      case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PreviewPublishLocal(_) |
+          Call.PreviewPublishSnapshots(_) =>
         CallResult.Fault(BuildFault.Compile(error))
       case Call.Test(_, _, _) | Call.PreviewTest(_) =>
-        BuildFault.testStopped(ModuleTestError.Compile(error)) match
+        Faults.testStopped(ModuleTestError.Compile(error)) match
           case Some(why) => CallResult.Fault(why)
           case None      => CallResult.reported(error.message)
       case _ =>
-        BuildFault.compileStopped(error) match
+        Faults.compileStopped(error) match
           case Some(why) => CallResult.Fault(why)
           case None      => CallResult.reported(error.message)
 
@@ -68,7 +67,7 @@ object Perform:
       call: Call,
       say: Say,
       edges: Edges[R],
-  ): ZIO[R & Resolve & Loader & ContentStore, ServerError, Unit] =
+  ): ZIO[R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Unit] =
     loaded match
       case Left(fault) => Calls.finish(say, CallResult.Fault(fault))
       case Right(have) =>
@@ -103,9 +102,7 @@ object Perform:
           case Call.PublishLocal(projects) =>
             held(build =>
               follow(
-                withJdk(jdk =>
-                  Calls.publishLocal(repo, build.graph, build.build, machine, jdk, projects, say)
-                )
+                withJdk(jdk => Calls.publishLocal(repo, build.graph, build.build, machine, jdk, projects, say))
               )
             )
           case Call.PublishSnapshots(projects) =>

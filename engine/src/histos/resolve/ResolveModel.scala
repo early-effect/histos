@@ -54,6 +54,3 @@ final case class Classpath(
     artifacts: List[ResolvedArtifact],
     evictions: List[Eviction],
 )
-
-enum RepositoryIo:
-  case Fetch, Metadata

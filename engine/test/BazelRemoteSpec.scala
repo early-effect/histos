@@ -48,7 +48,7 @@ object BazelRemoteSpec extends ZIOSpecDefault:
   private val namespaces =
     test("a pull request write misses on main, and a main write hits"):
       val bytes  = Chunk.fromArray("namespace".getBytes(StandardCharsets.UTF_8))
-      val action = Digest.ofBytes(bytes)
+      val action = ActionDigest.ofBytes(bytes)
       val pull   = CacheNamespace.PullRequest(PullRequestNumber("1"))
       for
         env       <- hostEnv

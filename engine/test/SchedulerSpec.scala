@@ -197,7 +197,7 @@ object SchedulerSpec extends ZIOSpecDefault:
     test("changing an input changes the digest"):
       val first  = action(a)
       val second = first.copy(inputs = List(Input(InputName.trusted("src"), InputValue.Text("other"))))
-      assertTrue(Digest.of(first, Map.empty) != Digest.of(second, Map.empty))
+      assertTrue(ActionDigest.of(first, Map.empty) != ActionDigest.of(second, Map.empty))
     ,
     test(
       "a core compile digest has no policy line, and a plugin seal changes it"
@@ -214,11 +214,11 @@ object SchedulerSpec extends ZIOSpecDefault:
         policy = Policy.Plugin(Seal.Hermetic, Set(Need.Network, Need.Docker))
       )
       assertTrue(
-        Digest.of(action, Map.empty).value == expected,
-        Digest
+        ActionDigest.of(action, Map.empty).value == expected,
+        ActionDigest
           .of(action.copy(policy = Policy.Core), Map.empty)
           .value == expected,
-        Digest.of(plugin, Map.empty).value != expected,
+        ActionDigest.of(plugin, Map.empty).value != expected,
       )
     ,
     test("an open plugin is not stored"):
@@ -290,7 +290,7 @@ object SchedulerSpec extends ZIOSpecDefault:
             Some(dir),
             List(RepoPath("out.txt")),
           )
-          digest = Digest.of(task, Map.empty)
+          digest = ActionDigest.of(task, Map.empty)
           (values, cache) <- recording
           _               <- values.set(Map(digest.value -> manifest))
           calls           <- Ref.make(0)
@@ -335,7 +335,7 @@ object SchedulerSpec extends ZIOSpecDefault:
             Some(dir),
             List(RepoPath("out.txt")),
           )
-          digest = Digest.of(task, Map.empty)
+          digest = ActionDigest.of(task, Map.empty)
           remote <- TestRemoteCache.memory(RemoteMode.Read)
           _      <- remote.plant(
             digest,

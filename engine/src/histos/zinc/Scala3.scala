@@ -1,7 +1,17 @@
 package histos.zinc
 
 import histos.{Dep, DepKind, Platform, ScalaVersion, ToolCatalog}
-import histos.resolve.{LockedTools, ToolRoot, ToolRequest, ToolId, ToolRole, ToolVariant, Repositories, Transitivity}
+import histos.resolve.{
+  LockedTools,
+  ToolRoot,
+  ToolRoots,
+  ToolRequest,
+  ToolId,
+  ToolRole,
+  ToolVariant,
+  Repositories,
+  Transitivity,
+}
 
 import java.net.{URL, URLClassLoader}
 import java.util.Enumeration
@@ -27,9 +37,15 @@ private[zinc] object Scala3:
       */
     private[zinc] def openLoader(engine: ClassLoader): URLClassLoader =
       new URLClassLoader(
-        (compilerClasspath ++ runtime).map(_.toUri.toURL).toArray,
+        loaderJars.map(_.toUri.toURL).toArray,
         new EngineBoundary(engine),
       )
+
+    /** Jars the compiler loader sees, in order. A resident compiler opens these, not a later resolve. */
+    private[zinc] def loaderJars: List[Path] = compilerClasspath ++ runtime
+
+    private[zinc] def boundary: LoaderBoundary = LoaderBoundary.Engine
+  end Toolchain
 
   private[zinc] def jars(
       version: ScalaVersion
@@ -243,7 +259,7 @@ object CompilerRequests:
     ToolRequest(
       ToolId(ToolRole.Compiler, version, ToolVariant.Jvm),
       names.map(name =>
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted("org.scala-lang", name, version.value, DepKind.Java),
           version,
           Platform.Jvm,
@@ -262,7 +278,7 @@ object CompilerRequests:
     ToolRequest(
       ToolId(ToolRole.Semanticdb, version, ToolVariant.Jvm),
       List(
-        ToolRoot.of(
+        ToolRoots.of(
           Dep.trusted(
             "org.scalameta",
             "semanticdb-scalac",

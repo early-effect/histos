@@ -44,46 +44,7 @@ object NativeKey:
          |""".stripMargin
     Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
 
-enum LinkError:
-  case Interrupted
-  case Linker(text: String)
-  case Unexpected(kind: String)
-
-  def message: String = this match
-    case Interrupted      => "the native link was interrupted"
-    case Linker(text)     => text
-    case Unexpected(kind) => s"the native link failed ($kind)"
-end LinkError
-
 final case class Linked(binary: Path, key: Sha256)
-
-enum NativeError:
-  case Clang(miss: ClangMiss)
-  case Fetch(error: NativeFetch)
-  case Compile(error: CompileError)
-  case Link(error: LinkError)
-
-  def message: String = this match
-    case Clang(miss)    => miss.message
-    case Fetch(error)   => error.message
-    case Compile(error) => error.message
-    case Link(error)    => error.message
-end NativeError
-
-enum NativeDeclaration:
-  case NotNative
-  case Major(major: histos.ClangMajor)
-  case Missing(name: ProjectName)
-  case Disagree(left: ProjectName, right: ProjectName)
-
-  def message: String = this match
-    case NotNative     => ""
-    case Major(major)  => s"clang ${major.value}"
-    case Missing(name) =>
-      s"project '${name.value}' targets Native and does not name a clang major"
-    case Disagree(left, right) =>
-      s"projects '${left.value}' and '${right.value}' name different clang majors"
-end NativeDeclaration
 
 object NativeProject:
   def declaration(graph: ProjectGraph): NativeDeclaration =
@@ -245,15 +206,26 @@ object NativeLink:
       )
     )
 
-  /** The toolchain appends its own native libraries. A resolved test jar of the same file is the same library.
+  /** The toolchain appends its own native libraries. A resolved jar of the same library, at any revision, is dropped.
     */
   private def withoutLibraries(
       classpath: List[Path],
       libraries: List[Path],
   ): List[Path] =
-    val names =
-      libraries.flatMap(path => Option(path.getFileName).map(_.toString)).toSet
-    classpath.filterNot(path => Option(path.getFileName).exists(name => names.contains(name.toString)))
+    val names = libraries.flatMap(libraryName).toSet
+    classpath.filterNot(path =>
+      Option(path.getFileName).exists(file => names.exists(name => file.toString.startsWith(s"$name-")))
+    )
+
+  /** `nativelib_native0.5_3-0.5.12.jar` and the snapshot jar are one library. The revision starts at the first hyphen.
+    */
+  private def libraryName(path: Path): Option[String] =
+    Option(path.getFileName).map(_.toString) match
+      case Some(file) if file.endsWith(".jar") =>
+        val base = file.stripSuffix(".jar")
+        val name = base.takeWhile(_ != '-')
+        if name.nonEmpty && name.length < base.length then Some(name) else None
+      case _ => None
 
   /** The linker JVM is a fresh environment. Linux clang finds `ld` on `PATH`. An empty environment makes that exec
     * fail.

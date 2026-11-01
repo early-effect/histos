@@ -299,7 +299,7 @@ private[histos] object TestCompile:
       val compiled = request.toolchain.platform match
         case Platform.Jvm => JvmCompile.compile(request, extra, hear)
         case Platform.Js  =>
-          ScalaJs.compile(request, extra, hear, module.jsVersion)
+          histos.zinc.Compilers.provide(1)(ScalaJs.compile(request, extra, hear, module.jsVersion))
         case Platform.Native =>
           val revision =
             module.nativeVersion.getOrElse(tools.catalog.native.revision)

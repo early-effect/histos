@@ -4,7 +4,7 @@ import histos.jdk.JdkRuntime
 import histos.node.NodeBinary
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildRequest}
-import histos.testrun.SuitePattern
+import histos.testrun.{SuiteMatch, SuitePattern}
 import histos.workspace.Workspace
 import histos.zinc.{
   CompileError,
@@ -305,7 +305,7 @@ object JsSuite:
       |""".stripMargin
       .replace("__ENV__", JsRun.envExpr(env))
       .replace("__USE_ENV__", if useRunEnv(env) then "true" else "false")
-      .replace("__SUITES__", SuitePattern.embed(patterns))
+      .replace("__SUITES__", SuiteMatch.embed(patterns))
 
   private def write(path: Path, text: String): IO[JsSuiteError, Unit] =
     Workspace
@@ -318,16 +318,3 @@ object JsSuite:
       .mapError(_ => JsSuiteError.Run(s"could not prepare $path"))
       .unit
 end JsSuite
-
-enum JsSuiteError:
-  case Resolved(error: ResolveError)
-  case Unavailable
-  case Library(error: CompileError)
-  case Run(text: String)
-
-  def message: String = this match
-    case Resolved(error) => error.message
-    case Unavailable     => "the Scala.js test adapter could not be fetched"
-    case Library(error)  => error.message
-    case Run(text)       => text
-end JsSuiteError

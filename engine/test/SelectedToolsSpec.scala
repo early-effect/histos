@@ -186,7 +186,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             ToolId(
               ToolRole.NativeLibraries,
               ScalaVersion("3.10.0"),
-              ToolVariant.Native(NativeVersion("0.5.12")),
+              ToolVariant.Native(NativeVersion("0.5.13-20261030-eb3f3b8-SNAPSHOT")),
             ),
             ToolId(
               ToolRole.NativeLibraries,
@@ -205,7 +205,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
               )
             )
             .map(_.revision)
-            .toSet == Set("3.10.0+0.5.12"),
+            .toSet == Set("3.10.0+0.5.13-20261030-eb3f3b8-SNAPSHOT"),
           libraries.entries.forall(path => !path.toString.contains("compiler")),
         )
     ,

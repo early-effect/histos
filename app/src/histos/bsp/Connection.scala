@@ -1,27 +1,39 @@
 package histos.bsp
 
 import histos.publish.LauncherPin
+import histos.server.Fingerprint
+import histos.watch.SourceWatch
 import histos.workspace.{IoFailure, IoFault}
 
 import java.nio.file.{Files, Path}
 
 import zio.json.*
-import zio.{IO, UIO, ZIO}
+import zio.{IO, Scope, UIO, ZIO}
 
-/** The `.bsp/histos.json` file Metals reads. The version is `histos.version` when this checkout has one. */
+/** The `.bsp/histos.json` file Metals reads. `version` is `histos.version`. `graph` is the build fingerprint. Metals
+  * ignores `graph` and hashes the file, so a new fingerprint is a build change.
+  */
 final case class Connection(
     name: String,
     argv: List[String],
     version: String,
     bspVersion: String,
     languages: List[String],
+    graph: String,
 ) derives JsonCodec
 
 object Connection:
   def ensure(repo: Path): IO[IoFailure, Unit] =
     version(repo).flatMap:
       case None        => ZIO.unit
-      case Some(value) => write(repo, value)
+      case Some(value) =>
+        Fingerprint
+          .read(repo)
+          .foldZIO(_ => ZIO.unit, fingerprint => write(repo, value, fingerprint.value))
+
+  /** While a BSP session is up, rewrite the connection file once the fingerprint changes. */
+  def follow(repo: Path): ZIO[Scope, Nothing, Unit] =
+    watch(repo).forkScoped.unit
 
   /** The properties line when it parses. A missing or bad line writes nothing. */
   def version(repo: Path): UIO[Option[String]] =
@@ -32,14 +44,30 @@ object Connection:
     if Files.isRegularFile(repo.resolve("histos")) then List("./histos", "bsp")
     else List("histos", "bsp")
 
-  def here(argv: List[String], version: String): Connection =
-    Connection(Bsp.ServerName, argv, version, Bsp.BspVersion, List("scala"))
+  def here(argv: List[String], version: String, graph: String): Connection =
+    Connection(Bsp.ServerName, argv, version, Bsp.BspVersion, List("scala"), graph)
 
-  private def write(repo: Path, version: String): IO[IoFailure, Unit] =
+  private def watch(repo: Path): UIO[Unit] =
+    Fingerprint.roots(repo).flatMap { paths =>
+      SourceWatch
+        .take(paths)
+        .foldZIO(
+          _ => ZIO.sleep(SourceWatch.Poll) *> watch(repo),
+          start =>
+            SourceWatch
+              .since(paths, start)
+              .foldZIO(
+                _ => ZIO.sleep(SourceWatch.Poll) *> watch(repo),
+                _ => ensure(repo).ignore *> watch(repo),
+              ),
+        )
+    }
+
+  private def write(repo: Path, version: String, graph: String): IO[IoFailure, Unit] =
     val path = repo.resolve(".bsp").resolve("histos.json")
     ZIO
       .attemptBlocking {
-        val wanted  = here(launch(repo), version)
+        val wanted  = here(launch(repo), version, graph)
         val present =
           if Files.isRegularFile(path) then Files.readString(path).fromJson[Connection].toOption
           else None

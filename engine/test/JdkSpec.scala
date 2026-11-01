@@ -20,10 +20,14 @@ object JdkSpec extends ZIOSpecDefault:
       val ancient  = JdkVersion.from("17.0.9")
       assertTrue(
         floor.value == "21",
-        newer.exists(_.atLeast(floor)),
-        ancient.exists(!_.atLeast(floor)),
-        required.exists(need => older.exists(!_.atLeast(need))),
-        required.exists(need => same.exists(_.atLeast(need))),
+        newer.exists(found => histos.toolchain.VersionOrder.atLeast(found.value, floor.value, stripJavaOne = true)),
+        ancient.exists(found => !histos.toolchain.VersionOrder.atLeast(found.value, floor.value, stripJavaOne = true)),
+        required.exists(need =>
+          older.exists(found => !histos.toolchain.VersionOrder.atLeast(found.value, need.value, stripJavaOne = true))
+        ),
+        required.exists(need =>
+          same.exists(found => histos.toolchain.VersionOrder.atLeast(found.value, need.value, stripJavaOne = true))
+        ),
       )
     ,
     test("a JVM at or above 21 is accepted and nothing is fetched"):

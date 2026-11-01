@@ -91,7 +91,7 @@ object ScenarioSpec extends ZIOSpecDefault:
       case _                        => false
 
   private def out(feeds: Chunk[TestFeed]): String =
-    feeds.collect { case TestFeed.Out(text) => text }.mkString("\n")
+    feeds.collect { case TestFeed.Out(_, _, _, text) => text }.mkString("\n")
 
   private def cached(feeds: Chunk[TestFeed]): List[String] =
     feeds.collect { case TestFeed.Cached(_, _, _, suite) => suite }.toList

@@ -149,7 +149,12 @@ object BspSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           cache  <- temp
-          result <- run.provideSome[Scope](Resolve.live(cache), histos.zinc.CompileReplay.processStore)
+          result <- run.provideSome[Scope](
+            Resolve.live(cache),
+            histos.zinc.CompileReplay.processStore,
+            histos.zinc.Compilers.live,
+            histos.zinc.CompileMemo.live,
+          )
         yield result,
   )
 
@@ -241,7 +246,7 @@ object BspSpec extends ZIOSpecDefault:
               found.exists(_.contains("semanticdb")),
               otherGone,
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -275,7 +280,7 @@ object BspSpec extends ZIOSpecDefault:
               code(missing).contains(-32603),
               message(missing).exists(_.contains("no dependency lock")),
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -336,7 +341,7 @@ object BspSpec extends ZIOSpecDefault:
                 ) && line.contains(""""line":1""")
               ),
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -374,7 +379,7 @@ object BspSpec extends ZIOSpecDefault:
               paths.exists(_.contains("scala-library-3.10.0")),
               paths.forall(path => !path.contains("scala-library-2.13.18")),
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -454,7 +459,7 @@ object BspSpec extends ZIOSpecDefault:
               code(run).isEmpty,
               code(env).isEmpty,
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -483,7 +488,7 @@ object BspSpec extends ZIOSpecDefault:
               code(env).contains(-32603),
               message(env).exists(_.contains("zio-test-sbt")),
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -519,7 +524,7 @@ object BspSpec extends ZIOSpecDefault:
               status(compiled).contains(2),
               code(compiled).isEmpty,
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -555,7 +560,7 @@ object BspSpec extends ZIOSpecDefault:
               code(compiled).isEmpty,
               !linked,
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -650,7 +655,7 @@ object BspSpec extends ZIOSpecDefault:
               !Files.exists(libClasses),
               mainWant.paths.nonEmpty,
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -688,7 +693,7 @@ object BspSpec extends ZIOSpecDefault:
               flagsOn.startsWith(List("-encoding", "UTF-8")),
               flagsOn.contains("-Xsemanticdb"),
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           )
     ,
@@ -712,7 +717,7 @@ object BspSpec extends ZIOSpecDefault:
               sourcePaths(sources).isEmpty,
               code(sources).isEmpty,
             )
-          program.provideSomeLayer[histos.resolve.LockedTools](
+          program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
             histos.AppToolFixture.resolver
           ),
   )
@@ -1027,7 +1032,7 @@ object BspSpec extends ZIOSpecDefault:
           ),
           histos.module("js", histos.Js)(histos.ScalaVersion("3.10.0")),
         )
-      )
+      ) ++ histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live
     ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)
 end BspSpec

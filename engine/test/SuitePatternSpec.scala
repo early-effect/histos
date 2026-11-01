@@ -9,11 +9,11 @@ object SuitePatternSpec extends ZIOSpecDefault:
       assertTrue:
         pattern match
           case Right(found) =>
-            SuitePattern.allows(List(found), "com.acme.FooA") &&
-            SuitePattern.allows(List(found), "com.acme.FooB") &&
-            SuitePattern.allows(List(found), "com.acme.FooA$") &&
-            !SuitePattern.allows(List(found), "com.acme.Bar") &&
-            !SuitePattern.allows(List(found), "com.other.FooA")
+            SuiteMatch.allows(List(found), "com.acme.FooA") &&
+            SuiteMatch.allows(List(found), "com.acme.FooB") &&
+            SuiteMatch.allows(List(found), "com.acme.FooA$") &&
+            !SuiteMatch.allows(List(found), "com.acme.Bar") &&
+            !SuiteMatch.allows(List(found), "com.other.FooA")
           case Left(_) => false
     ,
     test("a package pattern crosses dots, and a question mark is one character"):
@@ -22,11 +22,11 @@ object SuitePatternSpec extends ZIOSpecDefault:
       assertTrue:
         (packaged, one) match
           case (Right(wide), Right(mark)) =>
-            SuitePattern.allows(List(wide), "com.acme.FooA") &&
-            SuitePattern.allows(List(wide), "com.acme.bar.Baz") &&
-            SuitePattern.allows(List(mark), "com.acme.FooA") &&
-            SuitePattern.allows(List(mark), "com.acme.FooB") &&
-            !SuitePattern.allows(List(mark), "com.acme.FooAB")
+            SuiteMatch.allows(List(wide), "com.acme.FooA") &&
+            SuiteMatch.allows(List(wide), "com.acme.bar.Baz") &&
+            SuiteMatch.allows(List(mark), "com.acme.FooA") &&
+            SuiteMatch.allows(List(mark), "com.acme.FooB") &&
+            !SuiteMatch.allows(List(mark), "com.acme.FooAB")
           case _ => false
     ,
     test("an exact class does not match a different class"):
@@ -34,10 +34,10 @@ object SuitePatternSpec extends ZIOSpecDefault:
       assertTrue:
         found match
           case Right(pattern) =>
-            SuitePattern.allows(List(pattern), "histos.testrun.ProviderNoteSpec") &&
-            SuitePattern.allows(List(pattern), "histos.testrun.ProviderNoteSpec$") &&
-            !SuitePattern.allows(List(pattern), "histos.load.SpecularFixtureSpec") &&
-            !SuitePattern.allows(List(pattern), "histos.load.SpecularFixtureSpec$")
+            SuiteMatch.allows(List(pattern), "histos.testrun.ProviderNoteSpec") &&
+            SuiteMatch.allows(List(pattern), "histos.testrun.ProviderNoteSpec$") &&
+            !SuiteMatch.allows(List(pattern), "histos.load.SpecularFixtureSpec") &&
+            !SuiteMatch.allows(List(pattern), "histos.load.SpecularFixtureSpec$")
           case Left(_) => false
     ,
     test("an exact name does not match a longer one"):
@@ -45,12 +45,12 @@ object SuitePatternSpec extends ZIOSpecDefault:
       assertTrue(
         found match
           case Right(pattern) =>
-            SuitePattern.allows(List(pattern), "com.acme.FooA") &&
-            !SuitePattern.allows(List(pattern), "com.acme.FooAB")
+            SuiteMatch.allows(List(pattern), "com.acme.FooA") &&
+            !SuiteMatch.allows(List(pattern), "com.acme.FooAB")
           case Left(_) => false
         ,
         SuitePattern.from("") == Left(SuitePatternError.Empty),
-        SuitePattern.allows(Nil, "com.acme.FooA"),
+        SuiteMatch.allows(Nil, "com.acme.FooA"),
       ),
   )
 

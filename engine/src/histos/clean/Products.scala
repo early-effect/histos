@@ -19,6 +19,7 @@ object Products:
     "test-analysis",
     "test-work",
     "test-quick",
+    "tests",
     "jars",
     "link",
     "run",

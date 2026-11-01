@@ -59,8 +59,10 @@ object LauncherScript:
 
   /** A pointer or a timestamp boots when its channel is the script version, or the snapshot of a release ship. */
   def boots(ship: String, line: String): Boolean =
-    LauncherPin.channel(line).exists: pointer =>
-      pointer == ship || (!ship.endsWith("-SNAPSHOT") && pointer == s"$ship-SNAPSHOT")
+    LauncherPin
+      .channel(line)
+      .exists: pointer =>
+        pointer == ship || (!ship.endsWith("-SNAPSHOT") && pointer == s"$ship-SNAPSHOT")
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     if !launcher(graph) then Right(None)
@@ -283,6 +285,24 @@ while [ "$i" -le "$#" ]; do
   quoted_args="$quoted_args $(shell_quote "$one")"
   i=$((i + 1))
 done
+client=$root/dist/histos-client
+jar_client=1
+if [ "$#" -ge 1 ]; then
+  case $1 in
+    server|bsp|mcp) jar_client=1 ;;
+    *)
+      if [ -f "$client" ] && [ -x "$client" ]; then jar_client=0; fi
+      ;;
+  esac
+fi
+if [ "$jar_client" -eq 0 ]; then
+  HISTOS_JAVA=$java_bin
+  HISTOS_JAR=$jar
+  HISTOS_ROOT=$root
+  HISTOS_VERSION="histos $version"
+  export HISTOS_JAVA HISTOS_JAR HISTOS_ROOT HISTOS_VERSION
+  exec "$client" "$@"
+fi
 eval "set -- ${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
 exec "$java_bin" "$@"
 """
@@ -415,22 +435,23 @@ if (Test-Path -LiteralPath $opts) {
     $jvmArgs += $text
   }
 }
+$client = Join-Path $root 'dist\histos-client'
+$jarClient = $true
+if ($launchArgs.Count -ge 1) {
+  switch ($launchArgs[0]) {
+    { $_ -in 'server','bsp','mcp' } { $jarClient = $true }
+    default { if (Test-Path -LiteralPath $client -PathType Leaf) { $jarClient = $false } }
+  }
+}
+if (-not $jarClient) {
+  $env:HISTOS_JAVA = $java
+  $env:HISTOS_JAR = $jar
+  $env:HISTOS_ROOT = $root
+  $env:HISTOS_VERSION = 'histos ' + $version
+  & $client @launchArgs
+  exit $LASTEXITCODE
+}
 & $java @jvmArgs --enable-native-access=ALL-UNNAMED -jar $jar @launchArgs
 exit $LASTEXITCODE
 """
 end LauncherScript
-
-enum ScriptError:
-  case Drift(path: Path)
-  case Missing(path: Path)
-  case Io(failure: IoFailure)
-  case Revision
-  case Pin(error: LauncherError)
-
-  def message: String = this match
-    case Drift(path)   => s"launcher script does not match the ship: $path"
-    case Missing(path) => s"no launcher script at $path"
-    case Io(failure)   => failure.message
-    case Pin(error)    => error.message
-    case Revision      => "the launcher script needs one manual ship version"
-end ScriptError

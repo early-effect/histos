@@ -12,14 +12,15 @@ import zio.{IO, ZIO}
 /** The version the next boot runs. A pointer follows the snapshot. A revision is one timestamp. */
 final class LauncherPin private (val choice: LauncherChoice):
   def version: String = choice match
-    case LauncherChoice.Pointer(channel)     => channel
+    case LauncherChoice.Pointer(channel)      => channel
     case LauncherChoice.Revision(_, revision) => revision
 
   def channel: String = choice match
-    case LauncherChoice.Pointer(channel)    => channel
+    case LauncherChoice.Pointer(channel)     => channel
     case LauncherChoice.Revision(channel, _) => channel
 
   def shown: String = s"${LauncherPin.Key}=${version}"
+end LauncherPin
 
 enum LauncherChoice:
   case Pointer(channel: String)
@@ -40,7 +41,7 @@ object LauncherPin:
       .foldLeft[Either[LauncherError, Option[String]]](Right(None)): (acc, line) =>
         acc.flatMap: found =>
           field(line) match
-            case None                    => Left(LauncherError.Line(line))
+            case None                         => Left(LauncherError.Line(line))
             case Some((key, _)) if key != Key =>
               Left(LauncherError.Unknown(key))
             case Some((_, _)) if found.nonEmpty => Left(LauncherError.Duplicate)
@@ -141,11 +142,13 @@ object LauncherPin:
         case Some(raw) if raw.nonEmpty => ZIO.fromEither(renderBase(raw))
         case _                         => ZIO.succeed(Snapshots)
 
-  /** `Fetch.run` is the documented call. `withRepositories` drops Central and ivy2 local. TTL 0 rechecks the snapshot. */
+  /** `Fetch.run` is the documented call. `withRepositories` drops Central and ivy2 local. TTL 0 rechecks the snapshot.
+    */
   private def fetch(repository: String, channel: String, cache: Path): IO[LauncherError, String] =
     ZIO
       .attemptBlockingInterrupt:
-        val files = coursier.cache.FileCache()
+        val files = coursier.cache
+          .FileCache()
           .withLocation(cache.toString)
           .withTtl(0.seconds)
         val dependency = coursier
@@ -157,7 +160,8 @@ object LauncherPin:
             coursier.version.VersionConstraint(channel),
           )
           .copy(transitive = false)
-        coursier.Fetch()
+        coursier
+          .Fetch()
           .addDependencies(dependency)
           .withRepositories(Seq(coursier.MavenRepository(repository)))
           .withCache(files)
@@ -204,30 +208,3 @@ object LauncherPin:
       }
       .flatMap(ZIO.fromEither)
 end LauncherPin
-
-enum LauncherError:
-  case Line(raw: String)
-  case Unknown(raw: String)
-  case Duplicate
-  case Missing
-  case Version(raw: String)
-  case Repository(raw: String)
-  case Resolve(detail: String)
-  case Io(error: IoFailure)
-  case InvalidPath(path: Path)
-  case Absent(path: Path)
-
-  def message: String = this match
-    case Line(raw)        => s"launcher properties line is not a field: $raw"
-    case Unknown(raw)     => s"launcher properties field is unknown: $raw"
-    case Duplicate        => s"launcher properties repeat ${LauncherPin.Key}"
-    case Missing          => s"launcher properties are missing ${LauncherPin.Key}"
-    case Version(raw)     =>
-      s"launcher version is not a snapshot pointer or a timestamped revision: $raw"
-    case Repository(raw)  => s"launcher repository is not a supported base: $raw"
-    case Resolve(detail)  => detail
-    case Io(error)        => error.message
-    case InvalidPath(path) =>
-      s"launcher path is not a readable regular file: $path"
-    case Absent(path) => s"launcher pin is absent: $path"
-end LauncherError

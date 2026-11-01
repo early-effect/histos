@@ -30,5 +30,7 @@ object ToolCatalog:
       ToolRevision("1.1.1"),
       ToolRevision("0.1.3"),
     ),
-    NativeTools(NativeVersion("0.5.12"), ScalaVersion("3.9.0")),
+    // 0.5.12 aborts in libunwind on Apple Silicon. The newer nightly
+    // 0.5.13-20261031-4e8508c-SNAPSHOT publishes a javalib whose checksum does not match.
+    NativeTools(NativeVersion("0.5.13-20261030-eb3f3b8-SNAPSHOT"), ScalaVersion("3.9.0")),
   )

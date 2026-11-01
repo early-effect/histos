@@ -47,6 +47,20 @@ object RunnerToolsSpec extends ZIOSpecDefault:
         named.map(_.organization.map(_.value)) == Right(Some("rocks.earlyeffect")),
         flipped.map(_.runnerTools) == Right(tools),
         Projects.runnerTools(node)(core).map(_.runnerTools) == Right(node),
+      )
+    ,
+    test("test logs stay off until the build asks"):
+      val core = module("core", Jvm)(scala3)
+      assertTrue(
+        Projects(core).map(_.testLog) == Right(false),
+        Projects.testLog(core).map(_.testLog) == Right(true),
+        Projects
+          .organization(organization"rocks.earlyeffect")
+          .testLog(core)
+          .map(_.testLog) == Right(true),
+        Projects.testLog
+          .runnerTools(tools)(core)
+          .map(graph => graph.testLog && graph.runnerTools == tools) == Right(true),
       ),
   )
 end RunnerToolsSpec

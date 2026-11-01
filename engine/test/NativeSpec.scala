@@ -207,7 +207,7 @@ object NativeSpec extends ZIOSpecDefault:
         NativeToolchain.parse("").isLeft,
         NativeToolchain.parse("central").isLeft,
         release == Right(NativeToolchain.Release),
-        NativeToolchain.Release.revision.value == "0.5.12",
+        NativeToolchain.Release.revision.value == "0.5.13-20261030-eb3f3b8-SNAPSHOT",
       )
     ,
     test("the native linker is not on the engine classpath"):

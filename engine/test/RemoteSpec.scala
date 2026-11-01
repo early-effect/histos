@@ -17,7 +17,7 @@ object RemoteSpec extends ZIOSpecDefault:
     )
 
   private def digest(action: Action): Digest =
-    Digest.of(action, Map.empty)
+    ActionDigest.of(action, Map.empty)
 
   private def utf8(text: String): Chunk[Byte] =
     Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))

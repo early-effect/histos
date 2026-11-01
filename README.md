@@ -32,7 +32,7 @@ The `cs` command from Coursier 2.1 or newer is required. On macOS: `brew install
 
 The script version is the ship number, or the version line cannot boot. A timestamp boots when its channel is that number. This checkout's script and version line are `0.0.2-SNAPSHOT`.
 
-`.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails.
+`.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
 
 ## Publishing
 

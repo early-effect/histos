@@ -69,7 +69,11 @@ object Build:
               case _ => ZIO.unit
             })
             _ <- adopt(call).flatMap { loaded =>
-              Perform.run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say))
+              histos.zinc.CompileMemo.provide(
+                histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                  Perform.run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say))
+                )
+              )
             }
             beats <- heard.get
           yield replay(beats)

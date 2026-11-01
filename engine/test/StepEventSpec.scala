@@ -121,7 +121,7 @@ object StepEventSpec extends ZIOSpecDefault:
         node = action("a")
         remote <- TestRemoteCache.memory(RemoteMode.Read)
         _      <- remote.plant(
-          Digest.of(node, Map.empty),
+          ActionDigest.of(node, Map.empty),
           Chunk.fromArray("from-remote".getBytes(StandardCharsets.UTF_8)),
         )
         scheduler = Scheduler(runner, ActionCache.miss, remote)

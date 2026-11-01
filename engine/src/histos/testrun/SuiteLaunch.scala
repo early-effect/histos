@@ -247,7 +247,7 @@ private[testrun] object SuiteLaunch:
             case SuiteNames.Found.Unseen        => launch(patterns, linked)
             case SuiteNames.Found.Suites(names) =>
               val wanted =
-                names.filter(name => SuitePattern.allows(patterns, name))
+                names.filter(name => SuiteMatch.allows(patterns, name))
               if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
               else if wanted.isEmpty then launch(patterns, linked)
               else
@@ -474,7 +474,7 @@ private[testrun] object SuiteLaunch:
             case SuiteNames.Found.Unseen        => launch(patterns, linked, major)
             case SuiteNames.Found.Suites(names) =>
               val wanted =
-                names.filter(name => SuitePattern.allows(patterns, name))
+                names.filter(name => SuiteMatch.allows(patterns, name))
               if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
               else if wanted.isEmpty then launch(patterns, linked, major)
               else
@@ -887,7 +887,7 @@ private[testrun] object SuiteLaunch:
             case SuiteNames.Found.Unseen        => launch(patterns, linked)
             case SuiteNames.Found.Suites(names) =>
               val wanted =
-                names.filter(name => SuitePattern.allows(patterns, name))
+                names.filter(name => SuiteMatch.allows(patterns, name))
               if patterns.nonEmpty && wanted.isEmpty then ZIO.succeed(ZStream.empty)
               else if wanted.isEmpty then launch(patterns, linked)
               else
@@ -946,8 +946,8 @@ private[testrun] object SuiteLaunch:
       event: ChildEvent,
   ): ZIO[Any, ModuleTestError, TestFeed] =
     event match
-      case ChildEvent.Out(text)    => ZIO.succeed(TestFeed.Out(text))
-      case ChildEvent.Err(text)    => ZIO.succeed(TestFeed.Err(text))
+      case ChildEvent.Out(text)    => ZIO.succeed(TestFeed.Out(module, version, platform, text))
+      case ChildEvent.Err(text)    => ZIO.succeed(TestFeed.Err(module, version, platform, text))
       case ChildEvent.Exited(code) =>
         provider match
           case Some(_) if code.value == ProviderRunner.NoneMatched =>
@@ -986,7 +986,7 @@ private[testrun] object SuiteLaunch:
         .attemptBlocking(classBinaries(root))
         .mapError(_ => ModuleTestError.Root(root))
         .map: names =>
-          names.isEmpty || names.exists(name => SuitePattern.allows(patterns, name))
+          names.isEmpty || names.exists(name => SuiteMatch.allows(patterns, name))
 
   private[testrun] def classBinaries(root: Path): List[String] =
     if !Files.isDirectory(root) then Nil
