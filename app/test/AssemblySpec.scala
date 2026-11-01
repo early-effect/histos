@@ -19,12 +19,10 @@ object AssemblySpec extends ZIOSpecDefault:
     test("the runtime jar prints the version"):
       ZIO.scoped:
         for
-          repo  <- System.env("HISTOS_REPO")
-          xdg   <- System.env("XDG_CACHE_HOME")
-          home  <- System.property("user.home")
-          found <- ZIO.attemptBlocking(
-            (rooted(repo, "dist/histos.jar") ++ cachedLaunchers(xdg, home)).find(path => Files.isRegularFile(path))
-          )
+          repo    <- System.env("HISTOS_REPO")
+          xdg     <- System.env("XDG_CACHE_HOME")
+          home    <- System.property("user.home")
+          found   <- ZIO.attemptBlocking(runtimeJars(repo, xdg, home).find(path => Files.isRegularFile(path)))
           checked <- found match
             case None      => ZIO.succeed(assertTrue(found.nonEmpty))
             case Some(jar) =>
@@ -34,7 +32,7 @@ object AssemblySpec extends ZIOSpecDefault:
                 names    <- ZIO.attempt(namesOf(jar))
                 manifest <- ZIO.attempt(manifestOf(jar))
               yield
-                val lines = ran.output.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+                val lines = ran.stdout.linesIterator.map(_.trim).filter(_.nonEmpty).toList
                 assertTrue(
                   ran.finished,
                   ran.code == 0,
@@ -51,6 +49,12 @@ object AssemblySpec extends ZIOSpecDefault:
       Path.of(name),
       Path.of("..").resolve(name),
     )
+
+  /** `dist/histos.jar` when assembly wrote it, then the jar `./dogfood` packs, then a downloaded launcher. */
+  private def runtimeJars(repo: Option[String], xdg: Option[String], home: Option[String]): List[Path] =
+    rooted(repo, "dist/histos.jar") ++
+      rooted(repo, ".histos/dogfood/histos.jar") ++
+      cachedLaunchers(xdg, home)
 
   /** The launcher `./histos` downloaded when `dist/histos.jar` is not in the checkout. */
   private def cachedLaunchers(xdg: Option[String], home: Option[String]): List[Path] =
@@ -81,9 +85,7 @@ object AssemblySpec extends ZIOSpecDefault:
     val finished = process.waitFor(120, TimeUnit.SECONDS)
     if !finished then process.destroyForcibly()
     val output = if Files.isRegularFile(out) then Files.readString(out) else ""
-    val err    = work.resolve("err")
-    val errors = if Files.isRegularFile(err) then Files.readString(err) else ""
-    Ran(finished, if finished then process.exitValue() else -1, output + errors)
+    Ran(finished, if finished then process.exitValue() else -1, output)
 
   private def namesOf(path: Path): Set[String] =
     val zip = new ZipFile(path.toFile)
@@ -112,7 +114,7 @@ object AssemblySpec extends ZIOSpecDefault:
           paths.sortBy(_.getNameCount).reverse.foreach(path => Files.deleteIfExists(path))
       }.ignore
 
-  private final case class Ran(finished: Boolean, code: Int, output: String)
+  private final case class Ran(finished: Boolean, code: Int, stdout: String)
 
   def spec = checks @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
 end AssemblySpec
