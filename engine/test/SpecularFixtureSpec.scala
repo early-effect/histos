@@ -140,6 +140,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                 RemoteCache.off,
                 IdleResolve.layer,
                 histos.zinc.CompileReplay.processStore,
+                histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
               )
             lockText <- ZIO
               .attempt(Files.readString(Resolve.lockPath(project)))

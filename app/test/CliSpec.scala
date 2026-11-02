@@ -175,7 +175,7 @@ object CliSpec extends ZIOSpecDefault:
     ZIO
       .attempt {
         Files.createDirectories(dir.resolve(".histos"))
-        Files.writeString(dir.resolve(".histos").resolve("build.properties"), "histos.version=0.0.2-SNAPSHOT\n")
+        Files.writeString(dir.resolve("build.properties"), "histos.version=0.0.2-SNAPSHOT\n")
       }
       .orDie
       .unit
@@ -611,14 +611,14 @@ object CliSpec extends ZIOSpecDefault:
         )
     ,
     test(
-      "compile without a lock fails, and an unknown project is not a lock error"
+      "compile without a lock is not a lock error, and an unknown project is not either"
     ):
       ZIO.scoped:
         for
           missing <- invoke(List("compile"))
           unknown <- invoke(List("compile", "missing"))
         yield assertTrue(
-          missing.exit == CliExit.CompileFailed && missing.exit.code == 8 && missing.err
+          missing.exit == CliExit.CompileFailed && missing.exit.code == 8 && !missing.err
             .contains("dependencies.lock"),
           unknown.exit == CliExit.CompileFailed && unknown.err.contains(
             "missing"
@@ -641,7 +641,7 @@ object CliSpec extends ZIOSpecDefault:
               )
               Files.createDirectories(dir.resolve(".histos"))
               Files.writeString(
-                dir.resolve(".histos/dependencies.lock"),
+                dir.resolve("dependencies.lock"),
                 "cell core 3.9.0 jvm\n",
               )
             }
@@ -652,14 +652,14 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(done.exit == CliExit.CompileFailed)
     ,
     test(
-      "test without a lock fails, and an unknown project is not a lock error"
+      "test without a lock is not a lock error, and an unknown project is not either"
     ):
       ZIO.scoped:
         for
           missing <- invoke(List("test"))
           unknown <- invoke(List("test", "missing"))
         yield assertTrue(
-          missing.exit == CliExit.ResolveFailed && missing.err.contains(
+          missing.exit == CliExit.TestFailed && !missing.err.contains(
             "dependencies.lock"
           ),
           unknown.exit == CliExit.TestFailed && unknown.exit.code == 7 && unknown.err
@@ -798,7 +798,7 @@ object CliSpec extends ZIOSpecDefault:
                      |""".stripMargin,
               )
               Files.writeString(
-                dir.resolve(".histos").resolve("releases"),
+                dir.resolve("releases"),
                 "libs matches\n",
               )
             }
@@ -814,7 +814,7 @@ object CliSpec extends ZIOSpecDefault:
           _ <- ZIO
             .attempt(
               Files.writeString(
-                dir.resolve(".histos").resolve("releases"),
+                dir.resolve("releases"),
                 "libs moved\n",
               )
             )

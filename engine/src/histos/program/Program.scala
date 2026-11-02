@@ -6,7 +6,16 @@ import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest}
 import histos.native.{NativeLink, NativeLinkRequest, NativeToolchain}
 import histos.node.NodeMiss
 import histos.pack.{MainClass as Binary, MainClassError}
-import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
+import histos.resolve.{
+  BuildResolvers,
+  ClasspathScope,
+  DependencyLock,
+  Repositories,
+  ResolutionService,
+  Resolve,
+  ResolveCell,
+  ResolveError,
+}
 import histos.process.{ChildClasspath, ChildEvent, ChildProcess, ChildRequest}
 import histos.toolchain.Runtimes
 import histos.workspace.Workspace
@@ -35,7 +44,7 @@ object Program:
       choice: Option[Platform],
       report: CompileFeed => UIO[Unit],
       afterCompile: UIO[Unit],
-  ): ZStream[Resolve & histos.cache.ContentStore, ProgramError, ProgramFeed] =
+  ): ZStream[Resolve & histos.cache.ContentStore & ResolutionService, ProgramError, ProgramFeed] =
     ZStream.unwrap:
       for
         module <- ZIO.fromEither(locate(graph, name))
@@ -46,7 +55,7 @@ object Program:
           Binary.from(main.value).left.map(ProgramError.Main(_))
         )
         platform <- ZIO.fromEither(pick(module, choice))
-        lock     <- readLock(repo)
+        lock     <- ZIO.serviceWithZIO[ResolutionService](_.current)
         compiled <- GraphCompile
           .run(
             histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
@@ -90,9 +99,11 @@ object Program:
 
   private def runCell(
       run: CellRun
-  ): ZIO[Resolve, ProgramError, Chunk[ProgramFeed]] =
+  ): ZIO[Resolve & ResolutionService, ProgramError, Chunk[ProgramFeed]] =
     (for
-      tools    <- LockedTools.make(run.lock, run.graph)
+      report   <- ZIO.service[ResolutionService]
+      fresh    <- report.current
+      tools    <- LockedTools.make(fresh, run.graph, report)
       selected <- tools
         .application(
           run.module,
@@ -391,8 +402,10 @@ object Program:
       ClasspathScope.Compile,
     )
     for
-      fetched <- Resolve
-        .materialize(resolveCell, lock)
+      fetched <- ZIO
+        .serviceWithZIO[LockedTools]: tools =>
+          val view = if tools.service.isDefined then tools else tools.copy(lock = lock)
+          view.module(resolveCell)
         .mapError(ProgramError.Lock(_))
       upstream <- ZIO.foreach(Module.chain(module, modules, cell.platform)): dependency =>
         val path = GraphCompile.classesDir(

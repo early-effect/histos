@@ -29,7 +29,7 @@ object PublishHoldSpec extends ZIOSpecDefault:
           _    <- ZIO.attempt {
             Files.createDirectories(root.resolve(".histos"))
             Files.writeString(
-              root.resolve(".histos").resolve("releases"),
+              root.resolve("releases"),
               "libs matches\n",
             )
           }

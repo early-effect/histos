@@ -133,6 +133,7 @@ final case class ProjectGraph private (
     facts: OrganizationFacts = OrganizationFacts.empty,
     promote: Promote = Promote.Rebuild,
     testLog: Boolean = false,
+    resolution: Resolution = Resolution.Solve,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -174,6 +175,7 @@ object ProjectGraph:
       facts: OrganizationFacts = OrganizationFacts.empty,
       promote: Promote = Promote.Rebuild,
       testLog: Boolean = false,
+      resolution: Resolution = Resolution.Solve,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -187,6 +189,7 @@ object ProjectGraph:
       facts,
       promote,
       testLog,
+      resolution,
     )
 end ProjectGraph
 
@@ -214,6 +217,11 @@ object Projects:
     */
   def testLog: Organized =
     Organized(None, Nil, logged = true)
+
+  /** Pin jars to `dependencies.lock`. Omission resolves from the build.
+    */
+  def locked: Organized =
+    Organized(None, Nil, resolution = Resolution.Lock)
 
   /** Every published module uses this organization. A build that does not publish omits it.
     */
@@ -289,6 +297,7 @@ object Projects:
       facts: OrganizationFacts = OrganizationFacts.empty,
       promote: Promote = Promote.Rebuild,
       testLog: Boolean = false,
+      resolution: Resolution = Resolution.Solve,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -302,6 +311,7 @@ object Projects:
       facts,
       promote,
       testLog,
+      resolution,
     )
 
   private def build(
@@ -316,6 +326,7 @@ object Projects:
       facts: OrganizationFacts = OrganizationFacts.empty,
       promote: Promote = Promote.Rebuild,
       testLog: Boolean = false,
+      resolution: Resolution = Resolution.Solve,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -341,6 +352,7 @@ object Projects:
       facts,
       promote,
       testLog,
+      resolution,
     )
 
   private def uniqueResolvers(
@@ -826,12 +838,13 @@ final class Organized(
     facts: OrganizationFacts = OrganizationFacts.empty,
     promote: Promote = Promote.Rebuild,
     logged: Boolean = false,
+    resolution: Resolution = Resolution.Solve,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -842,18 +855,24 @@ final class Organized(
       facts,
       promote,
       logged,
+      resolution,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote, logged)
+    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution)
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value, logged)
+    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution)
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
   def testLog: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged = true)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged = true, resolution)
+
+  /** Pin jars to `dependencies.lock`. Omission resolves from the build.
+    */
+  def locked: Organized =
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -876,7 +895,7 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote, logged)
+    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -890,6 +909,7 @@ final class Organized(
       facts = facts,
       promote = promote,
       testLog = logged,
+      resolution = resolution,
     )
 
   def apply(
@@ -907,6 +927,7 @@ final class Organized(
       facts = facts,
       promote = promote,
       testLog = logged,
+      resolution = resolution,
     )
 
   def apply(
@@ -924,6 +945,7 @@ final class Organized(
       facts = facts,
       promote = promote,
       testLog = logged,
+      resolution = resolution,
     )
 
   def apply(
@@ -942,6 +964,7 @@ final class Organized(
       facts = facts,
       promote = promote,
       testLog = logged,
+      resolution = resolution,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -957,6 +980,7 @@ final class Organized(
       facts,
       promote,
       logged,
+      resolution,
     )
 
   def apply(
@@ -976,6 +1000,7 @@ final class Organized(
       facts,
       promote,
       logged,
+      resolution,
     )
 
   def apply(
@@ -995,6 +1020,7 @@ final class Organized(
       facts,
       promote,
       logged,
+      resolution,
     )
 
   def apply(
@@ -1015,5 +1041,6 @@ final class Organized(
       facts,
       promote,
       logged,
+      resolution,
     )
 end Organized

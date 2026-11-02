@@ -222,6 +222,37 @@ object NativeRequests:
       reposFor(toolchain, repos),
     )
 
+  /** The native test entry, `scala.scalanative.testinterface.TestMain`. Frameworks depend on `test-interface-sbt-defs`.
+    * The build tool supplies this jar, at the toolchain revision.
+    */
+  def testInterface(
+      version: ScalaVersion,
+      toolchain: NativeToolchain,
+      repos: Repositories,
+  ): ToolRequest =
+    ToolRequest(
+      ToolId(
+        ToolRole.NativeTestInterface,
+        version,
+        ToolVariant.Native(toolchain.revision),
+      ),
+      List(
+        ToolRoots.of(
+          Dep.trusted(
+            "org.scala-native",
+            "test-interface",
+            toolchain.revision.value,
+            DepKind.Binary,
+          ),
+          version,
+          Platform.Native,
+          Transitivity.Single,
+          nativeOrigin(toolchain.source),
+        )
+      ),
+      reposFor(toolchain, repos),
+    )
+
   def suite(
       toolchain: NativeToolchain,
       catalog: ToolCatalog,

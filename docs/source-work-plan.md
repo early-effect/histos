@@ -2,7 +2,7 @@
 
 Two products. A checkout is a module you are editing in another directory. A git library is a classpath jar built from a commit, so a Histos consumer can take an early-effect library without waiting for a Central publish.
 
-A module edge stays `dependsOn`. A Maven edge stays a `Dep` in `.histos/dependencies.lock`. A git library is a third edge: the coordinate of a library, the bytes of a commit. The resolved graph and the lock hold a commit. A branch is an update input.
+A module edge stays `dependsOn`. A Maven edge stays a `Dep` in `dependencies.lock`. A git library is a third edge: the coordinate of a library, the bytes of a commit. The resolved graph and the lock hold a commit. A branch is an update input.
 
 This file is the decision. The checklist is the work. Top to bottom. Finish one item and prove it before the next. The proof is the suite that item names, run with `./histos test` for the modules it touches. A fixture is two directories or a local git repository. Tests do not call GitHub.
 
@@ -82,7 +82,7 @@ engine.libraryDependencies(
 
 A later run reads the lock and does not talk to the remote. A missing `git` fails the update command. Compile of a stored jar does not look for `git`.
 
-The lock line holds the organization, the artifact, the module, the repository, the request token, the commit, the tree hash, and the jar sha256. It lives in `.histos/dependencies.lock` beside the cells. One update writes Maven cells and git lines together.
+The lock line holds the organization, the artifact, the module, the repository, the request token, the commit, the tree hash, and the jar sha256. It lives in `dependencies.lock` beside the cells. One update writes Maven cells and git lines together.
 
 The tree is checked against the recorded tree hash. The jar is checked against the recorded sha256. Either mismatch is a typed error. That is the whole integrity rule. A commit cannot change its tree, so there is no second policy for "source changes". A branch keeps the locked tree until update. Remote movement is invisible until then, and invisible movement is not a build error. Pin a commit when the tree must stay. Pin a branch when an update may move it.
 
@@ -149,7 +149,7 @@ The Sonatype wait that goes away is the one between two Histos builds. The produ
 - Checkout and a git library. Checkout is first. A foreign commit joined as a module stays closed.
 - The other tree is a Histos build, or an overlay that names its sources. `build.sbt` and Mill stay unread.
 - The build file may name a branch or a commit. The lock records the commit. Update moves a branch and refuses to move a commit.
-- The pin is a git line in `.histos/dependencies.lock`. `resolve --update` writes it with the cells.
+- The pin is a git line in `dependencies.lock`. `resolve --update` writes it with the cells.
 - A published library or application cannot take the edge. An assembly may pack it. An unpublished module may depend on it. `a`, `b`, and `c` unpublished, with `d` publishing one jar, is that assembly.
 - One classpath has one commit. The root names it with `.unify`. Anything else on that classpath fails. A plugin cell and a module cell are two classpaths and may differ. The upstream lock does not apply inside that resolve. The jar key includes the commits it was built against.
 

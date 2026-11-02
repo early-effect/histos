@@ -12,10 +12,10 @@ import zio.*
 import zio.test.*
 
 object BootstrapSpec extends ZIOSpecDefault:
-  private val version  = "0.0.1-SNAPSHOT"
-  private val revision = "0.0.1-20261101.030257-1"
-  private val bytes    = "fixture launcher".getBytes(StandardCharsets.UTF_8)
-  private val sha      = Sha256.of(Chunk.fromArray(bytes)).value
+  private val version   = "0.0.1-SNAPSHOT"
+  private val revision  = "0.0.1-20261101.030257-1"
+  private val bytes     = "fixture launcher".getBytes(StandardCharsets.UTF_8)
+  private val sha       = Sha256.of(Chunk.fromArray(bytes)).value
   private val snapshots = "https://central.sonatype.com/repository/maven-snapshots"
   private val javaGuide =
     """A JDK 21 or newer is required. Histos does not install it.
@@ -52,7 +52,7 @@ object BootstrapSpec extends ZIOSpecDefault:
       bin  <- Workspace.createDirectories(root.resolve("bin")).mapError(FixtureError.Io(_))
       _    <- write(root.resolve("histos"), LauncherScript.posix(version))
       _    <- write(root.resolve(".histos/assembly.sha256"), sha + "\n")
-      _    <- write(root.resolve(".histos/build.properties"), s"histos.version=$version\n")
+      _    <- write(root.resolve("build.properties"), s"histos.version=$version\n")
       jar  <- ZIO
         .attemptBlocking(Files.write(root.resolve("app.jar"), bytes))
         .mapError(_ => FixtureError.Io(IoFailure(root, IoFault.Write)))
@@ -285,7 +285,7 @@ object BootstrapSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           fixture <- layout
-          _       <- write(fixture.root.resolve(".histos/build.properties"), s"histos.version=$revision\n")
+          _       <- write(fixture.root.resolve("build.properties"), s"histos.version=$revision\n")
           ran     <- run(fixture, extra = Map("COURSIER_TTL" -> "1h"))
         yield assertTrue(
           ran.exit.contains(ProcessExit(0)),
@@ -337,14 +337,13 @@ object BootstrapSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           fixture <- layout
-          _       <- write(fixture.root.resolve(".histos/build.properties"), "histos.version=0.0.2-SNAPSHOT\n")
+          _       <- write(fixture.root.resolve("build.properties"), "histos.version=0.0.2-SNAPSHOT\n")
           ran     <- run(fixture)
         yield assertTrue(
           ran.exit.contains(ProcessExit(1)),
           ran.output.contains("invalid build.properties"),
           ran.coursier.isEmpty,
           ran.arguments.isEmpty,
-        )
-    ,
+        ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock
 end BootstrapSpec

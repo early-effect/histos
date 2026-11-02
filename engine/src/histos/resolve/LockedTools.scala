@@ -12,14 +12,28 @@ final case class LockedTools(
     catalog: ToolCatalog,
     repositories: Repositories,
     resolve: Resolve,
+    service: Option[ResolutionService] = None,
 ):
   def materialize(request: ToolRequest): IO[ResolveError, Classpath] =
-    lock.tools.find(_.id == request.id) match
-      case None       => ZIO.fail(ResolveError.NoTool(request.id))
-      case Some(cell) =>
-        ZIO.fromEither(LockedTools.validate(request, cell)) *> ZIO
-          .foreach(cell.artifacts)(resolve.fetch)
-          .map(Classpath(_, cell.evictions))
+    service match
+      case Some(held) => held.tool(request)
+      case None       =>
+        lock.tools.find(_.id == request.id) match
+          case None       => ZIO.fail(ResolveError.NoTool(request.id))
+          case Some(cell) =>
+            ZIO.fromEither(LockedTools.validate(request, cell)) *> ZIO
+              .foreach(cell.artifacts)(resolve.fetch)
+              .map(Classpath(_, cell.evictions))
+
+  /** Module jars. The attached service solves and remembers. Without one, the snapshot is fetched. */
+  def module(cell: ResolveCell): IO[ResolveError, Classpath] =
+    service match
+      case Some(held) => held.module(cell)
+      case None       =>
+        ZIO
+          .fromEither(Resolve.locate(cell, lock))
+          .flatMap: held =>
+            ZIO.foreach(held.artifacts)(resolve.fetch).map(Classpath(_, held.evictions))
 
   def selected(request: ToolRequest): IO[ResolveError, ToolInput] = materialize(
     request
@@ -261,6 +275,13 @@ object LockedTools:
       graph: ProjectGraph,
   ): ZIO[Resolve, Nothing, LockedTools] =
     ZIO.serviceWith[Resolve](resolve => LockedTools(lock, graph.tools, BuildResolvers(graph.resolvers), resolve))
+
+  def make(
+      lock: DependencyLock,
+      graph: ProjectGraph,
+      service: ResolutionService,
+  ): ZIO[Resolve, Nothing, LockedTools] =
+    make(lock, graph).map(_.copy(service = Some(service)))
 
   def layer(
       repo: Path,

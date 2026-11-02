@@ -22,9 +22,9 @@ object ScenarioSpec extends ZIOSpecDefault:
           right  <- store.checkout
           built  <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           _      <- left.write("core/src/main/scala/Core.scala", core)
-          _      <- left.write(".histos/dependencies.lock", lock)
+          _      <- left.write("dependencies.lock", lock)
           _      <- right.write("core/src/main/scala/Core.scala", core)
-          _      <- right.write(".histos/dependencies.lock", lock)
+          _      <- right.write("dependencies.lock", lock)
           first  <- left.compile(built)
           second <- right.compile(built)
           _      <- Products.wipe(left.root)
@@ -64,7 +64,7 @@ object ScenarioSpec extends ZIOSpecDefault:
   private def writeApp(checkout: Checkout): ZIO[Any, IoFailure, Unit] =
     checkout.write("app/src/main/scala/demo/Lib.scala", lib) *>
       checkout.write("app/src/test/scala/demo/Foo.scala", foo) *>
-      checkout.write(".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+      checkout.write("dependencies.lock", "cell app 3.10.0 jvm\n")
 
   private def changed(feeds: Chunk[CompileFeed]): Boolean =
     done(feeds).exists(_.changed)

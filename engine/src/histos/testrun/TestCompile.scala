@@ -17,6 +17,7 @@ import histos.node.{NodeBinary, NodeMiss}
 import histos.toolchain.Runtimes
 import histos.resolve.{
   BuildResolvers,
+  Classpath,
   ClasspathScope,
   DependencyLock,
   Repositories,
@@ -322,7 +323,7 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, ModuleTestError, List[ResolvedArtifact]] =
+  ): ZIO[Resolve & LockedTools, ModuleTestError, List[ResolvedArtifact]] =
     val found = Module.chain(module, modules, platform)
     ZIO
       .foreach(found)(
@@ -336,7 +337,7 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, ModuleTestError, List[ResolvedArtifact]] =
+  ): ZIO[Resolve & LockedTools, ModuleTestError, List[ResolvedArtifact]] =
     val cell = ResolveCell(
       module.name,
       Dep.select(module.dependencies, platform),
@@ -345,9 +346,7 @@ private[histos] object TestCompile:
       repositories,
       ClasspathScope.Compile,
     )
-    Resolve
-      .materialize(cell, lock)
-      .mapBoth(ModuleTestError.Lock(_), _.artifacts)
+    held(lock, cell).mapBoth(ModuleTestError.Lock(_), _.artifacts)
 
   private[testrun] def classpath(
       module: Module,
@@ -355,7 +354,7 @@ private[histos] object TestCompile:
       platform: Platform,
       lock: DependencyLock,
       repositories: Repositories,
-  ): ZIO[Resolve, ResolveError, Fetched] =
+  ): ZIO[Resolve & LockedTools, ResolveError, Fetched] =
     val (dependencies, scope) =
       val compileDeps = Dep.select(module.dependencies, platform)
       val testDeps    = Dep.select(module.testDependencies, platform)
@@ -369,9 +368,17 @@ private[histos] object TestCompile:
       repositories,
       scope,
     )
-    Resolve
-      .materialize(cell, lock)
-      .map(fetched => Fetched(fetched.artifacts.map(_.path), fetched.artifacts.map(_.sha256)))
+    held(lock, cell).map(fetched => Fetched(fetched.artifacts.map(_.path), fetched.artifacts.map(_.sha256)))
+
+  /** The service solves a miss. A tools value without one fetches the snapshot.
+    */
+  private def held(
+      lock: DependencyLock,
+      cell: ResolveCell,
+  ): ZIO[Resolve & LockedTools, ResolveError, Classpath] =
+    ZIO.serviceWithZIO[LockedTools]: tools =>
+      val view = if tools.service.isDefined then tools else tools.copy(lock = lock)
+      view.module(cell)
 
   private[testrun] def readLock(
       repo: Path

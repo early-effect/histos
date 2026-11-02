@@ -27,7 +27,7 @@ enum LauncherChoice:
   case Revision(channel: String, revision: String)
 
 object LauncherPin:
-  val file: Path = Path.of(".histos", "build.properties")
+  val file: Path = Path.of("build.properties")
   val Key        = "histos.version"
 
   val Snapshots: String = "https://central.sonatype.com/repository/maven-snapshots"

@@ -18,10 +18,12 @@ import histos.resolve.{
   LockedPlugin,
   PluginCells,
   PluginRequest,
+  ResolutionService,
   Resolve,
   ResolveError,
   ResolvedArtifact,
 }
+import histos.Resolution
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.zinc.{CompileProblem, CompileSeverity, PositionBase}
 import histos.{Dep, HistosBuild, Platform, ProjectPath, ScalaVersion}
@@ -69,6 +71,7 @@ private final case class Prepared(
     matched: List[Matched],
     source: Path,
     out: Path,
+    requests: List[PluginRequest],
 )
 
 private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Loader:
@@ -133,6 +136,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
       builds  <- BuildFile.entries(prepared.out, opened.build)
       build   <- BuildFile.select(builds)
       graph   <- graphOf(opened.build, threads, build, matched)
+      _       <- pinned(repo, graph, prepared.requests)
       _       <- checkUses(opened.build, matched, graph.plugins)
       runtime <- PluginRuntime.loaded(
         repo,
@@ -163,7 +167,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
       )
       out    <- BuildFile.tempDir("histos-classes")
       source <- BuildFile.writeTemp(scanned.source)
-    yield Prepared(launcher, boundary, matched, source, out)
+    yield Prepared(launcher, boundary, matched, source, out, scanned.requests)
 
   private def materialize(
       repo: Path,
@@ -176,9 +180,8 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
       dependency
     }
     val locked = supplied match
-      case Some(lock)                   => ZIO.succeed(lock)
-      case None if dependencies.isEmpty => ZIO.succeed(DependencyLock(Nil))
-      case None                         => Resolve.readLock(repo).mapError(absent(dependencies))
+      case Some(lock) => ZIO.succeed(lock)
+      case None       => pluginLock(repo, requests, dependencies)
     locked.flatMap: lock =>
       ZIO
         .foreach(requests):
@@ -406,6 +409,59 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
   private def pluginJars(matched: List[Matched]): List[Path] =
     matched.flatMap(_.classpath).distinct
 
+  /** A lock build still refuses a plugin the pin does not name. Solve already recorded it so the file could be read.
+    */
+  private def pinned(
+      repo: Path,
+      graph: histos.ProjectGraph,
+      requests: List[PluginRequest],
+  ): IO[LoadError, Unit] =
+    graph.resolution match
+      case Resolution.Solve => ZIO.unit
+      case Resolution.Lock  =>
+        Resolve
+          .requirePlugins(repo, requests)
+          .mapError(LoadError.Resolve(_))
+          .provideLayer(zio.ZLayer.succeed(resolve))
+
+  /** The pin wins when it already names every header. Otherwise solve into the local report.
+    */
+  private def pluginLock(
+      repo: Path,
+      requests: List[PluginRequest],
+      dependencies: List[Dep],
+  ): IO[LoadError, DependencyLock] =
+    if dependencies.isEmpty then ZIO.succeed(DependencyLock(Nil))
+    else
+      Resolve
+        .readLock(repo)
+        .foldZIO(
+          {
+            case ResolveError.NoLock(_) => solvePlugins(repo, requests)
+            case other                  => ZIO.fail(LoadError.Resolve(other))
+          },
+          lock =>
+            if dependencies.forall(dependency => PluginCells.locate(lock, dependency).isRight) then ZIO.succeed(lock)
+            else solvePlugins(repo, requests),
+        )
+
+  private def solvePlugins(
+      repo: Path,
+      requests: List[PluginRequest],
+  ): IO[LoadError, DependencyLock] =
+    ResolutionService
+      .open(repo, Resolution.Solve)
+      .provideLayer(zio.ZLayer.succeed(resolve))
+      .mapError(LoadError.Resolve(_))
+      .flatMap: report =>
+        ZIO.foreachDiscard(requests):
+          case PluginRequest.Path(_)               => ZIO.unit
+          case PluginRequest.Dep(dependency, link) =>
+            report
+              .plugin(dependency, link, histos.resolve.Repositories.central)
+              .mapError(LoadError.Resolve(_))
+        *> report.current
+
   private def absent(dependencies: List[Dep])(error: ResolveError): LoadError =
     error match
       case ResolveError.NoLock(_) =>
@@ -416,7 +472,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
             )
           case Nil =>
             LoadError.Io(
-              IoFailure(Path.of(".histos/dependencies.lock"), IoFault.Read)
+              IoFailure(Path.of("dependencies.lock"), IoFault.Read)
             )
       case other => LoadError.Resolve(other)
 

@@ -193,7 +193,7 @@ object ReportSpec extends ZIOSpecDefault:
           repo  <- Workspace.work("histos-report-version")
           loads <- Ref.make(0)
           _     <- Workspace.writeString(
-            repo.resolve(".histos").resolve("build.properties"),
+            repo.resolve("build.properties"),
             "histos.version=0.0.2-SNAPSHOT\n",
           )
           _ <- Workspace.writeString(
@@ -223,7 +223,7 @@ object ReportSpec extends ZIOSpecDefault:
         for
           repo <- Workspace.work("histos-report-plain")
           _    <- Workspace.writeString(
-            repo.resolve(".histos").resolve("build.properties"),
+            repo.resolve("build.properties"),
             "histos.version=0.0.2-SNAPSHOT\n",
           )
           loads  <- Ref.make(0)
@@ -289,7 +289,7 @@ object ReportSpec extends ZIOSpecDefault:
         )
       }
     ,
-    test("a compile that enters no module replaces the stored tally"):
+    test("a compile that names no cell replaces the stored tally with an empty count"):
       ZIO.scoped {
         for
           repo  <- Workspace.work("histos-report-compile")
@@ -304,15 +304,14 @@ object ReportSpec extends ZIOSpecDefault:
               histos.zinc.CompileReplay.processStore,
               histos.zinc.Compilers.live,
               histos.zinc.CompileMemo.live,
+              histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
             )
           read        <- Stored.read(repo).either
           observation <- say.observation
           chunk       <- feeds.get
         yield assertTrue(
-          read == Left(
-            ObserveError.Missing(Products.observation(repo).toString)
-          ),
-          observation.isEmpty,
+          read == Right(Observation(Chunk.empty, None, None, None, 1)),
+          observation == Some(Observation(Chunk.empty, None, None, None, 1)),
           chunk.exists {
             case Feed.Done(result) =>
               CliExit.from(Call.Compile(Nil), result) != CliExit.Success

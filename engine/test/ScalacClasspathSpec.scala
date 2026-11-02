@@ -82,7 +82,7 @@ object ScalacClasspathSpec extends ZIOSpecDefault:
               ),
             )
           )
-          _ <- ZIO.attempt(write(root, ".histos/dependencies.lock", DependencyLock.render(lock)))
+          _ <- ZIO.attempt(write(root, "dependencies.lock", DependencyLock.render(lock)))
           repos      = BuildResolvers(built.resolvers)
           libClasses = GraphCompile.classesDir(root, lib.name, version, Platform.Jvm)
           appClasses = GraphCompile.classesDir(root, app.name, version, Platform.Jvm)

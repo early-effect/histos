@@ -341,7 +341,7 @@ object Calls:
       id: String,
       platform: Option[Platform],
       say: Say,
-  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     CompileConsole
       .open(repo)
       .flatMap: console =>
@@ -410,7 +410,7 @@ object Calls:
       id: String,
       args: PluginArgs,
       say: Say,
-  ): ZIO[Resolve & histos.load.Loader & ContentStore, ServerError, Unit] =
+  ): ZIO[Resolve & histos.load.Loader & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     TaskId.from(id) match
       case Left(error)                             => fault(say, BuildFault.Task(error))
       case Right(found) if found == TaskId.Inspect =>
@@ -638,7 +638,7 @@ object Calls:
       machine: Machine,
       destination: Option[String],
       say: Say,
-  ): ZIO[Resolve & ContentStore, ServerError, Unit] =
+  ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
     placed(repo, destination) match
       case None =>
         reject(say, Rejection.AssemblyDestination(destination.getOrElse("")))
@@ -692,7 +692,11 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
-  ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Unit] =
+  ): ZIO[
+    Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    ServerError,
+    Unit,
+  ] =
     CompileConsole.open(repo).flatMap { console =>
       GraphCompile
         .strict(
@@ -873,7 +877,11 @@ object Calls:
       jdk: JdkRuntime,
       machine: Machine,
       say: Say,
-  ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Unit] =
+  ): ZIO[
+    Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    ServerError,
+    Unit,
+  ] =
     CompileConsole.open(repo).flatMap { console =>
       CompileConsole.notes.flatMap { notes =>
         Ref.make(Chunk.empty[TestedCell]).flatMap { ranCells =>
@@ -1011,11 +1019,11 @@ object Calls:
       id: PluginTaskId,
       args: PluginArgs,
       say: Say,
-  ): ZIO[ContentStore & Resolve, ServerError, Unit] =
+  ): ZIO[ContentStore & Resolve & histos.resolve.ResolutionService, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>
       plugins
         .run(id, args)
-        .provideSome[Resolve & ContentStore](
+        .provideSome[Resolve & ContentStore & histos.resolve.ResolutionService](
           ZLayer.succeed(ContentStore.actions(store)),
           RemoteCache.off,
         )

@@ -64,7 +64,7 @@ if ($jar) {
   if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid assembly checksum' }
   if ((Hash $jar) -ne $expected) { Fail 'checksum mismatch' }
 } else {
-  $props = Join-Path $root '.histos\build.properties'
+  $props = Join-Path $root 'build.properties'
   if (-not (Test-Path -LiteralPath $props -PathType Leaf)) {
     Fail 'missing build.properties; restore the committed version or use a source assembly'
   }

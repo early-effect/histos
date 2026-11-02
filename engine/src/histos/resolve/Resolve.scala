@@ -60,7 +60,7 @@ object Resolve:
     )
 
   def lockPath(repo: Path): Path =
-    repo.resolve(".histos").resolve("dependencies.lock")
+    repo.resolve("dependencies.lock")
 
   /** Aggregates have no cell. Order is graph order, then platform, then Scala version. A test cell follows its compile
     * cell.
@@ -151,7 +151,7 @@ object Resolve:
       _ <- write(path, DependencyLock(solved, kept, tools))
     yield path.toString
 
-  private def lockTool(request: ToolRequest, classpath: Classpath): LockedTool =
+  private[resolve] def lockTool(request: ToolRequest, classpath: Classpath): LockedTool =
     LockedTool(
       request.id,
       request.roots,
@@ -334,7 +334,7 @@ object Resolve:
           case Some(dependency) => ZIO.fail(ResolveError.Range(dependency))
           case None             => ZIO.unit
 
-  private def locate(
+  private[resolve] def locate(
       cell: ResolveCell,
       lock: DependencyLock,
   ): Either[ResolveError, LockedCell] =
@@ -381,7 +381,7 @@ object Resolve:
         case Some(error) => Left(error)
         case None        => Right(())
 
-  private def lockCell(cell: ResolveCell, classpath: Classpath): LockedCell =
+  private[resolve] def lockCell(cell: ResolveCell, classpath: Classpath): LockedCell =
     LockedCell(
       cell.module,
       cell.scalaVersion,
@@ -432,9 +432,22 @@ object Resolve:
       case ClasspathScope.Compile => base
       case ClasspathScope.Test    => s"$base test"
 
-  /** The one reader of `.histos/dependencies.lock`. */
+  /** The one reader of `dependencies.lock`. */
   private[histos] def readLock(repo: Path): IO[ResolveError, DependencyLock] =
     read(lockPath(repo))
+
+  /** Solve treats a missing or empty report as no cells. Lock requires the pin.
+    */
+  private[resolve] def readStored(
+      path: Path,
+      resolution: histos.Resolution,
+  ): IO[ResolveError, DependencyLock] =
+    resolution match
+      case histos.Resolution.Lock  => read(path)
+      case histos.Resolution.Solve =>
+        read(path).catchSome:
+          case ResolveError.NoLock(_)             => ZIO.succeed(DependencyLock(Nil))
+          case ResolveError.Lock(LockError.Empty) => ZIO.succeed(DependencyLock(Nil))
 
   private def read(path: Path): IO[ResolveError, DependencyLock] =
     Workspace
@@ -447,7 +460,7 @@ object Resolve:
             DependencyLock.parse(text).left.map(ResolveError.Lock(_))
           )
 
-  private def lockPlugin(
+  private[resolve] def lockPlugin(
       dependency: Dep,
       link: LinkStrategy,
       classpath: Classpath,
@@ -599,7 +612,7 @@ object Resolve:
   private def marked(character: Char): Boolean =
     character == '[' || character == ']' || character == '(' || character == ')' || character == '+' || character == ','
 
-  private def write(path: Path, lock: DependencyLock): IO[ResolveError, Unit] =
+  private[resolve] def write(path: Path, lock: DependencyLock): IO[ResolveError, Unit] =
     Option(path.getParent) match
       case None         => ZIO.fail(ResolveError.Io(IoFailure(path, IoFault.Write)))
       case Some(parent) =>

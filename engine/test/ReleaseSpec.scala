@@ -105,7 +105,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           record   <- text(deployment(root, "libs"))
           state    <- states(portal, ids)
           marker   <- exists(published(portal, "core_3", "1.0.0"))
-          releases <- exists(root.resolve(".histos").resolve("releases"))
+          releases <- exists(root.resolve("releases"))
           promoted <- report.deployed match
             case List(deployed) =>
               PublishRun.promote(root, env, deployed.id.value, _ => ZIO.unit) *>
@@ -230,7 +230,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           found    <- ZIO.foreach(ids)(id => token(portal, id).map(id -> _))
           good     <- text(deployment(root, "libs"))
           extra    <- exists(deployment(root, "extra"))
-          releases <- exists(root.resolve(".histos").resolve("releases"))
+          releases <- exists(root.resolve("releases"))
         yield
           val failed = found.collect { case (id, "FAILED") => id }
           val held   = found.collect { case (id, "VALIDATED") => id }
@@ -563,7 +563,7 @@ object ReleaseSpec extends ZIOSpecDefault:
   ) =
     ZIO.attempt {
       files.foreach((name, body) => write(root, name, body))
-      write(root, ".histos/dependencies.lock", lock)
+      write(root, "dependencies.lock", lock)
     } *> histos.ToolFixture.seed(root, graph)
 
   private def deploymentIds(root: Path): ZIO[Any, Throwable, List[String]] =

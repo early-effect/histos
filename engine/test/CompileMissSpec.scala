@@ -54,7 +54,7 @@ object CompileMissSpec extends ZIOSpecDefault:
           _     <- ZIO.attempt {
             write(root, "histos.scala", buildFile)
             write(root, "core/src/main/scala/Core.scala", "object Core:\n  def n: Int = 1\n")
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           }
           env = held(store, count)
           first  <- cells(root, built, jdk, env)

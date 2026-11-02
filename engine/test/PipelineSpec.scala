@@ -41,7 +41,7 @@ object PipelineSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell slow 3.10.0 jvm\ncell fast 3.10.0 jvm\ncell after 3.10.0 jvm\n",
               )
               Projects(slow, fast, after)

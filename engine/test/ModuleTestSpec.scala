@@ -32,7 +32,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Scope, System, ZIO, durationInt}
+import zio.{Scope, System, ZIO, ZLayer, durationInt}
 import zio.test.*
 
 private[testrun] object ModuleTestSupport:
@@ -71,7 +71,7 @@ private[testrun] object ModuleTestSupport:
               write(root, "extra/test/place.txt", "not scala")
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\ncell extra 3.10.0 jvm\n",
               )
               Projects(core, module("extra", Jvm)(scala3), app)
@@ -120,7 +120,7 @@ private[testrun] object ModuleTestSupport:
           root <- temp
           _    <- ZIO.attempt {
             write(root, "e2e/src/test/scala/demo/Check.scala", onlyPasses)
-            write(root, ".histos/dependencies.lock", "cell e2e 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell e2e 3.10.0 jvm\n")
           }
           built <- ZIO.fromEither(
             Projects(module("e2e", Jvm)(scala3).test(TestMain("demo.Check")))
@@ -166,7 +166,7 @@ private[testrun] object ModuleTestSupport:
           )
           _ <- ZIO.attempt {
             write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
-            write(root, ".histos/dependencies.lock", "cell probe 3.10.0 js\n")
+            write(root, "dependencies.lock", "cell probe 3.10.0 js\n")
           }
           chosen <- TestMachine.chosenNode(root)
           other = root.resolve("path-node.log")
@@ -288,7 +288,7 @@ private[testrun] object ModuleTestSupport:
           built <- ZIO.fromEither(Projects(probe))
           _     <- ZIO.attempt {
             write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
-            write(root, ".histos/dependencies.lock", "cell probe 3.10.0 js\n")
+            write(root, "dependencies.lock", "cell probe 3.10.0 js\n")
           }
           here <- Runtimes.read(TestMachine.at(root, Map.empty))
           out  <- histos.ToolFixture
@@ -326,7 +326,7 @@ private[testrun] object ModuleTestSupport:
             write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell probe 3.9.0 native\n",
             )
           }
@@ -362,7 +362,7 @@ private[testrun] object ModuleTestSupport:
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
             write(root, "test/scala/demo/Check.scala", helloPasses)
-            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
           }
           built <- ZIO.fromEither(
             Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))
@@ -397,7 +397,7 @@ private[testrun] object ModuleTestSupport:
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
             write(root, "test/scala/demo/Check.scala", helloFails)
-            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
           }
           built <- ZIO.fromEither(
             Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))
@@ -627,7 +627,7 @@ private[testrun] object ModuleTestSupport:
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
             write(root, "test/scala/demo/Check.scala", helloPasses)
-            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
           }
           built <- ZIO.fromEither(Projects(module("core", Jvm)(scala3)))
           here  <- TestMachine.runtimes(root)
@@ -667,7 +667,7 @@ private[testrun] object ModuleTestSupport:
             )
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell a 3.10.0 jvm\ncell b 3.10.0 jvm\n",
             )
           }
@@ -712,7 +712,7 @@ private[testrun] object ModuleTestSupport:
               "a/src/test/scala/demo/FooA.scala",
               mainNamed("FooA", "alpha"),
             )
-            write(root, ".histos/dependencies.lock", "cell a 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell a 3.10.0 jvm\n")
           }
           pattern <- ZIO.fromEither(SuitePattern.from("demo.Missing"))
           here    <- TestMachine.runtimes(root)
@@ -742,7 +742,7 @@ private[testrun] object ModuleTestSupport:
               "src/main/scala/demo/Hello.scala",
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
           }
           built <- ZIO.fromEither(
             Projects(module("core", Jvm)(scala3).test(TestMain("demo.Check")))
@@ -1064,7 +1064,7 @@ private[testrun] object ModuleTestSupport:
               "app/src/test/scala/demo/Foo.scala",
               onlyPasses.replace("Check", "Foo"),
             )
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built, Some(jdk))
           second <- feeds(root, built, Some(jdk))
@@ -1122,7 +1122,7 @@ private[testrun] object ModuleTestSupport:
               "app/src/test/scala/demo/Foo.scala",
               onlyPasses.replace("Check", "Foo"),
             )
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           _         <- feeds(root, built, Some(jdk))
           cachedRun <- feeds(root, built, Some(jdk))
@@ -1145,7 +1145,11 @@ private[testrun] object ModuleTestSupport:
           )
           runtimes <- TestMachine.runtimes(root)
           name     <- ZIO.fromEither(ProjectName.from(app.name))
-          result   <- ModuleTest
+          tools    <- ZIO.service[histos.resolve.LockedTools]
+          report   <- histos.resolve.ResolutionService
+            .open(root, histos.Resolution.Lock)
+            .provide(ZLayer.succeed(tools.resolve))
+          result <- ModuleTest
             .suites(
               TestRun(root, built, Nil, jdk, runtimes, TestMode.Quick),
               List(
@@ -1165,7 +1169,7 @@ private[testrun] object ModuleTestSupport:
             .runCollect
             .either
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ ZLayer.succeed(report)
             )
         yield assertTrue(
           cached(cachedRun) == List("demo.Foo"),
@@ -1195,7 +1199,7 @@ private[testrun] object ModuleTestSupport:
               libNamed("Other", "other"),
             )
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built)
           second <- feeds(root, built)
@@ -1227,7 +1231,7 @@ private[testrun] object ModuleTestSupport:
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built, mode = TestMode.Run)
           second <- feeds(root, built)
@@ -1312,7 +1316,7 @@ private[testrun] object ModuleTestSupport:
           built <- ZIO.fromEither(Projects(app))
           _     <- ZIO.attempt {
             write(root, "app/src/test/scala/demo/Foo.scala", fails)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built)
           second <- feeds(root, built)
@@ -1363,7 +1367,7 @@ private[testrun] object ModuleTestSupport:
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built, mode = TestMode.Run)
           second <- feeds(root, built, mode = TestMode.Run)
@@ -1384,7 +1388,7 @@ private[testrun] object ModuleTestSupport:
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built, mode = TestMode.Run)
           second <- feeds(root, built, mode = TestMode.Run)
@@ -1405,7 +1409,7 @@ private[testrun] object ModuleTestSupport:
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Lib.scala", lib("alpha"))
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built, mode = TestMode.Run)
           second <- feeds(root, built, mode = TestMode.Run)
@@ -1426,7 +1430,7 @@ private[testrun] object ModuleTestSupport:
             write(root, "core/src/main/scala/demo/Lib.scala", lib("alpha"))
             write(root, "core/src/main/scala/demo/Other.scala", libNamed("Other", "other"))
             write(root, "app/src/test/scala/demo/Foo.scala", callsLib)
-            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
           }
           first  <- feeds(root, built)
           second <- feeds(root, built)

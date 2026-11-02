@@ -69,11 +69,21 @@ object Build:
               case _ => ZIO.unit
             })
             _ <- adopt(call).flatMap { loaded =>
-              histos.zinc.CompileMemo.provide(
-                histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-                  Perform.run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say))
-                )
-              )
+              val mode = loaded match
+                case Right(Some(have)) => have.graph.resolution
+                case _                 => histos.Resolution.Solve
+              histos.resolve.ResolutionService
+                .open(repo, mode)
+                .mapError(ServerError.Resolve(_))
+                .flatMap { report =>
+                  histos.zinc.CompileMemo.provide(
+                    histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                      Perform
+                        .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say))
+                        .provideSomeLayer(zio.ZLayer.succeed(report))
+                    )
+                  )
+                }
             }
             beats <- heard.get
           yield replay(beats)

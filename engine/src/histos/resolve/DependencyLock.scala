@@ -47,7 +47,7 @@ final case class LockedPlugin(
     source: Option[LockedArtifact],
 )
 
-/** The committed `.histos/dependencies.lock`. Cells stay in file order. Plugin cells follow in file order.
+/** The committed `dependencies.lock`. Cells stay in file order. Plugin cells follow in file order.
   */
 final case class DependencyLock(
     cells: List[LockedCell],

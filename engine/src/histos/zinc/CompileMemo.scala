@@ -33,7 +33,7 @@ final case class StampedLock(lock: DependencyLock, stamp: LockStamp)
   */
 trait CompileMemo:
   def lock(repo: Path): IO[GraphCompileError, StampedLock]
-  def note(repo: Path, lock: DependencyLock): UIO[StampedLock]
+  def note(lock: DependencyLock): UIO[StampedLock]
   def sources(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]]
   def tests(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]]
   def digest(sources: List[Path]): IO[CompileError, Sha256]
@@ -118,13 +118,8 @@ object CompileMemo:
           case None =>
             read(repo).map(parsed => StampedLock(parsed, contentStamp(parsed)))
 
-    def note(repo: Path, lock: DependencyLock): UIO[StampedLock] =
-      ZIO
-        .attemptBlocking(fileStamp(Resolve.lockPath(repo)))
-        .orElseSucceed(None)
-        .map:
-          case Some(stamp) => StampedLock(lock, stamp)
-          case None        => StampedLock(lock, contentStamp(lock))
+    def note(lock: DependencyLock): UIO[StampedLock] =
+      ZIO.succeed(StampedLock(lock, contentStamp(lock)))
 
     def sources(root: Path, version: ScalaVersion, platform: Platform): IO[CompileError, List[Path]] =
       listed(root, version, platform, tests = false)

@@ -420,7 +420,7 @@ private[publish] object ReleaseRun:
   private final case class Sent(held: List[String], failed: List[String], deployed: List[Deployed])
 end ReleaseRun
 
-/** `.histos/deployments/<ship>`. Not `.histos/releases`. */
+/** `.histos/deployments/<ship>`. Not `releases`. */
 private[publish] object DeploymentFile:
   final case class Record(id: DeploymentId, state: DeploymentState, version: String)
 

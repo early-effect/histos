@@ -95,7 +95,7 @@ object ProtocolSpec extends ZIOSpecDefault:
         .attempt {
           Files.createDirectories(dir.resolve(".histos"))
           Files.writeString(
-            dir.resolve(".histos").resolve("build.properties"),
+            dir.resolve("build.properties"),
             "histos.version=0.0.2-SNAPSHOT\n",
           )
         }

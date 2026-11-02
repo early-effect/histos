@@ -35,7 +35,7 @@ object ServerSpec extends ZIOSpecDefault:
           root <- temp
           _    <- ZIO.attempt {
             write(root, "histos.scala", "object build\n")
-            write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell demo 3.10.0 jvm\n")
           }
           fingerprint <- Fingerprint.read(root)
           socket = root.resolve("missing.sock").toAbsolutePath.normalize
@@ -45,7 +45,7 @@ object ServerSpec extends ZIOSpecDefault:
           _       <- ZIO.attempt(
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell demo 3.10.0 jvm\nchanged\n",
             )
           )
@@ -76,7 +76,7 @@ object ServerSpec extends ZIOSpecDefault:
               "plugin(path\"tools/docs\")\nobject build\n",
             )
             write(root, "tools/docs/Echo.scala", "object Echo\n")
-            write(root, ".histos/dependencies.lock", "cell demo 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell demo 3.10.0 jvm\n")
           }
           fingerprint <- Fingerprint.read(root)
           socket = root.resolve("missing.sock").toAbsolutePath.normalize
@@ -87,7 +87,7 @@ object ServerSpec extends ZIOSpecDefault:
           )
           beforeLock <- ZIO.attempt(
             Files.readString(
-              root.resolve(".histos").resolve("dependencies.lock")
+              root.resolve("dependencies.lock")
             )
           )
           _ <- ZIO.attempt(
@@ -99,7 +99,7 @@ object ServerSpec extends ZIOSpecDefault:
           )
           afterLock <- ZIO.attempt(
             Files.readString(
-              root.resolve(".histos").resolve("dependencies.lock")
+              root.resolve("dependencies.lock")
             )
           )
         yield assertTrue(
@@ -141,7 +141,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -206,7 +206,7 @@ object ServerSpec extends ZIOSpecDefault:
           val program =
             for
               built <- ZIO.fromEither(
-                Projects(module("demo", Jvm)(ScalaVersion("3.10.0")))
+                Projects.locked(module("demo", Jvm)(ScalaVersion("3.10.0")))
               )
               name <- built.projects.collect { case item: histos.Module =>
                 item.name
@@ -222,7 +222,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -252,7 +252,7 @@ object ServerSpec extends ZIOSpecDefault:
               _ <- ZIO.attempt(
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\nchanged\n",
                 )
               )
@@ -299,7 +299,7 @@ object ServerSpec extends ZIOSpecDefault:
                 write(root, "tools/docs/Echo.scala", "object Echo\n")
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -345,7 +345,7 @@ object ServerSpec extends ZIOSpecDefault:
               )
               _ <- ZIO.attempt {
                 write(root, "histos.scala", "object build\n")
-                write(root, ".histos/build.properties", "histos.version=0.0.2-SNAPSHOT\n")
+                write(root, "build.properties", "histos.version=0.0.2-SNAPSHOT\n")
               }
               jdk     <- GraphCompile.jdkHere
               running <- histos.AppToolFixture.at(root, built)(
@@ -430,7 +430,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -465,7 +465,7 @@ object ServerSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -774,7 +774,7 @@ object ServerSpec extends ZIOSpecDefault:
       relaunch: Path => zio.IO[ServerError, Unit] = _ => ZIO.unit,
   ) =
     ZIO.attempt {
-      val path = root.resolve(".histos").resolve("build.properties")
+      val path = root.resolve("build.properties")
       if !Files.isRegularFile(path) then
         Files.createDirectories(root.resolve(".histos"))
         Files.writeString(path, "histos.version=0.0.2-SNAPSHOT\n")

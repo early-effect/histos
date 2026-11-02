@@ -80,8 +80,11 @@ object PluginRunSpec extends ZIOSpecDefault:
   private def graph[P](
       plugin: HistosPlugin,
       docs: ModuleDef[P],
+      resolution: histos.Resolution = histos.Resolution.Solve,
   ): ZIO[Any, BuildError, ProjectGraph] =
-    ZIO.fromEither(Projects(use(plugin), docs))
+    ZIO.fromEither:
+      if resolution == histos.Resolution.Lock then Projects.locked(use(plugin), docs)
+      else Projects(use(plugin), docs)
 
   private def runtime(
       repo: Path,
@@ -143,10 +146,18 @@ object PluginRunSpec extends ZIOSpecDefault:
       args: PluginArgs,
       cache: ActionCache,
       resolve: zio.ULayer[Resolve] = IdleResolve.layer,
+      report: ZLayer[Resolve, histos.resolve.ResolveError, histos.resolve.ResolutionService] =
+        histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
   ) =
     plugins.flatMap:
       _.run(id, args)
-        .provide(ZLayer.succeed(cache), RemoteCache.off, resolve, histos.zinc.CompileReplay.processStore)
+        .provide(
+          ZLayer.succeed(cache),
+          RemoteCache.off,
+          resolve,
+          histos.zinc.CompileReplay.processStore,
+          report,
+        )
 
   private val core = module("core", Jvm)(scala"3.9.0")
 
@@ -183,6 +194,7 @@ object PluginRunSpec extends ZIOSpecDefault:
           built <- graph(
             live,
             module("docs", Jvm)(scala"3.9.0").libraryDependencies(dependency),
+            histos.Resolution.Lock,
           )
           dir <- directory
           _   <- ZIO.attempt {
@@ -272,6 +284,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             PluginArgs.empty,
             cache,
             ZLayer.succeed(resolver),
+            histos.resolve.ResolutionService.layer(dir, built),
           ).forkScoped
           _ <- reached.await
           _ <- histos.workspace.Workspace.writeString(
@@ -706,7 +719,7 @@ object PluginRunSpec extends ZIOSpecDefault:
               "object Hello:\n  def greet: String = \"hi\"\n",
             )
             Files.writeString(
-              dir.resolve(".histos/dependencies.lock"),
+              dir.resolve("dependencies.lock"),
               "cell docs 3.9.0 jvm\n",
             )
           }.orDie
@@ -719,6 +732,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             PluginArgs.empty,
             cache,
             ZLayer.succeed(tools.resolve),
+            histos.resolve.ResolutionService.layer(dir, built),
           )
           text <- ZIO.attempt(Files.readString(dir.resolve("out.txt"))).orDie
           classes = dir
@@ -773,7 +787,7 @@ object PluginRunSpec extends ZIOSpecDefault:
               "object Hello:\n  val n: Int = \"no\"\n",
             )
             Files.writeString(
-              dir.resolve(".histos/dependencies.lock"),
+              dir.resolve("dependencies.lock"),
               "cell docs 3.9.0 jvm\n",
             )
           }.orDie
@@ -786,6 +800,7 @@ object PluginRunSpec extends ZIOSpecDefault:
             PluginArgs.empty,
             cache,
             ZLayer.succeed(tools.resolve),
+            histos.resolve.ResolutionService.layer(dir, built),
           ).either
           count <- calls.get
         yield
@@ -858,6 +873,7 @@ object PluginRunSpec extends ZIOSpecDefault:
               RemoteCache.off,
               IdleResolve.layer,
               histos.zinc.CompileReplay.processStore,
+              histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
             )
           id = PluginTaskId(echoId, TaskName("wait"))
           result <-

@@ -9,7 +9,7 @@ import java.nio.file.{Files, Path}
 import zio.{IO, ZIO}
 
 /** `histos` and `histos.bat`, rendered from the manual ship the way a workflow file is. Each script finds `java` and,
-  * when the checkout has no local assembly, asks `cs fetch` for `.histos/build.properties`. JVM arguments come from a
+  * when the checkout has no local assembly, asks `cs fetch` for `build.properties`. JVM arguments come from a
   * repository `.jvmopts`, one per line. Histos does not install a JDK or Coursier.
   */
 object LauncherScript:
@@ -154,7 +154,7 @@ if [ -n "$jar" ]; then
   [ -f "$jar" ] || fail "no assembly at $jar"
   [ "$(hash_of "$jar")" = "$expected" ] || fail "checksum mismatch"
 else
-  props=$root/.histos/build.properties
+  props=$root/build.properties
   [ -f "$props" ] || fail "missing build.properties; restore the committed version or use a source assembly"
   parse_version() {
     LC_ALL=C awk -v version="$version" '
@@ -373,7 +373,7 @@ if ($jar) {
   if ($expected -notmatch '^[0-9a-f]{64}$') { Fail 'invalid assembly checksum' }
   if ((Hash $jar) -ne $expected) { Fail 'checksum mismatch' }
 } else {
-  $props = Join-Path $root '.histos\build.properties'
+  $props = Join-Path $root 'build.properties'
   if (-not (Test-Path -LiteralPath $props -PathType Leaf)) {
     Fail 'missing build.properties; restore the committed version or use a source assembly'
   }

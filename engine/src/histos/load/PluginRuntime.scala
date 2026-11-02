@@ -61,9 +61,13 @@ trait PluginRuntime:
   def run(
       id: PluginTaskId,
       args: PluginArgs,
-  ): ZIO[ActionCache & RemoteCache & Resolve & histos.cache.ContentStore, PluginFault, PluginOutput]
+  ): ZIO[
+    ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
+    PluginFault,
+    PluginOutput,
+  ]
   def bind: ZIO[
-    ActionCache & RemoteCache & Resolve & histos.cache.ContentStore,
+    ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
     TaskError,
     Map[TaskId, IO[TaskError, TaskResult]],
   ]
@@ -110,7 +114,11 @@ object PluginRuntime:
     def run(
         id: PluginTaskId,
         args: PluginArgs,
-    ): ZIO[ActionCache & RemoteCache & Resolve & histos.cache.ContentStore, PluginFault, PluginOutput] =
+    ): ZIO[
+      ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
+      PluginFault,
+      PluginOutput,
+    ] =
       taskOf(id) match
         case None    => ZIO.fail(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(_) =>
@@ -126,10 +134,8 @@ object PluginRuntime:
                 )
               )
             env = machine.env
-            lock <- Resolve
-              .readLock(repo)
-              .mapError(PluginFault.Resolved(_))
-              .memoize
+            report <- ZIO.service[histos.resolve.ResolutionService]
+            lock = report.current
             jdk <- GraphCompile
               .jdk(machine)
               .mapError(PluginFault.Compiled(_))
@@ -151,7 +157,13 @@ object PluginRuntime:
                 id,
                 taskOf,
                 task => PluginCells.selected(graph, task),
-                cell => session.flatMap(PluginCells.compile(_, cell)),
+                cell =>
+                  session.flatMap: compiled =>
+                    PluginCells
+                      .compile(compiled, cell)
+                      .provideSome[Resolve & histos.cache.ContentStore](
+                        zio.ZLayer.succeed(report)
+                      ),
                 (taskId, task, upstream) =>
                   remembered(
                     id,
@@ -178,7 +190,7 @@ object PluginRuntime:
           yield output
 
     def bind: ZIO[
-      ActionCache & RemoteCache & Resolve & histos.cache.ContentStore,
+      ActionCache & RemoteCache & Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService,
       TaskError,
       Map[TaskId, IO[TaskError, TaskResult]],
     ] =
@@ -187,6 +199,7 @@ object PluginRuntime:
         remote  <- ZIO.service[RemoteCache]
         resolve <- ZIO.service[Resolve]
         store   <- ZIO.service[histos.cache.ContentStore]
+        report  <- ZIO.service[histos.resolve.ResolutionService]
         bound   <- ZIO.foreach(tasks): (id, _) =>
           for
             key <- ZIO.fromEither(TaskId.from(id.render))
@@ -196,6 +209,7 @@ object PluginRuntime:
                 ZLayer.succeed(remote),
                 ZLayer.succeed(resolve),
                 ZLayer.succeed(store),
+                ZLayer.succeed(report),
               )
               .map(out => TaskResult.Plugin(out))
               .mapError:

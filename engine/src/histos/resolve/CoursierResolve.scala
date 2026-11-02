@@ -208,7 +208,9 @@ private[resolve] final class CoursierResolve(
     for
       base   <- session()
       result <- execute(
-        base.withRepositories(coursierRepositories).withDependencies(requested)
+        nativeExclusions(version, platform)(
+          base.withRepositories(coursierRepositories).withDependencies(requested)
+        )
       )
       rows <- ZIO.fromEither(
         classpathRows(dependencies, version, platform, result)
@@ -383,6 +385,37 @@ private[resolve] final class CoursierResolve(
 
   private def distinct(items: List[Eviction]): List[Eviction] =
     items.foldLeft(List.empty[Eviction])((seen, item) => if seen.contains(item) then seen else seen :+ item)
+
+  /** Scala Native publishes one standard library for Scala 2.13 and another for Scala 3. A native resolve keeps the
+    * binary version it is compiling. Scala 3.8 and later also has its own `scalalib`, so the 2.13 one is excluded too.
+    */
+  private def nativeExclusions(
+      version: ScalaVersion,
+      platform: Platform,
+  )(
+      fetch: coursier.Fetch[coursier.util.Task]
+  ): coursier.Fetch[coursier.util.Task] =
+    val names = excludedNativeLibraries(version, platform)
+    if names.isEmpty then fetch
+    else
+      val rules =
+        names.map(name => (coursier.Organization("org.scala-native"), coursier.ModuleName(name)))
+      fetch.mapResolutionParams(_.addExclusions(rules*))
+
+  private def excludedNativeLibraries(version: ScalaVersion, platform: Platform): List[String] =
+    if platform != Platform.Native then Nil
+    else
+      val libraries = List("nativelib", "clib", "posixlib", "windowslib", "javalib", "auxlib")
+      val chosen    = version.value.split("\\.", 3) match
+        case Array("2", "13", _)  => Some(("_3", Nil))
+        case Array("3", minor, _) =>
+          val scalalib = minor.toIntOption.filter(_ >= 8).toList.map(_ => "scalalib")
+          Some(("_2.13", scalalib))
+        case _ => None
+      chosen match
+        case None                  => Nil
+        case Some((suffix, extra)) =>
+          (libraries ++ extra).map(name => s"$name${PlatformSuffix.Native}$suffix")
 
   private def dependency(
       organization: String,

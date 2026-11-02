@@ -223,5 +223,5 @@ enum RegistryError:
       s"'$line' is not a registry line. A line is '<ship> matches', '<ship> moved', or '<ship> unknown'."
     case Name(error)     => error.message
     case Relation(error) => error.message
-    case Duplicate(name) => s"ship '${name.value}' is listed twice in .histos/releases"
+    case Duplicate(name) => s"ship '${name.value}' is listed twice in releases"
 end RegistryError

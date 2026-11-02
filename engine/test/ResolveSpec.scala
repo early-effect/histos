@@ -391,6 +391,77 @@ object ResolveSpec extends ZIOSpecDefault:
           names = classpath.map(_.artifacts.map(_.name))
         yield assertTrue(names == Right(List("zio_native0.5_3")))
     ,
+    test("a native resolve excludes the other Scala binary's standard library"):
+      ZIO.scoped:
+        for
+          open <- opened
+          _    <- ZIO.attempt {
+            val older          = "0.5.12"
+            val scala2Scalalib = "2.13.18+0.5.12"
+            writeMaven(
+              open.maven,
+              "org.scala-native",
+              "nativelib_native0.5_2.13",
+              older,
+              emptyJar,
+              pom("org.scala-native", "nativelib_native0.5_2.13", older, None),
+            )
+            writeMaven(
+              open.maven,
+              "org.scala-native",
+              "scalalib_native0.5_2.13",
+              scala2Scalalib,
+              emptyJar,
+              pom("org.scala-native", "scalalib_native0.5_2.13", scala2Scalalib, None),
+            )
+            writeMaven(
+              open.maven,
+              "org.scala-native",
+              "nativelib_native0.5_3",
+              older,
+              emptyJar,
+              pom("org.scala-native", "nativelib_native0.5_3", older, None),
+            )
+            writeMaven(
+              open.maven,
+              "dev.zio",
+              "zio",
+              "2.1.26",
+              emptyJar,
+              pomDepends(
+                "dev.zio",
+                "zio",
+                "2.1.26",
+                List(
+                  ("org.scala-native", "nativelib_native0.5_2.13", older),
+                  ("org.scala-native", "scalalib_native0.5_2.13", scala2Scalalib),
+                  ("org.scala-native", "nativelib_native0.5_3", older),
+                ),
+              ),
+            )
+          }
+          asked = Dep.trusted("dev.zio", "zio", "2.1.26", DepKind.Java)
+          scala3 <- resolve(
+            open,
+            ResolveCell(core, List(asked), v390, Platform.Native, open.repositories),
+          )
+          scala2 <- resolve(
+            open,
+            ResolveCell(core, List(asked), v213, Platform.Native, open.repositories),
+          )
+          names3 = kept(scala3).map(_._1)
+          names2 = kept(scala2).map(_._1)
+        yield assertTrue(
+          names3.contains("zio"),
+          names3.contains("nativelib_native0.5_3"),
+          !names3.contains("nativelib_native0.5_2.13"),
+          !names3.contains("scalalib_native0.5_2.13"),
+          names2.contains("zio"),
+          names2.contains("nativelib_native0.5_2.13"),
+          names2.contains("scalalib_native0.5_2.13"),
+          !names2.contains("nativelib_native0.5_3"),
+        )
+    ,
     test("one transitive is evicted onto the direct revision"):
       ZIO.scoped:
         for
@@ -907,6 +978,38 @@ object ResolveSpec extends ZIOSpecDefault:
     Files.write(dir.resolve(pomName), pomBytes)
     Files.writeString(dir.resolve(s"$jarName.sha1"), sha1(jar) + "\n")
     Files.writeString(dir.resolve(s"$pomName.sha1"), sha1(pomBytes) + "\n")
+
+  private def kept(result: Either[ResolveError, Classpath]): List[(String, String)] =
+    result match
+      case Right(classpath) => classpath.artifacts.map(artifact => (artifact.name, artifact.revision))
+      case Left(_)          => Nil
+
+  private def pomDepends(
+      group: String,
+      name: String,
+      revision: String,
+      dependencies: List[(String, String, String)],
+  ): String =
+    val listed = dependencies
+      .map { case (depGroup, artifact, version) =>
+        s"""    <dependency>
+           |      <groupId>$depGroup</groupId>
+           |      <artifactId>$artifact</artifactId>
+           |      <version>$version</version>
+           |    </dependency>""".stripMargin
+      }
+      .mkString("\n")
+    s"""<?xml version="1.0" encoding="UTF-8"?>
+       |<project>
+       |  <modelVersion>4.0.0</modelVersion>
+       |  <groupId>$group</groupId>
+       |  <artifactId>$name</artifactId>
+       |  <version>$revision</version>
+       |  <dependencies>
+       |$listed
+       |  </dependencies>
+       |</project>
+       |""".stripMargin
 
   private def pom(
       group: String,

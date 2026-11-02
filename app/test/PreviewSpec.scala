@@ -178,11 +178,11 @@ object PreviewSpec extends ZIOSpecDefault:
           repo    <- keep
           planted <- plant(repo)
           _       <- write(repo, ".histos/server.json", "{}")
-          _       <- write(repo, ".histos/dependencies.lock", "lock")
+          _       <- write(repo, "dependencies.lock", "lock")
           app = module("app", Jvm)(scala3)
           graph <- ZIO.fromEither(Projects(app))
           server = repo.resolve(".histos").resolve("server.json")
-          lock   = repo.resolve(".histos").resolve("dependencies.lock")
+          lock   = repo.resolve("dependencies.lock")
           named <- Plan.clean(repo, graph, List(ProjectName("app"))).map(Plan.renderClean(repo, _))
           heard <- ask(repo)(Calls.previewClean(repo, graph, List(ProjectName("app")), _))
           all = Plan.renderClean(repo, Plan.cleanAll(repo))

@@ -59,7 +59,7 @@ object UpstreamInvalidationSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell upstream 3.9.0 jvm\ncell downstream 3.9.0 jvm\n",
               )
               Projects(upstream, downstream)

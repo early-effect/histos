@@ -63,7 +63,7 @@ An asset publication is a file the build already produced, plus a name. For Hist
 
 `publish snapshots` stays the PUT to `https://central.sonatype.com/repository/maven-snapshots`. It reads `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`. A release revision is refused before a request.
 
-`publish release` signs and uploads one bundle per ship to the Central Portal. The default is hold: `publishingType=USER_MANAGED`, poll until `VALIDATED` or `FAILED`, print the deployment id, and write it to `.histos/deployments/<ship>`. That file is not [`.histos/releases`](../engine/src/histos/version/VersionTask.scala). `--automatic` sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. That makes the version immutable as soon as validation passes. The catalog does not store the mode.
+`publish release` signs and uploads one bundle per ship to the Central Portal. The default is hold: `publishingType=USER_MANAGED`, poll until `VALIDATED` or `FAILED`, print the deployment id, and write it to `.histos/deployments/<ship>`. That file is not [`releases`](../engine/src/histos/version/VersionTask.scala). `--automatic` sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. That makes the version immutable as soon as validation passes. The catalog does not store the mode.
 
 `publish promote` and `publish drop` are the second act. They take a deployment id because that is the portal's input, and they use the portal base URL of this run. Promote publishes a `VALIDATED` deployment. Drop drops it, so the version stays free. Drop then deletes the GitHub asset uploaded for that ship, when one was uploaded. The deployment is dropped first. An asset deletion that fails is reported after the version is free.
 
@@ -118,7 +118,7 @@ Tests start that server in a `Scope` and pass the URL into the layer. They do no
 
 On a real portal, two reads run before an upload. A HEAD to repo1 refuses a GAV Central already has. A lookup of the signing key on `keyserver.ubuntu.com` refuses a key Central cannot fetch. Either miss fails before a deployment is opened. A rehearsal skips both reads. The fake is the only registry for that run, so a public version can be rehearsed. Histos does not upload the public key. Sending it remains `gpg --send-keys`, once.
 
-Central is the registry a real release reads. `.histos/releases` stays the evidence the versions task reads until that task asks this same registry. Tests of that task keep the file.
+Central is the registry a real release reads. `releases` stays the evidence the versions task reads until that task asks this same registry. Tests of that task keep the file.
 
 ## Signing
 
@@ -176,7 +176,7 @@ Top to bottom. Finish one item and prove it before starting the next. The proof 
 
 - [x] **Preflights.** When the portal URL is Central, HEAD repo1 and look up the signing key on `keyserver.ubuntu.com`, both through heddle against loopback stand-ins. Either miss fails before upload. When `HISTOS_PORTAL` points at the rehearsal portal, neither stand-in is called, and a version that is public on the stand-in still uploads to the fake.
 
-- [x] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `.histos/releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
+- [x] **Wire release, promote, and drop.** Hold writes `.histos/deployments/<ship>`. That path is not `releases`. Against the rehearsal portal, a two-ship fixture leaves the snapshot-dependent ship refused and the other `VALIDATED`. A `FAILED` bundle is that ship. A GAV the fake has published is a hold and opens no second deployment. `--automatic` reaches `PUBLISHED` on the fake. Drop leaves the version free to upload again. Missing secrets fail before a socket.
 
 - [x] **Histos-shaped rehearsal.** A fixture with a library module and an assembly module, at release numbers, reaches `VALIDATED` and then `PUBLISHED` on the rehearsal portal. That proof ran while this repository's catalog was the manual snapshot, so `publish release` here refused before any HTTP. No Central upload and no tag.
 

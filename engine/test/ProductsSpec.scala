@@ -21,8 +21,8 @@ object ProductsSpec extends ZIOSpecDefault:
           repo <- Workspace.work("histos-clean")
           _    <- Products.wipe(repo)
           kept = List(
-            ".histos/dependencies.lock",
-            ".histos/build.properties",
+            "dependencies.lock",
+            "build.properties",
             ".histos/assembly.sha256",
             ".histos/toolchain.local",
             ".histos/node.local",

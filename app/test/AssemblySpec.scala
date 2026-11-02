@@ -31,7 +31,7 @@ object AssemblySpec extends ZIOSpecDefault:
                   val work = root.resolve("work")
                   Files.createDirectories(work.resolve(".histos"))
                   Files.writeString(
-                    work.resolve(".histos").resolve("build.properties"),
+                    work.resolve("build.properties"),
                     "histos.version=0.0.2-SNAPSHOT\n",
                   )
                 }

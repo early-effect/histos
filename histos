@@ -47,7 +47,7 @@ if [ -n "$jar" ]; then
   [ -f "$jar" ] || fail "no assembly at $jar"
   [ "$(hash_of "$jar")" = "$expected" ] || fail "checksum mismatch"
 else
-  props=$root/.histos/build.properties
+  props=$root/build.properties
   [ -f "$props" ] || fail "missing build.properties; restore the committed version or use a source assembly"
   parse_version() {
     LC_ALL=C awk -v version="$version" '

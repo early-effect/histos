@@ -10,6 +10,7 @@ import histos.resolve.{
   BuildResolvers,
   ClasspathScope,
   DependencyLock,
+  ResolutionService,
   Repositories,
   RepositoryIo,
   Resolve,
@@ -39,12 +40,13 @@ object Assemble:
       native: NativeOrigin,
       destination: Path,
       report: CompileFeed => UIO[Unit],
-  ): ZIO[Resolve & histos.cache.ContentStore, AssembleError, Assembled] =
+  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService, AssembleError, Assembled] =
     for
       app      <- module(graph, "app")
       api      <- module(graph, "api")
       ordered  <- ZIO.fromEither(closure(app, index(graph)))
-      lock     <- readLock(repo)
+      resolved <- ZIO.service[ResolutionService]
+      lock     <- resolved.current
       compiled <- GraphCompile
         .run(
           histos.zinc.CompileSession(repo, graph, jdk, native, lock),
@@ -60,13 +62,12 @@ object Assemble:
         ordered,
         app.versions.first,
         BuildResolvers(graph.resolvers),
-        lock,
       )
       library <- JvmCompile
         .runtime(app.versions.first)
         .mapError(error => AssembleError.Toolchain(error))
         .provideSome[Resolve](
-          zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+          zio.ZLayer.fromZIO(LockedTools.make(lock, graph, resolved))
         )
       apiClasses <- ZIO.fromEither(
         apiDirectory(api.name, compiled, app.versions.first)
@@ -137,8 +138,7 @@ object Assemble:
       ordered: List[Module],
       version: ScalaVersion,
       repositories: Repositories,
-      lock: DependencyLock,
-  ): ZIO[Resolve, AssembleError, List[Path]] =
+  ): ZIO[Resolve & ResolutionService, AssembleError, List[Path]] =
     ZIO.foldLeft(ordered)(List.empty[Path]): (acc, module) =>
       val cell = ResolveCell(
         module.name,
@@ -148,8 +148,8 @@ object Assemble:
         repositories,
         ClasspathScope.Compile,
       )
-      Resolve
-        .materialize(cell, lock)
+      ZIO
+        .serviceWithZIO[ResolutionService](_.module(cell))
         .mapBoth(
           AssembleError.Resolve(_),
           classpath =>

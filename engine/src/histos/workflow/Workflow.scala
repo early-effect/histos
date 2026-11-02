@@ -15,6 +15,7 @@ import histos.{
   ProjectGraph,
   ProjectName,
   Publishing,
+  Resolution,
   RunnerTools,
   ScalaVersion,
   Splits,
@@ -226,7 +227,7 @@ object Workflow:
   private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
     val test = jobs match
       case Nil => Nil
-      case _   => testJob(jobs, graph.runnerTools)
+      case _   => testJob(jobs, graph.runnerTools, graph.resolution)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob)
@@ -367,12 +368,12 @@ object Workflow:
     * key is a package lock, and Chekhov does not read it. LLVM supplies clang and lld. The action skips its download
     * only when `cached` is the string `true`, which `cache-hit` is for this key alone. Chekhov reads Playwright from
     * `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. Coursier is
-    * the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` is the lock digest, so the
-    * file is not baked into the key. No step sets `restore-keys`. Every job that runs `./histos` installs `cs` and does
-    * not install a JDK.
+    * the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build file while the
+    * build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs `./histos`
+    * installs `cs` and does not install a JDK.
     */
-  private def steps(tools: RunnerTools): List[String] =
-    nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright) ++ coursierStep
+  private def steps(tools: RunnerTools, resolution: Resolution): List[String] =
+    nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright) ++ coursierStep(resolution)
 
   /** Current major. v4 still targets Node 20. */
   private val ToolCache = "actions/cache@v6"
@@ -381,8 +382,11 @@ object Workflow:
 
   private val PlaywrightBrowsers = "~/.cache/ms-playwright"
 
-  private val coursierKey: String =
-    "coursier-${{ hashFiles('.histos/dependencies.lock') }}-${{ runner.os }}-${{ runner.arch }}"
+  private def coursierKey(resolution: Resolution): String =
+    val named = resolution match
+      case Resolution.Solve => "histos.scala"
+      case Resolution.Lock  => "dependencies.lock"
+    s"coursier-$${{ hashFiles('$named') }}-$${{ runner.os }}-$${{ runner.arch }}"
 
   private def toolKey(name: String, revision: String): String =
     s"$name-$revision-$${{ runner.os }}-$${{ runner.arch }}"
@@ -403,8 +407,8 @@ object Workflow:
       case path :: Nil => List(s"          path: ${quote(path)}")
       case many        => "          path: |" :: many.map(path => s"            $path")
 
-  private def coursierStep: List[String] =
-    cacheStep(None, List(CoursierCache), coursierKey)
+  private def coursierStep(resolution: Resolution): List[String] =
+    cacheStep(None, List(CoursierCache), coursierKey(resolution))
 
   /** `apps` empty skips `sbtn`. Runners already have `JAVA_HOME`, so this step does not install a JDK. */
   private val CoursierCli = "coursier/setup-action@v3.0.4"
@@ -457,8 +461,12 @@ object Workflow:
           "          node \"$dir/node_modules/playwright/cli.js\" install firefox",
         )
 
-  private def testJob(jobs: List[TestJob], tools: RunnerTools): List[String] =
-    val prepare = steps(tools)
+  private def testJob(
+      jobs: List[TestJob],
+      tools: RunnerTools,
+      resolution: Resolution,
+  ): List[String] =
+    val prepare = steps(tools, resolution)
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(

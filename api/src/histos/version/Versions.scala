@@ -136,9 +136,9 @@ enum VersionError:
     case Session(error)    => error.message
     case Registry(error)   => error.message
     case UnknownShip(name) =>
-      s"ship '${name.value}' is in .histos/releases and not in the catalog"
+      s"ship '${name.value}' is in releases and not in the catalog"
     case Refused(refusals) => Decision.refusalText(refusals)
-    case Unreadable        => "could not read .histos/releases"
+    case Unreadable        => "could not read releases"
     case Config(error)     => s"configuration: ${configText(error)}"
 
   private def configText(error: zio.Config.Error): String =

@@ -65,7 +65,7 @@ private[load] object PluginCells:
   private[load] def compile(
       session: histos.zinc.CompileSession,
       cell: Cell,
-  ): ZIO[Resolve & histos.cache.ContentStore, PluginFault, Unit] =
+  ): ZIO[Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService, PluginFault, Unit] =
     val histos.zinc.CompileSession(repo, graph, jdk, origin, lock) = session
     for
       _ <- ZStream

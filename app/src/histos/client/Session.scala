@@ -211,22 +211,32 @@ object Session:
       shown: String,
   ): ZIO[Env, ServerError, Unit] =
     prepared(repo, apiJar, desk, call).flatMap { loaded =>
-      histos.zinc.CompileMemo.provide(
-        histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-          Perform.run(
-            repo,
-            apiJar,
-            loaded,
-            machine,
-            desk.runs,
-            track = true,
-            shown,
-            call,
-            say,
-            sessionEdges(repo, apiJar, machine, desk)(say),
+      val mode = loaded match
+        case Right(Some(have)) => have.graph.resolution
+        case _                 => histos.Resolution.Solve
+      histos.resolve.ResolutionService
+        .open(repo, mode)
+        .mapError(ServerError.Resolve(_))
+        .flatMap { report =>
+          histos.zinc.CompileMemo.provide(
+            histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+              Perform
+                .run(
+                  repo,
+                  apiJar,
+                  loaded,
+                  machine,
+                  desk.runs,
+                  track = true,
+                  shown,
+                  call,
+                  say,
+                  sessionEdges(repo, apiJar, machine, desk)(say),
+                )
+                .provideSomeLayer(zio.ZLayer.succeed(report))
+            )
           )
-        )
-      )
+        }
     }
 
   private def prepared(
@@ -301,24 +311,23 @@ object Session:
     LoadError | ServerError,
     LoadedBuild,
   ] =
-    for
-      now     <- Fingerprint.read(repo)
-      current <- desk.held.get
-      loaded  <- current match
-        case Some(held) if held.fingerprint == now => ZIO.succeed(held.loaded)
-        case other                                 =>
-          ZIO.foreachDiscard(other)(_.scope.close(Exit.unit)) *>
-            open(repo, apiJar, now, desk)
-    yield loaded
+    desk.held.get.flatMap:
+      case Some(held) =>
+        Fingerprint
+          .read(repo, held.loaded.graph.resolution)
+          .flatMap: now =>
+            if held.fingerprint == now then ZIO.succeed(held.loaded)
+            else held.scope.close(Exit.unit) *> open(repo, apiJar, desk)
+      case None =>
+        open(repo, apiJar, desk)
 
   private def open(
       repo: Path,
       apiJar: Path,
-      now: Fingerprint,
       desk: Desk,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore,
-    LoadError,
+    LoadError | ServerError,
     LoadedBuild,
   ] =
     for
@@ -326,7 +335,8 @@ object Session:
       loaded <- scope
         .extend(ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)))
         .tapError(_ => scope.close(Exit.unit))
-      _ <- desk.held.set(Some(Held(now, loaded, scope)))
+      now <- Fingerprint.read(repo, loaded.graph.resolution)
+      _   <- desk.held.set(Some(Held(now, loaded, scope)))
     yield loaded
 
   private def drop(desk: Desk): UIO[Unit] =

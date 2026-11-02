@@ -13,7 +13,7 @@ import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
 import histos.toolchain.Runtimes
 import histos.workflow.WorkflowAction
-import histos.{Platform, ProjectGraph, ProjectName}
+import histos.{Platform, ProjectGraph, ProjectName, Resolution}
 
 import java.io.{InputStream, OutputStream}
 import java.net.{StandardProtocolFamily, UnixDomainSocketAddress}
@@ -44,28 +44,41 @@ object Fingerprint:
   given CanEqual[Fingerprint, Fingerprint] = CanEqual.derived
 
   def read(repo: Path): IO[ServerError, Fingerprint] =
+    read(repo, Resolution.Solve)
+
+  /** Lock hashes the pin. Solve does not, so a resolution report write does not reload the server. */
+  def read(repo: Path, resolution: Resolution): IO[ServerError, Fingerprint] =
     val build = repo.resolve("histos.scala")
+    val pin   = resolution match
+      case Resolution.Lock  => tagged(repo.resolve("dependencies.lock"))
+      case Resolution.Solve => ZIO.succeed(Chunk.empty[Byte])
     for
       built <- tagged(build)
-      lock  <- tagged(repo.resolve(".histos").resolve("dependencies.lock"))
+      lock  <- pin
       extra <- pathBytes(repo, build)
     yield Sha256.of(built ++ Chunk.single(0.toByte) ++ lock ++ extra).value
 
   private[server] def trusted(raw: String): Fingerprint = raw
 
   /** The files [[read]] hashes. A header that does not parse contributes no plugin directories. */
-  def roots(repo: Path): UIO[List[Path]] =
+  def roots(repo: Path, resolution: Resolution = Resolution.Solve): UIO[List[Path]] =
     val build = repo.resolve("histos.scala")
-    val lock  = repo.resolve(".histos").resolve("dependencies.lock")
+    val lock  = repo.resolve("dependencies.lock")
     ZIO
       .attemptBlocking {
         val plugins =
           if Files.isRegularFile(build) then
             HeaderScan.paths(Files.readString(build)).map(path => repo.resolve(path.value))
           else Nil
-        (build :: lock :: plugins).distinct
+        val pinned = resolution match
+          case Resolution.Lock  => List(lock)
+          case Resolution.Solve => Nil
+        (build :: pinned ++ plugins).distinct
       }
-      .orElseSucceed(List(build, lock))
+      .orElseSucceed:
+        resolution match
+          case Resolution.Lock  => List(build, lock)
+          case Resolution.Solve => List(build)
 
   extension (fingerprint: Fingerprint) def value: String = fingerprint
 
@@ -382,7 +395,7 @@ object Daemon:
           )
           stopping <- Promise.make[Nothing, Unit]
           life = Lifecycle(armed, stopping, relaunch)
-          fingerprint <- Fingerprint.read(repo)
+          fingerprint <- Fingerprint.read(repo, graph.resolution)
           _           <- Record.write(repo, version, fingerprint, socket)
           held        <- Scope.make
           uses        <- Ref.make[Uses](Uses.Live(0))
@@ -392,7 +405,10 @@ object Daemon:
           )
           reloading <- Semaphore.make(1)
           spliced   <- Ref.make(Set.empty[Bsp.Session])
-          warm = Warm(live, graphs, reloading, spliced)
+          report    <- histos.resolve.ResolutionService
+            .open(repo, graph)
+            .mapError(ServerError.Resolve(_))
+          warm = Warm(live, graphs, reloading, spliced, report)
           permit <- Semaphore.make(1)
           runs   <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
           _      <- listening
@@ -420,7 +436,7 @@ object Daemon:
                 machine,
                 buildClasspath,
                 build,
-              )
+              ).provideSomeLayer(ZLayer.succeed(report))
             )
           )
         yield ()
@@ -466,6 +482,7 @@ object Daemon:
       graphs: Ref[ProjectGraph],
       reloading: Semaphore,
       spliced: Ref[Set[Bsp.Session]],
+      report: histos.resolve.ResolutionService,
   )
 
   private def accept(
@@ -484,13 +501,13 @@ object Daemon:
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[
     Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo,
+      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Unit,
   ] =
     def loop: ZIO[
       Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-        histos.zinc.CompileMemo,
+        histos.zinc.CompileMemo & histos.resolve.ResolutionService,
       ServerError,
       Unit,
     ] =
@@ -541,7 +558,7 @@ object Daemon:
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo,
+      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Unit,
   ] =
@@ -568,7 +585,7 @@ object Daemon:
                   out: Say
               ): Perform.Edges[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService
               ] =
                 Perform.Edges(
                   watch = (inner, edge) => watched(inner, edge),
@@ -597,7 +614,7 @@ object Daemon:
                   chosen: histos.jdk.Machine,
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo,
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
                 ServerError,
                 Unit,
               ] =
@@ -619,7 +636,7 @@ object Daemon:
                   out: Say,
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo,
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
                 ServerError,
                 Unit,
               ] =
@@ -640,7 +657,7 @@ object Daemon:
                   out: Say,
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo,
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
                 ServerError,
                 Unit,
               ] =
@@ -657,7 +674,7 @@ object Daemon:
 
               def watchRoots(call: Call): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo,
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
                 ServerError,
                 List[Path],
               ] =
@@ -677,7 +694,7 @@ object Daemon:
                   out: Say,
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-                  histos.zinc.CompileMemo,
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
                 ServerError,
                 Unit,
               ] =
@@ -721,14 +738,14 @@ object Daemon:
       warm: Warm,
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo,
+      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Either[LoadError, Generation],
   ] =
     warm.reloading.withPermit {
       for
-        now        <- Fingerprint.read(repo)
         generation <- warm.live.get
+        now        <- Fingerprint.read(repo, generation.graph.resolution)
         held       <-
           if now == generation.fingerprint then acquire(generation).as(Right(generation))
           else loadInto(repo, apiJar, version, bound, warm, now)
@@ -743,7 +760,7 @@ object Daemon:
       warm: Warm,
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo,
+      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -762,7 +779,7 @@ object Daemon:
       now: Fingerprint,
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo,
+      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Either[LoadError, Generation],
   ] =
@@ -775,9 +792,11 @@ object Daemon:
         case Left(error)  => scope.close(Exit.unit).as(Left(error))
         case Right(found) =>
           for
-            _    <- Record.write(repo, version, now, bound)
-            uses <- Ref.make[Uses](Uses.Live(1))
-            next = Generation(found.graph, found.plugins, found.build, now, scope, uses)
+            _     <- warm.report.adopt(found.graph).mapError(ServerError.Resolve(_))
+            fresh <- Fingerprint.read(repo, found.graph.resolution)
+            _     <- Record.write(repo, version, fresh, bound)
+            uses  <- Ref.make[Uses](Uses.Live(1))
+            next = Generation(found.graph, found.plugins, found.build, fresh, scope, uses)
             previous <- warm.live.getAndSet(next)
             _        <- warm.graphs.set(found.graph)
             _        <- Calls.release
@@ -872,7 +891,7 @@ object Daemon:
       output: OutputStream,
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
-      histos.zinc.CompileMemo,
+      histos.zinc.CompileMemo & histos.resolve.ResolutionService,
     ServerError,
     Unit,
   ] =

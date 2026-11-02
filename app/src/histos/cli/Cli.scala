@@ -421,22 +421,32 @@ object Cli:
           Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]]).flatMap { runs =>
             versionText(repo).orElseSucceed("").flatMap { shown =>
               adopted(repo, apiJar, other).flatMap { loaded =>
-                histos.zinc.CompileMemo.provide(
-                  histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
-                    Perform.run(
-                      repo,
-                      apiJar,
-                      loaded,
-                      machine,
-                      runs,
-                      track = false,
-                      shown,
-                      other,
-                      say,
-                      cliEdges(repo, apiJar, say),
+                val mode = loaded match
+                  case Right(Some(have)) => have.graph.resolution
+                  case _                 => histos.Resolution.Solve
+                histos.resolve.ResolutionService
+                  .open(repo, mode)
+                  .mapError(ServerError.Resolve(_))
+                  .flatMap { report =>
+                    histos.zinc.CompileMemo.provide(
+                      histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
+                        Perform
+                          .run(
+                            repo,
+                            apiJar,
+                            loaded,
+                            machine,
+                            runs,
+                            track = false,
+                            shown,
+                            other,
+                            say,
+                            cliEdges(repo, apiJar, say),
+                          )
+                          .provideSomeLayer(zio.ZLayer.succeed(report))
+                      )
                     )
-                  )
-                )
+                  }
               }
             }
           }
@@ -1537,11 +1547,18 @@ object Cli:
                                     )
                                   )
                                 case Right(session) =>
-                                  histos.zinc.CompileMemo
-                                    .provide(
-                                      histos.zinc.Compilers
-                                        .provide(histos.schedule.Parallelism.default.cpu)(speak(session))
-                                    )
+                                  histos.resolve.ResolutionService
+                                    .open(repo, loaded.graph)
+                                    .mapError(ServerError.Resolve(_))
+                                    .flatMap { report =>
+                                      histos.zinc.CompileMemo
+                                        .provide(
+                                          histos.zinc.Compilers
+                                            .provide(histos.schedule.Parallelism.default.cpu)(
+                                              speak(session).provideSomeLayer(zio.ZLayer.succeed(report))
+                                            )
+                                        )
+                                    }
                                     .foldZIO(
                                       error =>
                                         ZIO.succeed(
@@ -1570,7 +1587,11 @@ object Cli:
   /** Same reader and writer as a server splice. Stdio has no histos exit marker. */
   private def speak(
       session: Bsp.Session
-  ): ZIO[Resolve & ContentStore & Scope & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Int] =
+  ): ZIO[
+    Resolve & ContentStore & Scope & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+    ServerError,
+    Int,
+  ] =
     val stdin  = Path.of("stdin")
     val stdout = Path.of("stdout")
     val send   =

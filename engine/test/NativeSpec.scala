@@ -210,6 +210,16 @@ object NativeSpec extends ZIOSpecDefault:
         NativeToolchain.Release.revision.value == "0.5.13-20261030-eb3f3b8-SNAPSHOT",
       )
     ,
+    test("the native test entry is test-interface at the toolchain revision"):
+      val version = ScalaVersion("3.10.0")
+      val request = NativeRequests.testInterface(version, NativeToolchain.Release, histos.resolve.Repositories.central)
+      val root    = request.roots
+      assertTrue(
+        request.id.role == histos.resolve.ToolRole.NativeTestInterface,
+        root.map(_.name) == List("test-interface_native0.5_3"),
+        root.map(_.revision) == List(NativeToolchain.Release.revision.value),
+      )
+    ,
     test("the native linker is not on the engine classpath"):
       for
         classpath <- System.property("java.class.path")
@@ -333,24 +343,17 @@ object NativeSpec extends ZIOSpecDefault:
             )
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell app 3.9.0 native\ncell check 3.9.0 native\n",
             )
           }
           chosen <- ZIO.fromEither(NativeToolchain.parse(empty.toUri.toString))
-          missing = CompileError.NativeFetch(
-            NativeFetch.Resolved(
-              histos.resolve.ResolveError.ToolDrift(
-                histos.resolve.ToolId(
-                  histos.resolve.ToolRole.NativeLibraries,
-                  histos.ScalaVersion("3.9.0"),
-                  histos.resolve.ToolVariant.Native(
-                    NativeToolchain.ReleaseRevision
-                  ),
-                )
-              )
-            )
+          absent = histos.resolve.ResolveError.NotFound(
+            "org.scala-native",
+            "nscplugin_3.9.0",
+            NativeToolchain.ReleaseRevision.value,
           )
+          missing = CompileError.NativeFetch(NativeFetch.Resolved(absent))
           here <- Runtimes.read(
             TestMachine.at(
               root,
@@ -417,18 +420,7 @@ object NativeSpec extends ZIOSpecDefault:
               )
             )
           ),
-          tested == Left(
-            ModuleTestError.Lock(
-              histos.resolve.ResolveError.ToolDrift(
-                histos.resolve.ToolId(
-                  histos.resolve.ToolRole.NativeLibraries,
-                  histos.ScalaVersion("3.9.0"),
-                  histos.resolve.ToolVariant
-                    .Native(NativeToolchain.ReleaseRevision),
-                )
-              )
-            )
-          ),
+          tested == Left(ModuleTestError.Lock(absent)),
           linked == Left(
             NativeError.Fetch(
               NativeFetch.Resolved(

@@ -57,7 +57,7 @@ object PublishSpec extends ZIOSpecDefault:
             )
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n",
             )
           }
@@ -109,7 +109,7 @@ object PublishSpec extends ZIOSpecDefault:
             )
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell core 3.10.0 jvm\ncell core 3.10.0 js\ncell app 3.10.0 jvm\ncell app 3.10.0 js\n",
             )
           }
@@ -167,7 +167,7 @@ object PublishSpec extends ZIOSpecDefault:
               "core/src/main/scala/demo/Hello.scala",
               "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
           }
           develop   <- ZIO.fromEither(development)
           _         <- histos.ToolFixture.seed(root, develop)

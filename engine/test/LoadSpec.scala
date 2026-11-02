@@ -267,7 +267,7 @@ object LoadSpec extends ZIOSpecDefault:
         )
     ,
     test(
-      "a header dependency with no lock is unlocked, and the body is not compiled"
+      "a header dependency with no pin is solved, and the body is not compiled"
     ):
       val source =
         """plugin(dep"dev.example::echo:1.0.0")
@@ -282,9 +282,8 @@ object LoadSpec extends ZIOSpecDefault:
           out <- ZIO.serviceWithZIO[Loader](_.load(dir, jar)).either
         yield assertTrue:
           out match
-            case Left(LoadError.Plugin(PluginLoadError.Unlocked(coordinate))) =>
-              coordinate == PluginCoordinate.Published(echo).render && !Files
-                .exists(Resolve.lockPath(dir))
+            case Left(LoadError.Resolve(ResolveError.Repository(RepositoryIo.Fetch))) =>
+              !Files.exists(Resolve.lockPath(dir))
             case _ => false
     ,
     test("Api writes no lock, and a missing path directory is no entry"):
@@ -412,12 +411,14 @@ object LoadSpec extends ZIOSpecDefault:
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
               histos.zinc.CompileReplay.processStore,
+              histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
             )
           bound <- loaded.plugins.bind.provide(
             ZLayer.succeed(ActionCache.miss),
             RemoteCache.off,
             ZLayer.succeed(IdleResolve),
             histos.zinc.CompileReplay.processStore,
+            histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
           )
         yield assertTrue(
           loaded.graph.projects.map(_.name.value) == List("core"),
@@ -507,6 +508,7 @@ object LoadSpec extends ZIOSpecDefault:
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
               histos.zinc.CompileReplay.processStore,
+              histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
             )
         yield assertTrue(
           loaded.plugins.links match
@@ -561,6 +563,7 @@ object LoadSpec extends ZIOSpecDefault:
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
               histos.zinc.CompileReplay.processStore,
+              histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
             )
         yield assertTrue(
           loaded.plugins.links match
@@ -698,6 +701,7 @@ object LoadSpec extends ZIOSpecDefault:
               RemoteCache.off,
               ZLayer.succeed(IdleResolve),
               histos.zinc.CompileReplay.processStore,
+              histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
             )
         yield assertTrue(
           !Files.exists(Resolve.lockPath(repo)),
@@ -866,6 +870,7 @@ object LoadSpec extends ZIOSpecDefault:
         RemoteCache.off,
         ZLayer.succeed(IdleResolve),
         histos.zinc.CompileReplay.processStore,
+        histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
       )
 
   private val echoTask =

@@ -270,7 +270,7 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo    <- keep("histos-preview-hold")
           planted <- plant(repo)
-          _       <- write(repo, ".histos/releases", "libs matches\n")
+          _       <- write(repo, "releases", "libs matches\n")
           graph   <- ZIO.fromEither(twoShips)
           plan    <- Plan.publishSnapshots(repo, graph, Nil, snapshotEnv)
           text = Plan.renderPublish(plan)
@@ -291,7 +291,7 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo    <- keep("histos-preview-only-hold")
           planted <- plant(repo)
-          _       <- write(repo, ".histos/releases", "libs matches\n")
+          _       <- write(repo, "releases", "libs matches\n")
           graph   <- ZIO.fromEither(heldShip)
           plan    <- Plan.publishSnapshots(repo, graph, Nil, snapshotEnv)
           text = Plan.renderPublish(plan)
@@ -375,13 +375,13 @@ object PlanSpec extends ZIOSpecDefault:
         for
           repo    <- keep("histos-preview-clean")
           planted <- plant(repo)
-          _       <- write(repo, ".histos/dependencies.lock", "lock")
+          _       <- write(repo, "dependencies.lock", "lock")
           _       <- write(repo, ".histos/server.json", "{}")
           empty   <- ZIO.fromEither(Projects())
           plan    <- Plan.clean(repo, empty, Nil)
           text = Plan.renderClean(repo, plan)
           kept <- same(planted)
-          lock   = Files.isRegularFile(repo.resolve(".histos/dependencies.lock"))
+          lock   = Files.isRegularFile(repo.resolve("dependencies.lock"))
           server = Files.isRegularFile(repo.resolve(".histos/server.json"))
         yield assertTrue(
           plan == Plan.cleanAll(repo),
@@ -795,7 +795,7 @@ object PlanSpec extends ZIOSpecDefault:
           request = CompilerRequests.compiler(scala3, repos)
           toolSha = Sha256.of(Chunk.fromArray("compiler-tool".getBytes(StandardCharsets.UTF_8)))
           lock    = DependencyLock(Nil, Nil, List(compilerTool(request, toolSha)))
-          _ <- write(repo, ".histos/dependencies.lock", DependencyLock.render(lock))
+          _ <- write(repo, "dependencies.lock", DependencyLock.render(lock))
           classes = TestCompile.testClasses(repo, app.name, scala3, Jvm)
           _ <- ZIO.attempt {
             writeClass(classes, "demo/Foo", "one")
@@ -880,7 +880,7 @@ object PlanSpec extends ZIOSpecDefault:
           !text.contains("quick run"),
           before == after,
           !Files.exists(zip),
-          !Files.exists(repo.resolve(".histos").resolve("dependencies.lock")),
+          !Files.exists(repo.resolve("dependencies.lock")),
         )
       },
   )

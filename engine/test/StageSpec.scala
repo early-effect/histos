@@ -68,7 +68,7 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "core/src/main/scala/demo/Hello.scala", hello)
               write(root, "core/src/test/scala/demo/HelloTest.scala", "package demo\n\nobject HelloTest\n")
-              write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\n")
+              write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(published)
             _     <- histos.ToolFixture.seed(root, built)
@@ -126,7 +126,7 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "plug/src/main/scala/demo/Plug.scala", plug)
               write(root, "plug/src/main/resources/sbt/sbt.autoplugins", descriptor)
-              write(root, ".histos/dependencies.lock", "cell plug 3.10.0 jvm\n")
+              write(root, "dependencies.lock", "cell plug 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(pluginProject)
             _     <- histos.ToolFixture.seed(root, built)
@@ -161,7 +161,7 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "lib/src/main/scala/lib/Lib.scala", lib)
               write(root, "app/src/main/scala/demo/App.scala", app)
-              write(root, ".histos/dependencies.lock", "cell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n")
+              write(root, "dependencies.lock", "cell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(assemblyProject)
             _     <- histos.ToolFixture.seed(root, built)
@@ -203,7 +203,7 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "lib/src/main/scala/lib/Lib.scala", lib)
               write(root, "app/src/main/scala/demo/App.scala", app)
-              write(root, ".histos/dependencies.lock", "cell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n")
+              write(root, "dependencies.lock", "cell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(applicationProject)
             _     <- histos.ToolFixture.seed(root, built)
@@ -241,7 +241,7 @@ object StageSpec extends ZIOSpecDefault:
             repo <- temp
             _    <- ZIO.attempt {
               write(root, "app/src/main/scala/demo/Other.scala", other)
-              write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+              write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
             }
             built   <- ZIO.fromEither(missingMain)
             _       <- histos.ToolFixture.seed(root, built)

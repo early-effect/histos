@@ -154,6 +154,7 @@ object BspSpec extends ZIOSpecDefault:
             histos.zinc.CompileReplay.processStore,
             histos.zinc.Compilers.live,
             histos.zinc.CompileMemo.live,
+            histos.resolve.ResolutionService.pinned(histos.resolve.DependencyLock(Nil)),
           )
         yield result,
   )
@@ -178,7 +179,7 @@ object BspSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\ncell demo 2.13.16 jvm\n",
                 )
               }
@@ -247,10 +248,10 @@ object BspSpec extends ZIOSpecDefault:
               otherGone,
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
-    test("an unknown target and a missing lock are protocol errors"):
+    test("an unknown target is a protocol error, and deleting the pin is not a missing lock"):
       ZIO.scoped:
         temp.flatMap: root =>
           val program =
@@ -277,11 +278,10 @@ object BspSpec extends ZIOSpecDefault:
             yield assertTrue(
               code(unknown).contains(-32602),
               message(unknown).exists(_.contains("unknown build target")),
-              code(missing).contains(-32603),
-              message(missing).exists(_.contains("no dependency lock")),
+              !message(missing).exists(_.contains("no dependency lock")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("a compile failure publishes the range and then status 2"):
@@ -298,7 +298,7 @@ object BspSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -342,7 +342,7 @@ object BspSpec extends ZIOSpecDefault:
               ),
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test(
@@ -356,7 +356,7 @@ object BspSpec extends ZIOSpecDefault:
               _     <- ZIO.attempt {
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   """cell demo 3.10.0 jvm
                          |artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
                          |""".stripMargin,
@@ -380,7 +380,7 @@ object BspSpec extends ZIOSpecDefault:
               paths.forall(path => !path.contains("scala-library-2.13.18")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("metals can list a main and launch a jvm test"):
@@ -399,7 +399,7 @@ object BspSpec extends ZIOSpecDefault:
                 write(root, "demo/test/DemoSpec.scala", "object DemoSpec\n")
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   """cell demo 3.10.0 jvm
                          |test demo 3.10.0 jvm
                          |direct dev.zio zio-test-sbt 2.1.27 binary
@@ -460,7 +460,7 @@ object BspSpec extends ZIOSpecDefault:
               code(env).isEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("a test target without its framework library cannot be launched"):
@@ -489,7 +489,7 @@ object BspSpec extends ZIOSpecDefault:
               message(env).exists(_.contains("zio-test-sbt")),
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("a compile failure is status 2"):
@@ -506,7 +506,7 @@ object BspSpec extends ZIOSpecDefault:
                 )
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               }
@@ -525,7 +525,7 @@ object BspSpec extends ZIOSpecDefault:
               code(compiled).isEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("a js cell is a js target and a compile does not link"):
@@ -536,7 +536,7 @@ object BspSpec extends ZIOSpecDefault:
               built <- ZIO.fromEither(Projects(module("ui", Jvm, Js)(scala3)))
               _     <- ZIO.attempt {
                 write(root, "ui/src/Hello.scala", "object Hello\n")
-                write(root, ".histos/dependencies.lock", "cell ui 3.10.0 js\ncell ui 3.10.0 jvm\n")
+                write(root, "dependencies.lock", "cell ui 3.10.0 js\ncell ui 3.10.0 jvm\n")
               }
               jdk  <- GraphCompile.jdkHere
               open <- runtimes.flatMap(found =>
@@ -561,7 +561,7 @@ object BspSpec extends ZIOSpecDefault:
               !linked,
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("a js module is a js target, a jvm module is not, and scalac options are the engine classpath"):
@@ -577,7 +577,7 @@ object BspSpec extends ZIOSpecDefault:
                 write(root, "core/test/CoreSpec.scala", "object CoreSpec\n")
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell lib 3.10.0 jvm\ncell core 3.10.0 jvm\ncell ui 3.10.0 js\n",
                 )
               }
@@ -656,7 +656,7 @@ object BspSpec extends ZIOSpecDefault:
               mainWant.paths.nonEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("scalac options are the module flags and then semanticdb"):
@@ -672,7 +672,7 @@ object BspSpec extends ZIOSpecDefault:
               _ <- ZIO.attempt(
                 write(
                   root,
-                  ".histos/dependencies.lock",
+                  "dependencies.lock",
                   "cell demo 3.10.0 jvm\n",
                 )
               )
@@ -694,7 +694,7 @@ object BspSpec extends ZIOSpecDefault:
               flagsOn.contains("-Xsemanticdb"),
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           )
     ,
     test("a module with no source root lists no sources"):
@@ -718,7 +718,7 @@ object BspSpec extends ZIOSpecDefault:
               code(sources).isEmpty,
             )
           program.provideSomeLayer[histos.resolve.LockedTools & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            histos.AppToolFixture.resolver
+            histos.AppToolFixture.resolver ++ opened(root)
           ),
   )
 
@@ -999,12 +999,20 @@ object BspSpec extends ZIOSpecDefault:
     Files.createDirectories(path.getParent)
     Files.writeString(path, text)
 
+  private def opened(root: java.nio.file.Path) =
+    ZLayer.fromZIO(
+      ZIO.serviceWithZIO[histos.resolve.LockedTools]: tools =>
+        histos.resolve.ResolutionService
+          .open(root, histos.Resolution.Solve)
+          .provide(ZLayer.succeed(tools.resolve))
+    )
+
   private def temp: ZIO[Scope, Throwable, Path] =
     ZIO.acquireRelease(ZIO.attempt {
       val dir = Files.createTempDirectory("histos-bsp")
       Files.createDirectories(dir.resolve(".histos"))
       Files.writeString(
-        dir.resolve(".histos").resolve("build.properties"),
+        dir.resolve("build.properties"),
         "histos.version=0.0.2-SNAPSHOT\n",
       )
       dir

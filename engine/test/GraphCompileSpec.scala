@@ -26,7 +26,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "src/main/scala/demo/Hello.scala",
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
@@ -83,11 +83,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "src/main/scala/demo/Hello.scala",
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           }
-          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          _         <- histos.ToolFixture.seed(root, built)
-          tools     <- ZIO.service[histos.resolve.LockedTools]
+          built  <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _      <- histos.ToolFixture.seed(root, built)
+          tools  <- ZIO.service[histos.resolve.LockedTools]
+          report <- histos.resolve.ResolutionService
+            .open(root, built)
+            .provide(ZLayer.succeed(tools.resolve))
           compilers <- Compilers.live(1).build.map(_.get[Compilers])
           memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
           first     <- temp
@@ -100,6 +103,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 ZLayer.succeed(compilers),
                 ZLayer.succeed(memo),
                 ZLayer.succeed(tools.resolve),
+                ZLayer.succeed(report),
                 ZLayer.succeed(store),
               )
           firstFeeds  <- run(histos.cache.ContentStore.in(first))
@@ -121,11 +125,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "src/main/scala/demo/Hello.scala",
               "package demo\n\nobject Hello:\n  def greet: String = \"hi\"\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           }
-          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          _         <- histos.ToolFixture.seed(root, built)
-          tools     <- ZIO.service[histos.resolve.LockedTools]
+          built  <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _      <- histos.ToolFixture.seed(root, built)
+          tools  <- ZIO.service[histos.resolve.LockedTools]
+          report <- histos.resolve.ResolutionService
+            .open(root, built)
+            .provide(ZLayer.succeed(tools.resolve))
           compilers <- Compilers.live(1).build.map(_.get[Compilers])
           memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
           store     <- temp
@@ -136,6 +143,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               ZLayer.succeed(compilers),
               ZLayer.succeed(memo),
               ZLayer.succeed(tools.resolve),
+              ZLayer.succeed(report),
               ZLayer.succeed(histos.cache.ContentStore.in(store)),
             )
           first  <- run
@@ -184,11 +192,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "src/main/scala/demo/Other.scala",
               "package demo\n\nobject Other:\n  def rest: Int = 1\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           }
-          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          _         <- histos.ToolFixture.seed(root, built)
-          tools     <- ZIO.service[histos.resolve.LockedTools]
+          built  <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _      <- histos.ToolFixture.seed(root, built)
+          tools  <- ZIO.service[histos.resolve.LockedTools]
+          report <- histos.resolve.ResolutionService
+            .open(root, built)
+            .provide(ZLayer.succeed(tools.resolve))
           compilers <- Compilers.live(1).build.map(_.get[Compilers])
           memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
           store     <- temp
@@ -199,6 +210,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               ZLayer.succeed(compilers),
               ZLayer.succeed(memo),
               ZLayer.succeed(tools.resolve),
+              ZLayer.succeed(report),
               ZLayer.succeed(histos.cache.ContentStore.in(store)),
             )
           _ <- run
@@ -240,11 +252,14 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "src/main/scala/demo/Other.scala",
               "package demo\n\nobject Other:\n  def rest: Int = 1\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           }
-          built     <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
-          _         <- histos.ToolFixture.seed(root, built)
-          tools     <- ZIO.service[histos.resolve.LockedTools]
+          built  <- ZIO.fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+          _      <- histos.ToolFixture.seed(root, built)
+          tools  <- ZIO.service[histos.resolve.LockedTools]
+          report <- histos.resolve.ResolutionService
+            .open(root, built)
+            .provide(ZLayer.succeed(tools.resolve))
           compilers <- Compilers.live(1).build.map(_.get[Compilers])
           memo      <- CompileMemo.live.build.map(_.get[CompileMemo])
           store     <- temp
@@ -256,6 +271,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               ZLayer.succeed(compilers),
               ZLayer.succeed(memo),
               ZLayer.succeed(tools.resolve),
+              ZLayer.succeed(report),
               ZLayer.succeed(histos.cache.ContentStore.in(store)),
             )
           _      <- run
@@ -288,7 +304,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "core/src/Hello.scala",
               "object Hello {\n  def greet: String = \"hi\"\n}\n",
             )
-            write(root, ".histos/dependencies.lock", "cell core 2.13.16 jvm\n")
+            write(root, "dependencies.lock", "cell core 2.13.16 jvm\n")
           }
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("2.13.16"))))
@@ -348,7 +364,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell core 3.9.0 jvm\ncell app 3.9.0 jvm\n",
               )
               Projects(core, app, extra)
@@ -419,7 +435,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell core 3.9.0 jvm\ncell app 3.9.0 jvm\n",
               )
               Projects(core, app)
@@ -463,7 +479,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 "core/src/main/scala/Core.scala",
                 "object Core:\n  def n: Int = 1\n",
               )
-              write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+              write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
               Projects(core)
             }
             .flatMap(ZIO.fromEither(_))
@@ -518,7 +534,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell slow 3.9.0 jvm\ncell fast 3.9.0 jvm\ncell after 3.9.0 jvm\n",
               )
               Projects(slow, fast, after)
@@ -566,7 +582,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               write(root, "after/src/main/scala/After.scala", "object After:\n  def n: Int = Slow.n\n")
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell slow 3.9.0 jvm\ncell fast 3.9.0 jvm\ncell after 3.9.0 jvm\n",
               )
               Projects(slow, fast, after)
@@ -611,7 +627,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 "src/Bad.scala",
                 "object Bad:\n  def n: Int = missing\n",
               )
-              write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+              write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
               Projects(module("core", Jvm)(ScalaVersion("3.9.0")))
             }
             .flatMap(ZIO.fromEither(_))
@@ -664,7 +680,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell core 2.13.16 jvm\ncell app 3.9.0 jvm\n",
               )
               Projects(core, app)
@@ -732,7 +748,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               )
               write(
                 root,
-                ".histos/dependencies.lock",
+                "dependencies.lock",
                 "cell types 3.9.0 jvm\ncell types 3.9.0 js\ncell facade 3.9.0 js\ncell core 3.9.0 jvm\ncell core 3.9.0 js\n",
               )
               Projects(types, facade, core)
@@ -778,7 +794,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "example/todo/src/main/scala/Todo.scala",
               "object Todo:\n  def n: Int = 1\n",
             )
-            write(root, ".histos/dependencies.lock", "cell todo 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell todo 3.9.0 jvm\n")
           }
           built <- ZIO
             .fromEither(
@@ -832,7 +848,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
               "ui/src/main/scalajvm/JvmOnly.scala",
               "object JvmOnly:\n  def n: Int = 1\n",
             )
-            write(root, ".histos/dependencies.lock", "cell ui 3.9.0 js\n")
+            write(root, "dependencies.lock", "cell ui 3.9.0 js\n")
           }
           built <- ZIO
             .fromEither(Projects(module("ui", Js)(ScalaVersion("3.9.0"))))
@@ -937,7 +953,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           jdk   <- GraphCompile.jdkHere
           root  <- temp
           built <- ZIO
-            .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
+            .fromEither(Projects.locked(module("core", Jvm)(ScalaVersion("3.9.0"))))
           out <- GraphCompile
             .run(
               root,
@@ -955,7 +971,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
         yield assertTrue:
           out match
             case Left(GraphCompileError.Lock(ResolveError.NoLock(path))) =>
-              path == root.resolve(".histos").resolve("dependencies.lock")
+              path == root.resolve("dependencies.lock")
             case _ => false
     ,
     test("a module with no source root is refused"):
@@ -964,7 +980,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           jdk  <- GraphCompile.jdkHere
           root <- temp
           _    <- ZIO.attempt(
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
           )
           built <- ZIO
             .fromEither(Projects(module("core", Jvm)(ScalaVersion("3.9.0"))))
@@ -1017,7 +1033,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             )
             write(
               root,
-              ".histos/dependencies.lock",
+              "dependencies.lock",
               "cell e2e 3.9.0 jvm\ncell probe 3.9.0 jvm\n",
             )
           }
@@ -1086,7 +1102,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
           jdk  <- GraphCompile.jdkHere
           root <- temp
           _    <- ZIO.attempt {
-            write(root, ".histos/dependencies.lock", "cell core 3.9.0 jvm\n")
+            write(root, "dependencies.lock", "cell core 3.9.0 jvm\n")
             write(root, "src/place.txt", "no scala")
           }
           built <- ZIO

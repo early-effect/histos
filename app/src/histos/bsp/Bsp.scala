@@ -13,6 +13,7 @@ import histos.resolve.{
   DependencyLock,
   LockedArtifact,
   Repository,
+  ResolutionService,
   Resolve,
   ResolveError,
 }
@@ -231,8 +232,12 @@ object Bsp:
       buildClasspath: List[Path] = Nil,
       notify: String => UIO[Unit] = _ => ZIO.unit,
       build: IO[LoadError, BuildNotes] = ZIO.succeed(BuildNotes(false, Nil)),
-      gate: ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] => ZIO[
-        Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+      gate: ZIO[
+        Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+        Nothing,
+        Int,
+      ] => ZIO[
+        Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
         Nothing,
         Int,
       ] = effect => effect,
@@ -271,8 +276,12 @@ object Bsp:
         notify: String => UIO[Unit],
         build: IO[LoadError, BuildNotes],
         phase: Ref[Phase],
-        gate: ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] => ZIO[
-          Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+        gate: ZIO[
+          Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+          Nothing,
+          Int,
+        ] => ZIO[
+          Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
           Nothing,
           Int,
         ],
@@ -304,8 +313,12 @@ object Bsp:
       notify: String => UIO[Unit],
       build: IO[LoadError, BuildNotes],
       phase: Ref[Phase],
-      gate: ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] => ZIO[
-        Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+      gate: ZIO[
+        Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+        Nothing,
+        Int,
+      ] => ZIO[
+        Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
         Nothing,
         Int,
       ],
@@ -322,13 +335,21 @@ object Bsp:
       */
     def answer(
         payload: String
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       current.get.flatMap(graph => answer(graph, payload))
 
     def answer(
         seen: ProjectGraph,
         payload: String,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       for
         requested <- Ref.make(seen)
         lock      <- Ref.make(Option.empty[DependencyLock])
@@ -353,7 +374,11 @@ object Bsp:
     def changed(
         previous: ProjectGraph,
         next: ProjectGraph,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Unit] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Unit,
+    ] =
       targetUris(previous).either.zip(targetUris(next).either).flatMap {
         case (Right(before), Right(after)) =>
           notify(
@@ -367,7 +392,11 @@ object Bsp:
 
     private def read(
         payload: String
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       payload.fromJson[zio.json.ast.Json] match
         case Left(_) =>
           ZIO.succeed(Answer.Reply(failure(Rpc.RpcId.Absent, BspError.Parse)))
@@ -391,7 +420,11 @@ object Bsp:
         name: String,
         incoming: Rpc.Incoming,
         notification: Boolean,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       val asked = Method.from(name)
       (current, asked, notification) match
         case (_, Some(Method.Exit), _) =>
@@ -445,7 +478,11 @@ object Bsp:
     private def sources(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(sourceItem).map(Rpc.SourcesResult(_))),
@@ -454,7 +491,11 @@ object Bsp:
     private def options(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(scalac).map(Rpc.ScalacOptionsResult(_))),
@@ -463,7 +504,11 @@ object Bsp:
     private def dependencySources(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(sourceJars).map(Rpc.DependencySourcesResult(_))),
@@ -472,7 +517,11 @@ object Bsp:
     private def compile(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       ZIO
         .fromEither(Rpc.compileParams(incoming.params).left.map(fault))
         .foldZIO(
@@ -495,7 +544,11 @@ object Bsp:
 
     private def runCompile(
         ids: List[Id]
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Int,
+    ] =
       val mains  = ids.collect { case id: Id.Main => id }
       val tests  = ids.collect { case id: Id.Test => id }
       val builds = ids.collect { case Id.Build => Id.Build }
@@ -515,7 +568,11 @@ object Bsp:
     private def compileMains(
         platform: Platform,
         group: List[Id.Main],
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Int,
+    ] =
       val cells = group.map(id => id.module.name -> id.version)
       request.get.flatMap { graph =>
         Ref.make(false).flatMap { failed =>
@@ -567,7 +624,11 @@ object Bsp:
 
     private def compileTest(
         id: Id.Test
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Int,
+    ] =
       request.get.flatMap { graph =>
         val modules = modulesOf(graph)
         val uri     = targetUri(id)
@@ -612,8 +673,11 @@ object Bsp:
         }
       }
 
-    private def compileBuild
-        : ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Int] =
+    private def compileBuild: ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Int,
+    ] =
       val uri = buildUri
       (clear(uri) *> build.mapError(BspError.Build(_))).either.flatMap {
         case Left(error)  => log(CompileSeverity.Error, error.message).as(2)
@@ -638,8 +702,16 @@ object Bsp:
 
     private def reply[A: JsonCodec](
         id: Rpc.RpcId,
-        body: ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, A],
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+        body: ZIO[
+          Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+          BspError,
+          A,
+        ],
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       body.fold(
         error => Answer.Reply(failure(id, error)),
         value => Answer.Reply(Rpc.ok(id, value)),
@@ -647,7 +719,11 @@ object Bsp:
 
     private def scalac(
         uri: String
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, Rpc.ScalacOptionsItem] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      Rpc.ScalacOptionsItem,
+    ] =
       parsed(uri) {
         case Id.Build =>
           ZIO.succeed(
@@ -696,7 +772,11 @@ object Bsp:
         version: ScalaVersion,
         platform: Platform,
         scope: ClasspathScope,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, List[Path]] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      List[Path],
+    ] =
       for
         graph <- request.get
         lock  <- readLock
@@ -704,7 +784,7 @@ object Bsp:
         found <- withTools(
           ZIO
             .serviceWithZIO[histos.zinc.CompileMemo]: memo =>
-              memo.note(repo, lock).flatMap { stamped =>
+              memo.note(lock).flatMap { stamped =>
                 memo.classpath(
                   repo,
                   modules,
@@ -739,12 +819,26 @@ object Bsp:
           BspError.Sources(found)
 
     private def withTools[A](
-        effect: ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & LockedTools, BspError, A]
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, A] =
+        effect: ZIO[
+          Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService &
+            LockedTools,
+          BspError,
+          A,
+        ]
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      A,
+    ] =
       request.get.flatMap(graph =>
         readLock.flatMap(lock =>
-          effect.provideSome[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo](
-            zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
+          ZIO.serviceWithZIO[histos.resolve.ResolutionService](report =>
+            effect.provideSome[
+              Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
+                histos.resolve.ResolutionService
+            ](
+              zio.ZLayer.fromZIO(LockedTools.make(lock, graph, report))
+            )
           )
         )
       )
@@ -752,7 +846,7 @@ object Bsp:
     private def sourceJars(
         uri: String
     ): ZIO[
-      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
       BspError,
       Rpc.DependencySourcesItem,
     ] =
@@ -765,7 +859,11 @@ object Bsp:
       }
     private def jarsOf(
         id: Id
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, List[SourceAsk]] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      List[SourceAsk],
+    ] =
       id match
         case Id.Build =>
           ZIO.succeed(buildClasspath.flatMap(runtimeAsk(BuildScala, _)))
@@ -779,7 +877,11 @@ object Bsp:
         version: ScalaVersion,
         platform: Platform,
         test: Boolean,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, List[SourceAsk]] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      List[SourceAsk],
+    ] =
       for
         lock    <- readLock
         library <- withTools(
@@ -833,7 +935,11 @@ object Bsp:
 
     private def oneSource(
         ask: SourceAsk
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Option[Path]] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Option[Path],
+    ] =
       ZIO
         .serviceWithZIO[Resolve](
           _.sources(ask.organization, ask.name, ask.revision, ask.repository)
@@ -843,22 +949,17 @@ object Bsp:
           case Right(artifact) => Some(artifact.path)
           case Left(_)         => None
 
-    private def readLock: IO[BspError, DependencyLock] =
-      captured.get.flatMap:
-        case Some(lock) => ZIO.succeed(lock)
-        case None       =>
-          Resolve
-            .readLock(repo)
-            .mapError {
-              case ResolveError.Io(failure) => BspError.LockRead(failure.path)
-              case other                    => BspError.Lock(other)
-            }
-            .tap(lock => captured.set(Some(lock)))
+    private def readLock: ZIO[ResolutionService, BspError, DependencyLock] =
+      ZIO.serviceWithZIO[ResolutionService](_.current).tap(lock => captured.set(Some(lock)))
 
     private def mainClasses(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(mainClassItem).map(Rpc.ScalaMainClassesResult(_))),
@@ -867,7 +968,11 @@ object Bsp:
     private def testClasses(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(testClassItem).map(Rpc.ScalaTestClassesResult(_))),
@@ -876,7 +981,11 @@ object Bsp:
     private def runEnvironment(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(runItem).map(Rpc.JvmEnvironmentResult(_))),
@@ -885,7 +994,11 @@ object Bsp:
     private def testEnvironment(
         id: Rpc.RpcId,
         incoming: Rpc.Incoming,
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, Nothing, Answer] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      Nothing,
+      Answer,
+    ] =
       reply(
         id,
         uris(incoming).flatMap(found => ZIO.foreach(found)(testItem).map(Rpc.JvmEnvironmentResult(_))),
@@ -894,7 +1007,7 @@ object Bsp:
     private def mainClassItem(
         uri: String
     ): ZIO[
-      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
       BspError,
       Rpc.ScalaMainClassesItem,
     ] =
@@ -923,7 +1036,7 @@ object Bsp:
     private def testClassItem(
         uri: String
     ): ZIO[
-      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
       BspError,
       Rpc.ScalaTestClassesItem,
     ] =
@@ -941,7 +1054,11 @@ object Bsp:
       }
     private def runItem(
         uri: String
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, Rpc.JvmEnvironmentItem] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      Rpc.JvmEnvironmentItem,
+    ] =
       parsed(uri) {
         case id: Id.Main =>
           val classes = GraphCompile.classesDir(
@@ -992,7 +1109,11 @@ object Bsp:
       }
     private def testItem(
         uri: String
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, Rpc.JvmEnvironmentItem] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      Rpc.JvmEnvironmentItem,
+    ] =
       parsed(uri) {
         case id: Id.Test =>
           val work =
@@ -1054,7 +1175,11 @@ object Bsp:
       */
     private def suites(
         id: Id.Test
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, Suites] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      Suites,
+    ] =
       val classes =
         TestCompile.testClasses(repo, id.module.name, id.version, id.platform)
       id.module.test match
@@ -1153,7 +1278,7 @@ object Bsp:
               .mapError(BspError.Tests(_))
 
     private def targets: ZIO[
-      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
       BspError,
       Rpc.BuildTargetsResult,
     ] =
@@ -1161,12 +1286,20 @@ object Bsp:
 
     private def targetUris(
         graph: ProjectGraph
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, List[String]] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      List[String],
+    ] =
       targetList(graph).map(_.targets.map(_.id.uri))
 
     private def targetList(
         graph: ProjectGraph
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, Rpc.BuildTargetsResult] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      Rpc.BuildTargetsResult,
+    ] =
       val cells    = cellsOf(graph)
       val versions = (cells.map(_.version) :+ BuildScala).distinct
       listed(graph, cells, versions)
@@ -1175,7 +1308,11 @@ object Bsp:
         graph: ProjectGraph,
         cells: List[Cell],
         versions: List[ScalaVersion],
-    ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, BspError, Rpc.BuildTargetsResult] =
+    ): ZIO[
+      Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+      BspError,
+      Rpc.BuildTargetsResult,
+    ] =
       for
         jars <- ZIO
           .foreach(versions)(version =>

@@ -97,12 +97,17 @@ object ModuleTest:
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
   ): ZStream[Resolve & histos.cache.ContentStore, ModuleTestError, SessionFeed] =
     ZStream.unwrapScoped(
-      (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.map { env =>
-        sessionOn(asked, hold).provideSomeLayer(
-          zio.ZLayer.succeed(env.get[histos.zinc.Compilers]) ++
-            zio.ZLayer.succeed(env.get[histos.zinc.CompileMemo])
-        )
-      }
+      histos.resolve.ResolutionService
+        .open(asked.repo, asked.graph)
+        .mapError(ModuleTestError.Lock(_))
+        .flatMap: report =>
+          (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.map { env =>
+            sessionOn(asked, hold).provideSomeLayer(
+              zio.ZLayer.succeed(env.get[histos.zinc.Compilers]) ++
+                zio.ZLayer.succeed(env.get[histos.zinc.CompileMemo]) ++
+                zio.ZLayer.succeed(report)
+            )
+          }
     )
 
   /** The daemon's test. The caller keeps the compiler services. */
@@ -110,22 +115,31 @@ object ModuleTest:
       asked: TestRun,
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
   ): ZStream[
-    Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+    Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
+      histos.resolve.ResolutionService,
     ModuleTestError,
     SessionFeed,
   ] =
     ZStream.unwrap:
-      TestCompile.readLock(asked.repo).map(lock => arriving(asked, lock, hold))
+      ZIO
+        .serviceWithZIO[histos.resolve.ResolutionService](_.current)
+        .map(lock => arriving(asked, lock, hold))
 
   def suites(
       asked: TestRun,
       compiled: List[CompiledCell],
-  ): ZStream[Resolve, ModuleTestError, TestFeed] =
-    ZStream.unwrap(
-      TestCompile
-        .readLock(asked.repo)
-        .map(lock => suitesLocked(asked, compiled, lock))
-    )
+  ): ZStream[Resolve & histos.resolve.ResolutionService, ModuleTestError, TestFeed] =
+    ZStream.unwrap:
+      ZIO
+        .service[histos.resolve.ResolutionService]
+        .flatMap: report =>
+          report.current.map: lock =>
+            ZStream
+              .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph, report)))
+              .flatMap: (install, tools) =>
+                runCells(asked, compiled, lock).provideSomeLayer[Resolve](
+                  zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools)
+                )
 
   private[histos] def suitesLocked(
       asked: TestRun,
@@ -174,7 +188,8 @@ object ModuleTest:
       lock: DependencyLock,
       hold: ProjectName => UIO[Unit],
   ): ZStream[
-    Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo,
+    Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
+      histos.resolve.ResolutionService,
     ModuleTestError,
     SessionFeed,
   ] =
@@ -182,7 +197,8 @@ object ModuleTest:
     ZStream.unwrapScoped:
       for
         install <- ProviderInstall.make
-        tools   <- LockedTools.make(lock, graph)
+        report  <- ZIO.service[histos.resolve.ResolutionService]
+        tools   <- LockedTools.make(lock, graph, report)
         wanted  <- ZIO.fromEither(requested(graph, names).left.map(ModuleTestError.Target(_)))
         matched <- Ref.make(false)
         fibers  <- Ref.make(Chunk.empty[Fiber[Nothing, Unit]])
@@ -190,7 +206,10 @@ object ModuleTest:
         queue   <- Queue.unbounded[Take[ModuleTestError, SessionFeed]]
         scope   <- ZIO.scope
         _       <- compileThenTest(asked, lock, hold, wanted, matched, fibers, gate, queue, scope)
-          .provideSomeLayer[Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo](
+          .provideSomeLayer[
+            Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
+              histos.resolve.ResolutionService
+          ](
             zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools)
           )
           .forkScoped
@@ -208,7 +227,7 @@ object ModuleTest:
       scope: zio.Scope,
   ): ZIO[
     Resolve & histos.cache.ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & ProviderInstall &
-      LockedTools,
+      LockedTools & histos.resolve.ResolutionService,
     Nothing,
     Unit,
   ] =

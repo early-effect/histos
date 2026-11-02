@@ -10,6 +10,7 @@ import histos.native.{
   NativeLink,
   NativeLinkRequest,
   NativeOrigin,
+  NativeRequests,
   NativeSuite,
   NativeSuiteRequest,
   NativeToolchain,
@@ -328,7 +329,7 @@ private[testrun] object SuiteLaunch:
                   linkDir,
                   jdk,
                   binary,
-                  histos.ScalaVersion("3.9.0"),
+                  cell.version,
                 ),
                 classes :: linked.paths,
               )
@@ -397,10 +398,20 @@ private[testrun] object SuiteLaunch:
           if !keep then ZIO.succeed(ZStream.empty)
           else
             for
-              _ <- TestCompile.fresh(linkDir)
-              classpath = classes :: linked.paths
+              _         <- TestCompile.fresh(linkDir)
               toolchain <- nativeToolchain(module, cell, runtimes.native)
-              binary    <- NativeLink
+              iface     <- ZIO.serviceWithZIO[LockedTools](tools =>
+                tools
+                  .materialize(
+                    NativeRequests.testInterface(cell.version, toolchain, tools.repositories)
+                  )
+                  .mapBoth(
+                    ModuleTestError.Lock(_),
+                    _.artifacts.map(_.path),
+                  )
+              )
+              classpath = classes :: linked.paths.filterNot(replacedInterface) ++ iface
+              binary <- NativeLink
                 .linkClasspath(
                   NativeLinkRequest(
                     major,
@@ -409,7 +420,7 @@ private[testrun] object SuiteLaunch:
                     linkDir,
                     jdk,
                     entry,
-                    histos.ScalaVersion("3.9.0"),
+                    cell.version,
                   ),
                   classpath,
                 )
@@ -648,12 +659,15 @@ private[testrun] object SuiteLaunch:
     for
       tools   <- ZIO.service[LockedTools]
       context <- ZIO.service[TestContext]
+      seen    <- tools.service match
+        case Some(service) => service.current
+        case None          => ZIO.succeed(lock)
     yield SuiteAsk(
       module,
       modules,
       cell.version,
       cell.platform,
-      lock,
+      seen,
       repositories,
       tools.catalog,
       runtimes.native,
@@ -976,6 +990,10 @@ private[testrun] object SuiteLaunch:
 
   /** JVM class files. No class files means the platform's child still filters.
     */
+  /** A resolved `test-interface` jar. `test-interface-sbt-defs` is the framework contract and stays. */
+  private def replacedInterface(path: Path): Boolean =
+    Option(path.getFileName).exists(_.toString.startsWith("test-interface_native"))
+
   private[testrun] def narrowed(
       root: Path,
       patterns: List[SuitePattern],

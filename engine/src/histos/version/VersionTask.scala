@@ -45,7 +45,7 @@ object VersionTask:
           .flatMap(complete)
 
   def path(repo: Path): Path =
-    repo.resolve(".histos").resolve(fileName)
+    repo.resolve(fileName)
 
   private def complete(decision: Decision): IO[TaskError, TaskResult] =
     decision match

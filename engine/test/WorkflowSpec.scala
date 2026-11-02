@@ -26,6 +26,7 @@ import histos.{
   ProjectName,
   Publishing,
   ReleaseMode,
+  Resolution,
   RunnerTools,
   ScalaVersion,
   ScalaVersions,
@@ -143,7 +144,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         Workflow.render(graph(Splits.aggregate, playwrightOnly)) == Right(playwright),
         !node.contains("restore-keys") && !llvm.contains("restore-keys") && !playwright.contains("restore-keys"),
         !node.contains("cache: npm") && !node.contains("setup-java"),
-        node.contains("hashFiles('.histos/dependencies.lock')") &&
+        node.contains("hashFiles('histos.scala')") &&
           node.contains("${{ runner.os }}") && node.contains("${{ runner.arch }}"),
         llvm.contains("llvm-20.1.8-${{ runner.os }}-${{ runner.arch }}") &&
           llvm.contains("steps.llvm.outputs.cache-hit"),
@@ -151,6 +152,23 @@ object WorkflowSpec extends ZIOSpecDefault:
           playwright.contains("~/.cache/chekhov/playwright/1.49.0") &&
           playwright.contains("~/.cache/ms-playwright"),
       )
+    ,
+    test("a locked build keys Coursier on the pin"):
+      val open = graph(Splits.aggregate, nodeOnly)
+      assertTrue:
+        Workflow.render(
+          ProjectGraph.trusted(
+            open.projects,
+            open.splits,
+            Catalog.empty,
+            None,
+            Nil,
+            runnerTools = nodeOnly,
+            resolution = Resolution.Lock,
+          )
+        ) match
+          case Right(yaml) => yaml.contains("hashFiles('dependencies.lock')")
+          case Left(_)     => false
     ,
     test("this repository asks the runner for node, llvm, and playwright"):
       for golden <- text("histos.yml")
@@ -350,7 +368,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                 ) &&
                 test.contains("./histos test") &&
                 test.contains("actions/cache@v6") &&
-                test.contains("hashFiles('.histos/dependencies.lock')") &&
+                test.contains("hashFiles('histos.scala')") &&
                 !test.contains("restore-keys") &&
                 !test.contains("cache: npm") &&
                 !test.contains("setup-java") &&

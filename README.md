@@ -14,7 +14,7 @@ A build file is a Scala program that returns a graph. A module names its platfor
 
 ## This repository
 
-Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds `java` and, when this checkout has no local assembly, asks `cs fetch` for the version in [.histos/build.properties](.histos/build.properties).
+Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds `java` and, when this checkout has no local assembly, asks `cs fetch` for the version in [build.properties](build.properties).
 
 A JDK 21 or newer, and the `cs` command from Coursier 2.1 or newer, have to be on `PATH`. Histos does not install either. When one is missing or too old, the script prints the floor and how to install it.
 
@@ -70,7 +70,7 @@ The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` a
 
 `version` prints the ship number. `graph` prints each project with its platforms and Scala versions, then each plugin. Environment values are left out. `toolchain` prints the JDK a compile would use, Node when a module is JavaScript, and clang when a module is native.
 
-`compile` takes project names. No name compiles every module. `clean` takes project names too. No name wipes every product root under `.histos` and does not read the build. A name wipes that module. An aggregate expands to its modules, and upstream stays. Locks, the assembly, and the server stay. `cleanFull` takes no project. It wipes those products, then drops this project's content-store entries. `assembly` takes an optional path.
+`compile` takes project names. No name compiles every module. `clean` takes project names too. No name wipes every product root under `.histos` and does not read the build. A name wipes that module. An aggregate expands to its modules, and upstream stays. The pin and the launcher file are at the repo root, so they stay. The assembly checksum and the server stay. `cleanFull` takes no project. It wipes those products, then drops this project's content-store entries. `assembly` takes an optional path.
 
 `test` runs the suites. The default `testStore` is `Off`, so a full run launches every suite. `testQuick` skips a suite whose stored fingerprint still matches. `testOnly` takes `--module` and at least one pattern. `testQuick` takes the same flags, and its patterns may be empty. `Local` skips on `test` as well. `Remote` does not skip and does not upload. `run <name> [jvm|js|native]` runs that module. `run inspect` prints the project names. `run versions` prints the version decision. `run <plugin>/<task>` runs a plugin task.
 
@@ -80,7 +80,7 @@ The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` a
 
 `cache path` prints the store. `cache list` prints each digest and its size. `cache clean` removes an entry older than 30 days that no project keeps. `--dry-run` names those entries and leaves them. `cache promote --from` and `--to` take `main`, `pr/<n>`, or `dev/<name>`. The remote cache is not configured, so that command reports `remote cache is not configured` and does not open a connection.
 
-`resolve` fetches what `.histos/dependencies.lock` recorded and checks each sha256. `resolve --update` solves and writes that file. `resolve --check` solves again and fails when the result is not the lock. `workflow` compares the rendered workflow files and the launcher scripts with the tree. `workflow --update` writes them. Neither publishes, and neither changes the version line. `launcher --update` writes the timestamp. `launcher --latest` writes the snapshot pointer.
+`resolve` fetches what `dependencies.lock` recorded and checks each sha256. `resolve --update` solves and writes that file. `resolve --check` solves again and fails when the result is not the lock. `workflow` compares the rendered workflow files and the launcher scripts with the tree. `workflow --update` writes them. Neither publishes, and neither changes the version line. `launcher --update` writes the timestamp. `launcher --latest` writes the snapshot pointer.
 
 A word the grammar does not own is a plugin command, when the build registered it. A reserved root word cannot be one.
 

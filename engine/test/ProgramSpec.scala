@@ -146,7 +146,15 @@ object ProgramSpec extends ZIOSpecDefault:
               afterCompile = ZIO.unit,
             )
             .runCollect
-            .provide(ZLayer.succeed(resolver) ++ histos.zinc.CompileReplay.processStore)
+            .provide(
+              ZLayer.succeed(resolver),
+              histos.zinc.CompileReplay.processStore,
+              ZLayer.fromZIO(
+                histos.resolve.ResolutionService
+                  .open(root, histos.Resolution.Lock)
+                  .provide(ZLayer.succeed(resolver))
+              ),
+            )
             .forkScoped
           _ <- reached.await
           _ <- Workspace.writeString(
@@ -167,7 +175,15 @@ object ProgramSpec extends ZIOSpecDefault:
               afterCompile = ZIO.unit,
             )
             .runCollect
-            .provide(ZLayer.succeed(resolver) ++ histos.zinc.CompileReplay.processStore)
+            .provide(
+              ZLayer.succeed(resolver),
+              histos.zinc.CompileReplay.processStore,
+              ZLayer.fromZIO(
+                histos.resolve.ResolutionService
+                  .open(root, histos.Resolution.Lock)
+                  .provide(ZLayer.succeed(resolver))
+              ),
+            )
         yield assertTrue(
           inFlight.collect { case ProgramFeed.Exited(_, version, _, code) =>
             (version, code)
@@ -204,7 +220,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
             .either
         yield assertTrue:
@@ -221,7 +237,7 @@ object ProgramSpec extends ZIOSpecDefault:
           built <- ZIO.fromEither(Projects(app))
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           here  <- TestMachine.runtimes(root)
           feeds <- histos.ToolFixture
@@ -240,7 +256,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
           mainEntries <- ZIO.attempt(
             entries(root.resolve(".histos/classes/app/3.10.0/jvm"))
@@ -265,7 +281,7 @@ object ProgramSpec extends ZIOSpecDefault:
           built <- ZIO.fromEither(Projects(app))
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 js\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 js\n")
           }
           chosen <- TestMachine.chosenNode(root)
           here   <- TestMachine.runtimes(root)
@@ -285,7 +301,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
           ran <- TestMachine.launches(chosen)
         yield assertTrue(
@@ -323,7 +339,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
             .either
           classes <- ZIO.attempt(
@@ -362,7 +378,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
             .either
           classes <- ZIO.attempt(
@@ -385,7 +401,7 @@ object ProgramSpec extends ZIOSpecDefault:
           built <- ZIO.fromEither(Projects(app))
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
-            write(root, ".histos/dependencies.lock", "cell app 3.10.0 jvm\n")
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
           }
           here  <- TestMachine.runtimes(root)
           feeds <- histos.ToolFixture
@@ -404,7 +420,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
           jsClasses <- ZIO.attempt(
             Files.exists(root.resolve(".histos/classes/app/3.10.0/js"))
@@ -431,7 +447,7 @@ object ProgramSpec extends ZIOSpecDefault:
           built <- ZIO.fromEither(Projects(app))
           _     <- ZIO.attempt {
             write(root, "app/src/main/scala/demo/Check.scala", hi)
-            write(root, ".histos/dependencies.lock", "cell app 3.9.0 native\n")
+            write(root, "dependencies.lock", "cell app 3.9.0 native\n")
           }
           here  <- TestMachine.runtimes(root)
           feeds <- histos.ToolFixture
@@ -450,7 +466,7 @@ object ProgramSpec extends ZIOSpecDefault:
             )
             .runCollect
             .provideSomeLayer[histos.resolve.LockedTools](
-              histos.ToolFixture.resolver
+              histos.ToolFixture.resolver ++ opened(root, built)
             )
         yield assertTrue(
           feeds
@@ -487,6 +503,14 @@ object ProgramSpec extends ZIOSpecDefault:
     val path = root.resolve(name)
     Files.createDirectories(path.getParent)
     Files.writeString(path, text)
+
+  private def opened(root: Path, graph: histos.ProjectGraph) =
+    ZLayer.fromZIO(
+      ZIO.serviceWithZIO[histos.resolve.LockedTools]: tools =>
+        histos.resolve.ResolutionService
+          .open(root, graph)
+          .provide(ZLayer.succeed(tools.resolve))
+    )
 
   private def temp: ZIO[Scope, Throwable, Path] =
     Workspace

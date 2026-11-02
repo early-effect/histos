@@ -47,7 +47,7 @@ object PublicationSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "core/src/main/scala/demo/Hello.scala", hello)
               write(root, "app/src/main/scala/App.scala", appSource)
-              write(root, ".histos/dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
+              write(root, "dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(published)
             _     <- histos.ToolFixture.seed(root, built)

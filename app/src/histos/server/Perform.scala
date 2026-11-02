@@ -67,7 +67,12 @@ object Perform:
       call: Call,
       say: Say,
       edges: Edges[R],
-  ): ZIO[R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo, ServerError, Unit] =
+  ): ZIO[
+    R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
+      histos.resolve.ResolutionService,
+    ServerError,
+    Unit,
+  ] =
     loaded match
       case Left(fault) => Calls.finish(say, CallResult.Fault(fault))
       case Right(have) =>

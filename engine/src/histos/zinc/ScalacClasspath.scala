@@ -110,7 +110,7 @@ object ScalacClasspath:
       lock: DependencyLock,
       repositories: Repositories,
       scope: ClasspathScope,
-  ): ZIO[Resolve, GraphCompileError, Fetched] =
+  ): ZIO[Resolve & histos.resolve.LockedTools, GraphCompileError, Fetched] =
     val compileDeps              = Dep.select(module.dependencies, platform)
     val (dependencies, resolved) = scope match
       case ClasspathScope.Compile => (compileDeps, ClasspathScope.Compile)
@@ -119,7 +119,11 @@ object ScalacClasspath:
         if testDeps.isEmpty then (compileDeps, ClasspathScope.Compile)
         else (compileDeps ++ testDeps, ClasspathScope.Test)
     val cell = ResolveCell(module.name, dependencies, version, platform, repositories, resolved)
-    Resolve.materialize(cell, lock).mapBoth(GraphCompileError.Lock(_), fetched)
+    ZIO
+      .serviceWithZIO[histos.resolve.LockedTools]: tools =>
+        val view = if tools.service.isDefined then tools else tools.copy(lock = lock)
+        view.module(cell)
+      .mapBoth(GraphCompileError.Lock(_), fetched)
 
   /** JVM compile prepends `JvmCompile.runtime`. The lock's copy of that library has to stay off.
     */
