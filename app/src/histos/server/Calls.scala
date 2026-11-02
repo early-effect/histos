@@ -26,7 +26,7 @@ import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
 import histos.publish.{LauncherPin, LauncherScript, PublishRun, ReleaseError}
 import histos.resolve.{BuildResolvers, DependencyLock, PluginUpdate, Repositories, Resolve, ResolveError}
-import histos.schedule.{CacheNamespace, RemoteCache, RemoteError}
+import histos.schedule.{CacheConfig, CacheNamespace, RemoteCache}
 import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
@@ -664,11 +664,14 @@ object Calls:
           told(say, text) *> ok(say),
       )
 
-  /** The remote URI is configuration. The copy is [[histos.schedule.HttpCache.copy]]. This command does not open a
-    * connection.
-    */
+  /** The remote URI is configuration. HTTP copies the index. gRPC has no list, so promote names that limit. */
   def cachePromote(from: CacheNamespace, to: CacheNamespace, say: Say): IO[ServerError, Unit] =
-    fault(say, BuildFault.Remote(RemoteError.Off))
+    ZIO
+      .scoped(CacheConfig.processEnv.flatMap(env => CacheConfig.promote(env, from, to)))
+      .foldZIO(
+        error => fault(say, BuildFault.Remote(error)),
+        _ => ok(say),
+      )
 
   def launcher(repo: Path, action: LauncherAction, say: Say): IO[ServerError, Unit] =
     val wrote = action match
@@ -1069,16 +1072,24 @@ object Calls:
       say: Say,
   ): ZIO[ContentStore & Resolve & histos.resolve.ResolutionService, ServerError, Unit] =
     ZIO.serviceWithZIO[ContentStore] { store =>
-      plugins
-        .run(id, args)
-        .provideSome[Resolve & ContentStore & histos.resolve.ResolutionService](
-          ZLayer.succeed(ContentStore.actions(store)),
-          RemoteCache.off,
-        )
-        .foldZIO(
-          error => fault(say, BuildFault.Plugin(error)),
-          result => told(say, result.text) *> ok(say),
-        )
+      ZIO.scoped:
+        CacheConfig.processEnv.flatMap: env =>
+          CacheConfig
+            .open(env)
+            .foldZIO(
+              error => fault(say, BuildFault.Remote(error)),
+              remote =>
+                plugins
+                  .run(id, args)
+                  .provideSome[Resolve & ContentStore & histos.resolve.ResolutionService](
+                    ZLayer.succeed(ContentStore.actions(store)),
+                    ZLayer.succeed(remote),
+                  )
+                  .foldZIO(
+                    error => fault(say, BuildFault.Plugin(error)),
+                    result => told(say, result.text) *> ok(say),
+                  ),
+            )
     }
 
   private def cleanFault(

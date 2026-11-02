@@ -270,18 +270,18 @@ The content store is `~/.cache/histos`, or `$XDG_CACHE_HOME/histos`. A blob's na
 
 ### Remote
 
-The remote is a Bazel HTTP cache. A team shares compile, package, and link results through that protocol, and the build stays the Scala graph. The server is bazel-remote, or anything else that speaks the same API. gRPC can follow. It is not this client.
+The remote is a Bazel cache. A team shares compile, package, and link results through that protocol, and the build stays the Scala graph. The server is bazel-remote, or anything else that speaks the same API. `HISTOS_CACHE_URI` picks the client. `http` and `https` use the HTTP cache. `grpc` is plaintext and `grpcs` is TLS. Unset or blank is off and opens nothing. A bad scheme, mode, namespace, or address fails. It does not fall through to off. `HISTOS_CACHE_MODE` is `read` unless it is `write`.
 
 ```mermaid
 flowchart TD
   key[action key] --> here{this namespace}
   here -->|hit| result[ActionResult]
-  here -->|404| parent{a later prefix}
+  here -->|miss| parent{a later prefix}
   here -->|any other status| stop[stop]
   parent -->|pull request or dev, then main| main[main index]
   parent -->|none left| local{local content store}
   main -->|hit| result
-  main -->|404| local
+  main -->|miss| local
   main -->|any other status| stop
   result --> blob["/cas/digest"]
   blob --> out[output]
@@ -293,11 +293,11 @@ flowchart TD
 
 Two stores, one key. `/cas/{digest}` holds the bytes. The digest is the name, so a bad blob is a different name and an honest index entry never fetches it. `/{namespace}/ac/{digest}` holds an ActionResult whose stdout digest names that blob. The namespace is a prefix on the index. It is not part of the digest. The key is the declared inputs plus the toolchain: OS, arch, JDK, Scala, and the linker. The lock digest is an input. A hit requires the whole key. A prefix does not drop an input to recover an older result.
 
-A pull request reads `pr/<n>`, then `main`, and writes `pr/<n>` only. A push to `main` reads and writes `main`. A laptop reads `main` and writes only when it sets `dev/<name>`. That namespace reads `dev/<name>`, then `main`. CI does not read `dev`. A 404 tries the next prefix. A hit or any other status stops the walk.
+A pull request reads `pr/<n>`, then `main`, and writes `pr/<n>` only. A push to `main` reads and writes `main`. A laptop reads `main` and writes only when it sets `dev/<name>`. That namespace reads `dev/<name>`, then `main`. CI does not read `dev`. A miss tries the next prefix. HTTP reports that as 404. gRPC reports it as `NOT_FOUND`. A hit or any other status stops the walk.
 
 A run asks the remote first, then the local content store, then runs the action. `Write` uploads after a miss, and only when the action may leave the machine. Compile may leave. A test, a publish, and an action that needs the network or docker stay. The blob is written first. A crash leaves an unreferenced blob, not an index entry for bytes that never arrived. `Read` looks and does not upload. `Off` is the process default, so neither lookup nor upload opens a connection.
 
-`promote"rebuild"` is the default. Main fills `main` by doing the work, so a pull request cannot fill the index the next pull request reads. `promote"copy-index"` copies that pull request's index onto `main` and does not compile. The owner picks it. `purge` deletes the caller's index and leaves every blob, including a blob another namespace still names. The generated test job sets `HISTOS_CACHE_NAMESPACE` to `pr/<n>` or `main`. Docs, deploy, versions, workflow, and release leave it unset.
+`promote"rebuild"` is the default. Main fills `main` by doing the work, so a pull request cannot fill the index the next pull request reads. `promote"copy-index"` copies that pull request's index onto `main` and does not compile. The owner picks it. `purge` deletes the caller's index and leaves every blob, including a blob another namespace still names. `purge` and `cache promote` stay on HTTP. A `grpc` or `grpcs` address refuses them and does not open a second port. The generated test job sets `HISTOS_CACHE_NAMESPACE` to `pr/<n>` or `main`. Docs, deploy, versions, workflow, and release leave it unset. The workflow does not set `HISTOS_CACHE_URI`.
 
 The URI is configuration. Until it is set, `cache promote` reports `remote cache is not configured` and does not open a connection.
 

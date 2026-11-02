@@ -97,9 +97,11 @@ import histos.schedule.{
   ActionIdError,
   CacheError,
   CacheExchange,
+  DevNameError,
   Digest,
   InputName,
   InputNameError,
+  NamespaceError,
   RemoteError,
   ScheduleError,
 }
@@ -411,6 +413,8 @@ private object WireBuild extends WireSupport:
   given JsonCodec[ToolchainError]    = JsonCodec.derived
   given JsonCodec[CacheError]        = JsonCodec.derived
   given JsonCodec[CacheExchange]     = JsonCodec.derived
+  given JsonCodec[DevNameError]      = JsonCodec.derived
+  given JsonCodec[NamespaceError]    = JsonCodec.derived
   given JsonCodec[RemoteError]       = JsonCodec.derived
   given JsonCodec[GraphCompileError] = JsonCodec.derived
   given JsonCodec[JsEnv]             =

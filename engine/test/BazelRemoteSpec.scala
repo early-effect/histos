@@ -14,7 +14,7 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Schedule, Scope, System, UIO, ZIO, ZLayer, durationInt}
 import zio.test.*
 
-/** The real Bazel HTTP server, when a docker daemon is present. The pin is the multi-arch index of
+/** The real Bazel HTTP and gRPC server, when a docker daemon is present. The pin is the multi-arch index of
   * `buchgr/bazel-remote-cache`, so a tag cannot move and each platform pulls its own manifest.
   */
 object BazelRemoteSpec extends ZIOSpecDefault:
@@ -67,6 +67,38 @@ object BazelRemoteSpec extends ZIOSpecDefault:
       ZLayer.succeed(Client.Config.default) >>> Client.layer
     )
 
+  /** HTTP and gRPC store the same ActionResult, so a write on one is a hit on the other. */
+  private val cross =
+    test("an http write is a grpc hit, and a grpc write is an http hit"):
+      val viaHttp    = Chunk.fromArray("from-http".getBytes(StandardCharsets.UTF_8))
+      val viaGrpc    = Chunk.fromArray("from-grpc".getBytes(StandardCharsets.UTF_8))
+      val httpAction = ActionDigest.ofBytes(viaHttp)
+      val grpcAction = ActionDigest.ofBytes(viaGrpc)
+      val again      = Schedule.spaced(200.millis) && Schedule.recurs(25)
+      for
+        env     <- hostEnv
+        work    <- Workspace.work("histos-bazel-remote-grpc").mapError(error => StandFailure.Work(error.message))
+        bin     <- binary(env)
+        running <- container(bin, env, work)
+        host    <- running.origin.host match
+          case Some(value) => ZIO.succeed(value)
+          case None        => ZIO.fail(StandFailure.Port(running.origin.render))
+        httpWrite <- HttpCache.make(running.origin, RemoteMode.Write, CacheNamespace.Main)
+        _         <- httpWrite.store(httpAction, viaHttp).catchAll(error => failed(bin, env, work, running.name, error))
+        grpcRead  <- GrpcCache.open(host, running.grpc, tls = false, RemoteMode.Read, CacheNamespace.Main)
+        hit <- grpcRead.find(httpAction).retry(again).catchAll(error => failed(bin, env, work, running.name, error))
+        grpcWrite <- GrpcCache.open(host, running.grpc, tls = false, RemoteMode.Write, CacheNamespace.Main)
+        _         <- grpcWrite
+          .store(grpcAction, viaGrpc)
+          .retry(again)
+          .catchAll(error => failed(bin, env, work, running.name, error))
+        httpRead <- HttpCache.make(running.origin, RemoteMode.Read, CacheNamespace.Main)
+        back     <- httpRead.find(grpcAction).catchAll(error => failed(bin, env, work, running.name, error))
+      yield assertTrue(hit == Some(viaHttp), back == Some(viaGrpc))
+    .provideSomeLayer[zio.test.TestEnvironment & Scope](
+      ZLayer.succeed(Client.Config.default) >>> Client.layer
+    )
+
   private def daemonUp(exit: ProcessExit): Boolean =
     exit.value == 0
 
@@ -99,11 +131,11 @@ object BazelRemoteSpec extends ZIOSpecDefault:
       name <- ZIO.attempt(java.util.UUID.randomUUID.toString).orDie.map(id => s"histos-br-$id")
       _    <- ZIO.addFinalizer(remove(bin, env, work, name))
       _    <- started(bin, env, work, name)
-      url  <- published(bin, env, work, name)
+      ends <- endpoints(bin, env, work, name)
         .retry(Schedule.spaced(100.millis) && Schedule.recurs(30))
         .catchAll(error => blame(bin, env, work, name, error))
-      _ <- ready(url).catchAll(error => failed(bin, env, work, name, error))
-    yield Running(name, url)
+      _ <- ready(ends.origin).catchAll(error => failed(bin, env, work, name, error))
+    yield Running(name, ends.origin, ends.grpc)
 
   /** The suite scope closes after `withLiveSystem` is gone, and `ChildProcess` reads `java.home` from `System`. */
   private def remove(bin: Path, env: Map[String, String], work: Path, name: String): UIO[Unit] =
@@ -124,6 +156,8 @@ object BazelRemoteSpec extends ZIOSpecDefault:
       name,
       "-p",
       "127.0.0.1::8080",
+      "-p",
+      "127.0.0.1::9092",
       image,
       "--max_size",
       "1",
@@ -135,8 +169,30 @@ object BazelRemoteSpec extends ZIOSpecDefault:
         if ran.exit.value == 0 then ZIO.unit
         else ZIO.fail(StandFailure.Command(argv, ran.exit.value, ran.out.text, ran.err.text))
 
-  private def published(bin: Path, env: Map[String, String], work: Path, name: String): ZIO[Any, StandFailure, Url] =
-    val argv = List(bin.toString, "port", name, "8080/tcp")
+  private final case class Endpoints(origin: Url, grpc: Int)
+
+  private def endpoints(
+      bin: Path,
+      env: Map[String, String],
+      work: Path,
+      name: String,
+  ): ZIO[Any, StandFailure, Endpoints] =
+    for
+      origin <- published(bin, env, work, name, "8080/tcp")
+      grpc   <- published(bin, env, work, name, "9092/tcp")
+      port   <- grpc.port match
+        case Some(value) => ZIO.succeed(value)
+        case None        => ZIO.fail(StandFailure.Port(grpc.render))
+    yield Endpoints(origin, port)
+
+  private def published(
+      bin: Path,
+      env: Map[String, String],
+      work: Path,
+      name: String,
+      port: String,
+  ): ZIO[Any, StandFailure, Url] =
+    val argv = List(bin.toString, "port", name, port)
     command(argv, work, env)
       .mapError(error => StandFailure.Child(error.message))
       .flatMap: ran =>
@@ -234,7 +290,7 @@ object BazelRemoteSpec extends ZIOSpecDefault:
         case (heard, Some(code)) => ZIO.succeed(ChildOutcome(code, heard.outText, heard.errText))
         case _                   => ZIO.fail(ChildError.Status)
 
-  private final case class Running(name: String, origin: Url)
+  private final case class Running(name: String, origin: Url, grpc: Int)
 
   private enum StandFailure:
     case Command(argv: List[String], exit: Int, out: String, err: String)
@@ -247,5 +303,6 @@ object BazelRemoteSpec extends ZIOSpecDefault:
   def spec = suite("bazel-remote")(
     absent,
     namespaces.whenZIO(dockerUp),
-  ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+    cross.whenZIO(dockerUp),
+  ) @@ TestAspect.withLiveClock @@ TestAspect.withLiveSystem @@ TestAspect.timeout(6.minutes)
 end BazelRemoteSpec

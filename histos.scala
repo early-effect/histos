@@ -34,8 +34,15 @@ object build extends HistosBuild:
         dep"org.ow2.asm:asm:9.11.1",
         dep"org.ow2.asm:asm-tree:9.11.1",
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
+        // heddle has no gRPC, and the remote-execution stubs are not published.
+        dep"io.grpc:grpc-api:1.73.0",
+        dep"io.grpc:grpc-netty-shaded:1.73.0",
       )
-      .testDependencies(zioTest, zioTestSbt)
+      .testDependencies(
+        zioTest,
+        zioTestSbt,
+        dep"io.grpc:grpc-stub:1.73.0",
+      )
     val client = module("client", Native)(scala3)
       .clang(ClangMajor(21))
       .dependsOn(wire)

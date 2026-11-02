@@ -98,9 +98,11 @@ import histos.schedule.{
   ActionIdError,
   CacheError,
   CacheExchange,
+  DevNameError,
   Digest,
   InputName,
   InputNameError,
+  NamespaceError,
   RemoteError,
   ScheduleError,
 }
@@ -376,6 +378,10 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[CacheError] = Schema.derived
 
   given Schema[CacheExchange] = Schema.derived
+
+  given Schema[DevNameError] = Schema.derived
+
+  given Schema[NamespaceError] = Schema.derived
 
   given Schema[RemoteError] = Schema.derived
 

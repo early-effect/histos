@@ -24,7 +24,7 @@ import histos.server.{
 }
 import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
-import histos.schedule.{CacheNamespace, NamespaceError, RemoteError}
+import histos.schedule.{CacheConfig, CacheNamespace, NamespaceError}
 import histos.jdk.{HostSupport, Machine, Os, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
@@ -207,14 +207,14 @@ object Cli:
       case _ =>
         Connection.ensure(repo).ignore *>
           parse(args).foldZIO(
-        {
-          case CliParseError.UnknownRoot =>
-            inProcess(repo)((api, machine) => withLocal(machine)(contributed(args, repo, api)))
-          case detail =>
-            ZIO.succeed(Completed(CliExit.Usage, "", detail.message, Playback.Held))
-        },
-        command => route(repo, command),
-      )
+            {
+              case CliParseError.UnknownRoot =>
+                inProcess(repo)((api, machine) => withLocal(machine)(contributed(args, repo, api)))
+              case detail =>
+                ZIO.succeed(Completed(CliExit.Usage, "", detail.message, Playback.Held))
+            },
+            command => route(repo, command),
+          )
     }
 
   private def perform(
@@ -296,7 +296,7 @@ object Cli:
         previewRun(repo, apiJar, id.value, platform)
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
-      case Command.Observe => observe(repo)
+      case Command.Observe   => observe(repo)
       case Command.New(name) => fresh(repo, Some(name))
       case Command.Init      => fresh(repo, None)
 
@@ -980,10 +980,15 @@ object Cli:
       )
       .merge
 
-  /** The remote URI is configuration. This command names the namespaces and does not open a connection. */
+  /** The remote URI is configuration. HTTP copies the index. gRPC has no list, so promote names that limit. */
   private def cachePromote(from: CacheNamespace, to: CacheNamespace): UIO[Completed] =
     val call = Call.CachePromote(from, to)
-    ZIO.succeed(held(call, "", CallResult.Fault(BuildFault.Remote(RemoteError.Off))))
+    ZIO
+      .scoped(CacheConfig.processEnv.flatMap(env => CacheConfig.promote(env, from, to)))
+      .fold(
+        error => held(call, "", CallResult.Fault(BuildFault.Remote(error))),
+        _ => held(call, "", CallResult.reported()),
+      )
 
   /** No names skip the graph. A live server still holds the compile permit. */
   private def clean(

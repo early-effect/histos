@@ -38,11 +38,11 @@ The action index is namespaced. The namespace is a prefix, not part of the diges
 
 A pull request reads `pr/<n>/`, then `main/`, and writes `pr/<n>/` only. A push to `main` reads and writes `main/`. A laptop reads `main/` and does not write unless a `dev/<name>` namespace is set.
 
-The index path is `/{namespace}/ac/{digest}`, where the namespace is `main`, `pr/<n>`, or `dev/<name>`. The blob path stays `/cas/{digest}`. A miss is a 404. A hit, a bad entry, or any other status stops the walk and does not try the next prefix.
+The index path is `/{namespace}/ac/{digest}`, where the namespace is `main`, `pr/<n>`, or `dev/<name>`. On gRPC that same token is the instance name. The blob path stays `/cas/{digest}`. A miss tries the next prefix. HTTP reports that as 404. gRPC reports it as `NOT_FOUND`. A hit, a bad entry, or any other status stops the walk.
 
 The key is the declared inputs plus the toolchain identity: OS, arch, JDK, Scala, and the linker. The lock digest is an input. There is no epoch and no restore-key that drops an input.
 
-`RemoteMode` stays `Off`, `Read`, and `Write`. The client speaks the Bazel HTTP API through heddle. An action-cache value is an `ActionResult` whose stdout digest names the blob: bazel-remote rejects any other body unless validation is turned off. The URI is configuration. gRPC can follow. It is not this work.
+`RemoteMode` stays `Off`, `Read`, and `Write`. `HISTOS_CACHE_URI` picks the client. `http` and `https` speak the Bazel HTTP API through heddle. `grpc` is plaintext and `grpcs` is TLS. Both store an `ActionResult` whose stdout digest names the blob, so a write on one is a hit on the other. bazel-remote rejects any other body unless validation is turned off. Unset is off. `HISTOS_CACHE_MODE` defaults to `read`. `purge` and `cache promote` stay HTTP.
 
 ## What a compile publishes
 
@@ -141,6 +141,8 @@ A `workflow_dispatch` runs those three, cold, and tool warm, three times, and pu
 
 - [x] **bazel-remote, when docker is present.** One spec starts the pinned container, writes as `pr/1`, reads as `main` and misses, writes as `main`, and then reads a hit. The spec is ignored when docker is absent, so the default suite stays green without a daemon. The image pin lives next to the spec. The run passes `--enable_ac_key_instance_mangling`. Proof: `./histos testOnly --module engine 'histos.schedule.BazelRemoteSpec'` (2 passed) and `./histos test engine` (524 passed, 1 ignored).
 
+- [x] **gRPC beside HTTP.** `HISTOS_CACHE_URI` of `grpc` or `grpcs` opens the gRPC client. Unset stays off. `HISTOS_CACHE_MODE` defaults to `read`. Find and store use the action cache and ByteStream, the same `ActionResult`, and the same namespace walk. `NOT_FOUND` tries the next prefix. Any other status stops. `purge` and `cache promote` stay HTTP and name that limit on a gRPC address. Proof: `./histos testOnly --module engine 'histos.schedule.GrpcCacheSpec'` (13 passed), `./histos testOnly --module engine 'histos.schedule.BazelRemoteSpec'` (3 passed: an HTTP write is a gRPC hit, and the reverse, on the pinned image), `./histos test engine` (575 passed), and `./histos test app` (198 passed).
+
 ### Promote and workflow
 
 - [x] **Promote on the build.** `Rebuild` is the default. `CopyIndex` is the other value. An unknown token fails at load. A one-module graph spec reads the default and the explicit value. Proof: `./histos testOnly --module api 'histos.GraphSpec'`, `./histos testOnly --module engine 'histos.load.PromoteSpec'`, `./histos test api` (116 passed), and `./histos test engine` (526 passed, 1 ignored).
@@ -179,4 +181,4 @@ These items are the other repository. They start after the Histos items they cal
 
 ## Out of scope
 
-Native. Mill. scala-cli. A hosted cache account. gRPC. Caching `test` by default. A non-snapshot release. Histos installing a JDK or Node. The workflow restores those tools. Histos still refuses to install a toolchain.
+Native. Mill. scala-cli. A hosted cache account. Caching `test` by default. A non-snapshot release. Histos installing a JDK or Node. The workflow restores those tools. Histos still refuses to install a toolchain.

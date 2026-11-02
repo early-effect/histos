@@ -36,6 +36,12 @@ enum RemoteError:
   case Index(action: Digest)
   case Mismatch(action: Digest, output: Digest)
   case Catalog(line: String)
+  case Scheme(raw: String)
+  case Mode(raw: String)
+  case Address(raw: String)
+  case Namespace(error: NamespaceError)
+  case Rpc(code: String)
+  case HttpOnly(command: String)
 
   def message: String = this match
     case Off                      => "remote cache is not configured"
@@ -48,5 +54,11 @@ enum RemoteError:
     case Index(action)            => s"remote cache action ${action.value} is not an action result"
     case Mismatch(action, output) =>
       s"remote cache action ${action.value} returned bytes that are not ${output.value}"
-    case Catalog(line) => s"'$line' is not an action digest"
+    case Catalog(line)     => s"'$line' is not an action digest"
+    case Scheme(raw)       => s"'$raw' is not a remote cache scheme. A scheme is http, https, grpc, or grpcs."
+    case Mode(raw)         => s"'$raw' is not a remote cache mode. A mode is read or write."
+    case Address(raw)      => s"'$raw' is not a remote cache address."
+    case Namespace(error)  => error.message
+    case Rpc(code)         => s"remote cache answered $code"
+    case HttpOnly(command) => s"$command is an http cache operation"
 end RemoteError
