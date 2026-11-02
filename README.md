@@ -266,7 +266,40 @@ The content store is `~/.cache/histos`, or `$XDG_CACHE_HOME/histos`. A blob's na
 
 `test` launches the selected suites. Generated CI runs `test`. `testQuick` is local, and its stamp includes the upstream API digest, so a signature change cannot skip the suite. `TestStore` on a module is `Off`, `Local`, or `Remote`. `Off` is the default and does not skip `test`. `Local` skips `test` when the stored suite digest still matches. `Remote` is refused when the module names a need. The remote URI is configuration, so `Remote` does not upload and does not skip.
 
-The remote action index is off until a URI is set. The mode is `Off`, `Read`, or `Write`. The index is namespaced: `main`, `pr/<n>`, or `dev/<name>`. Blobs stay shared by digest. A pull request reads its own namespace and then `main`, and writes only its own. `cache promote` reports `remote cache is not configured` and does not open a connection. `./histos clean` deletes the work tree and leaves the store. `cleanFull` forgets this project's entries. `cache clean` drops an entry older than 30 days that no project keeps.
+`./histos clean` deletes the work tree and leaves the store. `cleanFull` forgets this project's entries. `cache clean` drops an entry older than 30 days that no project keeps.
+
+### Remote
+
+The remote is a Bazel HTTP cache. A team shares compile, package, and link results through that protocol, and the build stays the Scala graph. The server is bazel-remote, or anything else that speaks the same API. gRPC can follow. It is not this client.
+
+```mermaid
+flowchart TD
+  key[action key] --> here{this namespace}
+  here -->|hit| result[ActionResult]
+  here -->|404| parent{a later prefix}
+  here -->|any other status| stop[stop]
+  parent -->|pull request or dev, then main| main[main index]
+  parent -->|none left| local{local content store}
+  main -->|hit| result
+  main -->|404| local
+  main -->|any other status| stop
+  result --> blob["/cas/digest"]
+  blob --> out[output]
+  local -->|hit| out
+  local -->|miss| run[run the action]
+  run --> local
+  run -->|Write, and the action may leave| put["blob, then this namespace's index"]
+```
+
+Two stores, one key. `/cas/{digest}` holds the bytes. The digest is the name, so a bad blob is a different name and an honest index entry never fetches it. `/{namespace}/ac/{digest}` holds an ActionResult whose stdout digest names that blob. The namespace is a prefix on the index. It is not part of the digest. The key is the declared inputs plus the toolchain: OS, arch, JDK, Scala, and the linker. The lock digest is an input. A hit requires the whole key. A prefix does not drop an input to recover an older result.
+
+A pull request reads `pr/<n>`, then `main`, and writes `pr/<n>` only. A push to `main` reads and writes `main`. A laptop reads `main` and writes only when it sets `dev/<name>`. That namespace reads `dev/<name>`, then `main`. CI does not read `dev`. A 404 tries the next prefix. A hit or any other status stops the walk.
+
+A run asks the remote first, then the local content store, then runs the action. `Write` uploads after a miss, and only when the action may leave the machine. Compile may leave. A test, a publish, and an action that needs the network or docker stay. The blob is written first. A crash leaves an unreferenced blob, not an index entry for bytes that never arrived. `Read` looks and does not upload. `Off` is the process default, so neither lookup nor upload opens a connection.
+
+`promote"rebuild"` is the default. Main fills `main` by doing the work, so a pull request cannot fill the index the next pull request reads. `promote"copy-index"` copies that pull request's index onto `main` and does not compile. The owner picks it. `purge` deletes the caller's index and leaves every blob, including a blob another namespace still names. The generated test job sets `HISTOS_CACHE_NAMESPACE` to `pr/<n>` or `main`. Docs, deploy, versions, workflow, and release leave it unset.
+
+The URI is configuration. Until it is set, `cache promote` reports `remote cache is not configured` and does not open a connection.
 
 GitHub restores the content-store directory, the Coursier directory, and the toolchain directory with an exact key and no restore prefix. That copy is not the compile key. A later compile still hits or misses inside the store. Coursier is only the dependency jars, at `~/.cache/coursier/v1`.
 
