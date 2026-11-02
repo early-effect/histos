@@ -402,6 +402,54 @@ object Calls:
                     ),
               )
 
+  def client(
+      repo: Path,
+      graph: ProjectGraph,
+      jdk: JdkRuntime,
+      machine: Machine,
+      say: Say,
+  ): ZIO[Resolve & ContentStore & histos.resolve.ResolutionService, ServerError, Unit] =
+    CompileConsole
+      .open(repo)
+      .flatMap: console =>
+        Runtimes
+          .read(machine)
+          .flatMap: runtimes =>
+            histos.program.Program
+              .install(
+                repo,
+                graph,
+                jdk,
+                runtimes,
+                feed => speak(say, console, feed).ignore,
+              )
+              .foldZIO(
+                error =>
+                  val announced = error match
+                    case histos.program.ProgramError.Compile(_) =>
+                      console.announce(text => told(say, text))
+                    case _ => ZIO.unit
+                  val result = Faults.programStopped(error) match
+                    case Some(why) => CallResult.Fault(why)
+                    case None      => CallResult.reported(error.message)
+                  announced *> finishNoted(
+                    repo,
+                    say,
+                    console,
+                    List(console.observation),
+                    result,
+                  )
+                ,
+                path =>
+                  told(say, path.toString) *> finishNoted(
+                    repo,
+                    say,
+                    console,
+                    List(console.observation),
+                    CallResult.reported(),
+                  ),
+              )
+
   def task(
       repo: Path,
       graph: ProjectGraph,

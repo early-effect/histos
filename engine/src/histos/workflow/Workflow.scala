@@ -1,6 +1,7 @@
 package histos.workflow
 
 import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin}
+import histos.program.ClientBinary
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
 import histos.version.{Catalog, Ship}
@@ -227,7 +228,7 @@ object Workflow:
   private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
     val test = jobs match
       case Nil => Nil
-      case _   => testJob(jobs, graph.runnerTools, graph.resolution)
+      case _   => testJob(jobs, graph.runnerTools, graph.resolution, ClientBinary.present(graph))
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob)
@@ -465,8 +466,9 @@ object Workflow:
       jobs: List[TestJob],
       tools: RunnerTools,
       resolution: Resolution,
+      client: Boolean,
   ): List[String] =
-    val prepare = steps(tools, resolution)
+    val prepare = steps(tools, resolution) ++ clientStep(client)
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
@@ -487,6 +489,10 @@ object Workflow:
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ coursierCli ++ prepare ++ testRun("${{ matrix.command }}")
+
+  /** Link `dist/histos-client` before the suite, so the launcher execs that binary. LLVM is already on `PATH`. */
+  private def clientStep(present: Boolean): List[String] =
+    if present then List(s"      - run: ${quote("./histos client")}") else Nil
 
   private def include(job: TestJob): List[String] =
     List(

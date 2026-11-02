@@ -41,6 +41,7 @@ object Operation:
       case Command.TestQuick(modules, patterns) =>
         Right(Call.Test(modules, patterns, TestMode.Quick))
       case Command.Compile(projects)     => Right(Call.Compile(projects))
+      case Command.Client                => Right(Call.Client)
       case Command.Clean(projects)       => Right(Call.Clean(projects))
       case Command.CleanFull             => Right(Call.CleanFull)
       case Command.Assembly(destination) =>

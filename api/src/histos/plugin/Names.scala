@@ -49,6 +49,7 @@ object CommandName:
     trusted("testOnly"),
     trusted("testQuick"),
     trusted("compile"),
+    trusted("client"),
     trusted("clean"),
     trusted("cleanFull"),
     trusted("assembly"),

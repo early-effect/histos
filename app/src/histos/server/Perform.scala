@@ -29,8 +29,9 @@ object Perform:
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
-          Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) | Call.PreviewCompile(_) |
-          Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewRun(_, _) =>
+          Call.Client | Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) |
+          Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
+          Call.PreviewRun(_, _) =>
         true
       case Call.Clean(Nil) | Call.PreviewClean(Nil) =>
         false
@@ -132,6 +133,8 @@ object Perform:
             held(build => follow(Calls.publishAssets(repo, build.graph, machine, tokens, say)))
           case Call.Assembly(destination) =>
             held(build => follow(withJdk(jdk => Calls.assembly(repo, build.graph, jdk, machine, destination, say))))
+          case Call.Client =>
+            held(build => follow(withJdk(jdk => Calls.client(repo, build.graph, jdk, machine, say))))
           case Call.Run(id, platform) =>
             held(build => follow(withJdk(jdk => Calls.run(repo, build.graph, jdk, machine, id, platform, say))))
           case Call.Task(id, args) =>

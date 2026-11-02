@@ -58,6 +58,7 @@ enum Command:
   case TestQuick(modules: List[ProjectName], patterns: List[SuitePattern])
   case Watch(command: Command, args: List[String])
   case Compile(projects: List[ProjectName])
+  case Client
   case Clean(projects: List[ProjectName])
   case CleanFull
   case Assembly(destination: Option[String])
@@ -158,7 +159,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [project ...] | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -220,8 +221,10 @@ object Cli:
         test(repo, apiJar, modules, patterns, TestMode.Run)
       case Command.TestQuick(modules, patterns) =>
         test(repo, apiJar, modules, patterns, TestMode.Quick)
-      case Command.Watch(inner, _)       => watch(repo, apiJar, inner)
-      case Command.Compile(projects)     => compile(repo, apiJar, projects)
+      case Command.Watch(inner, _)   => watch(repo, apiJar, inner)
+      case Command.Compile(projects) => compile(repo, apiJar, projects)
+      case Command.Client            =>
+        attach(repo, Call.Client, locally(repo, apiJar, Call.Client))
       case Command.Clean(projects)       => clean(repo, apiJar, projects)
       case Command.CleanFull             => cleanFull(repo)
       case Command.Assembly(destination) => assembly(repo, apiJar, destination)
@@ -1743,6 +1746,8 @@ object Cli:
             )
       case Command.Compile(projects) =>
         dispatched(command)(call => compileAt(repo, projects, compileServices(repo, call)))
+      case Command.Client =>
+        served(repo, Call.Client)
       case Command.Clean(projects) =>
         dispatched(command)(call =>
           attach(

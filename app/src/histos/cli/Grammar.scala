@@ -27,7 +27,7 @@ import zio.cli.{
 object Grammar:
   private enum Wire:
     case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Toolchain,
-      Reload, Reboot
+      Reload, Reboot, Client
     case Cancel(id: String)
     case Run(name: String, platform: Option[String])
     case Test(projects: List[String])
@@ -155,13 +155,14 @@ object Grammar:
       .map { case (name, platform) =>
         Wire.PreviewRun(name, platform.headOption)
       }
+  private val client  = CliCommand("client").map(_ => Wire.Client)
   private val observe = CliCommand("observe").map(_ => Wire.Observe)
   private val preview = CliCommand("preview").subcommands(
     previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
+      version | graph | run | test | testOnly | testQuick | compile | client | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -229,6 +230,7 @@ object Grammar:
           .map { case (modules, patterns) =>
             Command.TestQuick(modules, patterns)
           }
+      case Wire.Client            => ZIO.succeed(Command.Client)
       case Wire.Observe           => ZIO.succeed(Command.Observe)
       case Wire.Compile(projects) =>
         projectList("compile", projects).map(Command.Compile(_))

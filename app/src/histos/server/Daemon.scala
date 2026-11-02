@@ -841,7 +841,8 @@ object Daemon:
   private[server] def writesOutputs(call: Call): Boolean =
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
-          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Assembly(_) | Call.Clean(_) | Call.CleanFull =>
+          Call.PublishRelease(_, _) | Call.Run(_, _) | Call.Client | Call.Assembly(_) | Call.Clean(_) |
+          Call.CleanFull =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
           Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |

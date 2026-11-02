@@ -175,7 +175,37 @@ object WorkflowSpec extends ZIOSpecDefault:
       yield assertTrue:
         repository match
           case Right(built) => Workflow.render(built) == Right(golden)
-          case Left(_)      => false,
+          case Left(_)      => false
+    ,
+    test("a native client module is linked before the suite"):
+      val api    = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
+      val client = histos
+        .module("client", Platform.Native)(ScalaVersion("3.10.0"))
+        .clang(histos.ClangMajor(21))
+        .main(histos.MainClass("histos.client.Main"))
+      val built = histos.Projects
+        .organization(histos.Organization("rocks.earlyeffect"))
+        .runnerTools(
+          RunnerTools(
+            Some(NodeFloor(25)),
+            Some(ToolRevision("21.1.8")),
+            Some(ToolRevision("1.62.1")),
+          )
+        )(
+          histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
+          api,
+          client,
+        )
+      assertTrue:
+        built match
+          case Right(graph) =>
+            Workflow.render(graph) match
+              case Right(yaml) =>
+                val linked = yaml.indexOf("./histos client")
+                val suite  = yaml.indexOf("./histos test")
+                linked >= 0 && suite > linked
+              case Left(_) => false
+          case Left(_) => false,
   )
 
   private val affected = suite("affected")(

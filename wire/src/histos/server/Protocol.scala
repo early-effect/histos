@@ -128,6 +128,9 @@ enum Call derives JsonCodec:
   case PublishAssets(tokens: List[String])
   case Graph
   case Run(id: String, platform: Option[Platform])
+
+  /** Link the native client and write `dist/histos-client`. Does not start it. */
+  case Client
   case Task(id: String, args: PluginArgs)
   case Cancel(id: RunId)
   case Toolchain
@@ -153,6 +156,7 @@ enum Call derives JsonCodec:
   case PreviewClean(projects: List[ProjectName])
   case PreviewCleanFull
   case PreviewRun(id: String, platform: Option[Platform])
+end Call
 
 object Call:
   /** The codec is on [[Call]]. A case value does not carry it. */

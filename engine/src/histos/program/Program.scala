@@ -24,7 +24,8 @@ import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
 import histos.step.{Input, InputName, InputValue, Need, Phase, Step, StepId, StepInfo}
 import histos.{Aggregate, ClangPin, Dep, MainClass, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, StandardCopyOption}
+import java.nio.file.attribute.PosixFilePermissions
 
 import scala.jdk.CollectionConverters.*
 
@@ -96,6 +97,116 @@ object Program:
                       continue.set(false)
                     case _ => ZIO.unit
               else ZStream.empty
+
+  /** Link the native client and copy the binary to [[ClientBinary.destination]]. Does not start it.
+    */
+  def install(
+      repo: Path,
+      graph: ProjectGraph,
+      jdk: JdkRuntime,
+      runtimes: Runtimes,
+      report: CompileFeed => UIO[Unit],
+  ): ZIO[Resolve & histos.cache.ContentStore & ResolutionService, ProgramError, Path] =
+    for
+      module   <- ZIO.fromEither(locate(graph, ClientBinary.moduleName))
+      main     <- ZIO.fromEither(module.application.toRight(ProgramError.NoMain(module.name)))
+      binary   <- ZIO.fromEither(Binary.from(main.value).left.map(ProgramError.Main(_)))
+      _        <- ZIO.fromEither(pick(module, Some(Platform.Native)))
+      service  <- ZIO.service[ResolutionService]
+      lock     <- service.current
+      tools    <- LockedTools.make(lock, graph, service)
+      compiled <- GraphCompile
+        .run(
+          histos.zinc.CompileSession(repo, graph, jdk, runtimes.native, lock),
+          List(module.name),
+          Some(Platform.Native),
+          report,
+        )
+        .mapError(ProgramError.Compile(_))
+      cells = compiled.filter(cell => cell.module == module.name && cell.platform == Platform.Native)
+      linked <- cells match
+        case cell :: Nil =>
+          linkClient(repo, graph, module, cell, lock, jdk, binary, runtimes)
+            .provideSomeLayer[Resolve](zio.ZLayer.succeed(tools))
+        case _ =>
+          module.versions.all match
+            case version :: _ =>
+              ZIO.fail(
+                ProgramError.Link(
+                  module.name,
+                  version,
+                  Platform.Native,
+                  "the client did not compile to one native cell",
+                )
+              )
+            case Nil => ZIO.fail(ProgramError.Absent(ClientBinary.moduleName))
+    yield linked
+
+  private def linkClient(
+      repo: Path,
+      graph: ProjectGraph,
+      module: Module,
+      cell: histos.zinc.CompiledCell,
+      lock: DependencyLock,
+      jdk: JdkRuntime,
+      binary: Binary,
+      runtimes: Runtimes,
+  ): ZIO[Resolve & LockedTools, ProgramError, Path] =
+    val modules      = graph.projects.collect { case item: Module => item }
+    val repositories = BuildResolvers(graph.resolvers)
+    for
+      view      <- ZIO.service[LockedTools]
+      paths     <- classpath(repo, modules, module, cell, lock, repositories)
+      linkDir   <- fresh(workDir(repo, cell))
+      major     <- nativeMajor(module, cell.version)
+      toolchain <- ZIO
+        .fromEither(
+          NativeToolchain.of(
+            module.nativeVersion.getOrElse(view.catalog.native.revision),
+            runtimes.native,
+          )
+        )
+        .mapError(error =>
+          ProgramError.Tool(
+            cell.module,
+            cell.version,
+            histos.toolchain.PlatformToolError.NativeOrigin(error),
+          )
+        )
+      program <- NativeLink
+        .linkClasspath(
+          NativeLinkRequest(
+            major,
+            toolchain,
+            runtimes.env,
+            linkDir,
+            jdk,
+            binary,
+            cell.version,
+          ),
+          paths,
+        )
+        .mapError(error =>
+          ProgramError.Tool(
+            cell.module,
+            cell.version,
+            histos.toolchain.PlatformToolError.Native(error),
+          )
+        )
+      placed <- place(program, ClientBinary.destination(repo))
+    yield placed
+
+  private def place(binary: Path, dest: Path): IO[ProgramError, Path] =
+    Option(dest.getParent) match
+      case None         => ZIO.fail(ProgramError.Work(dest))
+      case Some(parent) =>
+        ZIO
+          .attemptBlocking:
+            Files.createDirectories(parent)
+            Files.copy(binary, dest, StandardCopyOption.REPLACE_EXISTING)
+            Files.setPosixFilePermissions(dest, PosixFilePermissions.fromString("rwxr-xr-x"))
+            dest
+          .mapError(_ => ProgramError.Work(dest))
 
   private def runCell(
       run: CellRun
