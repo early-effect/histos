@@ -13,3 +13,4 @@ target/
 *.semanticdb
 .cursor/
 .vscode/
+AGENTS.md
