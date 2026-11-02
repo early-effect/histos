@@ -1,6 +1,6 @@
 package histos.node
 
-import histos.jdk.{Machine, Os}
+import histos.jdk.Machine
 import histos.toolchain.{LocalOverride, LocalOverrideError, RuntimeFiles, RuntimeIdentity}
 import histos.workspace.IoFailure
 
@@ -34,7 +34,7 @@ object NodeToolchain:
       .flatMap:
         case Some(path) => accept(path)
         case None       =>
-          val name = if machine.os == Os.Windows then "node.exe" else "node"
+          val name = "node"
           RuntimeFiles
             .firstOnPath(machine.env.get("PATH"), List(name))
             .mapError(error => NodeMiss.Unresolved(NodeError.Locations(error)))

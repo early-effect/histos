@@ -4,6 +4,24 @@ Histos is a Scala build tool. The build is data. The work is a ZIO effect. A per
 
 The terminal prints that result and chooses an exit. An agent receives the result as data and sees each line as it is printed. An editor uses BSP. If the work ran, the result is a report, including a compile or a test that failed. If the request never started, the result is a fault.
 
+```mermaid
+flowchart TD
+  person[terminal] --> cmd[histos command]
+  metals[Metals] --> conn[".bsp/histos.json"]
+  conn --> bsp["histos bsp"]
+  agent[MCP client] --> mcp["histos mcp"]
+  cmd --> client[native client]
+  client --> record[".histos/server.json"]
+  bsp --> record
+  mcp --> record
+  record --> jvm[JVM server]
+  jvm --> zinc[Zinc]
+  jvm --> coursier[Coursier library]
+  jvm --> store["content store"]
+```
+
+A batch command execs the native client. The client reads `.histos/server.json` and talks to that JVM server, starting one when none is listening. `server`, `bsp`, and `mcp` stay on the jar. When the recorded version matches, BSP copies frames onto that server and MCP sends the same call. No server means that process does the work. A different version stops.
+
 This is pre-release. The API may break when that makes it more honest. Other repositories take snapshots.
 
 What we still intend is [next](docs/next.md).
@@ -12,31 +30,105 @@ What we still intend is [next](docs/next.md).
 
 A build file is a Scala program that returns a graph. A module names its platforms (`jvm`, `js`, `native`), its Scala versions, and its dependencies. A version, a dependency, a path, a url, and a name are typed literals. A bad one does not compile the build file. This repository is built by [histos.scala](histos.scala). The literals are [Literals.scala](api/src/histos/Literals.scala).
 
+## Install
+
+Histos runs on macOS and Linux. A Windows machine uses WSL. A native Windows build may come later.
+
+Histos does not install a JDK. A JDK 21 or newer has to be on `PATH`. On macOS: `brew install --cask temurin@21`. On Linux: https://adoptium.net/temurin/releases?version=21
+
+The `cs` binary is not required. Dependency resolution uses the Coursier library inside the server. That library writes `~/.cache/coursier/v1` itself.
+
+One POSIX script is the installer and the command:
+
+```sh
+curl -fsSL https://github.com/early-effect/histos/releases/download/dist/shim | sh
+export PATH="$HOME/.histos/bin:$PATH"
+```
+
+The script does not edit a shell rc. A second run is a no-op when the installed shim matches.
+
+`histos self update` replaces the shim when the published shim hash differs. `histos toolchain install <version>` downloads one version. `histos toolchain list` prints installed versions. `histos update` moves the selected version: outside a project it rewrites `~/.histos/default`, and inside a project it rewrites `histos.version` in `build.properties` and leaves the user default alone. `histos update --make-default` writes that same resolved version into both files. A `SNAPSHOT` pointer becomes one timestamp. Nothing updates in the background.
+
+`histos new <name>` creates a one-module project pinned to the toolchain that wrote it. `histos init` writes the current directory. The next line the command prints is `histos test`.
+
+`--compile-client` on the install script, `histos toolchain install`, and `histos update` links a native client for that version after the jar is checked. It is not sticky. Clang has to already be on `PATH`. Histos does not install it. A platform with no prebuilt client runs `java -jar` and says that `--compile-client` will link one. The first prebuilt clients are `linux-x86_64` and `macos-aarch64`.
+
+A project pin wins. The layout is `~/.histos/bin/histos`, `~/.histos/default`, and `~/.histos/toolchains/<version>/` with the manifest, `histos.jar`, and `histos-client`. The content store is `~/.cache/histos` unless `XDG_CACHE_HOME` is set.
+
+```mermaid
+flowchart TD
+  cmd[a build command] --> local{assembly checksum matches}
+  local -->|yes| jar[that jar]
+  local -->|no| pin{project pin}
+  pin -->|build.properties| resolved[resolved version]
+  pin -->|none| fallback["~/.histos/default"]
+  resolved --> tc["toolchain directory"]
+  fallback --> tc
+  tc --> pair[jar and client]
+  jar --> run[exec the client]
+  pair --> run
+```
+
+GitHub Actions use `.github/actions/setup` from this repo:
+
+```yaml
+- uses: early-effect/histos/.github/actions/setup@main
+  with:
+    java: "21" # empty leaves the runner JDK
+```
+
+`version` empty reads `build.properties`. The action restores `~/.histos/toolchains`, `~/.cache/coursier/v1`, and `~/.cache/histos`. It does not install Node, LLVM, or Playwright.
+
 ## This repository
 
-Histos builds itself. [histos](histos) and [histos.bat](histos.bat) come from `workflow --update`. Each script finds `java` and, when this checkout has no local assembly, asks `cs fetch` for the version in [build.properties](build.properties).
+Histos builds itself. [histos](histos) comes from `workflow --update`. A local assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim.
 
-A JDK 21 or newer, and the `cs` command from Coursier 2.1 or newer, have to be on `PATH`. Histos does not install either. When one is missing or too old, the script prints the floor and how to install it.
-
-A JDK 21 or newer is required. On macOS: `brew install --cask temurin@21`. On Linux and Windows: https://adoptium.net/temurin/releases?version=21
-
-The `cs` command from Coursier 2.1 or newer is required. On macOS: `brew install coursier/formulas/coursier`. The Homebrew core formula provides `coursier` and does not. On Linux and Windows: https://get-coursier.io/docs/cli-installation and put the `cs` binary on `PATH`.
-
-`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through to Coursier. That path does not call `cs`. `dist/` and `.histos/assembly.sha256` stay uncommitted, so CI has neither jar and every job runs the version line. A local jar can compile [histos.scala](histos.scala) while CI still runs that line. `workflow --check` compares the files this jar renders with the files in the tree, so the two jars can disagree.
+`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through. `dist/` and `.histos/assembly.sha256` stay uncommitted, so CI has neither jar and every job runs the version line through the shim. A local jar can compile [histos.scala](histos.scala) while CI still runs that line. `workflow --check` compares the files this jar renders with the files in the tree, so the two jars can disagree.
 
 [histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` packed inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
 
 `assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The next `./histos` in this checkout runs `dist/histos.jar` when that checksum matches.
 
-`histos.version=0.0.2-SNAPSHOT` follows the snapshot. A timestamp such as `0.0.2-20261101.030257-1` freezes that channel. `launcher --update` resolves the channel and writes the timestamp Coursier selected. `launcher --latest` writes the pointer and does not fetch. Either line may be hand-edited. A bad line fails at boot. CI installs `cs` and runs the committed line, so a pointer moves when a snapshot is published.
+`histos.version=0.0.2-SNAPSHOT` follows the snapshot. A timestamp such as `0.0.2-20261101.030257-1` freezes that channel. `histos update` resolves the channel and writes that timestamp. `launcher --latest` writes the pointer and does not fetch. Either line may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim, so a pointer moves when a snapshot is published.
 
 The script version is the ship number, or the version line cannot boot. A timestamp boots when its channel is that number. This checkout's script and version line are `0.0.2-SNAPSHOT`.
 
 `.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
 
+## A workflow
+
+```mermaid
+flowchart TD
+  job[test job] --> setup["setup action"]
+  setup --> keys["exact keys, no restore prefix"]
+  keys --> ask{tools this job asks for}
+  ask -->|native module and an LLVM revision| llvm[LLVM]
+  ask -->|Js module and a Node revision| node[Node]
+  ask -->|a Playwright revision| pw["Playwright, and Node when a floor is set"]
+  ask -->|neither| none["no Node, LLVM, or Playwright"]
+  llvm --> run["./histos test"]
+  node --> run
+  pw --> run
+  none --> run
+```
+
+The setup action restores toolchains, `~/.cache/coursier/v1`, and the content store. It does not install those tools. `versions` and `workflow` do not either. Only a test job can, and only for the modules that job runs. Playwright is also installed when the build names its revision, because this suite launches Firefox from a JVM test. `install-deps firefox` stays on every such run. The browser download waits for a cache miss.
+
 ## Publishing
 
 The decision is [publishing.md](docs/publishing.md). `publishLocal`, `publish snapshots`, and `publish release` are three commands. The last two close the build's `sona` layer. The staged revision chooses the Sonatype branch. The command name does not.
+
+```mermaid
+flowchart TD
+  stage["stage the jar, pom, sources jar, and javadoc jar"]
+  stage --> local[publishLocal]
+  stage --> snap[publish snapshots]
+  stage --> rel[publish release]
+  local --> ivy["ivy2Local, unsigned"]
+  snap --> put["PUT a snapshot, unsigned"]
+  rel --> sign[sign the files]
+  sign --> portal[one portal bundle]
+```
 
 `publishLocal`, `publish snapshots`, and `publish release` stage the same files. A library module stages its jar. An assembly stages the packaged program. Each also stages the pom, the sources jar, and the javadoc jar. `publishLocal` writes those files where Coursier resolves `ivy2Local` and does not sign. A snapshot coordinate is a PUT of those files and does not sign. A release signs those files, then uploads one portal bundle.
 
@@ -86,9 +178,101 @@ A word the grammar does not own is a plugin command, when the build registered i
 
 The tally names files compiled, files skipped, modules, and classes written. A count that is unknown is omitted. A failure count is added when one happened.
 
+## An editor
+
+Metals is the editor path. It speaks BSP 2.2 to Histos. There is no sbt BSP server in this project.
+
+```mermaid
+sequenceDiagram
+  participant Metals
+  participant File as histos.json
+  participant Bsp as histos bsp
+  participant Server as JVM server
+  Metals->>File: read argv
+  Metals->>Bsp: start that argv
+  Bsp->>Server: splice when the version matches
+  Metals->>Bsp: build/initialize
+  Metals->>Bsp: workspace/buildTargets
+  Metals->>Bsp: buildTarget/compile
+  Bsp-->>Metals: diagnostics
+```
+
+Open the project in an editor that runs Metals. Metals discovers `.bsp/histos.json`. Import the build. Metals starts the `argv` in that file: `./histos bsp` when the project ships the wrapper, and `histos bsp` otherwise. The working directory is the project.
+
+A command writes that file when the pin parses and the build fingerprint can be read. A missing or bad line leaves the file alone. This checkout already commits it. The `version` field is that line. `bspVersion` is `2.2.0`. `languages` is `scala`. `graph` is a hash of the build files. Metals ignores the field and hashes the file, so a rewrite is a build change. A running `bsp` rewrites the file when that hash changes.
+
+One target is one cell: the module, the Scala version, the platform, and a scope of `main` or `test`. `histos.scala` is its own target. A compile from the editor is `buildTarget/compile` for that target. The scalac options include `-Xsemanticdb` and `-sourceroot`, which is what Metals uses to navigate. Diagnostics are `build/publishDiagnostics` on each source file. A compile that fails is still that report.
+
+`bsp` runs on the jar. A server recorded at the same version receives the session. No server means the `bsp` process compiles. `histos reload` asks a running server to load the build again. `histos reboot` replaces that server, or starts one. `~ bsp` is usage and does not start a session.
+
+## An agent
+
+An agent uses MCP. The same calls a person runs are tools. The process working directory is the project root.
+
+```mermaid
+sequenceDiagram
+  participant Agent
+  participant Mcp as histos mcp
+  participant Server as JVM server
+  Agent->>Mcp: tools/list
+  Mcp-->>Agent: the tool set
+  Agent->>Mcp: tools/call compile
+  Mcp->>Server: the same call, when server.json matches
+  Server-->>Mcp: lines, then the report
+  Mcp-->>Agent: the report
+```
+
+Point the client's stdio server at the shim. In this checkout the command is `./histos` and the argument is `mcp`, because the wrapper is how this repo boots.
+
+```json
+{
+  "mcpServers": {
+    "histos": {
+      "command": "histos",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+`tools/list` is `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, and `observe`. `compile` with an empty project list compiles every module. `test` takes suite globs in `patterns` and `run` or `quick` in `mode`. An absent mode runs the suites. `run` takes a main, `inspect`, `versions`, or a plugin task id. `watch` takes the inner command and does not take a leading `~`.
+
+When `.histos/server.json` names this version, the tool sends the call there and prints each line as it arrives. No server means this process keeps one graph and runs the call. A different version fails the tool. A compile or a test that ran and failed comes back as a report. A request that never started fails the tool.
+
+`acp` is a reserved word and has no command. `~ mcp` is usage and does not start a session.
+
+## Cache
+
+Compile, package, and link are content-addressed. A hit means the declared inputs and the toolchain identity matched. A miss names the input that changed. The decision is [cache-work-plan.md](docs/cache-work-plan.md).
+
+```mermaid
+flowchart TD
+  key["sources, flags, JDK, jar checksums, upstream API digests"]
+  key -->|hit| cas["content store"]
+  key -->|miss| work["compiler, linker, or packager"]
+  work --> cas
+  cas --> api["API digest"]
+  cas --> product["product digest"]
+  api --> down["downstream compile"]
+  product --> linked["link and package"]
+  api --> quick[testQuick]
+  quick -->|stamp matches| skip[skip the suite]
+  quick -->|signature moved| launch[run the suite]
+  plain[test] --> launch
+  jars["Coursier cache"] --> key
+```
+
+The content store is `~/.cache/histos`, or `$XDG_CACHE_HOME/histos`. A blob's name is its digest. The API digest is the public signature, written beside the analysis. A comment or a method body does not change it, so a downstream compile hits. A public signature changes it, so that compile runs. The product digest is the class bytes after jar timestamps, line numbers, and the `TASTY` attribute are taken out. Link and package key on that digest. A trailing comment that does not move member positions keeps the link. A method body runs it.
+
+`test` launches the selected suites. Generated CI runs `test`. `testQuick` is local, and its stamp includes the upstream API digest, so a signature change cannot skip the suite. `TestStore` on a module is `Off`, `Local`, or `Remote`. `Off` is the default and does not skip `test`. `Local` skips `test` when the stored suite digest still matches. `Remote` is refused when the module names a need. The remote URI is configuration, so `Remote` does not upload and does not skip.
+
+The remote action index is off until a URI is set. The mode is `Off`, `Read`, or `Write`. The index is namespaced: `main`, `pr/<n>`, or `dev/<name>`. Blobs stay shared by digest. A pull request reads its own namespace and then `main`, and writes only its own. `cache promote` reports `remote cache is not configured` and does not open a connection. `./histos clean` deletes the work tree and leaves the store. `cleanFull` forgets this project's entries. `cache clean` drops an entry older than 30 days that no project keeps.
+
+GitHub restores the content-store directory, the Coursier directory, and the toolchain directory with an exact key and no restore prefix. That copy is not the compile key. A later compile still hits or misses inside the store. Coursier is only the dependency jars, at `~/.cache/coursier/v1`.
+
 ## Tools already on the machine
 
-Histos does not install a JDK, Coursier, or Node. The running JVM must be JDK 21 or newer, and `cs` must be Coursier 2.1 or newer. The launcher script prints the same install lines as [This repository](#this-repository). A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one.
+Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be JDK 21 or newer. The launcher script prints that floor. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one. A generated workflow installs Node, LLVM, and Playwright only for the modules that job runs. A JVM-only project installs none of them. Playwright's browser download is skipped when its cache hits. `install-deps firefox` stays, because a fresh runner does not keep the apt packages.
 
 ## Plugins
 

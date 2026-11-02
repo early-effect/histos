@@ -12,20 +12,13 @@ import zio.*
 import zio.test.*
 
 object BootstrapSpec extends ZIOSpecDefault:
-  private val version   = "0.0.1-SNAPSHOT"
-  private val revision  = "0.0.1-20261101.030257-1"
-  private val bytes     = "fixture launcher".getBytes(StandardCharsets.UTF_8)
-  private val sha       = Sha256.of(Chunk.fromArray(bytes)).value
-  private val snapshots = "https://central.sonatype.com/repository/maven-snapshots"
+  private val version = "0.0.1-SNAPSHOT"
+  private val bytes   = "fixture launcher".getBytes(StandardCharsets.UTF_8)
+  private val sha     = Sha256.of(Chunk.fromArray(bytes)).value
   private val javaGuide =
     """A JDK 21 or newer is required. Histos does not install it.
       |macOS: brew install --cask temurin@21
-      |Linux and Windows: https://adoptium.net/temurin/releases?version=21""".stripMargin
-  private val csGuide =
-    """The cs command from Coursier 2.1 or newer is required. Histos does not install it.
-      |macOS: brew install coursier/formulas/coursier
-      |The Homebrew core formula provides coursier and does not.
-      |Linux and Windows: https://get-coursier.io/docs/cli-installation and put the cs binary on PATH.""".stripMargin
+      |Linux: https://adoptium.net/temurin/releases?version=21""".stripMargin
 
   private enum FixtureError:
     case Io(error: IoFailure)
@@ -66,25 +59,6 @@ object BootstrapSpec extends ZIOSpecDefault:
           |printf '%s\n' "$@" > "$HISTOS_JAVA_LOG"
           |""".stripMargin,
       )
-      _ <- executable(
-        bin.resolve("cs"),
-        """#!/bin/sh
-          |if [ "$1" = "version" ]; then
-          |  printf '%s\n' "${HISTOS_CS_VERSION:-2.1.26}"
-          |  exit 0
-          |fi
-          |{
-          |  printf 'TTL=%s\n' "${COURSIER_TTL-}"
-          |  printf '%s\n' "$@"
-          |} >> "$HISTOS_CS_LOG"
-          |if [ "${HISTOS_CS_FAIL:-}" = yes ]; then exit 1; fi
-          |case "${HISTOS_CS_LINES:-1}" in
-          |  0) exit 0 ;;
-          |  2) printf '%s\n%s\n' "$HISTOS_CS_JAR" "$HISTOS_CS_JAR" ;;
-          |  *) printf '%s\n' "$HISTOS_CS_JAR" ;;
-          |esac
-          |""".stripMargin,
-      )
       _ <- ZIO
         .attemptBlocking:
           List("/usr/bin/dirname", "/usr/bin/awk", "/usr/bin/tr", "/usr/bin/shasum", "/usr/bin/sha256sum")
@@ -111,11 +85,8 @@ object BootstrapSpec extends ZIOSpecDefault:
         .attemptBlocking(Files.createTempDirectory(fixture.root, "child-"))
         .mapError(_ => FixtureError.Io(IoFailure(fixture.root, IoFault.Temp)))
       log = work.resolve("java.log")
-      cs  = work.resolve("cs.log")
       env = Map(
         "HISTOS_JAVA_LOG" -> log.toString,
-        "HISTOS_CS_LOG"   -> cs.toString,
-        "HISTOS_CS_JAR"   -> fixture.jar.toString,
         "HOME"            -> fixture.root.toString,
         "PATH"            -> fixture.bin.toString,
       ) ++ extra
@@ -124,12 +95,11 @@ object BootstrapSpec extends ZIOSpecDefault:
         .runCollect
         .mapError(FixtureError.Process(_))
       arguments <- read(log).map(_.linesIterator.toList)
-      coursier  <- read(cs)
     yield Ran(
       events.collect { case ChildEvent.Exited(code) => code }.lastOption,
       events.collect { case ChildEvent.Out(text) => text; case ChildEvent.Err(text) => text }.mkString("\n"),
       arguments,
-      coursier,
+      "",
     )
 
   private def source(fixture: Fixture): Map[String, String] =
@@ -205,31 +175,16 @@ object BootstrapSpec extends ZIOSpecDefault:
           ran.coursier.isEmpty,
         )
     ,
-    test("missing java prints the floor before coursier is considered"):
+    test("missing java prints the floor"):
       ZIO.scoped:
         for
           fixture <- layout
           _       <- Workspace.delete(fixture.bin.resolve("java")).mapError(FixtureError.Io(_))
-          _       <- Workspace.delete(fixture.bin.resolve("cs")).mapError(FixtureError.Io(_))
           ran     <- run(fixture)
         yield assertTrue(
           ran.exit.contains(ProcessExit(1)),
           ran.output.contains("java is not on PATH"),
           ran.output.contains(javaGuide),
-          !ran.output.contains("Coursier 2.1"),
-          ran.coursier.isEmpty,
-        )
-    ,
-    test("missing cs prints the floor and how to install it"):
-      ZIO.scoped:
-        for
-          fixture <- layout
-          _       <- Workspace.delete(fixture.bin.resolve("cs")).mapError(FixtureError.Io(_))
-          ran     <- run(fixture)
-        yield assertTrue(
-          ran.exit.contains(ProcessExit(1)),
-          ran.output.contains("coursier is not on PATH"),
-          ran.output.contains(csGuide),
           ran.arguments.isEmpty,
         )
     ,
@@ -242,107 +197,37 @@ object BootstrapSpec extends ZIOSpecDefault:
           ran.exit.contains(ProcessExit(1)),
           ran.output.contains("java 1.8.0_292 is older than 21"),
           ran.output.contains(javaGuide),
-          ran.coursier.isEmpty,
           ran.arguments.isEmpty,
         )
     ,
-    test("cs older than 2.1 names the version and the floor"):
+    test("without a local assembly the checkout script execs the user shim"):
       ZIO.scoped:
         for
           fixture <- layout
-          ran     <- run(fixture, extra = Map("HISTOS_CS_VERSION" -> "2.0.16"))
-        yield assertTrue(
-          ran.exit.contains(ProcessExit(1)),
-          ran.output.contains("coursier 2.0.16 is older than 2.1"),
-          ran.output.contains(csGuide),
-          ran.arguments.isEmpty,
-        )
-    ,
-    test("a snapshot pointer rechecks with ttl 0 and the snapshot repository"):
-      ZIO.scoped:
-        for
-          fixture <- layout
-          ran     <- run(fixture, List("graph"), Map("COURSIER_TTL" -> "1h"))
-        yield assertTrue(
-          ran.exit.contains(ProcessExit(0)),
-          ran.coursier ==
-            s"""TTL=0s
-               |fetch
-               |--no-default
-               |-r
-               |$snapshots
-               |rocks.earlyeffect:histos:$version
+          log = fixture.root.resolve("shim.log")
+          _ <- executable(
+            fixture.root.resolve(".histos/bin/histos"),
+            s"""#!/bin/sh
+               |printf '%s\\n' "$$@" > "${log}"
+               |exit 0
                |""".stripMargin,
-          ran.arguments == List(
-            "--enable-native-access=ALL-UNNAMED",
-            "-jar",
-            fixture.jar.toString,
-            "graph",
-          ),
-        )
-    ,
-    test("a timestamp fetch does not set ttl and names that revision"):
-      ZIO.scoped:
-        for
-          fixture <- layout
-          _       <- write(fixture.root.resolve("build.properties"), s"histos.version=$revision\n")
-          ran     <- run(fixture, extra = Map("COURSIER_TTL" -> "1h"))
+          )
+          ran  <- run(fixture, List("test", "app"))
+          seen <- read(log)
         yield assertTrue(
           ran.exit.contains(ProcessExit(0)),
-          ran.coursier.startsWith("TTL=\n"),
-          ran.coursier.contains(s"rocks.earlyeffect:histos:$revision"),
-          ran.coursier.contains("--no-default"),
-          !ran.coursier.contains("TTL=0s"),
-          ran.arguments.contains("-jar"),
-        )
-    ,
-    test("HISTOS_LAUNCHER_REPO replaces the repository"):
-      ZIO.scoped:
-        for
-          fixture <- layout
-          ran     <- run(fixture, extra = Map("HISTOS_LAUNCHER_REPO" -> "http://127.0.0.1:9/repo"))
-        yield assertTrue(
-          ran.exit.contains(ProcessExit(0)),
-          ran.coursier.contains("http://127.0.0.1:9/repo"),
-          !ran.coursier.contains(snapshots),
-        )
-    ,
-    test("a failed fetch does not exec java"):
-      ZIO.scoped:
-        for
-          fixture <- layout
-          ran     <- run(fixture, extra = Map("HISTOS_CS_FAIL" -> "yes"))
-        yield assertTrue(
-          ran.exit.contains(ProcessExit(1)),
-          ran.output.contains("launcher fetch failed"),
+          seen == "test\napp\n",
           ran.arguments.isEmpty,
         )
     ,
-    test("zero or two fetched paths fail before java"):
+    test("a missing user shim names the install"):
       ZIO.scoped:
         for
           fixture <- layout
-          none    <- run(fixture, extra = Map("HISTOS_CS_LINES" -> "0"))
-          two     <- run(fixture, extra = Map("HISTOS_CS_LINES" -> "2"))
-        yield assertTrue(
-          none.exit.contains(ProcessExit(1)),
-          two.exit.contains(ProcessExit(1)),
-          none.output.contains("launcher fetch did not print one jar"),
-          two.output.contains("launcher fetch did not print one jar"),
-          none.arguments.isEmpty,
-          two.arguments.isEmpty,
-        )
-    ,
-    test("a channel that does not boot fails before cs"):
-      ZIO.scoped:
-        for
-          fixture <- layout
-          _       <- write(fixture.root.resolve("build.properties"), "histos.version=0.0.2-SNAPSHOT\n")
-          ran     <- run(fixture)
+          ran     <- run(fixture, List("test"))
         yield assertTrue(
           ran.exit.contains(ProcessExit(1)),
-          ran.output.contains("invalid build.properties"),
-          ran.coursier.isEmpty,
+          ran.output.contains("histos is not installed"),
           ran.arguments.isEmpty,
         ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock

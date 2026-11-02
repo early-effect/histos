@@ -27,11 +27,8 @@ object NodeProbe:
           )
 
   private def launcher(dir: Path): Option[Path] =
-    val binary  = dir.resolve("bin").resolve("node")
-    val windows = dir.resolve("bin").resolve("node.exe")
-    if Files.isRegularFile(binary) then Some(binary)
-    else if Files.isRegularFile(windows) then Some(windows)
-    else None
+    val binary = dir.resolve("bin").resolve("node")
+    if Files.isRegularFile(binary) then Some(binary) else None
 
   def home(dir: Path): IO[NodeError, NodeHome] =
     ZIO

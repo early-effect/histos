@@ -25,12 +25,13 @@ import histos.server.{
 import histos.load.BuildClasspath
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.schedule.{CacheNamespace, NamespaceError, RemoteError}
-import histos.jdk.{Machine, Toolchain, ToolchainError}
+import histos.jdk.{HostSupport, Machine, Os, Toolchain, ToolchainError}
 import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
 import histos.preview.{Plan, PreviewError}
 import histos.program.ProgramError
 import histos.publish.{LauncherError, LauncherPin}
+import histos.scaffold.Skeleton
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
 import histos.select.SelectError
 import histos.toolchain.{Runtimes, Survey}
@@ -92,6 +93,8 @@ enum Command:
   case PreviewRun(id: TaskId, platform: Option[Platform])
   case PreviewPlugin(id: PluginTaskId)
   case Observe
+  case New(name: String)
+  case Init
 
 enum CliParseError:
   case Help
@@ -181,11 +184,29 @@ object Cli:
         command => perform(repo, apiJar, command),
       )
 
+  /** `new` and `init` write a project. They do not load a graph and they do not talk to the server. */
+  private def fresh(parent: Path, name: Option[String]): UIO[Completed] =
+    System.env("HISTOS_VERSION").orElseSucceed(None).flatMap { raw =>
+      val written = ZIO.fromEither(Skeleton.versionOf(raw)).flatMap { version =>
+        name match
+          case Some(project) => Skeleton.create(parent, project, version)
+          case None          => Skeleton.init(parent, version)
+      }
+      written.fold(
+        error => Completed(CliExit.Usage, "", error.message, Playback.Held),
+        dir => Completed(CliExit.Success, s"${dir.toAbsolutePath.normalize}\nhistos test", "", Playback.Held),
+      )
+    }
+
   /** The process entry. A socket hit names none of the compile services. Each miss provides only what that miss uses.
     */
   private[histos] def launch(args: List[String], repo: Path): URIO[Scope, Completed] =
-    Connection.ensure(repo).ignore *>
-      parse(args).foldZIO(
+    System.property("os.name").orElseSucceed(None).flatMap {
+      case Some(name) if Os.from(name) == Os.Windows =>
+        ZIO.succeed(Completed(CliExit.Usage, "", HostSupport.refused, Playback.Held))
+      case _ =>
+        Connection.ensure(repo).ignore *>
+          parse(args).foldZIO(
         {
           case CliParseError.UnknownRoot =>
             inProcess(repo)((api, machine) => withLocal(machine)(contributed(args, repo, api)))
@@ -194,6 +215,7 @@ object Cli:
         },
         command => route(repo, command),
       )
+    }
 
   private def perform(
       repo: Path,
@@ -275,6 +297,8 @@ object Cli:
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
       case Command.Observe => observe(repo)
+      case Command.New(name) => fresh(repo, Some(name))
+      case Command.Init      => fresh(repo, None)
 
   /** Loopback rehearsal of the Central portal. Does not load the graph. */
   private def portal(repo: Path): URIO[Machine & Scope, Completed] =
@@ -1865,6 +1889,10 @@ object Cli:
         attach(repo, Call.PreviewRun(id.render, None), loadedMiss(repo)(previewRunLocal(_, id.render, None)))
       case Command.Observe =>
         observe(repo)
+      case Command.New(name) =>
+        fresh(repo, Some(name))
+      case Command.Init =>
+        fresh(repo, None)
 
   /** A call the server can answer. The local build runs only when the socket does not. */
   private def served(repo: Path, call: Call): URIO[Scope, Completed] =

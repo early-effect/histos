@@ -228,7 +228,7 @@ object Workflow:
   private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
     val test = jobs match
       case Nil => Nil
-      case _   => testJob(jobs, graph.runnerTools, graph.resolution, ClientBinary.present(graph))
+      case _   => testJob(jobs, graph)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob)
@@ -365,16 +365,27 @@ object Workflow:
     )
 
   /** The test job only. Versions, docs, deploy, workflow, and release do not restore these. This workflow does not
-    * fetch a JDK, so it emits no JDK key. Node runs the Scala.js tests. `setup-node` does not set `cache: npm`: that
-    * key is a package lock, and Chekhov does not read it. LLVM supplies clang and lld. The action skips its download
-    * only when `cached` is the string `true`, which `cache-hit` is for this key alone. Chekhov reads Playwright from
-    * `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. Coursier is
-    * the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build file while the
-    * build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs `./histos`
-    * installs `cs` and does not install a JDK.
+    * fetch a JDK, so it emits no JDK key. Node is installed for a JavaScript module, or when Playwright is installed.
+    * `setup-node` does not set `cache: npm`: that key is a package lock, and Chekhov does not read it. LLVM is
+    * installed for a native module. The action skips its download only when `cached` is the string `true`, which
+    * `cache-hit` is for this key alone. Chekhov reads Playwright from `~/.cache/chekhov`. An unset
+    * `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A Playwright revision installs the browser
+    * even when no module is Firefox, because a JVM suite can launch it. `npm install` and `install firefox` run only
+    * when that cache misses. `install-deps firefox` runs on every visit: it is apt, and a runner does not keep those
+    * packages. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names
+    * the build file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job
+    * that runs `./histos` uses the setup action and does not install a JDK or the `cs` binary.
     */
-  private def steps(tools: RunnerTools, resolution: Resolution): List[String] =
-    nodeStep(tools.node) ++ llvmStep(tools.llvm) ++ playwrightStep(tools.playwright) ++ coursierStep(resolution)
+  private def steps(
+      tools: RunnerTools,
+      resolution: Resolution,
+      need: ToolNeed,
+      gate: Boolean,
+  ): List[String] =
+    nodeStep(if need.node then tools.node else None, gate) ++
+      llvmStep(if need.llvm then tools.llvm else None, gate) ++
+      playwrightStep(if need.playwright then tools.playwright else None, gate) ++
+      coursierStep(resolution)
 
   /** Current major. v4 still targets Node 20. */
   private val ToolCache = "actions/cache@v6"
@@ -392,14 +403,20 @@ object Workflow:
   private def toolKey(name: String, revision: String): String =
     s"$name-$revision-$${{ runner.os }}-$${{ runner.arch }}"
 
-  private def cacheStep(id: Option[String], paths: List[String], key: String): List[String] =
+  private def cacheStep(
+      id: Option[String],
+      paths: List[String],
+      key: String,
+      condition: Option[String] = None,
+  ): List[String] =
     paths match
       case Nil => Nil
       case _   =>
         val ident = id match
           case None       => Nil
           case Some(name) => List(s"        id: $name")
-        List(s"      - uses: $ToolCache") ++ ident ++ List("        with:") ++ cachePaths(paths) ++ List(
+        val guard = condition.toList.map(text => s"        if: $text")
+        List(s"      - uses: $ToolCache") ++ ident ++ guard ++ List("        with:") ++ cachePaths(paths) ++ List(
           s"          key: ${quote(key)}"
         )
 
@@ -411,64 +428,74 @@ object Workflow:
   private def coursierStep(resolution: Resolution): List[String] =
     cacheStep(None, List(CoursierCache), coursierKey(resolution))
 
-  /** `apps` empty skips `sbtn`. Runners already have `JAVA_HOME`, so this step does not install a JDK. */
-  private val CoursierCli = "coursier/setup-action@v3.0.4"
+  /** The composite action in this repo. It installs the shim and restores the caches. It does not install a JDK. */
+  private val Setup = "./.github/actions/setup"
 
   private def coursierCli: List[String] =
-    List(
-      s"      - uses: $CoursierCli",
-      "        with:",
-      s"          apps: ${quote("")}",
-    )
+    List(s"      - uses: $Setup")
 
-  private def nodeStep(floor: Option[NodeFloor]): List[String] =
+  private def nodeStep(floor: Option[NodeFloor], gate: Boolean): List[String] =
     floor match
       case None        => Nil
       case Some(major) =>
-        List(
-          "      - uses: actions/setup-node@v4",
+        val guard = if gate then List("        if: matrix.node == 'true'") else Nil
+        List("      - uses: actions/setup-node@v4") ++ guard ++ List(
           "        with:",
           s"          node-version: ${quote(major.value.toString)}",
         )
 
-  private def llvmStep(revision: Option[ToolRevision]): List[String] =
+  private def llvmStep(revision: Option[ToolRevision], gate: Boolean): List[String] =
     revision match
       case None         => Nil
       case Some(pinned) =>
         val directory = "${{ runner.temp }}/llvm"
-        cacheStep(Some("llvm"), List(directory), toolKey("llvm", pinned.value)) ++ List(
+        val guard     = if gate then Some("matrix.llvm == 'true'") else None
+        cacheStep(Some("llvm"), List(directory), toolKey("llvm", pinned.value), guard) ++ List(
           "      - uses: KyleMayes/install-llvm-action@v2.0.9",
+        ) ++ guard.toList.map(text => s"        if: $text") ++ List(
           "        with:",
           s"          version: ${quote(pinned.value)}",
           s"          directory: ${quote(directory)}",
           "          cached: \"${{ steps.llvm.outputs.cache-hit }}\"",
         )
 
-  private def playwrightStep(revision: Option[ToolRevision]): List[String] =
+  private def playwrightStep(revision: Option[ToolRevision], gate: Boolean): List[String] =
     revision match
       case None         => Nil
       case Some(pinned) =>
         val version = pinned.value
+        val cell    = if gate then Some("matrix.playwright == 'true'") else None
+        val missed  =
+          if gate then "matrix.playwright == 'true' && steps.playwright.outputs.cache-hit != 'true'"
+          else "steps.playwright.outputs.cache-hit != 'true'"
         cacheStep(
-          None,
+          Some("playwright"),
           List(s"~/.cache/chekhov/playwright/$version", PlaywrightBrowsers),
           toolKey("playwright", version),
+          cell,
         ) ++ List(
           "      - run: |",
           s"          dir=\"$$HOME/.cache/chekhov/playwright/$version\"",
           "          mkdir -p \"$dir\"",
           s"          npm install --prefix \"$$dir\" --no-fund --no-audit --no-progress playwright@$version",
-          "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
           "          node \"$dir/node_modules/playwright/cli.js\" install firefox",
-        )
+          s"        if: $missed",
+        ) ++ List(
+          "      - run: |",
+          s"          dir=\"$$HOME/.cache/chekhov/playwright/$version\"",
+          "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
+        ) ++ (if gate then List("        if: matrix.playwright == 'true'") else Nil)
 
-  private def testJob(
-      jobs: List[TestJob],
-      tools: RunnerTools,
-      resolution: Resolution,
-      client: Boolean,
-  ): List[String] =
-    val prepare = steps(tools, resolution) ++ clientStep(client)
+  private def testJob(jobs: List[TestJob], graph: ProjectGraph): List[String] =
+    val modules = graph.projects.collect { case module: Module => module }
+    val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
+    val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
+    val matrix  = jobs.exists {
+      case TestJob.Split(_, _, _) => true
+      case _                      => false
+    }
+    val client = jobs.exists(job => linksClient(modulesOf(job, modules)))
+    val prepare = steps(graph.runnerTools, graph.resolution, any, matrix) ++ clientStep(client, matrix)
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
@@ -485,20 +512,69 @@ object Workflow:
           "      fail-fast: false",
           "      matrix:",
           "        include:",
-        ) ++ jobs.flatMap(include) ++ List(
+        ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, matrix && (any.any || client))) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ coursierCli ++ prepare ++ testRun("${{ matrix.command }}")
 
   /** Link `dist/histos-client` before the suite, so the launcher execs that binary. LLVM is already on `PATH`. */
-  private def clientStep(present: Boolean): List[String] =
-    if present then List(s"      - run: ${quote("./histos client")}") else Nil
+  private def clientStep(present: Boolean, gate: Boolean): List[String] =
+    if present then
+      val guard = if gate then List("        if: matrix.client == 'true'") else Nil
+      List(s"      - run: ${quote("./histos client")}") ++ guard
+    else Nil
 
-  private def include(job: TestJob): List[String] =
-    List(
+  private def include(job: TestJob, modules: List[Module], tools: RunnerTools, flags: Boolean): List[String] =
+    val rows = List(
       s"          - name: ${quote(slug(job))}",
       s"            command: ${quote(argv(job).mkString(" "))}",
     )
+    if !flags then rows
+    else
+      val need   = toolNeed(modulesOf(job, modules), tools)
+      val chosen = modulesOf(job, modules)
+      rows ++ List(
+        s"            node: ${quote(need.node.toString)}",
+        s"            llvm: ${quote(need.llvm.toString)}",
+        s"            playwright: ${quote(need.playwright.toString)}",
+        s"            client: ${quote(linksClient(chosen).toString)}",
+      )
+
+  private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean):
+    def ||(other: ToolNeed): ToolNeed =
+      ToolNeed(node || other.node, llvm || other.llvm, playwright || other.playwright)
+
+    def any: Boolean = node || llvm || playwright
+
+  private def toolNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
+    val native     = modules.exists(_.platforms.all.contains(Platform.Native))
+    val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
+    val browser    = tools.playwright.isDefined
+    ToolNeed(
+      tools.node.isDefined && (javascript || browser),
+      tools.llvm.isDefined && native,
+      browser,
+    )
+
+  private def modulesOf(job: TestJob, modules: List[Module]): List[Module] =
+    job match
+      case TestJob.Aggregate(TestTarget.Entire) => modules
+      case TestJob.Aggregate(TestTarget.Named(first, rest)) =>
+        val names = first :: rest
+        modules.filter(module => names.contains(module.name))
+      case TestJob.Split(module, platform, _) =>
+        val named = module match
+          case ModuleRef.All       => modules
+          case ModuleRef.One(name) => modules.filter(_.name == name)
+        platform match
+          case PlatformRef.All           => named
+          case PlatformRef.One(selected) => named.filter(_.platforms.all.contains(selected))
+
+  private def linksClient(modules: List[Module]): Boolean =
+    modules.exists: module =>
+      module.name.value == ClientBinary.moduleName &&
+        module.platforms.all.contains(Platform.Native) &&
+        module.application.nonEmpty
 
   private def slug(job: TestJob): String =
     job match
@@ -547,9 +623,7 @@ object Workflow:
       |    runs-on: $Runner
       |    steps:
       |      - uses: $Checkout
-      |      - uses: $CoursierCli
-      |        with:
-      |          apps: ""
+      |      - uses: $Setup
       |      - run: "./histos run versions"""".stripMargin
 
   private val workflowJob: String =
@@ -557,9 +631,7 @@ object Workflow:
       |    runs-on: $Runner
       |    steps:
       |      - uses: $Checkout
-      |      - uses: $CoursierCli
-      |        with:
-      |          apps: ""
+      |      - uses: $Setup
       |      - run: "./histos workflow --check"""".stripMargin
 
   private def quote(text: String): String =

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Generated from the manual ship. `histos workflow --update` rewrites this file.
-# A local assembly is checked against .histos/assembly.sha256. Otherwise `cs fetch` reads the version file.
+# A local assembly is checked against .histos/assembly.sha256. Otherwise the user shim runs.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 version=0.0.2-SNAPSHOT
@@ -10,13 +10,15 @@ hash_of() {
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 valid_sha() { printf '%s\n' "$1" | awk 'length($0)==64 && $0 !~ /[^0-9a-fA-F]/ {ok=1} END {exit !ok}'; }
+os=$(uname -s 2>/dev/null || true)
+case $os in
+  MINGW*|MSYS*|CYGWIN*|Windows*)
+    fail "Histos runs on macOS and Linux. On Windows, use WSL. A native Windows build may come later."
+    ;;
+esac
 java_guide='A JDK 21 or newer is required. Histos does not install it.
 macOS: brew install --cask temurin@21
-Linux and Windows: https://adoptium.net/temurin/releases?version=21'
-cs_guide='The cs command from Coursier 2.1 or newer is required. Histos does not install it.
-macOS: brew install coursier/formulas/coursier
-The Homebrew core formula provides coursier and does not.
-Linux and Windows: https://get-coursier.io/docs/cli-installation and put the cs binary on PATH.'
+Linux: https://adoptium.net/temurin/releases?version=21'
 java_bin=$(command -v java) || fail "java is not on PATH
 $java_guide"
 java_text=$("$java_bin" -version 2>&1 || true)
@@ -47,98 +49,10 @@ if [ -n "$jar" ]; then
   [ -f "$jar" ] || fail "no assembly at $jar"
   [ "$(hash_of "$jar")" = "$expected" ] || fail "checksum mismatch"
 else
-  props=$root/build.properties
-  [ -f "$props" ] || fail "missing build.properties; restore the committed version or use a source assembly"
-  parse_version() {
-    LC_ALL=C awk -v version="$version" '
-      function bad() { failed = 1; exit 1 }
-      function pointer(s) {
-        return s ~ /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT$/
-      }
-      function stamp_ok(s, y, m, d, h, n, t, days) {
-        if (length(s) != 15 || substr(s, 9, 1) != ".") return 0
-        if (substr(s, 1, 8) !~ /^[0-9]+$/ || substr(s, 10, 6) !~ /^[0-9]+$/) return 0
-        y = substr(s, 1, 4) + 0; m = substr(s, 5, 2) + 0; d = substr(s, 7, 2) + 0
-        h = substr(s, 10, 2) + 0; n = substr(s, 12, 2) + 0; t = substr(s, 14, 2) + 0
-        days = (m == 2 ? 28 + (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) : (m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31))
-        return y >= 1 && m >= 1 && m <= 12 && d >= 1 && d <= days && h < 24 && n < 60 && t < 60
-      }
-      function channel_of(s, rest, stamp, ship) {
-        if (pointer(s)) return s
-        if (match(s, /-[1-9][0-9]*$/)) {
-          rest = substr(s, 1, RSTART - 1)
-          if (length(rest) >= 16 && substr(rest, length(rest) - 15, 1) == "-") {
-            stamp = substr(rest, length(rest) - 14)
-            ship = substr(rest, 1, length(rest) - 16)
-            if (stamp_ok(stamp) && pointer(ship "-SNAPSHOT")) return ship "-SNAPSHOT"
-          }
-        }
-        return ""
-      }
-      { sub(/^[ \t\r]+/, ""); sub(/[ \t\r]+$/, "") }
-      /^$/ || /^#/ { next }
-      {
-        eq = index($0, "=")
-        if (eq <= 1) bad()
-        key = substr($0, 1, eq - 1)
-        value = substr($0, eq + 1)
-        gsub(/^[ \t]+|[ \t]+$/, "", key)
-        gsub(/^[ \t]+|[ \t]+$/, "", value)
-        if (key != "histos.version" || value == "") bad()
-        if (seen++) bad()
-        line = value
-      }
-      END {
-        if (failed || line == "") exit 1
-        ch = channel_of(line)
-        if (ch == "") exit 1
-        if (!(ch == version || (version !~ /-SNAPSHOT$/ && ch == version "-SNAPSHOT"))) exit 1
-        print line
-        if (line ~ /-SNAPSHOT$/) print "pointer"
-        else print "revision"
-      }
-    ' "$1"
-  }
-  if ! parsed=$(parse_version "$props"); then fail "invalid build.properties"; fi
-  line=$(printf '%s\n' "$parsed" | awk 'NR==1 { print; exit }')
-  kind=$(printf '%s\n' "$parsed" | awk 'NR==2 { print; exit }')
-  [ -n "$line" ] && [ -n "$kind" ] || fail "invalid build.properties"
-  repo=${HISTOS_LAUNCHER_REPO:-https://central.sonatype.com/repository/maven-snapshots}
-  case $repo in
-    *[[:space:]]*) fail "launcher repository is not a supported base: $repo" ;;
-    https://*|http://127.0.0.1|http://127.0.0.1/*|http://127.0.0.1:*|http://localhost|http://localhost/*|http://localhost:*|file:///*) ;;
-    *) fail "launcher repository is not a supported base: $repo" ;;
-  esac
-  cs_bin=$(command -v cs) || fail "coursier is not on PATH
-$cs_guide"
-  cs_text=$("$cs_bin" version 2>&1 || true)
-  if ! cs_found=$(printf '%s\n' "$cs_text" | awk '
-    match($0, /[0-9]+\.[0-9]+(\.[0-9]+)?/) { print substr($0, RSTART, RLENGTH); found = 1; exit }
-    END { if (!found) exit 1 }
-  '); then
-    fail "coursier version is unreadable
-$cs_guide"
-  fi
-  cs_major=$(printf '%s\n' "$cs_found" | awk -F. '{ print $1 + 0 }')
-  cs_minor=$(printf '%s\n' "$cs_found" | awk -F. '{ print $2 + 0 }')
-  if [ "$cs_major" -lt 2 ] || { [ "$cs_major" -eq 2 ] && [ "$cs_minor" -lt 1 ]; }; then
-    fail "coursier $cs_found is older than 2.1
-$cs_guide"
-  fi
-  if ! output=$(
-    if [ "$kind" = pointer ]; then
-      COURSIER_TTL=0s
-      export COURSIER_TTL
-    else
-      unset COURSIER_TTL
-    fi
-    "$cs_bin" fetch --no-default -r "$repo" "rocks.earlyeffect:histos:$line"
-  ); then
-    fail "launcher fetch failed"
-  fi
-  paths=$(printf '%s\n' "$output" | awk 'NF { c++ } END { print c + 0 }')
-  [ "$paths" -eq 1 ] || fail "launcher fetch did not print one jar"
-  jar=$(printf '%s\n' "$output" | awk 'NF { print; exit }')
+  home=${HISTOS_HOME:-$HOME/.histos}
+  shim=$home/bin/histos
+  [ -x "$shim" ] || fail "histos is not installed. Run the install script, then export PATH=\"\$HOME/.histos/bin:\$PATH\""
+  exec "$shim" "$@"
 fi
 shell_quote() {
   out="'"

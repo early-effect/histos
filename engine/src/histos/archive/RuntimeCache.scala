@@ -4,18 +4,11 @@ import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.file.{Files, LinkOption, Path}
 import java.nio.file.attribute.{
-  AclEntry,
-  AclEntryFlag,
-  AclEntryPermission,
-  AclEntryType,
-  AclFileAttributeView,
-  FileAttribute,
   PosixFileAttributeView,
   PosixFilePermission,
   PosixFilePermissions,
   UserPrincipal,
 }
-import java.util.EnumSet
 
 import scala.jdk.CollectionConverters.*
 
@@ -47,15 +40,6 @@ private[histos] object RuntimeCache:
     PosixFilePermission.OTHERS_WRITE,
     PosixFilePermission.OTHERS_EXECUTE,
   )
-  private val writes = Set(
-    AclEntryPermission.WRITE_DATA,
-    AclEntryPermission.APPEND_DATA,
-    AclEntryPermission.DELETE_CHILD,
-    AclEntryPermission.WRITE_ACL,
-    AclEntryPermission.WRITE_OWNER,
-    AclEntryPermission.DELETE,
-  )
-
   def prepare(root: Path): IO[RuntimeCacheError, Unit] = owner.flatMap: principal =>
     for
       // Lexical normalization can erase an alias before physical ancestry is checked.
@@ -66,24 +50,7 @@ private[histos] object RuntimeCache:
       system <- io(filesystemRoot, IoFault.Stat)(
         Files.getOwner(filesystemRoot)
       )
-      administrators <- io(filesystemRoot, IoFault.Stat):
-        Option(
-          Files.getFileAttributeView(
-            filesystemRoot,
-            classOf[AclFileAttributeView],
-          )
-        ).toList
-          .flatMap(view =>
-            view.getAcl.asScala.collect:
-              case entry
-                  if entry.`type`() == AclEntryType.ALLOW && entry
-                    .permissions()
-                    .contains(AclEntryPermission.WRITE_OWNER) && entry
-                    .permissions()
-                    .contains(AclEntryPermission.WRITE_ACL) =>
-                entry.principal()
-          )
-          .toSet + system
+      administrators = Set(system)
       ancestors = Iterator
         .iterate(Option(absolute.getParent))(
           _.flatMap(path => Option(path.getParent))
@@ -122,7 +89,7 @@ private[histos] object RuntimeCache:
       _ <-
         if exists then ZIO.unit
         else
-          create(path, principal).catchSome { case RuntimeCacheError.Io(failure @ IoFailure(_, IoFault.Create)) =>
+          create(path).catchSome { case RuntimeCacheError.Io(failure @ IoFailure(_, IoFault.Create)) =>
             io(path, IoFault.Stat)(Files.isDirectory(path)).flatMap(present =>
               if present then ZIO.unit
               else ZIO.fail(RuntimeCacheError.Io(failure))
@@ -154,10 +121,7 @@ private[histos] object RuntimeCache:
         .reverse
       ZIO.foreachDiscard(chain)(ancestor(_, principal, administrators))
 
-  private def create(
-      path: Path,
-      principal: UserPrincipal,
-  ): IO[RuntimeCacheError, Unit] =
+  private def create(path: Path): IO[RuntimeCacheError, Unit] =
     for
       views <- io(path, IoFault.Stat)(
         path.getFileSystem.supportedFileAttributeViews()
@@ -170,13 +134,6 @@ private[histos] object RuntimeCache:
               PosixFilePermissions.asFileAttribute(privateMode),
             )
           ).unit
-        else if views.contains("acl") then
-          val attribute = new FileAttribute[java.util.List[AclEntry]]:
-            def name(): String                    = "acl:acl"
-            def value(): java.util.List[AclEntry] = List(
-              ownerEntry(principal)
-            ).asJava
-          io(path, IoFault.Create)(Files.createDirectory(path, attribute)).unit
         else ZIO.fail(RuntimeCacheError.Unsupported(path))
     yield ()
 
@@ -203,21 +160,7 @@ private[histos] object RuntimeCache:
               .fail(RuntimeCacheError.Shared(path))
               .when(mode.exists(others.contains))
           ).unit
-        case None =>
-          acl(path).flatMap(view =>
-            io(path, IoFault.Stat)(view.getAcl.asScala.toList)
-              .flatMap(entries =>
-                ZIO
-                  .fail(RuntimeCacheError.Shared(path))
-                  .when(
-                    entries.exists(entry =>
-                      entry.`type`() == AclEntryType.ALLOW && entry
-                        .principal() != principal
-                    )
-                  )
-              )
-              .unit
-          )
+        case None => ZIO.fail(RuntimeCacheError.Unsupported(path))
     yield ()
 
   private def ancestor(
@@ -254,39 +197,8 @@ private[histos] object RuntimeCache:
                 ) || mode.contains(PosixFilePermission.OTHERS_WRITE))
               )
           yield ()
-        case None =>
-          acl(path).flatMap(view =>
-            io(path, IoFault.Stat)(view.getAcl.asScala.toList)
-              .flatMap(entries =>
-                ZIO
-                  .fail(RuntimeCacheError.Shared(path))
-                  .when(
-                    entries.exists(entry =>
-                      entry.`type`() == AclEntryType.ALLOW && entry
-                        .principal() != principal && !administrators
-                        .contains(entry.principal()) && entry
-                        .permissions()
-                        .asScala
-                        .exists(writes.contains)
-                    )
-                  )
-              )
-              .unit
-          )
+        case None => ZIO.fail(RuntimeCacheError.Unsupported(path))
     yield ()
-
-  private def acl(path: Path): IO[RuntimeCacheError, AclFileAttributeView] =
-    io(path, IoFault.Stat)(
-      Option(Files.getFileAttributeView(path, classOf[AclFileAttributeView]))
-    ).someOrFail(RuntimeCacheError.Unsupported(path))
-
-  private def ownerEntry(principal: UserPrincipal): AclEntry = AclEntry
-    .newBuilder()
-    .setType(AclEntryType.ALLOW)
-    .setPrincipal(principal)
-    .setPermissions(EnumSet.allOf(classOf[AclEntryPermission]))
-    .setFlags(AclEntryFlag.DIRECTORY_INHERIT, AclEntryFlag.FILE_INHERIT)
-    .build()
 
   private def io[A](path: Path, fault: IoFault)(
       value: => A

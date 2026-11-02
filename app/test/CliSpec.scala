@@ -315,6 +315,17 @@ object CliSpec extends ZIOSpecDefault:
       for parsed <- Cli.parse(List("toolchain"))
       yield assertTrue(parsed == Command.Toolchain)
     ,
+    test("new and init are commands"):
+      for
+        created <- Cli.parse(List("new", "my-app"))
+        here    <- Cli.parse(List("init"))
+        bare    <- Cli.parse(List("new")).either
+      yield assertTrue(
+        created == Command.New("my-app"),
+        here == Command.Init,
+        bare == Left(CliParseError.MissingArgument),
+      )
+    ,
     test("resolve takes update or check, not both"):
       for
         plain  <- Cli.parse(List("resolve"))
@@ -1321,13 +1332,11 @@ object CliSpec extends ZIOSpecDefault:
             .fromEither(Workflow.render(loaded.graph))
             .mapError(_.message)
           _     <- stageFile(dir.resolve("histos"), Some("stale\n"))
-          _     <- stageFile(dir.resolve("histos.bat"), None)
           _     <- stageFile(Workflow.path(dir), Some("stale\n"))
           local <- Cli
             .execute(List("workflow", "--update"), dir, jar)
             .provideSome[Scope](stack)
           localPosix    <- fileBytes(dir.resolve("histos"))
-          localWindows  <- fileBytes(dir.resolve("histos.bat"))
           localWorkflow <- fileBytes(Workflow.path(dir))
           localLock     <- fileBytes(lockPath)
           localPin      <- LauncherPin.read(dir).mapError(_.message)
@@ -1348,19 +1357,16 @@ object CliSpec extends ZIOSpecDefault:
               case error: histos.server.ServerError => error.message
               case error: LoadError                 => error.message
           _      <- stageFile(dir.resolve("histos"), None)
-          _      <- stageFile(dir.resolve("histos.bat"), Some("stale\n"))
           _      <- stageFile(Workflow.path(dir), Some("stale\n"))
           remote <- Cli
             .execute(List("workflow", "--update"), dir, jar)
             .provideSome[Scope](stack)
           remotePosix    <- fileBytes(dir.resolve("histos"))
-          remoteWindows  <- fileBytes(dir.resolve("histos.bat"))
           remoteWorkflow <- fileBytes(Workflow.path(dir))
           remoteLock     <- fileBytes(lockPath)
           remotePin      <- LauncherPin.read(dir).mapError(_.message)
         yield
           val posix    = utf8(LauncherScript.posix(pin.version))
-          val windows  = utf8(LauncherScript.windows(pin.version))
           val workflow = utf8(rendered)
           assertTrue(
             launcher(loaded.graph),
@@ -1368,14 +1374,12 @@ object CliSpec extends ZIOSpecDefault:
             local.exit == CliExit.Success,
             local.err.isEmpty,
             localPosix == posix,
-            localWindows == windows,
             localWorkflow == workflow,
             localLock == lockBytes,
             localPin.version == pin.version,
             remote.exit == CliExit.Success,
             remote.err.isEmpty,
             remotePosix == posix,
-            remoteWindows == windows,
             remoteWorkflow == workflow,
             remoteLock == lockBytes,
             remotePin.version == pin.version,

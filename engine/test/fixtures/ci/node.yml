@@ -11,9 +11,7 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-      - uses: coursier/setup-action@v3.0.4
-        with:
-          apps: ""
+      - uses: ./.github/actions/setup
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -28,7 +26,5 @@ jobs:
     runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
-      - uses: coursier/setup-action@v3.0.4
-        with:
-          apps: ""
+      - uses: ./.github/actions/setup
       - run: "./histos workflow --check"

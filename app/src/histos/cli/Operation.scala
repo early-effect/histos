@@ -26,7 +26,8 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe =>
+      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.New(_) |
+          Command.Init =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)

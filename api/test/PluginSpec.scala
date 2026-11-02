@@ -138,6 +138,8 @@ object PluginSpec extends ZIOSpecDefault:
           "cancel",
           "preview",
           "observe",
+          "new",
+          "init",
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,

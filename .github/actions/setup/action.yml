@@ -1,0 +1,47 @@
+name: Setup Histos
+description: Install the Histos shim and restore toolchains, Coursier, and the content store
+inputs:
+  version:
+    description: Histos version. Empty reads build.properties when a command runs.
+    required: false
+    default: ""
+  java:
+    description: JDK major for actions/setup-java. Empty leaves the JDK the runner already has.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: JDK
+      if: inputs.java != ''
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java }}
+    - name: Toolchains
+      uses: actions/cache@v6
+      with:
+        path: ~/.histos/toolchains
+        key: histos-toolchains-${{ inputs.version }}-${{ hashFiles('build.properties') }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Coursier
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/coursier/v1
+        key: coursier-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Content store
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/histos
+        key: histos-store-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}
+    - name: Install
+      shell: bash
+      env:
+        HISTOS_VERSION: ${{ inputs.version }}
+      run: |
+        shim="${GITHUB_ACTION_PATH}/histos"
+        "$shim"
+        echo "$HOME/.histos/bin" >> "$GITHUB_PATH"
+        if [ -n "$HISTOS_VERSION" ]; then
+          "$HOME/.histos/bin/histos" toolchain install "$HISTOS_VERSION"
+          printf '%s\n' "$HISTOS_VERSION" > "$HOME/.histos/default"
+        fi

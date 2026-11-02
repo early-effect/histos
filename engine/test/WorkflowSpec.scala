@@ -139,8 +139,8 @@ object WorkflowSpec extends ZIOSpecDefault:
         llvm       <- text("llvm.yml")
         playwright <- text("playwright.yml")
       yield assertTrue(
-        Workflow.render(graph(Splits.aggregate, nodeOnly)) == Right(node),
-        Workflow.render(graph(Splits.aggregate, llvmOnly)) == Right(llvm),
+        Workflow.render(graph(Splits.aggregate, nodeOnly, Platform.Js)) == Right(node),
+        Workflow.render(graph(Splits.aggregate, llvmOnly, Platform.Native)) == Right(llvm),
         Workflow.render(graph(Splits.aggregate, playwrightOnly)) == Right(playwright),
         !node.contains("restore-keys") && !llvm.contains("restore-keys") && !playwright.contains("restore-keys"),
         !node.contains("cache: npm") && !node.contains("setup-java"),
@@ -148,10 +148,44 @@ object WorkflowSpec extends ZIOSpecDefault:
           node.contains("${{ runner.os }}") && node.contains("${{ runner.arch }}"),
         llvm.contains("llvm-20.1.8-${{ runner.os }}-${{ runner.arch }}") &&
           llvm.contains("steps.llvm.outputs.cache-hit"),
+        playwright.contains("id: playwright") &&
+        playwright.contains("steps.playwright.outputs.cache-hit != 'true'") &&
+        playwright.contains("install-deps firefox") &&
         playwright.contains("playwright-1.49.0-${{ runner.os }}-${{ runner.arch }}") &&
           playwright.contains("~/.cache/chekhov/playwright/1.49.0") &&
           playwright.contains("~/.cache/ms-playwright"),
+        Workflow.render(
+          graph(
+            Splits.aggregate,
+            RunnerTools(Some(NodeFloor(25)), Some(ToolRevision("21.1.8")), None),
+          )
+        ) match
+          case Right(copied) =>
+            !copied.contains("setup-node") && !copied.contains("install-llvm-action") &&
+            !copied.contains("playwright")
+          case Left(_) => false,
       )
+    ,
+    test("a jvm cell does not install llvm while the native cell does"):
+      val jvm    = module("core", Platform.Jvm, Nil)
+      val native = module("native", Platform.Native, Nil)
+      val built  = ProjectGraph.trusted(
+        List(jvm, native),
+        Splits.of(Axis.Platform),
+        Catalog.empty,
+        None,
+        Nil,
+        runnerTools = RunnerTools(None, Some(ToolRevision("21.1.8")), None),
+      )
+      assertTrue:
+        Workflow.render(built) match
+          case Right(yaml) =>
+            yaml.contains("if: matrix.llvm == 'true'") &&
+            yaml.contains("install-llvm-action") &&
+            yaml.contains("llvm: \"false\"") &&
+            yaml.contains("llvm: \"true\"") &&
+            !yaml.contains("setup-node")
+          case Left(_) => false
     ,
     test("a locked build keys Coursier on the pin"):
       val open = graph(Splits.aggregate, nodeOnly)
@@ -289,9 +323,13 @@ object WorkflowSpec extends ZIOSpecDefault:
       ),
   )
 
-  private def graph(splits: Splits, tools: RunnerTools = RunnerTools.empty): ProjectGraph =
-    val library = module("core", Platform.Jvm, Nil)
-    val suite   = module("tests", Platform.Jvm, List(core))
+  private def graph(
+      splits: Splits,
+      tools: RunnerTools = RunnerTools.empty,
+      platform: Platform = Platform.Jvm,
+  ): ProjectGraph =
+    val library = module("core", platform, Nil)
+    val suite   = module("tests", platform, List(core))
     ProjectGraph.trusted(
       List(library, suite),
       splits,
@@ -304,6 +342,9 @@ object WorkflowSpec extends ZIOSpecDefault:
   /** The tools and the manual ship this repository names. The module list does not appear in an aggregate render. */
   private def repository: Either[histos.BuildError, ProjectGraph] =
     val api = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
+    val native = histos
+      .module("native", Platform.Native)(ScalaVersion("3.10.0"))
+      .clang(histos.ClangMajor(21))
     histos.Projects
       .organization(histos.Organization("rocks.earlyeffect"))
       .runnerTools(
@@ -315,6 +356,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       )(
         histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
         api,
+        native,
       )
 
   private def module(
@@ -468,9 +510,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                   |      contents: read
                   |    steps:
                   |      - uses: actions/checkout@v7
-                  |      - uses: coursier/setup-action@v3.0.4
-                  |        with:
-                  |          apps: ""
+                  |      - uses: ./.github/actions/setup
                   |      - run: "./histos run dev.example/site"
                   |""".stripMargin &&
               !body.contains("schedule:") && !body.contains("cron:")
@@ -754,9 +794,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |      contents: read
       |    steps:
       |      - uses: actions/checkout@v7
-      |      - uses: coursier/setup-action@v3.0.4
-      |        with:
-      |          apps: ""
+      |      - uses: ./.github/actions/setup
       |      - run: "./histos publish release histos"
       |        env:
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
@@ -782,9 +820,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |    runs-on: ubuntu-26.04
       |    steps:
       |      - uses: actions/checkout@v7
-      |      - uses: coursier/setup-action@v3.0.4
-      |        with:
-      |          apps: ""
+      |      - uses: ./.github/actions/setup
       |      - run: "./histos publish promote ${{ inputs.deployment }}"
       |        env:
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}

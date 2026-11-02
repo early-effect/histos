@@ -27,8 +27,9 @@ import zio.cli.{
 object Grammar:
   private enum Wire:
     case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Toolchain,
-      Reload, Reboot, Client
+      Reload, Reboot, Client, Init
     case Cancel(id: String)
+    case New(name: String)
     case Run(name: String, platform: Option[String])
     case Test(projects: List[String])
     case TestOnly(args: List[String])
@@ -156,13 +157,15 @@ object Grammar:
         Wire.PreviewRun(name, platform.headOption)
       }
   private val client  = CliCommand("client").map(_ => Wire.Client)
+  private val fresh   = CliCommand("new", Args.text("name")).map(Wire.New(_))
+  private val init    = CliCommand("init").map(_ => Wire.Init)
   private val observe = CliCommand("observe").map(_ => Wire.Observe)
   private val preview = CliCommand("preview").subcommands(
     previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | client | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
+      version | graph | run | test | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -231,6 +234,8 @@ object Grammar:
             Command.TestQuick(modules, patterns)
           }
       case Wire.Client            => ZIO.succeed(Command.Client)
+      case Wire.New(name)        => ZIO.succeed(Command.New(name))
+      case Wire.Init             => ZIO.succeed(Command.Init)
       case Wire.Observe           => ZIO.succeed(Command.Observe)
       case Wire.Compile(projects) =>
         projectList("compile", projects).map(Command.Compile(_))
