@@ -57,9 +57,26 @@ object AssemblySpec extends ZIOSpecDefault:
       Path.of("..").resolve(name),
     )
 
-  /** `dist/histos.jar` when assembly wrote it, then the jar Coursier cached for this coordinate. */
+  /** `dist/histos.jar` when assembly wrote it, then the shim's toolchain jar, then the jar Coursier cached for this
+    * coordinate. CI has no `dist/` file. The shim keeps the jar it fetched under `~/.histos/toolchains`.
+    */
   private def runtimeJars(repo: Option[String], home: Option[String]): List[Path] =
-    rooted(repo, "dist/histos.jar") ++ coursierJars(home)
+    rooted(repo, "dist/histos.jar") ++ toolchainJars(home) ++ coursierJars(home)
+
+  private def toolchainJars(home: Option[String]): List[Path] =
+    val roots = home.filter(_.nonEmpty).map(Path.of(_)).toList.map(_.resolve(".histos").resolve("toolchains"))
+    roots.flatMap: dir =>
+      if !Files.isDirectory(dir) then Nil
+      else
+        val stream = Files.list(dir)
+        try
+          stream.iterator.asScala
+            .filter(Files.isDirectory(_))
+            .map(_.resolve("histos.jar"))
+            .filter(Files.isRegularFile(_))
+            .toList
+            .sortBy(path => -Files.getLastModifiedTime(path).toMillis)
+        finally stream.close()
 
   private def coursierJars(home: Option[String]): List[Path] =
     val roots = home
