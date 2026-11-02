@@ -10,10 +10,11 @@ import zio.ZIO
 
 /** The scalac classpath of one cell. Compile and BSP both call this.
   *
-  * `paths` is the runtime library, then the lock jars, then the upstream class directories. On the JVM the lock's copy
-  * of the standard library is dropped, because that runtime is already first. A class directory is named even when it
-  * does not exist yet: import runs before compile. `jars` is what compile places after the upstream directories.
-  * `JvmCompile` prepends the output directory and the runtime, and an upstream class has to beat a lock jar.
+  * `paths` is the runtime library, then the lock jars, then the upstream class directories. On the JVM and on Native
+  * the lock's copy of the JVM standard library is dropped, because the compiler already puts that runtime first. A
+  * class directory is named even when it does not exist yet: import runs before compile. `jars` is what compile places
+  * after the upstream directories. `JvmCompile` prepends the output directory and the runtime, and an upstream class
+  * has to beat a lock jar.
   */
 final case class ScalacClasspath(paths: List[Path], jars: List[Path], hashes: List[Sha256])
 
@@ -46,7 +47,7 @@ object ScalacClasspath:
             val id =
               s"${artifact.organization}\n${artifact.name}\n${artifact.revision}\n${artifact.classifier}\n${artifact.sha256.value}"
             if seen.contains(id) then (kept, seen) else (kept :+ artifact, seen + id)
-      val kept = if platform == Platform.Jvm then unique._1.filterNot(standardLibrary) else unique._1
+      val kept = if dropJvmLibrary(platform) then unique._1.filterNot(standardLibrary) else unique._1
       Some(kept.map(_.sha256))
 
   private def standardLibrary(artifact: LockedArtifact): Boolean =
@@ -69,7 +70,7 @@ object ScalacClasspath:
         .foreach(asked):
           case (item, itemScope) => load(item, version, platform, lock, repositories, itemScope)
         .map(merge)
-      kept = if platform == Platform.Jvm then withoutStdlib(fetched) else fetched
+      kept = if dropJvmLibrary(platform) then withoutStdlib(fetched) else fetched
       runtime <- runtimeOf(module, version, platform)
     yield
       val dirs = directories(repo, module, chain, version, platform, scope)
@@ -125,7 +126,14 @@ object ScalacClasspath:
         view.module(cell)
       .mapBoth(GraphCompileError.Lock(_), fetched)
 
-  /** JVM compile prepends `JvmCompile.runtime`. The lock's copy of that library has to stay off.
+  /** JVM and Native compile do not keep a resolved `scala-library`. JavaScript supplies its own through `compileWith`.
+    */
+  private def dropJvmLibrary(platform: Platform): Boolean =
+    platform match
+      case Platform.Jvm | Platform.Native => true
+      case Platform.Js                    => false
+
+  /** JVM compile prepends `JvmCompile.runtime`. Native compile does too. The lock's copy of that library stays off.
     */
   private def withoutStdlib(fetched: Fetched): Fetched =
     val kept = fetched.paths

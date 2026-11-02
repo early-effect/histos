@@ -208,7 +208,7 @@ object NativeLink:
 
   /** The toolchain appends its own native libraries. A resolved jar of the same library, at any revision, is dropped.
     */
-  private def withoutLibraries(
+  private[native] def withoutLibraries(
       classpath: List[Path],
       libraries: List[Path],
   ): List[Path] =

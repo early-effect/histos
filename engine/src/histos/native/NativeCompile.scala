@@ -7,7 +7,8 @@ import histos.resolve.LockedTools
 import zio.{IO, ZIO}
 
 /** Compile a Native cell with that revision's compiler plugin. Linking is separate. The engine does not load the
-  * plugin.
+  * plugin. The compiler keeps its own `scala-library`. A resolved copy of that jar, and a resolved native library at
+  * any other revision, is dropped. The toolchain libraries are already first.
   */
 object NativeCompile:
   def compile(
@@ -29,7 +30,9 @@ object NativeCompile:
           .mapError(CompileError.NativeFetch(_))
         compiled <- JvmCompile.compilePrepared(
           request.copy(
-            classpath = libs.libraries ++ request.classpath,
+            classpath = libs.libraries ++ NativeLink
+              .withoutLibraries(request.classpath, libs.libraries)
+              .filterNot(JvmCompile.isStandardLibrary),
             compilationTools = request.compilationTools :+ libs.input,
             compilerPlugins =
               request.compilerPlugins :+ libs.input.copy(artifacts = libs.input.artifacts.filter(_.path == libs.plugin)),

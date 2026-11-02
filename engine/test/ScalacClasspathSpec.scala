@@ -150,6 +150,87 @@ object ScalacClasspathSpec extends ZIOSpecDefault:
           !Files.exists(libClasses),
           !Files.exists(appClasses),
         )
+    ,
+    test("a native classpath keeps the ordinary jar and omits the JVM standard library"):
+      ZIO.scoped:
+        for
+          root  <- temp
+          maven <- ZIO.attempt(Files.createDirectories(root.resolve("repo")).toRealPath())
+          cache <- ZIO.attempt(Files.createDirectories(root.resolve("cache")))
+          extraJar   = emptyJar
+          libraryJar = emptyJar
+          extraSha   = Sha256.of(Chunk.fromArray(extraJar))
+          librarySha = Sha256.of(Chunk.fromArray(libraryJar))
+          _ <- ZIO.attempt {
+            writeMaven(maven, "dev.example", "extra", "1.0.0", extraJar)
+            writeMaven(maven, "org.scala-lang", "scala-library", "2.13.18", libraryJar)
+          }
+          repo   = Repository.Maven(RepoUrl.file(maven))
+          extra  = Dep.trusted("dev.example", "extra", "1.0.0", DepKind.Java)
+          appDef = module("app", Platform.Native)(version)
+            .clang(histos.ClangMajor(21))
+            .libraryDependencies(extra)
+          built <- ZIO.fromEither(Projects(appDef))
+          app   <- ZIO.fromEither(named(built, "app"))
+          extraArtifact   = artifact("dev.example", "extra", "1.0.0", extraSha, repo)
+          libraryArtifact = artifact("org.scala-lang", "scala-library", "2.13.18", librarySha, repo)
+          directs         = Dep.select(app.dependencies, Platform.Native).map(direct)
+          lock            = DependencyLock(
+            List(
+              LockedCell(
+                app.name,
+                version,
+                Platform.Native,
+                directs,
+                List(extraArtifact, libraryArtifact),
+                Nil,
+              )
+            )
+          )
+          _ <- ZIO.attempt(write(root, "dependencies.lock", DependencyLock.render(lock)))
+          repos = BuildResolvers(built.resolvers)
+          checked <- histos.ToolFixture
+            .at(root, built) {
+              for
+                main <- ScalacClasspath.of(
+                  root,
+                  modules(built),
+                  app,
+                  version,
+                  Platform.Native,
+                  lock,
+                  repos,
+                  ClasspathScope.Compile,
+                )
+                compiled <- Resolve.materialize(
+                  ResolveCell(
+                    app.name,
+                    Dep.select(app.dependencies, Platform.Native),
+                    version,
+                    Platform.Native,
+                    repos,
+                  ),
+                  lock,
+                )
+              yield (main, compiled)
+            }
+            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.beside(cache))
+          (main, compiled) = checked
+          extraPath        = compiled.artifacts.find(_.name == "extra").map(_.path)
+          libraryPath      = compiled.artifacts.find(_.name == "scala-library").map(_.path)
+          picked <- ZIO.fromEither(
+            (extraPath, libraryPath) match
+              case (Some(jar), Some(library)) => Right((jar, library))
+              case _                          => Left(Fault.Shape)
+          )
+          (jar, library) = picked
+        yield assertTrue(
+          absolute(main.paths) == absolute(List(jar)),
+          absolute(main.jars) == absolute(List(jar)),
+          main.hashes == List(extraSha),
+          JvmCompile.isStandardLibrary(library),
+          !absolute(main.paths).contains(library.toAbsolutePath.normalize),
+        ),
   ).provideSomeLayerShared[zio.test.TestEnvironment & zio.Scope](
     histos.ToolFixture.jvm(version)
   ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(4.minutes)

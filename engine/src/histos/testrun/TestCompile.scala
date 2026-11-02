@@ -204,16 +204,16 @@ private[histos] object TestCompile:
         repositories,
       )
       library <- standardLibrary(cell)
-      jvm  = cell.platform == Platform.Jvm
+      drop = dropJvmLibrary(cell.platform)
       kept =
-        if jvm then
+        if drop then
           fetched.paths
             .zip(fetched.hashes)
             .filterNot((path, _) => JvmCompile.isStandardLibrary(path))
         else fetched.paths.zip(fetched.hashes)
       libraryPaths = libraries.map(_.path)
       tail         =
-        if jvm then libraryPaths.filterNot(JvmCompile.isStandardLibrary)
+        if drop then libraryPaths.filterNot(JvmCompile.isStandardLibrary)
         else libraryPaths
       jars           = (kept.map(_._1) ++ tail).distinct
       own            = kept.map(_._2).toSet
@@ -225,6 +225,13 @@ private[histos] object TestCompile:
       upstreamHashes,
       cell.classes :: upstream,
     )
+
+  /** A resolved JVM `scala-library` is a second copy of the compiler runtime. JavaScript supplies its own library list.
+    */
+  private def dropJvmLibrary(platform: Platform): Boolean =
+    platform match
+      case Platform.Jvm | Platform.Native => true
+      case Platform.Js                    => false
 
   /** The JVM suite needs `scala-library` on the child classpath. Js and Native put their own library on the compiler
     * classpath.
