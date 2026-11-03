@@ -47,8 +47,10 @@ final case class PluginOutput(text: String, files: List[WrittenFile])
 
 /** Classpath of one cell after `TaskDep.Compile`.
   *
-  * `compile` is the main class directory, upstream class directories, the JVM standard library, and compile-scope jars.
-  * `test` is that list. When the module has test sources, the test class directory is first and test-scope jars follow.
+  * `compile` is the main class directory, upstream class directories, each module's `src/main/resources` when it
+  * exists, the JVM standard library, and the compile-scope jars of this module and of `dependsOn`. `test` is that list.
+  * When the module has test sources, the test class directory and `src/test/resources` are first and test-scope jars
+  * follow.
   */
 final case class CellClasspath(
     module: ProjectName,
@@ -58,6 +60,9 @@ final case class CellClasspath(
     test: List[Path],
 )
 
+/** The script `TaskDep.Link` wrote. */
+final case class LinkedScript(module: ProjectName, version: ScalaVersion, script: Path)
+
 final case class RunRequest(
     id: PluginTaskId,
     repo: Path,
@@ -65,6 +70,7 @@ final case class RunRequest(
     args: PluginArgs,
     inputs: List[MaterialInput],
     compiled: List[CellClasspath] = Nil,
+    linked: List[LinkedScript] = Nil,
 )
 
 /** The contribution stored on the graph. Not the trait, the classloader, or a function. */

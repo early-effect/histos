@@ -141,7 +141,8 @@ private[zinc] object ScheduleCells:
     else if right.isEmpty then left
     else s"$left\n$right"
 
-  /** A dependency that does not declare this version and platform is not a step. The cell reports it missing.
+  /** An exact cell wins. Otherwise a Scala 3 cell waits on every Scala 3 cell of that module, and a 2.13 cell waits on
+    * the newest 2.13 patch. A miss is reported by the cell, not omitted here.
     */
   private def dependencies(
       key: CellKey,
@@ -156,8 +157,7 @@ private[zinc] object ScheduleCells:
       .flatMap(_.upstream(chosen))
       .filter(names.contains)
       .flatMap: dependency =>
-        val next = (dependency, version, chosen)
-        if declared.contains(next) then List(next) else Nil
+        byName.get(dependency).toList.flatMap(upstream => UpstreamCells.required(version, upstream, chosen, declared))
 
   private def keysOf(
       module: Module,

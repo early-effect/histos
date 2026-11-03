@@ -185,7 +185,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                     task.outputs == List(DeclaredOutput(OutputName("site"), RepoPath("docs/index.html")))
                   case _ => false) &&
                 (plugin.contribution.jobs match
-                  case CiJob(name, task, JobWhen.Always, _) :: Nil =>
+                  case CiJob(name, task, JobWhen.Always, _, _) :: Nil =>
                     name == JobName("docs") && task == TaskName("site")
                   case _ => false)
               case _ => false

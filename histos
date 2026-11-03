@@ -3,7 +3,7 @@
 # A local assembly is checked against .histos/assembly.sha256. Otherwise the user shim runs.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-version=0.0.2-SNAPSHOT
+version=0.1.0-SNAPSHOT
 fail() { echo "histos $version: $*" >&2; exit 1; }
 hash_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
@@ -103,10 +103,14 @@ if [ "$#" -ge 1 ]; then
   esac
 fi
 if [ "$jar_client" -eq 0 ]; then
+  pin_file=$root/build.properties
+  [ -f "$pin_file" ] || fail "missing build.properties"
+  pin_line=$(awk -F= '$1 == "histos.version" { print $2; exit }' "$pin_file")
+  [ -n "$pin_line" ] || fail "missing histos.version"
   HISTOS_JAVA=$java_bin
   HISTOS_JAR=$jar
   HISTOS_ROOT=$root
-  HISTOS_VERSION="histos $version"
+  HISTOS_VERSION="histos $pin_line"
   export HISTOS_JAVA HISTOS_JAR HISTOS_ROOT HISTOS_VERSION
   exec "$client" "$@"
 fi

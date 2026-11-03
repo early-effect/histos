@@ -18,10 +18,16 @@ private[load] object PluginSteps:
       root: PluginTaskId,
       taskOf: PluginTaskId => Option[DeclaredTask],
       cellsOf: DeclaredTask => Either[PluginRunError, List[PluginCells.Cell]],
+      linksOf: DeclaredTask => Either[PluginRunError, List[PluginCells.Cell]],
       compile: PluginCells.Cell => ZIO[
         R,
         PluginFault,
         Unit,
+      ],
+      link: PluginCells.Cell => ZIO[
+        R,
+        PluginFault,
+        String,
       ],
       runOne: (PluginTaskId, DeclaredTask, String) => ZIO[
         R,
@@ -55,13 +61,16 @@ private[load] object PluginSteps:
         case None           => Left(PluginFault.Task(PluginRunError.Unknown(id)))
         case Some(declared) =>
           for
-            cells     <- cellsOf(declared).left.map(PluginFault.Task(_))
-            upstreams <- cells.distinct
-              .foldLeft[Either[PluginFault, List[CellStep]]](Right(Nil)): (acc, cell) =>
-                acc.map(_ :+ compileStep(cell, compile))
-            same = declared.dependsOn.collect:
+            cells <- cellsOf(declared).left.map(PluginFault.Task(_))
+            links <- linksOf(declared).left.map(PluginFault.Task(_))
+            linked      = links.distinct
+            compileOnly = cells.distinct.filterNot(cell => linked.exists(other => same(cell, other)))
+            upstreams   = compileOnly.map(cell => compileStep(cell, compile)) ++ linked.map(cell =>
+              linkStep(cell, compile, link)
+            )
+            sameTasks = declared.dependsOn.collect:
               case TaskDep.Same(name) => PluginTaskId(id.plugin, name)
-            deps <- same.foldLeft[Either[PluginFault, List[CellStep]]](
+            deps <- sameTasks.foldLeft[Either[PluginFault, List[CellStep]]](
               Right(upstreams)
             ): (acc, dep) =>
               acc.flatMap(soFar => task(dep, stack).map(soFar :+ _))
@@ -114,6 +123,29 @@ private[load] object PluginSteps:
         val joined = tail.foldLeft[CellStep](head)((acc, next) => acc.zip(next).map((left, right) => join(left, right)))
         joined.andThenHermetic[String](info)(body)
     step @@ StepAspect.cached @@ StepAspect.remote
+
+  private def linkStep(
+      cell: PluginCells.Cell,
+      compile: PluginCells.Cell => ZIO[R, PluginFault, Unit],
+      link: PluginCells.Cell => ZIO[R, PluginFault, String],
+  ): CellStep =
+    val info = StepInfo(
+      StepId.Cell(cell.module.name, cell.version, cell.platform, Phase.Link),
+      Chunk(
+        Input(
+          InputName("link"),
+          InputValue.Text(
+            s"${cell.module.name.value} ${cell.version.value} ${cell.platform.token}"
+          ),
+        )
+      ),
+      Set(Need.Cpu),
+    )
+    compileStep(cell, compile).andThenHermetic[String](info)(_ => link(cell)) @@
+      StepAspect.cached @@ StepAspect.remote
+
+  private def same(left: PluginCells.Cell, right: PluginCells.Cell): Boolean =
+    left.module.name == right.module.name && left.version == right.version && left.platform == right.platform
 
   private def join(left: String, right: String): String =
     if left.isEmpty then right

@@ -501,6 +501,26 @@ object GraphSpec extends ZIOSpecDefault:
         absent == Left(BuildError.MissingProject("core", core.position)),
       )
     ,
+    test("a compile-only dependency stays on the compile classpath and off the pom list"):
+      val published = dep"dev.zio::zio:2.1.26"
+      val hidden    = dep"rocks.earlyeffect::histos-api:0.1.0".compileOnly
+      assertTrue(
+        Dep.select(List(published, hidden), Jvm) == List(published, hidden),
+        Dep.published(List(published, hidden), Jvm) == List(published),
+      )
+    ,
+    test("scalac flags are the compiler argv"):
+      val flags = ScalacFlags.of(
+        ScalacFlag.Deprecation,
+        ScalacFlag.Feature,
+        ScalacFlag.UnusedAll,
+        ScalacFlag.ImplicitConversions,
+      )
+      assertTrue(
+        flags.argv == List("-deprecation", "-feature", "-Wunused:all", "-language:implicitConversions"),
+        flags.canonical == "deprecation,feature,unused-all,implicit-conversions",
+      )
+    ,
     test("records a builder position"):
       val core = module("core", Jvm)(scala3)
       assertTrue(

@@ -217,6 +217,29 @@ object ZincSpec extends ZIOSpecDefault:
             ),
         )
     ,
+    test("a compile-only histos api jar stays on the classpath"):
+      ZIO.scoped:
+        for
+          root     <- temp
+          api      <- located(classOf[histos.HistosBuild])
+          onWaived <- JvmCompile
+            .compile(
+              sample(
+                ScalacFlags.empty,
+                v21,
+                Platform.Jvm,
+                histos.ScalaVersion("3.9.0"),
+              )
+                .copy(
+                  classes = root.resolve("c3"),
+                  analysis = root.resolve("a3"),
+                  classpath = List(api),
+                  permitted = List(api),
+                )
+            )
+            .either
+        yield assertTrue(onWaived == Left(CompileError.NoSources))
+    ,
     test("a plugin marker is banned in a jar and in a classes directory"):
       ZIO.scoped:
         for

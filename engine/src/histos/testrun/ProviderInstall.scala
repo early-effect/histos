@@ -28,6 +28,7 @@ private[testrun] final class ProviderInstall(
       version: ScalaVersion,
       jdk: JdkRuntime,
       classpath: List[Path],
+      permitted: List[Path] = Nil,
   ): ZIO[LockedTools, ModuleTestError, Path] =
     val digest = ProviderInstall.digest(version, classpath)
     val root   = repo
@@ -42,7 +43,7 @@ private[testrun] final class ProviderInstall(
           case Some(existing) => (existing, have)
           case None           => (promise, have.updated(digest, promise))
       path <-
-        if winner eq promise then occupy(promise, compile(module, version, jdk, classpath, root))
+        if winner eq promise then occupy(promise, compile(module, version, jdk, classpath, permitted, root))
         else winner.await
     yield path
 
@@ -60,6 +61,7 @@ private[testrun] final class ProviderInstall(
       version: ScalaVersion,
       jdk: JdkRuntime,
       classpath: List[Path],
+      permitted: List[Path],
       root: Path,
   ): ZIO[LockedTools, ModuleTestError, Path] =
     val source =
@@ -82,6 +84,7 @@ private[testrun] final class ProviderInstall(
             root.resolve("analysis"),
             Nil,
             Nil,
+            permitted = permitted,
           )
         )
         .mapError(error => ModuleTestError.Sources(module, version, error))

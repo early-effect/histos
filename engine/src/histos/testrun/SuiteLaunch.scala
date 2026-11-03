@@ -802,7 +802,7 @@ private[testrun] object SuiteLaunch:
                   jdk,
                   runtimes,
                   classes,
-                  linked.paths,
+                  linked.paths ++ linked.resources,
                   binary,
                   work,
                 ),
@@ -843,7 +843,7 @@ private[testrun] object SuiteLaunch:
     ] =
       for
         runnerClasses <- ZIO.serviceWithZIO[ProviderInstall](
-          _.classes(repo, module.name, cell.version, jdk, linked.paths)
+          _.classes(repo, module.name, cell.version, jdk, linked.paths, linked.permitted)
         )
         keep   <- narrowed(classes, selected)
         stream <-
@@ -867,7 +867,7 @@ private[testrun] object SuiteLaunch:
                     jdk,
                     runtimes,
                     runnerClasses,
-                    classes :: linked.paths,
+                    classes :: (linked.paths ++ linked.resources),
                     ProviderRunner.Main,
                     work,
                     note.environment,

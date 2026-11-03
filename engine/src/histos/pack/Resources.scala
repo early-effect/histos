@@ -6,8 +6,22 @@ import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** Files under `src/main/resources`. Entry names are the path relative to that directory. */
+/** Files under `src/main/resources`. Entry names are the path relative to that directory.
+  *
+  * A classes directory is not a jar, so a run from that directory needs the resource root on the classpath. `main` is
+  * the compile classpath. `test` is added only for the module being tested.
+  */
 object Resources:
+  def directories(src: Path, tests: Boolean): IO[JarError, List[Path]] =
+    ZIO
+      .attemptBlocking {
+        val main = existing(src.resolve("main").resolve("resources"))
+        val test =
+          if tests then existing(src.resolve("test").resolve("resources")) else Nil
+        main ++ test
+      }
+      .mapError(_ => JarError.Io(JarIo.Read(src)))
+
   def files(sourceBase: Path): IO[JarError, List[(String, Path)]] =
     val root = sourceBase.resolve("main").resolve("resources")
     ZIO
@@ -31,6 +45,9 @@ object Resources:
       }
       .mapError(_ => JarError.Io(JarIo.Read(root)))
       .flatMap(ZIO.fromEither)
+
+  private def existing(dir: Path): List[Path] =
+    if Files.isDirectory(dir) then List(dir) else Nil
 
   private def rejected(name: String): Boolean =
     name.isEmpty ||

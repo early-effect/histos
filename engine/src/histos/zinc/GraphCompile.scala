@@ -476,8 +476,8 @@ object GraphCompile:
   private def kept(error: GraphCompileError): Option[GraphCompileError] =
     error match
       case GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) |
-          GraphCompileError.MissingUpstream(_, _, _, _) | GraphCompileError.RootRead(_) | GraphCompileError.Output(_) |
-          GraphCompileError.Failed(_, _, _, _) =>
+          GraphCompileError.MissingUpstream(_, _, _, _) | GraphCompileError.IncompatibleUpstream(_, _, _, _, _) |
+          GraphCompileError.RootRead(_) | GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) =>
         Some(error)
       case _ => None
 
@@ -592,13 +592,9 @@ object GraphCompile:
           val classes  = classesDir(plan.repo, module.name, version, platform)
           val analysis = this.analysis(plan.repo, module.name, version, platform)
           for
-            paths <- ZIO.fromEither(upstreamClasses(module, chain, version, platform, done))
-            apis  <- ZIO
-              .foreach(chain): dependency =>
-                ZIO.fromEither(
-                  ApiDigest.read(this.analysis(plan.repo, dependency.name, version, platform))
-                )
-              .mapError(failed)
+            upstream <- upstreams(module, chain, version, platform, done, plan)
+            paths = upstream._1
+            apis  = upstream._2
             known    <- recall(work, sources, apis, classes, analysis).mapError(failed)
             compiled <- known match
               case Some(output) => ZIO.succeed(output)
@@ -627,6 +623,7 @@ object GraphCompile:
                     analysis,
                     assembled.hashes,
                     apis,
+                    permitted = assembled.permitted,
                   )
                   compiled <- compile(
                     work,
@@ -717,26 +714,128 @@ object GraphCompile:
         )
     compiled.provideSome[ContentStore & CompilerStarts & Compilers](ZLayer.succeed(work.plan.tools))
 
-  private def upstreamClasses(
+  /** An exact cell is the classpath. A 2.13 patch uses the newest declared 2.13 cell. A Scala 3 cell uses the newest
+    * TASTy header `dotty.tools.tasty.TastyFormat.isVersionCompatible` accepts. The three compiler numbers come from
+    * this cell's `tasty-core`, not from the compiler that built Histos.
+    */
+  private def upstreams(
       module: Module,
       chain: List[Module],
       version: ScalaVersion,
       platform: Platform,
       done: Map[CellKey, Path],
-  ): Either[GraphCompileError, List[Path]] =
-    chain.foldLeft[Either[GraphCompileError, List[Path]]](Right(Nil)): (acc, dependency) =>
-      acc.flatMap: paths =>
-        done.get((dependency.name, version, platform)) match
-          case Some(classes) => Right(paths :+ classes)
-          case None          =>
-            Left(
-              GraphCompileError.MissingUpstream(
-                module.name,
-                dependency.name,
-                version,
-                platform,
-              )
-            )
+      plan: CompilePlan,
+  ): ZIO[Fed, GraphCompileError, (List[Path], List[Sha256])] =
+    val failed  = (error: CompileError) => GraphCompileError.Failed(module.name, version, platform, error)
+    val missing = (dependency: Module) =>
+      GraphCompileError.MissingUpstream(module.name, dependency.name, version, platform)
+    if !UpstreamCells.isScala3(version) || chain.isEmpty then
+      foldUpstreams(module, chain, version, platform, done, plan, None, failed, missing)
+    else
+      ZIO.scoped {
+        ZIO
+          .acquireRelease(
+            Scala3
+              .jars(version)
+              .provide(ZLayer.succeed(plan.tools))
+              .mapError(failed)
+              .flatMap: toolchain =>
+                ZIO.fromEither(TastyCompat.open(version, toolchain.loaderJars)).mapError(failed)
+          )(reader => ZIO.succeed(reader.close()))
+          .flatMap: reader =>
+            foldUpstreams(module, chain, version, platform, done, plan, Some(reader), failed, missing)
+      }
+
+  private def foldUpstreams(
+      module: Module,
+      chain: List[Module],
+      version: ScalaVersion,
+      platform: Platform,
+      done: Map[CellKey, Path],
+      plan: CompilePlan,
+      reader: Option[TastyCompat.Reader],
+      failed: CompileError => GraphCompileError,
+      missing: Module => GraphCompileError,
+  ): ZIO[Fed, GraphCompileError, (List[Path], List[Sha256])] =
+    ZIO.foldLeft(chain)((List.empty[Path], List.empty[Sha256])): (acc, dependency) =>
+      val (paths, apis) = acc
+      chosen(module, dependency, version, platform, done, reader, failed, missing).flatMap: picked =>
+        done.get((dependency.name, picked, platform)) match
+          case None      => ZIO.fail(missing(dependency))
+          case Some(dir) =>
+            ZIO
+              .fromEither(ApiDigest.read(analysis(plan.repo, dependency.name, picked, platform)))
+              .mapError(failed)
+              .map(api => (paths :+ dir, apis :+ api))
+
+  private def chosen(
+      module: Module,
+      dependency: Module,
+      version: ScalaVersion,
+      platform: Platform,
+      done: Map[CellKey, Path],
+      reader: Option[TastyCompat.Reader],
+      failed: CompileError => GraphCompileError,
+      missing: Module => GraphCompileError,
+  ): ZIO[Any, GraphCompileError, ScalaVersion] =
+    UpstreamCells.required(version, dependency, platform, done.keySet) match
+      case Nil                                                  => ZIO.fail(missing(dependency))
+      case (_, exact, _) :: Nil if exact == version             => ZIO.succeed(exact)
+      case (_, patch, _) :: Nil if UpstreamCells.is213(version) => ZIO.succeed(patch)
+      case many if UpstreamCells.isScala3(version)              =>
+        reader match
+          case None       => ZIO.fail(failed(CompileError.Toolchain(ToolchainMiss.Unexpected(version, Nil))))
+          case Some(open) =>
+            readable(module, dependency, version, platform, done, many, open, failed, missing)
+      case _ => ZIO.fail(missing(dependency))
+
+  private def readable(
+      module: Module,
+      dependency: Module,
+      version: ScalaVersion,
+      platform: Platform,
+      done: Map[CellKey, Path],
+      cells: List[CellKey],
+      reader: TastyCompat.Reader,
+      failed: CompileError => GraphCompileError,
+      missing: Module => GraphCompileError,
+  ): ZIO[Any, GraphCompileError, ScalaVersion] =
+    ZIO
+      .foreach(cells):
+        case (_, upstream, _) =>
+          done.get((dependency.name, upstream, platform)) match
+            case None      => ZIO.fail(missing(dependency))
+            case Some(dir) =>
+              TastyCompat.header(dir).mapError(failed).map(header => (upstream, header))
+      .flatMap: judged =>
+        val present = judged.collect:
+          case (upstream, Some(numbers)) => (upstream, numbers)
+        if judged.forall(_._2.isEmpty) then ZIO.fail(missing(dependency))
+        else
+          ZIO
+            .foreach(present): (upstream, numbers) =>
+              ZIO.fromEither(reader.accepts(numbers)).mapError(failed).map(ok => (upstream, numbers, ok))
+            .flatMap: decided =>
+              val accepted = decided.collect:
+                case (upstream, numbers, true) => (upstream, numbers)
+              val ordered = accepted.sortBy((upstream, numbers) => (numbers.minor, UpstreamCells.rank(upstream)))
+              ordered.lastOption match
+                case Some((upstream, _)) => ZIO.succeed(upstream)
+                case None                =>
+                  val refused =
+                    decided.sortBy((upstream, numbers, _) => (numbers.minor, UpstreamCells.rank(upstream)))
+                  refused.lastOption match
+                    case Some((upstream, _, _)) =>
+                      ZIO.fail(
+                        GraphCompileError.IncompatibleUpstream(
+                          module.name,
+                          dependency.name,
+                          version,
+                          upstream,
+                          platform,
+                        )
+                      )
+                    case None => ZIO.fail(missing(dependency))
 
   /** Classpath root written for one JVM cell. Test compile and the test subprocess read this directory.
     */

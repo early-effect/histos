@@ -32,6 +32,7 @@ final case class JsLinkRequest(
     jdk: JdkRuntime,
     kind: histos.JsModuleKind = histos.JsModuleKind.NoModule,
     revision: Option[histos.JsVersion] = None,
+    initialize: Boolean = true,
 )
 
 /** Link `.sjsir` in a child JVM. The engine does not load `org.scalajs.linker`.
@@ -42,7 +43,7 @@ object JsLink:
   private val BridgeMain: String = "subprocess.JsBridge"
 
   def link(request: JsLinkRequest): ZIO[LockedTools, JsLinkError, JsLinked] =
-    val JsLinkRequest(version, main, classpath, work, jdk, kind, revision) =
+    val JsLinkRequest(version, main, classpath, work, jdk, kind, revision, initialize) =
       request
     val output     = work.resolve("out")
     val bridgeRoot = work.resolve("bridge")
@@ -100,10 +101,9 @@ object JsLink:
             child,
             Map(
               "JS_OUT"       -> output.toAbsolutePath.toString,
-              "JS_MAIN"      -> main.binary,
               "JS_CLASSPATH" -> listed.toAbsolutePath.toString,
               "JS_MODULE"    -> kind.token,
-            ),
+            ) ++ (if initialize then Map("JS_MAIN" -> main.binary) else Map.empty),
           )
         )
         .mapError(error => JsLinkError.Linker(error.message))
@@ -111,7 +111,7 @@ object JsLink:
         case 0 => readJs(child.resolve("js.path"))
         case _ =>
           ZIO.fail(JsLinkError.Linker(shown(ran.out.text, ran.err.text)))
-    yield JsLinked(script, JsKey.of(version, selected, kind, main, digests))
+    yield JsLinked(script, JsKey.of(version, selected, kind, main, digests, initialize))
 
   private def productsOf(classpath: List[Path]): IO[JsLinkError, List[Sha256]] =
     ZIO.foreach(classpath.flatMap(path => GraphCompile.analysisDirOf(path).toList)): dir =>
@@ -140,7 +140,7 @@ object JsLink:
       |object JsBridge {
       |  def main(args: Array[String]): Unit = {
       |    val output = Path.of(sys.env("JS_OUT"))
-      |    val mainClass = sys.env("JS_MAIN")
+      |    val mainClass = sys.env.get("JS_MAIN").map(_.trim).filter(_.nonEmpty)
       |    val classpath = Files.readAllLines(Path.of(sys.env("JS_CLASSPATH"))).asScala.map(Path.of(_)).toSeq
       |    Files.createDirectories(output)
       |    val base = StandardConfig().withOptimizer(false).withSourceMap(false).withBatchMode(true)
@@ -153,7 +153,7 @@ object JsLink:
       |    val linker = StandardImpl.linker(config)
       |    val containers = Await.result(PathIRContainer.fromClasspath(classpath), Duration.Inf)._1
       |    val ir = Await.result(StandardImpl.irFileCache().newCache.cached(containers), Duration.Inf)
-      |    val init = Seq(ModuleInitializer.mainMethodWithArgs(mainClass, "main"))
+      |    val init = mainClass.toSeq.map(name => ModuleInitializer.mainMethodWithArgs(name, "main"))
       |    val report = Await.result(linker.link(ir, init, PathOutputDirectory(output), logger), Duration.Inf)
       |    report.publicModules.headOption.map(_.jsFileName) match {
       |      case Some(name) =>

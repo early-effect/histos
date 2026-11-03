@@ -1,12 +1,21 @@
 package histos.zinc
 
 import histos.jdk.Sha256
-import histos.resolve.{Classpath, ClasspathScope, DependencyLock, LockedArtifact, Repositories, Resolve, ResolveCell}
+import histos.resolve.{
+  ArtifactName,
+  Classpath,
+  ClasspathScope,
+  DependencyLock,
+  LockedArtifact,
+  Repositories,
+  Resolve,
+  ResolveCell,
+}
 import histos.{Dep, Module, Platform, ScalaVersion}
 
 import java.nio.file.Path
 
-import zio.ZIO
+import zio.{IO, ZIO}
 
 /** The scalac classpath of one cell. Compile and BSP both call this.
   *
@@ -16,7 +25,12 @@ import zio.ZIO
   * after the upstream directories. `JvmCompile` prepends the output directory and the runtime, and an upstream class
   * has to beat a lock jar.
   */
-final case class ScalacClasspath(paths: List[Path], jars: List[Path], hashes: List[Sha256])
+final case class ScalacClasspath(
+    paths: List[Path],
+    jars: List[Path],
+    hashes: List[Sha256],
+    permitted: List[Path],
+)
 
 object ScalacClasspath:
   /** Checksums already in the lock, in the order [[of]] would fetch them. Nothing is opened. None when a cell is
@@ -72,9 +86,13 @@ object ScalacClasspath:
         .map(merge)
       kept = if dropJvmLibrary(platform) then withoutStdlib(fetched) else fetched
       runtime <- runtimeOf(module, version, platform)
+      api     <-
+        if asks(dependenciesOf(module, platform, scope), version, platform) then hostApi(repo).map(Some(_))
+        else ZIO.none
     yield
       val dirs = directories(repo, module, chain, version, platform, scope)
-      ScalacClasspath(runtime ++ kept.paths ++ dirs, kept.paths, kept.hashes)
+      val jars = kept.paths ++ api.toList
+      ScalacClasspath(runtime ++ jars ++ dirs, jars, kept.hashes, api.toList)
 
   private def runtimeOf(
       module: Module,
@@ -124,7 +142,10 @@ object ScalacClasspath:
       .serviceWithZIO[histos.resolve.LockedTools]: tools =>
         val view = if tools.service.isDefined then tools else tools.copy(lock = lock)
         view.module(cell)
-      .mapBoth(GraphCompileError.Lock(_), fetched)
+      .mapBoth(
+        GraphCompileError.Lock(_),
+        classpath => fetched(classpath),
+      )
 
   /** JVM and Native compile do not keep a resolved `scala-library`. JavaScript supplies its own through `compileWith`.
     */
@@ -152,6 +173,52 @@ object ScalacClasspath:
 
   private final case class Fetched(paths: List[Path], hashes: List[Sha256])
 
+  /** A compile-only `histos-api` is the api this process already loaded. The resolved jar is a second copy.
+    */
   private def fetched(classpath: Classpath): Fetched =
-    Fetched(classpath.artifacts.map(_.path), classpath.artifacts.map(_.sha256))
+    val artifacts = classpath.artifacts.filterNot(artifact => artifact.name.startsWith("histos-api"))
+    Fetched(artifacts.map(_.path), artifacts.map(_.sha256))
+
+  private def dependenciesOf(module: Module, platform: Platform, scope: ClasspathScope): List[Dep] =
+    val compileDeps = Dep.select(module.dependencies, platform)
+    scope match
+      case ClasspathScope.Compile => compileDeps
+      case ClasspathScope.Test    =>
+        val testDeps = Dep.select(module.testDependencies, platform)
+        if testDeps.isEmpty then compileDeps else compileDeps ++ testDeps
+
+  /** A direct `histos-api` dependency compiles against the api this process loaded. [[histos.load.Boundary]] already
+    * supplies that jar.
+    */
+  private[histos] def asks(dependencies: List[Dep], version: ScalaVersion, platform: Platform): Boolean =
+    dependencies.exists: dep =>
+      dep.name == "histos-api" || ArtifactName.of(dep, version, platform).startsWith("histos-api")
+
+  /** The pure api jar inside this process. An assembly carries it at `bootstrap/histos-api.jar`.
+    */
+  private[histos] def hostApi(repo: Path): IO[GraphCompileError, Path] =
+    codeSource match
+      case None         => ZIO.fail(GraphCompileError.RootRead(repo))
+      case Some(source) =>
+        histos.load.BuildClasspath(source, repo.resolve(".histos")).mapError(hostFailure(repo))
+
+  private def hostFailure(repo: Path)(error: histos.load.LoadError): GraphCompileError =
+    error match
+      case histos.load.LoadError.Runtime(inner)    => inner
+      case histos.load.LoadError.MissingApi(path)  => GraphCompileError.RootRead(path)
+      case histos.load.LoadError.MissingFile(path) => GraphCompileError.RootRead(path)
+      case histos.load.LoadError.Io(failure)       => GraphCompileError.RootRead(failure.path)
+      case histos.load.LoadError.CompileFailed(_)  => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.NoEntry           => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.AmbiguousEntry(_) => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.BrokenGraph(_)    => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.Plugin(_)         => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.Resolve(_)        => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.NoHome            => GraphCompileError.RootRead(repo)
+
+  private def codeSource: Option[Path] =
+    Option(classOf[histos.HistosBuild].getProtectionDomain)
+      .flatMap(domain => Option(domain.getCodeSource))
+      .flatMap(source => Option(source.getLocation))
+      .flatMap(url => scala.util.Try(Path.of(url.toURI)).toOption)
 end ScalacClasspath

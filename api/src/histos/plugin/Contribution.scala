@@ -32,6 +32,10 @@ enum TaskDep:
   case Compile(module: ProjectName, version: Option[ScalaVersion], platform: Option[Platform])
   case Same(name: TaskName)
 
+  /** Link this JavaScript cell and put the script on the run request. */
+  case Link(module: ProjectName, version: Option[ScalaVersion])
+end TaskDep
+
 final case class CommandSpec(
     name: CommandName,
     params: List[CliParam],
@@ -49,6 +53,7 @@ final case class CiJob(
     task: TaskName,
     when: JobWhen,
     permissions: JobPermissions = JobPermissions.ContentsRead,
+    site: Option[RepoPath] = None,
 )
 
 enum JobWhen:

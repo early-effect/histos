@@ -52,6 +52,8 @@ final case class CompileRequest(
     upstreamApis: List[Sha256],
     compilationTools: List[histos.resolve.ToolInput] = Nil,
     compilerPlugins: List[histos.resolve.ToolInput] = Nil,
+    /** The host api jar, when a compile-only edge asked for it. A resolved second copy is not in this list. */
+    permitted: List[Path] = Nil,
 )
 
 final case class CompileOutput(
@@ -179,7 +181,7 @@ object JvmCompile:
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
     else if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
     else
-      ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
+      ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
         hashSources(request.sources).flatMap: digest =>
           invoke(
             request,
@@ -208,7 +210,7 @@ object JvmCompile:
       extra: List[String],
       hear: CompileProblem => Unit,
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
-    ZIO.foreachDiscard(request.classpath)(rejectBanned) *>
+    ZIO.foreachDiscard(request.classpath)(rejectBanned(request)) *>
       (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
        else
          hashSources(request.sources).flatMap: digest =>
@@ -224,10 +226,16 @@ object JvmCompile:
   private def pluginArg(plugin: Path): String =
     s"-Xplugin:${plugin.toAbsolutePath}"
 
-  private def rejectBanned(path: Path): IO[CompileError, Unit] =
+  private def rejectBanned(request: CompileRequest)(path: Path): IO[CompileError, Unit] =
     ban(path).flatMap:
-      case Some(reason) => ZIO.fail(CompileError.Banned(path, reason))
-      case None         => ZIO.unit
+      case Some(ClasspathBan.Histos) if permitted(request, path) => ZIO.unit
+      case Some(reason)                                          => ZIO.fail(CompileError.Banned(path, reason))
+      case None                                                  => ZIO.unit
+
+  /** A compile-only coordinate may be the packaged build API. A published dependency may not. */
+  private def permitted(request: CompileRequest, path: Path): Boolean =
+    val normal = path.toAbsolutePath.normalize
+    request.permitted.exists(_.toAbsolutePath.normalize == normal)
 
   private def ban(path: Path): IO[CompileError, Option[ClasspathBan]] =
     ZIO
@@ -250,7 +258,7 @@ object JvmCompile:
           marker.classpathBan
       .flatten
 
-  /** The packaged build API is not a module dependency. `histos.scala` is compiled against it on its own.
+  /** The packaged build API is not a resolved module dependency. The host's own api jar is named in `permitted`.
     */
   private def jarBan(path: Path): Option[ClasspathBan] =
     val zip = new ZipFile(path.toFile)
@@ -337,7 +345,7 @@ object JvmCompile:
   ): ZIO[LockedTools & ContentStore & CompilerStarts & Compilers, CompileError, CompileOutput] =
     if !supported(request.toolchain.version) then ZIO.fail(CompileError.UnsupportedScala(request.toolchain.version))
     else
-      ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned) *>
+      ZIO.foreachDiscard(request.classpath ++ plugins)(rejectBanned(request)) *>
         (if request.sources.isEmpty then ZIO.fail(CompileError.NoSources)
          else
            hashSources(request.sources).flatMap: digest =>

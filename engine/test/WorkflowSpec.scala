@@ -149,9 +149,9 @@ object WorkflowSpec extends ZIOSpecDefault:
         llvm.contains("llvm-20.1.8-${{ runner.os }}-${{ runner.arch }}") &&
           llvm.contains("steps.llvm.outputs.cache-hit"),
         playwright.contains("id: playwright") &&
-        playwright.contains("steps.playwright.outputs.cache-hit != 'true'") &&
-        playwright.contains("install-deps firefox") &&
-        playwright.contains("playwright-1.49.0-${{ runner.os }}-${{ runner.arch }}") &&
+          playwright.contains("steps.playwright.outputs.cache-hit != 'true'") &&
+          playwright.contains("install-deps firefox") &&
+          playwright.contains("playwright-1.49.0-${{ runner.os }}-${{ runner.arch }}") &&
           playwright.contains("~/.cache/chekhov/playwright/1.49.0") &&
           playwright.contains("~/.cache/ms-playwright"),
         Workflow.render(
@@ -341,7 +341,7 @@ object WorkflowSpec extends ZIOSpecDefault:
 
   /** The tools and the manual ship this repository names. The module list does not appear in an aggregate render. */
   private def repository: Either[histos.BuildError, ProjectGraph] =
-    val api = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
+    val api    = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
     val native = histos
       .module("native", Platform.Native)(ScalaVersion("3.10.0"))
       .clang(histos.ClangMajor(21))
@@ -404,6 +404,39 @@ object WorkflowSpec extends ZIOSpecDefault:
       .mapError(error => new java.io.IOException(error.message))
 
   private val plugins = suite("plugins")(
+    test("a job that names a site directory uploads and deploys pages"):
+      val rendered = Workflow.render(
+        withJobs(
+          List(
+            CiJob(
+              JobName("docs"),
+              TaskName("site"),
+              JobWhen.Always,
+              site = Some(RepoPath("target/site")),
+            ),
+            CiJob(JobName("deploy"), TaskName("ship"), JobWhen.Always),
+          )
+        )
+      )
+      assertTrue:
+        rendered match
+          case Right(yaml) =>
+            val docs   = slice(yaml, "  docs:", "  deploy:")
+            val deploy = slice(yaml, "  deploy:", "")
+            (docs, deploy) match
+              case (Some(docsJob), Some(deployJob)) =>
+                docsJob.contains("actions/upload-pages-artifact@v5") &&
+                docsJob.contains("actions/deploy-pages@v5") &&
+                docsJob.contains("github-pages") &&
+                docsJob.contains("\"target/site\"") &&
+                docsJob.contains("pages: write") &&
+                docsJob.contains("id-token: write") &&
+                docsJob.contains("id: deployment") &&
+                !deployJob.contains("upload-pages-artifact") &&
+                !deployJob.contains("deploy-pages")
+              case _ => false
+          case _ => false
+    ,
     test("the test job passes the event namespace and caches coursier, and docs and deploy do not"):
       val rendered = Workflow.render(
         withJobs(

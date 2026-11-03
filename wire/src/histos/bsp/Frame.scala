@@ -28,22 +28,30 @@ object Frame:
   /** Interrupt closes the stream so a blocked read returns. Stdin ignores thread interrupts. */
   def read(in: InputStream): IO[FrameError, Option[String]] =
     ZIO
-      .attemptBlockingCancelable(readMessage(in))(ZIO.attempt(in.close()).ignore)
+      .attemptBlockingCancelable(take(in))(ZIO.attempt(in.close()).ignore)
       .mapError(_ => FrameError.Io)
       .flatMap(ZIO.fromEither)
 
+  /** One frame, on the calling thread. The native client uses this so a session is not a fiber per frame. */
+  def take(in: InputStream): Either[FrameError, Option[String]] =
+    try readMessage(in)
+    catch case _: java.io.IOException => Left(FrameError.Io)
+
   def write(out: OutputStream, payload: String): IO[FrameError, Unit] =
+    ZIO.attemptBlocking(put(out, payload)).mapError(_ => FrameError.Io).flatMap(ZIO.fromEither)
+
+  /** One frame, on the calling thread. */
+  def put(out: OutputStream, payload: String): Either[FrameError, Unit] =
     val bytes = payload.getBytes(StandardCharsets.UTF_8)
-    if bytes.length > BodyLimit then ZIO.fail(FrameError.TooLarge)
+    if bytes.length > BodyLimit then Left(FrameError.TooLarge)
     else
-      ZIO
-        .attemptBlocking {
-          val header = s"Content-Length: ${bytes.length}\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
-          out.write(header)
-          out.write(bytes)
-          out.flush()
-        }
-        .mapError(_ => FrameError.Io)
+      try
+        val header = s"Content-Length: ${bytes.length}\r\n\r\n".getBytes(StandardCharsets.US_ASCII)
+        out.write(header)
+        out.write(bytes)
+        out.flush()
+        Right(())
+      catch case _: java.io.IOException => Left(FrameError.Io)
 
   private def readMessage(in: InputStream): Either[FrameError, Option[String]] =
     try

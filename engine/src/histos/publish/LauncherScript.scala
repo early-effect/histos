@@ -24,8 +24,7 @@ object LauncherScript:
             .mapError(ScriptError.Pin(_))
             .flatMap: pin =>
               if !boots(version, pin.version) then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
-              else
-                agree(repo.resolve("histos"), posix(version))
+              else agree(repo.resolve("histos"), posix(version))
 
   def update(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
     ZIO
@@ -201,13 +200,18 @@ if [ "$#" -ge 1 ]; then
   esac
 fi
 if [ "$jar_client" -eq 0 ]; then
+  pin_file=$root/build.properties
+  [ -f "$pin_file" ] || fail "missing build.properties"
+  pin_line=$(awk -F= '$1 == "histos.version" { print $2; exit }' "$pin_file")
+  [ -n "$pin_line" ] || fail "missing histos.version"
   HISTOS_JAVA=$java_bin
   HISTOS_JAR=$jar
   HISTOS_ROOT=$root
-  HISTOS_VERSION="histos $version"
+  HISTOS_VERSION="histos $pin_line"
   export HISTOS_JAVA HISTOS_JAR HISTOS_ROOT HISTOS_VERSION
   exec "$client" "$@"
 fi
 eval "set -- ${jvm_extra} --enable-native-access=ALL-UNNAMED -jar $(shell_quote "$jar")${quoted_args}"
 exec "$java_bin" "$@"
 """
+end LauncherScript

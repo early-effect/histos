@@ -814,8 +814,8 @@ object Bsp:
               _,
               _,
               _,
-            ) | GraphCompileError.Cycle(_) | GraphCompileError.RootRead(_) | GraphCompileError.Output(_) |
-            GraphCompileError.Cells(_)) =>
+            ) | GraphCompileError.IncompatibleUpstream(_, _, _, _, _) | GraphCompileError.Cycle(_) |
+            GraphCompileError.RootRead(_) | GraphCompileError.Output(_) | GraphCompileError.Cells(_)) =>
           BspError.Sources(found)
 
     private def withTools[A](

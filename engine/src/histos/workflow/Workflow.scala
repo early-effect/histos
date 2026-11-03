@@ -333,16 +333,50 @@ object Workflow:
           case JobWhen.Always => Nil
 
   private def jobLines(plugin: RegisteredPlugin, job: CiJob): List[String] =
+    val run = quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")
     List(
       s"  ${job.name.value}:",
       s"    runs-on: $Runner",
+    ) ++ siteEnvironment(job) ++ List(
       "    permissions:",
       s"      contents: ${access(job.permissions)}",
+    ) ++ sitePermissions(job) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ List(
-      s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")}"
-    )
+      s"      - run: $run"
+    ) ++ siteSteps(job)
+
+  private def siteEnvironment(job: CiJob): List[String] =
+    job.site match
+      case None    => Nil
+      case Some(_) =>
+        List(
+          "    environment:",
+          "      name: github-pages",
+          "      url: ${{ steps.deployment.outputs.page_url }}",
+        )
+
+  private def sitePermissions(job: CiJob): List[String] =
+    job.site match
+      case None    => Nil
+      case Some(_) =>
+        List(
+          "      pages: write",
+          "      id-token: write",
+        )
+
+  private def siteSteps(job: CiJob): List[String] =
+    job.site match
+      case None       => Nil
+      case Some(path) =>
+        List(
+          s"      - uses: $UploadPages",
+          "        with:",
+          s"          path: ${quote(path.value)}",
+          "      - id: deployment",
+          s"        uses: $DeployPages",
+        )
 
   private def access(permissions: JobPermissions): String =
     permissions match
@@ -451,7 +485,7 @@ object Workflow:
         val directory = "${{ runner.temp }}/llvm"
         val guard     = if gate then Some("matrix.llvm == 'true'") else None
         cacheStep(Some("llvm"), List(directory), toolKey("llvm", pinned.value), guard) ++ List(
-          "      - uses: KyleMayes/install-llvm-action@v2.0.9",
+          "      - uses: KyleMayes/install-llvm-action@v2.0.9"
         ) ++ guard.toList.map(text => s"        if: $text") ++ List(
           "        with:",
           s"          version: ${quote(pinned.value)}",
@@ -494,7 +528,7 @@ object Workflow:
       case TestJob.Split(_, _, _) => true
       case _                      => false
     }
-    val client = jobs.exists(job => linksClient(modulesOf(job, modules)))
+    val client  = jobs.exists(job => linksClient(modulesOf(job, modules)))
     val prepare = steps(graph.runnerTools, graph.resolution, any, matrix) ++ clientStep(client, matrix)
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
@@ -545,6 +579,7 @@ object Workflow:
       ToolNeed(node || other.node, llvm || other.llvm, playwright || other.playwright)
 
     def any: Boolean = node || llvm || playwright
+  end ToolNeed
 
   private def toolNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
     val native     = modules.exists(_.platforms.all.contains(Platform.Native))
@@ -558,7 +593,7 @@ object Workflow:
 
   private def modulesOf(job: TestJob, modules: List[Module]): List[Module] =
     job match
-      case TestJob.Aggregate(TestTarget.Entire) => modules
+      case TestJob.Aggregate(TestTarget.Entire)             => modules
       case TestJob.Aggregate(TestTarget.Named(first, rest)) =>
         val names = first :: rest
         modules.filter(module => names.contains(module.name))
@@ -616,7 +651,9 @@ object Workflow:
   private val Runner = "ubuntu-26.04"
 
   /** Current major. v4 still targets Node 20, which the runner rewrites to Node 24. */
-  private val Checkout = "actions/checkout@v7"
+  private val Checkout    = "actions/checkout@v7"
+  private val UploadPages = "actions/upload-pages-artifact@v5"
+  private val DeployPages = "actions/deploy-pages@v5"
 
   private val versionsJob: String =
     s"""  versions:

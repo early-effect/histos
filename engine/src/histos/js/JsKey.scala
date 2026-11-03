@@ -18,12 +18,15 @@ object JsKey:
       kind: JsModuleKind,
       main: MainClass,
       products: List[Sha256],
+      initialize: Boolean = true,
   ): Sha256 =
+    val entry =
+      if initialize then main.binary else "exports"
     val text =
       s"""${version.value}
          |${linker.value}
          |${kind.token}
-         |${main.binary}
+         |$entry
          |products
          |${products.map(_.value).mkString("\n")}
          |""".stripMargin

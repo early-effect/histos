@@ -50,6 +50,13 @@ enum GraphCompileError:
       version: ScalaVersion,
       platform: Platform,
   )
+  case IncompatibleUpstream(
+      module: ProjectName,
+      dependency: ProjectName,
+      version: ScalaVersion,
+      upstream: ScalaVersion,
+      platform: Platform,
+  )
   case Cycle(module: ProjectName)
   case Lock(error: ResolveError)
   case LockRead(path: Path)
@@ -74,6 +81,8 @@ enum GraphCompileError:
       s"'${module.value}' has no main or test sources under $root"
     case MissingUpstream(module, dependency, version, platform) =>
       s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} ${platform.token} classes"
+    case IncompatibleUpstream(module, dependency, version, upstream, platform) =>
+      s"'${module.value}' ${version.value} cannot read '${dependency.value}' ${upstream.value} ${platform.token}"
     case Cycle(module)                            => s"'${module.value}' is in a compile cycle"
     case Lock(error)                              => error.message
     case LockRead(path)                           => s"could not read $path"

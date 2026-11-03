@@ -31,6 +31,8 @@ object Tally:
         Some(blank(module, version, platform))
       case GraphCompileError.MissingUpstream(module, _, version, platform) =>
         Some(blank(module, version, platform))
+      case GraphCompileError.IncompatibleUpstream(module, _, version, _, platform) =>
+        Some(blank(module, version, platform))
       case GraphCompileError.Runtime(_) | GraphCompileError.Target(_) | GraphCompileError.UnknownCell(_, _) |
           GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) | GraphCompileError.Cycle(_) |
           GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) | GraphCompileError.RootRead(_) |

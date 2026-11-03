@@ -713,6 +713,99 @@ object GraphCompileSpec extends ZIOSpecDefault:
                 case _ => false
             case _ => false
     ,
+    test("a Scala 3.10 module reads a Scala 3.9 upstream"):
+      ZIO.scoped:
+        for
+          jdk   <- GraphCompile.jdkHere
+          root  <- temp
+          built <- ZIO
+            .attempt {
+              val core = module("core", Jvm)(ScalaVersion("3.9.0"))
+              val app  = module("app", Jvm)(ScalaVersion("3.10.0")).dependsOn(core)
+              write(root, "core/src/main/scala/Core.scala", "object Core:\n  def n: Int = 1\n")
+              write(root, "app/src/main/scala/App.scala", "object App:\n  def x: Int = Core.n\n")
+              write(root, "dependencies.lock", "cell core 3.9.0 jvm\ncell app 3.10.0 jvm\n")
+              Projects(core, app)
+            }
+            .flatMap(ZIO.fromEither(_))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile.run(root, built, List(ProjectName("app")), jdk, NativeOrigin.Central, None, _ => ZIO.unit)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
+            .either
+          found <- ZIO.attempt(classFiles(out))
+        yield assertTrue:
+          found == Right(
+            List(
+              "app 3.10.0" -> List("App$.class", "App.class", "App.tasty"),
+              "core 3.9.0" -> List("Core$.class", "Core.class", "Core.tasty"),
+            )
+          )
+    ,
+    test("a Scala 3.9 module cannot read a Scala 3.10 upstream"):
+      ZIO.scoped:
+        for
+          jdk   <- GraphCompile.jdkHere
+          root  <- temp
+          built <- ZIO
+            .attempt {
+              val core = module("core", Jvm)(ScalaVersion("3.10.0"))
+              val app  = module("app", Jvm)(ScalaVersion("3.9.0")).dependsOn(core)
+              write(root, "core/src/main/scala/Core.scala", "object Core:\n  def n: Int = 1\n")
+              write(root, "app/src/main/scala/App.scala", "object App:\n  def x: Int = Core.n\n")
+              write(root, "dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.9.0 jvm\n")
+              Projects(core, app)
+            }
+            .flatMap(ZIO.fromEither(_))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile.run(root, built, List(ProjectName("app")), jdk, NativeOrigin.Central, None, _ => ZIO.unit)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
+            .either
+        yield assertTrue:
+          out match
+            case Left(GraphCompileError.Cells(errors)) =>
+              errors.toChunk.toList match
+                case List(
+                      GraphCompileError.IncompatibleUpstream(module, dependency, version, upstream, platform)
+                    ) =>
+                  module.value == "app" && dependency.value == "core" && version.value == "3.9.0" &&
+                  upstream.value == "3.10.0" && platform == Jvm
+                case _ => false
+            case _ => false
+    ,
+    test("a Scala 2.13 patch reads another 2.13 patch"):
+      ZIO.scoped:
+        for
+          jdk   <- GraphCompile.jdkHere
+          root  <- temp
+          built <- ZIO
+            .attempt {
+              val core = module("core", Jvm)(ScalaVersion("2.13.16"))
+              val app  = module("app", Jvm)(ScalaVersion("2.13.18")).dependsOn(core)
+              write(root, "core/src/main/scala/Core.scala", "object Core {\n  def n: Int = 1\n}\n")
+              write(root, "app/src/main/scala/App.scala", "object App {\n  def x: Int = Core.n\n}\n")
+              write(root, "dependencies.lock", "cell core 2.13.16 jvm\ncell app 2.13.18 jvm\n")
+              Projects(core, app)
+            }
+            .flatMap(ZIO.fromEither(_))
+          out <- histos.ToolFixture
+            .at(root, built)(
+              GraphCompile.run(root, built, List(ProjectName("app")), jdk, NativeOrigin.Central, None, _ => ZIO.unit)
+            )
+            .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
+            .either
+          found <- ZIO.attempt(classFiles(out))
+        yield assertTrue:
+          found == Right(
+            List(
+              "app 2.13.18"  -> List("App$.class", "App.class"),
+              "core 2.13.16" -> List("Core$.class", "Core.class"),
+            )
+          )
+    ,
     test("a js-only upstream is on the js classpath and not the jvm one"):
       ZIO.scoped:
         for
@@ -1144,6 +1237,17 @@ object GraphCompileSpec extends ZIOSpecDefault:
 
   /** Classpath-root entries. A later jar reads these paths, so a nested source tree is a failed compile.
     */
+  private def classFiles(out: Either[?, List[CompiledCell]]): Either[String, List[(String, List[String])]] =
+    out.fold(
+      err => Left(err.toString),
+      cells =>
+        Right(
+          cells.map: cell =>
+            val names = entries(cell.classes).filter(name => !name.startsWith("META-INF/"))
+            s"${cell.module.value} ${cell.version.value}" -> names
+        ),
+    )
+
   private def entries(classes: Path): List[String] =
     if !Files.isDirectory(classes) then Nil
     else
@@ -1197,5 +1301,5 @@ object GraphCompileSpec extends ZIOSpecDefault:
         histos.module("js", histos.Js)(histos.ScalaVersion("3.9.0")),
       )
     )
-  ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)
+  ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(6.minutes)
 end GraphCompileSpec

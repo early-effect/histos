@@ -14,6 +14,7 @@ import histos.native.{
   NativeToolchain,
 }
 import histos.node.{NodeBinary, NodeMiss}
+import histos.pack.Resources
 import histos.toolchain.Runtimes
 import histos.resolve.{
   BuildResolvers,
@@ -134,6 +135,21 @@ private[histos] object TestCompile:
       }
       .mapError(_ => ModuleTestError.Root(repo))
 
+  /** `src/main/resources`, and `src/test/resources` when `tests` is set. A missing directory is an empty list. */
+  private def resourceDirs(
+      repo: Path,
+      module: Module,
+      modules: List[Module],
+      tests: Boolean,
+  ): ZIO[Any, ModuleTestError, List[Path]] =
+    GraphCompile
+      .sourceBase(repo, module, modules)
+      .mapError(ModuleTestError.Compile(_))
+      .flatMap:
+        case None      => ZIO.succeed(Nil)
+        case Some(src) =>
+          Resources.directories(src, tests).mapError(_ => ModuleTestError.Root(src))
+
   private[testrun] def upstreamClasses(
       repo: Path,
       module: Module,
@@ -142,22 +158,22 @@ private[histos] object TestCompile:
       platform: Platform,
   ): IO[ModuleTestError, List[Path]] =
     ZIO.foreach(Module.chain(module, modules, platform)): dependency =>
-      val path =
-        GraphCompile.classesDir(repo, dependency.name, version, platform)
-      ZIO
-        .attemptBlocking(Files.isDirectory(path))
-        .mapError(_ => ModuleTestError.Root(path))
-        .flatMap: found =>
-          if found then ZIO.succeed(path)
-          else
-            ZIO.fail(
-              ModuleTestError
-                .MissingUpstream(module.name, dependency.name, version)
-            )
+      histos.zinc.UpstreamCells.chosen(version, dependency, platform, modules) match
+        case None =>
+          ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, version))
+        case Some(chosen) =>
+          val path = GraphCompile.classesDir(repo, dependency.name, chosen, platform)
+          ZIO
+            .attemptBlocking(Files.isDirectory(path))
+            .mapError(_ => ModuleTestError.Root(path))
+            .flatMap: found =>
+              if found then ZIO.succeed(path)
+              else ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, chosen))
 
   private[testrun] final case class Fetched(
       paths: List[Path],
       hashes: List[Sha256],
+      needsHost: Boolean,
   )
 
   /** Compiler library first, then locked jars. The first jar on the classpath defines `scala.*`.
@@ -170,6 +186,8 @@ private[histos] object TestCompile:
       hashes: List[Sha256],
       upstream: List[Sha256],
       classDirs: List[Path],
+      permitted: List[Path],
+      resources: List[Path],
   )
 
   private[histos] def runtimeClasspath(
@@ -204,6 +222,12 @@ private[histos] object TestCompile:
         repositories,
       )
       library <- standardLibrary(cell)
+      api     <-
+        if fetched.needsHost then histos.zinc.ScalacClasspath.hostApi(repo).mapBoth(ModuleTestError.Compile(_), Some(_))
+        else ZIO.none
+      ownResources      <- resourceDirs(repo, module, modules, tests = true)
+      upstreamResources <- ZIO.foreach(Module.chain(module, modules, cell.platform)): dependency =>
+        resourceDirs(repo, dependency, modules, tests = false)
       drop = dropJvmLibrary(cell.platform)
       kept =
         if drop then
@@ -215,15 +239,18 @@ private[histos] object TestCompile:
       tail         =
         if drop then libraryPaths.filterNot(JvmCompile.isStandardLibrary)
         else libraryPaths
-      jars           = (kept.map(_._1) ++ tail).distinct
+      jars           = (kept.map(_._1) ++ tail ++ api.toList).distinct
       own            = kept.map(_._2).toSet
       upstreamHashes =
         libraries.map(_.sha256).distinct.filterNot(own.contains)
+      resources = (ownResources ++ upstreamResources.flatten).distinct
     yield Linked(
       cell.classes :: (upstream ++ library ++ jars),
       kept.map(_._2),
       upstreamHashes,
       cell.classes :: upstream,
+      api.toList,
+      resources,
     )
 
   /** A resolved JVM `scala-library` is a second copy of the compiler runtime. JavaScript supplies its own library list.
@@ -285,6 +312,7 @@ private[histos] object TestCompile:
         analysis,
         linked.hashes,
         apis,
+        permitted = linked.permitted,
       )
       facts <- compileSuite(
         module,
@@ -333,9 +361,12 @@ private[histos] object TestCompile:
   ): ZIO[Resolve & LockedTools, ModuleTestError, List[ResolvedArtifact]] =
     val found = Module.chain(module, modules, platform)
     ZIO
-      .foreach(found)(
-        compileArtifacts(_, version, platform, lock, repositories)
-      )
+      .foreach(found): dependency =>
+        histos.zinc.UpstreamCells.chosen(version, dependency, platform, modules) match
+          case None =>
+            ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, version))
+          case Some(chosen) =>
+            compileArtifacts(dependency, chosen, platform, lock, repositories)
       .map(_.flatten.distinct)
 
   private[testrun] def compileArtifacts(
@@ -375,7 +406,10 @@ private[histos] object TestCompile:
       repositories,
       scope,
     )
-    held(lock, cell).map(fetched => Fetched(fetched.artifacts.map(_.path), fetched.artifacts.map(_.sha256)))
+    held(lock, cell).map: classpath =>
+      val host      = histos.zinc.ScalacClasspath.asks(dependencies, version, platform)
+      val artifacts = classpath.artifacts.filterNot(artifact => artifact.name.startsWith("histos-api"))
+      Fetched(artifacts.map(_.path), artifacts.map(_.sha256), host)
 
   /** The service solves a miss. A tools value without one fetches the snapshot.
     */

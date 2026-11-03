@@ -6,6 +6,10 @@ import _root_.scala.annotation.publicInBinary
 enum DepKind:
   case Java, Binary, Full
 
+/** `Published` is a pom dependency. `CompileOnly` is on the compile classpath and absent from the pom. */
+enum DepLink:
+  case Published, CompileOnly
+
 /** A library coordinate written the way sbt writes it. The Scala suffix is not resolved here. */
 /** `platforms` empty of a value means every platform. `Some` is only those platforms. */
 final case class Dep @publicInBinary private (
@@ -14,10 +18,15 @@ final case class Dep @publicInBinary private (
     revision: String,
     kind: DepKind,
     platforms: Option[List[Platform]] = None,
+    link: DepLink = DepLink.Published,
 ):
   /** This dependency is resolved only on the named platforms. */
   def on(platform: Platform, rest: Platform*): Dep =
     copy(platforms = Some((platform :: rest.toList).distinct))
+
+  /** Compile against this coordinate. The published pom does not fetch it. */
+  def compileOnly: Dep =
+    copy(link = DepLink.CompileOnly)
 
   def applies(platform: Platform): Boolean =
     platforms match
@@ -61,6 +70,10 @@ object Dep:
 
   def select(deps: List[Dep], platform: Platform): List[Dep] =
     deps.filter(_.applies(platform))
+
+  /** Coordinates the pom lists. Compile-only edges stay on the compile classpath and off this list. */
+  def published(deps: List[Dep], platform: Platform): List[Dep] =
+    select(deps, platform).filter(_.link == DepLink.Published)
 
   private def coordinate(
       organization: String,

@@ -1,17 +1,21 @@
 package histos.load
 
-import histos.jdk.JdkRuntime
-import histos.plugin.{CellClasspath, DeclaredTask, PluginDetail, PluginRunError, TaskDep}
+import histos.jdk.{JdkRuntime, Sha256}
+import histos.js.{JsLink, JsLinkRequest}
+import histos.plugin.{CellClasspath, DeclaredTask, LinkedScript, PluginDetail, PluginRunError, TaskDep}
+import histos.program.Program
+import histos.workspace.Workspace
 import histos.resolve.LockedTools
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.native.NativeOrigin
+import histos.pack.Resources
 import histos.testrun.{ModuleTestError, TestCompile}
 import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError, JvmCompile}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
-import zio.{IO, ZIO}
+import zio.{Chunk, IO, ZIO, ZLayer}
 import zio.stream.ZStream
 
 /** Compiles every `TaskDep.Compile` cell before the plugin task is hashed, then reads the classpath that compile wrote.
@@ -35,6 +39,18 @@ private[load] object PluginCells:
       case (Right(acc), TaskDep.Same(_))                          => Right(acc)
       case (Right(acc), TaskDep.Compile(name, version, platform)) =>
         named(graph, name, version, platform).map(acc ++ _)
+      case (Right(acc), TaskDep.Link(_, _)) => Right(acc)
+
+  def links(
+      graph: ProjectGraph,
+      task: DeclaredTask,
+  ): Either[PluginRunError, List[Cell]] =
+    task.dependsOn.foldLeft[Either[PluginRunError, List[Cell]]](Right(Nil)):
+      case (Left(error), _)                          => Left(error)
+      case (Right(acc), TaskDep.Link(name, version)) =>
+        named(graph, name, version, Some(Platform.Js)).map(acc ++ _)
+      case (Right(acc), TaskDep.Compile(_, _, _)) => Right(acc)
+      case (Right(acc), TaskDep.Same(_))          => Right(acc)
 
   def named(
       graph: ProjectGraph,
@@ -61,6 +77,115 @@ private[load] object PluginCells:
       .flatMap: found =>
         if found.isEmpty then ZIO.succeed(Nil)
         else lock.flatMap(captured => ZIO.foreach(found.distinct)(paths(repo, graph, _, captured)))
+
+  /** Compile the cell, link it, and remember the script path. The returned text is the script digest. */
+  def link(
+      session: histos.zinc.CompileSession,
+      cell: Cell,
+  ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, String] =
+    val histos.zinc.CompileSession(repo, graph, jdk, _, lock) = session
+    val asked                                                 =
+      cell.module.application match
+        case Some(main) =>
+          histos.pack.MainClass.from(main.value) match
+            case Left(error)   => Left(failed(error.message))
+            case Right(binary) => Right((binary, true))
+        case None if cell.platform == Platform.Js =>
+          Right((histos.pack.MainClass.trusted("histos.Exports"), false))
+        case None =>
+          Left(failed(s"'${cell.module.name.value}' has no main class to link"))
+    asked match
+      case Left(error)                              => ZIO.fail(PluginFault.Task(error))
+      case Right(_) if cell.platform != Platform.Js =>
+        ZIO.fail(PluginFault.Task(failed(s"'${cell.module.name.value}' is not a JavaScript module")))
+      case Right((binary, initialize)) =>
+        val modules      = modulesOf(graph)
+        val repositories = BuildResolvers(graph.resolvers)
+        val compiled     = histos.zinc.CompiledCell(
+          cell.module.name,
+          cell.version,
+          cell.platform,
+          classes(repo, cell),
+          0,
+          None,
+          false,
+          None,
+          None,
+        )
+        val work = Program.workDir(repo, cell.module.name, cell.version, cell.platform)
+        for
+          service <- ZIO.service[histos.resolve.ResolutionService]
+          tools = ZLayer.fromZIO(LockedTools.make(lock, graph, service))
+          paths <- Program
+            .classpath(repo, modules, cell.module, compiled, lock, repositories)
+            .provideSome[Resolve](tools)
+            .mapError(error => PluginFault.Task(failed(error.message)))
+          _      <- Workspace.recreate(work).mapError(error => PluginFault.Task(failed(error.message)))
+          linked <- JsLink
+            .link(
+              JsLinkRequest(
+                cell.version,
+                binary,
+                paths,
+                work,
+                jdk,
+                cell.module.jsModule,
+                revision = cell.module.jsVersion,
+                initialize = initialize,
+              )
+            )
+            .provideSome[Resolve](tools)
+            .mapError(error => PluginFault.Task(failed(error.message)))
+          _ <- Workspace
+            .writeString(scriptRecord(repo, cell.module.name, cell.version), linked.script.toString)
+            .mapError(error => PluginFault.Task(failed(error.message)))
+        yield linked.key.value
+
+  def scripts(
+      repo: Path,
+      graph: ProjectGraph,
+      task: DeclaredTask,
+  ): IO[PluginRunError, List[LinkedScript]] =
+    ZIO
+      .fromEither(links(graph, task))
+      .flatMap: found =>
+        ZIO.foreach(found.distinct): cell =>
+          Workspace
+            .readString(scriptRecord(repo, cell.module.name, cell.version))
+            .mapBoth(
+              _ => failed(s"link of ${cell.module.name.value} ${cell.version.value} was not written"),
+              text => LinkedScript(cell.module.name, cell.version, Path.of(text.trim)),
+            )
+
+  def scriptDigest(
+      repo: Path,
+      graph: ProjectGraph,
+      name: ProjectName,
+      version: Option[ScalaVersion],
+  ): IO[PluginRunError, Sha256] =
+    ZIO
+      .fromEither(named(graph, name, version, Some(Platform.Js)))
+      .flatMap: found =>
+        ZIO
+          .foreach(found): cell =>
+            Workspace
+              .readString(scriptRecord(repo, cell.module.name, cell.version))
+              .mapBoth(
+                _ => failed(s"link of ${cell.module.name.value} ${cell.version.value} was not written"),
+                identity,
+              )
+              .flatMap: text =>
+                val script = Path.of(text.trim)
+                ZIO
+                  .attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(script))))
+                  .orElseFail(failed(s"could not read ${script}"))
+          .map: hashes =>
+            Sha256.of(
+              Chunk.fromArray(hashes.map(_.value).mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
+            )
+
+  private[load] def scriptRecord(repo: Path, module: ProjectName, version: ScalaVersion): Path =
+    repo.resolve(".histos").resolve("link").resolve(module.value).resolve(version.value).resolve("script")
 
   private[load] def compile(
       session: histos.zinc.CompileSession,
@@ -149,11 +274,13 @@ private[load] object PluginCells:
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
         )
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
+      tested  <- resourceDirs(repo, cell.module, modules, tests = true)
       test    <-
         if sources.isEmpty then ZIO.succeed(compile)
         else
+          val extraResources = tested.filterNot(compile.toSet.contains)
           testJars(cell, lock, repositories)
-            .map(extra => testClasses(repo, cell) :: (compile ++ extra))
+            .map(extra => testClasses(repo, cell) :: (extraResources ++ compile ++ extra))
     yield CellClasspath(
       cell.module.name,
       cell.version,
@@ -161,6 +288,22 @@ private[load] object PluginCells:
       compile,
       test,
     )
+
+  private def resourceDirs(
+      repo: Path,
+      module: Module,
+      modules: List[Module],
+      tests: Boolean,
+  ): ZIO[Any, PluginFault, List[Path]] =
+    GraphCompile
+      .sourceBase(repo, module, modules)
+      .mapError(PluginFault.Compiled(_))
+      .flatMap:
+        case None      => ZIO.succeed(Nil)
+        case Some(src) =>
+          Resources
+            .directories(src, tests)
+            .mapError(_ => PluginFault.Compiled(GraphCompileError.RootRead(src)))
 
   private def compileClasspath(
       repo: Path,
@@ -181,8 +324,29 @@ private[load] object PluginCells:
         cell.module.dependencies,
       )
       library <- standardLibrary(cell).mapError(PluginFault.Tested(_))
-      jars = fetched.filterNot(path => cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path))
-    yield classes(repo, cell) :: (upstream ++ library ++ jars)
+      own     <- resourceDirs(repo, cell.module, modules, tests = false)
+      above   <- ZIO.foreach(Module.chain(cell.module, modules, cell.platform)): dependency =>
+        resourceDirs(repo, dependency, modules, tests = false)
+      transitive <- ZIO.foreach(Module.chain(cell.module, modules, cell.platform)): dependency =>
+        histos.zinc.UpstreamCells.chosen(cell.version, dependency, cell.platform, modules) match
+          case None =>
+            ZIO.fail(
+              PluginFault.Tested(
+                ModuleTestError.MissingUpstream(cell.module.name, dependency.name, cell.version)
+              )
+            )
+          case Some(chosen) =>
+            materialize(
+              Cell(dependency, chosen, cell.platform),
+              lock,
+              repositories,
+              ClasspathScope.Compile,
+              dependency.dependencies,
+            )
+      jars =
+        (fetched ++ transitive.flatten.distinct.filterNot(fetched.toSet.contains))
+          .filterNot(path => cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path))
+    yield classes(repo, cell) :: (upstream ++ own ++ above.flatten ++ library ++ jars)
 
   private def testJars(
       cell: Cell,

@@ -22,7 +22,8 @@ import zio.{System, ZIO}
 import zio.test.*
 
 object LauncherSpec extends ZIOSpecDefault:
-  private val version = "0.0.2-SNAPSHOT"
+  private val ship    = "0.1.0-SNAPSHOT"
+  private val pinLine = "0.1.0-SNAPSHOT"
 
   private val checks = suite("launcher publish")(
     test("a release ship boots the snapshot channel of that number"):
@@ -38,8 +39,10 @@ object LauncherSpec extends ZIOSpecDefault:
           !LauncherScript.boots("0.0.2-SNAPSHOT", "0.0.1-SNAPSHOT"),
           posix.contains("bin/histos"),
           posix.contains("assembly.sha256"),
+          posix.contains("histos.version"),
           posix.contains("On Windows, use WSL"),
           !posix.contains("cs fetch"),
+          !posix.contains("HISTOS_VERSION=\"histos $version\""),
         )
       )
     ,
@@ -54,9 +57,9 @@ object LauncherSpec extends ZIOSpecDefault:
         posix <- Workspace.readString(root.resolve("histos"))
         pin   <- LauncherPin.read(root)
       yield assertTrue(
-        posix == LauncherScript.posix(version),
-        pin.version == version,
-        LauncherScript.boots(version, pin.version),
+        posix == LauncherScript.posix(ship),
+        pin.version == pinLine,
+        LauncherScript.boots(ship, pin.version),
       )
     ,
     test("the api name keeps the binary suffix and the assembly name does not"):

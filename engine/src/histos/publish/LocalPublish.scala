@@ -694,7 +694,7 @@ object LocalPublish:
                   version,
                 ).map(seen :+ _)
         val external = Dep
-          .select(found.dependencies, cell.platform)
+          .published(found.dependencies, cell.platform)
           .foldLeft[Either[LocalPublishError, List[MavenDependency]]](
             Right(Nil)
           ): (acc, dependency) =>

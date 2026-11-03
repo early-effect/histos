@@ -802,6 +802,8 @@ object Projects:
       case TaskDep.Same(_)                          => None
       case TaskDep.Compile(name, version, platform) =>
         cellOf(plugin, modules, name, version, platform)
+      case TaskDep.Link(name, version) =>
+        cellOf(plugin, modules, name, version, Some(Platform.Js))
 
   private def cellOf(
       plugin: RegisteredPlugin,

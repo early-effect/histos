@@ -157,6 +157,7 @@ object PluginRuntime:
                 id,
                 taskOf,
                 task => PluginCells.selected(graph, task),
+                task => PluginCells.links(graph, task),
                 cell =>
                   session.flatMap: compiled =>
                     PluginCells
@@ -164,6 +165,11 @@ object PluginRuntime:
                       .provideSome[Resolve & histos.cache.ContentStore](
                         zio.ZLayer.succeed(report)
                       ),
+                cell =>
+                  session.flatMap: compiled =>
+                    PluginCells
+                      .link(compiled, cell)
+                      .provideSome[Resolve](zio.ZLayer.succeed(report)),
                 (taskId, task, upstream) =>
                   remembered(
                     id,
@@ -242,6 +248,7 @@ object PluginRuntime:
               .mapError(error => PluginFault.Task(error))
             inputs   <- withUpstream(hashed.inputs, upstream)
             compiled <- PluginCells.classpath(repo, graph, task, lock)
+            linked   <- PluginCells.scripts(repo, graph, task).mapError(PluginFault.Task(_))
             action   <- ZIO.fromEither(
               actionOf(id, task, inputs).left.map(error => PluginFault.Task(error))
             )
@@ -249,7 +256,7 @@ object PluginRuntime:
             info  = StepInfo(StepId.Plugin(id), Chunk.empty, Set(Need.Cpu))
             local = Step.run(
               Step.hermetic[String](info)(
-                produce(id, task, plugin, passed, made, compiled, held, env)
+                produce(id, task, plugin, passed, made, compiled, linked, held, env)
                   .mapError(error => PluginFault.Task(error))
               ) @@ PluginAspects.loader(threads) @@ PluginAspects
                 .declaredOutputs(repo, task, held)
@@ -300,6 +307,7 @@ object PluginRuntime:
         args: PluginArgs,
         made: Ref[Map[String, PluginOutput]],
         compiled: List[histos.plugin.CellClasspath],
+        linked: List[histos.plugin.LinkedScript],
         held: Ref[Option[PluginOutput]],
         env: Map[String, String],
     ): IO[PluginRunError, String] =
@@ -314,6 +322,7 @@ object PluginRuntime:
             args,
             hashed.material,
             compiled,
+            linked,
           ),
         )
         _    <- check(task, output)
@@ -411,6 +420,7 @@ object PluginRuntime:
       ):
         case (Left(err), _)                                       => Left(err)
         case (Right(acc), histos.plugin.TaskDep.Compile(_, _, _)) => Right(acc)
+        case (Right(acc), histos.plugin.TaskDep.Link(_, _))       => Right(acc)
         case (Right(acc), histos.plugin.TaskDep.Same(name))       =>
           ActionId
             .from(PluginTaskId(plugin, name).render)
