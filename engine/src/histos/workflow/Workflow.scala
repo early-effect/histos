@@ -243,13 +243,13 @@ object Workflow:
           case JobWhen.Always      => List(jobLines(plugin, job).mkString("\n"))
           case JobWhen.Schedule(_) => Nil
 
-  /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A GitHub
-    * release is not part of this file.
+  /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
+    * ship that has a native client then links that client and uploads the install files to the existing `dist` release.
     */
   private def releaseWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
     graph.catalog.ships match
       case Nil   => None
-      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(ships, sona)))
+      case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships, sona)))
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
   private def promoteWorkflow(sona: Publishing): Option[RenderedWorkflow] =
@@ -257,20 +257,22 @@ object Workflow:
       case FollowUp.Finished   => None
       case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument))
 
-  private def releaseDocument(ships: List[Ship], sona: Publishing): String =
-    val lines = List(
+  private def releaseDocument(graph: ProjectGraph, ships: List[Ship], sona: Publishing): String =
+    val install = installShip(graph, ships)
+    val lines   = List(
       "name: release",
       "on:",
       "  workflow_dispatch:",
       "permissions:",
       "  contents: read",
       "jobs:",
-    ) ++ ships.flatMap(ship => releaseJob(ship, sona))
+    ) ++ ships.flatMap(ship => releaseJob(ship, sona, install.exists(_.name == ship.name))) ++ install.toList
+      .flatMap(ship => installJobs(graph, ships, ship))
     lines.mkString("\n") + "\n"
 
-  private def releaseJob(ship: Ship, sona: Publishing): List[String] =
-    val name = ship.name.value
-    List(
+  private def releaseJob(ship: Ship, sona: Publishing, install: Boolean): List[String] =
+    val name      = ship.name.value
+    val published = List(
       s"  release-$name:",
       s"    runs-on: $Runner",
       "    permissions:",
@@ -280,6 +282,144 @@ object Workflow:
     ) ++ coursierCli ++ List(
       s"      - run: ${quote(s"./histos publish release $name")}"
     ) ++ secretEnv(sona.secretNames)
+    if install then published ++ jarArtifact else published
+
+  /** The assembly the install manifest names. It is built after the portal upload, on the warm workspace. */
+  private def jarArtifact: List[String] =
+    List(
+      s"      - run: ${quote("./histos assembly")}",
+      "      - uses: actions/upload-artifact@v7",
+      "        with:",
+      "          name: histos-jar",
+      "          path: dist/histos.jar",
+      "          if-no-files-found: error",
+    )
+
+  /** One non-snapshot ship that names an asset, and a native client the launcher can exec. */
+  private def installShip(graph: ProjectGraph, ships: List[Ship]): Option[Ship] =
+    val llvm = graph.runnerTools.llvm
+    if !ClientBinary.present(graph) || llvm.isEmpty then None
+    else
+      ships.filter(ship => releaseVersion(ship) && assetMember(graph, ship)) match
+        case ship :: Nil => Some(ship)
+        case _           => None
+
+  private def releaseVersion(ship: Ship): Boolean =
+    !shipVersion(ship).endsWith("-SNAPSHOT")
+
+  private def shipVersion(ship: Ship): String =
+    ship match
+      case Ship.Line(_, number, _, _, _)    => number.render
+      case Ship.Manual(_, version, _, _, _) => version.value
+
+  private def assetMember(graph: ProjectGraph, ship: Ship): Boolean =
+    ship.members.toList.exists: name =>
+      graph.get(name) match
+        case Some(module: Module) => module.asset.isDefined
+        case _                    => false
+
+  private def installJobs(graph: ProjectGraph, ships: List[Ship], ship: Ship): List[String] =
+    graph.runnerTools.llvm match
+      case None         => Nil
+      case Some(pinned) =>
+        val revision = pinned.value
+        val needed   = ships.map(row => s"release-${row.name.value}")
+        clientJob(needed, revision) ++ distJob(shipVersion(ship))
+
+  private def clientJob(needed: List[String], revision: String): List[String] =
+    val hosts = DistPlatforms.flatMap: (platform, runner, archive) =>
+      List(
+        s"          - runner: $runner",
+        s"            platform: $platform",
+        s"            archive: LLVM-$revision-$archive.tar.xz",
+      )
+    List(
+      "  client:",
+      s"    needs: [${needed.mkString(", ")}]",
+      "    runs-on: ${{ matrix.runner }}",
+      "    strategy:",
+      "      fail-fast: false",
+      "      matrix:",
+      "        include:",
+    ) ++ hosts ++ List(
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli ++ clientLlvm(revision) ++ List(
+      s"      - run: ${quote("./histos client")}",
+      "      - uses: actions/upload-artifact@v7",
+      "        with:",
+      "          name: client-${{ matrix.platform }}",
+      "          path: dist/histos-client",
+      "          if-no-files-found: error",
+    )
+
+  private def clientLlvm(revision: String): List[String] =
+    val key = "llvm-" + revision + "-${{ runner.os }}-${{ runner.arch }}"
+    val url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-" + revision + "/${{ matrix.archive }}"
+    cacheStep(Some("llvm"), List("${{ runner.temp }}/llvm"), key) ++ List(
+      "      - run: |",
+      "          dir=\"${{ runner.temp }}/llvm\"",
+      "          mkdir -p \"$dir\"",
+      "          curl -fsSL \"" + url + "\" -o \"$dir/llvm.tar.xz\"",
+      "          tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
+      "          rm \"$dir/llvm.tar.xz\"",
+      "        if: steps.llvm.outputs.cache-hit != 'true'",
+      "      - run: |",
+      "          dir=\"${{ runner.temp }}/llvm\"",
+      "          echo \"$dir/bin\" >> \"$GITHUB_PATH\"",
+      "          if [ \"$(uname -s)\" = Linux ]; then",
+      "            if [ -n \"$LD_LIBRARY_PATH\" ]; then",
+      "              echo \"LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH\" >> \"$GITHUB_ENV\"",
+      "            else",
+      "              echo \"LD_LIBRARY_PATH=$dir/lib\" >> \"$GITHUB_ENV\"",
+      "            fi",
+      "          fi",
+    )
+
+  private def distJob(version: String): List[String] =
+    List(
+      "  install:",
+      "    needs: client",
+      s"    runs-on: $Runner",
+      "    permissions:",
+      "      actions: read",
+      "      contents: write",
+      "    steps:",
+      "      - uses: actions/download-artifact@v8",
+      "        with:",
+      "          path: dist-in",
+      "      - run: |",
+      "          set -eu",
+      s"          version=$version",
+      "          jar=dist-in/histos-jar/histos.jar",
+      "          linux=dist-in/client-linux-x86_64/histos-client",
+      "          mac=dist-in/client-macos-aarch64/histos-client",
+      "          sha() { sha256sum \"$1\" | awk '{print $1}'; }",
+      "          jar_sha=$(sha \"$jar\")",
+      "          linux_sha=$(sha \"$linux\")",
+      "          mac_sha=$(sha \"$mac\")",
+      "          cp \"$jar\" \"$version-histos.jar\"",
+      "          cp \"$linux\" \"$version-client-linux-x86_64\"",
+      "          cp \"$mac\" \"$version-client-macos-aarch64\"",
+      "          cat > \"$version-manifest.json\" <<EOF",
+      "          {",
+      "            \"version\": \"$version\",",
+      "            \"jar\": \"$version-histos.jar\",",
+      "            \"jarSha256\": \"$jar_sha\",",
+      "            \"clients\": {",
+      "              \"linux-x86_64\": \"$linux_sha\",",
+      "              \"macos-aarch64\": \"$mac_sha\"",
+      "            }",
+      "          }",
+      "          EOF",
+      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" --clobber",
+    )
+
+  /** Install platforms. The archive token is the LLVM release name for that runner. */
+  private val DistPlatforms: List[(String, String, String)] = List(
+    ("linux-x86_64", "ubuntu-26.04", "Linux-X64"),
+    ("macos-aarch64", "macos-26", "macOS-ARM64"),
+  )
 
   /** Promote does not sign, so this file does not list `secretNames`. */
   private val promoteSecrets: List[String] =

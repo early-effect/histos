@@ -17,6 +17,7 @@ import histos.schedule.CacheNamespace
 import histos.version.{Catalog, ManualVersion, Ship, ShipName, ShipNumber}
 import histos.{
   Axis,
+  MainClass,
   Module,
   NodeFloor,
   Platform,
@@ -721,6 +722,52 @@ object WorkflowSpec extends ZIOSpecDefault:
             !promoteBody.contains("--automatic")
           case _ => false
     ,
+    test("a release links the native client after sona and publishes the install files"):
+      val tools    = RunnerTools(None, Some(ToolRevision("21.1.8")), None)
+      val rendered = renderRelease(
+        List(manual("histos", "1.2.3", "app")),
+        Set("app"),
+        automatic,
+        tools = tools,
+        client = true,
+      )
+      val snapshot = renderRelease(
+        List(manual("histos", "1.2.3-SNAPSHOT", "app")),
+        Set("app"),
+        automatic,
+        tools = tools,
+        client = true,
+      )
+      assertTrue:
+        rendered match
+          case Right(_ :: RenderedWorkflow("histos-release.yml", body) :: Nil) =>
+            val releaseAt = body.indexOf("  release-histos:")
+            val clientAt  = body.indexOf("\n  client:\n")
+            val installAt = body.indexOf("\n  install:\n")
+            val release   = if releaseAt >= 0 && clientAt > releaseAt then body.substring(releaseAt, clientAt) else ""
+            releaseAt >= 0 && clientAt > releaseAt && installAt > clientAt &&
+            release.contains("\"./histos publish release histos\"") &&
+            release.contains("\"./histos assembly\"") &&
+            !release.contains("contents: write") &&
+            body.contains("\"./histos client\"") &&
+            body.contains("needs: [release-histos]") &&
+            body.contains("needs: client") &&
+            body.contains("macos-26") &&
+            body.contains("linux-x86_64") &&
+            body.contains("macos-aarch64") &&
+            body.contains("LLVM-21.1.8-Linux-X64.tar.xz") &&
+            body.contains("LLVM-21.1.8-macOS-ARM64.tar.xz") &&
+            body.contains("actions/upload-artifact@v7") &&
+            body.contains("actions/download-artifact@v8") &&
+            body.contains("gh release upload dist") &&
+            body.contains("version=1.2.3") &&
+            body.contains("contents: write") &&
+            (snapshot match
+              case Right(_ :: RenderedWorkflow("histos-release.yml", held) :: Nil) =>
+                !held.contains("\"./histos client\"") && !held.contains("gh release upload dist")
+              case _ => false)
+          case _ => false
+    ,
     test("two ships release by dispatch, and neither uploads to GitHub"):
       val rendered = renderRelease(
         List(line("libs", "1.0.0", "core"), line("tool", "2.0.0", "app")),
@@ -866,13 +913,19 @@ object WorkflowSpec extends ZIOSpecDefault:
       assets: Set[String],
       sona: Publishing,
       plugins: List[RegisteredPlugin] = Nil,
+      tools: RunnerTools = RunnerTools.empty,
+      client: Boolean = false,
   ): Either[String, List[RenderedWorkflow]] =
-    releaseGraph(rows, assets, plugins).flatMap(graph => Workflow.renderAll(graph, sona).left.map(_.message))
+    releaseGraph(rows, assets, plugins, tools, client).flatMap(graph =>
+      Workflow.renderAll(graph, sona).left.map(_.message)
+    )
 
   private def releaseGraph(
       rows: List[Either[String, Ship]],
       assets: Set[String],
       plugins: List[RegisteredPlugin] = Nil,
+      tools: RunnerTools = RunnerTools.empty,
+      client: Boolean = false,
   ): Either[String, ProjectGraph] =
     rows
       .foldLeft[Either[String, List[Ship]]](Right(Nil)): (acc, row) =>
@@ -890,7 +943,20 @@ object WorkflowSpec extends ZIOSpecDefault:
                 val base = module(name.value, Platform.Jvm, Nil)
                 if assets.contains(name.value) then base.copy(asset = Some(RepoPath.trusted("dist/histos.jar")))
                 else base
-            ProjectGraph.trusted(modules, Splits.aggregate, catalog, None, Nil, plugins)
+            val withClient =
+              if client then
+                modules :+ module("client", Platform.Native, Nil)
+                  .copy(application = Some(MainClass("histos.client.Main")))
+              else modules
+            ProjectGraph.trusted(
+              withClient,
+              Splits.aggregate,
+              catalog,
+              None,
+              Nil,
+              plugins,
+              runnerTools = tools,
+            )
 
   private def line(name: String, number: String, member: String): Either[String, Ship] =
     for
