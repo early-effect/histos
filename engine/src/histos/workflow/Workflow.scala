@@ -435,7 +435,7 @@ object Workflow:
       "            }",
       "          }",
       "          EOF",
-      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" --clobber",
+      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" --clobber --repo \"$GITHUB_REPOSITORY\"",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
     )
