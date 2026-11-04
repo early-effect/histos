@@ -4,6 +4,7 @@ import histos.plugin.{
   DeclaredInput,
   EntryName,
   HistosPlugin,
+  JobWhen,
   ModuleNote,
   Need,
   PluginId,
@@ -712,7 +713,18 @@ object Projects:
         registered.flatMap(_.contribution.jobs.map(_.name)),
         BuildError.DuplicateJob(_),
       )
+      _ <- checkSites(registered)
     yield ()
+
+  private def checkSites(registered: List[RegisteredPlugin]): Either[BuildError, Unit] =
+    val named = registered.flatMap(_.contribution.jobs.filter(_.site.isDefined))
+    named match
+      case first :: second :: _ => Left(BuildError.DuplicateSite(first.name, second.name))
+      case job :: Nil           =>
+        job.when match
+          case JobWhen.Schedule(_) => Left(BuildError.ScheduledSite(job.name))
+          case JobWhen.Always      => Right(())
+      case Nil => Right(())
 
   private def uniquePlugins(
       registered: List[RegisteredPlugin]

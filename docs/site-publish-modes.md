@@ -1,6 +1,6 @@
 # Site publish modes
 
-This file is the decision for [#90](https://github.com/early-effect/histos/issues/90). Implementation has not started. The catalog is `manual("histos", manual"0.1.3")`, so a breaking change that makes this API honest is in scope.
+This file is the decision for [#90](https://github.com/early-effect/histos/issues/90). The catalog is `manual("histos", manual"0.1.3")`, so a breaking change that makes this API honest is in scope.
 
 A job that names a site builds that site on every run of the job. Publishing it is a mode on the site. `Automatic` deploys on a push to the repository's default branch, after the site task. `Manual` deploys from a generated `workflow_dispatch` workflow. `Both` is the two together. A pull request builds the site and does not request the `github-pages` environment. The default branch is not a literal in the generated file.
 
@@ -488,7 +488,7 @@ Goldens cover the three events by equality on the files those events run, plus t
 
 ## Implementation plan
 
-Two stacked PRs close the issue and the ledger. The second branch starts from the first. Do not tag a release on the first alone: until the second merges, `Some(path)` means the automatic deploy, and the second PR's default `Both` adds `histos-pages.yml` for every site. Specular does not set `site`, so neither PR changes that plugin until it opts in. The README workflow section is updated in the second PR, in the same change as the generator it describes.
+The two steps below land in one change. Do not tag a release on the deploy split alone: until `SitePublish` is in, `Some(path)` means the automatic deploy, and the default `Both` adds `histos-pages.yml` for every site. Specular does not set `site`, so this change does not publish that plugin until it opts in. The README workflow section is updated in the same change as the generator it describes.
 
 Audit fixes land in the PR that edits that code. Nothing waits for a later follow-up.
 
@@ -502,24 +502,24 @@ Audited while reading the CI model and the generator: `CiJob`, `JobWhen`, `JobNa
 
 | Done | Category | Location | Owning step |
 | --- | --- | --- | --- |
-| [ ] | booleanly | `CiJob.site: Option[RepoPath]` is both the directory and the decision to deploy on every event. [Contribution.scala](../api/src/histos/plugin/Contribution.scala) lines 51-57. | 2. SitePublish |
-| [ ] | booleanly | `steps` takes `gate: Boolean` to mean "emit a matrix `if`." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 602-607. | 1. Split the deploy job |
-| [ ] | booleanly | `nodeStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 660. | 1. Split the deploy job |
-| [ ] | booleanly | `llvmStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 670. | 1. Split the deploy job |
-| [ ] | booleanly | `playwrightStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 697. | 1. Split the deploy job |
-| [ ] | booleanly | `clientStep` takes `present: Boolean` and `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 756. | 1. Split the deploy job |
-| [ ] | booleanly | `include` takes `flags: Boolean` to mean "emit the tool columns." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 762. | 1. Split the deploy job |
-| [ ] | booleanly | `releaseJob` takes `install: Boolean` to mean "append the install uploads." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 277. | 1. Split the deploy job |
-| [ ] | stringly | The push branch is the literal `main` in the workflow header. The cache expressions use the same spelling for `CacheNamespace.Main`, which is a different fact. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 573-584, 849-852, and 884-885. | 1. Split the deploy job |
-| [ ] | `Either[String, _]` | `PluginMacros.textOf` flattens a typed `from` error to `String` before the compiler abort, including `JobName`. [Macros.scala](../api/src/histos/plugin/Macros.scala) lines 142-143. `JobName.from` stays `Either[JobNameError, JobName]`. The abort still receives `error.message`, because scalac takes a string. | 2. SitePublish |
-| [ ] | illegal state | `docJob` emits a job id `doc` that `JobName.reserved` does not contain, so a plugin can take the generated id. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 903-916 and [Names.scala](../api/src/histos/plugin/Names.scala) lines 109-114. | 2. SitePublish |
-| [ ] | partial | `oneModule` maps an empty group to `ModuleRef.All`. An empty group is not every module. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 220-223. | 1. Split the deploy job |
-| [ ] | partial | `WorkflowSpec.project` discards `Left` and recurses on `"core"`. A bad name silently becomes `core`, and a failure of `"core"` does not terminate. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 404-407. | 1. Split the deploy job |
-| [ ] | partial | The specular fixture source handles `ProjectName.from("docs")` with `case Left(_) => Contribution(Nil, Nil, Nil)`, dropping the typed error. [SpecularFixtureSpec.scala](../engine/test/SpecularFixtureSpec.scala) lines 59-75. | 2. SitePublish |
-| [ ] | weak test | The site test asserts a conjunction of `contains` calls, so a failure does not say which clause failed. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 435-466. | 1. Split the deploy job |
-| [ ] | weak test | The contents-write and scheduled-permission tests use the same conjunction. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 589-643. | 1. Split the deploy job |
-| [ ] | `Task` | `WorkflowSpec.text` is `ZIO[Any, Throwable, String]`. The suite's other effects use typed errors. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) line 409. | 1. Split the deploy job |
-| [ ] | permissions | The release and client jobs upload with `actions/upload-artifact@v7` under `contents: read` only. A permissions block sets every omitted scope to `none`, and that upload 403s on `FinalizeArtifact` without `actions: write`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 277-300 and 333-358. | 1. Split the deploy job |
+| [x] | booleanly | `CiJob.site: Option[RepoPath]` is both the directory and the decision to deploy on every event. [Contribution.scala](../api/src/histos/plugin/Contribution.scala) lines 51-57. | 2. SitePublish |
+| [x] | booleanly | `steps` takes `gate: Boolean` to mean "emit a matrix `if`." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 602-607. | 1. Split the deploy job |
+| [x] | booleanly | `nodeStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 660. | 1. Split the deploy job |
+| [x] | booleanly | `llvmStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 670. | 1. Split the deploy job |
+| [x] | booleanly | `playwrightStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 697. | 1. Split the deploy job |
+| [x] | booleanly | `clientStep` takes `present: Boolean` and `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 756. | 1. Split the deploy job |
+| [x] | booleanly | `include` takes `flags: Boolean` to mean "emit the tool columns." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 762. | 1. Split the deploy job |
+| [x] | booleanly | `releaseJob` takes `install: Boolean` to mean "append the install uploads." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 277. | 1. Split the deploy job |
+| [x] | stringly | The push branch is the literal `main` in the workflow header. The cache expressions use the same spelling for `CacheNamespace.Main`, which is a different fact. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 573-584, 849-852, and 884-885. | 1. Split the deploy job |
+| [x] | `Either[String, _]` | `PluginMacros.textOf` flattens a typed `from` error to `String` before the compiler abort, including `JobName`. [Macros.scala](../api/src/histos/plugin/Macros.scala) lines 142-143. `JobName.from` stays `Either[JobNameError, JobName]`. The abort still receives `error.message`, because scalac takes a string. | 2. SitePublish |
+| [x] | illegal state | `docJob` emits a job id `doc` that `JobName.reserved` does not contain, so a plugin can take the generated id. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 903-916 and [Names.scala](../api/src/histos/plugin/Names.scala) lines 109-114. | 2. SitePublish |
+| [x] | partial | `oneModule` maps an empty group to `ModuleRef.All`. An empty group is not every module. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 220-223. | 1. Split the deploy job |
+| [x] | partial | `WorkflowSpec.project` discards `Left` and recurses on `"core"`. A bad name silently becomes `core`, and a failure of `"core"` does not terminate. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 404-407. | 1. Split the deploy job |
+| [x] | partial | The specular fixture source handles `ProjectName.from("docs")` with `case Left(_) => Contribution(Nil, Nil, Nil)`, dropping the typed error. [SpecularFixtureSpec.scala](../engine/test/SpecularFixtureSpec.scala) lines 59-75. | 2. SitePublish |
+| [x] | weak test | The site test asserts a conjunction of `contains` calls, so a failure does not say which clause failed. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 435-466. | 1. Split the deploy job |
+| [x] | weak test | The contents-write and scheduled-permission tests use the same conjunction. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 589-643. | 1. Split the deploy job |
+| [x] | `Task` | `WorkflowSpec.text` is `ZIO[Any, Throwable, String]`. The suite's other effects use typed errors. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) line 409. | 1. Split the deploy job |
+| [x] | permissions | The release and client jobs upload with `actions/upload-artifact@v7` under `contents: read` only. A permissions block sets every omitted scope to `none`, and that upload 403s on `FinalizeArtifact` without `actions: write`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 277-300 and 333-358. | 1. Split the deploy job |
 
 Eighteen hits. Eight are `booleanly`, three are `partial`, two are `weak test`, and `stringly`, `Either[String, _]`, `illegal state`, `Task`, and `permissions` are one each.
 

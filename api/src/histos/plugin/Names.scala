@@ -99,7 +99,8 @@ enum CommandNameError:
     case Bad(raw) => s"'$raw' is not a command name"
 end CommandNameError
 
-/** A CI job name. Same token rule as a task name. `test`, `versions`, and `workflow` are reserved.
+/** A CI job name. Same token rule as a task name. `test`, `versions`, `workflow`, `launcher`, `doc`, and `pages` are
+  * reserved.
   */
 opaque type JobName = String
 
@@ -111,6 +112,8 @@ object JobName:
     trusted("versions"),
     trusted("workflow"),
     trusted("launcher"),
+    trusted("doc"),
+    trusted("pages"),
   )
 
   inline def apply(inline raw: String): JobName = ${

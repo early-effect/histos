@@ -85,6 +85,8 @@ enum BuildError:
   case DuplicateCommand(name: CommandName)
   case DuplicateJob(name: JobName)
   case ReservedJob(name: JobName)
+  case DuplicateSite(first: JobName, second: JobName)
+  case ScheduledSite(name: JobName)
   case DuplicateNote(module: ProjectName, plugin: PluginId, key: NoteKey)
   case MissingNote(module: ProjectName, plugin: PluginId, key: NoteKey)
   case PluginMissingModule(plugin: PluginId, name: ProjectName)
@@ -157,9 +159,12 @@ enum BuildError:
     case DuplicatePlugin(id)               => s"plugin ${id.value} is registered twice"
     case DuplicatePluginTask(plugin, name) =>
       s"plugin ${plugin.value} declares task ${name.value} twice"
-    case DuplicateCommand(name)             => s"command ${name.value} is declared twice"
-    case DuplicateJob(name)                 => s"job ${name.value} is declared twice"
-    case ReservedJob(name)                  => s"job ${name.value} is reserved"
+    case DuplicateCommand(name)       => s"command ${name.value} is declared twice"
+    case DuplicateJob(name)           => s"job ${name.value} is declared twice"
+    case ReservedJob(name)            => s"job ${name.value} is reserved"
+    case DuplicateSite(first, second) =>
+      s"job ${first.value} and job ${second.value} both name a site"
+    case ScheduledSite(name)                => s"job ${name.value} is scheduled and names a site"
     case DuplicateNote(module, plugin, key) =>
       s"module ${module.value} repeats note ${plugin.value}/${key.value}"
     case MissingNote(module, plugin, key) =>

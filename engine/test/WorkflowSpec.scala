@@ -11,6 +11,8 @@ import histos.plugin.{
   PluginId,
   RegisteredPlugin,
   RepoPath,
+  Site,
+  SitePublish,
   TaskName,
 }
 import histos.schedule.CacheNamespace
@@ -47,8 +49,8 @@ import zio.test.*
 
 object WorkflowSpec extends ZIOSpecDefault:
   private val v390           = ScalaVersion.trusted("3.9.0")
-  private val core           = project("core")
-  private val tests          = project("tests")
+  private val core           = ProjectName("core")
+  private val tests          = ProjectName("tests")
   private val nodeOnly       = RunnerTools(Some(NodeFloor(22)), None, None)
   private val llvmOnly       = RunnerTools(None, Some(ToolRevision("20.1.8")), None)
   private val playwrightOnly = RunnerTools(None, None, Some(ToolRevision("1.49.0")))
@@ -63,14 +65,17 @@ object WorkflowSpec extends ZIOSpecDefault:
         rendered = Workflow.render(graph(Splits.aggregate))
       yield assertTrue(
         rendered == Right(golden),
-        golden.contains("./histos test") && golden.contains(
-          "contents: read"
-        ) && golden.contains("workflow --check"),
-        !golden.contains("setup-java") && !golden.contains("setup-node") && !golden
-          .contains("llvm.tar.xz") && !golden.contains("playwright") && !golden
-          .contains("format:") && !golden.contains("publish") &&
-          golden.contains("push:\n    branches:\n      - main") && !golden
-            .contains("tags:"),
+        golden.contains("./histos test"),
+        golden.contains("contents: read"),
+        golden.contains("workflow --check"),
+        !golden.contains("setup-java"),
+        !golden.contains("setup-node"),
+        !golden.contains("llvm.tar.xz"),
+        !golden.contains("playwright"),
+        !golden.contains("format:"),
+        !golden.contains("publish"),
+        golden.contains("push:\n    branches:\n      - \"**\""),
+        !golden.contains("tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List(
           "./histos",
@@ -98,7 +103,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             case Right(catalog) =>
               Workflow.render(
                 ProjectGraph.trusted(
-                  List(module("core", Platform.Jvm, Nil)),
+                  List(module(ProjectName("core"), Platform.Jvm, Nil)),
                   Splits.aggregate,
                   catalog,
                 )
@@ -172,8 +177,8 @@ object WorkflowSpec extends ZIOSpecDefault:
       )
     ,
     test("a jvm cell does not install llvm while the native cell does"):
-      val jvm    = module("core", Platform.Jvm, Nil)
-      val native = module("native", Platform.Native, Nil)
+      val jvm    = module(ProjectName("core"), Platform.Jvm, Nil)
+      val native = module(ProjectName("native"), Platform.Native, Nil)
       val built  = ProjectGraph.trusted(
         List(jvm, native),
         Splits.of(Axis.Platform),
@@ -300,12 +305,12 @@ object WorkflowSpec extends ZIOSpecDefault:
         ),
         Workflow.target(built, List("1core")) == Left(CiError.BadName("1core")),
         Workflow.target(built, List("missing")) == Left(
-          CiError.Unknown(project("missing"))
+          CiError.Unknown(ProjectName("missing"))
         ),
       )
     ,
     test("an unknown project is not dropped"):
-      val missing = project("missing")
+      val missing = ProjectName("missing")
       assertTrue(
         Workflow.plan(
           graph(Splits.aggregate),
@@ -325,11 +330,11 @@ object WorkflowSpec extends ZIOSpecDefault:
       )
     ,
     test("a platform cell stays only when an affected module targets it"):
-      val js    = module("jsapp", Platform.Js, Nil)
-      val jvm   = module("core", Platform.Jvm, Nil)
+      val js    = module(ProjectName("jsapp"), Platform.Js, Nil)
+      val jvm   = module(ProjectName("core"), Platform.Jvm, Nil)
       val built = ProjectGraph.trusted(List(jvm, js), Splits.of(Axis.Platform))
       val plan  =
-        Workflow.plan(built, CiEvent.PullRequest(Set(project("jsapp"))))
+        Workflow.plan(built, CiEvent.PullRequest(Set(ProjectName("jsapp"))))
       assertTrue(
         plan == Right(
           List(
@@ -356,8 +361,8 @@ object WorkflowSpec extends ZIOSpecDefault:
       tools: RunnerTools = RunnerTools.empty,
       platform: Platform = Platform.Jvm,
   ): ProjectGraph =
-    val library = module("core", platform, Nil)
-    val suite   = module("tests", platform, List(core))
+    val library = module(ProjectName("core"), platform, Nil)
+    val suite   = module(ProjectName("tests"), platform, List(core))
     ProjectGraph.trusted(
       List(library, suite),
       splits,
@@ -388,12 +393,12 @@ object WorkflowSpec extends ZIOSpecDefault:
       )
 
   private def module(
-      name: String,
+      name: ProjectName,
       platform: Platform,
       depends: List[ProjectName],
   ): Module =
     Module(
-      project(name),
+      name,
       Platforms(platform, Nil),
       ScalaVersions(v390, Nil),
       Nil,
@@ -401,18 +406,20 @@ object WorkflowSpec extends ZIOSpecDefault:
       SourcePos("histos.scala", 1, 1),
     )
 
-  private def project(raw: String): ProjectName =
-    ProjectName.from(raw) match
-      case Right(name) => name
-      case Left(_)     => project("core")
+  private enum FixtureFault:
+    case Missing(name: String)
+    case Unreadable(name: String, detail: String)
 
-  private def text(name: String): ZIO[Any, Throwable, String] =
+  private def text(name: String): ZIO[Any, FixtureFault, String] =
     val relative = List(
       Path.of("engine/test/fixtures/ci").resolve(name),
       Path.of("test/fixtures/ci").resolve(name),
     )
+    def unreadable(error: Throwable): FixtureFault =
+      FixtureFault.Unreadable(name, error.toString)
     System
       .env("HISTOS_REPO")
+      .mapError(unreadable)
       .flatMap: root =>
         val candidates = root
           .filter(_.nonEmpty)
@@ -422,9 +429,10 @@ object WorkflowSpec extends ZIOSpecDefault:
           ) ++ relative
         ZIO
           .attempt(candidates.find(Files.isRegularFile(_)))
+          .mapError(unreadable)
           .flatMap:
-            case Some(file) => ZIO.attempt(Files.readString(file))
-            case None       => ZIO.fail(new java.io.FileNotFoundException(name))
+            case Some(file) => ZIO.attempt(Files.readString(file)).mapError(unreadable)
+            case None       => ZIO.fail(FixtureFault.Missing(name))
 
   private def temp: ZIO[Scope, Throwable, Path] =
     Workspace
@@ -432,7 +440,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       .mapError(error => new java.io.IOException(error.message))
 
   private val plugins = suite("plugins")(
-    test("a job that names a site directory uploads and deploys pages"):
+    test("a job that names a site directory uploads on the default branch and deploys from a pages job"):
       val rendered = Workflow.render(
         withJobs(
           List(
@@ -440,30 +448,83 @@ object WorkflowSpec extends ZIOSpecDefault:
               JobName("docs"),
               TaskName("site"),
               JobWhen.Always,
-              site = Some(RepoPath("target/site")),
-            ),
-            CiJob(JobName("deploy"), TaskName("ship"), JobWhen.Always),
+              site = Some(Site(RepoPath("target/site"))),
+            )
           )
         )
       )
-      assertTrue:
-        rendered match
-          case Right(yaml) =>
-            val docs   = slice(yaml, "  docs:", "  deploy:")
-            val deploy = slice(yaml, "  deploy:", "")
-            (docs, deploy) match
-              case (Some(docsJob), Some(deployJob)) =>
-                docsJob.contains("actions/upload-pages-artifact@v5") &&
-                docsJob.contains("actions/deploy-pages@v5") &&
-                docsJob.contains("github-pages") &&
-                docsJob.contains("\"target/site\"") &&
-                docsJob.contains("pages: write") &&
-                docsJob.contains("id-token: write") &&
-                docsJob.contains("id: deployment") &&
-                !deployJob.contains("upload-pages-artifact") &&
-                !deployJob.contains("deploy-pages")
-              case _ => false
-          case _ => false
+      for golden <- text("plugin-pages-ci.yml")
+      yield assertTrue(rendered == Right(golden))
+    ,
+    test("manual matches a job with no site, and both matches the automatic ci file"):
+      val manual                   = Workflow.render(withJobs(List(siteJob(SitePublish.Manual))))
+      val both                     = Workflow.render(withJobs(List(siteJob(SitePublish.Both))))
+      val automaticMode            = Workflow.render(withJobs(List(siteJob(SitePublish.Automatic))))
+      def files(mode: SitePublish) = Workflow.renderAll(withJobs(List(siteJob(mode))), automatic)
+      for
+        plain    <- text("plugin-always.yml")
+        pages    <- text("plugin-pages-ci.yml")
+        dispatch <- text("plugin-pages-dispatch.yml")
+      yield assertTrue(
+        manual == Right(plain),
+        both == Right(pages),
+        automaticMode == Right(pages),
+        files(SitePublish.Automatic).map(_.map(_.name)) == Right(List(Workflow.fileName)),
+        files(SitePublish.Manual).map(_.map(_.name)) == Right(List(Workflow.fileName, Workflow.pagesName)),
+        files(SitePublish.Both).map(_.map(_.name)) == Right(List(Workflow.fileName, Workflow.pagesName)),
+        files(SitePublish.Manual).map(pagesBody) == Right(List(dispatch)),
+        files(SitePublish.Both).map(pagesBody) == Right(List(dispatch)),
+      )
+    ,
+    test("two sites and a scheduled site are refused at render"):
+      val twice = withJobs(
+        List(
+          siteJob(SitePublish.Both),
+          CiJob(
+            JobName("deploy"),
+            TaskName("ship"),
+            JobWhen.Always,
+            site = Some(Site(RepoPath("other"))),
+          ),
+        )
+      )
+      val nightly = withJobs(
+        List(
+          CiJob(
+            JobName("nightly"),
+            TaskName("site"),
+            JobWhen.Schedule(Cron("0 6 * * 1")),
+            site = Some(Site(RepoPath("target/site"))),
+          )
+        )
+      )
+      assertTrue(
+        Workflow.render(twice) == Left(CiError.DuplicateSite(JobName("docs"), JobName("deploy"))),
+        Workflow.render(nightly) == Left(CiError.ScheduledSite(JobName("nightly"))),
+        Workflow.renderAll(twice, automatic) == Left(CiError.DuplicateSite(JobName("docs"), JobName("deploy"))),
+        Workflow.renderAll(nightly, automatic) == Left(CiError.ScheduledSite(JobName("nightly"))),
+      )
+    ,
+    test("update writes the dispatch file and a later update deletes it"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- Workflow.update(root, withJobs(List(siteJob(SitePublish.Manual))), automatic)
+          page  = Workflow.file(root, Workflow.pagesName)
+          other = Workflow.file(root, "release.yml")
+          _       <- ZIO.attempt(Files.writeString(other, "release\n"))
+          removed <- ZIO.attempt(Files.deleteIfExists(page))
+          missing <- Workflow.check(root, withJobs(List(siteJob(SitePublish.Manual))), automatic).either
+          _       <- Workflow.update(root, withJobs(List(siteJob(SitePublish.Both))), automatic)
+          _       <- Workflow.update(root, graph(Splits.aggregate), automatic)
+          gone = !Files.exists(page)
+          kept <- ZIO.attempt(Files.readString(other))
+        yield assertTrue(
+          removed,
+          missing == Left(CiError.Drift),
+          gone,
+          kept == "release\n",
+        )
     ,
     test("the test job passes the event namespace and caches coursier, and docs and deploy do not"):
       val rendered = Workflow.render(
@@ -553,19 +614,21 @@ object WorkflowSpec extends ZIOSpecDefault:
       val all   = Workflow.renderAll(built, automatic)
       val one   = Workflow.render(built)
       val plain = Workflow.render(graph(Splits.aggregate))
-      assertTrue:
-        (all, one, plain) match
-          case (
-                Right(
-                  RenderedWorkflow("ci.yml", body) :: RenderedWorkflow(
-                    name,
-                    scheduled,
-                  ) :: Nil
-                ),
-                Right(text),
-                Right(untouched),
-              ) =>
-            body == text && body == untouched && name == "histos-nightly.yml" &&
+      (all, one, plain) match
+        case (
+              Right(
+                RenderedWorkflow("ci.yml", body) :: RenderedWorkflow(
+                  name,
+                  scheduled,
+                ) :: Nil
+              ),
+              Right(text),
+              Right(untouched),
+            ) =>
+          assertTrue(
+            body == text,
+            body == untouched,
+            name == "histos-nightly.yml",
             scheduled ==
               """name: histos-nightly
                   |on:
@@ -582,9 +645,11 @@ object WorkflowSpec extends ZIOSpecDefault:
                   |      - uses: actions/checkout@v7
                   |      - uses: ./.github/actions/setup
                   |      - run: "./histos run dev.example/site"
-                  |""".stripMargin &&
-              !body.contains("schedule:") && !body.contains("cron:")
-          case _ => false
+                  |""".stripMargin,
+            !body.contains("schedule:"),
+            !body.contains("cron:"),
+          )
+        case _ => assertTrue(false)
     ,
     test(
       "an always job sits after versions and contents write stays on the job"
@@ -595,32 +660,34 @@ object WorkflowSpec extends ZIOSpecDefault:
         JobWhen.Always,
         JobPermissions.ContentsWrite,
       )
-      val rendered = (ShipName.from("libs"), ShipNumber.from("1.4.2")) match
+      val yaml = (ShipName.from("libs"), ShipNumber.from("1.4.2")) match
         case (Right(name), Right(number)) =>
           Catalog.from(List(Ship.Line(name, number, ::(core, Nil)))) match
             case Right(catalog) =>
               val built = ProjectGraph.trusted(
-                List(module("core", Platform.Jvm, Nil)),
+                List(module(ProjectName("core"), Platform.Jvm, Nil)),
                 Splits.aggregate,
                 catalog,
                 None,
                 Nil,
                 List(registered(List(job))),
               )
-              Workflow.render(built) match
-                case Right(yaml) =>
-                  val versionsAt = yaml.indexOf("  versions:")
-                  val docsAt     = yaml.indexOf("  docs:")
-                  val workflowAt = yaml.indexOf("  workflow:")
-                  versionsAt >= 0 && docsAt > versionsAt && workflowAt > docsAt &&
-                  yaml.contains("    permissions:\n      contents: write\n") &&
-                  yaml.contains("permissions:\n  contents: read\n") &&
-                  yaml.contains("\"./histos run dev.example/site\"") &&
-                  !yaml.contains("id-token")
-                case Left(_) => false
-            case Left(_) => false
-        case _ => false
-      assertTrue(rendered)
+              Workflow.render(built).toOption
+            case Left(_) => None
+        case _ => None
+      val versionsAt = yaml.fold(-1)(_.indexOf("  versions:"))
+      val docsAt     = yaml.fold(-1)(_.indexOf("  docs:"))
+      val workflowAt = yaml.fold(-1)(_.indexOf("  workflow:"))
+      assertTrue(
+        yaml.isDefined,
+        versionsAt >= 0,
+        docsAt > versionsAt,
+        workflowAt > docsAt,
+        yaml.exists(_.contains("    permissions:\n      contents: write\n")),
+        yaml.exists(_.contains("permissions:\n  contents: read\n")),
+        yaml.exists(_.contains("\"./histos run dev.example/site\"")),
+        yaml.forall(!_.contains("id-token")),
+      )
     ,
     test(
       "a scheduled contents write overrides the job and leaves the workflow header read"
@@ -632,15 +699,16 @@ object WorkflowSpec extends ZIOSpecDefault:
         JobPermissions.ContentsWrite,
       )
       val rendered = Workflow.renderAll(withJobs(List(job)), automatic)
-      assertTrue:
-        rendered match
-          case Right(
-                _ :: RenderedWorkflow("histos-nightly.yml", body) :: Nil
-              ) =>
-            body.contains("permissions:\n  contents: read\n") &&
-            body.contains("    permissions:\n      contents: write\n") &&
-            !body.contains("id-token")
-          case _ => false
+      rendered match
+        case Right(
+              _ :: RenderedWorkflow("histos-nightly.yml", body) :: Nil
+            ) =>
+          assertTrue(
+            body.contains("permissions:\n  contents: read\n"),
+            body.contains("    permissions:\n      contents: write\n"),
+            !body.contains("id-token"),
+          )
+        case _ => assertTrue(false)
     ,
     test("a missing scheduled file is drift and check does not rewrite ci.yml"):
       ZIO.scoped:
@@ -701,11 +769,23 @@ object WorkflowSpec extends ZIOSpecDefault:
       if at < 0 then seen else go(at + needle.length, seen + 1)
     go(0, 0)
 
+  private def siteJob(publish: SitePublish): CiJob =
+    CiJob(
+      JobName("docs"),
+      TaskName("site"),
+      JobWhen.Always,
+      site = Some(Site(RepoPath("target/site"), publish)),
+    )
+
+  private def pagesBody(files: List[RenderedWorkflow]): List[String] =
+    files.collect:
+      case RenderedWorkflow(Workflow.pagesName, body) => body
+
   private def withJobs(jobs: List[CiJob]): ProjectGraph =
     ProjectGraph.trusted(
       List(
-        module("core", Platform.Jvm, Nil),
-        module("tests", Platform.Jvm, List(core)),
+        module(ProjectName("core"), Platform.Jvm, Nil),
+        module(ProjectName("tests"), Platform.Jvm, List(core)),
       ),
       Splits.aggregate,
       Catalog.empty,
@@ -986,12 +1066,12 @@ object WorkflowSpec extends ZIOSpecDefault:
               .flatMap(_.members.toList)
               .distinct
               .map: name =>
-                val base = module(name.value, Platform.Jvm, Nil)
+                val base = module(name, Platform.Jvm, Nil)
                 if assets.contains(name.value) then base.copy(asset = Some(RepoPath.trusted("dist/histos.jar")))
                 else base
             val withClient =
               if client then
-                modules :+ module("client", Platform.Native, Nil)
+                modules :+ module(ProjectName("client"), Platform.Native, Nil)
                   .copy(application = Some(MainClass("histos.client.Main")))
               else modules
             ProjectGraph.trusted(

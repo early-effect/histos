@@ -7,7 +7,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "PluginId",
-      text => textOf(PluginId.from(text))(_.message)(_.value),
+      text => PluginId.from(text).map(_.value),
+      _.message,
       canonical => '{ PluginId.trusted(${ Expr(canonical) }) },
     )
 
@@ -15,7 +16,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "TaskName",
-      text => textOf(TaskName.from(text))(_.message)(_.value),
+      text => TaskName.from(text).map(_.value),
+      _.message,
       canonical => '{ TaskName.trusted(${ Expr(canonical) }) },
     )
 
@@ -23,7 +25,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "CommandName",
-      text => textOf(CommandName.from(text))(_.message)(_.value),
+      text => CommandName.from(text).map(_.value),
+      _.message,
       canonical => '{ CommandName.trusted(${ Expr(canonical) }) },
     )
 
@@ -31,7 +34,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "JobName",
-      text => textOf(JobName.from(text))(_.message)(_.value),
+      text => JobName.from(text).map(_.value),
+      _.message,
       canonical => '{ JobName.trusted(${ Expr(canonical) }) },
     )
 
@@ -39,7 +43,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "EntryName",
-      text => textOf(EntryName.from(text))(_.message)(_.value),
+      text => EntryName.from(text).map(_.value),
+      _.message,
       canonical => '{ EntryName.trusted(${ Expr(canonical) }) },
     )
 
@@ -47,7 +52,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "NoteKey",
-      text => textOf(NoteKey.from(text))(_.message)(_.value),
+      text => NoteKey.from(text).map(_.value),
+      _.message,
       canonical => '{ NoteKey.trusted(${ Expr(canonical) }) },
     )
 
@@ -55,7 +61,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "NoteText",
-      text => textOf(NoteText.from(text))(_.message)(_.value),
+      text => NoteText.from(text).map(_.value),
+      _.message,
       canonical => '{ NoteText.trusted(${ Expr(canonical) }) },
     )
 
@@ -63,7 +70,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "OutputName",
-      text => textOf(OutputName.from(text))(_.message)(_.value),
+      text => OutputName.from(text).map(_.value),
+      _.message,
       canonical => '{ OutputName.trusted(${ Expr(canonical) }) },
     )
 
@@ -71,7 +79,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "ParamName",
-      text => textOf(ParamName.from(text))(_.message)(_.value),
+      text => ParamName.from(text).map(_.value),
+      _.message,
       canonical => '{ ParamName.trusted(${ Expr(canonical) }) },
     )
 
@@ -79,7 +88,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "FlagName",
-      text => textOf(FlagName.from(text))(_.message)(_.value),
+      text => FlagName.from(text).map(_.value),
+      _.message,
       canonical => '{ FlagName.trusted(${ Expr(canonical) }) },
     )
 
@@ -87,7 +97,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "EnvName",
-      text => textOf(EnvName.from(text))(_.message)(_.value),
+      text => EnvName.from(text).map(_.value),
+      _.message,
       canonical => '{ EnvName.trusted(${ Expr(canonical) }) },
     )
 
@@ -95,7 +106,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "InputKey",
-      text => textOf(InputKey.from(text))(_.message)(_.value),
+      text => InputKey.from(text).map(_.value),
+      _.message,
       canonical => '{ InputKey.trusted(${ Expr(canonical) }) },
     )
 
@@ -103,7 +115,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "RepoPath",
-      text => textOf(RepoPath.from(text))(_.message)(_.value),
+      text => RepoPath.from(text).map(_.value),
+      _.message,
       canonical => '{ RepoPath.trusted(${ Expr(canonical) }) },
     )
 
@@ -111,7 +124,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "PluginDetail",
-      text => textOf(PluginDetail.from(text))(_.message)(_.value),
+      text => PluginDetail.from(text).map(_.value),
+      _.message,
       canonical => '{ PluginDetail.trusted(${ Expr(canonical) }) },
     )
 
@@ -119,7 +133,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "ApiDigest",
-      text => textOf(ApiDigest.from(text))(_.message)(_.value),
+      text => ApiDigest.from(text).map(_.value),
+      _.message,
       canonical => '{ ApiDigest.trusted(${ Expr(canonical) }) },
     )
 
@@ -127,7 +142,8 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "ContentHash",
-      text => textOf(ContentHash.from(text))(_.message)(_.value),
+      text => ContentHash.from(text).map(_.value),
+      _.message,
       canonical => '{ ContentHash.trusted(${ Expr(canonical) }) },
     )
 
@@ -135,17 +151,16 @@ private[histos] object PluginMacros:
     literal(
       raw,
       "Cron",
-      text => textOf(Cron.from(text))(_.message)(_.value),
+      text => Cron.from(text).map(_.value),
+      _.message,
       canonical => '{ Cron.trusted(${ Expr(canonical) }) },
     )
 
-  private def textOf[E, A](parsed: Either[E, A])(message: E => String)(value: A => String): Either[String, String] =
-    parsed.left.map(message).map(value)
-
-  private def literal[A](
+  private def literal[E, A](
       raw: Expr[String],
       what: String,
-      parse: String => Either[String, String],
+      parse: String => Either[E, String],
+      message: E => String,
       succeed: String => Expr[A],
   )(using Quotes): Expr[A] =
     import quotes.reflect.report
@@ -153,6 +168,6 @@ private[histos] object PluginMacros:
       case None       => report.errorAndAbort(s"$what(...) takes a literal. Use $what.from at runtime.", raw)
       case Some(text) =>
         parse(text) match
-          case Left(message)    => report.errorAndAbort(message, raw)
+          case Left(error)      => report.errorAndAbort(message(error), raw)
           case Right(canonical) => succeed(canonical)
 end PluginMacros

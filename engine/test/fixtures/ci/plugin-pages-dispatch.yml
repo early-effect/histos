@@ -1,0 +1,28 @@
+name: pages
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  pages:
+    runs-on: ubuntu-26.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+      pages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - run: "./histos run dev.example/site"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: "target/site"
+      - id: deployment
+        uses: actions/deploy-pages@v5

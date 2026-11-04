@@ -1,6 +1,6 @@
 package histos.workflow
 
-import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin}
+import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin, RepoPath, Site, SitePublish}
 import histos.program.ClientBinary
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
@@ -72,6 +72,9 @@ object Workflow:
     */
   val promoteName: String = "histos-promote.yml"
 
+  /** `histos-` so update deletes a stale copy when no job asks for a manual deploy. */
+  val pagesName: String = "histos-pages.yml"
+
   def path(repo: Path): Path =
     file(repo, fileName)
 
@@ -109,19 +112,47 @@ object Workflow:
           case Nil           => Right(TestTarget.Entire)
 
   def render(graph: ProjectGraph): Either[CiError, String] =
-    plan(graph, CiEvent.Other).map(jobs => document(graph, jobs))
+    siteProblem(graph).flatMap(_ => plan(graph, CiEvent.Other).map(jobs => document(graph, jobs)))
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
-    * is Deployment, then one `histos-<job>.yml` per schedule.
+    * is Deployment, `histos-pages.yml` when a site asks for a dispatch, then one `histos-<job>.yml` per schedule.
     */
   def renderAll(graph: ProjectGraph, sona: Publishing): Either[CiError, List[RenderedWorkflow]] =
-    render(graph).map: body =>
-      val release = releaseWorkflow(graph, sona).toList
-      val promote =
-        release match
-          case Nil => Nil
-          case _   => promoteWorkflow(sona).toList
-      RenderedWorkflow(fileName, body) :: release ++ promote ++ scheduled(graph)
+    render(graph).flatMap: body =>
+      pagesFile(graph).map: pages =>
+        val release = releaseWorkflow(graph, sona).toList
+        val promote =
+          release match
+            case Nil => Nil
+            case _   => promoteWorkflow(sona).toList
+        RenderedWorkflow(fileName, body) :: release ++ promote ++ pages.toList ++ scheduled(graph)
+
+  /** One site per graph. A cron is neither a default-branch push nor a dispatch. */
+  private def siteProblem(graph: ProjectGraph): Either[CiError, Unit] =
+    val named = graph.plugins.flatMap(_.contribution.jobs.filter(_.site.isDefined))
+    named match
+      case first :: second :: _ => Left(CiError.DuplicateSite(first.name, second.name))
+      case job :: Nil           =>
+        job.when match
+          case JobWhen.Schedule(_) => Left(CiError.ScheduledSite(job.name))
+          case JobWhen.Always      => Right(())
+      case Nil => Right(())
+
+  private def pagesFile(graph: ProjectGraph): Either[CiError, Option[RenderedWorkflow]] =
+    val chosen = graph.plugins.flatMap: plugin =>
+      plugin.contribution.jobs.flatMap: job =>
+        job.site match
+          case Some(site) =>
+            site.publish match
+              case SitePublish.Automatic                 => Nil
+              case SitePublish.Manual | SitePublish.Both => List((plugin, job, site))
+          case None => Nil
+    chosen match
+      case Nil                        => Right(None)
+      case (plugin, job, site) :: Nil =>
+        Right(Some(RenderedWorkflow(pagesName, dispatchDocument(plugin, job, site))))
+      case (_, job, _) :: (_, other, _) :: _ =>
+        Left(CiError.DuplicateSite(job.name, other.name))
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
@@ -204,9 +235,10 @@ object Workflow:
     val splitModule   = splits.axes.contains(Axis.Module)
     val splitPlatform = splits.axes.contains(Axis.Platform)
     val splitVersion  = splits.axes.contains(Axis.ScalaVersion)
-    val groups        = if splitModule then modules.map(List(_)) else List(modules)
-    groups.flatMap: group =>
-      val moduleRef = if splitModule then oneModule(group) else ModuleRef.All
+    val groups        =
+      if splitModule then modules.map(module => (ModuleRef.One(module.name), List(module)))
+      else List((ModuleRef.All, modules))
+    groups.flatMap: (moduleRef, group) =>
       val platforms =
         if splitPlatform then distinct(group.flatMap(_.platforms.all)).map(PlatformRef.One(_))
         else List(PlatformRef.All)
@@ -216,11 +248,6 @@ object Workflow:
       platforms.flatMap: platform =>
         versions.map: version =>
           TestJob.Split(moduleRef, platform, version)
-
-  private def oneModule(group: List[Module]): ModuleRef =
-    group match
-      case module :: _ => ModuleRef.One(module.name)
-      case Nil         => ModuleRef.All
 
   private def distinct[A](values: List[A]): List[A] =
     values.foldLeft(List.empty[A]): (seen, value) =>
@@ -244,7 +271,11 @@ object Workflow:
     plugins.flatMap: plugin =>
       plugin.contribution.jobs.flatMap: job =>
         job.when match
-          case JobWhen.Always      => List(jobLines(plugin, job).mkString("\n"))
+          case JobWhen.Always =>
+            val built = List(jobLines(plugin, job, JobPlace.Ci).mkString("\n"))
+            pushPublish(job.site) match
+              case PushPublish.Skip   => built
+              case PushPublish.Upload => built :+ pagesJob(job).mkString("\n")
           case JobWhen.Schedule(_) => Nil
 
   /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
@@ -270,23 +301,41 @@ object Workflow:
       "permissions:",
       "  contents: read",
       "jobs:",
-    ) ++ ships.flatMap(ship => releaseJob(ship, sona, install.exists(_.name == ship.name))) ++ install.toList
+    ) ++ ships.flatMap(ship =>
+      releaseJob(
+        ship,
+        sona,
+        if install.exists(_.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish,
+      )
+    ) ++ install.toList
       .flatMap(ship => installJobs(graph, ships, ship))
     lines.mkString("\n") + "\n"
 
-  private def releaseJob(ship: Ship, sona: Publishing, install: Boolean): List[String] =
+  private def releaseJob(ship: Ship, sona: Publishing, shape: ReleaseShape): List[String] =
     val name      = ship.name.value
     val published = List(
       s"  release-$name:",
       s"    runs-on: $Runner",
       "    permissions:",
-      "      contents: read",
+    ) ++ releasePermissions(shape) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ List(
       s"      - run: ${quote(s"./histos publish release $name")}"
     ) ++ secretEnv(sona.secretNames)
-    if install then published ++ jarArtifact ++ shimArtifact else published
+    shape match
+      case ReleaseShape.Publish     => published
+      case ReleaseShape.WithInstall => published ++ jarArtifact ++ shimArtifact
+
+  /** `upload-artifact` writes through the Actions API. A permissions block that omits `actions` sets it to none. */
+  private def releasePermissions(shape: ReleaseShape): List[String] =
+    shape match
+      case ReleaseShape.Publish     => List("      contents: read")
+      case ReleaseShape.WithInstall =>
+        List(
+          "      actions: write",
+          "      contents: read",
+        )
 
   /** The assembly the install manifest names. It is built after the portal upload, on the warm workspace. */
   private def jarArtifact: List[String] =
@@ -346,6 +395,9 @@ object Workflow:
       "      matrix:",
       "        include:",
     ) ++ hosts ++ List(
+      "    permissions:",
+      "      actions: write",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ clientSetup ++ clientLlvm(revision) ++ List(
@@ -513,62 +565,159 @@ object Workflow:
               "permissions:",
               "  contents: read",
               "jobs:",
-            ) ++ jobLines(plugin, job)
+            ) ++ jobLines(plugin, job, JobPlace.Schedule)
             List(RenderedWorkflow(s"histos-${job.name.value}.yml", lines.mkString("\n") + "\n"))
           case JobWhen.Always => Nil
 
-  private def jobLines(plugin: RegisteredPlugin, job: CiJob): List[String] =
-    val run = quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")
+  /** Where a plugin job is written. A cron file is not a pull request and not a default-branch push. */
+  private enum JobPlace:
+    case Ci
+    case Schedule
+
+  /** A matrix step runs for every cell, or only for the cells that name the tool. */
+  private enum MatrixScope:
+    case Whole
+    case Cell
+
+  /** The native client is linked for the whole job, or only on the matrix cells that need it. */
+  private enum ClientLink:
+    case Skip
+    case Run(scope: MatrixScope)
+
+  /** Matrix rows are a name and a command, or those plus the tool flags. */
+  private enum ToolColumns:
+    case Off
+    case On
+
+  /** A release job publishes, or it also uploads the install artifacts. */
+  private enum ReleaseShape:
+    case Publish
+    case WithInstall
+
+  /** The build job uploads the pages artifact on a default-branch push, or it only runs the task. */
+  private enum PushPublish:
+    case Skip
+    case Upload
+
+  private def pushPublish(site: Option[Site]): PushPublish =
+    site match
+      case Some(found) =>
+        found.publish match
+          case SitePublish.Manual                       => PushPublish.Skip
+          case SitePublish.Automatic | SitePublish.Both => PushPublish.Upload
+      case None => PushPublish.Skip
+
+  private def jobLines(plugin: RegisteredPlugin, job: CiJob, place: JobPlace): List[String] =
+    val run    = quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")
+    val upload = (place, pushPublish(job.site)) match
+      case (JobPlace.Ci, PushPublish.Upload) => job.site.toList.flatMap(site => uploadStep(site.dir))
+      case _                                 => Nil
+    val guard = place match
+      case JobPlace.Ci       => ciIf
+      case JobPlace.Schedule => Nil
     List(
-      s"  ${job.name.value}:",
+      s"  ${job.name.value}:"
+    ) ++ guard ++ List(
       s"    runs-on: $Runner",
-    ) ++ siteEnvironment(job) ++ List(
       "    permissions:",
+    ) ++ uploadScope(place, job.site) ++ List(
       s"      contents: ${access(job.permissions)}",
-    ) ++ sitePermissions(job) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ List(
       s"      - run: $run"
-    ) ++ siteSteps(job)
+    ) ++ upload
 
-  private def siteEnvironment(job: CiJob): List[String] =
-    job.site match
-      case None    => Nil
-      case Some(_) =>
-        List(
-          "    environment:",
-          "      name: github-pages",
-          "      url: ${{ steps.deployment.outputs.page_url }}",
-        )
+  private def uploadScope(place: JobPlace, site: Option[Site]): List[String] =
+    (place, pushPublish(site)) match
+      case (JobPlace.Ci, PushPublish.Upload) => List("      actions: write")
+      case _                                 => Nil
 
-  private def sitePermissions(job: CiJob): List[String] =
-    job.site match
-      case None    => Nil
-      case Some(_) =>
-        List(
-          "      pages: write",
-          "      id-token: write",
-        )
+  private def uploadStep(path: RepoPath): List[String] =
+    List(
+      s"      - if: ${quote(OnDefaultPush)}",
+      s"        uses: $UploadPages",
+      "        with:",
+      s"          path: ${quote(path.value)}",
+    )
 
-  private def siteSteps(job: CiJob): List[String] =
-    job.site match
-      case None       => Nil
-      case Some(path) =>
-        List(
-          s"      - uses: $UploadPages",
-          "        with:",
-          s"          path: ${quote(path.value)}",
-          "      - id: deployment",
-          s"        uses: $DeployPages",
-        )
+  private def pagesJob(job: CiJob): List[String] =
+    List(
+      "  pages:",
+      s"    needs: ${job.name.value}",
+      s"    if: ${quote(OnDefaultPush)}",
+      s"    runs-on: $Runner",
+      "    environment:",
+      "      name: github-pages",
+      "      url: ${{ steps.deployment.outputs.page_url }}",
+      "    concurrency:",
+      "      group: pages",
+      "      cancel-in-progress: false",
+      "    permissions:",
+      "      actions: read",
+      "      contents: read",
+      "      id-token: write",
+      "      pages: write",
+      "    steps:",
+      "      - id: deployment",
+      s"        uses: $DeployPages",
+    )
+
+  private def dispatchDocument(plugin: RegisteredPlugin, job: CiJob, site: Site): String =
+    val run   = quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")
+    val lines = List(
+      "name: pages",
+      "on:",
+      "  workflow_dispatch:",
+      "permissions:",
+      "  contents: read",
+      "concurrency:",
+      "  group: pages",
+      "  cancel-in-progress: false",
+      "jobs:",
+      "  pages:",
+      s"    runs-on: $Runner",
+      "    environment:",
+      "      name: github-pages",
+      "      url: ${{ steps.deployment.outputs.page_url }}",
+      "    permissions:",
+      "      actions: write",
+      "      contents: read",
+      "      id-token: write",
+      "      pages: write",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli ++ List(
+      s"      - run: $run",
+      s"      - uses: $UploadPages",
+      "        with:",
+      s"          path: ${quote(site.dir.value)}",
+      "      - id: deployment",
+      s"        uses: $DeployPages",
+    )
+    lines.mkString("\n") + "\n"
 
   private def access(permissions: JobPermissions): String =
     permissions match
       case JobPermissions.ContentsRead  => "read"
       case JobPermissions.ContentsWrite => "write"
 
-  /** A pull request runs once. `push` is only `main`, so the branch push that updates a PR does not start a second run.
+  /** On a push, `github.ref` is `refs/heads/<branch>` and `repository.default_branch` is the short name. */
+  private val OnDefaultBranch: String =
+    "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+
+  private val OnDefaultPush: String =
+    s"github.event_name == 'push' && $OnDefaultBranch"
+
+  private val OnCi: String =
+    s"github.event_name == 'pull_request' || $OnDefaultBranch"
+
+  private def ciIf: List[String] =
+    List(s"    if: ${quote(OnCi)}")
+
+  /** `on.push.branches` is a static glob. The github context is not available there, and `$default-branch` is a
+    * template token. `**` is every branch. A branches filter excludes tags. Each job repeats [[OnCi]], so a push to
+    * some other branch starts a run whose jobs skip.
     */
   private val header: List[String] =
     List(
@@ -577,7 +726,7 @@ object Workflow:
       "  pull_request:",
       "  push:",
       "    branches:",
-      "      - main",
+      s"      - ${quote("**")}",
       "permissions:",
       "  contents: read",
       "jobs:",
@@ -603,12 +752,17 @@ object Workflow:
       tools: RunnerTools,
       resolution: Resolution,
       need: ToolNeed,
-      gate: Boolean,
+      scope: MatrixScope,
   ): List[String] =
-    nodeStep(if need.node then tools.node else None, gate) ++
-      llvmStep(if need.llvm then tools.llvm else None, gate) ++
-      playwrightStep(if need.playwright then tools.playwright else None, gate) ++
+    nodeStep(if need.node then tools.node else None, scope) ++
+      llvmStep(if need.llvm then tools.llvm else None, scope) ++
+      playwrightStep(if need.playwright then tools.playwright else None, scope) ++
       coursierStep(resolution)
+
+  private def cellFlag(scope: MatrixScope, flag: String): Option[String] =
+    scope match
+      case MatrixScope.Whole => None
+      case MatrixScope.Cell  => Some(s"matrix.$flag == 'true'")
 
   /** Current major. v4 still targets Node 20. */
   private val ToolCache = "actions/cache@v6"
@@ -657,17 +811,17 @@ object Workflow:
   private def coursierCli: List[String] =
     List(s"      - uses: $Setup")
 
-  private def nodeStep(floor: Option[NodeFloor], gate: Boolean): List[String] =
+  private def nodeStep(floor: Option[NodeFloor], scope: MatrixScope): List[String] =
     floor match
       case None        => Nil
       case Some(major) =>
-        val guard = if gate then List("        if: matrix.node == 'true'") else Nil
+        val guard = cellFlag(scope, "node").toList.map(text => s"        if: $text")
         List("      - uses: actions/setup-node@v7") ++ guard ++ List(
           "        with:",
           s"          node-version: ${quote(major.value.toString)}",
         )
 
-  private def llvmStep(revision: Option[ToolRevision], gate: Boolean): List[String] =
+  private def llvmStep(revision: Option[ToolRevision], scope: MatrixScope): List[String] =
     revision match
       case None         => Nil
       case Some(pinned) =>
@@ -675,7 +829,7 @@ object Workflow:
         val version   = pinned.value
         val archive   = s"LLVM-$version-Linux-X64.tar.xz"
         val url       = s"https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/$archive"
-        val cell      = if gate then Some("matrix.llvm == 'true'") else None
+        val cell      = cellFlag(scope, "llvm")
         cacheStep(Some("llvm"), List(directory), toolKey("llvm", version), cell) ++ List(
           "      - run: |",
           s"          dir=${quote(directory)}",
@@ -694,12 +848,12 @@ object Workflow:
           "          fi",
         ) ++ cell.toList.map(text => s"        if: $text")
 
-  private def playwrightStep(revision: Option[ToolRevision], gate: Boolean): List[String] =
+  private def playwrightStep(revision: Option[ToolRevision], scope: MatrixScope): List[String] =
     revision match
       case None         => Nil
       case Some(pinned) =>
         val version = pinned.value
-        val cell    = if gate then Some("matrix.playwright == 'true'") else None
+        val cell    = cellFlag(scope, "playwright")
         cacheStep(
           Some("playwright"),
           List(s"~/.cache/chekhov/playwright/$version", PlaywrightBrowsers),
@@ -726,12 +880,15 @@ object Workflow:
       case _                      => false
     }
     val client  = jobs.exists(job => linksClient(modulesOf(job, modules)))
-    val prepare = steps(graph.runnerTools, graph.resolution, any, matrix)
-    val link    = clientStep(client, matrix)
+    val scope   = if matrix then MatrixScope.Cell else MatrixScope.Whole
+    val prepare = steps(graph.runnerTools, graph.resolution, any, scope)
+    val link    = clientStep(if client then ClientLink.Run(scope) else ClientLink.Skip)
+    val columns = if matrix && (any.any || client) then ToolColumns.On else ToolColumns.Off
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
-          "  test:",
+          "  test:"
+        ) ++ ciIf ++ List(
           s"    runs-on: $Runner",
           "    permissions:",
           "      actions: write",
@@ -741,39 +898,42 @@ object Workflow:
         ) ++ coursierCli ++ prepare ++ storeRestore ++ link ++ testRun(argv(aggregate).mkString(" ")) ++ storeSave
       case _ =>
         List(
-          "  test:",
+          "  test:"
+        ) ++ ciIf ++ List(
           s"    runs-on: $Runner",
           "    strategy:",
           "      fail-fast: false",
           "      matrix:",
           "        include:",
-        ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, matrix && (any.any || client))) ++ List(
+        ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, columns)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ coursierCli ++ prepare ++ link ++ testRun("${{ matrix.command }}")
 
   /** Link `dist/histos-client` before the suite, so the launcher execs that binary. LLVM is already on `PATH`. */
-  private def clientStep(present: Boolean, gate: Boolean): List[String] =
-    if present then
-      val guard = if gate then List("        if: matrix.client == 'true'") else Nil
-      List(s"      - run: ${quote("./histos client")}") ++ guard
-    else Nil
+  private def clientStep(link: ClientLink): List[String] =
+    link match
+      case ClientLink.Skip       => Nil
+      case ClientLink.Run(scope) =>
+        val guard = cellFlag(scope, "client").toList.map(text => s"        if: $text")
+        List(s"      - run: ${quote("./histos client")}") ++ guard
 
-  private def include(job: TestJob, modules: List[Module], tools: RunnerTools, flags: Boolean): List[String] =
+  private def include(job: TestJob, modules: List[Module], tools: RunnerTools, columns: ToolColumns): List[String] =
     val rows = List(
       s"          - name: ${quote(slug(job))}",
       s"            command: ${quote(argv(job).mkString(" "))}",
     )
-    if !flags then rows
-    else
-      val need   = toolNeed(modulesOf(job, modules), tools)
-      val chosen = modulesOf(job, modules)
-      rows ++ List(
-        s"            node: ${quote(need.node.toString)}",
-        s"            llvm: ${quote(need.llvm.toString)}",
-        s"            playwright: ${quote(need.playwright.toString)}",
-        s"            client: ${quote(linksClient(chosen).toString)}",
-      )
+    columns match
+      case ToolColumns.Off => rows
+      case ToolColumns.On  =>
+        val need   = toolNeed(modulesOf(job, modules), tools)
+        val chosen = modulesOf(job, modules)
+        rows ++ List(
+          s"            node: ${quote(need.node.toString)}",
+          s"            llvm: ${quote(need.llvm.toString)}",
+          s"            playwright: ${quote(need.playwright.toString)}",
+          s"            client: ${quote(linksClient(chosen).toString)}",
+        )
 
   private final case class ToolNeed(node: Boolean, llvm: Boolean, playwright: Boolean):
     def ||(other: ToolNeed): ToolNeed =
@@ -877,9 +1037,10 @@ object Workflow:
       s"          key: ${quote(storeKey)}",
     )
 
-  /** The test step only. A pull request is `pr/<n>`. This file starts `push` only for `main`, so that event is `main`.
-    * Docs, deploy, versions, workflow, and release do not set it. None of them `needs` a cache job or restores a remote
-    * disk. This render does not emit that job: the remote URI is configuration.
+  /** The test step only. A pull request is `pr/<n>`. Any other run of this file is a push to the default branch, and
+    * that event is the `main` cache namespace: `CacheNamespace.Main`, not the git branch name. Docs, deploy, versions,
+    * workflow, and release do not set it. None of them `needs` a cache job or restores a remote disk. This render does
+    * not emit that job: the remote URI is configuration.
     */
   private val cacheNamespace: String =
     "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
@@ -904,9 +1065,10 @@ object Workflow:
     val modules   = graph.projects.collect { case module: Module => module }
     val published = graph.catalog.ships.flatMap(_.members.toList)
     val chosen    = modules.filter(module => published.contains(module.name))
-    val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), false)
+    val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), MatrixScope.Whole)
     val lines     = List(
-      "  doc:",
+      "  doc:"
+    ) ++ ciIf ++ List(
       s"    runs-on: $Runner",
       "    steps:",
       s"      - uses: $Checkout",
@@ -920,21 +1082,27 @@ object Workflow:
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
-  private val versionsJob: String =
-    s"""  versions:
-      |    runs-on: $Runner
-      |    steps:
-      |      - uses: $Checkout
-      |      - uses: $Setup
-      |      - run: "./histos run versions"""".stripMargin
+  private def versionsJob: String =
+    (List(
+      "  versions:"
+    ) ++ ciIf ++ List(
+      s"    runs-on: $Runner",
+      "    steps:",
+      s"      - uses: $Checkout",
+      s"      - uses: $Setup",
+      "      - run: \"./histos run versions\"",
+    )).mkString("\n")
 
-  private val workflowJob: String =
-    s"""  workflow:
-      |    runs-on: $Runner
-      |    steps:
-      |      - uses: $Checkout
-      |      - uses: $Setup
-      |      - run: "./histos workflow --check"""".stripMargin
+  private def workflowJob: String =
+    (List(
+      "  workflow:"
+    ) ++ ciIf ++ List(
+      s"    runs-on: $Runner",
+      "    steps:",
+      s"      - uses: $Checkout",
+      s"      - uses: $Setup",
+      "      - run: \"./histos workflow --check\"",
+    )).mkString("\n")
 
   private def quote(text: String): String =
     "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
