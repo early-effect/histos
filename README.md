@@ -73,11 +73,9 @@ GitHub Actions use `.github/actions/setup` from this repo:
 
 ```yaml
 - uses: early-effect/histos/.github/actions/setup@main
-  with:
-    java: "21" # empty leaves the runner JDK
 ```
 
-`version` empty reads `build.properties`. The action restores `~/.histos/toolchains` and `~/.cache/coursier/v1`. It does not install Node, LLVM, or Playwright, and it does not open the content store.
+`version` empty reads `build.properties`. The action restores `~/.histos/toolchains` and `~/.cache/coursier/v1`. It does not install a JDK, Node, LLVM, or Playwright, and it does not open the content store. A job that needs a JDK calls `actions/setup-java` itself.
 
 ## This repository
 
@@ -305,7 +303,7 @@ GitHub restores the content-store directory, the Coursier directory, and the too
 
 ## Tools already on the machine
 
-Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be JDK 21 or newer. The launcher script prints that floor. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one. A generated workflow installs Node, LLVM, and Playwright only for the modules that job runs. A JVM-only project installs none of them. LLVM is `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release. A miss unpacks it. A hit does not. `bin` is put on `PATH` either way. Playwright's browser download is skipped when its cache hits. `install-deps firefox` stays, because a fresh runner does not keep the apt packages.
+Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be JDK 21 or newer. The launcher script prints that floor. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one. A generated workflow installs Node, LLVM, and Playwright only for the modules that job runs. A JVM-only project installs none of them. LLVM is `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release. A miss unpacks it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Playwright's browser download runs on a miss. The step still runs on a hit, checks the package, and runs `install-deps firefox`, because a fresh runner does not keep the apt packages.
 
 ## Plugins
 

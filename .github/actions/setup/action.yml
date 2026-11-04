@@ -5,19 +5,9 @@ inputs:
     description: Histos version. Empty reads build.properties when a command runs.
     required: false
     default: ""
-  java:
-    description: JDK major for actions/setup-java. Empty leaves the JDK the runner already has.
-    required: false
-    default: ""
 runs:
   using: composite
   steps:
-    - name: JDK
-      if: inputs.java != ''
-      uses: actions/setup-java@v6
-      with:
-        distribution: temurin
-        java-version: ${{ inputs.java }}
     - name: Toolchains
       uses: actions/cache@v6
       with:

@@ -371,9 +371,11 @@ object Workflow:
 
   private def clientSetup: List[String] =
     List(
-      s"      - uses: $Setup",
+      "      - uses: actions/setup-java@v6",
       "        with:",
-      s"          java: ${quote(ClientJdk)}",
+      "          distribution: temurin",
+      s"          java-version: ${quote(ClientJdk)}",
+      s"      - uses: $Setup",
     )
 
   private def clientLlvm(revision: String): List[String] =
@@ -382,13 +384,13 @@ object Workflow:
     cacheStep(Some("llvm"), List("${{ runner.temp }}/llvm"), key) ++ List(
       "      - run: |",
       "          dir=\"${{ runner.temp }}/llvm\"",
-      "          mkdir -p \"$dir\"",
-      "          curl -fsSL \"" + url + "\" -o \"$dir/llvm.tar.xz\"",
-      "          tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
-      "          rm \"$dir/llvm.tar.xz\"",
-      "        if: steps.llvm.outputs.cache-hit != 'true'",
-      "      - run: |",
-      "          dir=\"${{ runner.temp }}/llvm\"",
+      "          if [ \"${{ steps.llvm.outputs.cache-hit }}\" != \"true\" ]; then",
+      "            mkdir -p \"$dir\"",
+      "            curl -fsSL \"" + url + "\" -o \"$dir/llvm.tar.xz\"",
+      "            tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
+      "            rm \"$dir/llvm.tar.xz\"",
+      "          fi",
+      "          test -x \"$dir/bin/clang\"",
       "          echo \"$dir/bin\" >> \"$GITHUB_PATH\"",
       "          if [ \"$(uname -s)\" = Linux ]; then",
       "            if [ -n \"$LD_LIBRARY_PATH\" ]; then",
@@ -581,14 +583,15 @@ object Workflow:
     * fetch a JDK, so it emits no JDK key. Node is installed for a JavaScript module, or when Playwright is installed.
     * `setup-node` does not set `cache: npm`: that key is a package lock, and Chekhov does not read it. LLVM is
     * installed for a native module. The runner is `ubuntu-26.04`, so a miss downloads
-    * `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks it. A hit does not. `bin` is put on
-    * `PATH` either way. Chekhov reads Playwright from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is
-    * `~/.cache/ms-playwright` on this runner. A Playwright revision installs the browser even when no module is
-    * Firefox, because a JVM suite can launch it. `npm install` and `install firefox` run only when that cache misses.
-    * `install-deps firefox` runs on every visit: it is apt, and a runner does not keep those packages. Coursier is the
-    * Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build file while the
-    * build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs `./histos` uses
-    * the setup action and does not install a JDK or the `cs` binary.
+    * `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks it. A hit does not. The step runs
+    * either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads Playwright from `~/.cache/chekhov`. An unset
+    * `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A Playwright revision installs the browser
+    * even when no module is Firefox, because a JVM suite can launch it. `npm install` and `install firefox` run when
+    * that cache misses. The step still runs on a hit, checks the package, and runs `install-deps firefox`: it is apt,
+    * and a runner does not keep those packages. A step `if` that skips the download leaves a job that did not run.
+    * Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build
+    * file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs
+    * `./histos` uses the setup action and does not install a JDK or the `cs` binary.
     */
   private def steps(
       tools: RunnerTools,
@@ -667,19 +670,16 @@ object Workflow:
         val archive   = s"LLVM-$version-Linux-X64.tar.xz"
         val url       = s"https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/$archive"
         val cell      = if gate then Some("matrix.llvm == 'true'") else None
-        val missed    =
-          if gate then "matrix.llvm == 'true' && steps.llvm.outputs.cache-hit != 'true'"
-          else "steps.llvm.outputs.cache-hit != 'true'"
         cacheStep(Some("llvm"), List(directory), toolKey("llvm", version), cell) ++ List(
           "      - run: |",
           s"          dir=${quote(directory)}",
-          "          mkdir -p \"$dir\"",
-          s"          curl -fsSL ${quote(url)} -o \"$$dir/llvm.tar.xz\"",
-          "          tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
-          "          rm \"$dir/llvm.tar.xz\"",
-          s"        if: $missed",
-          "      - run: |",
-          s"          dir=${quote(directory)}",
+          "          if [ \"${{ steps.llvm.outputs.cache-hit }}\" != \"true\" ]; then",
+          "            mkdir -p \"$dir\"",
+          s"            curl -fsSL ${quote(url)} -o \"$$dir/llvm.tar.xz\"",
+          "            tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
+          "            rm \"$dir/llvm.tar.xz\"",
+          "          fi",
+          "          test -x \"$dir/bin/clang\"",
           "          echo \"$dir/bin\" >> \"$GITHUB_PATH\"",
           "          if [ -n \"$LD_LIBRARY_PATH\" ]; then",
           s"""            echo "LD_LIBRARY_PATH=$$dir/lib:$$LD_LIBRARY_PATH" >> "$$GITHUB_ENV"""",
@@ -694,9 +694,6 @@ object Workflow:
       case Some(pinned) =>
         val version = pinned.value
         val cell    = if gate then Some("matrix.playwright == 'true'") else None
-        val missed  =
-          if gate then "matrix.playwright == 'true' && steps.playwright.outputs.cache-hit != 'true'"
-          else "steps.playwright.outputs.cache-hit != 'true'"
         cacheStep(
           Some("playwright"),
           List(s"~/.cache/chekhov/playwright/$version", PlaywrightBrowsers),
@@ -705,15 +702,14 @@ object Workflow:
         ) ++ List(
           "      - run: |",
           s"          dir=\"$$HOME/.cache/chekhov/playwright/$version\"",
-          "          mkdir -p \"$dir\"",
-          s"          npm install --prefix \"$$dir\" --no-fund --no-audit --no-progress playwright@$version",
-          "          node \"$dir/node_modules/playwright/cli.js\" install firefox",
-          s"        if: $missed",
-        ) ++ List(
-          "      - run: |",
-          s"          dir=\"$$HOME/.cache/chekhov/playwright/$version\"",
+          "          if [ \"${{ steps.playwright.outputs.cache-hit }}\" != \"true\" ]; then",
+          "            mkdir -p \"$dir\"",
+          s"            npm install --prefix \"$$dir\" --no-fund --no-audit --no-progress playwright@$version",
+          "            node \"$dir/node_modules/playwright/cli.js\" install firefox",
+          "          fi",
+          "          test -d \"$dir/node_modules/playwright\"",
           "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
-        ) ++ (if gate then List("        if: matrix.playwright == 'true'") else Nil)
+        ) ++ cell.toList.map(text => s"        if: $text")
 
   private def testJob(jobs: List[TestJob], graph: ProjectGraph): List[String] =
     val modules = graph.projects.collect { case module: Module => module }
@@ -833,7 +829,8 @@ object Workflow:
       case VersionRef.One(selected) => Some(selected.value)
 
   /** Restore, then the suite, then save. The suite writes new products into the restored store. A taken key is deleted
-    * and saved again, because GitHub will not replace one. A matrix is more than one writer, so it does not open this
+    * and saved again, because GitHub will not replace one. The delete step always runs. It calls the API only when the
+    * restore hit, because a miss has no key to replace. A matrix is more than one writer, so it does not open this
     * scope. Versions, docs, deploy, workflow, and release do not either.
     */
   private val StorePath = "~/.cache/histos"
@@ -858,11 +855,14 @@ object Workflow:
 
   private def storeSave: List[String] =
     List(
-      s"      - if: ${quote("always() && steps.store.outputs.cache-hit == 'true'")}",
+      "      - if: \"always()\"",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
       s"          STORE_KEY: ${quote(storeKey)}",
-      s"        run: ${quote("gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}")}",
+      "        run: |",
+      "          if [ \"${{ steps.store.outputs.cache-hit }}\" = \"true\" ]; then",
+      "            gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}",
+      "          fi",
       "      - if: \"always()\"",
       s"        uses: $StoreSave",
       "        with:",

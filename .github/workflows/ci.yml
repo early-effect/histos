@@ -25,13 +25,13 @@ jobs:
           key: "llvm-21.1.8-${{ runner.os }}-${{ runner.arch }}"
       - run: |
           dir="${{ runner.temp }}/llvm"
-          mkdir -p "$dir"
-          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
-          tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
-          rm "$dir/llvm.tar.xz"
-        if: steps.llvm.outputs.cache-hit != 'true'
-      - run: |
-          dir="${{ runner.temp }}/llvm"
+          if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+            rm "$dir/llvm.tar.xz"
+          fi
+          test -x "$dir/bin/clang"
           echo "$dir/bin" >> "$GITHUB_PATH"
           if [ -n "$LD_LIBRARY_PATH" ]; then
             echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
@@ -47,12 +47,12 @@ jobs:
           key: "playwright-1.62.1-${{ runner.os }}-${{ runner.arch }}"
       - run: |
           dir="$HOME/.cache/chekhov/playwright/1.62.1"
-          mkdir -p "$dir"
-          npm install --prefix "$dir" --no-fund --no-audit --no-progress playwright@1.62.1
-          node "$dir/node_modules/playwright/cli.js" install firefox
-        if: steps.playwright.outputs.cache-hit != 'true'
-      - run: |
-          dir="$HOME/.cache/chekhov/playwright/1.62.1"
+          if [ "${{ steps.playwright.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            npm install --prefix "$dir" --no-fund --no-audit --no-progress playwright@1.62.1
+            node "$dir/node_modules/playwright/cli.js" install firefox
+          fi
+          test -d "$dir/node_modules/playwright"
           node "$dir/node_modules/playwright/cli.js" install-deps firefox
       - uses: actions/cache@v6
         with:
@@ -67,11 +67,14 @@ jobs:
       - run: "./histos test"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
-      - if: "always() && steps.store.outputs.cache-hit == 'true'"
+      - if: "always()"
         env:
           GH_TOKEN: ${{ github.token }}
           STORE_KEY: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
-        run: "gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}"
+        run: |
+          if [ "${{ steps.store.outputs.cache-hit }}" = "true" ]; then
+            gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}
+          fi
       - if: "always()"
         uses: actions/cache/save@v6
         with:

@@ -149,9 +149,12 @@ object WorkflowSpec extends ZIOSpecDefault:
         node.contains("hashFiles('histos.scala')") &&
           node.contains("${{ runner.os }}") && node.contains("${{ runner.arch }}"),
         llvm.contains("llvm-20.1.8-${{ runner.os }}-${{ runner.arch }}") &&
-          llvm.contains("steps.llvm.outputs.cache-hit"),
+          llvm.contains("steps.llvm.outputs.cache-hit") &&
+          llvm.contains("test -x \"$dir/bin/clang\"") &&
+          !llvm.contains("if: steps.llvm.outputs.cache-hit"),
         playwright.contains("id: playwright") &&
-          playwright.contains("steps.playwright.outputs.cache-hit != 'true'") &&
+          playwright.contains("steps.playwright.outputs.cache-hit") &&
+          !playwright.contains("if: steps.playwright.outputs.cache-hit") &&
           playwright.contains("install-deps firefox") &&
           playwright.contains("playwright-1.49.0-${{ runner.os }}-${{ runner.arch }}") &&
           playwright.contains("~/.cache/chekhov/playwright/1.49.0") &&
@@ -184,7 +187,8 @@ object WorkflowSpec extends ZIOSpecDefault:
           case Right(yaml) =>
             yaml.contains("if: matrix.llvm == 'true'") &&
             yaml.contains("LLVM-21.1.8-Linux-X64.tar.xz") &&
-            yaml.contains("steps.llvm.outputs.cache-hit != 'true'") &&
+            yaml.contains("steps.llvm.outputs.cache-hit") &&
+            !yaml.contains("if: steps.llvm.outputs.cache-hit") &&
             yaml.contains("llvm: \"false\"") &&
             yaml.contains("llvm: \"true\"") &&
             !yaml.contains("setup-node")
@@ -480,10 +484,11 @@ object WorkflowSpec extends ZIOSpecDefault:
                 test.contains("actions/cache/save@v6") &&
                 test.contains("~/.cache/histos") &&
                 test.contains("format('pr-{0}', github.event.pull_request.number)") &&
-                test.contains("steps.store.outputs.cache-hit == 'true'") &&
+                test.contains("steps.store.outputs.cache-hit") &&
                 test.contains("actions: write") &&
                 test.contains("gh api --method DELETE") &&
                 test.contains("if: \"always()\"") &&
+                !test.contains("if: \"always() &&") &&
                 test.contains("hashFiles('histos.scala')") &&
                 !test.contains("restore-keys") &&
                 !test.contains("cache: npm") &&
@@ -774,7 +779,9 @@ object WorkflowSpec extends ZIOSpecDefault:
             body.contains("--repo \"$GITHUB_REPOSITORY\"") &&
             body.contains("GH_TOKEN: ${{ github.token }}") &&
             body.contains("version=1.2.3") &&
-            body.contains("java: \"25\"") &&
+            body.contains("java-version: \"25\"") &&
+            body.contains("actions/setup-java@v6") &&
+            body.contains("distribution: temurin") &&
             body.contains("xcrun --show-sdk-path") &&
             body.contains("-isysroot") &&
             !release.contains("java:") &&
