@@ -1,6 +1,6 @@
 package histos.workflow
 
-import histos.plugin.{CiJob, JobPermissions, JobWhen, PluginTaskId, RegisteredPlugin, RepoPath, Site, SitePublish}
+import histos.plugin.{CiExtra, CiHeader}
 import histos.program.ClientBinary
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
@@ -112,47 +112,25 @@ object Workflow:
           case Nil           => Right(TestTarget.Entire)
 
   def render(graph: ProjectGraph): Either[CiError, String] =
-    siteProblem(graph).flatMap(_ => plan(graph, CiEvent.Other).map(jobs => document(graph, jobs)))
+    prepared(graph).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
-    * is Deployment, `histos-pages.yml` when a site asks for a dispatch, then one `histos-<job>.yml` per schedule.
+    * is Deployment, then one file per dispatch, cron, or trigger that must not wake `ci.yml`.
     */
   def renderAll(graph: ProjectGraph, sona: Publishing): Either[CiError, List[RenderedWorkflow]] =
-    render(graph).flatMap: body =>
-      pagesFile(graph).map: pages =>
-        val release = releaseWorkflow(graph, sona).toList
-        val promote =
-          release match
-            case Nil => Nil
-            case _   => promoteWorkflow(sona).toList
-        RenderedWorkflow(fileName, body) :: release ++ promote ++ pages.toList ++ scheduled(graph)
+    prepared(graph).map: (body, files) =>
+      val release = releaseWorkflow(graph, sona).toList
+      val promote =
+        release match
+          case Nil => Nil
+          case _   => promoteWorkflow(sona).toList
+      RenderedWorkflow(fileName, body) :: release ++ promote ++ files
 
-  /** One site per graph. A cron is neither a default-branch push nor a dispatch. */
-  private def siteProblem(graph: ProjectGraph): Either[CiError, Unit] =
-    val named = graph.plugins.flatMap(_.contribution.jobs.filter(_.site.isDefined))
-    named match
-      case first :: second :: _ => Left(CiError.DuplicateSite(first.name, second.name))
-      case job :: Nil           =>
-        job.when match
-          case JobWhen.Schedule(_) => Left(CiError.ScheduledSite(job.name))
-          case JobWhen.Always      => Right(())
-      case Nil => Right(())
-
-  private def pagesFile(graph: ProjectGraph): Either[CiError, Option[RenderedWorkflow]] =
-    val chosen = graph.plugins.flatMap: plugin =>
-      plugin.contribution.jobs.flatMap: job =>
-        job.site match
-          case Some(site) =>
-            site.publish match
-              case SitePublish.Automatic                 => Nil
-              case SitePublish.Manual | SitePublish.Both => List((plugin, job, site))
-          case None => Nil
-    chosen match
-      case Nil                        => Right(None)
-      case (plugin, job, site) :: Nil =>
-        Right(Some(RenderedWorkflow(pagesName, dispatchDocument(plugin, job, site))))
-      case (_, job, _) :: (_, other, _) :: _ =>
-        Left(CiError.DuplicateSite(job.name, other.name))
+  private def prepared(graph: ProjectGraph): Either[CiError, (String, List[RenderedWorkflow])] =
+    for
+      planned <- JobYaml.render(graph)
+      jobs    <- plan(graph, CiEvent.Other)
+    yield (document(graph, jobs, planned), planned.files)
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
@@ -253,8 +231,9 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def document(graph: ProjectGraph, jobs: List[TestJob]): String =
-    val test = jobs match
+  private def document(graph: ProjectGraph, jobs: List[TestJob], planned: JobYaml.Rendered): String =
+    val modules = graph.projects.collect { case module: Module => module }
+    val test    = jobs match
       case Nil => Nil
       case _   => testJob(jobs, graph)
     val versions = graph.catalog match
@@ -263,20 +242,9 @@ object Workflow:
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
       case DocCheck.On  => List(docJob(graph))
-    val body = test ++ versions ++ doc ++ pluginJobs(graph.plugins) ++ List(workflowJob)
-    (header ++ body).mkString("\n") + "\n"
-
-  /** `JobWhen.Always` only. A schedule is its own file, so `cron` does not wrap `test`. */
-  private def pluginJobs(plugins: List[RegisteredPlugin]): List[String] =
-    plugins.flatMap: plugin =>
-      plugin.contribution.jobs.flatMap: job =>
-        job.when match
-          case JobWhen.Always =>
-            val built = List(jobLines(plugin, job, JobPlace.Ci).mkString("\n"))
-            pushPublish(job.site) match
-              case PushPublish.Skip   => built
-              case PushPublish.Upload => built :+ pagesJob(job).mkString("\n")
-          case JobWhen.Schedule(_) => Nil
+    val seed = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
+    val body = List(affectedJob) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++ List(workflowJob)
+    (header(planned.header, graph) ++ body).mkString("\n") + "\n"
 
   /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
     * ship that has a native client then links that client and uploads the install files to the existing `dist` release.
@@ -552,28 +520,6 @@ object Workflow:
   private def secret(name: String): String =
     s"          $name: $${{ secrets.$name }}"
 
-  private def scheduled(graph: ProjectGraph): List[RenderedWorkflow] =
-    graph.plugins.flatMap: plugin =>
-      plugin.contribution.jobs.flatMap: job =>
-        job.when match
-          case JobWhen.Schedule(cron) =>
-            val lines = List(
-              s"name: histos-${job.name.value}",
-              "on:",
-              "  schedule:",
-              s"    - cron: ${quote(cron.value)}",
-              "permissions:",
-              "  contents: read",
-              "jobs:",
-            ) ++ jobLines(plugin, job, JobPlace.Schedule)
-            List(RenderedWorkflow(s"histos-${job.name.value}.yml", lines.mkString("\n") + "\n"))
-          case JobWhen.Always => Nil
-
-  /** Where a plugin job is written. A cron file is not a pull request and not a default-branch push. */
-  private enum JobPlace:
-    case Ci
-    case Schedule
-
   /** A matrix step runs for every cell, or only for the cells that name the tool. */
   private enum MatrixScope:
     case Whole
@@ -594,114 +540,6 @@ object Workflow:
     case Publish
     case WithInstall
 
-  /** The build job uploads the pages artifact on a default-branch push, or it only runs the task. */
-  private enum PushPublish:
-    case Skip
-    case Upload
-
-  private def pushPublish(site: Option[Site]): PushPublish =
-    site match
-      case Some(found) =>
-        found.publish match
-          case SitePublish.Manual                       => PushPublish.Skip
-          case SitePublish.Automatic | SitePublish.Both => PushPublish.Upload
-      case None => PushPublish.Skip
-
-  private def jobLines(plugin: RegisteredPlugin, job: CiJob, place: JobPlace): List[String] =
-    val run    = quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")
-    val upload = (place, pushPublish(job.site)) match
-      case (JobPlace.Ci, PushPublish.Upload) => job.site.toList.flatMap(site => uploadStep(site.dir))
-      case _                                 => Nil
-    val guard = place match
-      case JobPlace.Ci       => ciIf
-      case JobPlace.Schedule => Nil
-    List(
-      s"  ${job.name.value}:"
-    ) ++ guard ++ List(
-      s"    runs-on: $Runner",
-      "    permissions:",
-    ) ++ uploadScope(place, job.site) ++ List(
-      s"      contents: ${access(job.permissions)}",
-      "    steps:",
-      s"      - uses: $Checkout",
-    ) ++ coursierCli ++ List(
-      s"      - run: $run"
-    ) ++ upload
-
-  private def uploadScope(place: JobPlace, site: Option[Site]): List[String] =
-    (place, pushPublish(site)) match
-      case (JobPlace.Ci, PushPublish.Upload) => List("      actions: write")
-      case _                                 => Nil
-
-  private def uploadStep(path: RepoPath): List[String] =
-    List(
-      s"      - if: ${quote(OnDefaultPush)}",
-      s"        uses: $UploadPages",
-      "        with:",
-      s"          path: ${quote(path.value)}",
-    )
-
-  private def pagesJob(job: CiJob): List[String] =
-    List(
-      "  pages:",
-      s"    needs: ${job.name.value}",
-      s"    if: ${quote(OnDefaultPush)}",
-      s"    runs-on: $Runner",
-      "    environment:",
-      "      name: github-pages",
-      "      url: ${{ steps.deployment.outputs.page_url }}",
-      "    concurrency:",
-      "      group: pages",
-      "      cancel-in-progress: false",
-      "    permissions:",
-      "      actions: read",
-      "      contents: read",
-      "      id-token: write",
-      "      pages: write",
-      "    steps:",
-      "      - id: deployment",
-      s"        uses: $DeployPages",
-    )
-
-  private def dispatchDocument(plugin: RegisteredPlugin, job: CiJob, site: Site): String =
-    val run   = quote(s"./histos run ${PluginTaskId(plugin.id, job.task).render}")
-    val lines = List(
-      "name: pages",
-      "on:",
-      "  workflow_dispatch:",
-      "permissions:",
-      "  contents: read",
-      "concurrency:",
-      "  group: pages",
-      "  cancel-in-progress: false",
-      "jobs:",
-      "  pages:",
-      s"    runs-on: $Runner",
-      "    environment:",
-      "      name: github-pages",
-      "      url: ${{ steps.deployment.outputs.page_url }}",
-      "    permissions:",
-      "      actions: write",
-      "      contents: read",
-      "      id-token: write",
-      "      pages: write",
-      "    steps:",
-      s"      - uses: $Checkout",
-    ) ++ coursierCli ++ List(
-      s"      - run: $run",
-      s"      - uses: $UploadPages",
-      "        with:",
-      s"          path: ${quote(site.dir.value)}",
-      "      - id: deployment",
-      s"        uses: $DeployPages",
-    )
-    lines.mkString("\n") + "\n"
-
-  private def access(permissions: JobPermissions): String =
-    permissions match
-      case JobPermissions.ContentsRead  => "read"
-      case JobPermissions.ContentsWrite => "write"
-
   /** On a push, `github.ref` is `refs/heads/<branch>` and `repository.default_branch` is the short name. */
   private val OnDefaultBranch: String =
     "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
@@ -709,17 +547,29 @@ object Workflow:
   private val OnDefaultPush: String =
     s"github.event_name == 'push' && $OnDefaultBranch"
 
-  private val OnCi: String =
-    s"github.event_name == 'pull_request' || $OnDefaultBranch"
+  /** Verify runs on a pull request or a dispatch. A push does not run the suite. */
+  private val OnVerify: String =
+    "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
 
-  private def ciIf: List[String] =
-    List(s"    if: ${quote(OnCi)}")
+  private val NoneFailed: String =
+    "!cancelled() && !contains(needs.*.result, 'failure')"
 
-  /** `on.push.branches` is a static glob. The github context is not available there, and `$default-branch` is a
-    * template token. `**` is every branch. A branches filter excludes tags. Each job repeats [[OnCi]], so a push to
-    * some other branch starts a run whose jobs skip.
+  private def verifyIf: List[String] =
+    List(s"    if: ${quote(OnVerify)}")
+
+  private def verifyNeeds: List[String] =
+    List(s"    if: ${quote(s"($OnVerify) && ($NoneFailed)")}")
+
+  /** `on.push.branches` is a static glob. The github context is not available there. `**` is every branch. Verify jobs
+    * repeat [[OnVerify]], so a push starts a run whose suite skips. `workflow_dispatch` is on this file because verify
+    * accepts it. A label, a path, a cron, or `workflow_run` is not: those are their own files.
     */
-  private val header: List[String] =
+  private def header(extra: CiHeader, graph: ProjectGraph): List[String] =
+    val tags =
+      if extra.tags.isEmpty then Nil
+      else "    tags:" :: extra.tags.map(tag => s"      - ${quote(tag)}")
+    val merge   = if extra.extras.contains(CiExtra.MergeGroup) then List("  merge_group:") else Nil
+    val release = if extra.extras.contains(CiExtra.Release) then List("  release:") else Nil
     List(
       "name: ci",
       "on:",
@@ -727,10 +577,50 @@ object Workflow:
       "  push:",
       "    branches:",
       s"      - ${quote("**")}",
+    ) ++ tags ++ dispatchInputs(extra.inputs) ++ merge ++ release ++ List(
       "permissions:",
       "  contents: read",
-      "jobs:",
+    ) ++ workflowEnv(graph) ++ List(
+      "jobs:"
     )
+
+  private def workflowEnv(graph: ProjectGraph): List[String] =
+    val plain = graph.ci.env.filter {
+      case (_, histos.plugin.EnvValue.Secret(_)) => false
+      case _                                     => true
+    }
+    plain match
+      case Nil => Nil
+      case _   =>
+        "env:" :: plain.map:
+          case (name, value) => s"  ${name.value}: ${workflowValue(value)}"
+
+  private def workflowValue(value: histos.plugin.EnvValue): String =
+    value match
+      case histos.plugin.EnvValue.Plain(text)   => quote(text)
+      case histos.plugin.EnvValue.Secret(name)  => s"$${{ secrets.${name.value} }}"
+      case histos.plugin.EnvValue.Github(field) =>
+        field match
+          case histos.plugin.GithubField.Sha     => "${{ github.sha }}"
+          case histos.plugin.GithubField.RefName => "${{ github.ref_name }}"
+          case histos.plugin.GithubField.Token   => "${{ github.token }}"
+      case histos.plugin.EnvValue.Env(name) => s"$${{ env.${name.value} }}"
+
+  private def dispatchInputs(inputs: List[histos.plugin.DispatchInput]): List[String] =
+    inputs match
+      case Nil => List("  workflow_dispatch:")
+      case _   =>
+        "  workflow_dispatch:" :: "    inputs:" :: inputs.flatMap: input =>
+          val kind = input.kind match
+            case histos.plugin.InputKind.Text    => "string"
+            case histos.plugin.InputKind.Boolean => "boolean"
+            case histos.plugin.InputKind.Choice  => "choice"
+          List(
+            s"      ${input.name.value}:",
+            s"        description: ${input.name.value}",
+            "        required: false",
+            s"        type: $kind",
+          ) ++ input.default.toList.map(value => s"        default: ${quote(value)}")
 
   /** The test job, and the doc check when a build asks for it. The doc job restores the store because it compiles, and
     * it does not save: the suite is the writer. It does not wait for the suite. Versions, plugin docs, deploy,
@@ -871,6 +761,59 @@ object Workflow:
           "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
         ) ++ cell.toList.map(text => s"        if: $text")
 
+  private def affectedJob: String =
+    val script =
+      """          base=all
+          |          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+          |            base="$PR_BASE"
+          |          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          |            last=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?event=push&status=success&branch=${GITHUB_REF_NAME}&per_page=1" --jq '.workflow_runs[0].head_sha // empty' || true)
+          |            if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD; then
+          |              base="$last"
+          |            fi
+          |          fi
+          |          modules=$(./histos affected --base "$base" || echo '["all"]')
+          |          echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
+    List(
+      "  affected:",
+      s"    runs-on: $Runner",
+      "    permissions:",
+      "      actions: read",
+      "      contents: read",
+      "    outputs:",
+      "      modules: ${{ steps.affected.outputs.modules }}",
+      "    steps:",
+      s"      - uses: $Checkout",
+      "        with:",
+      "          fetch-depth: 0",
+      s"      - uses: $Setup",
+      "      - id: affected",
+      "        env:",
+      "          GH_TOKEN: ${{ github.token }}",
+      "          PR_BASE: ${{ github.event.pull_request.base.sha }}",
+      "        run: |",
+      script,
+    ).mkString("\n")
+
+  /** A push to the default branch compiles and saves the store. The suite does not run on that push. */
+  private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph): String =
+    val modules = graph.projects.collect { case module: Module => module }
+    val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
+    val any     = needs.foldLeft(ToolNeed(false, false, false))(_ || _)
+    val prepare = steps(graph.runnerTools, graph.resolution, any, MatrixScope.Whole)
+    (List(
+      "  cache-seed:",
+      s"    if: ${quote(OnDefaultPush)}",
+      s"    runs-on: $Runner",
+      "    permissions:",
+      "      actions: write",
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli ++ prepare ++ storeRestore ++ List(
+      "      - run: \"./histos compile\""
+    ) ++ storeSave).mkString("\n")
+
   private def testJob(jobs: List[TestJob], graph: ProjectGraph): List[String] =
     val modules = graph.projects.collect { case module: Module => module }
     val needs   = jobs.map(job => toolNeed(modulesOf(job, modules), graph.runnerTools))
@@ -887,8 +830,9 @@ object Workflow:
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
-          "  test:"
-        ) ++ ciIf ++ List(
+          "  test:",
+          "    needs: affected",
+        ) ++ verifyNeeds ++ List(
           s"    runs-on: $Runner",
           "    permissions:",
           "      actions: write",
@@ -898,9 +842,12 @@ object Workflow:
         ) ++ coursierCli ++ prepare ++ storeRestore ++ link ++ testRun(argv(aggregate).mkString(" ")) ++ storeSave
       case _ =>
         List(
-          "  test:"
-        ) ++ ciIf ++ List(
+          "  test:",
+          "    needs: affected",
+        ) ++ verifyNeeds ++ List(
           s"    runs-on: $Runner",
+          "    permissions:",
+          "      contents: read",
           "    strategy:",
           "      fail-fast: false",
           "      matrix:",
@@ -1046,8 +993,9 @@ object Workflow:
     "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
 
   private def testRun(command: String): List[String] =
+    val narrowed = s"$command --affected '$${{ needs.affected.outputs.modules }}'"
     List(
-      s"      - run: ${quote(command)}",
+      s"      - run: ${quote(narrowed)}",
       "        env:",
       s"          ${CacheNamespace.Key}: ${quote(cacheNamespace)}",
     )
@@ -1056,9 +1004,7 @@ object Workflow:
   private val Runner = "ubuntu-26.04"
 
   /** Current major. v4 still targets Node 20, which the runner rewrites to Node 24. */
-  private val Checkout    = "actions/checkout@v7"
-  private val UploadPages = "actions/upload-pages-artifact@v5"
-  private val DeployPages = "actions/deploy-pages@v5"
+  private val Checkout = "actions/checkout@v7"
 
   /** Beside the suite. No `needs`, so a scaladoc warning does not hold the tests. */
   private def docJob(graph: ProjectGraph): String =
@@ -1068,8 +1014,10 @@ object Workflow:
     val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), MatrixScope.Whole)
     val lines     = List(
       "  doc:"
-    ) ++ ciIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner",
+      "    permissions:",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli ++ prepare ++ storeRestore ++ List(
@@ -1085,8 +1033,10 @@ object Workflow:
   private def versionsJob: String =
     (List(
       "  versions:"
-    ) ++ ciIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner",
+      "    permissions:",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
@@ -1096,8 +1046,10 @@ object Workflow:
   private def workflowJob: String =
     (List(
       "  workflow:"
-    ) ++ ciIf ++ List(
+    ) ++ verifyIf ++ List(
       s"    runs-on: $Runner",
+      "    permissions:",
+      "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",

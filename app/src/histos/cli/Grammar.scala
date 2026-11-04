@@ -9,6 +9,7 @@ import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction
 import histos.{Platform, ProjectName}
 
+import zio.json.*
 import zio.{IO, ZIO}
 import zio.cli.{
   Args,
@@ -31,7 +32,8 @@ object Grammar:
     case Cancel(id: String)
     case New(name: String)
     case Run(name: String, platform: Option[String])
-    case Test(projects: List[String])
+    case Test(affected: Option[String], projects: List[String])
+    case Affected(base: String)
     case TestOnly(args: List[String])
     case TestQuick(args: List[String])
     case Compile(projects: List[String])
@@ -65,7 +67,10 @@ object Grammar:
       .map { case (name, platform) =>
         Wire.Run(name, platform.headOption)
       }
-  private val test       = CliCommand("test", Args.text("project").*).map(names => Wire.Test(names.toList))
+  private val test =
+    CliCommand("test", Options.text("affected").optional, Args.text("project").*)
+      .map { case (affected, names) => Wire.Test(affected, names.toList) }
+  private val affected   = CliCommand("affected", Options.text("base")).map(Wire.Affected(_))
   private val testOnly   = CliCommand("testOnly", Args.text("pattern").*).map(args => Wire.TestOnly(args.toList))
   private val testQuick  = CliCommand("testQuick", Args.text("pattern").*).map(args => Wire.TestQuick(args.toList))
   private val compile    = CliCommand("compile", Args.text("project").*).map(names => Wire.Compile(names.toList))
@@ -165,7 +170,7 @@ object Grammar:
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
+      version | graph | run | test | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -218,11 +223,13 @@ object Grammar:
         ZIO.fromEither(namespaces(from, to)).map { (source, dest) =>
           Command.CachePromote(source, dest)
         }
-      case Wire.Resolve(action)  => ZIO.succeed(Command.Resolve(action))
-      case Wire.Launcher(action) => ZIO.succeed(Command.Launcher(action))
-      case Wire.Workflow(action) => ZIO.succeed(Command.Workflow(action))
-      case Wire.Test(projects)   =>
-        projectList("test", projects).map(Command.Test(_))
+      case Wire.Resolve(action)          => ZIO.succeed(Command.Resolve(action))
+      case Wire.Launcher(action)         => ZIO.succeed(Command.Launcher(action))
+      case Wire.Workflow(action)         => ZIO.succeed(Command.Workflow(action))
+      case Wire.Test(affected, projects) =>
+        choice(affected).flatMap(picked => projectList("test", projects).map(names => Command.Test(names, picked)))
+      case Wire.Affected(base) =>
+        ZIO.succeed(Command.Affected(base))
       case Wire.TestOnly(args) =>
         ZIO.fromEither(selection("testOnly", args, requirePattern = true)).map { case (modules, patterns) =>
           Command.TestOnly(modules, patterns)
@@ -324,6 +331,22 @@ object Grammar:
   private enum NamedRun:
     case Module(id: TaskId, platform: Option[Platform])
     case Plugin(id: PluginTaskId)
+
+  private def choice(raw: Option[String]): IO[CliParseError, AffectedChoice] =
+    raw match
+      case None       => ZIO.succeed(AffectedChoice.Unset)
+      case Some(text) =>
+        text.fromJson[List[String]] match
+          case Left(_) =>
+            ZIO.fail(CliParseError.Pattern("affected is a JSON list of module names"))
+          case Right(Nil) =>
+            ZIO.succeed(AffectedChoice.NoneSelected)
+          case Right(names) if names.contains("all") =>
+            ZIO.succeed(AffectedChoice.Everything)
+          case Right(names) =>
+            ZIO
+              .foreach(names)(name => ZIO.fromEither(ProjectName.from(name)).mapError(CliParseError.ProjectName(_)))
+              .map(parsed => AffectedChoice.Only(parsed))
 
   private def projectList(
       command: String,

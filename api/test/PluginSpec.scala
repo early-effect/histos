@@ -140,6 +140,7 @@ object PluginSpec extends ZIOSpecDefault:
           "observe",
           "new",
           "init",
+          "affected",
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,
@@ -148,8 +149,10 @@ object PluginSpec extends ZIOSpecDefault:
           "versions",
           "workflow",
           "launcher",
+          "affected",
           "doc",
           "pages",
+          "cache-seed",
         ),
         JobName("docs").isReserved == false,
         JobName("doc").isReserved,
@@ -310,13 +313,11 @@ object PluginSpec extends ZIOSpecDefault:
   private def command(name: CommandName, taskName: TaskName): CommandSpec =
     CommandSpec(name, Nil, taskName, detail)
 
-  private def job(
-      name: JobName,
-      taskName: TaskName,
-      when: JobWhen = JobWhen.Always,
-      site: Option[Site] = None,
-  ): CiJob =
-    CiJob(name, taskName, when, site = site)
+  private def job(name: JobName, taskName: TaskName): CiJob =
+    TaskJob(name, taskName)
+
+  private def site(name: JobName, taskName: TaskName, published: Site): CiJob =
+    SiteJob(name, taskName, published)
 
   private val registration = suite("registration")(
     test("use copies the contribution and does not call run"):
@@ -477,40 +478,65 @@ object PluginSpec extends ZIOSpecDefault:
         ),
       )
     ,
-    test("a second site, a scheduled site, and the pages id are refused"):
+    test("a second site and the pages id are refused, and a site has no cron"):
       val first = fixed(
         PluginId("test.one"),
         List(task(TaskName("site"))),
-        jobs = List(job(JobName("docs"), TaskName("site"), site = Some(Site(RepoPath("docs"))))),
+        jobs = List(site(JobName("docs"), TaskName("site"), Site(RepoPath("docs")))),
       )
       val second = fixed(
         PluginId("test.two"),
         List(task(TaskName("site"))),
-        jobs = List(job(JobName("guide"), TaskName("site"), site = Some(Site(RepoPath("guide"))))),
+        jobs = List(site(JobName("guide"), TaskName("site"), Site(RepoPath("guide")))),
       )
       val cron = fixed(
         PluginId("test.echo"),
         List(task(TaskName("site"))),
-        jobs = List(
-          job(
-            JobName("nightly"),
-            TaskName("site"),
-            JobWhen.Schedule(Cron("0 6 * * 1")),
-            Some(Site(RepoPath("docs"), SitePublish.Manual)),
-          )
-        ),
+        jobs = List(site(JobName("nightly"), TaskName("site"), Site(RepoPath("docs"), SitePublish.Manual))),
       )
       val pages = fixed(
         PluginId("test.echo"),
         List(task(TaskName("site"))),
         jobs = List(job(JobName("pages"), TaskName("site"))),
       )
+      val schedule = typeCheckErrors(
+        "import histos.plugin.*\nSiteJob(JobName(\"docs\"), TaskName(\"site\"), Site(RepoPath(\"docs\")), cron = Cron(\"0 6 * * 1\"))\n"
+      )
       assertTrue(
         Projects(use(first, second), jvm("core")) == Left(
           BuildError.DuplicateSite(JobName("docs"), JobName("guide"))
         ),
-        Projects(use(cron), jvm("core")) == Left(BuildError.ScheduledSite(JobName("nightly"))),
+        Projects(use(cron), jvm("core")).isRight,
         Projects(use(pages), jvm("core")) == Left(BuildError.ReservedJob(JobName("pages"))),
+        schedule.nonEmpty,
+      )
+    ,
+    test("a need names a job on the graph"):
+      def needing(need: JobName): Fixed =
+        fixed(
+          PluginId("test.echo"),
+          List(task(TaskName("site"))),
+          jobs = List(TaskJob(JobName("docs"), TaskName("site"), needs = List(need))),
+        )
+      val doubled = fixed(
+        PluginId("test.echo"),
+        List(task(TaskName("site"))),
+        jobs = List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("test"), JobName("test")))),
+      )
+      assertTrue(
+        Projects(use(needing(JobName("test"))), jvm("core")).isRight,
+        Projects(use(needing(JobName("absent"))), jvm("core")) == Left(
+          BuildError.Ci(CiFault.UnknownNeed(JobName("docs"), JobName("absent")))
+        ),
+        Projects(use(needing(JobName("pages"))), jvm("core")) == Left(
+          BuildError.Ci(CiFault.UnknownNeed(JobName("docs"), JobName("pages")))
+        ),
+        Projects(use(needing(JobName("docs"))), jvm("core")) == Left(
+          BuildError.Ci(CiFault.UnknownNeed(JobName("docs"), JobName("docs")))
+        ),
+        Projects(use(doubled), jvm("core")) == Left(
+          BuildError.Ci(CiFault.DuplicateNeed(JobName("docs"), JobName("test")))
+        ),
       )
     ,
     test("a sibling task and an open cell are accepted"):

@@ -84,7 +84,7 @@ object CliSpec extends ZIOSpecDefault:
             PluginDetail("lists the site"),
           )
         ),
-        List(CiJob(JobName("nightly"), TaskName("echo"), JobWhen.Always)),
+        List(TaskJob(JobName("nightly"), TaskName("echo"))),
       )
 
     def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
@@ -535,6 +535,24 @@ object CliSpec extends ZIOSpecDefault:
         named == Command.Test(List(ProjectName("core"))),
         Operation.call(entire) == Right(Call.Test(Nil, Nil, TestMode.Run)),
         Operation.call(named) == Right(Call.Test(List(ProjectName("core")), Nil, TestMode.Run)),
+      )
+    ,
+    test("affected selects modules before the suite runs"):
+      for
+        all  <- Cli.parse(List("test", "--affected", "[\"all\"]"))
+        some <- Cli.parse(List("test", "--affected", "[\"api\",\"engine\"]", "engine"))
+        none <- Cli.parse(List("test", "--affected", "[]"))
+        base <- Cli.parse(List("affected", "--base", "abc"))
+        bad  <- Cli.parse(List("test", "--affected", "api")).either
+      yield assertTrue(
+        all == Command.Test(Nil, AffectedChoice.Everything),
+        some == Command
+          .Test(List(ProjectName("engine")), AffectedChoice.Only(List(ProjectName("api"), ProjectName("engine")))),
+        Operation.call(some) == Right(Call.Test(List(ProjectName("engine")), Nil, TestMode.Run)),
+        none == Command.Test(Nil, AffectedChoice.NoneSelected),
+        Operation.call(none) == Left(CliParseError.Pattern("nothing is affected")),
+        base == Command.Affected("abc"),
+        bad == Left(CliParseError.Pattern("affected is a JSON list of module names")),
       )
     ,
     test("a bad project name is usage and is not a call"):

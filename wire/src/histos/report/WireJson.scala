@@ -14,6 +14,7 @@ import histos.jdk.{
 }
 import histos.load.{BinaryName, CompilerMessage, LoadError, PluginFault}
 import histos.plugin.{
+  ActionName,
   ApiDigest,
   CommandName,
   ContentHash,
@@ -34,6 +35,9 @@ import histos.plugin.{
   PluginTaskError,
   PluginTaskId,
   RepoPath,
+  RunnerName,
+  SecretName,
+  TargetName,
   TaskName,
 }
 import histos.assembly.AssembleError
@@ -160,6 +164,7 @@ import histos.zinc.{
 }
 import histos.{
   BuildError,
+  CiFault,
   ClangMajor,
   Dep,
   DepError,
@@ -327,6 +332,10 @@ private object WireLeaves extends WireSupport:
   given JsonCodec[TaskName]         = parsed(TaskName.from, _.message, _.value)
   given JsonCodec[CommandName]      = parsed(CommandName.from, _.message, _.value)
   given JsonCodec[JobName]          = parsed(JobName.from, _.message, _.value)
+  given JsonCodec[ActionName]       = parsed(ActionName.from, _.message, _.value)
+  given JsonCodec[RunnerName]       = parsed(RunnerName.from, _.message, _.value)
+  given JsonCodec[SecretName]       = parsed(SecretName.from, _.message, _.value)
+  given JsonCodec[TargetName]       = parsed(TargetName.from, _.message, _.value)
   given JsonCodec[ProjectPath]      = parsed(ProjectPath.from, _.message, _.value)
   given JsonCodec[RepoPath]         = parsed(RepoPath.from, _.message, _.value)
   given JsonCodec[Organization]     = parsed(Organization.from, _.message, _.value)
@@ -478,6 +487,7 @@ private object WireBuild extends WireSupport:
         case histos.plugin.Need.Docker  => "docker"
       },
     )
+  given JsonCodec[CiFault]              = JsonCodec.derived
   given JsonCodec[BuildError]           = JsonCodec.derived
   given JsonCodec[LoadError]            = JsonCodec.derived
   given JsonCodec[ProcessOutput]        = JsonCodec.string.transform(ProcessOutput.from, _.text)

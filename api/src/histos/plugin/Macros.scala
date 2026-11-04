@@ -147,6 +147,60 @@ private[histos] object PluginMacros:
       canonical => '{ ContentHash.trusted(${ Expr(canonical) }) },
     )
 
+  def runnerName(raw: Expr[String])(using Quotes): Expr[RunnerName] =
+    literal(
+      raw,
+      "RunnerName",
+      text => RunnerName.from(text).map(_.value),
+      _.message,
+      canonical => '{ RunnerName.trusted(${ Expr(canonical) }) },
+    )
+
+  def environmentName(raw: Expr[String])(using Quotes): Expr[EnvironmentName] =
+    literal(
+      raw,
+      "EnvironmentName",
+      text => EnvironmentName.from(text).map(_.value),
+      _.message,
+      canonical => '{ EnvironmentName.trusted(${ Expr(canonical) }) },
+    )
+
+  def targetName(raw: Expr[String])(using Quotes): Expr[TargetName] =
+    literal(
+      raw,
+      "TargetName",
+      text => TargetName.from(text).map(_.value),
+      _.message,
+      canonical => '{ TargetName.trusted(${ Expr(canonical) }) },
+    )
+
+  def actionName(raw: Expr[String])(using Quotes): Expr[ActionName] =
+    literal(
+      raw,
+      "ActionName",
+      text => ActionName.from(text).map(_.value),
+      _.message,
+      canonical => '{ ActionName.trusted(${ Expr(canonical) }) },
+    )
+
+  def secretName(raw: Expr[String])(using Quotes): Expr[SecretName] =
+    literal(
+      raw,
+      "SecretName",
+      text => SecretName.from(text).map(_.value),
+      _.message,
+      canonical => '{ SecretName.trusted(${ Expr(canonical) }) },
+    )
+
+  def groupName(raw: Expr[String])(using Quotes): Expr[GroupName] =
+    literal(
+      raw,
+      "GroupName",
+      text => GroupName.from(text).map(_.value),
+      _.message,
+      canonical => '{ GroupName.trusted(${ Expr(canonical) }) },
+    )
+
   def cron(raw: Expr[String])(using Quotes): Expr[Cron] =
     literal(
       raw,

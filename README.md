@@ -112,7 +112,7 @@ flowchart TD
 
 The setup action restores toolchains and `~/.cache/coursier/v1`. It does not install those tools, and it does not open the content store. The test job restores `~/.cache/histos`, and after the suite it deletes that key and saves the store again so the next run sees the products this one wrote. `versions` and `workflow` do not open that scope, so a job that does not compile cannot publish an empty store. Only a test job installs Node, LLVM, or Playwright, and only for the modules that job runs. Playwright is also installed when the build names its revision, because this suite launches Firefox from a JVM test. `install-deps firefox` stays on every such run. The browser download waits for a cache miss.
 
-A plugin job may name a site directory and a publish mode. `Automatic` uploads that directory and deploys it from a `pages` job only on a push to the repository's default branch. `Manual` writes `histos-pages.yml`, and that workflow deploys when someone runs it. `Both` is the default and does both. A pull request runs the site task and does not request the `github-pages` environment. The branch comparison is `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`.
+A site is a `SiteJob`. `Automatic` uploads its directory and deploys it from a `pages` job on a push to the repository's default branch. `Manual` writes `histos-pages.yml`, and that workflow deploys when someone runs it. `Both` is the default and does both. A site job runs on the default branch only, so a pull request does not build it and does not request the `github-pages` environment. The branch comparison is `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`.
 
 ## Publishing
 
