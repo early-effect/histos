@@ -1,6 +1,8 @@
 package histos.publish
 
-import histos.resolve.ArtifactName
+import histos.cache.ContentStore
+import histos.load.{ApiJar, Loader}
+import histos.resolve.{ArtifactName, Resolve}
 import histos.version.ManualVersion
 import histos.{
   ArtifactBase,
@@ -15,16 +17,14 @@ import histos.{
   module,
 }
 
-import java.nio.file.Path
-import histos.workspace.Workspace
+import java.nio.file.{Files, Path}
 
-import zio.{System, ZIO}
+import scala.jdk.CollectionConverters.*
+
+import zio.{Scope, System, ZIO, ZLayer}
 import zio.test.*
 
 object LauncherSpec extends ZIOSpecDefault:
-  private val ship    = "0.1.0-SNAPSHOT"
-  private val pinLine = "0.1.0-SNAPSHOT"
-
   private val checks = suite("launcher publish")(
     test("a release ship boots the snapshot channel of that number"):
       val posix = LauncherScript.posix("0.0.1")
@@ -47,20 +47,30 @@ object LauncherSpec extends ZIOSpecDefault:
       )
     ,
     test("the committed scripts are the manual ship"):
-      for
-        value <- System
-          .env("HISTOS_REPO")
-          .mapError(_ => LauncherFixtureError.Environment)
-        root <- ZIO
-          .fromOption(value.filter(_.nonEmpty).map(Path.of(_)))
-          .orElseFail(LauncherFixtureError.Repository)
-        posix <- Workspace.readString(root.resolve("histos"))
-        pin   <- LauncherPin.read(root)
-      yield assertTrue(
-        posix == LauncherScript.posix(ship),
-        pin.version == pinLine,
-        LauncherScript.boots(ship, pin.version),
-      )
+      ZIO.scoped {
+        for
+          root <- repository
+          work <- ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-launcher"))): path =>
+            ZIO.attempt {
+              val stream = Files.walk(path)
+              try stream.iterator.asScala.toList.sortBy(_.getNameCount).reverse.foreach(Files.deleteIfExists(_))
+              finally stream.close()
+            }.ignore
+          _ <- ZIO.attempt {
+            Files.createDirectories(work.resolve("cache"))
+            Files.createDirectories(work.resolve("store"))
+          }
+          api    <- ApiJar.locate.provideSomeLayer[Scope](ZLayer.succeed(System.SystemLive))
+          loaded <- ZIO
+            .serviceWithZIO[Loader](_.load(root, api))
+            .provideSome[Scope](
+              Resolve.live(work.resolve("cache")),
+              ZLayer.succeed(ContentStore.in(work.resolve("store"))),
+              Loader.live,
+            )
+          checked <- LauncherScript.check(root, loaded.graph).either
+        yield assertTrue(checked == Right(()))
+      }
     ,
     test("the api name keeps the binary suffix and the assembly name does not"):
       ZIO
@@ -100,6 +110,19 @@ object LauncherSpec extends ZIOSpecDefault:
       assertTrue(missing == Left(LocalPublishError.Credentials), authed),
   )
 
+  private def repository: ZIO[Any, Throwable, Path] =
+    System
+      .env("HISTOS_REPO")
+      .flatMap: named =>
+        val cwd  = Path.of("").toAbsolutePath.normalize
+        val root = named.filter(_.nonEmpty).fold(cwd)(Path.of(_))
+        val file = root.resolve("histos.scala")
+        ZIO
+          .attempt(Files.isRegularFile(file))
+          .flatMap:
+            case true  => ZIO.succeed(root)
+            case false => ZIO.fail(new IllegalStateException(s"histos.scala is not at $file"))
+
   private val opened =
     val api = module("api", Jvm)(ScalaVersion("3.10.0")).artifact(
       ArtifactBase("histos-api")
@@ -119,6 +142,3 @@ object LauncherSpec extends ZIOSpecDefault:
     checks @@ TestAspect.withLiveSystem
   )
 end LauncherSpec
-
-private enum LauncherFixtureError:
-  case Environment, Repository
