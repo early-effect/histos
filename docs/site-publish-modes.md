@@ -2,7 +2,7 @@
 
 This file is the decision for [#90](https://github.com/early-effect/histos/issues/90). Implementation has not started. The catalog is `manual("histos", manual"0.1.3")`, so a breaking change that makes this API honest is in scope.
 
-A job that names a site builds that site on every run of the job. Publishing it is a mode on the site. `Automatic` deploys on a push to the branch `ci.yml` already triggers, after the site task. `Manual` deploys from a generated `workflow_dispatch` workflow. `Both` is the two together. A pull request builds the site and does not request the `github-pages` environment.
+A job that names a site builds that site on every run of the job. Publishing it is a mode on the site. `Automatic` deploys on a push to the repository's default branch, after the site task. `Manual` deploys from a generated `workflow_dispatch` workflow. `Both` is the two together. A pull request builds the site and does not request the `github-pages` environment. The default branch is not a literal in the generated file.
 
 The deploy is a separate job in `ci.yml`. It `needs` the build job. The build uploads the site with `actions/upload-pages-artifact` only on that push. The deploy job carries `environment: github-pages` and runs `actions/deploy-pages`. A job-level `if` skips the deploy job on every other event, so the environment is never requested. Gating the upload and deploy steps inside the build job leaves the environment on that job, and GitHub evaluates it before any step runs.
 
@@ -89,7 +89,7 @@ private def siteEnvironment(job: CiJob): List[String] =
 
 `UploadPages` is `actions/upload-pages-artifact@v5`. `DeployPages` is `actions/deploy-pages@v5`. `Checkout` is `actions/checkout@v7`. The runner is `ubuntu-26.04`. Those pins stay.
 
-`ci.yml` runs on every pull request and on a push to `main`. There is no `workflow_dispatch` on that file. The branch is a string literal, repeated in the cache keys ([Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 571-584).
+`ci.yml` runs on every pull request and on a push whose branch filter is the literal `main`. There is no `workflow_dispatch` on that file. The same literal is the non-PR cache namespace ([Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 571-584, 849-852, and 884-885). A push that is not that literal does not start this workflow. That literal is the bug the correction removes: the git branch and the cache token are different facts.
 
 ```scala
 private val header: List[String] =
@@ -106,7 +106,7 @@ private val header: List[String] =
     )
 ```
 
-The same literal is the non-PR cache namespace at `Workflow.scala` lines 849-852 and 884-885. A push that is not `main` does not start this workflow. "The default branch" in this generator is that literal.
+The cache token `main` is [CacheNamespace.Main](../wire/src/histos/schedule/CacheNamespace.scala). `CacheNamespace.from` accepts `main`, `pr/<n>`, and `dev/<name>`. It does not accept the git default branch name. A repository whose default branch is `master` still stores the primary line under `main`.
 
 `renderAll` emits `ci.yml`, then `histos-release.yml` and `histos-promote.yml` when the catalog asks, then one file per schedule (`Workflow.scala` lines 114-125). A stale `histos-*.yml` is deleted on update (`Workflow.scala` lines 961-968). A pages file has to use that prefix or a removed site leaves the file behind.
 
@@ -187,7 +187,7 @@ Two illegal configurations are representable if we only add the types. Both are 
 
 `DuplicateSite` is required by the platform. `actions/upload-pages-artifact@v5` defaults the artifact name to `github-pages`, and a workflow run can upload that name once. GitHub Pages is one site per repository. A pull-request preview environment is a different feature.
 
-`ScheduledSite` follows the semantics. `Automatic` deploys on a push to `main`. `Manual` deploys from `workflow_dispatch`. A cron is neither. A schedule that should build the site and not publish it uses `site = None`. The task still runs.
+`ScheduledSite` follows the semantics. `Automatic` deploys on a push to the default branch. `Manual` deploys from `workflow_dispatch`. A cron is neither. A schedule that should build the site and not publish it uses `site = None`. The task still runs.
 
 `ProjectGraph.trusted` skips `checkPlugins`. `Workflow.render` and `Workflow.renderAll` refuse the same two facts as `CiError`, so a trusted graph cannot emit two uploads or a cron that requests `github-pages`.
 
@@ -225,29 +225,45 @@ The match:
 | `Both` | same `ci.yml` as `Automatic` | same file as `Manual` | not reached |
 | no `Site` | build only, as today | file not emitted | build only, as today |
 
-The push condition is one value, shared with the `on.push.branches` entry:
+The push condition is one expression. On a `push` event, `github.ref` is `refs/heads/<branch>` and `github.event.repository.default_branch` is the short name, so `format` builds the ref those two can share:
 
 ```scala
-private val PushBranch: String = "main"
+private val OnDefaultBranch: String =
+  "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
 
-private val OnPushBranch: String =
-  s"github.event_name == 'push' && github.ref == 'refs/heads/$PushBranch'"
+private val OnDefaultPush: String =
+  s"github.event_name == 'push' && $OnDefaultBranch"
+
+private val OnCi: String =
+  s"github.event_name == 'pull_request' || $OnDefaultBranch"
 ```
 
-`header` prints `PushBranch`. The cache namespace expressions that spell `main` print it too. One literal cannot drift from the other.
+`on.push.branches` cannot use that expression. The filter is a static glob, evaluated before the `github` context exists. `$default-branch` is a workflow-template token, and copying it into a real workflow would be a branch with that name. The generated trigger is every branch and no tag:
+
+```yaml
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+```
+
+A branches filter excludes tags, so a tag push still does not start `ci.yml`. Every job in that file carries `if: "<OnCi>"`, so a push to a branch other than the default starts a run whose jobs skip. The deploy job and the upload step use `OnDefaultPush` instead. A `schedule` event does not populate `repository.default_branch`, so a cron file does not use these expressions.
+
+The cache expressions keep the token `main`. That is `CacheNamespace.Main`, the primary line, and it is not the git branch. A default-branch push still sets `HISTOS_CACHE_NAMESPACE` to `main`.
 
 `ci.yml` for `Automatic` and `Both`, after the plugin build job and before `workflow`:
 
 - The build job keeps the plugin's job name, runner, contents permission, checkout, setup, and `./histos run`.
 - It gains `actions: write`. The permission sits on the job for every event: a permissions block cannot be guarded by the step `if`. The workflow header sets `contents: read`, and any permissions block sets every omitted scope to `none` ([workflow syntax](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions)). `upload-pages-artifact@v5` uploads through `actions/upload-artifact@v7`. That action's own test workflow grants `actions: write`, and a restricted token 403s on `FinalizeArtifact` without it.
-- The upload step is guarded with `if: "<OnPushBranch>"`. The path is `site.dir`. The artifact name stays the action default, `github-pages`.
-- A job named `pages` follows. `needs` is the build job. `if` is the same guard. `environment` is `github-pages`. The only step is `deploy-pages`, id `deployment`.
+- The upload step is guarded with `if: "<OnDefaultPush>"`. The path is `site.dir`. The artifact name stays the action default, `github-pages`.
+- A job named `pages` follows. `needs` is the build job. `if` is the same guard. `environment` is `github-pages`. The only step is `deploy-pages`, id `deployment`. The build job's own `if` is `OnCi`, so a pull request still builds.
 - The deploy job's permissions are `actions: read`, `contents: read`, `id-token: write`, `pages: write`. The Pages doc requires the last two. `actions: read` is there so the restricted token can read the artifact. `pages: write` and `id-token: write` are not on the build job.
 - `concurrency` on the deploy job is `group: pages`, `cancel-in-progress: false`. The build job is not in the group, so a pull request is not queued behind a deploy.
 
 `histos-pages.yml` (`Workflow.pagesName`) is emitted for `Manual` and `Both`, next to the release file in `renderAll`. `on` is `workflow_dispatch` with no inputs. The single job is named `pages`, checks out the ref the dispatcher chose, runs the site task, uploads `site.dir`, and deploys. The job carries `environment: github-pages`. A dispatch is not a pull request ref, so one job is legal here. Workflow-level concurrency uses the same `pages` group. Concurrency groups are repository-wide, so a push deploy and a dispatch deploy queue, and the one already running finishes.
 
-The dispatch workflow does not add its own branch `if`. The `github-pages` environment is the branch policy. A histos-side `refs/heads/main` check would refuse a repository whose environment allows another branch.
+The dispatch workflow does not add its own branch `if`. The `github-pages` environment is the branch policy. A histos-side check for one branch name would refuse a repository whose environment allows another branch.
 
 `configure-pages` is not emitted. The site task owns the base path. Specular already generates pages with the project-site base path.
 
@@ -265,6 +281,7 @@ Plugin `dev.example`, job `docs`, task `site`, directory `target/site`. `test` a
 
 ```yaml
   docs:
+    if: "github.event_name == 'pull_request' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -277,13 +294,14 @@ Plugin `dev.example`, job `docs`, task `site`, directory `target/site`. `test` a
 | Event | What runs |
 | --- | --- |
 | `pull_request` | `docs` runs the site task. No upload. No `pages` job exists. The `github-pages` environment is not requested. |
-| push to `main` | The same job. Nothing is deployed. |
+| push to the default branch | The same job. Nothing is deployed. |
 | `workflow_dispatch` | `ci.yml` has no such trigger. |
 
 ### ci.yml, Automatic and Both
 
 ```yaml
   docs:
+    if: "github.event_name == 'pull_request' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
     permissions:
       actions: write
@@ -292,13 +310,13 @@ Plugin `dev.example`, job `docs`, task `site`, directory `target/site`. `test` a
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: "./histos run dev.example/site"
-      - if: "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+      - if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
         uses: actions/upload-pages-artifact@v5
         with:
           path: "target/site"
   pages:
     needs: docs
-    if: "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
     environment:
       name: github-pages
@@ -319,7 +337,7 @@ Plugin `dev.example`, job `docs`, task `site`, directory `target/site`. `test` a
 | Event | What runs |
 | --- | --- |
 | `pull_request` | `docs` runs the site task. The upload step is skipped. `pages` is skipped by its job `if` before it is sent to a runner. The environment is not requested. |
-| push to `main` | `docs` runs the task, then uploads `target/site`. `pages` runs, requests `github-pages`, and deploys that artifact. |
+| push to the default branch | `docs` runs the task, then uploads `target/site`. `pages` runs, requests `github-pages`, and deploys that artifact. `github.ref` is `refs/heads/<default>`. |
 | `workflow_dispatch` | `ci.yml` has no such trigger. `Automatic` has no other file, so nothing deploys. `Both` deploys from the file below. |
 
 A failed site task fails `docs`. `pages` is skipped because `needs` requires success. The guard is not `always()`.
@@ -360,7 +378,7 @@ jobs:
 | Event | What runs |
 | --- | --- |
 | `pull_request` | This file does not run. |
-| push to `main` | This file does not run. |
+| push to the default branch | This file does not run. |
 | `workflow_dispatch` | `pages` builds the site on the ref the dispatcher chose, uploads it, and deploys it. The environment applies its own branch rules to that ref. |
 
 ## Why the deploy is its own job
@@ -412,7 +430,7 @@ CiJob(
 )
 ```
 
-After, the same intent (build on pull requests, deploy on `main`, and a dispatch) is the default mode:
+After, the same intent (build on pull requests, deploy on the default branch, and a dispatch) is the default mode:
 
 ```scala
 CiJob(
@@ -423,7 +441,7 @@ CiJob(
 )
 ```
 
-`SitePublish.Manual` is the explicit form when a person should publish and a push to `main` should not:
+`SitePublish.Manual` is the explicit form when a person should publish and a push to the default branch should not:
 
 ```scala
 site = Some(Site(RepoPath("docs"), SitePublish.Manual))
@@ -464,47 +482,44 @@ Also assert:
 - `BuildError.ReservedJob(JobName("pages"))`.
 - The specular fixture still contributes `JobName("docs")` / `TaskName("site")` and `site` is `None`.
 
-No new dependency. `./histos test` runs the suites. The default `testStore` is `Off`, so that command does not skip.
+No new dependency. This repository has no `testFull` task. `testStore` defaults to `Off`, so `./histos test` runs every suite and `./histos testQuick` is the one that skips. The implementation runs `./histos test` on the suites the change touches.
+
+Goldens cover the three events by equality on the files those events run, plus the `if` each event evaluates. A pull request and a default-branch push share `ci.yml`. The `if` is what differs at runtime. `workflow_dispatch` is `histos-pages.yml` when the mode emits it, and absent when the mode is `Automatic`.
 
 ## Implementation plan
 
-Two stacked PRs close the issue. The second branch starts from the first. Do not tag a release on the first alone: until the second merges, `Some(path)` means the automatic deploy, and the second PR's default `Both` adds `histos-pages.yml` for every site. Specular does not set `site`, so neither PR changes that plugin until it opts in. The README workflow section is updated in the second PR, in the same change as the generator it describes.
+Two stacked PRs close the issue and the ledger. The second branch starts from the first. Do not tag a release on the first alone: until the second merges, `Some(path)` means the automatic deploy, and the second PR's default `Both` adds `histos-pages.yml` for every site. Specular does not set `site`, so neither PR changes that plugin until it opts in. The README workflow section is updated in the second PR, in the same change as the generator it describes.
 
-1. **Split the Pages deploy off the build job.** Keep `site: Option[RepoPath]`. `Some` means build on every trigger, upload and deploy only on a push to `PushBranch`, deploy job `pages` with the environment. `None` is unchanged. Replace the site `contains` test with `plugin-pages-ci.yml`. Introduce `PushBranch` and use it in the header, the deploy guard, and the cache namespace expressions. No new boolean parameter.
+Audit fixes land in the PR that edits that code. Nothing waits for a later follow-up.
 
-2. **Add `SitePublish`, the dispatch workflow, and the refusals.** Change `site` to `Option[Site]` with default `Both`. Emit `histos-pages.yml` for `Manual` and `Both`. `Automatic` keeps the `ci.yml` from step 1. Add `DuplicateSite`, `ScheduledSite`, and the `pages` reserved name. Goldens as in the test plan. Update the specular fixture assertion to record `site = None`. Update the README.
+1. **Split the Pages deploy off the build job.** Keep `site: Option[RepoPath]`. `Some` means build on a pull request and on a default-branch push, upload and deploy only on that push, deploy job `pages` with the environment. `None` is unchanged. The trigger is `branches: ["**"]` and each `ci.yml` job carries `OnCi`. Replace the site `contains` test with `plugin-pages-ci.yml`. In the same edit of `Workflow.scala` and `WorkflowSpec.scala`: replace the boolean generator parameters with enums, delete `oneModule`, grant `actions: write` on the release and client uploads, and make the fixture reader and the weak assertions total.
 
-Follow-ups, each its own PR after the feature. They are not required to close #90. The ledger names them so the hits are not dropped.
-
-3. **Replace generator boolean flags with ADTs.**
-4. **Make the workflow helpers total.**
-5. **Reserve the generated `doc` job id.**
-6. **Grant artifact scope on the release upload.**
+2. **Add `SitePublish`, the dispatch workflow, and the refusals.** Change `site` to `Option[Site]` with default `Both`. Emit `histos-pages.yml` for `Manual` and `Both`. `Automatic` keeps the `ci.yml` from step 1. Add `DuplicateSite`, `ScheduledSite`, and reserve `pages` and `doc`. Stop flattening macro parse errors through `Either[String, _]`. The specular fixture uses `ProjectName("docs")`. Goldens as in the test plan. Update the README.
 
 ## Audit ledger
 
-Audited while reading the CI model and the generator: `CiJob`, `JobWhen`, `JobName`, graph job checks, `Workflow`, `CiError`, and the workflow tests those types feed. Hits against the totality list and the review bar are below, including ones this feature does not fix.
+Audited while reading the CI model and the generator: `CiJob`, `JobWhen`, `JobName`, graph job checks, `Workflow`, `CiError`, and the workflow tests those types feed. Every row is closed by the implementation PR named in the last column.
 
 | Done | Category | Location | Owning step |
 | --- | --- | --- | --- |
 | [ ] | booleanly | `CiJob.site: Option[RepoPath]` is both the directory and the decision to deploy on every event. [Contribution.scala](../api/src/histos/plugin/Contribution.scala) lines 51-57. | 2. SitePublish |
-| [ ] | booleanly | `steps` takes `gate: Boolean` to mean "emit a matrix `if`." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 602-607. | 3. Boolean flags |
-| [ ] | booleanly | `nodeStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 660. | 3. Boolean flags |
-| [ ] | booleanly | `llvmStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 670. | 3. Boolean flags |
-| [ ] | booleanly | `playwrightStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 697. | 3. Boolean flags |
-| [ ] | booleanly | `clientStep` takes `present: Boolean` and `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 756. | 3. Boolean flags |
-| [ ] | booleanly | `include` takes `flags: Boolean` to mean "emit the tool columns." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 762. | 3. Boolean flags |
-| [ ] | booleanly | `releaseJob` takes `install: Boolean` to mean "append the install uploads." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 277. | 3. Boolean flags |
-| [ ] | stringly | The push branch is the literal `main` in the workflow header and in both cache namespace expressions. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 573-584, 849-852, and 884-885. | 1. Split the deploy job |
-| [ ] | `Either[String, _]` | `PluginMacros.textOf` flattens a typed `from` error to `String` for the compiler abort, including `JobName`. [Macros.scala](../api/src/histos/plugin/Macros.scala) lines 142-143. `JobName.from` stays `Either[JobNameError, JobName]`. Scalac takes a string, so this row is an accepted exception unless the owner wants a different report path. | accepted, no code |
-| [ ] | illegal state | `docJob` emits a job id `doc` that `JobName.reserved` does not contain, so a plugin can take the generated id. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 903-916 and [Names.scala](../api/src/histos/plugin/Names.scala) lines 109-114. | 5. Reserve `doc` |
-| [ ] | partial | `oneModule` maps an empty group to `ModuleRef.All`. An empty group is not every module. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 220-223. | 4. Total helpers |
-| [ ] | partial | `WorkflowSpec.project` discards `Left` and recurses on `"core"`. A bad name silently becomes `core`, and a failure of `"core"` does not terminate. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 404-407. | 4. Total helpers |
-| [ ] | partial | The specular fixture source handles `ProjectName.from("docs")` with `case Left(_) => Contribution(Nil, Nil, Nil)`, dropping the typed error. [SpecularFixtureSpec.scala](../engine/test/SpecularFixtureSpec.scala) lines 59-75. | 4. Total helpers |
+| [ ] | booleanly | `steps` takes `gate: Boolean` to mean "emit a matrix `if`." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 602-607. | 1. Split the deploy job |
+| [ ] | booleanly | `nodeStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 660. | 1. Split the deploy job |
+| [ ] | booleanly | `llvmStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 670. | 1. Split the deploy job |
+| [ ] | booleanly | `playwrightStep` takes `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 697. | 1. Split the deploy job |
+| [ ] | booleanly | `clientStep` takes `present: Boolean` and `gate: Boolean`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 756. | 1. Split the deploy job |
+| [ ] | booleanly | `include` takes `flags: Boolean` to mean "emit the tool columns." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 762. | 1. Split the deploy job |
+| [ ] | booleanly | `releaseJob` takes `install: Boolean` to mean "append the install uploads." [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) line 277. | 1. Split the deploy job |
+| [ ] | stringly | The push branch is the literal `main` in the workflow header. The cache expressions use the same spelling for `CacheNamespace.Main`, which is a different fact. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 573-584, 849-852, and 884-885. | 1. Split the deploy job |
+| [ ] | `Either[String, _]` | `PluginMacros.textOf` flattens a typed `from` error to `String` before the compiler abort, including `JobName`. [Macros.scala](../api/src/histos/plugin/Macros.scala) lines 142-143. `JobName.from` stays `Either[JobNameError, JobName]`. The abort still receives `error.message`, because scalac takes a string. | 2. SitePublish |
+| [ ] | illegal state | `docJob` emits a job id `doc` that `JobName.reserved` does not contain, so a plugin can take the generated id. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 903-916 and [Names.scala](../api/src/histos/plugin/Names.scala) lines 109-114. | 2. SitePublish |
+| [ ] | partial | `oneModule` maps an empty group to `ModuleRef.All`. An empty group is not every module. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 220-223. | 1. Split the deploy job |
+| [ ] | partial | `WorkflowSpec.project` discards `Left` and recurses on `"core"`. A bad name silently becomes `core`, and a failure of `"core"` does not terminate. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 404-407. | 1. Split the deploy job |
+| [ ] | partial | The specular fixture source handles `ProjectName.from("docs")` with `case Left(_) => Contribution(Nil, Nil, Nil)`, dropping the typed error. [SpecularFixtureSpec.scala](../engine/test/SpecularFixtureSpec.scala) lines 59-75. | 2. SitePublish |
 | [ ] | weak test | The site test asserts a conjunction of `contains` calls, so a failure does not say which clause failed. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 435-466. | 1. Split the deploy job |
-| [ ] | weak test | The contents-write and scheduled-permission tests use the same conjunction. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 589-643. | 4. Total helpers |
-| [ ] | `Task` | `WorkflowSpec.text` is `ZIO[Any, Throwable, String]`. The suite's other effects use typed errors. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) line 409. | 4. Total helpers |
-| [ ] | permissions | The release and client jobs upload with `actions/upload-artifact@v7` under `contents: read` only. A permissions block sets every omitted scope to `none`, and that upload 403s on `FinalizeArtifact` without `actions: write`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 277-300 and 333-358. | 6. Release upload scope |
+| [ ] | weak test | The contents-write and scheduled-permission tests use the same conjunction. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) lines 589-643. | 1. Split the deploy job |
+| [ ] | `Task` | `WorkflowSpec.text` is `ZIO[Any, Throwable, String]`. The suite's other effects use typed errors. [WorkflowSpec.scala](../engine/test/WorkflowSpec.scala) line 409. | 1. Split the deploy job |
+| [ ] | permissions | The release and client jobs upload with `actions/upload-artifact@v7` under `contents: read` only. A permissions block sets every omitted scope to `none`, and that upload 403s on `FinalizeArtifact` without `actions: write`. [Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 277-300 and 333-358. | 1. Split the deploy job |
 
 Eighteen hits. Eight are `booleanly`, three are `partial`, two are `weak test`, and `stringly`, `Either[String, _]`, `illegal state`, `Task`, and `permissions` are one each.
 
