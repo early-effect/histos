@@ -13,6 +13,7 @@ object Paint:
   private val Bold   = "\u001b[1m"
 
   def paint(line: String, tty: Boolean, noColor: Option[String]): String =
+    // A pipe and NO_COLOR both leave the line as it arrived.
     if !tty || noColor.isDefined then line
     else if total(line) then bold(line)
     else words(line)
