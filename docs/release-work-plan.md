@@ -23,7 +23,7 @@ An early-effect ship releases its ship number. A manual `major.minor.patch` rele
 
 ## Publications
 
-A module publishes one artifact. Unspecified, it is a library jar for each platform that module builds: the Scala suffix, the class jar, a sources jar, a javadoc jar, and a pom. The javadoc jar contains a README. Real scaladoc is a later product. The pom lists that module's dependencies.
+A module publishes one artifact. Unspecified, it is a library jar for each platform that module builds: the Scala suffix, the class jar, a sources jar, a javadoc jar, and a pom. A local publish and a release pack that module's scaladoc into the javadoc jar. A snapshot publish omits the javadoc jar. A warning does not fail the publish. `Projects.docCheck` adds a CI job, beside the suite, that fails on a warning. The pom lists that module's dependencies.
 
 Central requires the javadoc jar, the sources jar, `.md5`, `.sha1`, and `.asc` on the jar, the pom, the sources jar, and the javadoc jar. `.sha256` stays. An `.asc` is not checksummed, and a checksum is not signed. The pom carries `name`, `description`, `url`, one license, one developer, and `scm`. `name` defaults to the artifact id. License, developer, and scm are written once on the organization. A ship overrides description and url. The git remote and a `LICENSE` file are not read. Forks and a detached checkout lie.
 

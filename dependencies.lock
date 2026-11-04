@@ -284,6 +284,7 @@ cell engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
 direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
+direct org.scala-lang scaladoc 3.10.0 binary
 direct org.scala-sbt zinc 2.0.4 binary
 direct org.scala-sbt sbinary 0.6.0 binary
 direct org.scala-lang.modules scala-parser-combinators 2.5.0 binary
@@ -296,6 +297,7 @@ direct io.grpc grpc-netty-shaded 1.73.0 java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
+artifact org.scala-lang scaladoc_3 3.10.0 2f1a34c894696858c0ccc97a4ea0d6400efb7a6ba6171281c50813c956a851af central
 artifact org.scala-sbt zinc_3 2.0.4 83ef81980ff8ab819d2367b1cb23ee8df0cc2e6f4fe76b8f9cd42e70eac05bfd central
 artifact org.scala-sbt sbinary_3 0.6.0 6c7e65a95d8dc2680687397fdd0e72c5c8e4a36ae257d5ed604fe71616d718b7 central
 artifact org.scala-lang.modules scala-parser-combinators_3 2.5.0 b0bd92c899104db8ce82b675a6bc54cfd9da80b81a6ce4c15451819dfd5b12cc central
@@ -315,6 +317,22 @@ artifact org.scala-lang tasty-core_3 3.10.0 cd8088db4457e84610cfdf0381e8c2f92f40
 artifact org.ow2.asm asm-util 9.10.1 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c central
 artifact org.ow2.asm asm-commons 9.10.1 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895 central
 artifact org.scala-sbt compiler-interface 2.0.4 d973c89d6a0036f71501807dd2568f337f501be9dca4e72a7141fae35ba97d7d central
+artifact org.scala-lang scala3-tasty-inspector_3 3.10.0 96a9e772a6d3f5c7e76f8fba9f6745cf6d68478c8c9346109b287de8cf957a12 central
+artifact com.vladsch.flexmark flexmark 0.64.8 3133878d108f0e1964d7d427f379a7433e1b71a45f9f3c1fab7ed0ac0301d3b0 central
+artifact com.vladsch.flexmark flexmark-util-ast 0.64.8 a5342f644c6a5f37d502f225c3a0cb699c263621c82e720d9c08eba5a9f3b8d3 central
+artifact com.vladsch.flexmark flexmark-util-data 0.64.8 83ceb5989ab0205054bf1b42446f55cb6da14c10aa7c2bda05d6a2504670f353 central
+artifact com.vladsch.flexmark flexmark-util-html 0.64.8 5b19e6506aff7913c74ad725af7c2b8a9f23958e6324bf0710c5a645a4663017 central
+artifact com.vladsch.flexmark flexmark-ext-anchorlink 0.64.8 36d6849df8548a71b0f87eb97d3690864b960a8e4979fedf865418c8903453a6 central
+artifact com.vladsch.flexmark flexmark-ext-autolink 0.64.8 4850d6f895ec3f2932635829d74ff9a2fb00918965bb91c000ab497d603e11b8 central
+artifact com.vladsch.flexmark flexmark-ext-emoji 0.64.8 012d2db51463afd84702627e493fedce42eb7deb1bae309ddcefd181ab283cbe central
+artifact com.vladsch.flexmark flexmark-ext-gfm-strikethrough 0.64.8 fc6cad026fbd036b3ffd0448264360a5f1b572756ef3427ff022715b7fc5f1c3 central
+artifact com.vladsch.flexmark flexmark-ext-gfm-tasklist 0.64.8 c86754ba8f0ffe997fa448da2a6ab2cfdbea9b381884cfed6f74bf513b77f5a9 central
+artifact com.vladsch.flexmark flexmark-ext-wikilink 0.64.8 f32ef779eefb4c3b80d5bebf3c4b7ad7206fc46e083a5901cf51db7b4535ff79 central
+artifact com.vladsch.flexmark flexmark-ext-tables 0.64.8 cdf82d26e112e96ade7e370138aeb16920b7e2d411d20c6c15cb1acfacd1ef1f central
+artifact com.vladsch.flexmark flexmark-ext-yaml-front-matter 0.64.8 6c60b85db4cc851301c1a52d712dc0909c5d2da9bd17ebae4d97a3a03afe22ee central
+artifact nl.big-o liqp 0.9.2.3 1f7dc450a0e116dcf9be7f7285f531bd59c6f9a88a85377bb0f716678e2d838a central
+artifact org.jsoup jsoup 1.22.2 596785996d3c6df16f544c232d10a9a1d88783b2a4740cf5251cb616f2be704d central
+artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 b6a748ca9aab640f647079b6bfa53f16a5b65b815a19581c4afe0601e754854e central
 artifact org.scala-sbt zinc-core_3 2.0.4 cea9d9114b19c9bcfe9b137f1a135d915a003a553ff27e595bd97b7949a12f62 central
 artifact org.scala-sbt zinc-persist_3 2.0.4 174d4f169a8baf36eeead33c9485eb6f5e9c3973f4775b2c1833d1c98ec1d9f6 central
 artifact org.scala-sbt zinc-compile-core_3 2.0.4 39ab30c1368deea7050f18d0ab3bf570496e8cc4b6c21a2ae7506b6f25765c11 central
@@ -337,6 +355,25 @@ artifact org.scala-lang scala-library 3.10.0 b47befb29e02bbc08a10bbd387b35cf80ff
 artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
 artifact org.ow2.asm asm-analysis 9.10.1 dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc central
 artifact org.scala-sbt util-interface 2.0.0 689d4def3cd0a2521c49850f698a773363bc13d3840d417670b8ea8b5f1d45ee central
+artifact com.vladsch.flexmark flexmark-util-builder 0.64.8 afb9c88d9f652451e75f1ab069ad7ddd791d712eb211c51d8d2a83494240875d central
+artifact com.vladsch.flexmark flexmark-util-collection 0.64.8 031ff01408d0f54c6235db18d451dc6e6b15b859b0ec1e40ff3429a82375082a central
+artifact com.vladsch.flexmark flexmark-util-dependency 0.64.8 e41adb5e8144699b61b78d50eb004eeb7de84f90c4c63626609e6cee5ea28b42 central
+artifact com.vladsch.flexmark flexmark-util-format 0.64.8 6c9ac87686474edf0117b3f838d9dcb3b965fa72be4998d2177b598013679f73 central
+artifact com.vladsch.flexmark flexmark-util-misc 0.64.8 74472ca81a9080e51ea1a4f11c270898e3d6c242c92275fab47eb993806c8f2b central
+artifact com.vladsch.flexmark flexmark-util-sequence 0.64.8 6e22976fe4e9b8de94fd529991ecb2d79cc482aad94985367470a93be1d82631 central
+artifact com.vladsch.flexmark flexmark-util-visitor 0.64.8 d9b3002a833a078c45e139568b306dab0ac117ff9046c6a1f9e180c0154563fc central
+artifact org.jetbrains annotations 24.0.1 61666dbce7e42e6c85b43c04fcfb8293a21dcb55b3c80e869270ce42c01a6b35 central
+artifact com.vladsch.flexmark flexmark-util 0.64.8 1e24c891dac9532bb722be7122c7026fb47868c3de36c02400eed8e9ad535727 central
+artifact org.nibor.autolink autolink 0.6.0 a80be030f6386f18111cad9161c0b6983157352a1b59a59e6002172f0d321c04 central
+artifact com.vladsch.flexmark flexmark-jira-converter 0.64.8 ccc1c3a9659a104b75a53a2321e9c1d4cedb05acd867d4366d8b8e1647bd37dd central
+artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
+artifact com.fasterxml.jackson.core jackson-core 2.13.4 4c2e043200edd9ee7ba6fc378bd5c17784a5bf2388e152d208068b51fd0839cf central
+artifact com.fasterxml.jackson.core jackson-databind 2.13.4.2 ba1a368137f9b92f48dd07f299ff7a782a69487b853ef5578215426fcde8f08b central
+artifact com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 cf5034791afbbec5139d539c1a94194f172d52a516ad9c25aad5f235a937c747 central
+artifact ua.co.k strftime4j 1.0.6 d37cabad2f97a746fa811f04c01c9e4b5f6636fff05e294f4e5324c051dd7495 central
+artifact tools.jackson.core jackson-core 3.2.1 2688aaa60b207403287e16a71fb5644bf2f9cfc464cc601ae95c6c86a5af1f94 central
+artifact tools.jackson.core jackson-databind 3.2.1 8d005c5626b1839e2eea6bd33a437287e7a24d54e1bb3746b8f861193262b519 central
+artifact org.snakeyaml snakeyaml-engine 3.0.1 0b638c8806112215e02e58e95cbd9e9a69d4bd540991f47553d053919994cc94 central
 artifact org.scala-sbt zinc-apiinfo_3 2.0.4 5295de5a1d63fda68391546ff626f718125c430daa3b4607c84541ae1a7e6449 central
 artifact org.scala-sbt zinc-classpath_3 2.0.4 9f42b1b6e28d1fa90158750964fee58aa286e7e82f7aef48bbb9d38c74465921 central
 artifact org.scala-lang.modules scala-parallel-collections_3 1.2.0 de814a415584199a6e3e680319d16b25c069aa69db08938c97c04f4b28e54a84 central
@@ -358,6 +395,9 @@ artifact com.google.j2objc j2objc-annotations 3.0.0 88241573467ddca44ffd4d74aa04
 artifact com.google.code.gson gson 2.11.0 57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b central
 artifact com.google.android annotations 4.1.1.4 ba734e1e84c09d615af6a09d33034b4f0442f8772dec120efb376d86a565ae15 central
 artifact io.grpc grpc-context 1.73.0 d8d6911e225b55501692651272ce961ba5be1f76662ceb7f0aa79ecce8f63f25 central
+artifact com.vladsch.flexmark flexmark-util-options 0.64.8 2489f41e9caf1d9f8061833b311b25403925cbb631fff2b8c069192804d6fc88 central
+artifact com.vladsch.flexmark flexmark-ext-ins 0.64.8 5b61b83c31cb0bd3273cbf12aed3887b63b8bdc6dfa17b03ecf479cf1ce176bd central
+artifact com.vladsch.flexmark flexmark-ext-superscript 0.64.8 457933324d1ca9f283bc15a1842777c6df0385f318fcceade4de41621395e402 central
 artifact com.swoval file-tree-views 2.1.12 fd7373889b7a92cf3e97db36c920ba272aec158a9387b3259fca9f2dfaeda914 central
 artifact org.scala-sbt util-core_3 2.0.0 0797c940dcd41d3906519514abadf84ada4374046d12b5310afb27ebea41f103 central
 artifact com.eed3si9n sjson-new-core_3 0.15.0 b51f27ada484f6aedfcf15ac86d27029e23422a4ebf50eef0e0a93e93a8b2fdf central
@@ -374,8 +414,26 @@ artifact io.get-coursier.jniutils windows-jni-utils 0.4.0 2dd0a83362c6276050a675
 artifact com.eed3si9n shaded-scalajson_3 1.0.0-M4 d4997e6dfcdc24db0502a7bae6d44ac2e78e6f683e61b287cb756d9b2559cd33 central
 artifact com.eed3si9n shaded-jawn-parser_3 1.3.2 5b815a3b05960149a8310a288c2f5f3662fc833c1474079e76b31b2c4dc6d4b3 central
 evict com.eed3si9n sjson-new-core_3 0.10.1 0.15.0
+evict com.fasterxml.jackson.core jackson-annotations ${jackson.version.annotations} 2.22
+evict com.fasterxml.jackson.core jackson-annotations 2.13.2 2.22
+evict com.fasterxml.jackson.core jackson-core ${jackson.version.core} 2.13.4
+evict com.fasterxml.jackson.core jackson-core 2.13.2 2.13.4
 evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
+evict com.google.code.gson gson 2.13.2 2.11.0
 evict com.google.errorprone error_prone_annotations 2.27.0 2.30.0
+evict com.google.guava guava ${guava.version} 33.3.1-android
+evict com.vladsch.flexmark flexmark-util-ast ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-builder ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-collection ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-data ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-dependency ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-format ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-html ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-misc ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-options ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-sequence ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-visitor ${project.version} 0.64.8
+evict org.nibor.autolink autolink ${autolink.version} 0.6.0
 evict org.ow2.asm asm 9.10.1 9.11.1
 evict org.ow2.asm asm-tree 9.10.1 9.11.1
 evict org.scala-lang scala-library 2.12.20 3.10.0
@@ -394,10 +452,12 @@ evict org.scala-sbt compiler-interface 1.12.0 2.0.4
 evict org.scala-sbt io_3 1.12.1 1.12.2
 evict org.scala-sbt sbinary_3 0.5.1 0.6.0
 evict org.scala-sbt util-interface 1.11.5 2.0.0
+evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.1
 test engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
 direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
+direct org.scala-lang scaladoc 3.10.0 binary
 direct org.scala-sbt zinc 2.0.4 binary
 direct org.scala-sbt sbinary 0.6.0 binary
 direct org.scala-lang.modules scala-parser-combinators 2.5.0 binary
@@ -413,6 +473,7 @@ direct io.grpc grpc-stub 1.73.0 java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
+artifact org.scala-lang scaladoc_3 3.10.0 2f1a34c894696858c0ccc97a4ea0d6400efb7a6ba6171281c50813c956a851af central
 artifact org.scala-sbt zinc_3 2.0.4 83ef81980ff8ab819d2367b1cb23ee8df0cc2e6f4fe76b8f9cd42e70eac05bfd central
 artifact org.scala-sbt sbinary_3 0.6.0 6c7e65a95d8dc2680687397fdd0e72c5c8e4a36ae257d5ed604fe71616d718b7 central
 artifact org.scala-lang.modules scala-parser-combinators_3 2.5.0 b0bd92c899104db8ce82b675a6bc54cfd9da80b81a6ce4c15451819dfd5b12cc central
@@ -435,6 +496,22 @@ artifact org.scala-lang tasty-core_3 3.10.0 cd8088db4457e84610cfdf0381e8c2f92f40
 artifact org.ow2.asm asm-util 9.10.1 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c central
 artifact org.ow2.asm asm-commons 9.10.1 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895 central
 artifact org.scala-sbt compiler-interface 2.0.4 d973c89d6a0036f71501807dd2568f337f501be9dca4e72a7141fae35ba97d7d central
+artifact org.scala-lang scala3-tasty-inspector_3 3.10.0 96a9e772a6d3f5c7e76f8fba9f6745cf6d68478c8c9346109b287de8cf957a12 central
+artifact com.vladsch.flexmark flexmark 0.64.8 3133878d108f0e1964d7d427f379a7433e1b71a45f9f3c1fab7ed0ac0301d3b0 central
+artifact com.vladsch.flexmark flexmark-util-ast 0.64.8 a5342f644c6a5f37d502f225c3a0cb699c263621c82e720d9c08eba5a9f3b8d3 central
+artifact com.vladsch.flexmark flexmark-util-data 0.64.8 83ceb5989ab0205054bf1b42446f55cb6da14c10aa7c2bda05d6a2504670f353 central
+artifact com.vladsch.flexmark flexmark-util-html 0.64.8 5b19e6506aff7913c74ad725af7c2b8a9f23958e6324bf0710c5a645a4663017 central
+artifact com.vladsch.flexmark flexmark-ext-anchorlink 0.64.8 36d6849df8548a71b0f87eb97d3690864b960a8e4979fedf865418c8903453a6 central
+artifact com.vladsch.flexmark flexmark-ext-autolink 0.64.8 4850d6f895ec3f2932635829d74ff9a2fb00918965bb91c000ab497d603e11b8 central
+artifact com.vladsch.flexmark flexmark-ext-emoji 0.64.8 012d2db51463afd84702627e493fedce42eb7deb1bae309ddcefd181ab283cbe central
+artifact com.vladsch.flexmark flexmark-ext-gfm-strikethrough 0.64.8 fc6cad026fbd036b3ffd0448264360a5f1b572756ef3427ff022715b7fc5f1c3 central
+artifact com.vladsch.flexmark flexmark-ext-gfm-tasklist 0.64.8 c86754ba8f0ffe997fa448da2a6ab2cfdbea9b381884cfed6f74bf513b77f5a9 central
+artifact com.vladsch.flexmark flexmark-ext-wikilink 0.64.8 f32ef779eefb4c3b80d5bebf3c4b7ad7206fc46e083a5901cf51db7b4535ff79 central
+artifact com.vladsch.flexmark flexmark-ext-tables 0.64.8 cdf82d26e112e96ade7e370138aeb16920b7e2d411d20c6c15cb1acfacd1ef1f central
+artifact com.vladsch.flexmark flexmark-ext-yaml-front-matter 0.64.8 6c60b85db4cc851301c1a52d712dc0909c5d2da9bd17ebae4d97a3a03afe22ee central
+artifact nl.big-o liqp 0.9.2.3 1f7dc450a0e116dcf9be7f7285f531bd59c6f9a88a85377bb0f716678e2d838a central
+artifact org.jsoup jsoup 1.22.2 596785996d3c6df16f544c232d10a9a1d88783b2a4740cf5251cb616f2be704d central
+artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 b6a748ca9aab640f647079b6bfa53f16a5b65b815a19581c4afe0601e754854e central
 artifact org.scala-sbt zinc-core_3 2.0.4 cea9d9114b19c9bcfe9b137f1a135d915a003a553ff27e595bd97b7949a12f62 central
 artifact org.scala-sbt zinc-persist_3 2.0.4 174d4f169a8baf36eeead33c9485eb6f5e9c3973f4775b2c1833d1c98ec1d9f6 central
 artifact org.scala-sbt zinc-compile-core_3 2.0.4 39ab30c1368deea7050f18d0ab3bf570496e8cc4b6c21a2ae7506b6f25765c11 central
@@ -459,6 +536,25 @@ artifact org.scala-lang scala-library 3.10.0 b47befb29e02bbc08a10bbd387b35cf80ff
 artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
 artifact org.ow2.asm asm-analysis 9.10.1 dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc central
 artifact org.scala-sbt util-interface 2.0.0 689d4def3cd0a2521c49850f698a773363bc13d3840d417670b8ea8b5f1d45ee central
+artifact com.vladsch.flexmark flexmark-util-builder 0.64.8 afb9c88d9f652451e75f1ab069ad7ddd791d712eb211c51d8d2a83494240875d central
+artifact com.vladsch.flexmark flexmark-util-collection 0.64.8 031ff01408d0f54c6235db18d451dc6e6b15b859b0ec1e40ff3429a82375082a central
+artifact com.vladsch.flexmark flexmark-util-dependency 0.64.8 e41adb5e8144699b61b78d50eb004eeb7de84f90c4c63626609e6cee5ea28b42 central
+artifact com.vladsch.flexmark flexmark-util-format 0.64.8 6c9ac87686474edf0117b3f838d9dcb3b965fa72be4998d2177b598013679f73 central
+artifact com.vladsch.flexmark flexmark-util-misc 0.64.8 74472ca81a9080e51ea1a4f11c270898e3d6c242c92275fab47eb993806c8f2b central
+artifact com.vladsch.flexmark flexmark-util-sequence 0.64.8 6e22976fe4e9b8de94fd529991ecb2d79cc482aad94985367470a93be1d82631 central
+artifact com.vladsch.flexmark flexmark-util-visitor 0.64.8 d9b3002a833a078c45e139568b306dab0ac117ff9046c6a1f9e180c0154563fc central
+artifact org.jetbrains annotations 24.0.1 61666dbce7e42e6c85b43c04fcfb8293a21dcb55b3c80e869270ce42c01a6b35 central
+artifact com.vladsch.flexmark flexmark-util 0.64.8 1e24c891dac9532bb722be7122c7026fb47868c3de36c02400eed8e9ad535727 central
+artifact org.nibor.autolink autolink 0.6.0 a80be030f6386f18111cad9161c0b6983157352a1b59a59e6002172f0d321c04 central
+artifact com.vladsch.flexmark flexmark-jira-converter 0.64.8 ccc1c3a9659a104b75a53a2321e9c1d4cedb05acd867d4366d8b8e1647bd37dd central
+artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
+artifact com.fasterxml.jackson.core jackson-core 2.13.4 4c2e043200edd9ee7ba6fc378bd5c17784a5bf2388e152d208068b51fd0839cf central
+artifact com.fasterxml.jackson.core jackson-databind 2.13.4.2 ba1a368137f9b92f48dd07f299ff7a782a69487b853ef5578215426fcde8f08b central
+artifact com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 cf5034791afbbec5139d539c1a94194f172d52a516ad9c25aad5f235a937c747 central
+artifact ua.co.k strftime4j 1.0.6 d37cabad2f97a746fa811f04c01c9e4b5f6636fff05e294f4e5324c051dd7495 central
+artifact tools.jackson.core jackson-core 3.2.1 2688aaa60b207403287e16a71fb5644bf2f9cfc464cc601ae95c6c86a5af1f94 central
+artifact tools.jackson.core jackson-databind 3.2.1 8d005c5626b1839e2eea6bd33a437287e7a24d54e1bb3746b8f861193262b519 central
+artifact org.snakeyaml snakeyaml-engine 3.0.1 0b638c8806112215e02e58e95cbd9e9a69d4bd540991f47553d053919994cc94 central
 artifact org.scala-sbt zinc-apiinfo_3 2.0.4 5295de5a1d63fda68391546ff626f718125c430daa3b4607c84541ae1a7e6449 central
 artifact org.scala-sbt zinc-classpath_3 2.0.4 9f42b1b6e28d1fa90158750964fee58aa286e7e82f7aef48bbb9d38c74465921 central
 artifact org.scala-lang.modules scala-parallel-collections_3 1.2.0 de814a415584199a6e3e680319d16b25c069aa69db08938c97c04f4b28e54a84 central
@@ -480,6 +576,9 @@ artifact com.google.j2objc j2objc-annotations 3.0.0 88241573467ddca44ffd4d74aa04
 artifact com.google.code.gson gson 2.11.0 57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b central
 artifact com.google.android annotations 4.1.1.4 ba734e1e84c09d615af6a09d33034b4f0442f8772dec120efb376d86a565ae15 central
 artifact io.grpc grpc-context 1.73.0 d8d6911e225b55501692651272ce961ba5be1f76662ceb7f0aa79ecce8f63f25 central
+artifact com.vladsch.flexmark flexmark-util-options 0.64.8 2489f41e9caf1d9f8061833b311b25403925cbb631fff2b8c069192804d6fc88 central
+artifact com.vladsch.flexmark flexmark-ext-ins 0.64.8 5b61b83c31cb0bd3273cbf12aed3887b63b8bdc6dfa17b03ecf479cf1ce176bd central
+artifact com.vladsch.flexmark flexmark-ext-superscript 0.64.8 457933324d1ca9f283bc15a1842777c6df0385f318fcceade4de41621395e402 central
 artifact com.swoval file-tree-views 2.1.12 fd7373889b7a92cf3e97db36c920ba272aec158a9387b3259fca9f2dfaeda914 central
 artifact org.scala-sbt util-core_3 2.0.0 0797c940dcd41d3906519514abadf84ada4374046d12b5310afb27ebea41f103 central
 artifact com.eed3si9n sjson-new-core_3 0.15.0 b51f27ada484f6aedfcf15ac86d27029e23422a4ebf50eef0e0a93e93a8b2fdf central
@@ -496,8 +595,26 @@ artifact io.get-coursier.jniutils windows-jni-utils 0.4.0 2dd0a83362c6276050a675
 artifact com.eed3si9n shaded-scalajson_3 1.0.0-M4 d4997e6dfcdc24db0502a7bae6d44ac2e78e6f683e61b287cb756d9b2559cd33 central
 artifact com.eed3si9n shaded-jawn-parser_3 1.3.2 5b815a3b05960149a8310a288c2f5f3662fc833c1474079e76b31b2c4dc6d4b3 central
 evict com.eed3si9n sjson-new-core_3 0.10.1 0.15.0
+evict com.fasterxml.jackson.core jackson-annotations ${jackson.version.annotations} 2.22
+evict com.fasterxml.jackson.core jackson-annotations 2.13.2 2.22
+evict com.fasterxml.jackson.core jackson-core ${jackson.version.core} 2.13.4
+evict com.fasterxml.jackson.core jackson-core 2.13.2 2.13.4
 evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
+evict com.google.code.gson gson 2.13.2 2.11.0
 evict com.google.errorprone error_prone_annotations 2.27.0 2.30.0
+evict com.google.guava guava ${guava.version} 33.3.1-android
+evict com.vladsch.flexmark flexmark-util-ast ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-builder ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-collection ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-data ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-dependency ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-format ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-html ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-misc ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-options ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-sequence ${project.version} 0.64.8
+evict com.vladsch.flexmark flexmark-util-visitor ${project.version} 0.64.8
+evict org.nibor.autolink autolink ${autolink.version} 0.6.0
 evict org.ow2.asm asm 9.10.1 9.11.1
 evict org.ow2.asm asm-tree 9.10.1 9.11.1
 evict org.scala-lang scala-library 2.12.20 3.10.0
@@ -517,6 +634,7 @@ evict org.scala-sbt compiler-interface 1.12.0 2.0.4
 evict org.scala-sbt io_3 1.12.1 1.12.2
 evict org.scala-sbt sbinary_3 0.5.1 0.6.0
 evict org.scala-sbt util-interface 1.11.5 2.0.0
+evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.1
 cell app 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
 direct rocks.earlyeffect heddle-mcp 0.14.2 binary

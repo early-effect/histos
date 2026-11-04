@@ -1,7 +1,8 @@
 package histos.publish
 
 import histos.central.{Digest, Publisher}
-import histos.pack.{AssemblyError, JavadocJar}
+import histos.doc.DocTask
+import histos.pack.AssemblyError
 import histos.version.ManualVersion
 import histos.zinc.GraphCompile
 import histos.{
@@ -43,6 +44,9 @@ object StageSpec extends ZIOSpecDefault:
   private val hello =
     "package demo\n\nobject Hello {\n  def greet: String = \"hi\"\n}\n"
 
+  private val broken =
+    "package demo\n\n/** [[no.Such.Member]] */\nobject Hello {\n  def greet: String = \"hi\"\n}\n"
+
   private val plug =
     "package demo\n\nobject Plug {\n  def name: String = \"plug\"\n}\n"
 
@@ -59,7 +63,7 @@ object StageSpec extends ZIOSpecDefault:
 
   def spec =
     suite("stage")(
-      test("a library stage is the jar, sources, a readme javadoc, the pom, and three checksums"):
+      test("a library stage is the jar, sources, scaladoc, the pom, and three checksums"):
         ZIO.scoped:
           for
             jdk  <- GraphCompile.jdkHere
@@ -87,7 +91,6 @@ object StageSpec extends ZIOSpecDefault:
             packed  <- names(sources)
             source  <- entry(sources, "demo/Hello.scala")
             docs    <- names(javadoc)
-            readme  <- entry(javadoc, JavadocJar.Entry)
             pom     <- ZIO.attempt(Files.readString(pomPath))
             jarSums <- sums(jar)
             srcSums <- sums(sources)
@@ -104,8 +107,8 @@ object StageSpec extends ZIOSpecDefault:
             !classes.exists(_.contains("HelloTest")),
             packed == List("demo/Hello.scala"),
             source == Some(hello),
-            docs == List(JavadocJar.Entry),
-            readme == Some(JavadocJar.Text),
+            docs.contains("index.html"),
+            docs.exists(_.contains("Hello")),
             pom.contains("<groupId>com.example</groupId>"),
             pom.contains("<artifactId>core_3</artifactId>"),
             pom.contains("<name>core_3</name>"),
@@ -115,6 +118,59 @@ object StageSpec extends ZIOSpecDefault:
             srcSums == srcHash,
             docSums == docHash,
             pomSums == pomHash,
+          )
+      ,
+      test("a snapshot publish omits the javadoc jar"):
+        ZIO.scoped:
+          for
+            jdk  <- GraphCompile.jdkHere
+            root <- temp
+            repo <- temp
+            _    <- ZIO.attempt {
+              write(root, "core/src/main/scala/demo/Hello.scala", hello)
+              write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
+            }
+            built <- ZIO.fromEither(snapshot)
+            _     <- histos.ToolFixture.seed(root, built)
+            _     <- LocalPublish
+              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Snapshots)
+              .provideSomeLayer[histos.resolve.LockedTools](
+                histos.ToolFixture.resolver ++ Publisher.local(repo)
+              )
+            found <- files(repo)
+          yield assertTrue(
+            found == coordinateFiles("com/example/core_3/1.0.0-SNAPSHOT", "core_3", "1.0.0-SNAPSHOT", docs = false),
+            !found.exists(_.contains("javadoc")),
+          )
+      ,
+      test("a broken member link still packs, and the check reports it"):
+        ZIO.scoped:
+          for
+            jdk  <- GraphCompile.jdkHere
+            root <- temp
+            repo <- temp
+            _    <- ZIO.attempt {
+              write(root, "core/src/main/scala/demo/Hello.scala", broken)
+              write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
+            }
+            built <- ZIO.fromEither(published)
+            _     <- histos.ToolFixture.seed(root, built)
+            _     <- LocalPublish
+              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .provideSomeLayer[histos.resolve.LockedTools](
+                histos.ToolFixture.resolver ++ Publisher.local(repo)
+              )
+            docs    <- names(repo.resolve("com/example/core_3/1.0.0/core_3-1.0.0-javadoc.jar"))
+            machine <- histos.jdk.Machine.load(root)
+            checked <- DocTask
+              .fromRepo(built, root, machine)
+              .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
+              .either
+          yield assertTrue(
+            docs.contains("index.html"),
+            checked match
+              case Left(histos.task.TaskError.Doc(lines)) => lines.exists(_.contains("no.Such.Member"))
+              case _                                      => false,
           )
       ,
       test("an sbt 2 plugin stages under the sbt 2 artifact id and keeps its descriptor"):
@@ -287,13 +343,18 @@ object StageSpec extends ZIOSpecDefault:
     "com/example/core_3/1.0.0/core_3-1.0.0.pom.sha256",
   )
 
-  private def coordinateFiles(path: String, artifact: String, version: String): List[String] =
+  private def coordinateFiles(
+      path: String,
+      artifact: String,
+      version: String,
+      docs: Boolean = true,
+  ): List[String] =
     val names = List(
-      s"$artifact-$version-javadoc.jar",
-      s"$artifact-$version-sources.jar",
-      s"$artifact-$version.jar",
-      s"$artifact-$version.pom",
-    )
+      Option.when(docs)(s"$artifact-$version-javadoc.jar"),
+      Some(s"$artifact-$version-sources.jar"),
+      Some(s"$artifact-$version.jar"),
+      Some(s"$artifact-$version.pom"),
+    ).flatten
     names.flatMap(name => List(s"$path/$name", s"$path/$name.md5", s"$path/$name.sha1", s"$path/$name.sha256")).sorted
 
   private val pluginProject =
@@ -334,6 +395,13 @@ object StageSpec extends ZIOSpecDefault:
       .license(licenseValue)
       .developer(developerValue)
       .scm(scmValue)(catalog, modules*)
+
+  private val snapshot =
+    val core = module("core", Jvm)(ScalaVersion("3.10.0"))
+    Projects.organization(Organization("com.example"))(
+      histos.ships(histos.manual("libs", ManualVersion("1.0.0-SNAPSHOT"))(core)),
+      core,
+    )
 
   private val published =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))

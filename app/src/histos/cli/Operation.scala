@@ -32,7 +32,7 @@ object Operation:
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)
       case Command.Run(id, platform) =>
-        if id == TaskId.Inspect || id == TaskId.Versions then Right(Call.Task(id.value, PluginArgs.empty))
+        if id.builtIn then Right(Call.Task(id.value, PluginArgs.empty))
         else Right(Call.Run(id.value, platform))
       case Command.Plugin(id, args) => Right(Call.Task(id.render, args))
       case Command.Test(projects)   =>

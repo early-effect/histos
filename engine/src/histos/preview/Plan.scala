@@ -176,7 +176,7 @@ object Plan:
       id: String,
       platform: Option[Platform],
   ): Either[PreviewError, RunPlan] =
-    if id == TaskId.Inspect.value || id == TaskId.Versions.value then taskOnly(id, platform)
+    if TaskId.from(id).toOption.exists(_.builtIn) then taskOnly(id, platform)
     else if id.contains("/") then pluginTask(graph, id, platform)
     else runModule(graph, id, platform)
 

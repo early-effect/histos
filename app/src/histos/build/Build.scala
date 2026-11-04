@@ -18,8 +18,8 @@ enum Beat:
   case Heard(event: BuildEvent)
   case Finished(result: CallResult)
 
-/** Local and remote execution of one [[Call]]. The listener on a local build runs as the call produces, and the stream
-  * is that same transcript.
+/** Local and remote execution of one [[histos.server.Call]]. The listener on a local build runs as the call produces,
+  * and the stream is that same transcript.
   */
 trait Build[-R]:
   def perform(call: Call): ZStream[R, ServerError, Beat]

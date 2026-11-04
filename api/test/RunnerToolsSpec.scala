@@ -61,6 +61,17 @@ object RunnerToolsSpec extends ZIOSpecDefault:
         Projects.testLog
           .runnerTools(tools)(core)
           .map(graph => graph.testLog && graph.runnerTools == tools) == Right(true),
+      )
+    ,
+    test("the doc check stays off until the build asks"):
+      val core = module("core", Jvm)(scala3)
+      assertTrue(
+        Projects(core).map(_.docCheck) == Right(histos.DocCheck.Off),
+        Projects.docCheck(core).map(_.docCheck) == Right(histos.DocCheck.On),
+        Projects
+          .organization(organization"rocks.earlyeffect")
+          .docCheck(core)
+          .map(_.docCheck) == Right(histos.DocCheck.On),
       ),
   )
 end RunnerToolsSpec

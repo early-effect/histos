@@ -4,7 +4,7 @@ import histos.server.{Feed, Message, ServerError}
 
 import zio.json.*
 
-/** One decoded daemon frame. The terminal frame is [[Feed.Done]].
+/** One decoded daemon frame. The terminal frame is [[histos.server.Feed.Done]].
   */
 object Remote:
   enum Event:

@@ -86,6 +86,41 @@ jobs:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: "./histos run versions"
+  doc:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - uses: actions/cache@v6
+        id: llvm
+        with:
+          path: "${{ runner.temp }}/llvm"
+          key: "llvm-21.1.8-${{ runner.os }}-${{ runner.arch }}"
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
+            mkdir -p "$dir"
+            curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+            rm "$dir/llvm.tar.xz"
+          fi
+          test -x "$dir/bin/clang"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          if [ -n "$LD_LIBRARY_PATH" ]; then
+            echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/cache@v6
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - uses: actions/cache/restore@v6
+        id: store
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: "./histos run doc"
   workflow:
     runs-on: ubuntu-26.04
     steps:

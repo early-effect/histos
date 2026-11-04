@@ -13,6 +13,7 @@ import histos.central.{
   Revision,
 }
 import histos.native.NativeOrigin
+import histos.doc.DocClasspath
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JavadocJar, PackageKey, Resources}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
 import histos.version.{CiVersion, Decision, PublishAction, ShipName, VersionError, VersionTask}
@@ -145,6 +146,7 @@ object LocalPublish:
                       group,
                       jobs(plans, live.modules, cells),
                       cells,
+                      write,
                     )
                   yield PublishOutput(
                     skipped(live),
@@ -162,6 +164,7 @@ object LocalPublish:
       group: Organization,
       jobs: List[Job],
       cells: List[histos.zinc.CompiledCell],
+      write: PublishWrite,
   ): ZIO[PublishEnv, LocalPublishError, List[PublishedModule]] =
     execute(combine(jobs.map: job =>
       val cell = job.cell
@@ -170,7 +173,7 @@ object LocalPublish:
         Chunk.empty,
         Set(Need.Io),
       )
-      Step.local[PublishedModule](info)(write(repo, graph, group, job, jobs, cells))))
+      Step.local[PublishedModule](info)(stage(repo, graph, group, job, jobs, cells, write))))
 
   private def combine(
       steps: List[Step[PublishEnv, LocalPublishError, PublishedModule]]
@@ -411,21 +414,22 @@ object LocalPublish:
         .filter(cell => names.contains(cell.module))
         .map(cell => Job(plan.ship, plan.revision, cell))
 
-  private def write(
+  private def stage(
       repo: Path,
       graph: ProjectGraph,
       group: Organization,
       job: Job,
       jobs: List[Job],
       cells: List[histos.zinc.CompiledCell],
+      write: PublishWrite,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell     = job.cell
     val artifact = artifactName(graph, cell.module, cell.version, cell.platform)
     publication(graph, cell.module) match
       case Publication.Assembly(main) =>
-        stageAssembly(repo, graph, group, job, cells, main, artifact)
+        stageAssembly(repo, graph, group, job, cells, main, artifact, write)
       case Publication.Library | Publication.SbtPlugin(_) | Publication.Application =>
-        stageLibrary(repo, graph, group, job, jobs, artifact)
+        stageLibrary(repo, graph, group, job, jobs, artifact, write)
 
   private def stageLibrary(
       repo: Path,
@@ -434,6 +438,7 @@ object LocalPublish:
       job: Job,
       jobs: List[Job],
       artifact: String,
+      write: PublishWrite,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
@@ -449,13 +454,10 @@ object LocalPublish:
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-      javadoc <- JavadocJar
-        .write(scratch(repo, cell, job.revision, Scratch.Javadoc))
-        .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-      bytes        <- bytesOf(classes.path)
-      sourceBytes  <- bytesOf(sources.path)
-      javadocBytes <- bytesOf(javadoc.path)
-      published    <- publishOne(
+      javadoc     <- documented(repo, graph, cell, job.revision, write)
+      bytes       <- bytesOf(classes.path)
+      sourceBytes <- bytesOf(sources.path)
+      published   <- publishOne(
         group,
         name,
         job.revision,
@@ -463,7 +465,7 @@ object LocalPublish:
         deps,
         document(graph, job.ship),
         Some(sourceBytes),
-        Some(javadocBytes),
+        javadoc,
         artifact,
         cell.module,
         job.ship,
@@ -479,6 +481,7 @@ object LocalPublish:
       cells: List[histos.zinc.CompiledCell],
       main: MainClass,
       artifact: String,
+      write: PublishWrite,
   ): ZIO[PublishEnv, LocalPublishError, PublishedModule] =
     val cell = job.cell
     for
@@ -502,13 +505,10 @@ object LocalPublish:
       sources <- ClassJar
         .writeNamed(packed, scratch(repo, cell, job.revision, Scratch.SourceJar))
         .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-      javadoc <- JavadocJar
-        .write(scratch(repo, cell, job.revision, Scratch.Javadoc))
-        .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
-      bytes        <- bytesOf(classes.path)
-      sourceBytes  <- bytesOf(sources.path)
-      javadocBytes <- bytesOf(javadoc.path)
-      published    <- publishOne(
+      javadoc     <- documented(repo, graph, cell, job.revision, write)
+      bytes       <- bytesOf(classes.path)
+      sourceBytes <- bytesOf(sources.path)
+      published   <- publishOne(
         group,
         name,
         job.revision,
@@ -516,7 +516,7 @@ object LocalPublish:
         Nil,
         document(graph, job.ship),
         Some(sourceBytes),
-        Some(javadocBytes),
+        javadoc,
         artifact,
         cell.module,
         job.ship,
@@ -788,8 +788,37 @@ object LocalPublish:
       .attemptBlocking(Chunk.fromArray(Files.readAllBytes(path)))
       .mapError(_ => LocalPublishError.Read(path))
 
+  /** A snapshot omits the javadoc jar. A local publish and a release pack the scaladoc site. */
+  private def documented(
+      repo: Path,
+      graph: ProjectGraph,
+      cell: histos.zinc.CompiledCell,
+      revision: Revision,
+      write: PublishWrite,
+  ): ZIO[Resolve, LocalPublishError, Option[Chunk[Byte]]] =
+    write match
+      case PublishWrite.Snapshots                    => ZIO.succeed(None)
+      case PublishWrite.Local | PublishWrite.Release =>
+        for
+          module <- ZIO.fromEither(moduleOf(graph, cell.module))
+          paths  <- DocClasspath
+            .of(repo, graph, module, cell)
+            .mapError(text => LocalPublishError.Jar(cell.module, cell.version, cell.platform, JarError.Scaladoc(text)))
+          packed <- JavadocJar
+            .write(
+              cell.classes,
+              paths,
+              cell.module.value,
+              cell.version.value,
+              scratch(repo, cell, revision, Scratch.DocSite),
+              scratch(repo, cell, revision, Scratch.Javadoc),
+            )
+            .mapError(error => LocalPublishError.Jar(cell.module, cell.version, cell.platform, error))
+          bytes <- bytesOf(packed.path)
+        yield Some(bytes)
+
   private enum Scratch:
-    case Classes, SourceJar, Javadoc
+    case Classes, SourceJar, Javadoc, DocSite
 
     def file(platform: String, revision: Revision): String =
       val stem = revision match
@@ -799,6 +828,7 @@ object LocalPublish:
         case Classes   => s"$stem.jar"
         case SourceJar => s"$stem-sources.jar"
         case Javadoc   => s"$stem-javadoc.jar"
+        case DocSite   => s"$stem-doc"
   end Scratch
 
   private def scratch(

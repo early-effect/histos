@@ -26,6 +26,7 @@ object build extends HistosBuild:
         zio,
         dep"dev.zio::zio-streams:2.1.27",
         dep"org.scala-lang::scala3-compiler:3.10.0",
+        dep"org.scala-lang::scaladoc:3.10.0",
         dep"org.scala-sbt::zinc:2.0.4",
         // Zinc 2.0.4 still requests jars whose lazy vals call Unsafe.
         dep"org.scala-sbt::sbinary:0.6.0",
@@ -85,7 +86,8 @@ object build extends HistosBuild:
           Some(ToolRevision("21.1.8")),
           Some(ToolRevision("1.62.1")),
         )
-      )(
+      )
+      .docCheck(
         ships(manual("histos", manual"0.1.3-SNAPSHOT")(api, app)),
         api,
         wire,

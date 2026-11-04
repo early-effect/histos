@@ -16,7 +16,7 @@ import java.nio.file.Path
 
 import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO, ZLayer}
 
-/** One MCP process. It sends [[Call]] while the server matches, and keeps a single graph otherwise.
+/** One MCP process. It sends [[histos.server.Call]] while the server matches, and keeps a single graph otherwise.
   */
 object Session:
   enum SessionError:
@@ -107,7 +107,7 @@ object Session:
         case CallResult.Reported(report) => ZIO.succeed(report)
         case CallResult.Fault(fault)     => ZIO.fail(CallProblem.Fault(fault))
 
-  /** `inspect`, `versions`, and a plugin task reject a platform. A main may name one.
+  /** `inspect`, `versions`, `doc`, and a plugin task reject a platform. A main may name one.
     */
   def runCall(
       id: String,
@@ -118,7 +118,7 @@ object Session:
       id.contains("/") || TaskId
         .from(id)
         .toOption
-        .exists(found => found == TaskId.Inspect || found == TaskId.Versions)
+        .exists(_.builtIn)
     if !task && args != PluginArgs.empty then Left(BuildFault.Rejected(Rejection.TaskArguments(id)))
     else
       platform match

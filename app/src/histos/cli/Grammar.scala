@@ -21,8 +21,8 @@ import zio.cli.{
   ValidationErrorType,
 }
 
-/** zio-cli grammar. The wire value still has the raw name. [[parse]] turns that name into a [[TaskId]] and, for a
-  * module, a platform.
+/** zio-cli grammar. The wire value still has the raw name. [[Grammar.parse]] turns that name into a
+  * [[histos.task.TaskId]] and, for a module, a platform.
   */
 object Grammar:
   private enum Wire:
@@ -234,8 +234,8 @@ object Grammar:
             Command.TestQuick(modules, patterns)
           }
       case Wire.Client            => ZIO.succeed(Command.Client)
-      case Wire.New(name)        => ZIO.succeed(Command.New(name))
-      case Wire.Init             => ZIO.succeed(Command.Init)
+      case Wire.New(name)         => ZIO.succeed(Command.New(name))
+      case Wire.Init              => ZIO.succeed(Command.Init)
       case Wire.Observe           => ZIO.succeed(Command.Observe)
       case Wire.Compile(projects) =>
         projectList("compile", projects).map(Command.Compile(_))
@@ -362,7 +362,7 @@ object Grammar:
         .fromEither(TaskId.from(raw))
         .mapError(_ => CliParseError.BadTaskId)
         .flatMap: id =>
-          val task = id == TaskId.Inspect || id == TaskId.Versions
+          val task = id.builtIn
           token match
             case Some(_) if task =>
               ZIO.fail(CliParseError.TaskPlatform(id.value))

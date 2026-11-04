@@ -61,7 +61,7 @@ The snapshot branch ignores the mode. The release branch uses it. Automatic poll
 
 A narrower publisher is still a legal `Publishing`. A build that will never snapshot writes an effect that only portals, and that effect may fail `Version` if handed a snapshot. That fault belongs to that effect.
 
-Signing stays inside the Sonatype effect. `publishLocal`, `publish snapshots`, and `publish release` stage the same unsigned files: the jar, the pom, the sources jar, and the javadoc jar. A release signs them. A snapshot PUT and a local install do not. `histos.central.Publisher` remains the Maven-file writer for the snapshot PUT. It is not this trait.
+Signing stays inside the Sonatype effect. `publishLocal` and `publish release` stage the same unsigned files: the jar, the pom, the sources jar, and a javadoc jar of that module's scaladoc. `publish snapshots` stages those files and omits the javadoc jar. A release signs what it staged. A snapshot PUT and a local install do not sign. A scaladoc warning does not fail the publish. `Projects.docCheck` adds a CI job that runs the same scaladoc beside the suite and fails on a warning. `histos.central.Publisher` remains the Maven-file writer for the snapshot PUT. It is not this trait.
 
 ## Local is Coursier
 

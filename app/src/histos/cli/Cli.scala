@@ -581,7 +581,7 @@ object Cli:
       platform: Option[Platform],
   ): URIO[Loader & Scope & ContentStore & Machine & Resolve, Completed] =
     val call =
-      if id == TaskId.Inspect || id == TaskId.Versions then Call.Task(id.value, PluginArgs.empty)
+      if id.builtIn then Call.Task(id.value, PluginArgs.empty)
       else Call.Run(id.value, platform)
     attach(repo, call, locally(repo, apiJar, call))
 
@@ -1733,7 +1733,7 @@ object Cli:
       case Command.Test(projects)    => Some(Call.Test(projects, Nil, TestMode.Run))
       case Command.Run(id, platform) =>
         Some(
-          if id == TaskId.Inspect || id == TaskId.Versions then Call.Task(id.value, PluginArgs.empty)
+          if id.builtIn then Call.Task(id.value, PluginArgs.empty)
           else Call.Run(id.value, platform)
         )
       case Command.Clean(projects) => Some(Call.Clean(projects))

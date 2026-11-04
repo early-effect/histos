@@ -128,7 +128,7 @@ flowchart TD
   sign --> portal[one portal bundle]
 ```
 
-`publishLocal`, `publish snapshots`, and `publish release` stage the same files. A library module stages its jar. An assembly stages the packaged program. Each also stages the pom, the sources jar, and the javadoc jar. `publishLocal` writes those files where Coursier resolves `ivy2Local` and does not sign. A snapshot coordinate is a PUT of those files and does not sign. A release signs those files, then uploads one portal bundle.
+`publishLocal` and `publish release` stage the same files: the jar, the pom, the sources jar, and a javadoc jar that holds that module's scaladoc. A library module stages its jar. An assembly stages the packaged program. `publish snapshots` stages the same files and omits the javadoc jar. `publishLocal` writes those files where Coursier resolves `ivy2Local` and does not sign. A snapshot coordinate is a PUT of those files and does not sign. A release signs those files, then uploads one portal bundle. A warning from scaladoc does not fail the publish. `Projects.docCheck` adds a CI job that runs the same scaladoc beside the suite and fails on a warning.
 
 - A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.

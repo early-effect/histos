@@ -13,8 +13,9 @@ import java.nio.file.Path
 
 import zio.{Fiber, Ref, ZIO}
 
-/** One execution of a [[Call]]. Reload, reboot, bsp, and watch stay on [[Edges]] because they own the process, the
-  * socket, or the session. A missing graph is a fault. A fault is [[CallResult.Fault]], not a failed effect.
+/** One execution of a [[histos.server.Call]]. Reload, reboot, bsp, and watch stay on [[Perform.Edges]] because they own
+  * the process, the socket, or the session. A missing graph is a fault. A fault is [[histos.report.CallResult.Fault]],
+  * not a failed effect.
   */
 object Perform:
   final case class Edges[R](

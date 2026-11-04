@@ -1,16 +1,20 @@
 package histos.pack
 
-import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 
-import zio.{Chunk, IO}
+import zio.IO
 
-/** The javadoc jar Central requires. Real scaladoc is a later product, so the jar holds a README. */
+/** The javadoc jar Central requires on a release. The bytes are the scaladoc site of that module. */
 object JavadocJar:
-  val Entry: String = "README"
-  val Text: String  = "This jar is not scaladoc.\n"
-
-  def write(destination: Path): IO[JarError, Jarred] =
-    val bytes = Chunk.fromArray(Text.getBytes(StandardCharsets.UTF_8))
-    ClassJar.writeBytes(List(Entry -> bytes), destination)
-end JavadocJar
+  def write(
+      classes: Path,
+      classpath: List[Path],
+      project: String,
+      scalaVersion: String,
+      site: Path,
+      destination: Path,
+  ): IO[JarError, Jarred] =
+    ScaladocSite
+      .render(classes, classpath, project, scalaVersion, site, failOnWarning = false)
+      .mapError(fault => JarError.Scaladoc(fault.text))
+      .flatMap(_ => ClassJar.write(site, destination))

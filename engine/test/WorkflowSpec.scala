@@ -211,6 +211,27 @@ object WorkflowSpec extends ZIOSpecDefault:
           case Right(yaml) => yaml.contains("hashFiles('dependencies.lock')")
           case Left(_)     => false
     ,
+    test("a doc check runs beside the suite and does not save the store"):
+      val checked = histos.Projects.docCheck(
+        histos.module("core", histos.Jvm)(histos.ScalaVersion("3.10.0"))
+      )
+      assertTrue:
+        checked match
+          case Right(built) =>
+            Workflow.render(built) match
+              case Right(yaml) =>
+                slice(yaml, "  doc:", "  workflow:") match
+                  case Some(doc) =>
+                    doc.contains("./histos run doc") &&
+                    doc.contains("actions/cache/restore@v6") &&
+                    !doc.contains("actions/cache/save@v6") &&
+                    !doc.contains("needs:") &&
+                    !doc.contains("actions: write") &&
+                    !yaml.contains("needs:")
+                  case None => false
+              case Left(_) => false
+          case Left(_) => false
+    ,
     test("this repository asks the runner for node, llvm, and playwright"):
       for golden <- text("histos.yml")
       yield assertTrue:

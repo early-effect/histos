@@ -27,7 +27,7 @@ object Batch:
         if token.startsWith("-") then None
         else ProjectName.from(token).toOption.map(name => have :+ name)
 
-  /** The same split `run` uses: a module, `inspect`, `versions`, or a plugin task. */
+  /** The same split `run` uses: a module, `inspect`, `versions`, `doc`, or a plugin task. */
   private def runCall(name: String, platform: Option[String]): Option[Call] =
     if name.contains('/') then
       platform match
@@ -39,7 +39,7 @@ object Batch:
         .from(name)
         .toOption
         .flatMap: id =>
-          val task = id == TaskId.Inspect || id == TaskId.Versions
+          val task = id.builtIn
           platform match
             case Some(_) if task => None
             case None            =>

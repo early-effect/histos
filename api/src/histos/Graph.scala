@@ -134,6 +134,7 @@ final case class ProjectGraph private (
     promote: Promote = Promote.Rebuild,
     testLog: Boolean = false,
     resolution: Resolution = Resolution.Solve,
+    docCheck: DocCheck = DocCheck.Off,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -176,6 +177,7 @@ object ProjectGraph:
       promote: Promote = Promote.Rebuild,
       testLog: Boolean = false,
       resolution: Resolution = Resolution.Solve,
+      docCheck: DocCheck = DocCheck.Off,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -190,6 +192,7 @@ object ProjectGraph:
       promote,
       testLog,
       resolution,
+      docCheck,
     )
 end ProjectGraph
 
@@ -217,6 +220,11 @@ object Projects:
     */
   def testLog: Organized =
     Organized(None, Nil, logged = true)
+
+  /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
+    */
+  def docCheck: Organized =
+    Organized(None, Nil, checked = DocCheck.On)
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
@@ -298,6 +306,7 @@ object Projects:
       promote: Promote = Promote.Rebuild,
       testLog: Boolean = false,
       resolution: Resolution = Resolution.Solve,
+      docCheck: DocCheck = DocCheck.Off,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -312,6 +321,7 @@ object Projects:
       promote,
       testLog,
       resolution,
+      docCheck,
     )
 
   private def build(
@@ -327,6 +337,7 @@ object Projects:
       promote: Promote = Promote.Rebuild,
       testLog: Boolean = false,
       resolution: Resolution = Resolution.Solve,
+      docCheck: DocCheck = DocCheck.Off,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -353,6 +364,7 @@ object Projects:
       promote,
       testLog,
       resolution,
+      docCheck,
     )
 
   private def uniqueResolvers(
@@ -841,12 +853,13 @@ final class Organized(
     promote: Promote = Promote.Rebuild,
     logged: Boolean = false,
     resolution: Resolution = Resolution.Solve,
+    checked: DocCheck = DocCheck.Off,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -858,23 +871,29 @@ final class Organized(
       promote,
       logged,
       resolution,
+      checked,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution)
+    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked)
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution)
+    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked)
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
   def testLog: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged = true, resolution)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked)
+
+  /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
+    */
+  def docCheck: Organized =
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, DocCheck.On)
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -897,7 +916,7 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution)
+    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -912,6 +931,7 @@ final class Organized(
       promote = promote,
       testLog = logged,
       resolution = resolution,
+      docCheck = checked,
     )
 
   def apply(
@@ -930,6 +950,7 @@ final class Organized(
       promote = promote,
       testLog = logged,
       resolution = resolution,
+      docCheck = checked,
     )
 
   def apply(
@@ -948,6 +969,7 @@ final class Organized(
       promote = promote,
       testLog = logged,
       resolution = resolution,
+      docCheck = checked,
     )
 
   def apply(
@@ -967,6 +989,7 @@ final class Organized(
       promote = promote,
       testLog = logged,
       resolution = resolution,
+      docCheck = checked,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -983,6 +1006,7 @@ final class Organized(
       promote,
       logged,
       resolution,
+      checked,
     )
 
   def apply(
@@ -1003,6 +1027,7 @@ final class Organized(
       promote,
       logged,
       resolution,
+      checked,
     )
 
   def apply(
@@ -1023,6 +1048,7 @@ final class Organized(
       promote,
       logged,
       resolution,
+      checked,
     )
 
   def apply(
@@ -1044,5 +1070,6 @@ final class Organized(
       promote,
       logged,
       resolution,
+      checked,
     )
 end Organized

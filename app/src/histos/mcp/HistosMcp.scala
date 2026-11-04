@@ -26,7 +26,7 @@ import java.nio.file.Path
 import zio.*
 import zio.json.JsonCodec
 
-/** MCP tools. Each call reads `.histos/server.json` and sends [[Call]] when it matches.
+/** MCP tools. Each call reads `.histos/server.json` and sends [[histos.server.Call]] when it matches.
   */
 object HistosMcp:
   final case class NoArgs() derives Schema, JsonCodec

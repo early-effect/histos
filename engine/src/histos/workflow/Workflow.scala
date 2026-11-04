@@ -9,6 +9,7 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
   Axis,
+  DocCheck,
   FollowUp,
   Module,
   NodeFloor,
@@ -232,7 +233,10 @@ object Workflow:
     val versions = graph.catalog match
       case Catalog.Empty => Nil
       case _             => List(versionsJob)
-    val body = test ++ versions ++ pluginJobs(graph.plugins) ++ List(workflowJob)
+    val doc = graph.docCheck match
+      case DocCheck.Off => Nil
+      case DocCheck.On  => List(docJob(graph))
+    val body = test ++ versions ++ doc ++ pluginJobs(graph.plugins) ++ List(workflowJob)
     (header ++ body).mkString("\n") + "\n"
 
   /** `JobWhen.Always` only. A schedule is its own file, so `cron` does not wrap `test`. */
@@ -579,19 +583,21 @@ object Workflow:
       "jobs:",
     )
 
-  /** The test job only. Versions, docs, deploy, workflow, and release do not restore these. This workflow does not
-    * fetch a JDK, so it emits no JDK key. Node is installed for a JavaScript module, or when Playwright is installed.
-    * `setup-node` does not set `cache: npm`: that key is a package lock, and Chekhov does not read it. LLVM is
-    * installed for a native module. The runner is `ubuntu-26.04`, so a miss downloads
-    * `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks it. A hit does not. The step runs
-    * either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads Playwright from `~/.cache/chekhov`. An unset
-    * `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A Playwright revision installs the browser
-    * even when no module is Firefox, because a JVM suite can launch it. `npm install` and `install firefox` run when
-    * that cache misses. The step still runs on a hit, checks the package, and runs `install-deps firefox`: it is apt,
-    * and a runner does not keep those packages. A step `if` that skips the download leaves a job that did not run.
-    * Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build
-    * file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs
-    * `./histos` uses the setup action and does not install a JDK or the `cs` binary.
+  /** The test job, and the doc check when a build asks for it. The doc job restores the store because it compiles, and
+    * it does not save: the suite is the writer. It does not wait for the suite. Versions, plugin docs, deploy,
+    * workflow, and release do not restore these. This workflow does not fetch a JDK, so it emits no JDK key. Node is
+    * installed for a JavaScript module, or when Playwright is installed. `setup-node` does not set `cache: npm`: that
+    * key is a package lock, and Chekhov does not read it. LLVM is installed for a native module. The runner is
+    * `ubuntu-26.04`, so a miss downloads `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks
+    * it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads Playwright
+    * from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A
+    * Playwright revision installs the browser even when no module is Firefox, because a JVM suite can launch it.
+    * `npm install` and `install firefox` run when that cache misses. The step still runs on a hit, checks the package,
+    * and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. A step `if` that skips the
+    * download leaves a job that did not run. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE`
+    * is unset. `hashFiles` names the build file while the build resolves, and the pin while it is locked. No step sets
+    * `restore-keys`. Every job that runs `./histos` uses the setup action and does not install a JDK or the `cs`
+    * binary.
     */
   private def steps(
       tools: RunnerTools,
@@ -831,7 +837,8 @@ object Workflow:
   /** Restore, then the suite, then save. The suite writes new products into the restored store. A taken key is deleted
     * and saved again, because GitHub will not replace one. The delete step always runs. It calls the API only when the
     * restore hit, because a miss has no key to replace. A matrix is more than one writer, so it does not open this
-    * scope. Versions, docs, deploy, workflow, and release do not either.
+    * scope. The doc check restores and does not save. Versions, plugin docs, deploy, workflow, and release do not
+    * either.
     */
   private val StorePath = "~/.cache/histos"
 
@@ -891,6 +898,27 @@ object Workflow:
   private val Checkout    = "actions/checkout@v7"
   private val UploadPages = "actions/upload-pages-artifact@v5"
   private val DeployPages = "actions/deploy-pages@v5"
+
+  /** Beside the suite. No `needs`, so a scaladoc warning does not hold the tests. */
+  private def docJob(graph: ProjectGraph): String =
+    val modules   = graph.projects.collect { case module: Module => module }
+    val published = graph.catalog.ships.flatMap(_.members.toList)
+    val chosen    = modules.filter(module => published.contains(module.name))
+    val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), false)
+    val lines     = List(
+      "  doc:",
+      s"    runs-on: $Runner",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli ++ prepare ++ storeRestore ++ List(
+      s"      - run: ${quote("./histos run doc")}"
+    )
+    lines.mkString("\n")
+
+  private def docNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
+    val native     = modules.exists(_.platforms.all.contains(Platform.Native))
+    val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
+    ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
   private val versionsJob: String =
     s"""  versions:

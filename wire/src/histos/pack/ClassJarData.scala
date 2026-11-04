@@ -1,6 +1,6 @@
 package histos.pack
 
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum JarIo:
   case Read(path: Path)
@@ -25,6 +25,7 @@ enum JarError:
   case Duplicate(name: String)
   case DestinationInside(path: Path)
   case Io(op: JarIo)
+  case Scaladoc(text: String)
 
   def message: String = this match
     case NotADirectory(path)     => s"$path is not a directory of classes"
@@ -33,4 +34,5 @@ enum JarError:
     case Duplicate(name)         => s"'$name' is already a jar entry"
     case DestinationInside(path) => s"$path is inside the classes directory"
     case Io(op)                  => s"jar failed while ${op.word} ${op.location}"
+    case Scaladoc(text)          => text
 end JarError

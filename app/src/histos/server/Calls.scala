@@ -473,6 +473,15 @@ object Calls:
               error => fault(say, BuildFault.Task(error)),
               result => told(say, result.render) *> ok(say),
             )
+      case Right(found) if found == TaskId.Doc =>
+        if args != PluginArgs.empty then reject(say, Rejection.TaskArguments(found.value))
+        else
+          histos.doc.DocTask
+            .fromRepo(graph, repo, machine)
+            .foldZIO(
+              error => fault(say, BuildFault.Task(error)),
+              result => told(say, result.render) *> ok(say),
+            )
       case Right(_) =>
         PluginTaskId.parse(id) match
           case Left(error)   => fault(say, BuildFault.PluginTask(error))
