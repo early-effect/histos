@@ -143,9 +143,17 @@ object PluginSpec extends ZIOSpecDefault:
         ),
         CommandName("list").isReserved == false,
         CommandName("test").isReserved,
-        JobName.reserved
-          .map(_.value) == Set("test", "versions", "workflow", "launcher"),
+        JobName.reserved.map(_.value) == Set(
+          "test",
+          "versions",
+          "workflow",
+          "launcher",
+          "doc",
+          "pages",
+        ),
         JobName("docs").isReserved == false,
+        JobName("doc").isReserved,
+        JobName("pages").isReserved,
       )
     ,
     test("an entry name is the module class, including the trailing dollar"):
@@ -302,8 +310,13 @@ object PluginSpec extends ZIOSpecDefault:
   private def command(name: CommandName, taskName: TaskName): CommandSpec =
     CommandSpec(name, Nil, taskName, detail)
 
-  private def job(name: JobName, taskName: TaskName): CiJob =
-    CiJob(name, taskName, JobWhen.Always)
+  private def job(
+      name: JobName,
+      taskName: TaskName,
+      when: JobWhen = JobWhen.Always,
+      site: Option[Site] = None,
+  ): CiJob =
+    CiJob(name, taskName, when, site = site)
 
   private val registration = suite("registration")(
     test("use copies the contribution and does not call run"):
@@ -462,6 +475,42 @@ object PluginSpec extends ZIOSpecDefault:
             TaskName("absent"),
           )
         ),
+      )
+    ,
+    test("a second site, a scheduled site, and the pages id are refused"):
+      val first = fixed(
+        PluginId("test.one"),
+        List(task(TaskName("site"))),
+        jobs = List(job(JobName("docs"), TaskName("site"), site = Some(Site(RepoPath("docs"))))),
+      )
+      val second = fixed(
+        PluginId("test.two"),
+        List(task(TaskName("site"))),
+        jobs = List(job(JobName("guide"), TaskName("site"), site = Some(Site(RepoPath("guide"))))),
+      )
+      val cron = fixed(
+        PluginId("test.echo"),
+        List(task(TaskName("site"))),
+        jobs = List(
+          job(
+            JobName("nightly"),
+            TaskName("site"),
+            JobWhen.Schedule(Cron("0 6 * * 1")),
+            Some(Site(RepoPath("docs"), SitePublish.Manual)),
+          )
+        ),
+      )
+      val pages = fixed(
+        PluginId("test.echo"),
+        List(task(TaskName("site"))),
+        jobs = List(job(JobName("pages"), TaskName("site"))),
+      )
+      assertTrue(
+        Projects(use(first, second), jvm("core")) == Left(
+          BuildError.DuplicateSite(JobName("docs"), JobName("guide"))
+        ),
+        Projects(use(cron), jvm("core")) == Left(BuildError.ScheduledSite(JobName("nightly"))),
+        Projects(use(pages), jvm("core")) == Left(BuildError.ReservedJob(JobName("pages"))),
       )
     ,
     test("a sibling task and an open cell are accepted"):

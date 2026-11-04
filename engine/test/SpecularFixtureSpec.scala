@@ -56,8 +56,8 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
        |  val id: PluginId = PluginId("dev.earlyeffect.specular")
        |
        |  def contribute: Contribution =
-       |    ProjectName.from("docs") match
-       |      case Right(docs) => Contribution(
+       |    val docs = ProjectName("docs")
+       |    Contribution(
        |      tasks = List(DeclaredTask(
        |        name = TaskName("site"),
        |        seal = Seal.Open,
@@ -72,7 +72,6 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
        |      commands = List(CommandSpec(CommandName("site"), Nil, TaskName("site"), PluginDetail("write the site"))),
        |      jobs = List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always)),
        |    )
-       |      case Left(_) => Contribution(Nil, Nil, Nil)
        |
        |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
        |    val text = SiteText.render("docs")
@@ -185,8 +184,8 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                     task.outputs == List(DeclaredOutput(OutputName("site"), RepoPath("docs/index.html")))
                   case _ => false) &&
                 (plugin.contribution.jobs match
-                  case CiJob(name, task, JobWhen.Always, _, _) :: Nil =>
-                    name == JobName("docs") && task == TaskName("site")
+                  case CiJob(name, task, JobWhen.Always, _, site) :: Nil =>
+                    name == JobName("docs") && task == TaskName("site") && site.isEmpty
                   case _ => false)
               case _ => false
             val noted =
