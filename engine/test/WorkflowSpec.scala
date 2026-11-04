@@ -762,7 +762,10 @@ object WorkflowSpec extends ZIOSpecDefault:
             body.contains("gh release upload dist") &&
             body.contains("version=1.2.3") &&
             body.contains("java: \"25\"") &&
+            body.contains("xcrun --show-sdk-path") &&
+            body.contains("-isysroot") &&
             !release.contains("java:") &&
+            !release.contains("xcrun") &&
             body.contains("contents: write") &&
             (snapshot match
               case Right(_ :: RenderedWorkflow("histos-release.yml", held) :: Nil) =>

@@ -64,6 +64,16 @@ jobs:
               echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
             fi
           fi
+          if [ "$(uname -s)" = Darwin ]; then
+            sdk=$(xcrun --show-sdk-path)
+            wrap="${{ runner.temp }}/clang-sdk"
+            mkdir -p "$wrap"
+            for tool in clang clang++; do
+              printf '%s\n' '#!/bin/sh' "exec \"$dir/bin/$tool\" -isysroot \"$sdk\" \"\$@\"" > "$wrap/$tool"
+              chmod +x "$wrap/$tool"
+            done
+            echo "$wrap" >> "$GITHUB_PATH"
+          fi
       - run: "./histos client"
       - uses: actions/upload-artifact@v7
         with:

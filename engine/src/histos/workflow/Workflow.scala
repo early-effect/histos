@@ -354,7 +354,8 @@ object Workflow:
     )
 
   /** Temurin 25. The process bootstrap compiles `java.lang.foreign`. JDK 21 still marks that API preview, and that is
-    * the JDK image on `macos-26`.
+    * the JDK image on `macos-26`. The unpacked LLVM clang does not find the Xcode SDK, and the linker child keeps only
+    * `PATH`, so the macOS job puts a `clang` wrapper on `PATH` that passes `-isysroot`.
     */
   private val ClientJdk: String = "25"
 
@@ -385,6 +386,16 @@ object Workflow:
       "            else",
       "              echo \"LD_LIBRARY_PATH=$dir/lib\" >> \"$GITHUB_ENV\"",
       "            fi",
+      "          fi",
+      "          if [ \"$(uname -s)\" = Darwin ]; then",
+      "            sdk=$(xcrun --show-sdk-path)",
+      "            wrap=\"${{ runner.temp }}/clang-sdk\"",
+      "            mkdir -p \"$wrap\"",
+      "            for tool in clang clang++; do",
+      "              printf '%s\\n' '#!/bin/sh' \"exec \\\"$dir/bin/$tool\\\" -isysroot \\\"$sdk\\\" \\\"\\$@\\\"\" > \"$wrap/$tool\"",
+      "              chmod +x \"$wrap/$tool\"",
+      "            done",
+      "            echo \"$wrap\" >> \"$GITHUB_PATH\"",
       "          fi",
     )
 
