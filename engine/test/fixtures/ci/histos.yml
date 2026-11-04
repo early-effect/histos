@@ -9,6 +9,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-26.04
+    permissions:
+      actions: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
@@ -63,7 +66,12 @@ jobs:
       - run: "./histos test"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
-      - if: "always() && steps.store.outputs.cache-hit != 'true'"
+      - if: "always() && steps.store.outputs.cache-hit == 'true'"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORE_KEY: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+        run: "gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}"
+      - if: "always()"
         uses: actions/cache/save@v6
         with:
           path: "~/.cache/histos"

@@ -169,8 +169,8 @@ object JvmCompile:
     else if !supported(tool.version) then ZIO.fail(CompileError.UnsupportedScala(tool.version))
     else CompileReplay.isolated(compilePrepared(request, Nil, extra, hear))
 
-  /** Uses the compiler service in the environment. The service keeps the pool. */
-  private[zinc] def compilePooled(
+  /** Uses the compiler service and the content store in the environment. The service keeps the pool. */
+  private[histos] def compilePooled(
       request: CompileRequest,
       extra: List[String],
       hear: CompileProblem => Unit,

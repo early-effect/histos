@@ -731,6 +731,9 @@ object Workflow:
         List(
           "  test:",
           s"    runs-on: $Runner",
+          "    permissions:",
+          "      actions: write",
+          "      contents: read",
           "    steps:",
           s"      - uses: $Checkout",
         ) ++ coursierCli ++ prepare ++ storeRestore ++ link ++ testRun(argv(aggregate).mkString(" ")) ++ storeSave
@@ -829,9 +832,9 @@ object Workflow:
       case VersionRef.All           => None
       case VersionRef.One(selected) => Some(selected.value)
 
-  /** Restore, then the suite, then save. The save is the release of that scope. It publishes only when the restore
-    * missed, because a taken key is not replaced. A matrix is more than one writer, so it does not open this scope.
-    * Versions, docs, deploy, workflow, and release do not either.
+  /** Restore, then the suite, then save. The suite writes new products into the restored store. A taken key is deleted
+    * and saved again, because GitHub will not replace one. A matrix is more than one writer, so it does not open this
+    * scope. Versions, docs, deploy, workflow, and release do not either.
     */
   private val StorePath = "~/.cache/histos"
 
@@ -855,7 +858,12 @@ object Workflow:
 
   private def storeSave: List[String] =
     List(
-      s"      - if: ${quote("always() && steps.store.outputs.cache-hit != 'true'")}",
+      s"      - if: ${quote("always() && steps.store.outputs.cache-hit == 'true'")}",
+      "        env:",
+      "          GH_TOKEN: ${{ github.token }}",
+      s"          STORE_KEY: ${quote(storeKey)}",
+      s"        run: ${quote("gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}")}",
+      "      - if: \"always()\"",
       s"        uses: $StoreSave",
       "        with:",
       s"          path: ${quote(StorePath)}",

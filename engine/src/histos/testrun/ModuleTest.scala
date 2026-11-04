@@ -128,37 +128,41 @@ object ModuleTest:
   def suites(
       asked: TestRun,
       compiled: List[CompiledCell],
-  ): ZStream[Resolve & histos.resolve.ResolutionService, ModuleTestError, TestFeed] =
-    ZStream.unwrap:
-      ZIO
-        .service[histos.resolve.ResolutionService]
-        .flatMap: report =>
-          report.current.map: lock =>
-            ZStream
-              .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph, report)))
-              .flatMap: (install, tools) =>
-                runCells(asked, compiled, lock).provideSomeLayer[Resolve](
-                  zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools)
-                )
+  ): ZStream[Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService, ModuleTestError, TestFeed] =
+    ZStream.unwrapScoped:
+      for
+        compilers <- histos.zinc.Compilers.live.build
+        pool = zio.ZLayer.succeed(compilers.get[histos.zinc.Compilers])
+        report <- ZIO.service[histos.resolve.ResolutionService]
+        lock   <- report.current
+      yield ZStream
+        .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph, report)))
+        .flatMap: (install, tools) =>
+          runCells(asked, compiled, lock).provideSomeLayer[Resolve & histos.cache.ContentStore](
+            zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools) ++ pool
+          )
 
   private[histos] def suitesLocked(
       asked: TestRun,
       compiled: List[CompiledCell],
       lock: DependencyLock,
-  ): ZStream[Resolve, ModuleTestError, TestFeed] =
-    ZStream
-      .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph)))
-      .flatMap: (install, tools) =>
-        runCells(asked, compiled, lock).provideSomeLayer[Resolve](
-          zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools)
-        )
+  ): ZStream[Resolve & histos.cache.ContentStore, ModuleTestError, TestFeed] =
+    ZStream.unwrapScoped:
+      histos.zinc.Compilers.live.build.map: compilers =>
+        val pool = zio.ZLayer.succeed(compilers.get[histos.zinc.Compilers])
+        ZStream
+          .fromZIO(ProviderInstall.make.zip(LockedTools.make(lock, asked.graph)))
+          .flatMap: (install, tools) =>
+            runCells(asked, compiled, lock).provideSomeLayer[Resolve & histos.cache.ContentStore](
+              zio.ZLayer.succeed(install) ++ zio.ZLayer.succeed(tools) ++ pool
+            )
 
   private def runCells(
       asked: TestRun,
       compiled: List[CompiledCell],
       lock: DependencyLock,
   ): ZStream[
-    Resolve & ProviderInstall & LockedTools,
+    Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     TestFeed,
   ] =
@@ -274,7 +278,11 @@ object ModuleTest:
       cell: CompiledCell,
       lock: DependencyLock,
       matched: Ref[Boolean],
-  ): ZStream[Resolve & ProviderInstall & LockedTools, ModuleTestError, TestFeed] =
+  ): ZStream[
+    Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers,
+    ModuleTestError,
+    TestFeed,
+  ] =
     val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile) = asked
     ZStream.unwrap(
       prepare(
@@ -340,7 +348,7 @@ object ModuleTest:
           histos.zinc.CompileFacts,
       ) => UIO[Unit],
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools,
+    Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -485,7 +493,9 @@ object ModuleTest:
             else ZIO.succeed(TestContext.empty)
             context
               .flatMap(value =>
-                chosen.provideSome[Resolve & ProviderInstall & LockedTools](
+                chosen.provideSome[
+                  Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers
+                ](
                   zio.ZLayer.succeed(value)
                 )
               )

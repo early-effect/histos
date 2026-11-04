@@ -70,7 +70,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -168,7 +168,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -180,7 +180,7 @@ private[testrun] object SuiteLaunch:
         selected: List[SuitePattern],
         linked: TestCompile.Linked,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext,
+      Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =
@@ -278,7 +278,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -374,7 +374,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -388,7 +388,7 @@ private[testrun] object SuiteLaunch:
         linked: TestCompile.Linked,
         major: histos.ClangMajor,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext,
+      Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =
@@ -751,7 +751,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -827,7 +827,7 @@ private[testrun] object SuiteLaunch:
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
   ): ZIO[
-    Resolve & ProviderInstall & LockedTools & TestContext,
+    Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
     ZStream[Any, ModuleTestError, TestFeed],
   ] =
@@ -837,7 +837,7 @@ private[testrun] object SuiteLaunch:
         selected: List[SuitePattern],
         linked: TestCompile.Linked,
     ): ZIO[
-      Resolve & ProviderInstall & LockedTools & TestContext,
+      Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
       ModuleTestError,
       ZStream[Any, ModuleTestError, TestFeed],
     ] =

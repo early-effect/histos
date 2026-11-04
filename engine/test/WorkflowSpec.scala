@@ -480,13 +480,16 @@ object WorkflowSpec extends ZIOSpecDefault:
                 test.contains("actions/cache/save@v6") &&
                 test.contains("~/.cache/histos") &&
                 test.contains("format('pr-{0}', github.event.pull_request.number)") &&
-                test.contains("steps.store.outputs.cache-hit != 'true'") &&
+                test.contains("steps.store.outputs.cache-hit == 'true'") &&
+                test.contains("actions: write") &&
+                test.contains("gh api --method DELETE") &&
+                test.contains("if: \"always()\"") &&
                 test.contains("hashFiles('histos.scala')") &&
                 !test.contains("restore-keys") &&
                 !test.contains("cache: npm") &&
                 !test.contains("setup-java") &&
                 occurrences(yaml, CacheNamespace.Key) == 1 &&
-                occurrences(yaml, "actions/cache") == 3 &&
+                occurrences(yaml, "actions/cache") == 4 &&
                 !docs.contains(CacheNamespace.Key) &&
                 !deploy.contains(CacheNamespace.Key) &&
                 !workflow.contains(CacheNamespace.Key) &&

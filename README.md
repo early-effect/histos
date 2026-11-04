@@ -112,7 +112,7 @@ flowchart TD
   none --> run
 ```
 
-The setup action restores toolchains and `~/.cache/coursier/v1`. It does not install those tools, and it does not open the content store. The test job restores `~/.cache/histos` and saves it when that key is still free. `versions` and `workflow` do not open that scope, so a job that does not compile cannot publish an empty store. Only a test job installs Node, LLVM, or Playwright, and only for the modules that job runs. Playwright is also installed when the build names its revision, because this suite launches Firefox from a JVM test. `install-deps firefox` stays on every such run. The browser download waits for a cache miss.
+The setup action restores toolchains and `~/.cache/coursier/v1`. It does not install those tools, and it does not open the content store. The test job restores `~/.cache/histos`, and after the suite it deletes that key and saves the store again so the next run sees the products this one wrote. `versions` and `workflow` do not open that scope, so a job that does not compile cannot publish an empty store. Only a test job installs Node, LLVM, or Playwright, and only for the modules that job runs. Playwright is also installed when the build names its revision, because this suite launches Firefox from a JVM test. `install-deps firefox` stays on every such run. The browser download waits for a cache miss.
 
 ## Publishing
 

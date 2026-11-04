@@ -1109,6 +1109,38 @@ private[testrun] object ModuleTestSupport:
           },
         )
     ,
+    test("an unchanged test compile restores and compiles nothing"):
+      ZIO.scoped:
+        for
+          jdk  <- GraphCompile.jdkHere
+          root <- temp
+          app = module("app", Jvm)(scala3).test(TestMain("demo.Foo"))
+          built <- ZIO.fromEither(Projects(app))
+          _     <- ZIO.attempt {
+            write(
+              root,
+              "app/src/test/scala/demo/Foo.scala",
+              onlyPasses.replace("Check", "Foo"),
+            )
+            write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
+          }
+          seen <- zio.Ref.make(List.empty[histos.zinc.CompileFacts])
+          note =
+            (_: ProjectName, _: ScalaVersion, _: histos.Platform, facts: histos.zinc.CompileFacts) =>
+              seen.update(facts :: _)
+          _   <- noted(root, built, jdk, note)
+          _   <- noted(root, built, jdk, note)
+          got <- seen.get
+        yield assertTrue:
+          got match
+            case second :: first :: Nil =>
+              first.changed &&
+              first.sources.exists(_.compiled > 0) &&
+              second.changed == false &&
+              second.sources.exists(count => count.compiled == 0 && count.skipped > 0) &&
+              second.classesWritten.contains(0)
+            case _ => false
+    ,
     test("a cached JVM success cannot bypass a corrupt selected compiler"):
       ZIO.scoped:
         for
@@ -1467,6 +1499,24 @@ private[testrun] object ModuleTestSupport:
           out(fourth).contains("alpha") && cached(fourth).isEmpty,
         ),
   )
+
+  private def noted(
+      root: Path,
+      built: histos.ProjectGraph,
+      jdk: histos.jdk.JdkRuntime,
+      hear: (ProjectName, ScalaVersion, histos.Platform, histos.zinc.CompileFacts) => zio.UIO[Unit],
+  ) =
+    TestMachine
+      .runtimes(root)
+      .flatMap: here =>
+        histos.ToolFixture
+          .streamAt(root, built)(
+            ModuleTest.console(
+              TestRun(root, built, Nil, jdk, here, TestMode.Run, onTestCompile = hear)
+            )
+          )
+          .runDrain
+      .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
 
   private def feeds(
       root: Path,

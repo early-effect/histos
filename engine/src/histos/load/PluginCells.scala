@@ -192,35 +192,31 @@ private[load] object PluginCells:
       cell: Cell,
   ): ZIO[Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService, PluginFault, Unit] =
     val histos.zinc.CompileSession(repo, graph, jdk, origin, lock) = session
-    for
-      _ <- ZStream
-        .unwrapScoped(
-          (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.map { env =>
-            GraphCompile
-              .cellFeed(
-                session,
-                List(cell.module.name -> cell.version),
-                cell.platform,
-              )
-              .provideSomeLayer(
-                zio.ZLayer.succeed(env.get[histos.zinc.Compilers]) ++
-                  zio.ZLayer.succeed(env.get[histos.zinc.CompileMemo])
-              )
-          }
-        )
-        .runCollect
-        .mapError(error => PluginFault.Compiled(error))
-        .flatMap: chunk =>
-          chunk.toList.collect { case CompileFeed.Failed(error) => error } match
+    ZIO.scoped:
+      (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.flatMap { env =>
+        val compilers = zio.ZLayer.succeed(env.get[histos.zinc.Compilers])
+        val memo      = zio.ZLayer.succeed(env.get[histos.zinc.CompileMemo])
+        for
+          chunk <- GraphCompile
+            .cellFeed(
+              session,
+              List(cell.module.name -> cell.version),
+              cell.platform,
+            )
+            .provideSomeLayer(compilers ++ memo)
+            .runCollect
+            .mapError(error => PluginFault.Compiled(error))
+          _ <- chunk.toList.collect { case CompileFeed.Failed(error) => error } match
             case Nil        => ZIO.unit
             case error :: _ => ZIO.fail(PluginFault.Compiled(error))
-      sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
-      _       <- ZIO.unless(sources.isEmpty)(
-        compileTests(repo, graph, cell, sources, jdk, origin, lock).mapError(
-          PluginFault.Tested(_)
-        )
-      )
-    yield ()
+          sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
+          _       <- ZIO.unless(sources.isEmpty)(
+            compileTests(repo, graph, cell, sources, jdk, origin, lock)
+              .provideSomeLayer[Resolve & histos.cache.ContentStore](compilers)
+              .mapError(PluginFault.Tested(_))
+          )
+        yield ()
+      }
 
   private def compileTests(
       repo: Path,
@@ -230,7 +226,7 @@ private[load] object PluginCells:
       jdk: JdkRuntime,
       origin: NativeOrigin,
       lock: DependencyLock,
-  ): ZIO[Resolve, ModuleTestError, Unit] =
+  ): ZIO[Resolve & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, Unit] =
     val modules  = modulesOf(graph)
     val compiled = CompiledCell(
       cell.module.name,
@@ -255,7 +251,7 @@ private[load] object PluginCells:
           lock,
           BuildResolvers(graph.resolvers),
         )
-        .provideSome[Resolve](
+        .provideSome[Resolve & histos.cache.ContentStore & histos.zinc.Compilers](
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
         )
     yield ()

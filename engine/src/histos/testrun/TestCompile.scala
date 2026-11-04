@@ -39,7 +39,6 @@ import histos.zinc.{
   CompiledCell,
   GraphCompile,
   GraphCompileError,
-  CompileReplay,
   JvmCompile,
 
   ScalacFlags,
@@ -291,7 +290,7 @@ private[histos] object TestCompile:
       repositories: Repositories,
       hear: CompileProblem => Unit = _ => (),
       onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit,
-  ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
+  ): ZIO[Resolve & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, Linked] =
     val classes  = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
     for
@@ -330,18 +329,26 @@ private[histos] object TestCompile:
       native: NativeOrigin,
       extra: List[String],
       hear: CompileProblem => Unit,
-  ): ZIO[LockedTools, ModuleTestError, CompileFacts] =
+  ): ZIO[LockedTools & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, CompileFacts] =
     ZIO.serviceWithZIO[LockedTools]: tools =>
-      val compiled = request.toolchain.platform match
-        case Platform.Jvm => JvmCompile.compile(request, extra, hear)
-        case Platform.Js  =>
-          histos.zinc.Compilers.provide(1)(ScalaJs.compile(request, extra, hear, module.jsVersion))
-        case Platform.Native =>
-          val revision =
-            module.nativeVersion.getOrElse(tools.catalog.native.revision)
-          NativeCompile.compile(request, revision, native, extra, hear)
-      CompileReplay
-        .isolated(compiled)
+      type Keep = LockedTools & histos.cache.ContentStore & histos.zinc.Compilers
+      def keep(
+          effect: ZIO[Keep & histos.zinc.CompilerStarts, CompileError, histos.zinc.CompileOutput]
+      ): ZIO[Keep, CompileError, histos.zinc.CompileOutput] =
+        effect.provideSomeLayer[Keep](histos.zinc.CompilerStarts.live)
+      val compiled: ZIO[Keep, CompileError, histos.zinc.CompileOutput] =
+        request.toolchain.platform match
+          case Platform.Jvm =>
+            keep(JvmCompile.compilePooled(request, extra, hear))
+          case Platform.Js =>
+            keep(ScalaJs.compile(request, extra, hear, module.jsVersion))
+          case Platform.Native =>
+            val revision =
+              module.nativeVersion.getOrElse(tools.catalog.native.revision)
+            NativeCompile
+              .compile(request, revision, native, extra, hear)
+              .provideSomeLayer[Keep](histos.zinc.CompilerStarts.live)
+      compiled
         .mapBoth(
           error =>
             ModuleTestError
