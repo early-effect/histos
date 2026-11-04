@@ -10,6 +10,10 @@ hash_of() {
   else shasum -a 256 "$1" | awk '{print $1}'; fi
 }
 valid_sha() { printf '%s\n' "$1" | awk 'length($0)==64 && $0 !~ /[^0-9a-fA-F]/ {ok=1} END {exit !ok}'; }
+script_file() {
+  file=$1
+  [ -n "$file" ] && [ -f "$file" ] && grep -q 'Histos user install' "$file"
+}
 java_guide='A JDK 21 or newer is required. Histos does not install it.
 macOS: brew install --cask temurin@21
 Linux: https://adoptium.net/temurin/releases?version=21'
@@ -263,7 +267,7 @@ else
 fi
 if [ "$self_path" != "$installed" ]; then
   mkdir -p "$home/bin"
-  if [ -n "$self_path" ] && [ -f "$self_path" ]; then
+  if script_file "$self_path"; then
     cp "$self_path" "$installed"
     chmod +x "$installed"
   else

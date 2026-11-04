@@ -38,6 +38,21 @@ object ShimSpec extends ZIOSpecDefault:
           )
         }
     ,
+    test("a piped install fetches the published shim"):
+      scene(remoteSuffix = "\n# published\n").flatMap { case (home, _, hits, _) =>
+        for
+          script <- ZIO.attempt(Files.readString(shimSource))
+          base   <- ZIO.attempt(Files.readString(home.getParent.resolve("dist-base")).trim)
+          exit   <- piped(home, script, base)
+          text   <- ZIO.attempt(Files.readString(home.resolve("bin/histos")))
+        yield assertTrue(
+          exit.value == 0,
+          text.contains("# published"),
+          hits.contains(DistLayout.Shim),
+          hits.contains(DistLayout.ShimSha),
+        )
+      }
+    ,
     test("self update replaces the shim when the published hash differs"):
       scene(remoteSuffix = "\n# updated\n").flatMap { case (home, repo, _, _) =>
         runShim(home, repo, "self", "update").flatMap { exit =>
@@ -256,6 +271,23 @@ object ShimSpec extends ZIOSpecDefault:
           .mapError(error => new IOException(error.getMessage))
       }
     }
+
+  private def piped(home: Path, script: String, base: String): ZIO[Any, Throwable, ProcessExit] =
+    for
+      events <- ChildProcess
+        .command(
+          List("sh", "-c", script),
+          home.getParent,
+          Map(
+            "HISTOS_HOME" -> home.toString,
+            "HISTOS_DIST" -> base,
+          ),
+        )
+        .runCollect
+        .mapError(error => new IOException(error.toString))
+      exit = events.collect { case ChildEvent.Exited(code) => code }.headOption
+      code <- ZIO.fromOption(exit).orElseFail(new IOException("shim did not exit"))
+    yield code
 
   private def runShim(home: Path, repo: Path, args: String*): ZIO[Any, Throwable, ProcessExit] =
     runShimFull(home, repo, args*).map(_._1)

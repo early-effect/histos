@@ -19,12 +19,8 @@ object LauncherScript:
       .flatMap:
         case None          => ZIO.unit
         case Some(version) =>
-          LauncherPin
-            .read(repo)
-            .mapError(ScriptError.Pin(_))
-            .flatMap: pin =>
-              if !boots(version, pin.version) then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
-              else agree(repo.resolve("histos"), posix(version))
+          LauncherPin.read(repo).mapError(ScriptError.Pin(_)) *>
+            agree(repo.resolve("histos"), posix(version))
 
   def update(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
     ZIO
@@ -32,27 +28,15 @@ object LauncherScript:
       .flatMap:
         case None          => ZIO.unit
         case Some(version) =>
-          LauncherPin
-            .read(repo)
-            .mapError(ScriptError.Pin(_))
-            .flatMap: pin =>
-              if !boots(version, pin.version) then ZIO.fail(ScriptError.Pin(LauncherError.Version(pin.version)))
-              else
-                write(
-                  repo.resolve("histos"),
-                  posix(version),
-                  executable = true,
-                )
+          LauncherPin.read(repo).mapError(ScriptError.Pin(_)) *>
+            write(
+              repo.resolve("histos"),
+              posix(version),
+              executable = true,
+            )
 
   def posix(version: String): String =
     Posix.replace("__VERSION__", version)
-
-  /** A pointer or a timestamp boots when its channel is the script version, or the snapshot of a release ship. */
-  def boots(ship: String, line: String): Boolean =
-    LauncherPin
-      .channel(line)
-      .exists: pointer =>
-        pointer == ship || (!ship.endsWith("-SNAPSHOT") && pointer == s"$ship-SNAPSHOT")
 
   private def ship(graph: ProjectGraph): Either[ScriptError, Option[String]] =
     if !launcher(graph) then Right(None)

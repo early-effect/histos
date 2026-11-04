@@ -282,7 +282,7 @@ object Workflow:
     ) ++ coursierCli ++ List(
       s"      - run: ${quote(s"./histos publish release $name")}"
     ) ++ secretEnv(sona.secretNames)
-    if install then published ++ jarArtifact else published
+    if install then published ++ jarArtifact ++ shimArtifact else published
 
   /** The assembly the install manifest names. It is built after the portal upload, on the warm workspace. */
   private def jarArtifact: List[String] =
@@ -350,6 +350,16 @@ object Workflow:
       "        with:",
       "          name: client-${{ matrix.platform }}",
       "          path: dist/histos-client",
+      "          if-no-files-found: error",
+    )
+
+  /** The installer the README curls. A piped `sh` cannot see its own file, so the release publishes this copy. */
+  private def shimArtifact: List[String] =
+    List(
+      "      - uses: actions/upload-artifact@v7",
+      "        with:",
+      "          name: shim",
+      "          path: install/histos",
       "          if-no-files-found: error",
     )
 
@@ -424,6 +434,10 @@ object Workflow:
       "          cp \"$jar\" \"$version-histos.jar\"",
       "          cp \"$linux\" \"$version-client-linux-x86_64\"",
       "          cp \"$mac\" \"$version-client-macos-aarch64\"",
+      "          shim_file=dist-in/shim/histos",
+      "          shim_sha=$(sha \"$shim_file\")",
+      "          cp \"$shim_file\" shim",
+      "          printf '%s\\n' \"$shim_sha\" > shim.sha256",
       "          cat > \"$version-manifest.json\" <<EOF",
       "          {",
       "            \"version\": \"$version\",",
@@ -435,7 +449,7 @@ object Workflow:
       "            }",
       "          }",
       "          EOF",
-      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" --clobber --repo \"$GITHUB_REPOSITORY\"",
+      "          gh release upload dist \"$version-manifest.json\" \"$version-histos.jar\" \"$version-client-linux-x86_64\" \"$version-client-macos-aarch64\" shim shim.sha256 --clobber --repo \"$GITHUB_REPOSITORY\"",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
     )

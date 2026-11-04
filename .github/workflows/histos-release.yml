@@ -24,6 +24,11 @@ jobs:
           name: histos-jar
           path: dist/histos.jar
           if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: shim
+          path: install/histos
+          if-no-files-found: error
   client:
     needs: [release-histos]
     runs-on: ${{ matrix.runner }}
@@ -92,7 +97,7 @@ jobs:
           path: dist-in
       - run: |
           set -eu
-          version=0.1.1
+          version=0.1.2
           jar=dist-in/histos-jar/histos.jar
           linux=dist-in/client-linux-x86_64/histos-client
           mac=dist-in/client-macos-aarch64/histos-client
@@ -103,6 +108,10 @@ jobs:
           cp "$jar" "$version-histos.jar"
           cp "$linux" "$version-client-linux-x86_64"
           cp "$mac" "$version-client-macos-aarch64"
+          shim_file=dist-in/shim/histos
+          shim_sha=$(sha "$shim_file")
+          cp "$shim_file" shim
+          printf '%s\n' "$shim_sha" > shim.sha256
           cat > "$version-manifest.json" <<EOF
           {
             "version": "$version",
@@ -114,6 +123,6 @@ jobs:
             }
           }
           EOF
-          gh release upload dist "$version-manifest.json" "$version-histos.jar" "$version-client-linux-x86_64" "$version-client-macos-aarch64" --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload dist "$version-manifest.json" "$version-histos.jar" "$version-client-linux-x86_64" "$version-client-macos-aarch64" shim shim.sha256 --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GH_TOKEN: ${{ github.token }}

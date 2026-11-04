@@ -91,7 +91,7 @@ Histos builds itself. [histos](histos) comes from `workflow --update`. A local a
 
 `histos.version=0.1.0` pins that release. The shim installs that toolchain from the GitHub release `dist`: the jar, the manifest, and a prebuilt client when the manifest names one. `histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel. `histos update` resolves a snapshot channel and writes that timestamp. A release pin stays. `launcher --latest` writes the snapshot pointer and does not fetch. A release pin stays there too. Any of these lines may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim. The shim fetches `channel-<histos.version>` from `dist` when the line is a snapshot pointer. Replacing that file moves the pointer. A Maven snapshot does not.
 
-The script version is the ship number, or the version line cannot boot. A release pin boots that ship number. A timestamp boots when its channel is that number. A release ship also boots the snapshot channel of that number. This checkout's script is the ship. Its version line is `0.1.1-SNAPSHOT`. The native client sends that version line. The server records the same line, so a release script talks to the snapshot it boots.
+The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.1.2`. Its version line is `0.1.2-SNAPSHOT`. The native client sends that version line. The server records the same line.
 
 `.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
 
@@ -136,7 +136,7 @@ flowchart TD
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 - A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-This catalog is `manual("histos", manual"0.1.1")`. `publish release` publishes that coordinate. `publish snapshots` does not stage a release. `0.0.1` is already on Central.
+This catalog is `manual("histos", manual"0.1.2")`. `publish release` publishes that coordinate. `publish snapshots` does not stage a release. `0.0.1` is already on Central.
 
 The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. The client prints each step as it happens: `building`, `staged`, `signing`, `bundling`, `uploading`, and `installing`. A local install prints `installing`. A snapshot prints `uploading <artifact> <revision>`. A release prints `signing`, `bundling`, and `uploading <ship> to the portal`. The portal post then prints `uploading bundle to the portal`, and `uploading...` if that post is still running after 30 seconds. Each status is `portal <id> is <STATE>`. Until the waited state arrives, the line names it. The first read, a changed state, and every thirty quiet reads print. A status read that has not returned prints `reading portal <id>` after that same wait. A failure is printed when it happens. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 
@@ -156,7 +156,7 @@ Rehearse with `./histos portal`. It binds loopback and prints a base URL. Set `H
 
 The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` and `central` are not members. The three publish commands package `app` the same way. A release signs that jar. `assembly` writes `dist/histos.jar` for this checkout. That file is the local launcher, not a second publication. The pom carries the organization description and url, which Central requires. A release also needs a license, a developer, and an scm, or the command fails before upload. Histos does not create a tag or a GitHub release. [AssetSpec](engine/test/AssetSpec.scala) is a loopback stand-in and does not call GitHub.
 
-`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After a release is on Central, the next development catalog is a snapshot. The version line stays a snapshot of the ship number so `./histos` still boots.
+`ci.yml` does not publish and does not run on a tag. The release job does not run the suite again. After a release is on Central, the next development catalog is a snapshot. The version line stays a published Histos, stable or snapshot, and the shim downloads that toolchain.
 
 ## An operation
 
