@@ -57,7 +57,7 @@ object ConnectionSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           repo    <- work
-          _       <- plant(repo, "histos.version=0.0.2\n")
+          _       <- plant(repo, "histos.version=nope\n")
           _       <- Connection.ensure(repo)
           present <- ZIO.attempt(Files.isRegularFile(repo.resolve(".bsp").resolve("histos.json")))
         yield assertTrue(!present)

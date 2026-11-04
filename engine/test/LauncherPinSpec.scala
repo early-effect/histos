@@ -20,7 +20,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
            |
            |  histos.version = $pointer
            |""".stripMargin
-      val revisionText = s"histos.version=$revision\n"
+      val revisionText   = s"histos.version=$revision\n"
       val parsedPointer  = LauncherPin.parse(pointerText)
       val parsedRevision = LauncherPin.parse(revisionText)
       assertTrue(
@@ -35,13 +35,26 @@ object LauncherPinSpec extends ZIOSpecDefault:
         parsedRevision.map(_.version) == Right(revision),
       )
     ,
+    test("a release ship number round-trips"):
+      val release = "0.1.0"
+      val text    = s"histos.version=$release\n"
+      val parsed  = LauncherPin.parse(text)
+      assertTrue(
+        parsed.map(_.version) == Right(release),
+        parsed.map(_.channel) == Right(release),
+        parsed.map(LauncherPin.render) == Right(text),
+        parsed.map(_.choice) == Right(LauncherChoice.Release(release)),
+        LauncherPin.channel(release) == Some(release),
+      )
+    ,
     test("a duplicate, unknown, missing, or illegal version fails"):
       assertTrue(
         LauncherPin.parse(s"histos.version=$pointer\nhistos.version=$pointer\n") == Left(LauncherError.Duplicate),
         LauncherPin.parse("other=1\n") == Left(LauncherError.Unknown("other")),
         LauncherPin.parse("# only\n") == Left(LauncherError.Missing),
         LauncherPin.parse("not a field\n") == Left(LauncherError.Line("not a field")),
-        LauncherPin.parse("histos.version=0.0.2\n") == Left(LauncherError.Version("0.0.2")),
+        LauncherPin.parse("histos.version=01.2.3\n") == Left(LauncherError.Version("01.2.3")),
+        LauncherPin.parse("histos.version=0.1\n") == Left(LauncherError.Version("0.1")),
         LauncherPin.parse("histos.version=0.0.2-20260230.030257-1\n") == Left(
           LauncherError.Version("0.0.2-20260230.030257-1")
         ),
@@ -76,12 +89,39 @@ object LauncherPinSpec extends ZIOSpecDefault:
           text == s"histos.version=$pointer\n",
         )
     ,
+    test("latest leaves a release pin where it is"):
+      ZIO.scoped:
+        for
+          root <- Workspace.work("histos-latest-release")
+          _    <- Workspace.writeString(root.resolve(LauncherPin.file), "histos.version=0.1.0\n")
+          pin  <- LauncherPin.latest(root)
+          text <- Workspace.readString(root.resolve(LauncherPin.file))
+        yield assertTrue(
+          pin.version == "0.1.0",
+          pin.choice == LauncherChoice.Release("0.1.0"),
+          text == "histos.version=0.1.0\n",
+        )
+    ,
+    test("update refuses a release pin and leaves the version file"):
+      ZIO.scoped:
+        for
+          root  <- Workspace.work("histos-pin-release")
+          cache <- Workspace.createDirectories(root.resolve("cache"))
+          before = "histos.version=0.1.0\n"
+          _      <- Workspace.writeString(root.resolve(LauncherPin.file), before)
+          result <- LauncherPin.updateAt(root, cache).either
+          after  <- Workspace.readString(root.resolve(LauncherPin.file))
+        yield assertTrue(
+          result == Left(LauncherError.Release("0.1.0")),
+          after == before,
+        )
+    ,
     test("a wrong published checksum fails and leaves the version file"):
       ZIO.scoped:
         for
-          root   <- Workspace.work("histos-pin-bad")
-          repo   <- published(root.resolve("repo"), jarDigest = Some("a" * 40))
-          cache  <- Workspace.createDirectories(root.resolve("cache"))
+          root  <- Workspace.work("histos-pin-bad")
+          repo  <- published(root.resolve("repo"), jarDigest = Some("a" * 40))
+          cache <- Workspace.createDirectories(root.resolve("cache"))
           before = s"histos.version=$pointer\n"
           _      <- Workspace.writeString(root.resolve(LauncherPin.file), before)
           _      <- TestSystem.putEnv("HISTOS_LAUNCHER_REPO", directoryUri(repo))
@@ -90,11 +130,10 @@ object LauncherPinSpec extends ZIOSpecDefault:
         yield assertTrue(
           result match
             case Left(_: LauncherError.Resolve) => true
-            case _                               => false
+            case _                              => false
           ,
           after == before,
-        )
-    ,
+        ),
   )
 
   private def directoryUri(path: Path): String =
@@ -114,7 +153,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
         |  <version>0.0.2-SNAPSHOT</version>
         |</project>
         |""".stripMargin
-    val jar = "histos"
+    val jar      = "histos"
     val metadata =
       s"""<?xml version="1.0" encoding="UTF-8"?>
          |<metadata modelVersion="1.1.0">

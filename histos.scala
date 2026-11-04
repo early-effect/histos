@@ -86,7 +86,7 @@ object build extends HistosBuild:
           Some(ToolRevision("1.62.1")),
         )
       )(
-        ships(manual("histos", manual"0.1.0")(api, app)),
+        ships(manual("histos", manual"0.1.1")(api, app)),
         api,
         wire,
         client,

@@ -32,8 +32,10 @@ object LauncherSpec extends ZIOSpecDefault:
         assertTrue(
           LauncherScript.boots("0.0.1-SNAPSHOT", "0.0.1-SNAPSHOT"),
           LauncherScript.boots("0.0.1-SNAPSHOT", "0.0.1-20261101.030257-1"),
+          LauncherScript.boots("0.0.1", "0.0.1"),
           LauncherScript.boots("0.0.1", "0.0.1-SNAPSHOT"),
           LauncherScript.boots("0.0.1", "0.0.1-20261101.030257-1"),
+          !LauncherScript.boots("0.0.1-SNAPSHOT", "0.0.1"),
           !LauncherScript.boots("0.0.1", "0.0.2-SNAPSHOT"),
           !LauncherScript.boots("0.0.1", "0.0.2"),
           !LauncherScript.boots("0.0.2-SNAPSHOT", "0.0.1-SNAPSHOT"),

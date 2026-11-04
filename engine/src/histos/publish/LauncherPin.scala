@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.version.ShipNumber
 import histos.workspace.{IoFailure, IoFault}
 
 import java.nio.file.{Files, LinkOption, Path}
@@ -9,13 +10,17 @@ import scala.concurrent.duration.*
 
 import zio.{IO, ZIO}
 
-/** The version the next boot runs. A pointer follows the snapshot. A revision is one timestamp. */
+/** The version the next boot runs. A release is a ship number. A pointer follows the snapshot. A revision is one
+  * timestamp.
+  */
 final class LauncherPin private (val choice: LauncherChoice):
   def version: String = choice match
+    case LauncherChoice.Release(version)      => version
     case LauncherChoice.Pointer(channel)      => channel
     case LauncherChoice.Revision(_, revision) => revision
 
   def channel: String = choice match
+    case LauncherChoice.Release(version)     => version
     case LauncherChoice.Pointer(channel)     => channel
     case LauncherChoice.Revision(channel, _) => channel
 
@@ -23,6 +28,7 @@ final class LauncherPin private (val choice: LauncherChoice):
 end LauncherPin
 
 enum LauncherChoice:
+  case Release(version: String)
   case Pointer(channel: String)
   case Revision(channel: String, revision: String)
 
@@ -55,11 +61,17 @@ object LauncherPin:
     else
       channelOf(raw) match
         case Some(channel) => Right(new LauncherPin(LauncherChoice.Revision(channel, raw)))
-        case None          => Left(LauncherError.Version(raw))
+        case None          =>
+          releaseOf(raw) match
+            case Some(version) => Right(new LauncherPin(LauncherChoice.Release(version)))
+            case None          => Left(LauncherError.Version(raw))
 
-  /** The snapshot channel a pointer or a timestamp belongs to. */
+  /** The channel a pointer, a timestamp, or a release belongs to. A release's channel is the ship number. */
   def channel(raw: String): Option[String] =
-    if validPointer(raw) then Some(raw) else channelOf(raw)
+    if validPointer(raw) then Some(raw) else channelOf(raw).orElse(releaseOf(raw))
+
+  private def releaseOf(raw: String): Option[String] =
+    ShipNumber.from(raw).toOption.map(_.render)
 
   def render(pin: LauncherPin): String = s"${pin.shown}\n"
 
@@ -73,7 +85,7 @@ object LauncherPin:
       .orElseFail(LauncherError.Io(IoFailure(Path.of("coursier-cache"), IoFault.Stat)))
       .flatMap(cache => updateAt(repo, cache))
 
-  /** Write the snapshot pointer for the channel already in the file. Does not fetch. */
+  /** Write the snapshot pointer for the channel already in the file. A release pin stays. Does not fetch. */
   def latest(repo: Path): IO[LauncherError, LauncherPin] =
     for
       current <- read(repo)
@@ -82,13 +94,16 @@ object LauncherPin:
     yield pin
 
   private[publish] def updateAt(repo: Path, cache: Path): IO[LauncherError, LauncherPin] =
-    for
-      current  <- read(repo)
-      base     <- repository
-      selected <- fetch(base, current.channel, cache)
-      pin      <- ZIO.fromEither(from(selected))
-      _        <- write(repo, pin)
-    yield pin
+    read(repo).flatMap: current =>
+      current.choice match
+        case LauncherChoice.Release(version) => ZIO.fail(LauncherError.Release(version))
+        case _                               =>
+          for
+            base     <- repository
+            selected <- fetch(base, current.channel, cache)
+            pin      <- ZIO.fromEither(from(selected))
+            _        <- write(repo, pin)
+          yield pin
 
   def renderBase(raw: String): Either[LauncherError, String] =
     val supported =
