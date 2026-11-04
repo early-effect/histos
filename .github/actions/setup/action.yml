@@ -1,5 +1,5 @@
 name: Setup Histos
-description: Install the Histos shim and restore toolchains, Coursier, and the content store
+description: Install the Histos shim and restore toolchains and Coursier
 inputs:
   version:
     description: Histos version. Empty reads build.properties when a command runs.
@@ -28,11 +28,6 @@ runs:
       with:
         path: ~/.cache/coursier/v1
         key: coursier-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}
-    - name: Content store
-      uses: actions/cache@v6
-      with:
-        path: ~/.cache/histos
-        key: histos-store-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}
     - name: Install
       shell: bash
       env:

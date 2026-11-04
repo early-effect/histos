@@ -87,7 +87,8 @@ object WorkflowSpec extends ZIOSpecDefault:
             yaml.contains("\"./histos test core\"") &&
             yaml.contains("\"./histos test tests\"") &&
             !yaml.contains("setup-java") && !yaml.contains("setup-node") &&
-            !yaml.contains("llvm.tar.xz") && !yaml.contains("playwright")
+            !yaml.contains("llvm.tar.xz") && !yaml.contains("playwright") &&
+            !yaml.contains("~/.cache/histos")
           case Left(_) => false
     ,
     test("a catalog adds the versions command and still does not publish"):
@@ -475,12 +476,17 @@ object WorkflowSpec extends ZIOSpecDefault:
                 ) &&
                 test.contains("./histos test") &&
                 test.contains("actions/cache@v6") &&
+                test.contains("actions/cache/restore@v6") &&
+                test.contains("actions/cache/save@v6") &&
+                test.contains("~/.cache/histos") &&
+                test.contains("format('pr-{0}', github.event.pull_request.number)") &&
+                test.contains("steps.store.outputs.cache-hit != 'true'") &&
                 test.contains("hashFiles('histos.scala')") &&
                 !test.contains("restore-keys") &&
                 !test.contains("cache: npm") &&
                 !test.contains("setup-java") &&
                 occurrences(yaml, CacheNamespace.Key) == 1 &&
-                occurrences(yaml, "actions/cache") == 1 &&
+                occurrences(yaml, "actions/cache") == 3 &&
                 !docs.contains(CacheNamespace.Key) &&
                 !deploy.contains(CacheNamespace.Key) &&
                 !workflow.contains(CacheNamespace.Key) &&

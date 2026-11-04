@@ -724,7 +724,8 @@ object Workflow:
       case _                      => false
     }
     val client  = jobs.exists(job => linksClient(modulesOf(job, modules)))
-    val prepare = steps(graph.runnerTools, graph.resolution, any, matrix) ++ clientStep(client, matrix)
+    val prepare = steps(graph.runnerTools, graph.resolution, any, matrix)
+    val link    = clientStep(client, matrix)
     jobs match
       case (aggregate @ TestJob.Aggregate(_)) :: Nil =>
         List(
@@ -732,7 +733,7 @@ object Workflow:
           s"    runs-on: $Runner",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ coursierCli ++ prepare ++ testRun(argv(aggregate).mkString(" "))
+        ) ++ coursierCli ++ prepare ++ storeRestore ++ link ++ testRun(argv(aggregate).mkString(" ")) ++ storeSave
       case _ =>
         List(
           "  test:",
@@ -744,7 +745,7 @@ object Workflow:
         ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, matrix && (any.any || client))) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ coursierCli ++ prepare ++ testRun("${{ matrix.command }}")
+        ) ++ coursierCli ++ prepare ++ link ++ testRun("${{ matrix.command }}")
 
   /** Link `dist/histos-client` before the suite, so the launcher execs that binary. LLVM is already on `PATH`. */
   private def clientStep(present: Boolean, gate: Boolean): List[String] =
@@ -827,6 +828,39 @@ object Workflow:
     version match
       case VersionRef.All           => None
       case VersionRef.One(selected) => Some(selected.value)
+
+  /** Restore, then the suite, then save. The save is the release of that scope. It publishes only when the restore
+    * missed, because a taken key is not replaced. A matrix is more than one writer, so it does not open this scope.
+    * Versions, docs, deploy, workflow, and release do not either.
+    */
+  private val StorePath = "~/.cache/histos"
+
+  private val StoreRestore = "actions/cache/restore@v6"
+
+  private val StoreSave = "actions/cache/save@v6"
+
+  private def storeKey: String =
+    val namespace =
+      "${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}"
+    s"histos-store-$namespace-$${{ runner.os }}-$${{ runner.arch }}"
+
+  private def storeRestore: List[String] =
+    List(
+      s"      - uses: $StoreRestore",
+      "        id: store",
+      "        with:",
+      s"          path: ${quote(StorePath)}",
+      s"          key: ${quote(storeKey)}",
+    )
+
+  private def storeSave: List[String] =
+    List(
+      s"      - if: ${quote("always() && steps.store.outputs.cache-hit != 'true'")}",
+      s"        uses: $StoreSave",
+      "        with:",
+      s"          path: ${quote(StorePath)}",
+      s"          key: ${quote(storeKey)}",
+    )
 
   /** The test step only. A pull request is `pr/<n>`. This file starts `push` only for `main`, so that event is `main`.
     * Docs, deploy, versions, workflow, and release do not set it. None of them `needs` a cache job or restores a remote

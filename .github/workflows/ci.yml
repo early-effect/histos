@@ -55,10 +55,20 @@ jobs:
         with:
           path: "~/.cache/coursier/v1"
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - uses: actions/cache/restore@v6
+        id: store
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos client"
       - run: "./histos test"
         env:
           HISTOS_CACHE_NAMESPACE: "${{ case(github.event_name == 'pull_request', format('pr/{0}', github.event.pull_request.number), 'main') }}"
+      - if: "always() && steps.store.outputs.cache-hit != 'true'"
+        uses: actions/cache/save@v6
+        with:
+          path: "~/.cache/histos"
+          key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
   versions:
     runs-on: ubuntu-26.04
     steps:
