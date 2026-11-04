@@ -66,7 +66,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           "contents: read"
         ) && golden.contains("workflow --check"),
         !golden.contains("setup-java") && !golden.contains("setup-node") && !golden
-          .contains("install-llvm-action") && !golden.contains("playwright") && !golden
+          .contains("llvm.tar.xz") && !golden.contains("playwright") && !golden
           .contains("format:") && !golden.contains("publish") &&
           golden.contains("push:\n    branches:\n      - main") && !golden
             .contains("tags:"),
@@ -86,7 +86,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             yaml.contains("\"./histos test core\"") &&
             yaml.contains("\"./histos test tests\"") &&
             !yaml.contains("setup-java") && !yaml.contains("setup-node") &&
-            !yaml.contains("install-llvm-action") && !yaml.contains("playwright")
+            !yaml.contains("llvm.tar.xz") && !yaml.contains("playwright")
           case Left(_) => false
     ,
     test("a catalog adds the versions command and still does not publish"):
@@ -161,7 +161,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           )
         ) match
           case Right(copied) =>
-            !copied.contains("setup-node") && !copied.contains("install-llvm-action") &&
+            !copied.contains("setup-node") && !copied.contains("llvm.tar.xz") &&
             !copied.contains("playwright")
           case Left(_) => false,
       )
@@ -181,7 +181,8 @@ object WorkflowSpec extends ZIOSpecDefault:
         Workflow.render(built) match
           case Right(yaml) =>
             yaml.contains("if: matrix.llvm == 'true'") &&
-            yaml.contains("install-llvm-action") &&
+            yaml.contains("LLVM-21.1.8-Linux-X64.tar.xz") &&
+            yaml.contains("steps.llvm.outputs.cache-hit != 'true'") &&
             yaml.contains("llvm: \"false\"") &&
             yaml.contains("llvm: \"true\"") &&
             !yaml.contains("setup-node")

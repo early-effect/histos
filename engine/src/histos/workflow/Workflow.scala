@@ -401,14 +401,15 @@ object Workflow:
   /** The test job only. Versions, docs, deploy, workflow, and release do not restore these. This workflow does not
     * fetch a JDK, so it emits no JDK key. Node is installed for a JavaScript module, or when Playwright is installed.
     * `setup-node` does not set `cache: npm`: that key is a package lock, and Chekhov does not read it. LLVM is
-    * installed for a native module. The action skips its download only when `cached` is the string `true`, which
-    * `cache-hit` is for this key alone. Chekhov reads Playwright from `~/.cache/chekhov`. An unset
-    * `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A Playwright revision installs the browser
-    * even when no module is Firefox, because a JVM suite can launch it. `npm install` and `install firefox` run only
-    * when that cache misses. `install-deps firefox` runs on every visit: it is apt, and a runner does not keep those
-    * packages. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names
-    * the build file while the build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job
-    * that runs `./histos` uses the setup action and does not install a JDK or the `cs` binary.
+    * installed for a native module. The runner is `ubuntu-26.04`, so a miss downloads
+    * `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks it. A hit does not. `bin` is put on
+    * `PATH` either way. Chekhov reads Playwright from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is
+    * `~/.cache/ms-playwright` on this runner. A Playwright revision installs the browser even when no module is
+    * Firefox, because a JVM suite can launch it. `npm install` and `install firefox` run only when that cache misses.
+    * `install-deps firefox` runs on every visit: it is apt, and a runner does not keep those packages. Coursier is the
+    * Linux default of `Resolve.coursier` when `COURSIER_CACHE` is unset. `hashFiles` names the build file while the
+    * build resolves, and the pin while it is locked. No step sets `restore-keys`. Every job that runs `./histos` uses
+    * the setup action and does not install a JDK or the `cs` binary.
     */
   private def steps(
       tools: RunnerTools,
@@ -473,7 +474,7 @@ object Workflow:
       case None        => Nil
       case Some(major) =>
         val guard = if gate then List("        if: matrix.node == 'true'") else Nil
-        List("      - uses: actions/setup-node@v4") ++ guard ++ List(
+        List("      - uses: actions/setup-node@v7") ++ guard ++ List(
           "        with:",
           s"          node-version: ${quote(major.value.toString)}",
         )
@@ -483,15 +484,30 @@ object Workflow:
       case None         => Nil
       case Some(pinned) =>
         val directory = "${{ runner.temp }}/llvm"
-        val guard     = if gate then Some("matrix.llvm == 'true'") else None
-        cacheStep(Some("llvm"), List(directory), toolKey("llvm", pinned.value), guard) ++ List(
-          "      - uses: KyleMayes/install-llvm-action@v2.0.9"
-        ) ++ guard.toList.map(text => s"        if: $text") ++ List(
-          "        with:",
-          s"          version: ${quote(pinned.value)}",
-          s"          directory: ${quote(directory)}",
-          "          cached: \"${{ steps.llvm.outputs.cache-hit }}\"",
-        )
+        val version   = pinned.value
+        val archive   = s"LLVM-$version-Linux-X64.tar.xz"
+        val url       = s"https://github.com/llvm/llvm-project/releases/download/llvmorg-$version/$archive"
+        val cell      = if gate then Some("matrix.llvm == 'true'") else None
+        val missed    =
+          if gate then "matrix.llvm == 'true' && steps.llvm.outputs.cache-hit != 'true'"
+          else "steps.llvm.outputs.cache-hit != 'true'"
+        cacheStep(Some("llvm"), List(directory), toolKey("llvm", version), cell) ++ List(
+          "      - run: |",
+          s"          dir=${quote(directory)}",
+          "          mkdir -p \"$dir\"",
+          s"          curl -fsSL ${quote(url)} -o \"$$dir/llvm.tar.xz\"",
+          "          tar -xJf \"$dir/llvm.tar.xz\" -C \"$dir\" --strip-components=1",
+          "          rm \"$dir/llvm.tar.xz\"",
+          s"        if: $missed",
+          "      - run: |",
+          s"          dir=${quote(directory)}",
+          "          echo \"$dir/bin\" >> \"$GITHUB_PATH\"",
+          "          if [ -n \"$LD_LIBRARY_PATH\" ]; then",
+          s"""            echo "LD_LIBRARY_PATH=$$dir/lib:$$LD_LIBRARY_PATH" >> "$$GITHUB_ENV"""",
+          "          else",
+          "            echo \"LD_LIBRARY_PATH=$dir/lib\" >> \"$GITHUB_ENV\"",
+          "          fi",
+        ) ++ cell.toList.map(text => s"        if: $text")
 
   private def playwrightStep(revision: Option[ToolRevision], gate: Boolean): List[String] =
     revision match

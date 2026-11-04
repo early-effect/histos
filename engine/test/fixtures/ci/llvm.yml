@@ -17,11 +17,21 @@ jobs:
         with:
           path: "${{ runner.temp }}/llvm"
           key: "llvm-20.1.8-${{ runner.os }}-${{ runner.arch }}"
-      - uses: KyleMayes/install-llvm-action@v2.0.9
-        with:
-          version: "20.1.8"
-          directory: "${{ runner.temp }}/llvm"
-          cached: "${{ steps.llvm.outputs.cache-hit }}"
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          mkdir -p "$dir"
+          curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+          tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
+          rm "$dir/llvm.tar.xz"
+        if: steps.llvm.outputs.cache-hit != 'true'
+      - run: |
+          dir="${{ runner.temp }}/llvm"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          if [ -n "$LD_LIBRARY_PATH" ]; then
+            echo "LD_LIBRARY_PATH=$dir/lib:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
+          else
+            echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
+          fi
       - uses: actions/cache@v6
         with:
           path: "~/.cache/coursier/v1"

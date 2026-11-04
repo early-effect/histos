@@ -89,7 +89,7 @@ Histos builds itself. [histos](histos) comes from `workflow --update`. A local a
 
 `assembly` compiles with the running jar and writes `dist/histos.jar` unless a path is given. It packs the api it just compiled at `bootstrap/histos-api.jar` inside that jar. Only the default path writes `.histos/assembly.sha256`. The next `./histos` in this checkout runs `dist/histos.jar` when that checksum matches.
 
-`histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel. `histos update` resolves the channel and writes that timestamp. `launcher --latest` writes the pointer and does not fetch. Either line may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim, so a pointer moves when a snapshot is published.
+`histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel. `histos update` resolves the channel and writes that timestamp. `launcher --latest` writes the pointer and does not fetch. Either line may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim. The shim fetches `channel-<histos.version>` from the GitHub release `dist`. Replacing that file moves the pointer. A Maven snapshot does not.
 
 The script version is the ship number, or the version line cannot boot. A timestamp boots when its channel is that number. A release ship also boots the snapshot channel of that number. This checkout's script is `0.1.0-SNAPSHOT` and its version line is `0.1.0-SNAPSHOT`. The native client sends that version line. The server records the same line, so a release script talks to the snapshot it boots.
 
@@ -305,7 +305,7 @@ GitHub restores the content-store directory, the Coursier directory, and the too
 
 ## Tools already on the machine
 
-Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be JDK 21 or newer. The launcher script prints that floor. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one. A generated workflow installs Node, LLVM, and Playwright only for the modules that job runs. A JVM-only project installs none of them. Playwright's browser download is skipped when its cache hits. `install-deps firefox` stays, because a fresh runner does not keep the apt packages.
+Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be JDK 21 or newer. The launcher script prints that floor. A JavaScript module also needs Node 25 or newer on `PATH`. A newer install meets the floor. `.histos/toolchain.local` and `.histos/node.local` name a home you already chose. A file that points at a missing or too-old home fails. Histos does not pick a different one. A generated workflow installs Node, LLVM, and Playwright only for the modules that job runs. A JVM-only project installs none of them. LLVM is `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release. A miss unpacks it. A hit does not. `bin` is put on `PATH` either way. Playwright's browser download is skipped when its cache hits. `install-deps firefox` stays, because a fresh runner does not keep the apt packages.
 
 ## Plugins
 
