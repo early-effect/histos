@@ -761,6 +761,8 @@ object WorkflowSpec extends ZIOSpecDefault:
             body.contains("actions/download-artifact@v8") &&
             body.contains("gh release upload dist") &&
             body.contains("version=1.2.3") &&
+            body.contains("java: \"25\"") &&
+            !release.contains("java:") &&
             body.contains("contents: write") &&
             (snapshot match
               case Right(_ :: RenderedWorkflow("histos-release.yml", held) :: Nil) =>

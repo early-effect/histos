@@ -344,13 +344,25 @@ object Workflow:
     ) ++ hosts ++ List(
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli ++ clientLlvm(revision) ++ List(
+    ) ++ clientSetup ++ clientLlvm(revision) ++ List(
       s"      - run: ${quote("./histos client")}",
       "      - uses: actions/upload-artifact@v7",
       "        with:",
       "          name: client-${{ matrix.platform }}",
       "          path: dist/histos-client",
       "          if-no-files-found: error",
+    )
+
+  /** Temurin 25. The process bootstrap compiles `java.lang.foreign`. JDK 21 still marks that API preview, and that is
+    * the JDK image on `macos-26`.
+    */
+  private val ClientJdk: String = "25"
+
+  private def clientSetup: List[String] =
+    List(
+      s"      - uses: $Setup",
+      "        with:",
+      s"          java: ${quote(ClientJdk)}",
     )
 
   private def clientLlvm(revision: String): List[String] =

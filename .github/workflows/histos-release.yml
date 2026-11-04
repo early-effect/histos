@@ -40,6 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+        with:
+          java: "25"
       - uses: actions/cache@v6
         id: llvm
         with:
