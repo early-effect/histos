@@ -760,6 +760,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             body.contains("actions/upload-artifact@v7") &&
             body.contains("actions/download-artifact@v8") &&
             body.contains("gh release upload dist") &&
+            body.contains("GH_TOKEN: ${{ github.token }}") &&
             body.contains("version=1.2.3") &&
             body.contains("java: \"25\"") &&
             body.contains("xcrun --show-sdk-path") &&
