@@ -1,5 +1,6 @@
 package histos.zinc
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.jdk.{Sha256, ToolchainError}
 import histos.resolve.ResolveError
 import histos.select.SelectError
@@ -91,4 +92,10 @@ enum GraphCompileError:
     case Failed(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to compile\n${error.message}"
     case Cells(errors) => errors.map(_.message).mkString("\n")
+
+  def diagnose: Diagnostic = this match
+    case Target(error) => error.diagnose
+    case Lock(error)   => error.diagnose
+    case Cells(errors) => errors.head.diagnose
+    case other         => Noted.carry("compile.failed", other.message, other.message, "histos help compile")
 end GraphCompileError

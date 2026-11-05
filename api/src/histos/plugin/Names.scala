@@ -76,6 +76,9 @@ object CommandName:
     trusted("doctor"),
     trusted("deps"),
     trusted("setup"),
+    trusted("help"),
+    trusted("update"),
+    trusted("self"),
   )
 
   inline def apply(inline raw: String): CommandName = ${

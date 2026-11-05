@@ -108,8 +108,9 @@ object SonaStock:
             .tapError(error => note(centralFault(request, error).message))
             .mapError(centralFault(request, _))
         unique <- done match
-          case Published.Snapshot(unique, _)  => ZIO.succeed(unique.value)
-          case Published.Local(_, _, _, _, _) => ZIO.fail(PublishFault.Remote)
+          case Published.Snapshot(unique, _) => ZIO.succeed(unique.value)
+          case Published.Local(_, _, _, _, _) =>
+            ZIO.fail(PublishFault.Refused("the snapshot repository returned a local coordinate"))
       yield PublishedModule(
         module.module,
         module.group,
@@ -190,16 +191,16 @@ object SonaStock:
 
   private def centralFault(request: PublishRequest, error: PublishError): PublishFault =
     error match
-      case PublishError.EmptyJar            => PublishFault.Remote
-      case PublishError.NotAJar             => PublishFault.Remote
+      case PublishError.EmptyJar            => PublishFault.Refused(error.message)
+      case PublishError.NotAJar             => PublishFault.Refused(error.message)
       case PublishError.NotADirectory(path) => PublishFault.Write(path.toString)
       case PublishError.Escaped(path)       => PublishFault.Write(path.toString)
       case PublishError.Io(path, _)         => PublishFault.Write(path.toString)
       case PublishError.Unauthorized        => PublishFault.Rejected
       case PublishError.NotSnapshot(_)      => PublishFault.Version(request.revision)
-      case PublishError.Status(_)           => PublishFault.Remote
-      case PublishError.Transport(_)        => PublishFault.Remote
-      case PublishError.Metadata(_)         => PublishFault.Remote
+      case PublishError.Status(code)        => PublishFault.Status(code)
+      case PublishError.Transport(reason)   => PublishFault.Transport(reason.message)
+      case PublishError.Metadata(reason)    => PublishFault.Metadata(reason.message)
 
   private def releaseFault(error: ReleaseError): PublishFault =
     error match
@@ -213,8 +214,8 @@ object SonaStock:
       case ReleaseError.Client(_)                            => PublishFault.Client
       case ReleaseError.Io(path)     => PublishFault.Write(path)
       case ReleaseError.Record(ship) => PublishFault.Record(ship)
-      case ReleaseError.Stage(_)     => PublishFault.Remote
-      case ReleaseError.Asset(_)     => PublishFault.Remote
+      case ReleaseError.Stage(error) => PublishFault.Refused(error.message)
+      case ReleaseError.Asset(error) => PublishFault.Refused(error.message)
 
   private final case class Ready(
       secret: RepositorySecret,

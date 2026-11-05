@@ -1,5 +1,6 @@
 package histos.program
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.node.NodeMiss
 import histos.pack.{MainClassError}
 import histos.resolve.{ResolveError}
@@ -13,7 +14,7 @@ enum ProgramError:
       version: ScalaVersion,
       error: histos.toolchain.PlatformToolError,
   )
-  case Absent(name: String)
+  case Absent(name: String, near: List[String] = Nil)
   case Aggregate(name: ProjectName)
   case NoMain(name: ProjectName)
   case Choose(name: ProjectName, platforms: List[Platform])
@@ -42,7 +43,7 @@ enum ProgramError:
 
   def message: String = this match
     case Tool(_, _, error)       => error.message
-    case Absent(name)            => s"'$name' is not a module"
+    case Absent(name, _)        => s"'$name' is not a module"
     case Aggregate(name)         => s"'${name.value}' is an aggregate"
     case NoMain(name)            => s"'${name.value}' does not name a main"
     case Choose(name, platforms) =>
@@ -66,6 +67,18 @@ enum ProgramError:
       s"'${module.value}' depends on '${dependency.value}', which has no ${version.value} classes"
     case Work(path) => s"could not prepare the run directory $path"
     case Root(path) => s"could not read $path"
+
+  def diagnose: Diagnostic = this match
+    case Absent(_, near) =>
+      val explain = near match
+        case head :: _ => s"did you mean $head?"
+        case Nil       => "The name is not a module in this graph."
+      val fix = near.headOption match
+        case Some(guess) => Noted.command(s"histos run $guess")
+        case None        => Noted.command("histos graph")
+      Noted.error("run.absent", message, explain, fix)
+    case Lock(error) => error.diagnose
+    case other       => Noted.carry("run.failed", other.message, other.message, "histos help run")
 end ProgramError
 
 private def joined(platforms: List[Platform]): String =

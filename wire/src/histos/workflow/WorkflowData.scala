@@ -1,5 +1,6 @@
 package histos.workflow
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.plugin.{ActionName, JobName, RunnerName, SecretName, TargetName}
 import histos.workspace.IoFailure
 import histos.ProjectName
@@ -7,11 +8,11 @@ import java.nio.file.Path
 
 enum CiError:
   case BadName(raw: String)
-  case Unknown(name: ProjectName)
+  case Unknown(name: ProjectName, near: List[String] = Nil)
   case NotModule(name: ProjectName)
   case Duplicate(name: ProjectName)
   case Missing(path: Path)
-  case Drift
+  case Drift(file: String, hint: String)
   case Io(failure: IoFailure)
   case DuplicateSite(first: JobName, second: JobName)
   case IllegalSite(name: JobName)
@@ -34,11 +35,11 @@ enum CiError:
 
   def message: String = this match
     case BadName(raw)                 => s"'$raw' is not a project name"
-    case Unknown(name)                => s"'${name.value}' is not a project"
+    case Unknown(name, _)             => s"'${name.value}' is not a project"
     case NotModule(name)              => s"'${name.value}' is not a module"
     case Duplicate(name)              => s"'${name.value}' is listed twice"
     case Missing(path)                => s"no workflow at $path"
-    case Drift                        => "workflow does not match the graph"
+    case Drift(file, _)               => s"$file does not match the graph"
     case Io(failure)                  => failure.message
     case DuplicateSite(first, second) =>
       s"job ${first.value} and job ${second.value} both name a site"
@@ -67,4 +68,32 @@ enum CiError:
       s"a job timeout is between 1 and 360 minutes, not $count"
     case LlvmChecksum(archive) =>
       s"no sha256 is pinned for $archive"
+
+  def diagnose: Diagnostic = this match
+    case Drift(file, hint) =>
+      val line = hint match
+        case s"line $raw\n$_" => raw.toIntOption
+        case _                => None
+      Noted.at(
+        Noted.carry(
+          "workflow.drift",
+          message,
+          if hint.isEmpty then "The rendered workflow does not match the file." else hint,
+          "histos workflow --update",
+        ),
+        file,
+        line,
+      )
+    case Unknown(_, near) =>
+      val explain = near match
+        case head :: _ => s"did you mean $head?"
+        case Nil       => "The name is not a project in this graph."
+      val fix = near.headOption match
+        case Some(guess) => Noted.command(s"histos test $guess")
+        case None        => Noted.command("histos graph")
+      Noted.error("workflow.unknown-project", message, explain, fix)
+    case Missing(_) =>
+      Noted.carry("workflow.missing", message, "The generated file is not on disk.", "histos workflow --update")
+    case other =>
+      Noted.carry("workflow.failed", other.message, other.message, "histos workflow --update")
 end CiError

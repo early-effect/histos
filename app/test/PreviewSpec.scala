@@ -31,7 +31,10 @@ object PreviewSpec extends ZIOSpecDefault:
         named == Command.PreviewCompile(List(ProjectName("app"))),
         all == Command.PreviewCompile(Nil),
         bare == Left(CliParseError.Help),
-        other == Left(CliParseError.UnknownCommand),
+        other match
+          case Left(CliParseError.UnknownCommand("nope", _)) => true
+          case _                                             => false
+        ,
       )
     ,
     test("preview test, publish, clean, cleanFull, and run parse"):

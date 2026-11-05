@@ -1,5 +1,6 @@
 package histos
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.version.{Revision, ShipName}
 
 import java.nio.file.Path
@@ -70,22 +71,65 @@ enum PublishFault:
   case Client
   case Write(path: String)
   case Record(ship: String)
-  case Remote
+  case Status(code: Int)
+  case Transport(detail: String)
+  case Metadata(detail: String)
+  case Refused(detail: String)
 
   def message: String = this match
-    case Version(found)  => s"${found.render} is not a version this publisher accepts"
-    case Unreadable(raw) => s"'$raw' is not a revision"
-    case Artifact(raw)   => s"'$raw' is not an artifact id"
-    case Dependency(raw) => s"'$raw' is not a dependency version"
-    case Credentials     => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
-    case Rejected        => "the portal rejected the token. Regenerate the portal user token."
-    case Signer          => "a release needs a signing key"
-    case Portal          => "the portal URL is not usable"
-    case Bundle          => "the bundle could not be packed"
-    case Client          => "the portal rejected the upload"
-    case Write(path)     => s"could not write $path"
-    case Record(ship)    => s"$ship deployment record is not readable"
-    case Remote          => "the repository rejected the publish"
+    case Version(found)    => s"${found.render} is not a version this publisher accepts"
+    case Unreadable(raw)   => s"'$raw' is not a revision"
+    case Artifact(raw)     => s"'$raw' is not an artifact id"
+    case Dependency(raw)   => s"'$raw' is not a dependency version"
+    case Credentials       => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
+    case Rejected          => "the portal rejected the token. Regenerate the portal user token."
+    case Signer            => "a release needs a signing key"
+    case Portal            => "the portal URL is not usable"
+    case Bundle            => "the bundle could not be packed"
+    case Client            => "the portal rejected the upload"
+    case Write(path)       => s"could not write $path"
+    case Record(ship)      => s"$ship deployment record is not readable"
+    case Status(code)      => s"publish failed with HTTP $code"
+    case Transport(detail) => detail
+    case Metadata(detail)  => detail
+    case Refused(detail)   => detail
+
+  def diagnose: Diagnostic = this match
+    case Credentials =>
+      Noted.error(
+        "publish.credentials",
+        message,
+        "Neither variable is set. This is not a rejected login.",
+        Noted.steps(
+          "Export SONATYPE_USERNAME and SONATYPE_PASSWORD.",
+          "A 401 after they are set is a rejected token, not a missing variable.",
+        ),
+      )
+    case Rejected =>
+      Noted.error(
+        "publish.rejected",
+        message,
+        "SONATYPE_USERNAME and SONATYPE_PASSWORD were sent. The repository answered 401 or 403.",
+        Noted.steps("Regenerate the portal user token.", "A missing variable names SONATYPE_USERNAME."),
+      )
+    case Status(code) =>
+      Noted.carry(
+        "publish.status",
+        message,
+        s"The repository answered HTTP $code. That is not a missing credential and not a transport failure.",
+        "histos help publish",
+      )
+    case Transport(detail) =>
+      Noted.carry(
+        "publish.transport",
+        detail,
+        "The request did not get an HTTP status. The repository did not reject the publish.",
+        "histos help publish",
+      )
+    case Metadata(detail) =>
+      Noted.carry("publish.metadata", detail, "Snapshot metadata could not name the next build.", "histos help publish")
+    case other =>
+      Noted.carry("publish.failed", other.message, other.message, "histos help publish")
 end PublishFault
 
 object Publishing:

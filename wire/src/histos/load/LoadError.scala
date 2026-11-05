@@ -1,5 +1,6 @@
 package histos.load
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.BuildError
 import histos.plugin.PluginLoadError
 import histos.resolve.ResolveError
@@ -52,5 +53,12 @@ enum LoadError:
     case Resolve(error)     => error.message
     case MissingApi(path)   => s"$path has no bootstrap api jar"
     case NoHome             => "no user home, so the api jar cannot be cached"
-    case Io(failure)        => failure.message
+    case Io(failure) => failure.message
+
+  def diagnose: Diagnostic = this match
+    case Resolve(error) => error.diagnose
+    case MissingFile(_) =>
+      Noted.carry("load.missing", message, "Histos looks for histos.scala in this directory.", "histos init")
+    case other =>
+      Noted.carry("load.failed", other.message, other.message, "histos help")
 end LoadError

@@ -512,7 +512,10 @@ object Plan:
       case Left(error) => Left(PreviewError.Run(RunMiss.BadId(error.message)))
       case Right(name) =>
         graph.get(name) match
-          case None               => Left(PreviewError.Run(RunMiss.Absent(id)))
+          case None =>
+            Left(
+              PreviewError.Run(RunMiss.Absent(id, histos.doctor.Suggest.runs(id, graph.projects.map(_.name.value))))
+            )
           case Some(_: Aggregate) =>
             Left(PreviewError.Run(RunMiss.Aggregate(name)))
           case Some(module: Module) =>

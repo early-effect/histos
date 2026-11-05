@@ -1,5 +1,6 @@
 package histos.testrun
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.node.NodeMiss
 import histos.resolve.ResolveError
 import histos.select.SelectError
@@ -89,4 +90,10 @@ enum ModuleTestError:
     case Pattern(error)                 => error.message
     case Api(module, version, platform) =>
       s"'${module.value}' ${version.value} ${platform.token} has no readable API digest"
+
+  def diagnose: Diagnostic = this match
+    case Target(error)  => error.diagnose
+    case Compile(error) => error.diagnose
+    case Lock(error)    => error.diagnose
+    case other          => Noted.carry("test.failed", other.message, other.message, "histos help test")
 end ModuleTestError

@@ -1036,7 +1036,7 @@ object GraphCompileSpec extends ZIOSpecDefault:
             .either
         yield assertTrue:
           out match
-            case Left(GraphCompileError.Target(SelectError.Unknown(name))) =>
+            case Left(GraphCompileError.Target(SelectError.Unknown(name, _))) =>
               name.value == "missing"
             case _ => false
     ,

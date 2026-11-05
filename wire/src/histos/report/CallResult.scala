@@ -1,5 +1,6 @@
 package histos.report
 
+import histos.doctor.{Diagnostic => Finding, Noted}
 import histos.cache.CacheCleanModeError
 import histos.assembly.AssembleError
 import histos.jdk.ToolchainError
@@ -104,6 +105,22 @@ enum BuildFault:
     case Watch(error)        => error.message
     case Interrupted         => "interrupted"
     case Rejected(rejection) => rejection.message
+
+  def diagnose: Finding = this match
+    case Load(error)      => error.diagnose
+    case Resolve(error)   => error.diagnose
+    case Select(error)    => error.diagnose
+    case Compile(error)   => error.diagnose
+    case Test(error)      => error.diagnose
+    case Publish(error)   => error.diagnose
+    case Workflow(error)  => error.diagnose
+    case Program(error)   => error.diagnose
+    case Task(error)      => error.diagnose
+    case Preview(error)   => error.diagnose
+    case Rejected(reason) => reason.diagnose
+    case Release(detail)  => Noted.carry("publish.release", detail, detail, "histos help publish")
+    case Interrupted      => Noted.carry("build.interrupted", message, "The run was interrupted.", "histos help")
+    case other            => Noted.carry("build.failed", other.message, other.message, "histos help")
 end BuildFault
 
 /** A request the grammar refused. Tokens only. The CLI renders a usage banner for [[Rejection.CommandHelp]]. */
@@ -151,8 +168,23 @@ enum Rejection:
     case CacheClean(error)      => error.message
     case Flag(error)            => error.message
     case TaskPlatform(name)     => s"run $name does not take a platform"
-    case CommandHelp(names)     =>
+    case CommandHelp(names) =>
       if names.isEmpty then "unknown command" else s"unknown command: ${names.mkString(", ")}"
+
+  def diagnose: Finding = this match
+    case CommandHelp(names) =>
+      val token   = names.headOption.getOrElse("")
+      val summary = if token.isEmpty then "unknown command" else s"unknown command '$token'"
+      Noted.error(
+        "cli.unknown-command",
+        summary,
+        "histos help lists the commands.\nhistos help <command> prints one.",
+        Noted.command("histos help"),
+      )
+    case MissingRunName =>
+      Noted.carry("cli.run", message, "run needs the task name.", "histos help run")
+    case other =>
+      Noted.carry("cli.usage", other.message, other.message, "histos help")
 end Rejection
 
 /** Workflow generation failed before a build report existed. */
@@ -163,4 +195,8 @@ enum WorkflowFault:
   def message: String = this match
     case Files(error)   => error.message
     case Scripts(error) => error.message
+
+  def diagnose: Finding = this match
+    case Files(error)   => error.diagnose
+    case Scripts(error) => Noted.carry("workflow.script", error.message, error.message, "histos workflow --update")
 end WorkflowFault
