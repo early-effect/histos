@@ -105,10 +105,11 @@ object FixMode:
 
 /** Where doctor runs in generated workflows. Neither value adds a job. */
 enum DoctorPlacement:
-  /** Every generated job starts with `./histos doctor --preflight`, and the supply-chain job also runs full doctor. */
+  /** Every generated job starts with `./histos doctor --preflight`, and the `workflow` job also runs the full doctor.
+    */
   case PreflightPlusWorkflowJob
 
-  /** Only the supply-chain job runs doctor. No per-job preflight step is rendered. */
+  /** The `workflow` job runs the full doctor. No per-job preflight step is rendered. */
   case WorkflowJobOnly
 end DoctorPlacement
 

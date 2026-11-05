@@ -345,6 +345,9 @@ object WorkflowSpec extends ZIOSpecDefault:
         ciOf(own) match
           case Some(ci) =>
             ci.contains("\n  toolchain:\n") &&
+            ci.contains("\n  workflow:\n") &&
+            ci.contains("doctor --preflight workflow") &&
+            ci.contains("./histos workflow --check") &&
             ci.split("cp .histos/assembly.sha256").length == 2 &&
             ci.contains("needs: [affected, toolchain]") &&
             ci.contains("\n    needs: toolchain\n")

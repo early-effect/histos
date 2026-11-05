@@ -139,6 +139,17 @@ jobs:
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
+  workflow:
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: ./histos doctor --preflight workflow
+      - run: ./histos doctor
+      - run: "./histos workflow --check"
   supply-chain:
     runs-on: ubuntu-26.04
     permissions:

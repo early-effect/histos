@@ -247,7 +247,7 @@ object Workflow:
     val boot = if selfHosted(graph) then List(toolchainJob) else Nil
     val body =
       boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++
-        List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
+        List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph) ++ body).mkString("\n") + "\n"
 
   /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
@@ -1156,6 +1156,23 @@ object Workflow:
     val native     = modules.exists(_.platforms.all.contains(Platform.Native))
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
+
+  /** The required check. It runs on a pull request, reuses this repository's assembly, and runs the full doctor. */
+  private def workflowJob(graph: ProjectGraph): String =
+    (List(
+      "  workflow:"
+    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+      s"    runs-on: $Runner",
+      "    permissions:",
+    ) ++ actionsRead(graph) ++ List(
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+      s"      - uses: $Setup",
+    ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
+      "      - run: ./histos doctor",
+      "      - run: \"./histos workflow --check\"",
+    )).mkString("\n")
 
   private def versionsJob(graph: ProjectGraph): String =
     (List(

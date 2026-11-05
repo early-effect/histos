@@ -14,7 +14,7 @@ histos pins every generated `uses:` to a 40-character commit SHA and a tag comme
 
 ## What the workflows do
 
-`ci.yml` has a `supply-chain` job. It runs doctor, `workflow --check`, `resolve --check`, and `deps audit`. On a non-pull-request event it also runs `deps alert`. The `dependency-snapshot` job runs on a push to the default branch and is the supply job that asks for `contents: write`.
+`ci.yml` has a `workflow` job. It runs on a pull request, runs the full doctor, and runs `workflow --check`. `ci.yml` also has a `supply-chain` job. It runs doctor, `workflow --check`, `resolve --check`, and `deps audit`. On a non-pull-request event it also runs `deps alert`. The `dependency-snapshot` job runs on a push to the default branch and is the supply job that asks for `contents: write`.
 
 `histos-deps.yml` is the weekly update. `workflow_dispatch` takes `dry-run`. A dry run is doctor plus update: no branch and no pull request. `deps pr` under `CommitSigning.ApiSigned` updates the branch with `createCommitOnBranch`, one commit per bump kind, then opens or updates a pull request titled `deps: weekly updates`. The body carries `<!-- histos-deps head=<oid> -->`. Human commits on the branch produce a comment and no force-push. An empty plan closes a stale pull request.
 
@@ -30,4 +30,4 @@ histos pins every generated `uses:` to a 40-character commit SHA and a tag comme
 
 ## Policies
 
-Set them on `SupplyChain`. The defaults are `SeverityGate.Threshold(High, Low)`, `GateScope.All`, `OutageStrategy.ByEvent` (pull requests may use a 24-hour cache; push and schedule fail closed), `IgnoreRule.ReasonAndExpiry(90 days)`, `ZeroX.MinorIsMinor`, `Majors.ListOnly`, `PreRelease.Skip`, `Cooldown.After(3 days)`, and `DoctorPlacement.PreflightPlusWorkflowJob`. `WorkflowJobOnly` drops the per-job preflight step and still runs doctor on `supply-chain`.
+Set them on `SupplyChain`. The defaults are `SeverityGate.Threshold(High, Low)`, `GateScope.All`, `OutageStrategy.ByEvent` (pull requests may use a 24-hour cache; push and schedule fail closed), `IgnoreRule.ReasonAndExpiry(90 days)`, `ZeroX.MinorIsMinor`, `Majors.ListOnly`, `PreRelease.Skip`, `Cooldown.After(3 days)`, and `DoctorPlacement.PreflightPlusWorkflowJob`. `WorkflowJobOnly` drops the per-job preflight step and still runs doctor on `workflow`.
