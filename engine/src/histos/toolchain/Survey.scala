@@ -25,7 +25,7 @@ object Survey:
           if !Node.required(graph) then ZIO.succeed(None)
           else
             NodeToolchain
-              .explain(machine)
+              .explain(machine, graph.runnerTools.nodePath)
               .mapBoth(
                 error => SurveyError.Node(jdk, error),
                 found => Some(found),

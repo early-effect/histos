@@ -105,7 +105,8 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             resolver,
           )
           runtimes <- histos.toolchain.Runtimes.read(
-            TestMachine.at(root, Map.empty)
+            TestMachine.at(root, Map.empty),
+            None,
           )
           result <- histos.testrun.TestContext
             .make(
@@ -132,7 +133,7 @@ object SelectedToolsSpec extends ZIOSpecDefault:
             histos.testrun.ModuleTestError.NoNode(
               name,
               version,
-              histos.node.NodeMiss.Absent(histos.node.NodeToolchain.Floor),
+              histos.node.NodeMiss.Absent(histos.node.NodeToolchain.Floor, histos.node.NodeSource.Path),
             )
           )
         )

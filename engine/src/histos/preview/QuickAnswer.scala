@@ -6,7 +6,7 @@ import histos.resolve.{BuildResolvers, Resolve}
 import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp}
 import histos.toolchain.RuntimeIdentity
 import histos.zinc.GraphCompile
-import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
+import histos.{Module, NodePath, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
 
@@ -104,7 +104,7 @@ object QuickAnswer:
             .flatMap:
               case Left(_)        => ZIO.succeed(None)
               case Right(machine) =>
-                accepted(platform, machine).map: runtime =>
+                accepted(platform, machine, graph.runnerTools.nodePath).map: runtime =>
                   runtime.flatMap: (jdk, node) =>
                     SuiteCover
                       .stored(
@@ -127,6 +127,7 @@ object QuickAnswer:
   private def accepted(
       platform: Platform,
       machine: Machine,
+      nodePath: Option[NodePath],
   ): UIO[Option[(RuntimeIdentity, Option[RuntimeIdentity])]] =
     Toolchain
       .resolve(machine)
@@ -138,7 +139,7 @@ object QuickAnswer:
             case Platform.Jvm | Platform.Native => ZIO.succeed(Some((jdk.identity, None)))
             case Platform.Js                    =>
               NodeToolchain
-                .resolve(machine)
+                .resolve(machine, nodePath)
                 .either
                 .map:
                   case Left(_)     => None

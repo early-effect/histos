@@ -1,6 +1,6 @@
 package histos.testrun
 
-import histos.node.{NodeMiss, NodeToolchain}
+import histos.node.{NodeMiss, NodeSource, NodeToolchain}
 import histos.resolve.{BuildResolvers, Resolve}
 import histos.toolchain.Runtimes
 import histos.zinc.GraphCompile
@@ -175,7 +175,7 @@ private[testrun] object ModuleTestSupport:
           path = (root.resolve("elsewhere").resolve("bin").toString :: env
             .get("PATH")
             .toList).mkString(java.io.File.pathSeparator)
-          here  <- Runtimes.read(TestMachine.at(root, env + ("PATH" -> path)))
+          here  <- Runtimes.read(TestMachine.at(root, env + ("PATH" -> path)), None)
           cells <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
@@ -290,7 +290,7 @@ private[testrun] object ModuleTestSupport:
             write(root, "probe/src/test/scala/demo/Check.scala", hiPasses)
             write(root, "dependencies.lock", "cell probe 3.10.0 js\n")
           }
-          here <- Runtimes.read(TestMachine.at(root, Map.empty))
+          here <- Runtimes.read(TestMachine.at(root, Map.empty), None)
           out  <- histos.ToolFixture
             .at(root, built)(
               ModuleTest
@@ -307,7 +307,7 @@ private[testrun] object ModuleTestSupport:
             ModuleTestError.NoNode(
               name,
               scala3,
-              NodeMiss.Absent(NodeToolchain.Floor),
+              NodeMiss.Absent(NodeToolchain.Floor, NodeSource.Path),
             )
           ),
           !linked,

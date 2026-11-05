@@ -900,40 +900,44 @@ object Daemon:
     val next = Frame.read(input).mapError(_ => ServerError.Io(ServerIo.Read(bound)))
     ZIO.scoped {
       outbox(send).flatMap { box =>
-        warm.live.get.zip(Runtimes.read(machine)).flatMap { (generation, runtimes) =>
-          Bsp
-            .open(
-              repo,
-              generation.graph,
-              jdk,
-              runtimes,
-              buildClasspath,
-              box.offer,
-              build,
-              effect => permit.withPermit(effect),
-              Some(warm.graphs),
-            )
-            .mapError(ServerError.Resolve(_))
-            .flatMap { session =>
-              def adopted(payload: String) =
-                adopt(repo, apiJar, version, bound, warm)
-                  .flatMap {
-                    case Right(gen) => ZIO.succeed(gen)
-                    case Left(_)    =>
-                      warm.reloading.withPermit(
-                        warm.live.get.flatMap(gen => acquire(gen).as(gen))
-                      )
-                  }
-                  .flatMap { gen =>
-                    session.answer(gen.graph, payload).ensuring(release(gen))
-                  }
-              warm.spliced.update(_ + session) *>
-                session.follow *>
-                requests(next, box.offer, adopted, box.done)
-                  .flatMap(code => box.offer(wire(Message.Marker(code))) *> box.close)
-                  .ensuring(warm.spliced.update(_ - session))
-            }
-        }
+        warm.live.get
+          .flatMap(generation =>
+            Runtimes.read(machine, generation.graph.runnerTools.nodePath).map(runtimes => (generation, runtimes))
+          )
+          .flatMap { (generation, runtimes) =>
+            Bsp
+              .open(
+                repo,
+                generation.graph,
+                jdk,
+                runtimes,
+                buildClasspath,
+                box.offer,
+                build,
+                effect => permit.withPermit(effect),
+                Some(warm.graphs),
+              )
+              .mapError(ServerError.Resolve(_))
+              .flatMap { session =>
+                def adopted(payload: String) =
+                  adopt(repo, apiJar, version, bound, warm)
+                    .flatMap {
+                      case Right(gen) => ZIO.succeed(gen)
+                      case Left(_)    =>
+                        warm.reloading.withPermit(
+                          warm.live.get.flatMap(gen => acquire(gen).as(gen))
+                        )
+                    }
+                    .flatMap { gen =>
+                      session.answer(gen.graph, payload).ensuring(release(gen))
+                    }
+                warm.spliced.update(_ + session) *>
+                  session.follow *>
+                  requests(next, box.offer, adopted, box.done)
+                    .flatMap(code => box.offer(wire(Message.Marker(code))) *> box.close)
+                    .ensuring(warm.spliced.update(_ - session))
+              }
+          }
       }
     }
 

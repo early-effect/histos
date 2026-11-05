@@ -59,10 +59,12 @@ import histos.native.{
 import histos.node.{
   NodeBinary,
   NodeError,
+  NodeFileFault,
   NodeMajor,
   NodeMiss,
   NodeOverrideError,
   NodeReject,
+  NodeSource,
   NodeSurvey,
   NodeVersion,
   NodeVersionError,
@@ -180,6 +182,7 @@ import histos.{
   PomFact,
   ProjectName,
   ProjectNameError,
+  NodePathError,
   ProjectPath,
   ProviderLibrary,
   RepositoryUrl,
@@ -471,6 +474,12 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[NodeError] = Schema.derived
 
   given Schema[NodeReject] = Schema.derived
+
+  given Schema[NodeSource] = Schema.derived
+
+  given Schema[NodeFileFault] = Schema.derived
+
+  given Schema[NodePathError] = Schema.derived
 
   given Schema[NodeVersion] = text("NodeVersion")
 

@@ -27,15 +27,20 @@ enum NodeFloorError:
     case NotPositive(raw) => s"$raw is not a Node major"
 end NodeFloorError
 
-/** The tools a generated test job asks the runner to provide. Empty installs nothing. */
+/** Tools a generated test job installs, and the Node binary a Js launch prefers.
+  *
+  * `node` is the major the runner installs. `nodePath`, when set, is the absolute `node` binary used after
+  * `HISTOS_NODE` and before `node.local` and `PATH`. Empty installs nothing and names no binary.
+  */
 final case class RunnerTools(
     node: Option[NodeFloor],
     llvm: Option[ToolRevision],
     playwright: Option[ToolRevision],
+    nodePath: Option[NodePath] = None,
 )
 
 object RunnerTools:
-  val empty: RunnerTools = RunnerTools(None, None, None)
+  val empty: RunnerTools = RunnerTools(None, None, None, None)
 
 private object NodeFloorMacro:
   def literal(raw: Expr[Int])(using Quotes): Expr[NodeFloor] =

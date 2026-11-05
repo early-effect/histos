@@ -80,9 +80,9 @@ object WorkflowSpec extends ZIOSpecDefault:
   private val v390           = ScalaVersion.trusted("3.9.0")
   private val core           = ProjectName("core")
   private val tests          = ProjectName("tests")
-  private val nodeOnly       = RunnerTools(Some(NodeFloor(22)), None, None)
-  private val llvmOnly       = RunnerTools(None, Some(ToolRevision("20.1.8")), None)
-  private val playwrightOnly = RunnerTools(None, None, Some(ToolRevision("1.49.0")))
+  private val nodeOnly       = RunnerTools(Some(NodeFloor(22)), None, None, None)
+  private val llvmOnly       = RunnerTools(None, Some(ToolRevision("20.1.8")), None, None)
+  private val playwrightOnly = RunnerTools(None, None, Some(ToolRevision("1.49.0")), None)
   private val automatic      = Sona.described(ReleaseMode.Automatic)
   private val hold           = Sona.described(ReleaseMode.Hold)
 
@@ -197,7 +197,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         Workflow.render(
           graph(
             Splits.aggregate,
-            RunnerTools(Some(NodeFloor(25)), Some(ToolRevision("21.1.8")), None),
+            RunnerTools(Some(NodeFloor(25)), Some(ToolRevision("21.1.8")), None, None),
           )
         ) match
           case Right(copied) =>
@@ -215,7 +215,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         Catalog.empty,
         None,
         Nil,
-        runnerTools = RunnerTools(None, Some(ToolRevision("21.1.8")), None),
+        runnerTools = RunnerTools(None, Some(ToolRevision("21.1.8")), None, None),
       )
       assertTrue:
         Workflow.render(built) match
@@ -286,6 +286,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             Some(NodeFloor(25)),
             Some(ToolRevision("21.1.8")),
             Some(ToolRevision("1.62.1")),
+            None,
           )
         )(
           histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
@@ -414,6 +415,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           Some(NodeFloor(25)),
           Some(ToolRevision("21.1.8")),
           Some(ToolRevision("1.62.1")),
+          None,
         )
       )(
         histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
@@ -1054,7 +1056,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           case _ => false
     ,
     test("a release links the native client after sona and publishes the install files"):
-      val tools    = RunnerTools(None, Some(ToolRevision("21.1.8")), None)
+      val tools    = RunnerTools(None, Some(ToolRevision("21.1.8")), None, None)
       val rendered = renderRelease(
         List(manual("histos", "1.2.3", "app")),
         Set("app"),

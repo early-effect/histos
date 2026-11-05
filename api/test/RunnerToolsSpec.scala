@@ -10,6 +10,7 @@ object RunnerToolsSpec extends ZIOSpecDefault:
     Some(NodeFloor(25)),
     Some(ToolRevision("21.1.8")),
     Some(ToolRevision("1.62.1")),
+    None,
   )
 
   def spec = suite("runner tools")(
@@ -41,7 +42,7 @@ object RunnerToolsSpec extends ZIOSpecDefault:
       val flipped = Projects
         .runnerTools(tools)
         .organization(organization"rocks.earlyeffect")(core)
-      val node = RunnerTools(Some(NodeFloor(22)), None, None)
+      val node = RunnerTools(Some(NodeFloor(22)), None, None, None)
       assertTrue(
         named.map(_.runnerTools) == Right(tools),
         named.map(_.organization.map(_.value)) == Right(Some("rocks.earlyeffect")),
@@ -72,6 +73,40 @@ object RunnerToolsSpec extends ZIOSpecDefault:
           .organization(organization"rocks.earlyeffect")
           .docCheck(core)
           .map(_.docCheck) == Right(histos.DocCheck.On),
+      )
+    ,
+    test("a node path is an absolute node binary and stays on the build"):
+      val core     = module("core", Jvm)(scala3)
+      val path     = NodePath("/usr/local/bin/node")
+      val named    = RunnerTools(None, None, None, Some(path))
+      val literal  = typeCheckErrors("""histos.NodePath("/usr/bin/node")""")
+      val relative = typeCheckErrors("""histos.NodePath("bin/node")""")
+      val blank    = typeCheckErrors("""histos.NodePath("")""")
+      val other    = typeCheckErrors("""histos.NodePath("/tmp/nodejs")""")
+      assertTrue(
+        path.value == "/usr/local/bin/node",
+        NodePath("/usr/bin/../bin/node").value == "/usr/bin/node",
+        NodePath.from("/usr/bin/node").map(_.value) == Right("/usr/bin/node"),
+        NodePath.from("  /usr/bin/node  ").map(_.value) == Right("/usr/bin/node"),
+        NodePath.from("/usr/bin/node/").map(_.value) == Right("/usr/bin/node"),
+        NodePath.from("bin/node") == Left(NodePathError.Relative("bin/node")),
+        NodePath.from("") == Left(NodePathError.Empty),
+        NodePath.from("   ") == Left(NodePathError.Empty),
+        NodePath.from("/tmp/nodejs") == Left(NodePathError.NotBinary("/tmp/nodejs")),
+        NodePathError.Relative("bin/node").message == "is not absolute: bin/node",
+        NodePathError.Empty.message == "is empty",
+        NodePathError.NotBinary("/tmp/nodejs").message == "is not a node binary: /tmp/nodejs",
+        Projects.runnerTools(named)(core).map(_.runnerTools) == Right(named),
+        literal == Nil,
+        relative match
+          case head :: _ => head.message.contains("is not absolute")
+          case Nil       => false,
+        blank match
+          case head :: _ => head.message.contains("is empty")
+          case Nil       => false,
+        other match
+          case head :: _ => head.message.contains("is not a node binary")
+          case Nil       => false,
       ),
   )
 end RunnerToolsSpec

@@ -3,7 +3,7 @@ package histos.toolchain
 import histos.jdk.Machine
 import histos.native.NativeOrigin
 import histos.node.{NodeBinary, NodeMiss, NodeToolchain, NodeRuntime}
-import histos.Platform
+import histos.{NodePath, Platform}
 import histos.step.{Input, InputName, InputValue}
 import zio.{Chunk, ZIO}
 
@@ -36,9 +36,9 @@ object Runtimes:
     case RuntimeIdentity.Local(home, salt) =>
       s"local:${home.toString}:${salt.value}"
 
-  def read(machine: Machine): UIO[Runtimes] =
+  def read(machine: Machine, nodePath: Option[NodePath]): UIO[Runtimes] =
     NodeToolchain
-      .resolve(machine)
+      .resolve(machine, nodePath)
       .memoize
       .map(node => new Runtimes(machine.env, machine.native, node))
 end Runtimes
