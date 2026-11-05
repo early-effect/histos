@@ -63,6 +63,7 @@ enum PublishFault:
   case Artifact(raw: String)
   case Dependency(raw: String)
   case Credentials
+  case Rejected
   case Signer
   case Portal
   case Bundle
@@ -77,6 +78,7 @@ enum PublishFault:
     case Artifact(raw)   => s"'$raw' is not an artifact id"
     case Dependency(raw) => s"'$raw' is not a dependency version"
     case Credentials     => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
+    case Rejected        => "the portal rejected the token. Regenerate the portal user token."
     case Signer          => "a release needs a signing key"
     case Portal          => "the portal URL is not usable"
     case Bundle          => "the bundle could not be packed"

@@ -131,7 +131,7 @@ object JobYaml:
       case SiteShape.Dispatch     => Nil
       case SiteShape.Build        => List(taskLike(graph, plugin, job, upload = false))
       case SiteShape.DeployOnPush =>
-        List(taskLike(graph, plugin, job, upload = true), pages(job.name))
+        List(taskLike(graph, plugin, job, upload = true), pages(graph, job.name))
 
   private def task(
       graph: ProjectGraph,
@@ -240,6 +240,7 @@ object JobYaml:
       needsLine(needs) ++
       when(cond, needs, policy) ++
       List(s"    runs-on: ${runsOn(runner, graph.ci)}") ++
+      Workflow.jobLimit(graph) ++
       matrixBlock(matrix) ++
       environmentLine(environment, matrix) ++
       concurrencyBlock(concurrency) ++
@@ -252,12 +253,13 @@ object JobYaml:
       List(s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin, taskName).render}")}") ++
       upload.toList.flatMap(uploadStep)
 
-  private def pages(name: JobName): List[String] =
+  private def pages(graph: ProjectGraph, name: JobName): List[String] =
     List(
       "  pages:",
       s"    needs: ${name.value}",
       s"    if: ${quote(OnDefaultPush)}",
       "    runs-on: ubuntu-26.04",
+    ) ++ Workflow.jobLimit(graph) ++ List(
       "    environment:",
       "      name: github-pages",
       "      url: ${{ steps.deployment.outputs.page_url }}",
@@ -288,6 +290,7 @@ object JobYaml:
       "jobs:",
       "  pages:",
       "    runs-on: ubuntu-26.04",
+    ) ++ Workflow.jobLimit(graph) ++ List(
       "    environment:",
       "      name: github-pages",
       "      url: ${{ steps.deployment.outputs.page_url }}",

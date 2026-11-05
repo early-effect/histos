@@ -233,6 +233,7 @@ object PublishRun:
   private def releaseFault(fault: PublishFault): IO[ReleaseError, Piece] =
     fault match
       case PublishFault.Credentials => ZIO.fail(ReleaseError.Credentials)
+      case PublishFault.Rejected    => ZIO.fail(ReleaseError.Rejected)
       case PublishFault.Version(_)  => ZIO.succeed(Piece.Refused(fault.message))
       case other                    => ZIO.succeed(Piece.Failed(List(other.message)))
 

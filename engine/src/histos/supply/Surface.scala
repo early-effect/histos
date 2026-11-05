@@ -60,9 +60,10 @@ object DoctorSurface:
       setting: String => UIO[Unit],
   ): UIO[(Int, String)] =
     for
-      hit    <- github(repo, net, token)
+      hit                 <- github(repo, net, token)
+      (auth, pgp, pages) <- probes(repo, graph, request, net, token, hit)
       report <- Runner.run(
-        selected(repo, graph, request, hit),
+        selected(repo, graph, request, hit, auth, pgp, pages),
         DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
         2.seconds,
       )
@@ -72,15 +73,58 @@ object DoctorSurface:
       val note = if written.isEmpty then "" else written.mkString("\n", "\n", "")
       (report.exit, body + note)
 
+  private def probes(
+      repo: Path,
+      graph: ProjectGraph,
+      request: Request,
+      net: Net,
+      token: Option[String],
+      hit: histos.doctor.GitHubProbe.Hit,
+  ): UIO[(histos.doctor.CentralProbe.Auth, histos.doctor.PgpProbe.Hit, histos.doctor.PagesProbe.Hit)] =
+    if request.preflight.isDefined then
+      ZIO.succeed(
+        (histos.doctor.CentralProbe.Auth.NotRun, histos.doctor.PgpProbe.Hit.Unset, histos.doctor.PagesProbe.Hit.Absent)
+      )
+    else
+      val auth = histos.doctor.CentralProbe.read(net, sys.env)
+      val pgp  = histos.doctor.PgpProbe.read(sys.env)
+      val pages =
+        if !histos.doctor.HygieneChecks.publishesPages(graph) then ZIO.succeed(histos.doctor.PagesProbe.Hit.Absent)
+        else
+          (token.filter(_.nonEmpty), githubRepo(repo)) match
+            case (Some(value), Some(name)) =>
+              val branch = hit match
+                case histos.doctor.GitHubProbe.Hit.Ready(read) => read.view.defaultBranch.value
+                case _                                         => "main"
+              histos.doctor.PagesProbe.read(net, name, branch, value)
+            case _ => ZIO.succeed(histos.doctor.PagesProbe.Hit.Absent)
+      auth.zipPar(pgp).zipPar(pages)
+
   private def selected(
       repo: Path,
       graph: ProjectGraph,
       request: Request,
       hit: histos.doctor.GitHubProbe.Hit,
+      auth: histos.doctor.CentralProbe.Auth,
+      pgp: histos.doctor.PgpProbe.Hit,
+      pages: histos.doctor.PagesProbe.Hit,
   ): List[DoctorCheck] =
     val pins   = pinCheck(repo, graph)
     val github = githubCheck(repo, graph, hit)
-    val all    = histos.doctor.Registry.collect(graph, pins :: github :: shipChecks(repo, graph))
+    val listed = hit match
+      case histos.doctor.GitHubProbe.Hit.Ready(read) if read.covered.contains("supply.secret-missing") =>
+        Some(read.view.secrets)
+      case _ => None
+    val release = List(
+      closed(
+        "central.credentials",
+        Area.Release,
+        histos.doctor.HygieneChecks.credentials(graph.catalog, sys.env, listed, auth),
+      ),
+      closed("pgp.key", Area.Release, histos.doctor.HygieneChecks.key(pgp)),
+      closedPages(graph, pages),
+    )
+    val all = histos.doctor.Registry.collect(graph, pins :: github :: release ++ shipChecks(repo, graph))
     request.preflight match
       case Some(job) => preflight(job)
       case None      =>
@@ -100,6 +144,21 @@ object DoctorSurface:
             case _ =>
               ZIO.succeed(List(Outcome.Ok(id, s"$job preflight")))
     )
+
+  private def closed(raw: String, where: Area, outcome: Outcome): DoctorCheck =
+    new DoctorCheck:
+      def id                      = CheckId.trusted(raw)
+      def area                    = where
+      def needs                   = Set.empty
+      def run(ctx: DoctorContext) = ZIO.succeed(List(outcome))
+
+  private def closedPages(graph: ProjectGraph, hit: histos.doctor.PagesProbe.Hit): DoctorCheck =
+    new DoctorCheck:
+      def id   = CheckId.trusted("pages.enabled")
+      def area = Area.SitePublish
+      def needs                   = Set.empty
+      def run(ctx: DoctorContext) =
+        ZIO.succeed(histos.doctor.HygieneChecks.pages(histos.doctor.HygieneChecks.publishesPages(graph), hit))
 
   private def shipChecks(repo: Path, graph: ProjectGraph): List[DoctorCheck] =
     val file = repo.resolve(histos.version.VersionTask.fileName)

@@ -10,6 +10,7 @@ permissions:
 jobs:
   affected:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -42,6 +43,7 @@ jobs:
     needs: affected
     if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
@@ -59,6 +61,9 @@ jobs:
           if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
             mkdir -p "$dir"
             curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            expected="1ead36b3dfcb774b57be530df42bec70ab2d239fbce9889447c7a29a4ddc1ae6"
+            got=$(openssl dgst -sha256 "$dir/llvm.tar.xz" | awk '{print $NF}')
+            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }
             tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
             rm "$dir/llvm.tar.xz"
           fi
@@ -97,6 +102,7 @@ jobs:
   cache-seed:
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
@@ -114,6 +120,9 @@ jobs:
           if [ "${{ steps.llvm.outputs.cache-hit }}" != "true" ]; then
             mkdir -p "$dir"
             curl -fsSL "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/LLVM-20.1.8-Linux-X64.tar.xz" -o "$dir/llvm.tar.xz"
+            expected="1ead36b3dfcb774b57be530df42bec70ab2d239fbce9889447c7a29a4ddc1ae6"
+            got=$(openssl dgst -sha256 "$dir/llvm.tar.xz" | awk '{print $NF}')
+            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }
             tar -xJf "$dir/llvm.tar.xz" -C "$dir" --strip-components=1
             rm "$dir/llvm.tar.xz"
           fi
@@ -150,6 +159,7 @@ jobs:
   workflow:
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -164,6 +174,7 @@ jobs:
       - run: "./histos workflow --check"
   supply-chain:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read
       issues: write
@@ -191,6 +202,7 @@ jobs:
   dependency-snapshot:
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -198,3 +210,5 @@ jobs:
       - uses: ./.github/actions/setup
       - run: ./histos doctor --preflight dependency-snapshot
       - run: ./histos deps snapshot --submit
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -259,6 +259,10 @@ object Projects:
   def ci(settings: CiSettings): Organized =
     Organized(None, Nil, ci = settings)
 
+  /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
+  def jobTimeout(value: JobTimeout): Organized =
+    Organized(None, Nil, ci = CiSettings.empty.copy(timeout = value))
+
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
@@ -960,6 +964,10 @@ final class Organized(
   /** Pins, advisories, and the weekly bump. A second call replaces the policy. */
   def supplyChain(value: SupplyChain): Organized =
     Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, value)
+
+  /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including this. */
+  def jobTimeout(value: JobTimeout): Organized =
+    ci(ci.copy(timeout = value))
 
   /** Runners, action pins, secrets, and graph env. A second call replaces the settings. */
   def ci(settings: CiSettings): Organized =

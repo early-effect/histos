@@ -47,6 +47,7 @@ final case class Deployed(ship: ShipName, id: DeploymentId, state: DeploymentSta
 
 enum ReleaseError:
   case Credentials
+  case Rejected
   case Portal(error: PortalBase.Error)
   case Signer(error: SignerError)
   case Stage(error: LocalPublishError)
@@ -58,6 +59,7 @@ enum ReleaseError:
 
   def message: String = this match
     case Credentials   => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
+    case Rejected      => "the portal rejected the token. Regenerate the portal user token."
     case Portal(error) => error.message
     case Signer(error) => error.message
     case Stage(error)  => error.message

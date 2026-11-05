@@ -2,7 +2,7 @@ package histos.supply
 
 import _root_.scala.quoted.*
 
-private[histos] object SupplyMacros:
+private object SupplyMacros:
   def timeZone(raw: Expr[String])(using Quotes): Expr[TimeZone] =
     text("TimeZone", raw, TimeZone.from, _.message, value => '{ TimeZone.trusted(${ Expr(value) }) })
 
@@ -88,3 +88,15 @@ private[histos] object SupplyMacros:
           case None      => Left(s"""$what"..." takes a literal""")
       case _ => Left(s"""$what"..." takes no arguments""")
 end SupplyMacros
+
+/** Interpolators for callers outside this package. The macro object stays package-private. */
+object Interp:
+  inline def ghsa(inline sc: StringContext, inline args: String*): AdvisoryId =
+    ${ SupplyMacros.ghsaInterp('sc, 'args) }
+
+  inline def reason(inline sc: StringContext, inline args: String*): Reason =
+    ${ SupplyMacros.reasonInterp('sc, 'args) }
+
+  inline def date(inline sc: StringContext, inline args: String*): Date =
+    ${ SupplyMacros.dateInterp('sc, 'args) }
+end Interp
