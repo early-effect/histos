@@ -968,9 +968,7 @@ object Workflow:
       "    outputs:",
       "      modules: ${{ steps.affected.outputs.modules }}",
       "    steps:",
-      s"      - uses: $Checkout",
-      "        with:",
-      "          fetch-depth: 0",
+    ) ++ fullGitCheckout() ++ List(
       s"      - uses: $Setup",
     ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
@@ -1191,6 +1189,20 @@ object Workflow:
   /** Pinned image. `ubuntu-latest` moves, and this render should not move with it. */
   private val Runner = "ubuntu-26.04"
 
+  /** The whole history and the tags, the way zipx checks out. `fetch-depth: 0` is all branches and tags. A fetch still
+    * does not write `refs/remotes/origin/HEAD`, so a job that renders a workflow follows this with
+    * [[ActionPins.originHead]].
+    */
+  private[workflow] def fullGitCheckout(persistCredentials: Boolean = true): List[String] =
+    val creds =
+      if persistCredentials then Nil else List("          persist-credentials: false")
+    List(
+      s"      - uses: ${ActionPins.checkout.line}",
+      "        with:",
+      s"          fetch-depth: ${quote("0")}",
+      s"          fetch-tags: ${quote("true")}",
+    ) ++ creds
+
   /** Current major. v4 still targets Node 20, which the runner rewrites to Node 24. */
   private val Checkout = ActionPins.checkout.line
 
@@ -1235,7 +1247,7 @@ object Workflow:
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",
-      s"      - uses: $Checkout",
+    ) ++ fullGitCheckout() ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: $Setup",
     ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(

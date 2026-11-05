@@ -34,7 +34,7 @@ object SupplyYaml:
       "      contents: read"
     ) ++ issues ++ List(
       "    steps:",
-      s"      - uses: ${ActionPins.checkout.line}",
+    ) ++ Workflow.fullGitCheckout() ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: ${ActionPins.localSetup}",
       s"      - uses: ${ActionPins.cache.line}",
@@ -124,9 +124,7 @@ object SupplyYaml:
       "          permission-contents: write",
       "          permission-pull-requests: write",
       "          permission-workflows: write",
-      s"      - uses: ${ActionPins.checkout.line}",
-      "        with:",
-      "          persist-credentials: false",
+    ) ++ Workflow.fullGitCheckout(persistCredentials = false) ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: ${ActionPins.localSetup}",
     ) ++ Workflow.buildAssembly(graph) ++ opened ++ List(

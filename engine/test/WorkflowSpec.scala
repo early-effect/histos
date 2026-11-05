@@ -166,16 +166,20 @@ object WorkflowSpec extends ZIOSpecDefault:
         golden.contains("contents: read"),
         golden.contains("workflow --check"),
         {
-          val job = slice(golden, "  workflow:", "  supply-chain:").getOrElse("")
-          val head = job.indexOf("./.github/actions/origin-head")
+          val job   = slice(golden, "  workflow:", "  supply-chain:").getOrElse("")
+          val depth = job.indexOf("fetch-depth: \"0\"")
+          val tags  = job.indexOf("fetch-tags: \"true\"")
+          val head  = job.indexOf("./.github/actions/origin-head")
           val check = job.indexOf("workflow --check")
-          head >= 0 && check > head
+          depth >= 0 && tags > depth && head > tags && check > head
         },
         {
-          val job = slice(golden, "  supply-chain:", "").getOrElse("")
-          val head = job.indexOf("./.github/actions/origin-head")
+          val job   = slice(golden, "  supply-chain:", "").getOrElse("")
+          val depth = job.indexOf("fetch-depth: \"0\"")
+          val tags  = job.indexOf("fetch-tags: \"true\"")
+          val head  = job.indexOf("./.github/actions/origin-head")
           val check = job.indexOf("workflow --check")
-          head >= 0 && check > head
+          depth >= 0 && tags > depth && head > tags && check > head
         },
         !golden.contains("setup-java"),
         !golden.contains("setup-node"),
@@ -189,7 +193,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         !golden.contains("branches:\n      - \"${{"),
         !golden.contains("branches:\n      - main"),
         !golden.contains("\"**\""),
-        !golden.contains("tags:"),
+        !golden.contains("\n    tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List(
           "./histos",
@@ -904,7 +908,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       assertTrue:
         rendered match
           case Right(yaml) =>
-            yaml.contains("tags:") &&
+            yaml.contains("\n    tags:\n") &&
             yaml.contains("startsWith(github.ref, 'refs/tags/v')") &&
             slice(yaml, "  test:", "  ship:").getOrElse("").contains("github.event_name == 'pull_request'") &&
             !slice(yaml, "  test:", "  ship:").getOrElse("").contains("refs/tags")
@@ -1274,7 +1278,7 @@ object WorkflowSpec extends ZIOSpecDefault:
               _,
             ) :: Nil
             if name == Workflow.releaseName && snapshots == Workflow.snapshotsName && snap == snapshotWorkflow &&
-              !ci.contains("publish") && !ci.contains("tags:") =>
+              !ci.contains("publish") && !ci.contains("\n    tags:") =>
           Right(text)
         case other => Left(other.toString)
       assertTrue(body == Right(oneShipRelease))
@@ -1373,7 +1377,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             val toolAt  = body.indexOf("  release-tool:")
             val libsJob = if libsAt >= 0 && toolAt > libsAt then body.substring(libsAt, toolAt) else ""
             val toolJob = if toolAt >= 0 then body.substring(toolAt) else ""
-            !body.contains("tags:") &&
+            !body.contains("\n    tags:") &&
             !body.contains("inputs:") &&
             !body.contains("if:") &&
             !body.contains("publish promote") &&
