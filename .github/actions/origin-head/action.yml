@@ -1,0 +1,8 @@
+name: Origin HEAD
+description: Point refs/remotes/origin/HEAD at the remote default branch
+runs:
+  using: composite
+  steps:
+    - name: Record origin/HEAD
+      shell: bash
+      run: git remote set-head origin --auto

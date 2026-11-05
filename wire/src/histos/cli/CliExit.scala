@@ -1,8 +1,9 @@
 package histos.cli
 
 import histos.program.ProgramError
-import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
+import histos.report.{BuildFault, CallResult, Rejection, Report, Severity, WorkflowFault}
 import histos.server.Call
+import histos.workflow.CiError
 import histos.testrun.{ModuleTestError, TestStatus}
 import histos.zinc.GraphCompileError
 
@@ -85,7 +86,7 @@ object CliExit:
       case BuildFault.Compile(error)                     => compileExit(call, error)
       case BuildFault.Test(error)                        => testFaultExit(error)
       case BuildFault.Publish(_) | BuildFault.Release(_) => PublishFailed
-      case BuildFault.Workflow(_)                        => WorkflowFailed
+      case BuildFault.Workflow(fault)                    => workflowExit(fault)
       case BuildFault.Program(error)                     => programFaultExit(error)
       case BuildFault.Platform(_)                        => TaskFailed
       case BuildFault.Task(_)                            => TaskFailed
@@ -101,6 +102,12 @@ object CliExit:
       case BuildFault.Watch(_)                           => TaskFailed
       case BuildFault.Interrupted                        => Interrupted
       case BuildFault.Rejected(rejection)                => rejectedExit(rejection)
+
+  /** A missing default branch is a failed command. Other workflow faults stay on their own status. */
+  private def workflowExit(fault: WorkflowFault): CliExit =
+    fault match
+      case WorkflowFault.Files(CiError.NoDefaultBranch) => TaskFailed
+      case _                                            => WorkflowFailed
 
   /** No lock is 8 for compile and assembly, 9 for publish, and 5 for test, run, and resolve. */
   private def resolveExit(call: Call): CliExit =

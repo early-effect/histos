@@ -8,7 +8,7 @@ import histos.plugin.*
 import histos.resolve.{PluginRequest, *}
 import histos.schedule.{ActionCache, Hold, RemoteCache, Runner, Sendable, Verdict}
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.workflow.Workflow
+import histos.workflow.{CiBranch, Workflow}
 import histos.{Dep, Module}
 
 import java.io.ByteArrayOutputStream
@@ -25,6 +25,7 @@ import zio.test.*
 
 /** A temp-repo stand-in for a Specular plugin. Not the Specular repository, and not a root build plugin. */
 object SpecularFixtureSpec extends ZIOSpecDefault:
+  private given CiBranch = CiBranch("main")
   private val coordinate = Dep("dev.earlyeffect::specular:0.2.0")
 
   private val marker = "not-a-workflow: fixture"
