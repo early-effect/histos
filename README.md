@@ -47,7 +47,9 @@ export PATH="$HOME/.histos/bin:$PATH"
 
 The script does not edit a shell rc. A second run is a no-op when the installed shim matches.
 
-`histos self update` replaces the shim when the published shim hash differs. `histos toolchain install <version>` downloads one version. `histos toolchain list` prints installed versions. `histos update` moves the selected version: outside a project it rewrites `~/.histos/default`, and inside a project it rewrites `histos.version` in `build.properties` and leaves the user default alone. `histos update --make-default` writes that same resolved version into both files. A `SNAPSHOT` pointer becomes one timestamp. A release pin stays. Nothing updates in the background.
+A first install writes `~/.histos/default` when that file is missing. The value is the published dist channel: `channel` when that file is on the dist base, otherwise the newest `channel-<version>-SNAPSHOT` asset, or the newest release when no snapshot channel is published. The next command resolves it, so `histos new` works straight after install.
+
+`histos self update` replaces the shim when the published shim hash differs. `histos toolchain install <version>` downloads one version and, when no default is set, records that version. `histos toolchain list` prints installed versions. `histos update` moves the selected version: outside a project it rewrites `~/.histos/default`, and when that file is missing it resolves the same published channel first. Inside a project it rewrites `histos.version` in `build.properties` and leaves the user default alone. `histos update --make-default` writes that same resolved version into both files. A `SNAPSHOT` pointer becomes one timestamp. A release pin stays. Nothing updates in the background.
 
 `histos new <name>` creates a one-module project pinned to the toolchain that wrote it. `histos init` writes the current directory. The next line the command prints is `histos test`.
 

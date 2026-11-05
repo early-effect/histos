@@ -106,6 +106,99 @@ resolve_channel() {
     *) printf '%s' "$channel" ;;
   esac
 }
+fetch_ok() {
+  curl -fsSL "$1" -o "$2" 2>/dev/null
+}
+read_default() {
+  if [ -s "$home/default" ]; then
+    tr -d '[:space:]' < "$home/default"
+  else
+    return 1
+  fi
+}
+write_default() {
+  printf '%s\n' "$1" > "$home/default"
+}
+pick_channel() {
+  awk '
+    function num(v, a, n) {
+      n = split(v, a, ".")
+      if (n != 3) return -1
+      if (a[1] !~ /^[0-9]+$/ || a[2] !~ /^[0-9]+$/ || a[3] !~ /^[0-9]+$/) return -1
+      return a[1] * 1000000 + a[2] * 1000 + a[3]
+    }
+    function consider(name, ver, r) {
+      if (name ~ /^channel-[0-9]+\.[0-9]+\.[0-9]+-SNAPSHOT$/) {
+        ver = substr(name, 9)
+        r = num(substr(ver, 1, length(ver) - 9))
+        if (r > snap_rank) { snap_rank = r; snap = ver }
+      } else if (name ~ /^[0-9]+\.[0-9]+\.[0-9]+-manifest\.json$/) {
+        ver = substr(name, 1, length(name) - 14)
+        r = num(ver)
+        if (r > rel_rank) { rel_rank = r; rel = ver }
+      }
+    }
+    BEGIN { snap_rank = -1; rel_rank = -1 }
+    { consider($0) }
+    END {
+      if (snap != "") print snap
+      else if (rel != "") print rel
+      else exit 1
+    }
+  '
+}
+asset_names() {
+  awk '
+    {
+      line = $0
+      while (match(line, /"name"[[:space:]]*:[[:space:]]*"[^"]+"/)) {
+        token = substr(line, RSTART, RLENGTH)
+        split(token, q, "\"")
+        print q[4]
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$1"
+}
+published_channel() {
+  tmp=$(mktemp)
+  names=$(mktemp)
+  if fetch_ok "$dist/channel" "$tmp"; then
+    channel=$(tr -d '[:space:]' < "$tmp")
+    if [ -n "$channel" ]; then
+      rm -f "$tmp" "$names"
+      printf '%s' "$channel"
+      return 0
+    fi
+  fi
+  case $dist in
+    https://github.com/*/releases/download/*)
+      owner_repo=${dist#https://github.com/}
+      owner_repo=${owner_repo%%/releases/download/*}
+      tag=${dist##*/}
+      if fetch_ok "https://api.github.com/repos/$owner_repo/releases/tags/$tag" "$tmp"; then
+        asset_names "$tmp" > "$names"
+        if channel=$(pick_channel < "$names"); then
+          rm -f "$tmp" "$names"
+          printf '%s' "$channel"
+          return 0
+        fi
+      fi
+      ;;
+  esac
+  if fetch_ok "$dist/assets" "$tmp"; then
+    if channel=$(pick_channel < "$tmp"); then
+      rm -f "$tmp" "$names"
+      printf '%s' "$channel"
+      return 0
+    fi
+  fi
+  rm -f "$tmp" "$names"
+  return 1
+}
+no_default() {
+  fail "no default toolchain. Run 'histos toolchain install <version>'"
+}
 find_repo() {
   dir=$PWD
   while :; do
@@ -281,6 +374,10 @@ if [ "$self_path" != "$installed" ] && { [ -z "$self_path" ] || [ ! -e "$install
     chmod +x "$installed"
   fi
   if [ "$#" -eq 0 ]; then
+    if [ ! -s "$home/default" ]; then
+      channel=$(published_channel) || no_default
+      write_default "$channel"
+    fi
     echo "export PATH=\"\$HOME/.histos/bin:\$PATH\""
     exit 0
   fi
@@ -327,6 +424,7 @@ case $cmd in
         done
         selected=$(resolve_channel "$selected")
         ensure_toolchain "$selected" "$compile"
+        if [ ! -s "$home/default" ]; then write_default "$selected"; fi
         exit 0
         ;;
       *) fail "usage: histos toolchain (install <version> | list)" ;;
@@ -349,10 +447,12 @@ case $cmd in
       write_pin "$selected" "$repo"
       if [ "$make_default" = yes ]; then printf '%s\n' "$selected" > "$home/default"; fi
     else
-      current=$(tr -d '[:space:]' < "$home/default" 2>/dev/null || true)
-      [ -n "$current" ] || fail "no default toolchain"
+      current=$(read_default || true)
+      if [ -z "$current" ]; then
+        current=$(published_channel) || no_default
+      fi
       selected=$(resolve_channel "$current")
-      printf '%s\n' "$selected" > "$home/default"
+      write_default "$selected"
     fi
     ensure_toolchain "$selected" "$compile"
     exit 0
@@ -367,9 +467,12 @@ fi
 if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
   selected=$(resolve_channel "$pin")
 else
-  [ -f "$home/default" ] || fail "no project pin and no default toolchain"
-  selected=$(tr -d '[:space:]' < "$home/default")
-  selected=$(resolve_channel "$selected")
+  current=$(read_default || true)
+  if [ -z "$current" ]; then
+    current=$(published_channel) || no_default
+    write_default "$current"
+  fi
+  selected=$(resolve_channel "$current")
 fi
 version=$selected
 dir=$home/toolchains/$selected

@@ -173,6 +173,109 @@ object ShimSpec extends ZIOSpecDefault:
           }
       }
     ,
+    test("a fresh install writes the published channel and new dispatches"):
+      scene(clients = Nil).flatMap { case (home, _, _, log) =>
+        val outside = home.getParent.resolve("outside")
+        for
+          script         <- ZIO.attempt(Files.readString(shimSource))
+          base           <- ZIO.attempt(Files.readString(home.getParent.resolve("dist-base")).trim)
+          (exit, _, err) <- pipedFull(home, script, base)
+          written        <- text(home.resolve("default"))
+          _              <- ZIO.attempt(Files.createDirectories(outside))
+          (ran, runErr)  <- runShimFull(home, outside, "new", "foo")
+          logged         <- ZIO.attempt(logLines(log))
+        yield assertTrue(
+          exit.value == 0,
+          !err.contains("cannot open"),
+          written.trim == Pointer,
+          ran.value == 0,
+          !runErr.contains("cannot open"),
+          !runErr.contains("no default toolchain"),
+          logged.contains("new"),
+          logged.contains("foo"),
+        )
+      }
+    ,
+    test("update outside a project with no default resolves the published channel"):
+      scene().flatMap { case (home, _, hits, _) =>
+        val outside = home.getParent.resolve("outside")
+        ZIO.attempt(Files.createDirectories(outside)) *>
+          runShimFull(home, outside, "update").flatMap { (exit, err) =>
+            text(home.resolve("default")).map { written =>
+              assertTrue(
+                exit.value == 0,
+                written.trim == Version,
+                !err.contains("cannot open"),
+                !err.contains("no default toolchain"),
+                Files.exists(home.resolve(s"toolchains/$Version/histos.jar")),
+                hits.contains("channel"),
+                hits.contains(DistLayout.channel(Pointer)),
+              )
+            }
+          }
+      }
+    ,
+    test("toolchain install sets the default when none exists"):
+      scene().flatMap { case (home, repo, _, _) =>
+        runShim(home, repo, "toolchain", "install", Version).flatMap { exit =>
+          text(home.resolve("default")).map { written =>
+            assertTrue(exit.value == 0, written.trim == Version)
+          }
+        }
+      }
+    ,
+    test("toolchain install leaves an existing default in place"):
+      scene().flatMap { case (home, repo, _, _) =>
+        write(home.resolve("default"), "kept\n") *>
+          runShim(home, repo, "toolchain", "install", Version).flatMap { exit =>
+            text(home.resolve("default")).map { written =>
+              assertTrue(exit.value == 0, written.trim == "kept")
+            }
+          }
+      }
+    ,
+    test("a fresh install prefers the newest snapshot channel over a release"):
+      scene(
+        channel = None,
+        assets = Some("channel-0.0.1-SNAPSHOT\nchannel-0.0.2-SNAPSHOT\n0.9.0-manifest.json\n"),
+      ).flatMap { case (home, _, _, _) =>
+        for
+          script  <- ZIO.attempt(Files.readString(shimSource))
+          base    <- ZIO.attempt(Files.readString(home.getParent.resolve("dist-base")).trim)
+          exit    <- piped(home, script, base)
+          written <- text(home.resolve("default"))
+        yield assertTrue(exit.value == 0, written.trim == Pointer)
+      }
+    ,
+    test("a fresh install uses the latest release when no snapshot channel is published"):
+      scene(
+        channel = None,
+        assets = Some(
+          "0.0.1-manifest.json\n0.0.2-manifest.json\n0.0.2-20260101.120000-1-manifest.json\n"
+        ),
+      ).flatMap { case (home, _, _, _) =>
+        for
+          script  <- ZIO.attempt(Files.readString(shimSource))
+          base    <- ZIO.attempt(Files.readString(home.getParent.resolve("dist-base")).trim)
+          exit    <- piped(home, script, base)
+          written <- text(home.resolve("default"))
+        yield assertTrue(exit.value == 0, written.trim == "0.0.2")
+      }
+    ,
+    test("a fresh home with nothing published fails in one line"):
+      scene(channel = None).flatMap { case (home, _, _, _) =>
+        val outside = home.getParent.resolve("outside")
+        ZIO.attempt(Files.createDirectories(outside)) *>
+          runShimFull(home, outside, "new", "foo").map { (exit, err) =>
+            val lines = err.split('\n').toList.filter(_.nonEmpty)
+            assertTrue(
+              exit.value != 0,
+              lines == List("histos: no default toolchain. Run 'histos toolchain install <version>'"),
+              !err.contains("cannot open"),
+            )
+          }
+      }
+    ,
     test("compile-client links a binary and records that it was compiled here"):
       scene(clients = Nil, sources = true).flatMap { case (home, repo, _, log) =>
         runShim(home, repo, "toolchain", "install", Version, "--compile-client").flatMap { exit =>
@@ -198,6 +301,8 @@ object ShimSpec extends ZIOSpecDefault:
       sources: Boolean = false,
       javaVersion: String = "21.0.2",
       remoteSuffix: String = "",
+      channel: Option[String] = Some(Pointer),
+      assets: Option[String] = None,
   ): ZIO[Scope, Any, (Path, Path, CopyOnWriteArrayList[String], Path)] =
     Workspace.work("histos-shim").mapError(error => new IOException(error.message)).flatMap { root =>
       val packed =
@@ -260,6 +365,8 @@ object ShimSpec extends ZIOSpecDefault:
               files.put(DistLayout.client(Version, platform), s"client-$platform".getBytes(StandardCharsets.UTF_8))
             }
             files.put(DistLayout.channel(Pointer), (Version + "\n").getBytes(StandardCharsets.UTF_8))
+            channel.foreach(value => files.put("channel", (value + "\n").getBytes(StandardCharsets.UTF_8)))
+            assets.foreach(value => files.put("assets", value.getBytes(StandardCharsets.UTF_8)))
             val shimBytes = Files.readAllBytes(script) ++ remoteSuffix.getBytes(StandardCharsets.UTF_8)
             files.put(DistLayout.Shim, shimBytes)
             files.put(
@@ -294,6 +401,9 @@ object ShimSpec extends ZIOSpecDefault:
     }
 
   private def piped(home: Path, script: String, base: String): ZIO[Any, Throwable, ProcessExit] =
+    pipedFull(home, script, base).map(_._1)
+
+  private def pipedFull(home: Path, script: String, base: String): ZIO[Any, Throwable, (ProcessExit, String, String)] =
     for
       events <- ChildProcess
         .command(
@@ -307,8 +417,10 @@ object ShimSpec extends ZIOSpecDefault:
         .runCollect
         .mapError(error => new IOException(error.toString))
       exit = events.collect { case ChildEvent.Exited(code) => code }.headOption
-      code <- ZIO.fromOption(exit).orElseFail(new IOException("shim did not exit"))
-    yield code
+      out  = events.collect { case ChildEvent.Out(line) => line }.mkString("\n")
+      err  = events.collect { case ChildEvent.Err(line) => line }.mkString("\n")
+      code <- ZIO.fromOption(exit).orElseFail(new IOException(s"shim did not exit: $err"))
+    yield (code, out, err)
 
   private def runShim(home: Path, repo: Path, args: String*): ZIO[Any, Throwable, ProcessExit] =
     runShimFull(home, repo, args*).map(_._1)
