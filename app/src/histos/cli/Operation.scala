@@ -34,9 +34,15 @@ object Operation:
       case Command.Run(id, platform) =>
         if id.builtIn then Right(Call.Task(id.value, PluginArgs.empty))
         else Right(Call.Run(id.value, platform))
-      case Command.Plugin(id, args) => Right(Call.Task(id.render, args))
-      case Command.Test(projects)   =>
-        Right(Call.Test(projects, Nil, TestMode.Run))
+      case Command.Plugin(id, args)         => Right(Call.Task(id.render, args))
+      case Command.Test(projects, affected) =>
+        AffectedChoice.select(projects, affected) match
+          case None =>
+            Left(CliParseError.Pattern("nothing is affected"))
+          case Some(names) =>
+            Right(Call.Test(names, Nil, TestMode.Run))
+      case Command.Affected(_) =>
+        Left(CliParseError.Rejected)
       case Command.TestOnly(modules, patterns) =>
         Right(Call.Test(modules, patterns, TestMode.Run))
       case Command.TestQuick(modules, patterns) =>

@@ -1,20 +1,49 @@
 package histos.workflow
 
 import histos.plugin.{
+  ActionName,
+  ActionPin,
+  AwsOidc,
   CiJob,
+  CiSettings,
+  Cond,
   Contribution,
+  Cancel,
+  Concurrency,
   Cron,
+  DispatchInput,
   EntryName,
+  EnvName,
+  EnvValue,
+  EventKind,
+  Grant,
+  GraphSecrets,
+  GroupName,
+  Guard,
+  InputKey,
+  InputKind,
   JobName,
   JobPermissions,
-  JobWhen,
+  JobRender,
+  On,
   PluginId,
   RegisteredPlugin,
   RepoPath,
+  Runner,
+  RunnerName,
+  SecretName,
   Site,
+  SiteArrange,
+  SiteJob,
   SitePublish,
+  SiteShape,
+  Target,
+  TargetName,
+  TaskJob,
   TaskName,
+  Trigger,
 }
+import histos.version.CommitSha
 import histos.schedule.CacheNamespace
 import histos.version.{Catalog, ManualVersion, Ship, ShipName, ShipNumber}
 import histos.{
@@ -88,12 +117,13 @@ object WorkflowSpec extends ZIOSpecDefault:
       assertTrue:
         rendered match
           case Right(yaml) =>
-            yaml.contains("fail-fast: false") &&
-            yaml.contains("\"./histos test core\"") &&
-            yaml.contains("\"./histos test tests\"") &&
-            !yaml.contains("setup-java") && !yaml.contains("setup-node") &&
-            !yaml.contains("llvm.tar.xz") && !yaml.contains("playwright") &&
-            !yaml.contains("~/.cache/histos")
+            val test = slice(yaml, "  test:", "  cache-seed:").getOrElse("")
+            test.contains("fail-fast: false") &&
+            test.contains("\"./histos test core\"") &&
+            test.contains("\"./histos test tests\"") &&
+            !test.contains("setup-java") && !test.contains("setup-node") &&
+            !test.contains("llvm.tar.xz") && !test.contains("playwright") &&
+            !test.contains("~/.cache/histos")
           case Left(_) => false
     ,
     test("a catalog adds the versions command and still does not publish"):
@@ -225,14 +255,13 @@ object WorkflowSpec extends ZIOSpecDefault:
           case Right(built) =>
             Workflow.render(built) match
               case Right(yaml) =>
-                slice(yaml, "  doc:", "  workflow:") match
+                slice(yaml, "  doc:", "  cache-seed:") match
                   case Some(doc) =>
                     doc.contains("./histos run doc") &&
                     doc.contains("actions/cache/restore@v6") &&
                     !doc.contains("actions/cache/save@v6") &&
                     !doc.contains("needs:") &&
-                    !doc.contains("actions: write") &&
-                    !yaml.contains("needs:")
+                    !doc.contains("actions: write")
                   case None => false
               case Left(_) => false
           case Left(_) => false
@@ -444,25 +473,20 @@ object WorkflowSpec extends ZIOSpecDefault:
       val rendered = Workflow.render(
         withJobs(
           List(
-            CiJob(
-              JobName("docs"),
-              TaskName("site"),
-              JobWhen.Always,
-              site = Some(Site(RepoPath("target/site"))),
-            )
+            SiteJob(JobName("docs"), TaskName("site"), Site(RepoPath("target/site")))
           )
         )
       )
       for golden <- text("plugin-pages-ci.yml")
       yield assertTrue(rendered == Right(golden))
     ,
-    test("manual matches a job with no site, and both matches the automatic ci file"):
+    test("manual builds on the default branch, and both matches the automatic ci file"):
       val manual                   = Workflow.render(withJobs(List(siteJob(SitePublish.Manual))))
       val both                     = Workflow.render(withJobs(List(siteJob(SitePublish.Both))))
       val automaticMode            = Workflow.render(withJobs(List(siteJob(SitePublish.Automatic))))
       def files(mode: SitePublish) = Workflow.renderAll(withJobs(List(siteJob(mode))), automatic)
       for
-        plain    <- text("plugin-always.yml")
+        plain    <- text("plugin-manual.yml")
         pages    <- text("plugin-pages-ci.yml")
         dispatch <- text("plugin-pages-dispatch.yml")
       yield assertTrue(
@@ -480,29 +504,195 @@ object WorkflowSpec extends ZIOSpecDefault:
       val twice = withJobs(
         List(
           siteJob(SitePublish.Both),
-          CiJob(
-            JobName("deploy"),
-            TaskName("ship"),
-            JobWhen.Always,
-            site = Some(Site(RepoPath("other"))),
-          ),
+          SiteJob(JobName("deploy"), TaskName("ship"), Site(RepoPath("other"))),
         )
       )
       val nightly = withJobs(
         List(
-          CiJob(
-            JobName("nightly"),
-            TaskName("site"),
-            JobWhen.Schedule(Cron("0 6 * * 1")),
-            site = Some(Site(RepoPath("target/site"))),
-          )
+          Twice(JobName("nightly"), TaskName("site"), Site(RepoPath("target/site")))
         )
       )
       assertTrue(
         Workflow.render(twice) == Left(CiError.DuplicateSite(JobName("docs"), JobName("deploy"))),
-        Workflow.render(nightly) == Left(CiError.ScheduledSite(JobName("nightly"))),
+        Workflow.render(nightly) == Left(CiError.IllegalSite(JobName("nightly"))),
         Workflow.renderAll(twice, automatic) == Left(CiError.DuplicateSite(JobName("docs"), JobName("deploy"))),
-        Workflow.renderAll(nightly, automatic) == Left(CiError.ScheduledSite(JobName("nightly"))),
+        Workflow.renderAll(nightly, automatic) == Left(CiError.IllegalSite(JobName("nightly"))),
+      )
+    ,
+    test("a need names a generated job and never pages or itself"):
+      val present = withJobs(List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("test")))))
+      val missing = withJobs(List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("absent")))))
+      val pages   = withJobs(List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("pages")))))
+      val self    = withJobs(List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("docs")))))
+      val twice   = withJobs(
+        List(TaskJob(JobName("docs"), TaskName("site"), needs = List(JobName("test"), JobName("test"))))
+      )
+      assertTrue(
+        Workflow.render(present).isRight,
+        Workflow.render(missing) == Left(CiError.UnknownNeed(JobName("docs"), JobName("absent"))),
+        Workflow.render(pages) == Left(CiError.UnknownNeed(JobName("docs"), JobName("pages"))),
+        Workflow.render(self) == Left(CiError.UnknownNeed(JobName("docs"), JobName("docs"))),
+        Workflow.render(twice) == Left(CiError.DuplicateNeed(JobName("docs"), JobName("test"))),
+      )
+    ,
+    test("an open job that delegates to SiteJob is still one site"):
+      val shared = withJobs(
+        List(
+          Guide(TaskName("site")),
+          SiteJob(JobName("docs"), TaskName("site"), Site(RepoPath("docs"))),
+        )
+      )
+      assertTrue(
+        Workflow.render(withJobs(List(Guide(TaskName("site"))))).isRight,
+        Workflow.render(shared) == Left(CiError.DuplicateSite(JobName("guide"), JobName("docs"))),
+      )
+    ,
+    test("a fan is one job and one matrix row per target"):
+      val rendered = Workflow.render(withJobs(List(Matrix(TaskName("ship")))))
+      assertTrue:
+        rendered match
+          case Right(yaml) =>
+            yaml.contains("  deploy:") &&
+            yaml.contains("name: \"us\"") &&
+            yaml.contains("name: \"eu\"") &&
+            yaml.contains("REGION: \"us-east-1\"") &&
+            yaml.contains("REGION: \"eu-west-1\"") &&
+            yaml.contains("contains(fromJSON(needs.affected.outputs.modules), 'core')") &&
+            yaml.contains("contains(fromJSON(needs.affected.outputs.modules), 'all')")
+          case Left(_) => false
+    ,
+    test("a third-party action needs a pin and its grant, and a graph secret stays off it"):
+      val action = AwsOidc(EnvValue.Plain("role"), EnvValue.Plain("us-east-1"))
+      val sha    = CommitSha("0123456789abcdef0123456789abcdef01234567")
+      val pinned = CiSettings.empty.copy(
+        actions = Map(ActionName("aws-actions/configure-aws-credentials") -> ActionPin(sha, "v6")),
+        secrets = Set(SecretName("TOKEN")),
+        env = List(EnvName("TOKEN") -> EnvValue.Secret(SecretName("TOKEN"))),
+      )
+      val bare    = withJobs(List(TaskJob(JobName("ship"), TaskName("echo"), pre = List(action))), pinned)
+      val granted = TaskJob(
+        JobName("ship"),
+        TaskName("echo"),
+        permissions = JobPermissions(Set(Grant.ContentsRead, Grant.IdTokenWrite)),
+        pre = List(action),
+      )
+      val opened = withJobs(List(granted), pinned)
+      val opted  = withJobs(
+        List(granted.copy(graphSecrets = GraphSecrets.Include)),
+        pinned,
+      )
+      val unpinned = withJobs(List(granted))
+      assertTrue(
+        Workflow.render(bare) == Left(CiError.GrantMissing(JobName("ship"), action.name)),
+        Workflow.render(unpinned) == Left(CiError.UnpinnedAction(JobName("ship"), action.name)),
+        Workflow.render(opened) match
+          case Right(yaml) =>
+            val job = slice(yaml, "  ship:", "  cache-seed:").getOrElse("")
+            job.contains(s"uses: aws-actions/configure-aws-credentials@${sha.value} # v6") &&
+            job.contains("id-token: write") &&
+            !job.contains("secrets.TOKEN")
+          case Left(_) => false
+        ,
+        Workflow.render(opted) match
+          case Right(yaml) =>
+            slice(yaml, "  ship:", "  cache-seed:").getOrElse("").contains("secrets.TOKEN")
+          case Left(_) => false,
+      )
+    ,
+    test("a runner is a catalog name"):
+      val named   = TaskJob(JobName("ship"), TaskName("echo"), runner = Runner.Named(RunnerName("build")))
+      val missing = withJobs(List(named))
+      val known   = withJobs(
+        List(named),
+        CiSettings.empty.copy(runners = Map(RunnerName("build") -> "depot-ubuntu")),
+      )
+      assertTrue(
+        Workflow.render(missing) == Left(CiError.UnknownRunner(JobName("ship"), RunnerName("build"))),
+        Workflow.render(known) match
+          case Right(yaml) => yaml.contains("    runs-on: depot-ubuntu")
+          case Left(_)     => false,
+      )
+    ,
+    test("a secret is declared before a job may read it"):
+      val job = TaskJob(
+        JobName("ship"),
+        TaskName("echo"),
+        env = List(EnvName("TOKEN") -> EnvValue.Secret(SecretName("TOKEN"))),
+      )
+      val declared = withJobs(
+        List(job),
+        CiSettings.empty.copy(secrets = Set(SecretName("TOKEN"))),
+      )
+      assertTrue(
+        Workflow.render(withJobs(List(job))) == Left(CiError.UnknownSecret(SecretName("TOKEN"))),
+        Workflow.render(declared) match
+          case Right(yaml) => yaml.contains("TOKEN: ${{ secrets.TOKEN }}")
+          case Left(_)     => false,
+      )
+    ,
+    test("a label, a path, a cron, and workflow_run leave ci.yml"):
+      val label   = TaskJob(JobName("triage"), TaskName("echo"), trigger = Trigger.Label("bug"))
+      val paths   = TaskJob(JobName("api"), TaskName("echo"), trigger = Trigger.Paths(::("api/**", Nil)))
+      val nightly = TaskJob.nightly(JobName("nightly"), TaskName("echo"), Cron("0 6 * * 1"))
+      val after   = TaskJob(JobName("after"), TaskName("echo"), trigger = AfterCi)
+      def names(jobs: List[CiJob]) =
+        Workflow.renderAll(withJobs(jobs), automatic).map(_.map(_.name))
+      val labeled = Workflow.renderAll(withJobs(List(label)), automatic)
+      assertTrue(
+        names(List(label)) == Right(List(Workflow.fileName, "histos-triage.yml")),
+        names(List(paths)) == Right(List(Workflow.fileName, "histos-api.yml")),
+        names(List(nightly)) == Right(List(Workflow.fileName, "histos-nightly.yml")),
+        names(List(after)) == Right(List(Workflow.fileName, "histos-after.yml")),
+        labeled match
+          case Right(files) =>
+            val ci  = files.find(_.name == Workflow.fileName).map(_.body).getOrElse("")
+            val own = files.find(_.name == "histos-triage.yml").map(_.body).getOrElse("")
+            !ci.contains("labeled") && own.contains("labeled") && own.contains("bug")
+          case Left(_) => false
+        ,
+        Workflow.renderAll(withJobs(List(nightly)), automatic) match
+          case Right(files) =>
+            val own = files.find(_.name == "histos-nightly.yml").map(_.body).getOrElse("")
+            own.contains("schedule:") && own.contains("workflow_dispatch:") && !own.contains("pull_request:")
+          case Left(_) => false,
+      )
+    ,
+    test("a tag stays in ci.yml and does not widen verify"):
+      val tagged   = TaskJob(JobName("ship"), TaskName("echo"), trigger = Trigger.Tag("v*"))
+      val rendered = Workflow.render(withJobs(List(tagged)))
+      assertTrue:
+        rendered match
+          case Right(yaml) =>
+            yaml.contains("tags:") &&
+            yaml.contains("startsWith(github.ref, 'refs/tags/v')") &&
+            slice(yaml, "  test:", "  ship:").getOrElse("").contains("github.event_name == 'pull_request'") &&
+            !slice(yaml, "  test:", "  ship:").getOrElse("").contains("refs/tags")
+          case Left(_) => false
+    ,
+    test("a condition the file cannot reach is refused"):
+      val hidden  = TaskJob(JobName("triage"), TaskName("echo"), trigger = LabeledOnCi)
+      val missing = TaskJob(JobName("after"), TaskName("echo"), trigger = AfterMissing)
+      assertTrue(
+        Workflow.render(withJobs(List(hidden))) == Left(CiError.UnreachableCond(JobName("triage"))),
+        Workflow.render(withJobs(List(missing))) == Left(CiError.UnpinnedWorkflowRun("missing.yml")),
+      )
+    ,
+    test("one file has one concurrency group and one declaration of a dispatch input"):
+      val left = TaskJob(
+        JobName("docs"),
+        TaskName("echo"),
+        concurrency = Some(Concurrency(GroupName("docs"), Cancel.InProgress)),
+      )
+      val right = TaskJob(
+        JobName("ship"),
+        TaskName("echo"),
+        concurrency = Some(Concurrency(GroupName("ship"), Cancel.Finish)),
+      )
+      val ask   = TaskJob(JobName("docs"), TaskName("echo"), trigger = Ask("no"))
+      val again = TaskJob(JobName("ship"), TaskName("echo"), trigger = Ask("yes"))
+      assertTrue(
+        Workflow.render(withJobs(List(left, right))) == Left(CiError.ConcurrencyConflict(Workflow.fileName)),
+        Workflow.render(withJobs(List(ask, again))) == Left(CiError.DispatchInputConflict("ship")),
       )
     ,
     test("update writes the dispatch file and a later update deletes it"):
@@ -530,13 +720,8 @@ object WorkflowSpec extends ZIOSpecDefault:
       val rendered = Workflow.render(
         withJobs(
           List(
-            CiJob(JobName("docs"), TaskName("site"), JobWhen.Always),
-            CiJob(
-              JobName("deploy"),
-              TaskName("ship"),
-              JobWhen.Always,
-              JobPermissions.ContentsWrite,
-            ),
+            TaskJob(JobName("docs"), TaskName("site")),
+            TaskJob(JobName("deploy"), TaskName("ship"), permissions = JobPermissions.write),
           )
         )
       )
@@ -548,11 +733,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             (
               slice(yaml, "  test:", "  docs:"),
               slice(yaml, "  docs:", "  deploy:"),
-              slice(
-                yaml,
-                "  deploy:",
-                "  workflow:",
-              ),
+              slice(yaml, "  deploy:", "  cache-seed:"),
               slice(yaml, "  workflow:", ""),
             ) match
               case (Some(test), Some(docs), Some(deploy), Some(workflow)) =>
@@ -576,7 +757,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                 !test.contains("cache: npm") &&
                 !test.contains("setup-java") &&
                 occurrences(yaml, CacheNamespace.Key) == 1 &&
-                occurrences(yaml, "actions/cache") == 4 &&
+                occurrences(test, "actions/cache") == 4 &&
                 !docs.contains(CacheNamespace.Key) &&
                 !deploy.contains(CacheNamespace.Key) &&
                 !workflow.contains(CacheNamespace.Key) &&
@@ -585,7 +766,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                 !workflow.contains("actions/cache") &&
                 !docs.contains("needs:") &&
                 !deploy.contains("needs:") &&
-                !yaml.contains("needs:") &&
+                test.contains("needs: affected") &&
                 !yaml.contains("restore-keys") &&
                 pull.map(ns => (ns.token, ns.reads.map(_.token))) == Right(("pr/8", List("pr/8", "main"))) &&
                 main.map(ns => (ns.token, ns.reads.map(_.token))) == Right(("main", List("main")))
@@ -599,21 +780,17 @@ object WorkflowSpec extends ZIOSpecDefault:
         golden <- text("plugin-always.yml")
         rendered = Workflow.render(
           withJobs(
-            List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always))
+            List(TaskJob(JobName("docs"), TaskName("site")))
           )
         )
       yield assertTrue(rendered == Right(golden))
     ,
     test("render stays the ci.yml body and a schedule is a separate file"):
-      val nightly = CiJob(
-        JobName("nightly"),
-        TaskName("site"),
-        JobWhen.Schedule(Cron("0 6 * * 1")),
-      )
-      val built = withJobs(List(nightly))
-      val all   = Workflow.renderAll(built, automatic)
-      val one   = Workflow.render(built)
-      val plain = Workflow.render(graph(Splits.aggregate))
+      val nightly = TaskJob(JobName("nightly"), TaskName("site"), cron = Some(Cron("0 6 * * 1")))
+      val built   = withJobs(List(nightly))
+      val all     = Workflow.renderAll(built, automatic)
+      val one     = Workflow.render(built)
+      val plain   = Workflow.render(graph(Splits.aggregate))
       (all, one, plain) match
         case (
               Right(
@@ -654,12 +831,7 @@ object WorkflowSpec extends ZIOSpecDefault:
     test(
       "an always job sits after versions and contents write stays on the job"
     ):
-      val job = CiJob(
-        JobName("docs"),
-        TaskName("site"),
-        JobWhen.Always,
-        JobPermissions.ContentsWrite,
-      )
+      val job  = TaskJob(JobName("docs"), TaskName("site"), permissions = JobPermissions.write)
       val yaml = (ShipName.from("libs"), ShipNumber.from("1.4.2")) match
         case (Right(name), Right(number)) =>
           Catalog.from(List(Ship.Line(name, number, ::(core, Nil)))) match
@@ -692,11 +864,11 @@ object WorkflowSpec extends ZIOSpecDefault:
     test(
       "a scheduled contents write overrides the job and leaves the workflow header read"
     ):
-      val job = CiJob(
+      val job = TaskJob(
         JobName("nightly"),
         TaskName("site"),
-        JobWhen.Schedule(Cron("0 6 * * 1")),
-        JobPermissions.ContentsWrite,
+        cron = Some(Cron("0 6 * * 1")),
+        permissions = JobPermissions.write,
       )
       val rendered = Workflow.renderAll(withJobs(List(job)), automatic)
       rendered match
@@ -715,11 +887,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         for
           root <- temp
           _    <- Workflow.update(root, graph(Splits.aggregate), automatic)
-          nightly = CiJob(
-            JobName("nightly"),
-            TaskName("site"),
-            JobWhen.Schedule(Cron("0 6 * * 1")),
-          )
+          nightly = TaskJob(JobName("nightly"), TaskName("site"), cron = Some(Cron("0 6 * * 1")))
           checked <- Workflow.check(root, withJobs(List(nightly)), automatic).either
           ci      <- ZIO.attempt(Files.readString(Workflow.path(root)))
           plain   <- ZIO.fromEither(Workflow.render(graph(Splits.aggregate)))
@@ -731,11 +899,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          nightly = CiJob(
-            JobName("nightly"),
-            TaskName("site"),
-            JobWhen.Schedule(Cron("0 6 * * 1")),
-          )
+          nightly = TaskJob(JobName("nightly"), TaskName("site"), cron = Some(Cron("0 6 * * 1")))
           _ <- Workflow.update(root, withJobs(List(nightly)), automatic)
           orphan = Workflow.file(root, "histos-retired.yml")
           other  = Workflow.file(root, "release.yml")
@@ -769,19 +933,70 @@ object WorkflowSpec extends ZIOSpecDefault:
       if at < 0 then seen else go(at + needle.length, seen + 1)
     go(0, 0)
 
+  private final case class Guide(taskName: TaskName) extends CiJob:
+    def name: JobName                             = JobName("guide")
+    def task: TaskName                            = taskName
+    def permissions: JobPermissions               = JobPermissions.read
+    def needs: List[JobName]                      = Nil
+    def render(plugin: PluginId): List[JobRender] =
+      SiteJob(name, taskName, Site(RepoPath("guide"))).render(plugin)
+
+  private final case class Matrix(taskName: TaskName) extends CiJob:
+    def name: JobName                             = JobName("deploy")
+    def task: TaskName                            = taskName
+    def permissions: JobPermissions               = JobPermissions.read
+    def needs: List[JobName]                      = Nil
+    def render(plugin: PluginId): List[JobRender] =
+      TaskJob(
+        name,
+        taskName,
+        guard = Some(Guard.Affected(::(ProjectName("core"), Nil), Guard.OnCi)),
+      ).render(plugin) match
+        case JobRender.Task(arranged) :: Nil =>
+          val us = Target(TargetName("us"), env = List(EnvName("REGION") -> EnvValue.Plain("us-east-1")))
+          val eu = Target(TargetName("eu"), env = List(EnvName("REGION") -> EnvValue.Plain("eu-west-1")))
+          List(JobRender.Fan(arranged, ::(us, ::(eu, Nil))))
+        case _ => Nil
+
+  private object AfterCi extends Trigger:
+    def on: List[On] = List(On.WorkflowRun(List("ci.yml")))
+    def cond: Cond   = Cond.Event(EventKind.WorkflowRun)
+
+  private object AfterMissing extends Trigger:
+    def on: List[On] = List(On.WorkflowRun(List("missing.yml")))
+    def cond: Cond   = Cond.Event(EventKind.WorkflowRun)
+
+  private object LabeledOnCi extends Trigger:
+    def on: List[On] = List(On.pullRequest)
+    def cond: Cond   = Cond.HasLabel("bug")
+
+  private final case class Ask(value: String) extends Trigger:
+    def on: List[On] = List(On.Dispatch(List(DispatchInput(InputKey("ship"), InputKind.Text, Some(value)))))
+    def cond: Cond   = Cond.True
+
+  private final case class Twice(name: JobName, task: TaskName, site: Site) extends CiJob:
+    def permissions: JobPermissions               = JobPermissions.read
+    def needs: List[JobName]                      = Nil
+    def render(plugin: PluginId): List[JobRender] =
+      val arranged = SiteArrange(
+        name,
+        task,
+        permissions,
+        Nil,
+        site,
+        Trigger.DefaultPush.cond,
+        Trigger.DefaultPush.on,
+      )
+      List(JobRender.Site(arranged, SiteShape.DeployOnPush), JobRender.Site(arranged, SiteShape.DeployOnPush))
+
   private def siteJob(publish: SitePublish): CiJob =
-    CiJob(
-      JobName("docs"),
-      TaskName("site"),
-      JobWhen.Always,
-      site = Some(Site(RepoPath("target/site"), publish)),
-    )
+    SiteJob(JobName("docs"), TaskName("site"), Site(RepoPath("target/site"), publish))
 
   private def pagesBody(files: List[RenderedWorkflow]): List[String] =
     files.collect:
       case RenderedWorkflow(Workflow.pagesName, body) => body
 
-  private def withJobs(jobs: List[CiJob]): ProjectGraph =
+  private def withJobs(jobs: List[CiJob], settings: CiSettings = CiSettings.empty): ProjectGraph =
     ProjectGraph.trusted(
       List(
         module(ProjectName("core"), Platform.Jvm, Nil),
@@ -792,6 +1007,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       None,
       Nil,
       List(registered(jobs)),
+      ci = settings,
     )
 
   private def registered(jobs: List[CiJob]): RegisteredPlugin =
@@ -924,11 +1140,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           case _ => false
     ,
     test("a schedule is rendered after the release file"):
-      val nightly = CiJob(
-        JobName("nightly"),
-        TaskName("site"),
-        JobWhen.Schedule(Cron("0 6 * * 1")),
-      )
+      val nightly  = TaskJob(JobName("nightly"), TaskName("site"), cron = Some(Cron("0 6 * * 1")))
       val rendered = renderRelease(
         List(manual("histos", "0.0.1-SNAPSHOT", "app")),
         Set("app"),

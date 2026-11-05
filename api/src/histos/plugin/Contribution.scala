@@ -48,29 +48,6 @@ enum CliParam:
   case OptionalText(name: ParamName)
   case Flag(name: FlagName)
 
-enum SitePublish:
-  case Automatic
-  case Manual
-  case Both
-
-final case class Site(dir: RepoPath, publish: SitePublish = SitePublish.Both)
-
-final case class CiJob(
-    name: JobName,
-    task: TaskName,
-    when: JobWhen,
-    permissions: JobPermissions = JobPermissions.ContentsRead,
-    site: Option[Site] = None,
-)
-
-enum JobWhen:
-  case Always
-  case Schedule(cron: Cron)
-
-enum JobPermissions:
-  case ContentsRead
-  case ContentsWrite
-
 /** How a header coordinate is linked. `Api` is a real case and loading it is refused. */
 enum LinkStrategy:
   case ExactBinary

@@ -70,7 +70,7 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
        |        dependsOn = Nil,
        |      )),
        |      commands = List(CommandSpec(CommandName("site"), Nil, TaskName("site"), PluginDetail("write the site"))),
-       |      jobs = List(CiJob(JobName("docs"), TaskName("site"), JobWhen.Always)),
+       |      jobs = List(TaskJob(JobName("docs"), TaskName("site"))),
        |    )
        |
        |  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
@@ -156,9 +156,11 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                   case _           => false
               case _ => false
             val rendered = Workflow.render(loaded.graph) match
-              case Right(text) =>
-                text.contains("./histos run dev.earlyeffect.specular/site") && !text.contains(marker)
-              case Left(_) => false
+              case Right(text) => text.contains("./histos run dev.earlyeffect.specular/site")
+              case Left(_)     => false
+            val unmarked = Workflow.render(loaded.graph) match
+              case Right(text) => !text.contains(marker)
+              case Left(_)     => false
             val locked = DependencyLock.parse(lockText) match
               case Right(lock) =>
                 lock.plugins
@@ -168,25 +170,38 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
                     s"${plugin.organization} ${plugin.name} ${plugin.revision} ${plugin.link} $names shas=$shas source=${plugin.source.isDefined}"
                   .mkString(";")
               case Left(err) => err.message
-            val contributed = loaded.graph.plugins match
+            val plugins = loaded.graph.plugins
+            val entry   = plugins match
+              case plugin :: Nil => plugin.entry.value == "dev.earlyeffect.specular.SpecularPlugin$"
+              case _             => false
+            val command = plugins match
               case plugin :: Nil =>
-                plugin.entry.value == "dev.earlyeffect.specular.SpecularPlugin$" &&
-                (plugin.contribution.commands match
+                plugin.contribution.commands match
                   case CommandSpec(name, params, task, summary) :: Nil =>
-                    name == CommandName("site") &&
-                    params.isEmpty &&
-                    task == TaskName("site") &&
+                    name == CommandName("site") && params.isEmpty && task == TaskName("site") &&
                     summary.value == "write the site"
-                  case _ => false) &&
-                (plugin.contribution.tasks match
+                  case _ => false
+              case _ => false
+            val taskOut = plugins match
+              case plugin :: Nil =>
+                plugin.contribution.tasks match
                   case task :: Nil =>
                     task.name == TaskName("site") &&
                     task.outputs == List(DeclaredOutput(OutputName("site"), RepoPath("docs/index.html")))
-                  case _ => false) &&
-                (plugin.contribution.jobs match
-                  case CiJob(name, task, JobWhen.Always, _, site) :: Nil =>
-                    name == JobName("docs") && task == TaskName("site") && site.isEmpty
-                  case _ => false)
+                  case _ => false
+              case _ => false
+            val job = plugins match
+              case plugin :: Nil =>
+                plugin.contribution.jobs match
+                  case (found: TaskJob) :: Nil =>
+                    found.name == JobName("docs") && found.task == TaskName("site")
+                  case _ => false
+              case _ => false
+            val jobTrigger = plugins match
+              case plugin :: Nil =>
+                plugin.contribution.jobs match
+                  case (found: TaskJob) :: Nil => found.cron.isEmpty && found.trigger == Trigger.Ci
+                  case _                       => false
               case _ => false
             val noted =
               loaded.graph.projects.collect { case module: Module => module }.find(_.name.value == "docs") match
@@ -200,8 +215,13 @@ object SpecularFixtureSpec extends ZIOSpecDefault:
               ran == PluginOutput("site:docs", List(WrittenFile(OutputName("site"), RepoPath("docs/index.html")))),
               stayed,
               rendered,
+              unmarked,
               locked == "dev.earlyeffect specular 0.2.0 BinaryOrSource specular-text_3 specular_3 shas=2 source=true",
-              contributed,
+              entry,
+              command,
+              taskOut,
+              job,
+              jobTrigger,
               noted,
             )
     ) @@ TestAspect.withLiveSystem @@ TestAspect.timeout(3.minutes)

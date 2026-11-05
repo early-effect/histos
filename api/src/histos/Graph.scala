@@ -1,10 +1,11 @@
 package histos
 
 import histos.plugin.{
+  CiSettings,
   DeclaredInput,
   EntryName,
   HistosPlugin,
-  JobWhen,
+  JobCheck,
   ModuleNote,
   Need,
   PluginId,
@@ -136,6 +137,7 @@ final case class ProjectGraph private (
     testLog: Boolean = false,
     resolution: Resolution = Resolution.Solve,
     docCheck: DocCheck = DocCheck.Off,
+    ci: CiSettings = CiSettings.empty,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -179,6 +181,7 @@ object ProjectGraph:
       testLog: Boolean = false,
       resolution: Resolution = Resolution.Solve,
       docCheck: DocCheck = DocCheck.Off,
+      ci: CiSettings = CiSettings.empty,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -194,6 +197,7 @@ object ProjectGraph:
       testLog,
       resolution,
       docCheck,
+      ci,
     )
 end ProjectGraph
 
@@ -246,6 +250,10 @@ object Projects:
   /** How a push to main fills the main index. Omission, from [[apply]], is rebuild. */
   def promote(value: Promote): Organized =
     Organized(None, Nil, promote = value)
+
+  /** Runners, action pins, secrets, and graph env for the workflow. */
+  def ci(settings: CiSettings): Organized =
+    Organized(None, Nil, ci = settings)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
@@ -308,6 +316,7 @@ object Projects:
       testLog: Boolean = false,
       resolution: Resolution = Resolution.Solve,
       docCheck: DocCheck = DocCheck.Off,
+      ci: CiSettings = CiSettings.empty,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -323,6 +332,7 @@ object Projects:
       testLog,
       resolution,
       docCheck,
+      ci,
     )
 
   private def build(
@@ -339,6 +349,7 @@ object Projects:
       testLog: Boolean = false,
       resolution: Resolution = Resolution.Solve,
       docCheck: DocCheck = DocCheck.Off,
+      ci: CiSettings = CiSettings.empty,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -352,21 +363,27 @@ object Projects:
       _          <- bindPlugins(registered, built)
       ships      <- ShipLink.catalog(catalog, built)
       _          <- uniqueResolvers(resolvers)
-    yield ProjectGraph.trusted(
-      built,
-      splits,
-      ships,
-      organization,
-      resolvers,
-      registered,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      testLog,
-      resolution,
-      docCheck,
-    )
+      builtGraph <-
+        Right(
+          ProjectGraph.trusted(
+            built,
+            splits,
+            ships,
+            organization,
+            resolvers,
+            registered,
+            tools,
+            runnerTools,
+            facts,
+            promote,
+            testLog,
+            resolution,
+            docCheck,
+            ci,
+          )
+        )
+      _ <- JobCheck.arrange(builtGraph)
+    yield builtGraph
 
   private def uniqueResolvers(
       resolvers: List[Resolver]
@@ -713,18 +730,7 @@ object Projects:
         registered.flatMap(_.contribution.jobs.map(_.name)),
         BuildError.DuplicateJob(_),
       )
-      _ <- checkSites(registered)
     yield ()
-
-  private def checkSites(registered: List[RegisteredPlugin]): Either[BuildError, Unit] =
-    val named = registered.flatMap(_.contribution.jobs.filter(_.site.isDefined))
-    named match
-      case first :: second :: _ => Left(BuildError.DuplicateSite(first.name, second.name))
-      case job :: Nil           =>
-        job.when match
-          case JobWhen.Schedule(_) => Left(BuildError.ScheduledSite(job.name))
-          case JobWhen.Always      => Right(())
-      case Nil => Right(())
 
   private def uniquePlugins(
       registered: List[RegisteredPlugin]
@@ -866,12 +872,13 @@ final class Organized(
     logged: Boolean = false,
     resolution: Resolution = Resolution.Solve,
     checked: DocCheck = DocCheck.Off,
+    ci: CiSettings = CiSettings.empty,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked, ci)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -884,28 +891,29 @@ final class Organized(
       logged,
       resolution,
       checked,
+      ci,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked)
+    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked, ci)
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked)
+    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked, ci)
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
   def testLog: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked, ci)
 
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
   def docCheck: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, DocCheck.On)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, DocCheck.On, ci)
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked, ci)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -928,7 +936,11 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked)
+    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked, ci)
+
+  /** Runners, action pins, secrets, and graph env. A second call replaces the settings. */
+  def ci(settings: CiSettings): Organized =
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, settings)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -944,6 +956,7 @@ final class Organized(
       testLog = logged,
       resolution = resolution,
       docCheck = checked,
+      ci = ci,
     )
 
   def apply(
@@ -963,6 +976,7 @@ final class Organized(
       testLog = logged,
       resolution = resolution,
       docCheck = checked,
+      ci = ci,
     )
 
   def apply(
@@ -982,6 +996,7 @@ final class Organized(
       testLog = logged,
       resolution = resolution,
       docCheck = checked,
+      ci = ci,
     )
 
   def apply(
@@ -1002,6 +1017,7 @@ final class Organized(
       testLog = logged,
       resolution = resolution,
       docCheck = checked,
+      ci = ci,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -1019,6 +1035,7 @@ final class Organized(
       logged,
       resolution,
       checked,
+      ci,
     )
 
   def apply(
@@ -1040,6 +1057,7 @@ final class Organized(
       logged,
       resolution,
       checked,
+      ci,
     )
 
   def apply(
@@ -1061,6 +1079,7 @@ final class Organized(
       logged,
       resolution,
       checked,
+      ci,
     )
 
   def apply(
@@ -1083,5 +1102,6 @@ final class Organized(
       logged,
       resolution,
       checked,
+      ci,
     )
 end Organized

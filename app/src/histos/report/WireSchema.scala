@@ -15,6 +15,7 @@ import histos.jdk.{
 }
 import histos.load.{BinaryName, CompilerMessage, LoadError, PluginFault}
 import histos.plugin.{
+  ActionName,
   ApiDigest,
   CommandName,
   ContentHash,
@@ -35,6 +36,9 @@ import histos.plugin.{
   PluginTaskError,
   PluginTaskId,
   RepoPath,
+  RunnerName,
+  SecretName,
+  TargetName,
   TaskName,
 }
 import histos.assembly.AssembleError
@@ -161,6 +165,7 @@ import histos.zinc.{
 }
 import histos.{
   BuildError,
+  CiFault,
   ClangMajor,
   Dep,
   DepError,
@@ -322,6 +327,10 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given Schema[TaskName]       = text("TaskName")
   given Schema[CommandName]    = text("CommandName")
   given Schema[JobName]        = text("JobName")
+  given Schema[ActionName]     = text("ActionName")
+  given Schema[RunnerName]     = text("RunnerName")
+  given Schema[SecretName]     = text("SecretName")
+  given Schema[TargetName]     = text("TargetName")
   given Schema[ProjectPath]    = text("ProjectPath")
   given Schema[RepoPath]       = text("RepoPath")
   given Schema[Organization]   = text("Organization")
@@ -442,6 +451,7 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[histos.plugin.Need] =
     enumeration("Need", List("network", "docker"))
 
+  given Schema[CiFault]    = Schema.derived
   given Schema[BuildError] = Schema.derived
 
   given Schema[LoadError] = Schema.derived
