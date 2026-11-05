@@ -109,7 +109,13 @@ object WorkflowSpec extends ZIOSpecDefault:
         !golden.contains("playwright"),
         !golden.contains("format:"),
         !golden.contains("publish"),
-        golden.contains("push:\n    branches:\n      - \"**\""),
+        golden.contains(
+          "push:\n    branches:\n      - \"${{ github.event.repository.default_branch }}\""
+        ),
+        golden.contains("pull_request:"),
+        !golden.contains("branches:\n      - \"main\""),
+        !golden.contains("branches:\n      - main"),
+        !golden.contains("\"**\""),
         !golden.contains("tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List(
@@ -766,6 +772,19 @@ object WorkflowSpec extends ZIOSpecDefault:
           case Right(files) =>
             val own = files.find(_.name == "histos-nightly.yml").map(_.body).getOrElse("")
             own.contains("schedule:") && own.contains("workflow_dispatch:") && !own.contains("pull_request:")
+          case Left(_) => false,
+        Workflow.renderAll(withJobs(List(paths)), automatic) match
+          case Right(files) =>
+            val own = files.find(_.name == "histos-api.yml").map(_.body).getOrElse("")
+            val ci  = files.find(_.name == Workflow.fileName).map(_.body).getOrElse("")
+            own.contains("push:\n    branches:\n      - \"${{ github.event.repository.default_branch }}\"") &&
+            own.contains("paths:\n      - \"api/**\"") &&
+            !own.contains("\"**\"") &&
+            !own.contains("branches:\n      - \"main\"") &&
+            ci.contains("pull_request:") &&
+            ci.contains("push:\n    branches:\n      - \"${{ github.event.repository.default_branch }}\"") &&
+            !ci.contains("branches:\n      - \"main\"") &&
+            !ci.contains("\"**\"")
           case Left(_) => false,
       )
     ,

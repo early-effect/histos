@@ -10,14 +10,14 @@ trait Trigger:
   def ++(other: Trigger): Trigger = Trigger.Combine(this, other)
 
 object Trigger:
-  /** Pull request, or a push to the repository's default branch. */
+  /** Pull request, or a push to [[On.defaultBranch]]. */
   case object Ci extends Trigger:
-    def on: List[On] = List(On.pullRequest, On.pushAll)
+    def on: List[On] = List(On.pullRequest, On.pushDefault)
     def cond: Cond   = Cond.AnyOf(List(Cond.Event(EventKind.PullRequest), Cond.DefaultBranchPush))
 
-  /** A push to the repository's default branch. Not a tag and not a pull request. */
+  /** A push to [[On.defaultBranch]]. Not a tag and not a pull request. */
   case object DefaultPush extends Trigger:
-    def on: List[On] = List(On.pushAll)
+    def on: List[On] = List(On.pushDefault)
     def cond: Cond   = Cond.DefaultBranchPush
 
   /** `workflow_dispatch` with no inputs. */
@@ -35,9 +35,9 @@ object Trigger:
     def on: List[On] = List(On.PullRequest(List(PullType.Labeled), Nil))
     def cond: Cond   = Cond.HasLabel(label)
 
-  /** Paths on a push. Non-empty paths are their own file: they would wake `ci.yml`. */
+  /** Paths on a push to [[On.defaultBranch]]. Non-empty paths are their own file: they would wake `ci.yml`. */
   final case class Paths(paths: ::[String]) extends Trigger:
-    def on: List[On] = List(On.Push(List("**"), Nil, paths))
+    def on: List[On] = List(On.Push(List(On.defaultBranch), Nil, paths))
     def cond: Cond   = Cond.DefaultBranchPush
 
   final case class Combine(left: Trigger, right: Trigger) extends Trigger:
@@ -65,7 +65,13 @@ object On:
 
   def pullRequest: On = PullRequest(defaultPull, Nil)
 
-  def pushAll: On = Push(List("**"), Nil, Nil)
+  /** `on.push.branches` entry. The short name GitHub reports as the repository default branch, the same fact as
+    * [[Cond.DefaultBranch]]. Not a literal branch name.
+    */
+  val defaultBranch: String = "${{ github.event.repository.default_branch }}"
+
+  /** A push to [[defaultBranch]]. Not every branch, and not a tag. */
+  def pushDefault: On = Push(List(defaultBranch), Nil, Nil)
 
   /** Would this event wake or cancel `ci.yml` if it were merged there. */
   def splits(on: On): Boolean = on match

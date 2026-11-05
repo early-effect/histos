@@ -22,11 +22,11 @@ A path belongs to the module whose directory is the longest prefix. Dependents o
 
 **Runners.** `CiSettings.runners` maps a `RunnerName` to the `runs-on` label. `Runner.Default` is `ubuntu-26.04`. An unknown name is `UnknownRunner`. The catalog is `ProjectGraph.ci`, not the ship catalog.
 
-**Verify.** There is no gate job. `test`, `doc`, `versions`, and `workflow` run when the event is `pull_request` or `workflow_dispatch`. A push still starts the workflow. Those jobs skip. `cache-seed` runs on a push to the default branch, compiles, and saves the cache. It does not set the cache namespace. The test job is the only writer of that namespace.
+**Verify.** There is no gate job. `test`, `doc`, `versions`, and `workflow` run when the event is `pull_request` or `workflow_dispatch`. A push to the default branch still starts the workflow. Those jobs skip. A push to any other branch does not start `ci.yml`, so a pull-request commit is one run. `cache-seed` runs on a push to the default branch, compiles, and saves the cache. It does not set the cache namespace. The test job is the only writer of that namespace.
 
 **Triggers.** `Trigger` is an open trait. It renders only into the closed `On` and `Cond` vocabularies. `Cond` is an expression tree. The printer is the only place a condition becomes a string. Shipped presets are `Ci`, `DefaultPush`, `Tag`, `Dispatch`, `Label`, `Paths`, and `Nightly` (`TaskJob.nightly`, which is `Dispatch` plus a cron). `SitePublish` (`Automatic`, `Manual`, `Both`, default `Both`) is those presets applied to a site. A site has no cron, so `ScheduledSite` cannot be constructed.
 
-The default branch is one expression: `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`. The branch name `main` is not hard-coded. The cache namespace token `main` is `CacheNamespace.Main` and is unrelated.
+A job `if` names the default branch as one expression: `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`. `on.push.branches` is the same fact as a short name, `${{ github.event.repository.default_branch }}` (`On.defaultBranch`), not a literal branch. The cache namespace token `main` is `CacheNamespace.Main` and is unrelated.
 
 Events that would wake or cancel `ci.yml` are written to `histos-<job>.yml` automatically: a label, a path filter, a cron, and `workflow_run`. `push`, the default pull-request types, `workflow_dispatch`, tags, `merge_group`, and `release` stay in `ci.yml`. A job in `ci.yml` is skipped on an event it did not ask for.
 

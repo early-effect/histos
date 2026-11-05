@@ -1,6 +1,6 @@
 package histos.workflow
 
-import histos.plugin.{CiExtra, CiHeader}
+import histos.plugin.{CiExtra, CiHeader, On}
 import histos.program.ClientBinary
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
@@ -624,9 +624,11 @@ object Workflow:
   private def verifyNeeds: List[String] =
     List(s"    if: ${quote(s"($OnVerify) && ($NoneFailed)")}")
 
-  /** `on.push.branches` is a static glob. The github context is not available there. `**` is every branch. Verify jobs
-    * repeat [[OnVerify]], so a push starts a run whose suite skips. `workflow_dispatch` is on this file because verify
-    * accepts it. A label, a path, a cron, or `workflow_run` is not: those are their own files.
+  /** `on.push.branches` is [[On.defaultBranch]], the repository default branch GitHub reports, not a literal name.
+    * `pull_request` still validates every other branch. A push to a feature branch does not start this file, so one
+    * commit on an open pull request is one run. Verify jobs repeat [[OnVerify]], so a push to the default branch starts
+    * a run whose suite skips. `workflow_dispatch` is on this file because verify accepts it. A label, a path, a cron,
+    * or `workflow_run` is not: those are their own files.
     */
   private def header(extra: CiHeader, graph: ProjectGraph): List[String] =
     val tags =
@@ -640,7 +642,7 @@ object Workflow:
       "  pull_request:",
       "  push:",
       "    branches:",
-      s"      - ${quote("**")}",
+      s"      - ${quote(On.defaultBranch)}",
     ) ++ tags ++ dispatchInputs(extra.inputs) ++ merge ++ release ++ List(
       "permissions:",
       "  contents: read",
