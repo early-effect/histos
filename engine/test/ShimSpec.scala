@@ -276,6 +276,63 @@ object ShimSpec extends ZIOSpecDefault:
           }
       }
     ,
+    test("a snapshot pin reads the channel once inside the ttl"):
+      scene(clients = Nil).flatMap { case (home, repo, hits, _) =>
+        val channel = DistLayout.channel(Pointer)
+        write(repo.resolve("build.properties"), s"histos.version=$Pointer\n") *>
+          runShimFull(home, repo, "version").flatMap { (first, firstErr) =>
+            val once = (0 until hits.size).count(index => hits.get(index) == channel)
+            runShimFull(home, repo, "version").map { (exit, err) =>
+              val twice = (0 until hits.size).count(index => hits.get(index) == channel)
+              assertTrue(
+                first.value == 0,
+                exit.value == 0,
+                !firstErr.contains("did not resolve"),
+                !err.contains("did not resolve"),
+                once == 1,
+                twice == 1,
+              )
+            }
+          }
+      }
+    ,
+    test("a stale snapshot pin reads the channel again"):
+      scene(clients = Nil).flatMap { case (home, repo, hits, _) =>
+        val channel = DistLayout.channel(Pointer)
+        val cache   = home.resolve("channels").resolve(Pointer)
+        write(repo.resolve("build.properties"), s"histos.version=$Pointer\n") *>
+          runShim(home, repo, "version") *>
+          ZIO.attempt {
+            java.nio.file.Files.setLastModifiedTime(
+              cache,
+              java.nio.file.attribute.FileTime.fromMillis(java.lang.System.currentTimeMillis - 7200000L),
+            )
+          } *>
+          runShimFull(home, repo, "version").map { (exit, err) =>
+            val seen = (0 until hits.size).count(index => hits.get(index) == channel)
+            assertTrue(exit.value == 0, !err.contains("did not resolve"), seen == 2)
+          }
+      }
+    ,
+    test("a stale snapshot pin keeps the cached revision when the channel is down"):
+      scene().flatMap { case (home, repo, hits, _) =>
+        val cache = home.resolve("channels").resolve(Pointer)
+        val jar   = home.resolve("toolchains").resolve(Version).resolve("histos.jar")
+        write(repo.resolve("build.properties"), s"histos.version=$Pointer\n") *>
+          write(cache, s"$Version\n") *>
+          write(jar, new String(JarBytes, StandardCharsets.UTF_8)) *>
+          ZIO.attempt {
+            java.nio.file.Files.setLastModifiedTime(
+              cache,
+              java.nio.file.attribute.FileTime.fromMillis(java.lang.System.currentTimeMillis - 7200000L),
+            )
+          } *>
+          runShimDist(home, repo, Some("http://127.0.0.1:1"), "version").map { (exit, err) =>
+            val seen = (0 until hits.size).count(index => hits.get(index) == DistLayout.channel(Pointer))
+            assertTrue(exit.value == 0, seen == 0, !err.contains("did not resolve"))
+          }
+      }
+    ,
     test("compile-client links a binary and records that it was compiled here"):
       scene(clients = Nil, sources = true).flatMap { case (home, repo, _, log) =>
         runShim(home, repo, "toolchain", "install", Version, "--compile-client").flatMap { exit =>
@@ -455,8 +512,16 @@ object ShimSpec extends ZIOSpecDefault:
     yield (code, out, err)
 
   private def runShimFull(home: Path, repo: Path, args: String*): ZIO[Any, Throwable, (ProcessExit, String)] =
+    runShimDist(home, repo, None, args*)
+
+  private def runShimDist(
+      home: Path,
+      repo: Path,
+      dist: Option[String],
+      args: String*
+  ): ZIO[Any, Throwable, (ProcessExit, String)] =
     for
-      base   <- ZIO.attempt(Files.readString(home.getParent.resolve("dist-base")).trim)
+      base   <- ZIO.attempt(dist.getOrElse(Files.readString(home.getParent.resolve("dist-base")).trim))
       bin    <- ZIO.attempt(Files.readString(home.getParent.resolve("path-bin")).trim)
       path   <- System.env("PATH").map(_.getOrElse(""))
       events <- ChildProcess

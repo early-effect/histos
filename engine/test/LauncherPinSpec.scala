@@ -113,6 +113,7 @@ object LauncherPinSpec extends ZIOSpecDefault:
           after  <- Workspace.readString(root.resolve(LauncherPin.file))
         yield assertTrue(
           result == Left(LauncherError.Release("0.1.0")),
+          result.swap.toOption.exists(_.message.contains("histos launcher --latest")),
           after == before,
         )
     ,
