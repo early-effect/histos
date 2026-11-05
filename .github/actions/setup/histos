@@ -265,7 +265,8 @@ if [ -f "$self" ]; then
 else
   self_path=
 fi
-if [ "$self_path" != "$installed" ]; then
+# A PATH symlink to the installed shim is the same file. cp then fails with "are the same file".
+if [ "$self_path" != "$installed" ] && { [ -z "$self_path" ] || [ ! -e "$installed" ] || [ ! "$self_path" -ef "$installed" ]; }; then
   mkdir -p "$home/bin"
   if script_file "$self_path"; then
     cp "$self_path" "$installed"

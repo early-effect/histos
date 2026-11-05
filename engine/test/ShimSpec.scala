@@ -53,6 +53,27 @@ object ShimSpec extends ZIOSpecDefault:
         )
       }
     ,
+    test("a symlink to the installed shim dispatches instead of copying itself"):
+      scene().flatMap { case (home, repo, hits, _) =>
+        val linked = home.getParent.resolve("local/bin/histos")
+        val name   = "0.0.2-installed"
+        for
+          _ <- ZIO.attempt {
+            Files.createDirectories(linked.getParent)
+            Files.createDirectories(home.resolve(s"toolchains/$name"))
+            Files.createSymbolicLink(linked, home.resolve("bin/histos"))
+          }
+          (exit, out, err) <- runAt(linked, home, repo, "toolchain", "list")
+          text             <- ZIO.attempt(Files.readString(home.resolve("bin/histos")))
+        yield assertTrue(
+          exit.value == 0,
+          out.split('\n').contains(name),
+          !err.contains("same file"),
+          !hits.contains(DistLayout.Shim),
+          text.contains("Histos user install"),
+        )
+      }
+    ,
     test("self update replaces the shim when the published hash differs"):
       scene(remoteSuffix = "\n# updated\n").flatMap { case (home, repo, _, _) =>
         runShim(home, repo, "self", "update").flatMap { exit =>
@@ -291,6 +312,35 @@ object ShimSpec extends ZIOSpecDefault:
 
   private def runShim(home: Path, repo: Path, args: String*): ZIO[Any, Throwable, ProcessExit] =
     runShimFull(home, repo, args*).map(_._1)
+
+  /** Runs `command` with `HISTOS_HOME` set, so a symlink can be the argv0. */
+  private def runAt(
+      command: Path,
+      home: Path,
+      repo: Path,
+      args: String*
+  ): ZIO[Any, Throwable, (ProcessExit, String, String)] =
+    for
+      base   <- ZIO.attempt(Files.readString(home.getParent.resolve("dist-base")).trim)
+      bin    <- ZIO.attempt(Files.readString(home.getParent.resolve("path-bin")).trim)
+      path   <- System.env("PATH").map(_.getOrElse(""))
+      events <- ChildProcess
+        .command(
+          command.toString :: args.toList,
+          repo,
+          Map(
+            "HISTOS_HOME" -> home.toString,
+            "HISTOS_DIST" -> base,
+            "PATH"        -> s"$bin:$path",
+          ),
+        )
+        .runCollect
+        .mapError(error => new IOException(error.toString))
+      exit = events.collect { case ChildEvent.Exited(code) => code }
+      out  = events.collect { case ChildEvent.Out(line) => line }.mkString("\n")
+      err  = events.collect { case ChildEvent.Err(line) => line }.mkString("\n")
+      code <- ZIO.fromOption(exit.headOption).orElseFail(new IOException(s"shim did not exit: $err"))
+    yield (code, out, err)
 
   private def runShimFull(home: Path, repo: Path, args: String*): ZIO[Any, Throwable, (ProcessExit, String)] =
     for
