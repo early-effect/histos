@@ -142,6 +142,14 @@ object Workflow:
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
 
+  /** A missing `ci.yml` is reported before git is asked for the default branch. */
+  def present(repo: Path): IO[CiError, Unit] =
+    val path = file(repo, fileName)
+    ZIO
+      .attemptBlocking(Files.isRegularFile(path))
+      .mapError(_ => CiError.Io(IoFailure(path, IoFault.Stat)))
+      .flatMap(found => if found then ZIO.unit else ZIO.fail(CiError.Missing(path)))
+
   def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))

@@ -615,7 +615,10 @@ object Calls:
       sona: Publishing,
       action: WorkflowAction,
   ): IO[WorkflowFault, Path] =
-    CiBranch.read(repo).mapError(WorkflowFault.Files(_)).flatMap: branch =>
+    val present = action match
+      case WorkflowAction.Check  => Workflow.present(repo).mapError(WorkflowFault.Files(_))
+      case WorkflowAction.Update => ZIO.unit
+    present *> CiBranch.read(repo).mapError(WorkflowFault.Files(_)).flatMap: branch =>
       val rendered = action match
         case WorkflowAction.Check =>
           Workflow.check(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
