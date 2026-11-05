@@ -195,7 +195,7 @@ object SonaStock:
       case PublishError.NotADirectory(path) => PublishFault.Write(path.toString)
       case PublishError.Escaped(path)       => PublishFault.Write(path.toString)
       case PublishError.Io(path, _)         => PublishFault.Write(path.toString)
-      case PublishError.Unauthorized        => PublishFault.Credentials
+      case PublishError.Unauthorized        => PublishFault.Rejected
       case PublishError.NotSnapshot(_)      => PublishFault.Version(request.revision)
       case PublishError.Status(_)           => PublishFault.Remote
       case PublishError.Transport(_)        => PublishFault.Remote
@@ -203,11 +203,14 @@ object SonaStock:
 
   private def releaseFault(error: ReleaseError): PublishFault =
     error match
-      case ReleaseError.Credentials  => PublishFault.Credentials
-      case ReleaseError.Signer(_)    => PublishFault.Signer
-      case ReleaseError.Portal(_)    => PublishFault.Portal
-      case ReleaseError.Bundle(_)    => PublishFault.Bundle
-      case ReleaseError.Client(_)    => PublishFault.Client
+      case ReleaseError.Credentials                          => PublishFault.Credentials
+      case ReleaseError.Rejected                             => PublishFault.Rejected
+      case ReleaseError.Signer(_)                            => PublishFault.Signer
+      case ReleaseError.Portal(_)                            => PublishFault.Portal
+      case ReleaseError.Bundle(_)                            => PublishFault.Bundle
+      case ReleaseError.Client(histos.central.PortalError.Unauthorized) =>
+        PublishFault.Rejected
+      case ReleaseError.Client(_)                            => PublishFault.Client
       case ReleaseError.Io(path)     => PublishFault.Write(path)
       case ReleaseError.Record(ship) => PublishFault.Record(ship)
       case ReleaseError.Stage(_)     => PublishFault.Remote
