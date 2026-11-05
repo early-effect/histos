@@ -68,6 +68,11 @@ object Workflow:
   /** Owned like a scheduled `histos-*.yml`. An empty catalog does not emit it, so update deletes a stale copy. */
   val releaseName: String = "histos-release.yml"
 
+  /** `histos-` so update deletes a stale copy when no ship names an asset. Dispatch publishes snapshots. On the default
+    * branch that command also uploads the dist channel.
+    */
+  val snapshotsName: String = "histos-snapshots.yml"
+
   /** `histos-` so update deletes a stale copy when `followUp` is Finished, on the same orphan pass as the release file.
     */
   val promoteName: String = "histos-promote.yml"
@@ -115,7 +120,8 @@ object Workflow:
     prepared(graph).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
-    * is Deployment, then one file per dispatch, cron, or trigger that must not wake `ci.yml`.
+    * is Deployment, `histos-snapshots.yml` when a ship names an asset, then one file per dispatch, cron, or trigger
+    * that must not wake `ci.yml`.
     */
   def renderAll(graph: ProjectGraph, sona: Publishing): Either[CiError, List[RenderedWorkflow]] =
     prepared(graph).map: (body, files) =>
@@ -124,7 +130,8 @@ object Workflow:
         release match
           case Nil => Nil
           case _   => promoteWorkflow(graph, sona).toList
-      RenderedWorkflow(fileName, body) :: release ++ promote ++ SupplyYaml.files(graph) ++ files
+      val snapshots = snapshotWorkflow(graph).toList
+      RenderedWorkflow(fileName, body) :: release ++ promote ++ snapshots ++ SupplyYaml.files(graph) ++ files
 
   private def prepared(graph: ProjectGraph): Either[CiError, (String, List[RenderedWorkflow])] =
     for
@@ -257,6 +264,49 @@ object Workflow:
     graph.catalog.ships match
       case Nil   => None
       case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships, sona)))
+
+  /** A ship that names an asset. The workflow publishes snapshots, and on the default branch uploads the dist channel.
+    * An empty asset list emits nothing, so update deletes a stale copy.
+    */
+  private def snapshotWorkflow(graph: ProjectGraph): Option[RenderedWorkflow] =
+    if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
+      Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
+    else None
+
+  /** `HISTOS_BRANCH` is `default` only on the repository's default branch. That is the session that names the pointer.
+    * Another ref stores the commit coordinate and does not upload a channel. The assembly step is the same condition:
+    * the channel reads the asset file, and `./histos assembly` writes it.
+    */
+  private def snapshotDocument(graph: ProjectGraph): String =
+    val branch =
+      "github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'default' || 'other'"
+    val lines = List(
+      "name: snapshots",
+      "on:",
+      "  workflow_dispatch:",
+      "permissions:",
+      "  contents: read",
+      "jobs:",
+      "  snapshots:",
+      s"    runs-on: $Runner",
+      "    permissions:",
+      "      contents: write",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli(graph, "snapshots", build = true) ++ List(
+      s"      - if: ${quote(OnDefaultBranch)}",
+      s"        run: ${quote("./histos assembly")}",
+      s"      - run: ${quote("./histos publish snapshots")}",
+      "        env:",
+      "          HISTOS_SESSION: snapshot",
+      "          HISTOS_SHA: ${{ github.sha }}",
+      s"          HISTOS_BRANCH: $${{ $branch }}",
+      "          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}",
+      "          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}",
+      "          GITHUB_TOKEN: ${{ github.token }}",
+      "          GITHUB_REPOSITORY: ${{ github.repository }}",
+    )
+    lines.mkString("\n") + "\n"
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
   private def promoteWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
@@ -757,6 +807,20 @@ object Workflow:
         "          fi",
       )
 
+  /** The shared bootstrap, or an assembly of this checkout when the pin skipped that upload. `workflow --check` renders
+    * with the running jar. A pin that already lists `doctor` does not upload `histos-bootstrap`, and that pin does not
+    * know a workflow file this checkout just added.
+    */
+  private[workflow] def branchJar(graph: ProjectGraph): List[String] =
+    if !selfHosted(graph) then Nil
+    else
+      fetchAssembly(graph) ++ List(
+        "      - run: |",
+        "          if [ ! -f dist/histos.jar ]; then",
+        "            ./histos assembly",
+        "          fi",
+      )
+
   /** The published jar is the one the version line names. Build this tree only when that jar has no `doctor`. */
   private[workflow] def buildAssembly(graph: ProjectGraph): List[String] =
     if !selfHosted(graph) then Nil
@@ -1158,7 +1222,7 @@ object Workflow:
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
-  /** The required check. It runs on a pull request, reuses this repository's assembly, and runs the full doctor. */
+  /** The required check. It runs on a pull request, uses this checkout's jar, and runs the full doctor. */
   private def workflowJob(graph: ProjectGraph): String =
     (List(
       "  workflow:"
@@ -1170,7 +1234,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
-    ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
+    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
       "      - run: ./histos doctor",
       "      - run: \"./histos workflow --check\"",
     )).mkString("\n")
