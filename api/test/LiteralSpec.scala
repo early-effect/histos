@@ -2,7 +2,7 @@ package histos
 
 import _root_.scala.compiletime.testing.typeCheckErrors
 
-import histos.version.{ManualVersion, ManualVersionError, ShipNumber, ShipNumberError}
+import histos.version.{ShipNumber, ShipNumberError}
 
 import zio.test.*
 
@@ -74,18 +74,30 @@ object LiteralSpec extends ZIOSpecDefault:
           case Nil    => false,
       )
     ,
-    test("a manual version is the text that was written"):
-      val errors = typeCheckErrors("""manual"1.2..3"""")
+    test("Ship.next rejects a bad name, a negative component, and a short commit"):
+      val name     = typeCheckErrors("""Ship("1histos").next(0, 2, 0)""")
+      val negative = typeCheckErrors("""Ship("histos").next(-1, 2, 0)""")
+      val sha      = typeCheckErrors("""Ship("histos").next(0, 2, 0).commit("abc")""")
+      val pin      = Ship("histos").next(0, 2, 0)
+      val released = pin.released
       assertTrue(
-        manual"1.2.3".value == "1.2.3",
-        manual"1.2.3-SNAPSHOT" == ManualVersion("1.2.3-SNAPSHOT"),
-        manual"2026.10.17".value == "2026.10.17",
-        ManualVersion.from("") == Left(ManualVersionError.Empty),
-        ManualVersion.from("1.2..3") == Left(ManualVersionError.NotAVersion("1.2..3")),
-        ManualVersion.from(" 1.2.3") == Left(ManualVersionError.NotAVersion(" 1.2.3")),
-        errors match
-          case e :: _ => e.message.contains("1.2..3")
+        pin.pointer.revision == "0.2.0-SNAPSHOT",
+        pin.commit("0123456789abcdef0123456789abcdef01234567").revision == "0.2.0-0123456789ab-SNAPSHOT",
+        released.revision == "0.2.0",
+        pin.pointer.dep(organization"rocks.earlyeffect", artifact"histos-api").revision == "0.2.0-SNAPSHOT",
+        released.dep(organization"rocks.earlyeffect", artifact"histos").revision == "0.2.0",
+        name match
+          case e :: _ => e.message.contains("1histos") && e.message.contains("Ship(\"histos\")")
           case Nil    => false,
+        negative match
+          case e :: _ => e.message.contains("major is -1") && e.message.contains("next(0, 2, 0)")
+          case Nil    => false,
+        sha match
+          case e :: _ => e.message.contains("abc") && e.message.contains("40-hex")
+          case Nil    => false,
+        typeCheckErrors(
+          "val pin = Ship(\"histos\").next(0, 2, 0).pointer; pin.revisionValue"
+        ).nonEmpty,
       )
     ,
     test("a broken dependency literal does not compile"):

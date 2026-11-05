@@ -46,7 +46,7 @@ end CheckIdError
 
 /** Where a check belongs. A plugin uses [[Area.Plugin]]. */
 enum Area:
-  case Toolchain, BuildDefinition, Workflows, RepoSettings, SupplyChain, SitePublish
+  case Toolchain, BuildDefinition, Workflows, RepoSettings, SupplyChain, SitePublish, Release
   case Plugin(id: PluginId)
 
 /** What a check reads. A missing probe is [[Outcome.Skipped]], never a crash. */

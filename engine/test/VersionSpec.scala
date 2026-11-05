@@ -1,6 +1,6 @@
 package histos.version
 
-import histos.*
+import histos.{Ship as _, *}
 import histos.task.{TaskError, TaskResult}
 
 import java.nio.file.Files
@@ -60,25 +60,32 @@ object VersionTaskSpec extends ZIOSpecDefault:
           missed.render.contains("drift unchecked"),
         )
     ,
-    test("a manual ship publishes its stated version without a registry file"):
+    test("an empty releases file derives a snapshot and the pointer"):
       val core = module("core", Jvm)(scala"3.9.0")
-      Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core) match
-        case Left(error)  => ZIO.succeed(assertTrue(error.message == "manual"))
+      Projects(ships(ship("libs", ship"1.2.3")(core)), core) match
+        case Left(error) => ZIO.succeed(assertTrue(error.message == "libs"))
         case Right(graph) =>
           ZIO.scoped:
             for
               dir <- ZIO.acquireRelease(
-                ZIO.attempt(Files.createTempDirectory("histos-manual"))
+                ZIO.attempt(Files.createTempDirectory("histos-releases"))
               ): path =>
                 ZIO.attempt(Files.deleteIfExists(path)).ignore
-              done <- VersionTask
-                .fromRepo(graph, dir, Map(Session.Key -> "snapshot"))
+              _ <- ZIO.attempt(Files.writeString(dir.resolve("releases"), ""))
+              done <- VersionTask.fromRepo(
+                graph,
+                dir,
+                Map(
+                  Session.Key       -> "snapshot",
+                  Session.ShaKey    -> "1234567890abcdef1234567890abcdef12345678",
+                  Session.BranchKey -> "default",
+                ),
+              )
             yield assertTrue(
-              done.render.contains("session manual"),
-              done.render.contains(
-                "compile 1.2.3-SNAPSHOT publish 1.2.3-SNAPSHOT"
-              ),
-              !done.render.contains("-ci"),
+              done.render.contains("session snapshot default"),
+              done.render.contains("publish 1.2.3-1234567890ab-SNAPSHOT"),
+              done.render.contains("pointer 1.2.3-SNAPSHOT"),
+              done.render.contains("compile 1.2.3-ci"),
             )
     ,
     test(

@@ -1,6 +1,6 @@
 package histos
 
-import histos.version.{Ship, ShipName, ShipNameError}
+import histos.version.{Ship as CatalogShip, ShipName, ShipNameError}
 
 import zio.{IO, ZIO}
 import zio.test.*
@@ -437,7 +437,7 @@ object GraphSpec extends ZIOSpecDefault:
         libs     <- shipName("libs")
         coreName <- projectName("core")
       yield assertTrue(
-        built.map(_.catalog.ships) == Right(List(Ship.Line(libs, number, ::(coreName, Nil))))
+        built.map(_.catalog.ships) == Right(List(CatalogShip.Line(libs, number, ::(coreName, Nil))))
       )
     ,
     test("a ship name is not empty and is a name"):
@@ -449,29 +449,19 @@ object GraphSpec extends ZIOSpecDefault:
         Projects(ships(bad), core) == Left(BuildError.BadShipName("1libs", bad.position)),
       )
     ,
-    test(
-      "a manual version is not an early-effect ship, and the two are not mixed"
-    ):
-      val core    = module("core", Jvm)(scala3)
-      val app     = module("app", Jvm)(scala3)
-      val version = manual"1.2.3-SNAPSHOT"
-      val stated  =
-        Projects(ships(manual("libs", version)(core)), core)
-      val appShip = manual("app", manual"2026.10.17")(app)
-      val mixed   = Projects(
-        ships(
-          ship("libs", ship"1.0.0")(core),
-          appShip,
-        ),
-        core,
-        app,
-      )
+    test("Ship.next is the next release and pins render without parsing a string"):
+      val core   = module("core", Jvm)(scala3)
+      val draft  = Ship("libs").next(1, 4, 2)
+      val built  = Projects(ships(draft(core)), core)
       for
         libs     <- shipName("libs")
         coreName <- projectName("core")
       yield assertTrue(
-        stated.map(_.catalog.ships) == Right(List(Ship.Manual(libs, version, ::(coreName, Nil)))),
-        mixed == Left(BuildError.MixedScheme(appShip.position)),
+        draft.number.render == "1.4.2",
+        draft.pointer.revision == "1.4.2-SNAPSHOT",
+        draft.commit("1234567890abcdef1234567890abcdef12345678").revision == "1.4.2-1234567890ab-SNAPSHOT",
+        draft.released.revision == "1.4.2",
+        built.map(_.catalog.ships) == Right(List(CatalogShip.Line(libs, draft.number, ::(coreName, Nil)))),
       )
     ,
     test("a module is in at most one ship and an aggregate is not a member"):

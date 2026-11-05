@@ -138,7 +138,31 @@ flowchart TD
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 - A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-This catalog is `ships(ship("histos", ship"0.2.0")(api, app))`. The number is the next release. Everyday compiles `0.2.0-ci`. `publish snapshots` derives the stored coordinate and the `0.2.0-SNAPSHOT` pointer. `0.0.1` is already on Central.
+A catalog row is `ships(Ship("histos").next(0, 2, 0)(api, app))`. The number is the next release. Everyday compiles `0.2.0-ci`. `publish snapshots` derives the stored coordinate and the `0.2.0-SNAPSHOT` pointer. `0.0.1` is already on Central. This repository's `histos.scala` still writes `ship("histos", ship"0.2.0")`, the same number, so the current bootstrap can load the build. `ship"..."` is only the number.
+
+A laptop publishes snapshots by naming the session. The catalog stays on the next release. `releases` may be empty.
+
+```bash
+export HISTOS_SESSION=snapshot
+export HISTOS_SHA=$(git rev-parse HEAD)
+export HISTOS_BRANCH=default
+./histos run versions
+```
+
+`HISTOS_BRANCH=default` moves the `0.2.0-SNAPSHOT` pointer. `other` stores only the commit snapshot. `publish release` uses `export HISTOS_SESSION=release` and the same `releases` file. `histos doctor` warns `ship.should-bump` when that number is already released. It does not open a bump pull request.
+
+A dependency on an owned ship is a pin, not a revision string. Third-party coordinates stay `dep"..."`.
+
+```scala
+Ship("histos").next(0, 2, 0).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
+Ship("histos").next(0, 2, 0).commit("0123456789abcdef0123456789abcdef01234567").dep(
+  organization"rocks.earlyeffect",
+  artifact"histos-api",
+)
+Ship("histos").next(0, 2, 0).released.dep(organization"rocks.earlyeffect", artifact"histos")
+```
+
+`.pointer` is `0.2.0-SNAPSHOT`. `.commit` is `0.2.0-<12 hex>-SNAPSHOT`. `.released` is `0.2.0`. The three types are distinct, so a release API does not accept a snapshot pin.
 
 The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. The client prints each step as it happens: `building`, `staged`, `signing`, `bundling`, `uploading`, and `installing`. A local install prints `installing`. A snapshot prints `uploading <artifact> <revision>`. A release prints `signing`, `bundling`, and `uploading <ship> to the portal`. The portal post then prints `uploading bundle to the portal`, and `uploading...` if that post is still running after 30 seconds. Each status is `portal <id> is <STATE>`. Until the waited state arrives, the line names it. The first read, a changed state, and every thirty quiet reads print. A status read that has not returned prints `reading portal <id>` after that same wait. A failure is printed when it happens. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 

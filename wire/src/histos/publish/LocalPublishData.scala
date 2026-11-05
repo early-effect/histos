@@ -67,7 +67,7 @@ enum LocalPublishError:
       "a publish needs an organization. Name it with Projects.organization(organization\"com.example\")"
     case NothingToPublish           => "nothing publishes"
     case Development(ship, compile) =>
-      s"${ship.value} compiles ${compile.render}, which is not published"
+      histos.version.ShipAdvice.development(ship, compile)
     case UnknownShip(ship)                    => s"ship '${ship.value}' is not in the catalog"
     case NotPublished(module)                 => s"'${module.value}' is not in a ship"
     case SnapshotDependency(ship, dependency) =>

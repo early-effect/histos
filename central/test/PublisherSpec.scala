@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.version.{CommitSha, ManualVersion, ReleaseVersion, ShipNumber, SnapshotCoordinate, SnapshotPointer}
+import histos.version.{CommitSha, ReleaseVersion, ShipNumber, SnapshotCoordinate, SnapshotPointer}
 import histos.Organization
 
 import java.nio.file.{Files, Path}
@@ -19,7 +19,7 @@ object PublisherSpec extends ZIOSpecDefault:
       widget: ArtifactId,
       app: ArtifactId,
       commit: CommitSha,
-      manual: ManualVersion,
+      pointer: ShipNumber,
   )
 
   private val opened: Either[ArtifactIdError, Fixture] =
@@ -32,7 +32,7 @@ object PublisherSpec extends ZIOSpecDefault:
       widget,
       app,
       CommitSha("1234567890abcdef1234567890abcdef12345678"),
-      ManualVersion("1.2.3-SNAPSHOT"),
+      ShipNumber("1.2.3"),
     )
 
   private def use[E](f: Fixture => ZIO[Any, E, TestResult]): ZIO[Any, E | ArtifactIdError, TestResult] =
@@ -61,7 +61,7 @@ object PublisherSpec extends ZIOSpecDefault:
                 )
           yield result
     ,
-    test("a stored snapshot and a manual version keep the text they were given"):
+    test("a stored snapshot and a pointer keep the text they were given"):
       use: fixture =>
         ZIO.scoped:
           for
@@ -72,7 +72,7 @@ object PublisherSpec extends ZIOSpecDefault:
               Revision.Snapshot(SnapshotCoordinate(fixture.number, fixture.commit.abbreviate)),
               fixture.widget,
             )
-            stated <- send(root, fixture, Revision.Manual(fixture.manual), fixture.app)
+            stated <- send(root, fixture, Revision.Pointer(SnapshotPointer(fixture.pointer)), fixture.app)
           yield assertTrue(
             jarOf(snapshot).exists(_.toString.contains("widget-1.4.2-1234567890ab-SNAPSHOT.jar")),
             jarOf(stated).exists(_.toString.contains("app-1.2.3-SNAPSHOT.jar")),

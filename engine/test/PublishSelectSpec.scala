@@ -1,10 +1,10 @@
 package histos.publish
 
 import histos.preview.{Plan, PreviewError}
-import histos.version.{ManualVersion, ShipName}
+import histos.version.ShipName
 import histos.{Jvm, MainClass, Organization, ProjectName, Projects, SbtSeries, ScalaVersion, aggregate, module}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
 
 import zio.ZIO
 import zio.test.*
@@ -21,8 +21,8 @@ object PublishSelectSpec extends ZIOSpecDefault:
       yield assertTrue(
         Plan.renderPublish(plan) ==
           """ivy2Local
-            |core libs 0.21.2 selected
-            |site libs 0.21.2 selected""".stripMargin
+            |core libs 0.21.2-ci selected
+            |site libs 0.21.2-ci selected""".stripMargin
       )
     ,
     test("an aggregate publishes listed modules at their own ship versions"):
@@ -34,9 +34,9 @@ object PublishSelectSpec extends ZIOSpecDefault:
         text ==
           """ivy2Local
             |'stray' is not in a ship
-            |core libs 0.21.2 selected
-            |adapter extra 0.0.1 selected
-            |lib base 1.5.0 upstream""".stripMargin,
+            |core libs 0.21.2-ci selected
+            |adapter extra 0.0.1-ci selected
+            |lib base 1.5.0-ci upstream""".stripMargin,
         !text.contains("site"),
       )
     ,
@@ -68,7 +68,7 @@ object PublishSelectSpec extends ZIOSpecDefault:
       yield assertTrue(
         text ==
           """ivy2Local
-            |adapter core 9.0.0 selected""".stripMargin,
+            |adapter core 9.0.0-ci selected""".stripMargin,
         !text.contains("libs"),
         !text.contains("site"),
       )
@@ -81,24 +81,42 @@ object PublishSelectSpec extends ZIOSpecDefault:
       yield assertTrue(
         text ==
           """ivy2Local
-            |core libs 0.21.2 selected
-            |site libs 0.21.2 selected
-            |adapter extra 0.0.1 selected
-            |lib base 1.5.0 selected""".stripMargin,
+            |core libs 0.21.2-ci selected
+            |site libs 0.21.2-ci selected
+            |adapter extra 0.0.1-ci selected
+            |lib base 1.5.0-ci selected""".stripMargin,
         !text.contains("stray"),
       )
     ,
     test("a snapshot dependency refuses that ship and the rest continues"):
-      for
-        graph <- ZIO.fromEither(snapshotDependency)
-        plan  <- Plan.publishSnapshots(repo, graph, List("libs", "tool"), Map.empty)
-        text = Plan.renderPublish(plan)
-      yield assertTrue(
+      ZIO.scoped:
+        for
+          root <- ZIO.acquireRelease(ZIO.attempt(Files.createTempDirectory("histos-select"))): path =>
+            ZIO.attempt {
+              Files.deleteIfExists(path.resolve("releases"))
+              Files.deleteIfExists(path)
+            }.ignore
+          _     <- ZIO.attempt(Files.writeString(root.resolve("releases"), ""))
+          graph <- ZIO.fromEither(snapshotDependency)
+          plan  <- Plan.publishSnapshots(
+            root,
+            graph,
+            List("libs", "tool"),
+            Map(
+              "HISTOS_SESSION" -> "snapshot",
+              "HISTOS_SHA"     -> "1234567890abcdef1234567890abcdef12345678",
+              "HISTOS_BRANCH"  -> "default",
+            ),
+          )
+          text = Plan.renderPublish(plan)
+        yield assertTrue(
         text ==
           s"""${histos.central.SnapshotRepository.central.root.render}
              |tool depends on snapshot lib, so it is not published
-             |core libs 1.0.0 selected
-             |site libs 1.0.0 selected""".stripMargin,
+             |core libs 1.0.0-1234567890ab-SNAPSHOT selected
+             |site libs 1.0.0-1234567890ab-SNAPSHOT selected
+             |core libs 1.0.0-SNAPSHOT selected
+             |site libs 1.0.0-SNAPSHOT selected""".stripMargin,
         !text.contains("\nlib "),
         !text.contains("\napp "),
       )
@@ -110,8 +128,8 @@ object PublishSelectSpec extends ZIOSpecDefault:
       yield assertTrue(
         Plan.renderPublish(plan) ==
           """ivy2Local
-            |api histos 0.0.1-SNAPSHOT selected
-            |engine histos 0.0.1-SNAPSHOT selected""".stripMargin
+            |api histos 0.0.1-ci selected
+            |engine histos 0.0.1-ci selected""".stripMargin
       )
     ,
     test("an assembly may depend on a module that is not in a ship"):
@@ -163,9 +181,9 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val root    = aggregate("root", core, adapter, stray)
     Projects.organization(Organization("com.example"))(
       histos.ships(
-        histos.manual("libs", ManualVersion("0.21.2"))(core, site),
-        histos.manual("extra", ManualVersion("0.0.1"))(adapter),
-        histos.manual("base", ManualVersion("1.5.0"))(lib),
+        histos.ship("libs", histos.version.ShipNumber("0.21.2"))(core, site),
+        histos.ship("extra", histos.version.ShipNumber("0.0.1"))(adapter),
+        histos.ship("base", histos.version.ShipNumber("1.5.0"))(lib),
       ),
       core,
       site,
@@ -181,8 +199,8 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val adapter = module("adapter", Jvm)(scala3)
     Projects.organization(Organization("com.example"))(
       histos.ships(
-        histos.manual("libs", ManualVersion("0.21.2"))(core, site),
-        histos.manual("core", ManualVersion("9.0.0"))(adapter),
+        histos.ship("libs", histos.version.ShipNumber("0.21.2"))(core, site),
+        histos.ship("core", histos.version.ShipNumber("9.0.0"))(adapter),
       ),
       core,
       site,
@@ -196,9 +214,9 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val app  = module("app", Jvm)(scala3).dependsOn(lib)
     Projects.organization(Organization("com.example"))(
       histos.ships(
-        histos.manual("libs", ManualVersion("1.0.0"))(core, site),
-        histos.manual("snaps", ManualVersion("1.2.3-SNAPSHOT"))(lib),
-        histos.manual("tool", ManualVersion("2.0.0"))(app),
+        histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core, site),
+        histos.ship("snaps", histos.version.ShipNumber("1.2.3"))(lib),
+        histos.ship("tool", histos.version.ShipNumber("2.0.0"))(app),
       ),
       core,
       site,
@@ -211,7 +229,7 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val core   = module("core", Jvm)(scala3)
     val app    = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).dependsOn(core, inside)
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(core, app)),
+      histos.ships(histos.ship("tool", histos.version.ShipNumber("1.0.0"))(core, app)),
       core,
       app,
       inside,
@@ -221,7 +239,7 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val inside = module("inside", Jvm)(scala3)
     val core   = module("core", Jvm)(scala3).dependsOn(inside)
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(core)),
+      histos.ships(histos.ship("tool", histos.version.ShipNumber("1.0.0"))(core)),
       core,
       inside,
     )
@@ -230,7 +248,7 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val inside = module("inside", Jvm)(scala3)
     val app    = module("app", Jvm)(scala3).application.dependsOn(inside)
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(app)),
+      histos.ships(histos.ship("tool", histos.version.ShipNumber("1.0.0"))(app)),
       app,
       inside,
     )
@@ -239,7 +257,7 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val inside = module("inside", Jvm)(scala3)
     val plug   = module("plug", Jvm)(scala3).sbtPlugin(SbtSeries("2")).dependsOn(inside)
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("tool", ManualVersion("1.0.0"))(plug)),
+      histos.ships(histos.ship("tool", histos.version.ShipNumber("1.0.0"))(plug)),
       plug,
       inside,
     )
@@ -249,8 +267,8 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val app  = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).dependsOn(core)
     Projects.organization(Organization("com.example"))(
       histos.ships(
-        histos.manual("libs", ManualVersion("1.0.0"))(core),
-        histos.manual("tool", ManualVersion("2.0.0"))(app),
+        histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core),
+        histos.ship("tool", histos.version.ShipNumber("2.0.0"))(app),
       ),
       core,
       app,
@@ -260,7 +278,7 @@ object PublishSelectSpec extends ZIOSpecDefault:
     val api    = module("api", Jvm)(scala3)
     val engine = module("engine", Jvm)(scala3).dependsOn(api)
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api, engine)),
+      histos.ships(histos.ship("histos", histos.version.ShipNumber("0.0.1"))(api, engine)),
       api,
       engine,
     )

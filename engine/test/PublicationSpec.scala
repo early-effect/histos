@@ -1,7 +1,7 @@
 package histos.publish
 
 import histos.central.Publisher
-import histos.version.{ManualVersion, ShipName}
+import histos.version.ShipName
 import histos.zinc.GraphCompile
 import histos.{
   Developer,
@@ -47,12 +47,13 @@ object PublicationSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "core/src/main/scala/demo/Hello.scala", hello)
               write(root, "app/src/main/scala/App.scala", appSource)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell core 3.10.0 jvm\ncell app 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(published)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
@@ -134,9 +135,9 @@ object PublicationSpec extends ZIOSpecDefault:
     val scalaVersion = ScalaVersion("3.10.0")
     val core         = module("core", Jvm)(scalaVersion)
     val app          = module("app", Jvm)(scalaVersion).dependsOn(core)
-    val base         = histos.manual("base", ManualVersion("1.5.0"))(core)
+    val base         = histos.ship("base", histos.version.ShipNumber("1.5.0"))(core)
     val tool         = histos
-      .manual("tool", ManualVersion("2.0.0"))(app)
+      .ship("tool", histos.version.ShipNumber("2.0.0"))(app)
       .description(pom"Tool text")
       .url(url"https://example.com/tool")
     Projects
@@ -154,7 +155,7 @@ object PublicationSpec extends ZIOSpecDefault:
   private def release(fill: histos.Organized => histos.Organized) =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))
     fill(Projects.organization(Organization("com.example")))(
-      histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)),
+      histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core)),
       core,
     )
 
@@ -164,8 +165,11 @@ object PublicationSpec extends ZIOSpecDefault:
       jdk: histos.jdk.JdkRuntime,
       graph: histos.ProjectGraph,
   ) =
-    LocalPublish
-      .run(root, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+    ZIO.attempt {
+      val file = root.resolve("releases")
+      if !Files.exists(file) then Files.writeString(file, "")
+    }.mapError(thrown => LocalPublishError.Io(thrown.toString)) *> LocalPublish
+      .run(root, graph, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
       .provideSomeLayer[histos.resolve.LockedTools](
         histos.ToolFixture.resolver ++ Publisher.local(repo)
       )

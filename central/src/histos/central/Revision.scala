@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.version.{CiVersion, ManualVersion, ReleaseVersion, SnapshotCoordinate, SnapshotPointer}
+import histos.version.{CiVersion, ReleaseVersion, SnapshotCoordinate, SnapshotPointer}
 
 /** A revision a repository may store. `<ship>-ci` is written by a local publish. Snapshots refuse it. */
 enum Revision:
@@ -8,14 +8,12 @@ enum Revision:
   case Release(version: ReleaseVersion)
   case Snapshot(coordinate: SnapshotCoordinate)
   case Pointer(pointer: SnapshotPointer)
-  case Manual(version: ManualVersion)
 
   def render: String = this match
     case Ci(version)          => version.render
     case Release(version)     => version.render
     case Snapshot(coordinate) => coordinate.render
     case Pointer(pointer)     => pointer.render
-    case Manual(version)      => version.value
 end Revision
 
 /** A Maven artifact id. One path segment, not a group. */
