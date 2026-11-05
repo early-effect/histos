@@ -89,7 +89,7 @@ object build extends HistosBuild:
       )
       .supplyChain(histos.supply.SupplyChain())
       .docCheck(
-        ships(manual("histos", manual"0.1.3")(api, app)),
+        ships(manual("histos", manual"0.2.0")(api, app)),
         api,
         wire,
         client,

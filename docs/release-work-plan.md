@@ -2,7 +2,7 @@
 
 Histos publishes the way it is meant to replace sbt and zipx. One catalog row is a ship. `publishLocal` writes this machine. `publish snapshots` uploads to the Central snapshot repository. `publish release` signs a bundle and uploads it to the Central Portal. A release is that bundle after an explicit promote. A tool people install can also be a GitHub release asset. The library version stays off Central until promote.
 
-This file is history. The decision is [publishing.md](publishing.md). Do not follow a sentence in this file that names a publisher id, a per-module publisher list, or `~/.m2/repository`. The catalog is `manual("histos", manual"0.1.3")`. Editing this file does not upload it.
+This file is history. The decision is [publishing.md](publishing.md). Do not follow a sentence in this file that names a publisher id, a per-module publisher list, or `~/.m2/repository`. The catalog is `manual("histos", manual"0.2.0")`. Editing this file does not upload it.
 
 The build file says what a ship publishes. The invocation says which portal, which signer, and whether this run promotes. A mode stored on the ship would fire on the next real upload.
 
@@ -19,7 +19,7 @@ The ship name is the release. The members are the publications. The Maven artifa
 
 The number in the file is the next release. Edit it, then publish. Publish does not rewrite the file and does not open a bump pull request. [PublishAction.Release](../api/src/histos/version/Versions.scala) carries the release version and nothing else.
 
-An early-effect ship releases its ship number. A manual `major.minor.patch` releases as written. A manual snapshot and a `-ci` coordinate are refused by `publish release`. Histos itself is `manual("histos", manual"0.1.3")`.
+An early-effect ship releases its ship number. A manual `major.minor.patch` releases as written. A manual snapshot and a `-ci` coordinate are refused by `publish release`. Histos itself is `manual("histos", manual"0.2.0")`.
 
 ## Publications
 
@@ -35,7 +35,7 @@ These are the same packer with a different coordinate:
 
 `histos-api_3` and the `histos` assembly stay two modules in one ship, and one deployment. [Projects.assembly](../api/src/histos/Graph.scala) as a graph-level side door goes away. The empty pom it writes for snapshots will not pass Central.
 
-`engine` and `central` stay out of that ship. They are packed into the fat jar and are not coordinates. An assembly may depend on a module that is not in a ship: that module is compiled and packed, and it is not published. A library, an application, or an sbt plugin that depends on such a module still fails. The organization names a license, a developer, an scm, a description, and a url. Central requires the description and the url. The catalog version is `0.1.3`. Neither adds a publication.
+`engine` and `central` stay out of that ship. They are packed into the fat jar and are not coordinates. An assembly may depend on a module that is not in a ship: that module is compiled and packed, and it is not published. A library, an application, or an sbt plugin that depends on such a module still fails. The organization names a license, a developer, an scm, a description, and a url. Central requires the description and the url. The catalog version is `0.2.0`. Neither adds a publication.
 
 An asset publication is a file the build already produced, plus a name. For Histos the file is `dist/histos.jar`. A native image and a native launcher stay later work. The asset is not a GAV and it is not in the portal zip.
 
@@ -150,7 +150,7 @@ The README teaches this for Histos development: rehearse against `./histos porta
 
 ## Checklist
 
-Top to bottom. Finish one item and prove it before starting the next. The proof is a ZIO Test suite run with `./histos test` for the modules that item touches. Tests bind loopback. The items below were proved while the catalog was the manual snapshot. The catalog is now `manual("histos", manual"0.1.3")`. No item uploads to Central, sends a public key, or tags Histos.
+Top to bottom. Finish one item and prove it before starting the next. The proof is a ZIO Test suite run with `./histos test` for the modules that item touches. Tests bind loopback. The items below were proved while the catalog was the manual snapshot. The catalog is now `manual("histos", manual"0.2.0")`. No item uploads to Central, sends a public key, or tags Histos.
 
 ### Publisher
 
