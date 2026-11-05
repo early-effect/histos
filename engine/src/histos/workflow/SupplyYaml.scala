@@ -26,10 +26,12 @@ object SupplyYaml:
         case MainAlert.Issue(_)  => List("      issues: write")
         case MainAlert.CheckOnly => Nil
     (List(
-      s"  $name:",
+      s"  $name:"
+    ) ++ Workflow.toolchainNeeds(graph) ++ List(
       s"    runs-on: ${Workflow.runner}",
       "    permissions:",
-      "      contents: read",
+    ) ++ Workflow.actionsRead(graph) ++ List(
+      "      contents: read"
     ) ++ issues ++ List(
       "    steps:",
       s"      - uses: ${ActionPins.checkout.line}",
@@ -39,7 +41,7 @@ object SupplyYaml:
       "          path: ~/.cache/histos/advisories",
       "          key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}",
       "          restore-keys: histos-osv-",
-    ) ++ preflight(graph, name) ++ List(
+    ) ++ Workflow.fetchAssembly(graph) ++ preflight(graph, name) ++ List(
       "      - run: ./histos doctor",
       "      - run: ./histos workflow --check",
       "      - run: ./histos resolve --check",
@@ -57,15 +59,17 @@ object SupplyYaml:
         val name = job.value
         Some(
           (List(
-            s"  $name:",
+            s"  $name:"
+          ) ++ Workflow.toolchainNeeds(graph) ++ List(
             s"    if: ${quote(Workflow.onDefaultPush)}",
             s"    runs-on: ${Workflow.runner}",
             "    permissions:",
+          ) ++ Workflow.actionsRead(graph) ++ List(
             "      contents: write",
             "    steps:",
             s"      - uses: ${ActionPins.checkout.line}",
             s"      - uses: ${ActionPins.localSetup}",
-          ) ++ preflight(graph, name) ++ List(
+          ) ++ Workflow.fetchAssembly(graph) ++ preflight(graph, name) ++ List(
             "      - run: ./histos deps snapshot --submit"
           )).mkString("\n")
         )
@@ -123,7 +127,7 @@ object SupplyYaml:
       "        with:",
       "          persist-credentials: false",
       s"      - uses: ${ActionPins.localSetup}",
-    ) ++ opened ++ List(
+    ) ++ Workflow.buildAssembly(graph) ++ opened ++ List(
       "      - run: ./histos deps update --yes",
       "      - run: ./histos resolve --update",
       "      - run: ./histos workflow --update",
@@ -161,7 +165,7 @@ object SupplyYaml:
           "    steps:",
           s"      - uses: ${ActionPins.checkout.line}",
           s"      - uses: ${ActionPins.localSetup}",
-        ) ++ preflight(graph, "audit") ++ List(
+        ) ++ Workflow.buildAssembly(graph) ++ preflight(graph, "audit") ++ List(
           "      - id: audit",
           "        run: ./histos deps audit",
         ) ++ security
@@ -188,7 +192,7 @@ object SupplyYaml:
       "        with:",
       "          persist-credentials: false",
       s"      - uses: ${ActionPins.localSetup}",
-    ) ++ preflight(graph, "security") ++ List(
+    ) ++ Workflow.buildAssembly(graph) ++ preflight(graph, "security") ++ List(
       "      - run: ./histos deps update --security --yes",
       "      - run: ./histos deps pr --security",
       "        env:",

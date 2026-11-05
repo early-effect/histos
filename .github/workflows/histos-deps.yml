@@ -33,6 +33,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      - run: |
+          usage=$(./histos 2>&1 || true)
+          case "$usage" in
+            *" doctor "*) ;;
+            *) ./histos assembly ;;
+          esac
       - run: ./histos doctor --preflight histos-deps
         env:
           HISTOS_SECRET_PRESENT_HISTOS_APP_ID: ${{ secrets.HISTOS_APP_ID != '' }}

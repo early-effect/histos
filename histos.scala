@@ -87,7 +87,6 @@ object build extends HistosBuild:
           Some(ToolRevision("1.62.1")),
         )
       )
-      .supplyChain(histos.supply.SupplyChain())
       .docCheck(
         ships(manual("histos", manual"0.2.0")(api, app)),
         api,

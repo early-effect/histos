@@ -309,6 +309,60 @@ object WorkflowSpec extends ZIOSpecDefault:
           case Right(built) => Workflow.render(built) == Right(golden)
           case Left(_)      => false
     ,
+    test("this repository builds one assembly and other builds stay on the shim"):
+      val base = graph(Splits.aggregate)
+      val api  = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
+      def hosted(site: histos.HttpUrl, remote: histos.ScmConnection) =
+        histos.Projects
+          .organization(histos.Organization("rocks.earlyeffect"))
+          .scm(histos.Scm(site, remote))(
+            histos.ships(histos.manual("lib", ManualVersion("0.2.0"))(api)),
+            api,
+          )
+      val own = hosted(
+        histos.HttpUrl("https://github.com/early-effect/histos"),
+        histos.ScmConnection("scm:git@github.com:early-effect/histos.git"),
+      )
+      val other = hosted(
+        histos.HttpUrl("https://github.com/early-effect/other"),
+        histos.ScmConnection("scm:git@github.com:early-effect/other.git"),
+      )
+      def ciOf(project: Either[histos.BuildError, ProjectGraph]) =
+        project match
+          case Right(built) =>
+            Workflow.renderAll(built, automatic) match
+              case Right(files) => files.find(_.name == "ci.yml").map(_.body)
+              case Left(_)      => None
+          case Left(_) => None
+      def depsOf(project: Either[histos.BuildError, ProjectGraph]) =
+        project match
+          case Right(built) =>
+            Workflow.renderAll(built, automatic) match
+              case Right(files) => files.find(_.name == "histos-deps.yml").map(_.body)
+              case Left(_)      => None
+          case Left(_) => None
+      assertTrue(
+        ciOf(own) match
+          case Some(ci) =>
+            ci.contains("\n  toolchain:\n") &&
+            ci.split("cp .histos/assembly.sha256").length == 2 &&
+            ci.contains("needs: [affected, toolchain]") &&
+            ci.contains("\n    needs: toolchain\n")
+          case None => false
+        ,
+        depsOf(own) match
+          case Some(deps) => deps.contains("case \"$usage\" in") && !deps.contains("needs: toolchain")
+          case None       => false
+        ,
+        ciOf(other) match
+          case Some(yaml) => !yaml.contains("toolchain:")
+          case None       => false
+        ,
+        Workflow.render(base) match
+          case Right(yaml) => !yaml.contains("histos-bootstrap")
+          case _           => false,
+      )
+    ,
     test("a native client module is linked before the suite"):
       val api    = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
       val client = histos

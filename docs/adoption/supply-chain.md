@@ -6,7 +6,7 @@ histos pins every generated `uses:` to a 40-character commit SHA and a tag comme
 
 1. Create a GitHub App named `histos-deps`. Permissions: Contents write, Pull requests write, Workflows write, Metadata read. Webhook off. Install it on the repository.
 2. Add repository secrets `HISTOS_APP_ID` and `HISTOS_APP_PRIVATE_KEY`. doctor checks that the names exist. It never reads the values.
-3. In `histos.scala`, before `.docCheck`, add `.supplyChain(SupplyChain())`. The defaults are the weekly Monday 06:00 `America/Chicago` schedule, branch `histos/deps`, one pull request, one commit per bump kind, and `CommitSigning.ApiSigned`.
+3. In `histos.scala`, before `.docCheck`, add `.supplyChain(SupplyChain())`. The defaults are the weekly Monday 06:00 `America/Chicago` schedule, branch `histos/deps`, one pull request, one commit per bump kind, and `CommitSigning.ApiSigned`. This repository leaves the call out until the published toolchain can compile it. On a toolchain that has the method, omitting it selects that same default.
 4. Run `./histos setup supply-chain --fix` and `./histos workflow --update`.
 5. Run `./histos doctor` and `./histos workflow --check`.
 
