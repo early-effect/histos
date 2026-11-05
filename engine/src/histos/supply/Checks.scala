@@ -32,10 +32,29 @@ final case class GitHubView(
 object SupplyChecks:
   val owned: Set[Ecosystem] = Set(Ecosystem.GithubActions, Ecosystem.Maven)
 
-  def run(view: GitHubView, policy: SupplyChain): List[Outcome] =
+  /** Every id `run` can emit, apart from a refusal. A probe passes the ids it actually read. */
+  val all: Set[String] = Set(
+    "supply.app-installed",
+    "supply.secret-missing",
+    "supply.app-permissions",
+    "supply.app-token",
+    "supply.required-check",
+    "supply.signing",
+    "supply.dependabot-overlap",
+    "supply.dependabot-security",
+    "supply.dependency-graph",
+    "supply.dependabot-alerts",
+    "supply.default-branch",
+    "supply.default-token",
+    "supply.allow-prs",
+    "supply.sha-pin-policy",
+    "supply.schedule-disabled",
+  )
+
+  def run(view: GitHubView, policy: SupplyChain, covered: Set[String] = all): List[Outcome] =
     val refused = view.refusals.flatMap: (call, status, body) =>
       histos.doctor.RefusalMap.refused(call, status, body).map(Outcome.Found(_))
-    refused ++ List(
+    val checks = List(
       installed(view),
       secret(view, policy),
       permission(view),
@@ -51,7 +70,14 @@ object SupplyChecks:
       allow(view),
       pins(view),
       schedule(view),
-    )
+    ).filter(outcome => covered.contains(idOf(outcome)))
+    refused ++ checks
+
+  private def idOf(outcome: Outcome): String =
+    outcome match
+      case Outcome.Ok(id, _)         => id.value
+      case Outcome.Found(found)      => found.check.value
+      case Outcome.Skipped(id, _, _) => id.value
 
   private def installed(view: GitHubView): Outcome =
     if view.appInstalled then ok("supply.app-installed", s"installed on ${view.repo.value}")

@@ -272,15 +272,15 @@ object PrFlow:
     else
       identity(request).map: _ =>
         val create = request.head.isEmpty
-        val start  = request.head.getOrElse(request.main)
         val ref    =
           if request.human.nonEmpty then Nil
           else List(GhCall.UpdateRef(request.branch, request.main, create))
         val commits = request.policy.signing match
           case CommitSigning.ApiSigned =>
-            request.changes.zipWithIndex.map: (change, index) =>
-              val expected = if index == 0 then start else request.main
-              GhCall.CommitOnBranch(request.branch, expected, s"deps: ${change.kind}", change.files)
+            // UpdateRef points the branch at main. GhRun replaces every later
+            // expectedHeadOid with the oid createCommitOnBranch just returned.
+            request.changes.map: change =>
+              GhCall.CommitOnBranch(request.branch, request.main, s"deps: ${change.kind}", change.files)
           case CommitSigning.GitPush(_) =>
             List(GhCall.Push(request.branch, false))
           case CommitSigning.GitPushSshSigned(_, _) =>

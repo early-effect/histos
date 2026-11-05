@@ -132,6 +132,7 @@ object SupplyYaml:
       "        run: ./histos deps pr",
       "        env:",
       "          GH_TOKEN: ${{ steps.app.outputs.token }}",
+      "          HISTOS_DRY_RUN: ${{ inputs.dry-run }}",
     )).mkString("\n") + "\n"
 
   private def audit(graph: ProjectGraph): Option[RenderedWorkflow] =

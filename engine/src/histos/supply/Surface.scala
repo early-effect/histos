@@ -1,18 +1,29 @@
 package histos.supply
 
-import histos.doctor.{Area, CheckId, DoctorCheck, DoctorContext, Fix, FixApply, FixMode, Outcome, Probe, Render, Runner}
+import histos.doctor.{
+  Area,
+  CheckId,
+  DoctorCheck,
+  DoctorContext,
+  Fix,
+  FixApply,
+  FixMode,
+  Outcome,
+  Probe,
+  Render,
+  Runner,
+  ShellLine,
+}
+import histos.version.CommitSha
 import histos.workflow.PinScan
 import histos.ProjectGraph
 
-import java.net.URI
-import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
-import java.time.Duration as JavaDuration
 
 import zio.{durationInt, UIO, ZIO}
 
-/** In-process doctor. GitHub checks stay skipped until `gh auth` answers. */
+/** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
   final case class Request(
       area: Option[String],
@@ -23,21 +34,52 @@ object DoctorSurface:
   )
 
   def run(repo: Path, graph: ProjectGraph, request: Request): UIO[(Int, String)] =
+    val token = sys.env.get("GH_TOKEN").filter(_.nonEmpty).orElse(sys.env.get("GITHUB_TOKEN").filter(_.nonEmpty))
+    val tty   = System.console() != null
+    runWith(
+      repo,
+      graph,
+      request,
+      Net.live,
+      token,
+      tty,
+      prompt(tty),
+      command(repo),
+      applySetting(token),
+    )
+
+  def runWith(
+      repo: Path,
+      graph: ProjectGraph,
+      request: Request,
+      net: Net,
+      token: Option[String],
+      tty: Boolean,
+      ask: Fix => UIO[FixApply.Answer],
+      exec: String => UIO[Unit],
+      setting: String => UIO[Unit],
+  ): UIO[(Int, String)] =
     for
-      authed <- histos.doctor.GitHubProbe.authenticated
-      present =
-        if authed then Set(Probe.Local, Probe.JobEnv, Probe.GitHubRead)
-        else Set(Probe.Local, Probe.JobEnv)
-      report  <- Runner.run(selected(repo, graph, request), DoctorContext(Nil, present), 2.seconds)
-      written <- applyFixes(repo, report.found.flatMap(_.fixes.toList), request)
+      hit    <- github(repo, net, token)
+      report <- Runner.run(
+        selected(repo, graph, request, hit),
+        DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
+        2.seconds,
+      )
+      written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, tty, ask, exec, setting)
     yield
       val body = if request.json then Render.json(report) else Render.text(repoName(repo), report)
       val note = if written.isEmpty then "" else written.mkString("\n", "\n", "")
       (report.exit, body + note)
 
-  private def selected(repo: Path, graph: ProjectGraph, request: Request): List[DoctorCheck] =
+  private def selected(
+      repo: Path,
+      graph: ProjectGraph,
+      request: Request,
+      hit: histos.doctor.GitHubProbe.Hit,
+  ): List[DoctorCheck] =
     val pins   = pinCheck(repo, graph)
-    val github = githubCheck(graph)
+    val github = githubCheck(repo, graph, hit)
     val all    = histos.doctor.Registry.collect(graph, List(pins, github))
     request.preflight match
       case Some(job) => preflight(job)
@@ -69,31 +111,159 @@ object DoctorSurface:
           case Nil => ZIO.succeed(List(Outcome.Ok(id, "every uses is pinned")))
           case _ => ZIO.succeed(List(Outcome.Found(SupplyDiagnostic.ShaPinPolicyOff(RepoName.trusted(repoName(repo))))))
 
-  private def githubCheck(graph: ProjectGraph): DoctorCheck =
+  private def githubCheck(repo: Path, graph: ProjectGraph, hit: histos.doctor.GitHubProbe.Hit): DoctorCheck =
     new DoctorCheck:
       def id                      = CheckId.trusted("supply.app-installed")
       def area                    = Area.SupplyChain
-      def needs                   = Set(Probe.GitHubRead)
+      def needs                   = Set.empty
       def run(ctx: DoctorContext) =
-        ZIO.succeed(List(Outcome.Ok(id, s"${graph.supply.checkName.value} has no live permission view yet")))
+        ZIO.succeed:
+          hit match
+            case histos.doctor.GitHubProbe.Hit.Absent =>
+              List(Outcome.Skipped(id, Probe.GitHubRead, Fix.Command(ShellLine.trusted("gh auth login"))))
+            case histos.doctor.GitHubProbe.Hit.Unreachable =>
+              List(Outcome.Skipped(id, Probe.GitHubRead, Fix.Command(ShellLine.trusted("GitHub could not be reached"))))
+            case histos.doctor.GitHubProbe.Hit.Ready(read) =>
+              val text = readFile(repo.resolve(".github").resolve("dependabot.yml"))
+              val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
+              SupplyChecks.run(view, graph.supply, read.covered)
 
-  private def applyFixes(repo: Path, fixes: List[Fix], request: Request): UIO[List[String]] =
-    val mode  = FixMode.from(request.fix, request.yes)
-    val files = fixes.collect { case Fix.Config(file, _) =>
-      file.value -> read(repo.resolve(file.value))
-    }.toMap
-    val (next, commands) =
-      FixApply.applyAll(fixes, mode, _ => FixApply.Answer.NonTty, files)
+  /** Local edits and histos commands run when `--fix` is set. A GitHub setting runs only after a yes on a terminal. */
+  def applyReported(
+      repo: Path,
+      fixes: List[Fix],
+      request: Request,
+      tty: Boolean,
+      ask: Fix => UIO[FixApply.Answer],
+      exec: String => UIO[Unit],
+      setting: String => UIO[Unit],
+  ): UIO[List[String]] =
+    if !request.fix then ZIO.succeed(Nil)
+    else
+      val mode  = FixMode.from(request.fix, request.yes)
+      val files = fixes.collect { case Fix.Config(file, _) =>
+        file.value -> readFile(repo.resolve(file.value))
+      }.toMap
+      val (next, commands) = FixApply.applyAll(fixes, mode, _ => FixApply.Answer.No, files)
+      val settings         = fixes.collect { case fix: Fix.Settings => fix }
+      for
+        wrote <- ZIO
+          .attempt {
+            next.foreach: (name, body) =>
+              if !files.get(name).contains(body) then Files.writeString(repo.resolve(name), body)
+            next.keys.filterNot(name => files.get(name).contains(next(name))).toList
+          }
+          .orElseSucceed(Nil)
+        ran   <- ZIO.foreach(commands)(line => runCommand(line, exec))
+        asked <- ZIO.foreach(settings)(fix => confirmSetting(fix, request.yes, tty, ask, setting))
+      yield wrote.map(name => s"wrote $name") ++ ran ++ asked
+
+  private def runCommand(line: String, exec: String => UIO[Unit]): UIO[String] =
+    if line.toLowerCase.contains("secret") then ZIO.succeed(s"not applied (secret): $line")
+    else exec(line).as(s"ran: $line")
+
+  private def confirmSetting(
+      fix: Fix.Settings,
+      yes: Boolean,
+      tty: Boolean,
+      ask: Fix => UIO[FixApply.Answer],
+      setting: String => UIO[Unit],
+  ): UIO[String] =
+    val url = fix.url.value
+    if url.contains("secret") then ZIO.succeed(s"not applied (secret): $url")
+    else if !tty then ZIO.succeed(s"not applied (no terminal): $url")
+    else if yes then ZIO.succeed(s"not applied (--yes does not confirm GitHub settings): $url")
+    else
+      ask(fix).flatMap:
+        case FixApply.Answer.Yes => setting(url).as(s"applied: $url")
+        case _                   => ZIO.succeed(s"skipped: $url")
+
+  private def github(repo: Path, net: Net, token: Option[String]): UIO[histos.doctor.GitHubProbe.Hit] =
+    githubRepo(repo) match
+      case None       => ZIO.succeed(histos.doctor.GitHubProbe.Hit.Absent)
+      case Some(name) =>
+        histos.doctor.GitHubProbe.read(net, name, BranchName.trusted("main"), token)
+
+  private def prompt(tty: Boolean)(fix: Fix): UIO[FixApply.Answer] =
+    if !tty then ZIO.succeed(FixApply.Answer.NonTty)
+    else
+      val url = fix match
+        case Fix.Settings(target, _) => target.value
+        case _                       => ""
+      zio.Console.printLine(s"Apply GitHub setting $url? [y/N] ").orDie *>
+        zio.Console.readLine
+          .map(line =>
+            if line.trim.equalsIgnoreCase("y") || line.trim.equalsIgnoreCase("yes") then FixApply.Answer.Yes
+            else FixApply.Answer.No
+          )
+          .orElseSucceed(FixApply.Answer.NonTty)
+
+  private def command(repo: Path)(line: String): UIO[Unit] =
     ZIO
-      .attempt:
-        next.foreach: (name, body) =>
-          if files.get(name).contains(body) then ()
-          else Files.writeString(repo.resolve(name), body)
-        commands
-      .orElseSucceed(commands)
+      .attemptBlockingInterrupt:
+        val process = new ProcessBuilder("sh", "-c", line).directory(repo.toFile).inheritIO().start()
+        process.waitFor()
+        ()
+      .ignore
 
-  private def read(path: Path): String =
+  private def applySetting(token: Option[String])(url: String): UIO[Unit] =
+    apiFor(url) match
+      case None                         => ZIO.unit
+      case Some((method, target, body)) =>
+        token match
+          case None        => ZIO.unit
+          case Some(value) =>
+            Net.live
+              .send(
+                method,
+                target,
+                body,
+                List("Authorization" -> s"Bearer $value", "Accept" -> "application/vnd.github+json"),
+              )
+              .ignore
+
+  private def apiFor(url: String): Option[(String, String, String)] =
+    val repo = url
+      .split("github.com/")
+      .lift(1)
+      .flatMap(_.split("/").toList match
+        case owner :: name :: _ if !name.startsWith("settings") => Some(s"$owner/$name")
+        case _                                                  => None)
+    if url.contains("secret") then None
+    else if url.contains("security_analysis") || url.contains("vulnerability") then
+      repo.map(name => ("PUT", s"https://api.github.com/repos/$name/vulnerability-alerts", ""))
+    else if url.contains("/settings/actions") then
+      repo.map: name =>
+        (
+          "PUT",
+          s"https://api.github.com/repos/$name/actions/permissions/workflow",
+          """{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}""",
+        )
+    else None
+
+  private def readFile(path: Path): String =
     if Files.isRegularFile(path) then Files.readString(path) else ""
+
+  private def githubRepo(repo: Path): Option[RepoName] =
+    sys.env.get("GITHUB_REPOSITORY").flatMap(raw => RepoName.from(raw).toOption).orElse(origin(repo))
+
+  private def origin(repo: Path): Option[RepoName] =
+    val text = git(repo, "remote", "get-url", "origin").trim.stripSuffix(".git")
+    val name =
+      if text.contains("github.com/") then text.split("github.com/").lastOption.getOrElse("")
+      else if text.contains(":") then text.split(":").lastOption.getOrElse("")
+      else text
+    RepoName.from(name).toOption
+
+  private def git(repo: Path, args: String*): String =
+    try
+      val process = new ProcessBuilder((List("git", "-C", repo.toString) ++ args)*)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+      val text = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+      process.waitFor()
+      text
+    catch case _: Exception => ""
 
   private def areaName(area: Area): String =
     area match
@@ -109,54 +279,221 @@ object DoctorSurface:
     repo.getFileName.toString
 end DoctorSurface
 
-/** Lock-backed deps commands. The OSV query is the only network call. */
+/** Lock-backed deps commands. Network access goes through [[Net]]. */
 object DepsSurface:
-  def check(repo: Path): (Int, String) =
-    lock(repo) match
-      case Left(message) => (1, message)
-      case Right(text)   =>
-        val direct = purls(text, directOnly = true)
-        (0, s"deps check\n${direct.map(item => s"  $item").mkString("\n")}\nno release index was fetched\n")
+  final case class DepsResult(code: Int, text: String)
 
-  def update(repo: Path, yes: Boolean, security: Boolean): (Int, String) =
-    val mode  = if security then "security" else "weekly"
-    val wrote = if yes then "wrote nothing" else "dry run"
-    (0, s"deps update ($mode, $wrote)\n")
+  def check(
+      repo: Path,
+      policy: SupplyChain,
+      net: Net,
+      today: Date,
+      known: Map[String, RepoId] = Map.empty,
+  ): UIO[DepsResult] =
+    propose(repo, policy, net, today, false, known)
 
-  def audit(repo: Path, report: Boolean): (Int, String) =
+  def update(
+      repo: Path,
+      policy: SupplyChain,
+      net: Net,
+      today: Date,
+      yes: Boolean,
+      security: Boolean,
+      known: Map[String, RepoId] = Map.empty,
+  ): UIO[DepsResult] =
     lock(repo) match
-      case Left(message) => (1, message)
-      case Right(text)   =>
-        query(purls(text, directOnly = false)) match
-          case Left(message) => (1, message + "\n")
-          case Right(body)   =>
-            try cache(body)
-            catch case _: Exception => ()
-            val ids  = ghsa(body)
+      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
+      case Some(text) =>
+        Plan
+          .propose(text, Plan.catalog(policy.extraActions), policy, today, security, net, known)
+          .flatMap: proposal =>
+            if !yes then ZIO.succeed(DepsResult(0, proposal.text))
+            else
+              ZIO
+                .attempt:
+                  val histos = read(repo.resolve("histos.scala"))
+                  val files  = Plan.workflowFiles(repo).map(path => path -> Files.readString(path))
+                  val wrote  = Plan.write(repo, proposal, histos, files)
+                  proposal.text + wrote.map(name => s"wrote $name\n").mkString
+                .map(body => DepsResult(0, body))
+                .orElseSucceed(DepsResult(1, "could not write the plan\n"))
+          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+
+  def audit(repo: Path, report: Boolean, net: Net): UIO[DepsResult] =
+    lock(repo) match
+      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
+      case Some(text) =>
+        val packages = purls(text, directOnly = false)
+        query(net, packages)
+          .map: body =>
+            cache(body)
+            val ids  = Scan.strings(body, "id").filter(_.startsWith("GHSA-")).distinct
             val head = if report then "deps audit --report" else "deps audit"
-            (0, s"$head\n${ids.map(id => s"  $id").mkString("\n")}\n")
+            DepsResult(0, s"$head\n${ids.map(id => s"  $id").mkString("\n")}\n")
+          .catchAll(_ => ZIO.succeed(DepsResult(1, "osv is down\n")))
 
-  def pullRequest(security: Boolean, open: Boolean): (Int, String) =
-    val kind = if security then "histos/security" else "histos/deps"
-    val verb = if open then "open" else "update"
-    (0, s"deps pr $verb $kind: nothing to commit\n")
+  def pullRequest(
+      repo: Path,
+      policy: SupplyChain,
+      net: Net,
+      token: Option[String],
+      security: Boolean,
+      open: Boolean,
+      files: Option[List[(String, String)]] = None,
+  ): UIO[DepsResult] =
+    val dry = dryRun
+    if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
+    else
+      val present = files.getOrElse(changed(repo))
+      if present.isEmpty then ZIO.succeed(DepsResult(0, "deps pr: nothing to commit\n"))
+      else
+        val branch  = if security then BranchName.trusted("histos/security") else policy.updates.branch
+        val main    = sha(repo, "rev-parse", "HEAD")
+        val head    = sha(repo, "rev-parse", branch.value)
+        val request = PrRequest(
+          policy.updates,
+          branch,
+          main,
+          if head == main then None else Some(head),
+          group(present),
+          Nil,
+          open,
+          None,
+        )
+        PrFlow.plan(request) match
+          case Left(fault)  => ZIO.succeed(DepsResult(1, fault.message + "\n"))
+          case Right(calls) =>
+            val kept = calls.filter:
+              case GhCall.OpenOrUpdate(_, _) => opens(policy, open)
+              case _                         => true
+            val name = githubName(repo)
+            GhRun
+              .execute(net, name, token.getOrElse(""), kept, dry)
+              .map(text => DepsResult(0, text))
+              .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
 
-  def alert: (Int, String) =
-    (0, "deps alert: no advisories\n")
+  def alert(repo: Path, policy: SupplyChain, net: Net, token: Option[String]): UIO[DepsResult] =
+    val dry = dryRun
+    if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
+    else
+      val packages = lock(repo).fold(List.empty[String])(text => purls(text, directOnly = false))
+      query(net, packages)
+        .orElseSucceed("")
+        .flatMap: body =>
+          GhRun
+            .alert(net, githubName(repo), token.getOrElse(""), policy, findingsOf(body), dry)
+            .map(text => DepsResult(0, text))
+            .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
 
-  def snapshot(repo: Path, submit: Boolean): (Int, String) =
+  private def findingsOf(body: String): List[Finding] =
+    Scan
+      .strings(body, "id")
+      .filter(id => AdvisoryId.from(id).isRight)
+      .distinct
+      .map: id =>
+        Finding(
+          AdvisoryId.trusted(id),
+          Severity.Unknown,
+          None,
+          Nil,
+          Scan.strings(body, "fixed"),
+          id,
+          "",
+        )
+
+  def snapshot(repo: Path, net: Net, token: Option[String], submit: Boolean): UIO[DepsResult] =
     lock(repo) match
-      case Left(message) => (1, message)
-      case Right(text)   =>
-        val body = SnapshotSubmit.json(SnapshotSubmit.fromLock(text), "HEAD", "refs/heads/main")
-        if !submit then (0, body + "\n")
-        else if sys.env.get("GITHUB_TOKEN").exists(_.nonEmpty) then (0, body + "\n")
-        else (1, "GITHUB_TOKEN is not set\n")
+      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
+      case Some(text) =>
+        val commit = sys.env.get("GITHUB_SHA").filter(_.nonEmpty).getOrElse(git(repo, "rev-parse", "HEAD").trim)
+        val ref    = sys.env.get("GITHUB_REF").filter(_.nonEmpty).getOrElse("refs/heads/main")
+        val body   = SnapshotSubmit.json(SnapshotSubmit.fromLock(text), commit, ref)
+        if !submit then ZIO.succeed(DepsResult(0, body + "\n"))
+        else if token.forall(_.isEmpty) then ZIO.succeed(DepsResult(1, "GITHUB_TOKEN is not set\n"))
+        else
+          GhRun
+            .snapshot(net, githubName(repo), token.getOrElse(""), body, dryRun)
+            .map(text => DepsResult(0, text + body + "\n"))
+            .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
 
-  private def lock(repo: Path): Either[String, String] =
+  private def propose(
+      repo: Path,
+      policy: SupplyChain,
+      net: Net,
+      today: Date,
+      security: Boolean,
+      known: Map[String, RepoId],
+  ): UIO[DepsResult] =
+    lock(repo) match
+      case None       => ZIO.succeed(DepsResult(1, "dependencies.lock is missing\n"))
+      case Some(text) =>
+        Plan
+          .propose(text, Plan.catalog(policy.extraActions), policy, today, security, net, known)
+          .map(proposal => DepsResult(0, proposal.text))
+          .catchAll(fault => ZIO.succeed(DepsResult(1, fault.message + "\n")))
+
+  private def opens(policy: SupplyChain, open: Boolean): Boolean =
+    policy.updates.author match
+      case PrAuthor.OwnerOpens(_, _) => open
+      case _                         => true
+
+  private def dryRun: Boolean =
+    sys.env.get("HISTOS_DRY_RUN").exists(value => value == "true" || value == "1")
+
+  private def group(files: List[(String, String)]): List[KindChange] =
+    files
+      .groupBy((path, _) => kindOf(path))
+      .toList
+      .map: (kind, rows) =>
+        KindChange(kind, rows)
+
+  private def kindOf(path: String): BumpKind =
+    if path.contains(".github") || path.endsWith("ActionPins.scala") then BumpKind.Actions
+    else if path == "histos" || path.endsWith("build.properties") then BumpKind.Launcher
+    else BumpKind.Libraries
+
+  private def changed(repo: Path): List[(String, String)] =
+    git(repo, "diff", "--name-only", "HEAD")
+      .split('\n')
+      .toList
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .flatMap: name =>
+        val path = repo.resolve(name)
+        if Files.isRegularFile(path) then Some(name -> Files.readString(path)) else None
+
+  private def sha(repo: Path, args: String*): CommitSha =
+    CommitSha.from(git(repo, args*).trim).getOrElse(CommitSha.trusted("0" * 40))
+
+  private def githubName(repo: Path): RepoName =
+    sys.env
+      .get("GITHUB_REPOSITORY")
+      .flatMap(raw => RepoName.from(raw).toOption)
+      .orElse:
+        val text = git(repo, "remote", "get-url", "origin").trim.stripSuffix(".git")
+        val name =
+          if text.contains("github.com/") then text.split("github.com/").lastOption.getOrElse("")
+          else if text.contains(":") then text.split(":").lastOption.getOrElse("")
+          else text
+        RepoName.from(name).toOption
+      .getOrElse(RepoName.trusted("early-effect/histos"))
+
+  private def git(repo: Path, args: String*): String =
+    try
+      val process = new ProcessBuilder((List("git", "-C", repo.toString) ++ args)*)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+      val text = new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8)
+      process.waitFor()
+      text
+    catch case _: Exception => ""
+
+  private def lock(repo: Path): Option[String] =
     val path = repo.resolve("dependencies.lock")
-    if Files.isRegularFile(path) then Right(Files.readString(path))
-    else Left("dependencies.lock is missing\n")
+    if Files.isRegularFile(path) then Some(Files.readString(path)) else None
+
+  private def read(path: Path): String =
+    if Files.isRegularFile(path) then Files.readString(path) else ""
 
   private def purls(text: String, directOnly: Boolean): List[String] =
     val rows = text.split('\n').toList.map(_.trim).filter(_.nonEmpty)
@@ -173,40 +510,24 @@ object DepsSurface:
       ._2
       .distinct
 
-  private def query(packages: List[String]): Either[String, String] =
-    try
-      val queries = packages.map(purl => s"""{"package":{"purl":"$purl"}}""").mkString(",")
-      val client  = HttpClient.newBuilder().connectTimeout(JavaDuration.ofSeconds(5)).build()
-      val request = HttpRequest
-        .newBuilder(URI.create("https://api.osv.dev/v1/querybatch"))
-        .timeout(JavaDuration.ofSeconds(20))
-        .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(s"""{"queries":[$queries]}"""))
-        .build()
-      val response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-      if response.statusCode() == 200 then Right(response.body())
-      else Left("osv is down")
-    catch case _: Exception => Left("osv is down")
+  private def query(net: Net, packages: List[String]) =
+    val queries = packages.map(purl => s"""{"package":{"purl":"$purl"}}""").mkString(",")
+    net
+      .send(
+        "POST",
+        "https://api.osv.dev/v1/querybatch",
+        s"""{"queries":[$queries]}""",
+        List("Content-Type" -> "application/json"),
+      )
+      .map(_.body)
 
   private def cache(body: String): Unit =
-    val home = sys.props.get("user.home").getOrElse(".")
-    val dir  = Path.of(home, ".cache", "histos", "advisories")
-    Files.createDirectories(dir)
-    Files.writeString(dir.resolve("querybatch.json"), body)
-
-  private def ghsa(body: String): List[String] =
-    val mark = "\"id\":\""
-    Iterator
-      .unfold(0): at =>
-        val next = body.indexOf(mark, at)
-        if next < 0 then None
-        else
-          val start = next + mark.length
-          val end   = body.indexOf('"', start)
-          if end < 0 then None else Some((body.substring(start, end), end + 1))
-      .filter(_.startsWith("GHSA-"))
-      .toList
-      .distinct
+    try
+      val home = sys.props.get("user.home").getOrElse(".")
+      val dir  = Path.of(home, ".cache", "histos", "advisories")
+      Files.createDirectories(dir)
+      Files.writeString(dir.resolve("querybatch.json"), body)
+    catch case _: Exception => ()
 end DepsSurface
 
 /** Inserts the default policy. A second run changes nothing. */

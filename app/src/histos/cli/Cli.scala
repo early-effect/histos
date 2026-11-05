@@ -236,16 +236,41 @@ object Cli:
               val exit = if code == 0 then CliExit.Success else CliExit.TaskFailed
               Completed(exit, text, "", Playback.Held)
 
-  private def deps(repo: Path, action: DepsAction): UIO[Completed] =
-    val (code, text) = action match
-      case DepsAction.Check                 => histos.supply.DepsSurface.check(repo)
-      case DepsAction.Update(yes, security) => histos.supply.DepsSurface.update(repo, yes, security)
-      case DepsAction.Audit(report)         => histos.supply.DepsSurface.audit(repo, report)
-      case DepsAction.Pr(security, open)    => histos.supply.DepsSurface.pullRequest(security, open)
-      case DepsAction.Alert                 => histos.supply.DepsSurface.alert
-      case DepsAction.Snapshot(submit)      => histos.supply.DepsSurface.snapshot(repo, submit)
-    val exit = if code == 0 then CliExit.Success else if code == 2 then CliExit.Usage else CliExit.TaskFailed
-    ZIO.succeed(Completed(exit, text, "", Playback.Held))
+  private def deps(
+      repo: Path,
+      apiJar: Path,
+      action: DepsAction,
+  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+    ZIO
+      .serviceWithZIO[Loader](_.load(repo, apiJar))
+      .either
+      .flatMap:
+        case Left(error) =>
+          ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message, Playback.Held))
+        case Right(loaded) =>
+          val policy = loaded.graph.supply
+          val net    = histos.supply.Net.live
+          val today  = histos.supply.Date.trusted(java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString)
+          val token  = sys.env.get("GH_TOKEN").filter(_.nonEmpty).orElse(sys.env.get("GITHUB_TOKEN").filter(_.nonEmpty))
+          val effect = action match
+            case DepsAction.Check =>
+              histos.supply.DepsSurface.check(repo, policy, net, today)
+            case DepsAction.Update(yes, security) =>
+              histos.supply.DepsSurface.update(repo, policy, net, today, yes, security)
+            case DepsAction.Audit(report) =>
+              histos.supply.DepsSurface.audit(repo, report, net)
+            case DepsAction.Pr(security, open) =>
+              histos.supply.DepsSurface.pullRequest(repo, policy, net, token, security, open)
+            case DepsAction.Alert =>
+              histos.supply.DepsSurface.alert(repo, policy, net, token)
+            case DepsAction.Snapshot(submit) =>
+              histos.supply.DepsSurface.snapshot(repo, net, token, submit)
+          effect.map: result =>
+            val exit =
+              if result.code == 0 then CliExit.Success
+              else if result.code == 2 then CliExit.Usage
+              else CliExit.TaskFailed
+            Completed(exit, result.text, "", Playback.Held)
 
   private def setup(repo: Path, from: Option[String], fix: Boolean, yes: Boolean): Completed =
     val (code, text) = histos.supply.SetupSurface.run(repo, from, fix, yes)
@@ -362,7 +387,7 @@ object Cli:
       case Command.Doctor(area, json, preflight, fix, yes) =>
         doctor(repo, apiJar, area, json, preflight, fix, yes)
       case Command.Deps(action) =>
-        deps(repo, action)
+        deps(repo, apiJar, action)
       case Command.Setup(from, fix, yes) =>
         ZIO.succeed(setup(repo, from, fix, yes))
 
@@ -2008,7 +2033,7 @@ object Cli:
       case Command.Doctor(area, json, preflight, fix, yes) =>
         inProcessReady(repo)((api, machine) => withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes)))
       case Command.Deps(action) =>
-        deps(repo, action)
+        inProcessReady(repo)((api, machine) => withLoader(machine)(deps(repo, api, action)))
       case Command.Setup(from, fix, yes) =>
         ZIO.succeed(setup(repo, from, fix, yes))
 

@@ -127,7 +127,8 @@ end Render
 object RefusalMap:
   def refused(call: histos.supply.ApiCall, status: Int, body: String): Option[SupplyDiagnostic] =
     val known =
-      status == 403 || status == 404 || status == 422 || body.contains("Resource not accessible by integration")
+      status == 401 || status == 403 || status == 404 || status == 422 ||
+        body.contains("Resource not accessible by integration")
     if known then Some(SupplyDiagnostic.GitHubRefused(call, status, body)) else None
 
 object FixApply:

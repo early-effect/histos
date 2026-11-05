@@ -47,3 +47,4 @@ jobs:
         run: ./histos deps pr
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
+          HISTOS_DRY_RUN: ${{ inputs.dry-run }}
