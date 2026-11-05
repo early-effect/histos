@@ -3,7 +3,7 @@ package histos.publish
 import histos.cache.ContentStore
 import histos.load.{ApiJar, Loader}
 import histos.resolve.{ArtifactName, Resolve}
-import histos.version.ManualVersion
+import histos.version.ShipNumber
 import histos.{
   ArtifactBase,
   Jvm,
@@ -127,7 +127,7 @@ object LauncherSpec extends ZIOSpecDefault:
     Projects
       .organization(Organization("rocks.earlyeffect"))(
         histos
-          .ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api, app)),
+          .ships(histos.ship("histos", ShipNumber("0.0.1"))(api, app)),
         api,
         app,
       )

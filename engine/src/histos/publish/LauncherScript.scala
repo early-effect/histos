@@ -8,9 +8,9 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** `histos`, rendered from the ship number the way a workflow file is. A line states the next release. A manual row
-  * states its version. A local assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the
-  * user shim. JVM arguments come from a repository `.jvmopts`, one per line. Histos does not install a JDK.
+/** `histos`, rendered from the ship number the way a workflow file is. A line states the next release. A local
+  * assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim. JVM arguments come
+  * from a repository `.jvmopts`, one per line. Histos does not install a JDK.
   */
 object LauncherScript:
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =
@@ -45,12 +45,11 @@ object LauncherScript:
         case List(version) => Right(Some(version))
         case _             => Left(ScriptError.Revision)
 
-  /** The ship number, or the manual version. One distinct value. Session coordinates stay out of the script. */
+  /** The next release number. One distinct value. Session coordinates stay out of the script. */
   private def versions(catalog: Catalog): List[String] =
     catalog match
-      case Catalog.Empty        => Nil
-      case Catalog.Manual(rows) => rows.toList.map(_.version.value).distinct
-      case Catalog.Lines(rows)  => rows.toList.map(_.number.render).distinct
+      case Catalog.Empty       => Nil
+      case Catalog.Lines(rows) => rows.toList.map(_.number.render).distinct
 
   private def launcher(graph: ProjectGraph): Boolean =
     graph.projects.exists:

@@ -2,17 +2,12 @@ package histos
 
 import _root_.scala.annotation.publicInBinary
 
-import histos.version.{Catalog, CatalogError, ManualVersion, Ship, ShipName, ShipNameError, ShipNumber}
+import histos.version.{Catalog, CatalogError, Ship as CatalogShip, ShipName, ShipNameError, ShipNumber}
 
-/** Whether a written ship derives its coordinates or states them. */
-enum ShipSpec:
-  case Line(number: ShipNumber)
-  case Manual(version: ManualVersion)
-
-/** A ship as written, before [[Projects]] checks names and membership. */
+/** A ship as written, before [[Projects]] checks names and membership. The number is the next release. */
 final case class ShipDef private (
     name: String,
-    spec: ShipSpec,
+    number: ShipNumber,
     members: ::[ProjectDef],
     position: SourcePos,
     description: Option[PomText] = None,
@@ -26,23 +21,14 @@ final case class ShipDef private (
 end ShipDef
 
 object ShipDef:
-  /** Spliced by `ship`. Source code cannot call it. */
+  /** Spliced by `ship` and `Ship(...).next(...)`. Source code cannot call it. */
   @publicInBinary private[histos] def line(
       name: String,
       number: ShipNumber,
       members: ::[ProjectDef],
       position: SourcePos,
   ): ShipDef =
-    new ShipDef(name, ShipSpec.Line(number), members, position)
-
-  /** Spliced by `manual`. Source code cannot call it. */
-  @publicInBinary private[histos] def manual(
-      name: String,
-      version: ManualVersion,
-      members: ::[ProjectDef],
-      position: SourcePos,
-  ): ShipDef =
-    new ShipDef(name, ShipSpec.Manual(version), members, position)
+    new ShipDef(name, number, members, position)
 end ShipDef
 
 /** One or more ships. The empty catalog is [[CatalogSpec.empty]], not a call with no ships. */
@@ -58,7 +44,7 @@ end CatalogSpec
 object ShipLink:
   def catalog(spec: CatalogSpec, projects: List[Project]): Either[BuildError, Catalog] =
     spec.ships
-      .foldLeft[Either[BuildError, List[(Ship, SourcePos)]]](Right(Nil)): (acc, defn) =>
+      .foldLeft[Either[BuildError, List[(CatalogShip, SourcePos)]]](Right(Nil)): (acc, defn) =>
         acc.flatMap: seen =>
           one(defn, projects, seen).map(ship => seen :+ (ship, defn.position))
       .flatMap: built =>
@@ -67,8 +53,8 @@ object ShipLink:
   private def one(
       defn: ShipDef,
       projects: List[Project],
-      seen: List[(Ship, SourcePos)],
-  ): Either[BuildError, Ship] =
+      seen: List[(CatalogShip, SourcePos)],
+  ): Either[BuildError, CatalogShip] =
     ShipName.from(defn.name) match
       case Left(ShipNameError.Empty)    => Left(BuildError.EmptyShipName(defn.position))
       case Left(ShipNameError.Bad(raw)) => Left(BuildError.BadShipName(raw, defn.position))
@@ -77,17 +63,13 @@ object ShipLink:
           case Some(first) => Left(BuildError.DuplicateShip(name, first, defn.position))
           case None        =>
             members(defn, name, projects, seen.map(_._1)).map: parsed =>
-              defn.spec match
-                case ShipSpec.Line(number) =>
-                  Ship.Line(name, number, parsed, defn.description, defn.url)
-                case ShipSpec.Manual(version) =>
-                  Ship.Manual(name, version, parsed, defn.description, defn.url)
+              CatalogShip.Line(name, defn.number, parsed, defn.description, defn.url)
 
   private def members(
       defn: ShipDef,
       ship: ShipName,
       projects: List[Project],
-      seen: List[Ship],
+      seen: List[CatalogShip],
   ): Either[BuildError, ::[ProjectName]] =
     defn.members match
       case member :: rest =>
@@ -103,7 +85,7 @@ object ShipLink:
       ship: ShipName,
       member: ProjectDef,
       projects: List[Project],
-      seen: List[Ship],
+      seen: List[CatalogShip],
       chosen: List[ProjectName],
   ): Either[BuildError, ProjectName] =
     projects.find(_.name.value == member.name) match
@@ -119,9 +101,8 @@ object ShipLink:
             case Some(first) => Left(BuildError.MemberInTwoShips(name, first, ship, defn.position))
             case None        => Right(name)
 
-  private def asBuild(built: List[(Ship, SourcePos)], error: CatalogError): BuildError =
+  private def asBuild(built: List[(CatalogShip, SourcePos)], error: CatalogError): BuildError =
     error match
-      case CatalogError.MixedScheme         => BuildError.MixedScheme(mismatch(built))
       case CatalogError.DuplicateName(name) =>
         built.collect { case (ship, pos) if ship.name == name => pos } match
           case first :: second :: _ => BuildError.DuplicateShip(name, first, second)
@@ -132,18 +113,7 @@ object ShipLink:
       case CatalogError.InTwoShips(member, first, second) =>
         BuildError.MemberInTwoShips(member, first, second, at(built))
 
-  private def mismatch(built: List[(Ship, SourcePos)]): SourcePos =
-    built match
-      case (first, _) :: rest =>
-        val other = first match
-          case _: Ship.Line   => rest.collectFirst { case (_: Ship.Manual, pos) => pos }
-          case _: Ship.Manual => rest.collectFirst { case (_: Ship.Line, pos) => pos }
-        other match
-          case Some(pos) => pos
-          case None      => at(built)
-      case Nil => at(built)
-
-  private def at(built: List[(Ship, SourcePos)]): SourcePos =
+  private def at(built: List[(CatalogShip, SourcePos)]): SourcePos =
     built match
       case (_, pos) :: _ => pos
       case Nil           => SourcePos("<catalog>", 1, 1)

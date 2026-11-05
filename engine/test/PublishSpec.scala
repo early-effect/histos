@@ -4,7 +4,7 @@ import histos.jdk.JdkRuntime
 import histos.central.Publisher
 import histos.native.NativeOrigin
 import histos.resolve.{BuildResolvers, Resolve, ResolveError}
-import histos.version.{ManualVersion, ShipNumber}
+import histos.version.ShipNumber
 import histos.zinc.{GraphCompile, GraphCompileError}
 import histos.{
   BuildError,
@@ -55,6 +55,7 @@ object PublishSpec extends ZIOSpecDefault:
               "app/src/main/scala/App.scala",
               "object App {\n  def text: String = demo.Hello.greet\n}\n",
             )
+            write(root, "releases", "")
             write(
               root,
               "dependencies.lock",
@@ -64,7 +65,7 @@ object PublishSpec extends ZIOSpecDefault:
           built     <- ZIO.fromEither(library)
           _         <- histos.ToolFixture.seed(root, built)
           published <- LocalPublish
-            .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+            .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(repo)
             )
@@ -107,6 +108,7 @@ object PublishSpec extends ZIOSpecDefault:
               "app/src/main/scala/App.scala",
               "object App {\n  def text: String = demo.Hello.greet\n}\n",
             )
+            write(root, "releases", "")
             write(
               root,
               "dependencies.lock",
@@ -116,7 +118,7 @@ object PublishSpec extends ZIOSpecDefault:
           built     <- ZIO.fromEither(crossLibrary)
           _         <- histos.ToolFixture.seed(root, built)
           published <- LocalPublish
-            .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+            .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(repo)
             )
@@ -289,7 +291,7 @@ object PublishSpec extends ZIOSpecDefault:
       .dependsOn(core)
       .testDependencies(Dep("dev.zio::zio-test:2.1.27"))
     released(Projects.organization(Organization("com.example")))(
-      histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)),
+      histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core, app)),
       core,
       app,
     )
@@ -299,7 +301,7 @@ object PublishSpec extends ZIOSpecDefault:
     val core         = module("core", Jvm, Js)(scalaVersion)
     val app          = module("app", Jvm, Js)(scalaVersion).dependsOn(core)
     released(Projects.organization(Organization("com.example")))(
-      histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core, app)),
+      histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core, app)),
       core,
       app,
     )
@@ -321,7 +323,7 @@ object PublishSpec extends ZIOSpecDefault:
   private val unorganized =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))
     Projects(
-      histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)),
+      histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core)),
       core,
     )
 

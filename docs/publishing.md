@@ -2,7 +2,26 @@
 
 `publish` is an effect. It requires a `Publishing`. A command closes that requirement with `provideLayer`. Anything larger is `flatMap` of those effects. The engine does not look up a publisher by name.
 
-This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. The catalog is `ships(ship("histos", ship"0.2.0")(api, app))`. Editing this file does not upload it.
+This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 0)(api, app))`. This repository's `histos.scala` still writes `ship("histos", ship"0.2.0")` so the current bootstrap can load it. Editing this file does not upload it.
+
+The number in `.next(0, 2, 0)` is the next release. SNAPSHOT is not written in the catalog. A development session compiles `0.2.0-ci`. A snapshot session derives `0.2.0-<sha>-SNAPSHOT` and, on the default branch, the `0.2.0-SNAPSHOT` pointer. A release session publishes `0.2.0`.
+
+```bash
+export HISTOS_SESSION=snapshot
+export HISTOS_SHA=$(git rev-parse HEAD)
+export HISTOS_BRANCH=default
+./histos run versions
+```
+
+`releases` is the registry the versions task reads. An empty file means nothing in the catalog is released. A line is `histos matches`, `histos moved`, or `histos unknown`. `histos doctor` reports `ship.releases` when the file is missing, `ship.session` when `HISTOS_*` is incomplete, and `ship.should-bump` when `.next(...)` is already released. The bump finding is a warning. Histos does not open a bump pull request.
+
+Depend on an owned ship with a pin. `.pointer`, `.commit`, and `.released` are different types.
+
+```scala
+Ship("histos").next(0, 2, 0).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
+```
+
+Third-party Maven coordinates stay `dep"org::name:revision"`.
 
 ## The effect
 

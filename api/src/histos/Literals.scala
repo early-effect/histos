@@ -1,15 +1,15 @@
 package histos
 
-/** `scala"3.9.0"`, `dep"dev.zio::zio:2.1.26"`, `ship"1.4.2"`, `manual"1.2.3"`, `organization"com.example"`,
-  * `artifact"histos-api"`, `path"example/todo"`, `asset"dist/histos.jar"`, `pom"..."`, `url"https://..."`,
-  * `license"Apache-2.0"`, `developer"early-effect"`, `connection"scm:git:..."`, `sbt"2"`, and `promote"rebuild"`. A bad
-  * literal fails compilation of the build file.
+/** `scala"3.9.0"`, `dep"dev.zio::zio:2.1.26"`, `ship"1.4.2"`, `organization"com.example"`, `artifact"histos-api"`,
+  * `path"example/todo"`, `asset"dist/histos.jar"`, `pom"..."`, `url"https://..."`, `license"Apache-2.0"`,
+  * `developer"early-effect"`, `connection"scm:git:..."`, `sbt"2"`, and `promote"rebuild"`. A bad literal fails
+  * compilation of the build file. A catalog row is `Ship("histos").next(0, 2, 0)(api, app)`. `ship"..."` is the ship
+  * number alone.
   */
 extension (inline sc: StringContext)
-  inline def scala(inline args: String*): ScalaVersion                  = ${ LiteralMacro.scalaVersion('sc, 'args) }
-  inline def dep(inline args: String*): Dep                             = ${ LiteralMacro.dep('sc, 'args) }
-  inline def ship(inline args: String*): histos.version.ShipNumber      = ${ LiteralMacro.shipNumber('sc, 'args) }
-  inline def manual(inline args: String*): histos.version.ManualVersion = ${ LiteralMacro.declaredVersion('sc, 'args) }
+  inline def scala(inline args: String*): ScalaVersion             = ${ LiteralMacro.scalaVersion('sc, 'args) }
+  inline def dep(inline args: String*): Dep                        = ${ LiteralMacro.dep('sc, 'args) }
+  inline def ship(inline args: String*): histos.version.ShipNumber = ${ LiteralMacro.shipNumber('sc, 'args) }
   inline def organization(inline args: String*): Organization           = ${ LiteralMacro.organization('sc, 'args) }
   inline def artifact(inline args: String*): ArtifactBase               = ${ LiteralMacro.artifact('sc, 'args) }
   inline def maven(inline args: String*): Resolver                      = ${ LiteralMacro.maven('sc, 'args) }
@@ -30,16 +30,11 @@ extension (inline sc: StringContext)
   }
   inline def date(inline args: String*): histos.supply.Date = ${ histos.supply.SupplyMacros.dateInterp('sc, 'args) }
 
-/** An early-effect catalog row. The number is the next release. Members are the modules that publish it. */
+/** An early-effect catalog row. The number is the next release. Members are the modules that publish it. Prefer
+  * `Ship(name).next(major, minor, patch)(member, ...)`.
+  */
 inline def ship(name: String, number: histos.version.ShipNumber)(member: ProjectDef, members: ProjectDef*): ShipDef =
   ${ BuilderMacro.ship('name, 'number, 'member, 'members) }
-
-/** A ship whose version is the one written here. Histos does not derive it. */
-inline def manual(name: String, version: histos.version.ManualVersion)(
-    member: ProjectDef,
-    members: ProjectDef*
-): ShipDef =
-  ${ BuilderMacro.fixed('name, 'version, 'member, 'members) }
 
 /** One or more catalog rows. A build that calls neither `ship` nor `ships` has an empty catalog. */
 def ships(first: ShipDef, rest: ShipDef*): CatalogSpec =

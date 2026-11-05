@@ -61,8 +61,8 @@ object VersionTask:
       repo: Path,
   ): IO[VersionError, Evidence] =
     graph.catalog match
-      case Catalog.Empty | Catalog.Manual(_) => ZIO.succeed(Evidence.Unchecked)
-      case Catalog.Lines(_)                  => read(repo)
+      case Catalog.Empty    => ZIO.succeed(Evidence.Unchecked)
+      case Catalog.Lines(_) => read(repo)
 
   private def read(repo: Path): IO[VersionError, Evidence] =
     val file = path(repo)

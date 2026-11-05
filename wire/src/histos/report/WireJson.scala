@@ -131,7 +131,6 @@ import histos.version.{
   BranchError,
   CiVersion,
   CommitShaError,
-  ManualVersion,
   PullRequestError,
   Refusal,
   RegistryError,
@@ -342,9 +341,8 @@ private object WireLeaves extends WireSupport:
   given JsonCodec[ProjectPath]      = parsed(ProjectPath.from, _.message, _.value)
   given JsonCodec[RepoPath]         = parsed(RepoPath.from, _.message, _.value)
   given JsonCodec[Organization]     = parsed(Organization.from, _.message, _.value)
-  given JsonCodec[ToolRevision]     = parsed(ToolRevision.from, _.message, _.value)
-  given JsonCodec[ManualVersion]    = parsed(ManualVersion.from, _.message, _.value)
-  given JsonCodec[TestMain]         = parsed(TestMain.from, _.message, _.value)
+  given JsonCodec[ToolRevision] = parsed(ToolRevision.from, _.message, _.value)
+  given JsonCodec[TestMain]     = parsed(TestMain.from, _.message, _.value)
   given JsonCodec[FrameworkClass]   = parsed(FrameworkClass.from, _.message, _.value)
   given JsonCodec[MainClass]        = parsed(MainClass.from, _.message, _.value)
   given JsonCodec[PackMain]         = parsed(PackMain.from, _.message, _.binary)

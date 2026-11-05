@@ -5,7 +5,7 @@ import histos.jdk.{Machine, Sha256, Toolchain}
 import histos.publish.LocalPublishError
 import histos.resolve.{BuildResolvers, DependencyLock, LockedArtifact, LockedTool, Repository, Repositories}
 import histos.testrun.{QuickRecord, SuiteAsk, SuiteCover, SuiteName, SuiteStamp, TestCompile}
-import histos.version.{ManualVersion, Refusal, Session, ShipNumber, VersionError}
+import histos.version.{Refusal, Session, ShipNumber, VersionError}
 import histos.zinc.{AnalysisKind, CompilerRequests, FileStaleness, SourceStale, StoredAnalysis}
 import histos.select.SelectError
 import histos.{
@@ -258,8 +258,8 @@ object PlanSpec extends ZIOSpecDefault:
         yield assertTrue(
           text ==
             """ivy2Local
-              |core libs 1.0.0 upstream
-              |app libs 1.0.0 selected""".stripMargin,
+              |core libs 1.0.0-ci upstream
+              |app libs 1.0.0-ci selected""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
@@ -531,7 +531,7 @@ object PlanSpec extends ZIOSpecDefault:
     val app  = module("app", Jvm)(scala3).dependsOn(core)
     Projects.organization(Organization("com.example"))(
       histos.ships(
-        histos.manual("libs", ManualVersion("1.0.0"))(core, app)
+        histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core, app)
       ),
       core,
       app,
@@ -567,7 +567,7 @@ object PlanSpec extends ZIOSpecDefault:
     val core = module("core", Jvm)(scala3)
     val idle = module("idle", Jvm)(scala3)
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)),
+      histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core)),
       core,
       idle,
     )

@@ -45,7 +45,7 @@ object PublicationFormSpec extends ZIOSpecDefault:
       val named   = module("lib", Jvm)(scala3).library
       val program = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).asset(asset"dist/histos.jar")
       val swapped = module("app", Jvm)(scala3).asset(asset"dist/histos.jar").assembly(MainClass("demo.App"))
-      val ship    = Projects(ships(manual("libs", manual"1.0.0")(library)), library)
+      val stated = Projects(ships(ship("libs", ship"1.0.0")(library)), library)
       assertTrue(
         assets(library) == Right(List(None)),
         assets(named) == Right(List(None)),
@@ -53,7 +53,7 @@ object PublicationFormSpec extends ZIOSpecDefault:
         assets(swapped) == Right(List(Some("dist/histos.jar"))),
         form(program) == Right(List(Publication.Assembly(MainClass("demo.App")))),
         form(swapped) == Right(List(Publication.Assembly(MainClass("demo.App")))),
-        ship.map(graph => assetsOf(graph)) == Right(List(None)),
+        stated.map(graph => assetsOf(graph)) == Right(List(None)),
       )
     ,
     test("an asset on a module that is not an assembly is refused"):

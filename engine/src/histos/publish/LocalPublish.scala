@@ -221,7 +221,7 @@ object LocalPublish:
   )
 
   private enum RevisionKind:
-    case Ci, Release, Snapshot, Pointer, Manual
+    case Ci, Release, Snapshot, Pointer
 
   private def scheme(
       decision: Decision,
@@ -247,15 +247,6 @@ object LocalPublish:
               .map(plans => Scheme(plans, Nil))
       case Decision.Refused(refusals) =>
         Left(LocalPublishError.Version(VersionError.Refused(refusals)))
-      case Decision.Manual(lines) =>
-        lines.toList
-          .foldLeft[Either[LocalPublishError, List[Planned]]](Right(Nil)): (acc, line) =>
-            acc.flatMap: seen =>
-              members(catalog, line.ship).map(mods =>
-                seen :+ Planned(line.ship, Revision.Manual(line.version), mods.toList)
-              )
-          .flatMap(present)
-          .map(plans => Scheme(plans, Nil))
       case Decision.Publish(_, lines) =>
         lines.toList
           .foldLeft[Either[LocalPublishError, (List[Planned], List[String])]](
@@ -365,9 +356,8 @@ object LocalPublish:
 
   private def releaseRevision(revision: Revision): Boolean =
     revision match
-      case Revision.Release(_)      => true
-      case Revision.Manual(version) => !PublishSelect.snapshotCoordinate(version.value)
-      case _                        => false
+      case Revision.Release(_) => true
+      case _                   => false
 
   private def document(graph: ProjectGraph, ship: ShipName): PomDocument =
     val row = graph.catalog.get(ship)
@@ -400,8 +390,7 @@ object LocalPublish:
       case Revision.Ci(_)       => RevisionKind.Ci
       case Revision.Release(_)  => RevisionKind.Release
       case Revision.Snapshot(_) => RevisionKind.Snapshot
-      case Revision.Pointer(_)  => RevisionKind.Pointer
-      case Revision.Manual(_)   => RevisionKind.Manual
+      case Revision.Pointer(_) => RevisionKind.Pointer
 
   private def jobs(
       plans: List[Planned],

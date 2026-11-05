@@ -47,7 +47,7 @@ import histos.plugin.{
 }
 import histos.version.CommitSha
 import histos.schedule.CacheNamespace
-import histos.version.{Catalog, ManualVersion, Ship, ShipName, ShipNumber}
+import histos.version.{Catalog, Ship, ShipName, ShipNumber}
 import histos.{
   Axis,
   MainClass,
@@ -316,7 +316,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         histos.Projects
           .organization(histos.Organization("rocks.earlyeffect"))
           .scm(histos.Scm(site, remote))(
-            histos.ships(histos.manual("lib", ManualVersion("0.2.0"))(api)),
+            histos.ships(histos.ship("lib", histos.version.ShipNumber("0.2.0"))(api)),
             api,
           )
       val own = hosted(
@@ -382,7 +382,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             None,
           )
         )(
-          histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
+          histos.ships(histos.ship("histos", histos.version.ShipNumber("0.0.1"))(api)),
           api,
           client,
         )
@@ -513,7 +513,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           None,
         )
       )(
-        histos.ships(histos.manual("histos", ManualVersion("0.0.1-SNAPSHOT"))(api)),
+        histos.ships(histos.ship("histos", histos.version.ShipNumber("0.0.1"))(api)),
         api,
         native,
       )
@@ -1122,7 +1122,7 @@ object WorkflowSpec extends ZIOSpecDefault:
   private val release = suite("release")(
     test("one ship publishes on dispatch and does not upload to GitHub"):
       val body = renderRelease(
-        List(manual("histos", "0.0.1-SNAPSHOT", "app")),
+        List(line("histos", "0.0.1", "app")),
         Set("app"),
         automatic,
       ).flatMap:
@@ -1136,7 +1136,7 @@ object WorkflowSpec extends ZIOSpecDefault:
     ,
     test("hold renders a promote file and does not pass --automatic"):
       val rendered = renderRelease(
-        List(manual("histos", "0.0.1-SNAPSHOT", "app")),
+        List(line("histos", "0.0.1", "app")),
         Set("app"),
         hold,
       )
@@ -1160,14 +1160,7 @@ object WorkflowSpec extends ZIOSpecDefault:
     test("a release links the native client after sona and publishes the install files"):
       val tools    = RunnerTools(None, Some(ToolRevision("21.1.8")), None, None)
       val rendered = renderRelease(
-        List(manual("histos", "1.2.3", "app")),
-        Set("app"),
-        automatic,
-        tools = tools,
-        client = true,
-      )
-      val snapshot = renderRelease(
-        List(manual("histos", "1.2.3-SNAPSHOT", "app")),
+        List(line("histos", "1.2.3", "app")),
         Set("app"),
         automatic,
         tools = tools,
@@ -1209,11 +1202,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             body.contains("-isysroot") &&
             !release.contains("java:") &&
             !release.contains("xcrun") &&
-            body.contains("contents: write") &&
-            (snapshot match
-              case Right(_ :: RenderedWorkflow("histos-release.yml", held) :: _ :: Nil) =>
-                !held.contains("\"./histos client\"") && !held.contains("gh release upload dist")
-              case _ => false)
+            body.contains("contents: write")
           case _ => false
     ,
     test("two ships release by dispatch, and neither uploads to GitHub"):
@@ -1250,7 +1239,7 @@ object WorkflowSpec extends ZIOSpecDefault:
     test("a schedule is rendered after the release file"):
       val nightly  = TaskJob(JobName("nightly"), TaskName("site"), cron = Some(Cron("0 6 * * 1")))
       val rendered = renderRelease(
-        List(manual("histos", "0.0.1-SNAPSHOT", "app")),
+        List(line("histos", "0.0.1", "app")),
         Set("app"),
         automatic,
         List(registered(List(nightly))),
@@ -1273,7 +1262,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root    <- temp
-          built   <- ZIO.fromEither(releaseGraph(List(manual("histos", "0.0.1-SNAPSHOT", "app")), Set("app")))
+          built   <- ZIO.fromEither(releaseGraph(List(line("histos", "0.0.1", "app")), Set("app")))
           _       <- Workflow.update(root, built, automatic)
           text    <- ZIO.attempt(Files.readString(Workflow.file(root, Workflow.releaseName)))
           again   <- Workflow.check(root, built, automatic)
@@ -1415,13 +1404,6 @@ object WorkflowSpec extends ZIOSpecDefault:
       parsed  <- ShipNumber.from(number).left.map(_.message)
       project <- ProjectName.from(member).left.map(_.message)
     yield Ship.Line(ship, parsed, ::(project, Nil))
-
-  private def manual(name: String, version: String, member: String): Either[String, Ship] =
-    for
-      ship    <- ShipName.from(name).left.map(_.message)
-      parsed  <- ManualVersion.from(version).left.map(_.message)
-      project <- ProjectName.from(member).left.map(_.message)
-    yield Ship.Manual(ship, parsed, ::(project, Nil))
 
   def spec =
     suite("workflow")(render, affected, plugins, release) @@ TestAspect.withLiveSystem

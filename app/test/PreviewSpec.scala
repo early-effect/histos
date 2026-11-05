@@ -7,7 +7,6 @@ import histos.preview.{Plan, PreviewError, RunMiss}
 import histos.report.{BuildFault, CallResult, Rejection}
 import histos.server.{Call, Calls, Feed, Say}
 import histos.task.TaskId
-import histos.version.ManualVersion
 import histos.{Jvm, MainClass, Organization, ProjectName, Projects, ScalaVersion, module}
 
 import java.nio.file.{Files, Path}
@@ -149,7 +148,7 @@ object PreviewSpec extends ZIOSpecDefault:
           graph <- ZIO.fromEither(
             Projects.organization(Organization("com.example"))(
               histos.ships(
-                histos.manual("libs", ManualVersion("1.0.0"))(core, app)
+                histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core, app)
               ),
               core,
               app,
@@ -165,8 +164,8 @@ object PreviewSpec extends ZIOSpecDefault:
           heard.done == Chunk(CallResult.reported()),
           text ==
             """ivy2Local
-              |core libs 1.0.0 upstream
-              |app libs 1.0.0 selected""".stripMargin,
+              |core libs 1.0.0-ci upstream
+              |app libs 1.0.0-ci selected""".stripMargin,
           kept,
           !Files.exists(repo.resolve(".histos").resolve("jars")),
         )
