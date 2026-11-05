@@ -238,7 +238,7 @@ private val OnCi: String =
   s"github.event_name == 'pull_request' || $OnDefaultBranch"
 ```
 
-`on.push.branches` cannot use that expression. The filter is a static glob, evaluated before the `github` context exists. `$default-branch` is a workflow-template token, and copying it into a real workflow would be a branch with that name. Histos resolves `refs/remotes/origin/HEAD` when it writes the file and emits that short name. `pull_request` still validates every other branch. A feature-branch push does not start this file, so a commit on an open pull request is one run. A repository whose default branch is `main` gets:
+`on.push.branches` cannot use that expression. The filter is a static glob, evaluated before the `github` context exists. `$default-branch` is a workflow-template token, and copying it into a real workflow would be a branch with that name. Histos writes the short name it resolved: `refs/remotes/origin/HEAD` when present, otherwise the name `git remote set-head origin --auto` or `git ls-remote --symref origin HEAD` reports. `pull_request` still validates every other branch. A feature-branch push does not start this file, so a commit on an open pull request is one run. A repository whose default branch is `main` gets:
 
 ```yaml
 on:

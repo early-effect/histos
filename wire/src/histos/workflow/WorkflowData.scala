@@ -59,5 +59,6 @@ enum CiError:
     case ConcurrencyConflict(file) => s"jobs in $file do not share a concurrency group"
     case UnpinnedWorkflowRun(name) => s"workflow $name is not rendered by this graph"
     case Pins(text)                => text
-    case NoDefaultBranch          => "the repository default branch is not set"
+    case NoDefaultBranch =>
+      "the repository default branch is not set. refs/remotes/origin/HEAD is absent, and origin did not answer HEAD"
 end CiError

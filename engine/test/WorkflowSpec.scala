@@ -1,6 +1,9 @@
 package histos.workflow
 
+import histos.cli.CliExit
 import histos.doctor.DoctorPlacement
+import histos.report.{BuildFault, CallResult, WorkflowFault}
+import histos.server.Call
 import histos.supply.SupplyChain
 import histos.plugin.{
   ActionName,
@@ -105,6 +108,40 @@ object WorkflowSpec extends ZIOSpecDefault:
         trunk.exists(_.contains("github.event.repository.default_branch")),
         trunk.exists(text => !text.contains("${{ github.event.repository.default_branch }}")),
       )
+    ,
+    test("ls-remote names the default branch from the ref line"):
+      assertTrue(
+        CiBranch.headFromLsRemote("ref: refs/heads/develop\tHEAD\nabc\tHEAD\n") == Some("develop"),
+        CiBranch.headFromLsRemote("ref: refs/heads/feature/x\tHEAD\n") == Some("feature/x"),
+        CiBranch.headFromLsRemote("abc\tHEAD\n").isEmpty,
+      )
+    ,
+    test("a checkout without origin/HEAD asks the remote"):
+      ZIO.scoped:
+        for
+          root <- temp
+          bare  = root.resolve("bare")
+          work  = root.resolve("work")
+          _    <- ZIO.attempt(checkoutWithoutHead(bare, work, "develop"))
+          found <- CiBranch.read(work)
+        yield assertTrue(found.name == "develop")
+    ,
+    test("a repo with no remote fails as a command, not as workflow status 6"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(git(root, "init"))
+          read <- CiBranch.read(root).either
+        yield
+          val exit = CliExit.from(
+            Call.Workflow(WorkflowAction.Check),
+            CallResult.Fault(BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch))),
+          )
+          assertTrue(
+            read == Left(CiError.NoDefaultBranch),
+            exit == CliExit.TaskFailed,
+            exit.code == 1,
+          )
     ,
     test("origin HEAD is the name written into push"):
       ZIO.scoped:
@@ -605,6 +642,33 @@ object WorkflowSpec extends ZIOSpecDefault:
     Workspace
       .work("histos-workflow")
       .mapError(error => new java.io.IOException(error.message))
+
+  private def checkoutWithoutHead(bare: Path, work: Path, branch: String): Unit =
+    Files.createDirectories(bare)
+    Files.createDirectories(work)
+    git(bare, "init", "--bare")
+    git(bare, "symbolic-ref", "HEAD", s"refs/heads/$branch")
+    git(work, "init", "-b", branch)
+    git(work, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init")
+    git(work, "remote", "add", "origin", bare.toString)
+    git(work, "push", "origin", branch)
+    val removed = new ProcessBuilder("git", "-C", work.toString, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+      .redirectErrorStream(true)
+      .start()
+    removed.getInputStream.readAllBytes
+    removed.waitFor()
+    val still = new ProcessBuilder("git", "-C", work.toString, "symbolic-ref", "refs/remotes/origin/HEAD")
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+    still.getInputStream.readAllBytes
+    if still.waitFor() == 0 then throw new java.io.IOException("origin/HEAD is still set")
+
+  private def git(repo: Path, args: String*): Unit =
+    val process = new ProcessBuilder((Array("git", "-C", repo.toString) ++ args)*)
+      .redirectErrorStream(true)
+      .start()
+    val text = String(process.getInputStream.readAllBytes)
+    if process.waitFor() != 0 then throw new java.io.IOException(s"${args.mkString(" ")}\n$text")
 
   private def pointOrigin(repo: Path, branch: String): Unit =
     def git(args: String*): Unit =
