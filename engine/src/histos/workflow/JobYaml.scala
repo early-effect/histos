@@ -19,6 +19,7 @@ import histos.plugin.{
   NeedsPolicy,
   On,
   PinnedAction,
+  PushBranch,
   Placed,
   PluginId,
   PluginTaskId,
@@ -42,7 +43,7 @@ object JobYaml:
       case ActionUse.Pinned(name, pin) => ActionPins.line(name, pin)
       case ActionUse.Local(path)       => path
 
-  def render(graph: ProjectGraph): Either[CiError, Rendered] =
+  def render(graph: ProjectGraph, defaultBranch: String): Either[CiError, Rendered] =
     JobCheck
       .arrange(graph)
       .left
@@ -53,7 +54,7 @@ object JobYaml:
         val pages = placed.collect:
           case Placed(WorkflowFile.Pages, plugin, JobRender.Site(job, SiteShape.Dispatch)) =>
             RenderedWorkflow(Workflow.pagesName, dispatch(graph, plugin, job))
-        val owned = ownedFiles(graph, placed)
+        val owned = ownedFiles(graph, placed, defaultBranch)
         Rendered(ci.flatten, pages ++ owned, JobCheck.header(placed))
 
   def lift(error: BuildError): CiError =
@@ -82,7 +83,7 @@ object JobYaml:
       case JobRender.Schedule(_, _)   => Nil
     body.map(_.mkString("\n"))
 
-  private def ownedFiles(graph: ProjectGraph, placed: List[Placed]): List[RenderedWorkflow] =
+  private def ownedFiles(graph: ProjectGraph, placed: List[Placed], defaultBranch: String): List[RenderedWorkflow] =
     val named = placed.collect:
       case item @ Placed(WorkflowFile.Named(name), _, _) => (name, item)
     named
@@ -94,9 +95,9 @@ object JobYaml:
               acc.map: pair =>
                 if pair._1 == name then (name, jobs :+ item) else pair
       .map: (name, jobs) =>
-        RenderedWorkflow(name, document(graph, name, jobs))
+        RenderedWorkflow(name, document(graph, name, jobs, defaultBranch))
 
-  private def document(graph: ProjectGraph, name: String, jobs: List[Placed]): String =
+  private def document(graph: ProjectGraph, name: String, jobs: List[Placed], defaultBranch: String): String =
     val cron   = jobs.collectFirst { case Placed(_, _, JobRender.Schedule(expr, _)) => expr }
     val events = jobs.flatMap:
       case Placed(_, _, render) => eventsOf(render)
@@ -106,7 +107,7 @@ object JobYaml:
         case JobRender.Task(job)        => List(task(graph, item.plugin, job, None).mkString("\n"))
         case JobRender.Fan(job, rows)   => List(fan(graph, item.plugin, job, rows).mkString("\n"))
         case JobRender.Site(job, shape) => site(graph, item.plugin, job, shape).map(_.mkString("\n"))
-    val lines = List(s"name: ${name.stripSuffix(".yml")}", "on:") ++ onLines(events, cron) ++ List(
+    val lines = List(s"name: ${name.stripSuffix(".yml")}", "on:") ++ onLines(events, cron, defaultBranch) ++ List(
       "permissions:",
       "  contents: read",
       "jobs:",
@@ -413,7 +414,7 @@ object JobYaml:
       case GithubField.RefName => "${{ github.ref_name }}"
       case GithubField.Token   => "${{ github.token }}"
 
-  private def onLines(events: List[On], cron: Option[histos.plugin.Cron]): List[String] =
+  private def onLines(events: List[On], cron: Option[histos.plugin.Cron], defaultBranch: String): List[String] =
     val pull      = events.collect { case On.PullRequest(types, paths) => (types, paths) }
     val push      = events.collect { case On.Push(branches, tags, paths) => (branches, tags, paths) }
     val inputs    = events.collect { case On.Dispatch(found) => found }.flatten
@@ -427,7 +428,7 @@ object JobYaml:
     val pushPaths = push.flatMap(_._3).distinct
     val dispatch  = events.exists(_.isInstanceOf[On.Dispatch])
     (if pull.nonEmpty then pullLines(types, paths) else Nil) ++
-      (if push.nonEmpty then pushLines(branches, tags, pushPaths) else Nil) ++
+      (if push.nonEmpty then pushLines(branches, tags, pushPaths, defaultBranch) else Nil) ++
       (if dispatch then dispatchLines(inputs) else Nil) ++
       (if merge then List("  merge_group:") else Nil) ++
       (if release then List("  release:") else Nil) ++
@@ -441,9 +442,17 @@ object JobYaml:
     val listed = paths.map(path => s"      - ${quote(path)}")
     "  pull_request:" :: typed ++ (if listed.isEmpty then Nil else "    paths:" :: listed)
 
-  private def pushLines(branches: List[String], tags: List[String], paths: List[String]): List[String] =
+  private def pushLines(
+      branches: List[PushBranch],
+      tags: List[String],
+      paths: List[String],
+      defaultBranch: String,
+  ): List[String] =
+    val names = branches.map:
+      case PushBranch.Default     => defaultBranch
+      case PushBranch.Named(name) => name
     val branchLines =
-      if branches.isEmpty then Nil else "    branches:" :: branches.map(branch => s"      - ${quote(branch)}")
+      if names.isEmpty then Nil else "    branches:" :: names.map(branch => s"      - ${quote(branch)}")
     val tagLines  = if tags.isEmpty then Nil else "    tags:" :: tags.map(tag => s"      - ${quote(tag)}")
     val pathLines = if paths.isEmpty then Nil else "    paths:" :: paths.map(path => s"      - ${quote(path)}")
     "  push:" :: branchLines ++ tagLines ++ pathLines

@@ -26,7 +26,7 @@ A path belongs to the module whose directory is the longest prefix. Dependents o
 
 **Triggers.** `Trigger` is an open trait. It renders only into the closed `On` and `Cond` vocabularies. `Cond` is an expression tree. The printer is the only place a condition becomes a string. Shipped presets are `Ci`, `DefaultPush`, `Tag`, `Dispatch`, `Label`, `Paths`, and `Nightly` (`TaskJob.nightly`, which is `Dispatch` plus a cron). `SitePublish` (`Automatic`, `Manual`, `Both`, default `Both`) is those presets applied to a site. A site has no cron, so `ScheduledSite` cannot be constructed.
 
-A job `if` names the default branch as one expression: `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`. `on.push.branches` is the same fact as a short name, `${{ github.event.repository.default_branch }}` (`On.defaultBranch`), not a literal branch. The cache namespace token `main` is `CacheNamespace.Main` and is unrelated.
+A job `if` names the default branch as one expression: `github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`. `on.push.branches` cannot use that expression. Histos writes the short name of `refs/remotes/origin/HEAD` when it renders the workflow. `$default-branch` is a workflow-template token and is not written into a real workflow. The cache namespace token `main` is `CacheNamespace.Main` and is unrelated.
 
 Events that would wake or cancel `ci.yml` are written to `histos-<job>.yml` automatically: a label, a path filter, a cron, and `workflow_run`. `push`, the default pull-request types, `workflow_dispatch`, tags, `merge_group`, and `release` stay in `ci.yml`. A job in `ci.yml` is skipped on an event it did not ask for.
 

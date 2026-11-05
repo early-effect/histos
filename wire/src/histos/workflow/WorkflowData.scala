@@ -28,6 +28,7 @@ enum CiError:
   case ConcurrencyConflict(file: String)
   case UnpinnedWorkflowRun(name: String)
   case Pins(text: String)
+  case NoDefaultBranch
 
   def message: String = this match
     case BadName(raw)                 => s"'$raw' is not a project name"
@@ -58,4 +59,5 @@ enum CiError:
     case ConcurrencyConflict(file) => s"jobs in $file do not share a concurrency group"
     case UnpinnedWorkflowRun(name) => s"workflow $name is not rendered by this graph"
     case Pins(text)                => text
+    case NoDefaultBranch          => "the repository default branch is not set"
 end CiError

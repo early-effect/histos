@@ -83,6 +83,7 @@ import zio.{Scope, System, ZIO}
 import zio.test.*
 
 object WorkflowSpec extends ZIOSpecDefault:
+  private given CiBranch     = CiBranch("main")
   private val v390           = ScalaVersion.trusted("3.9.0")
   private val core           = ProjectName("core")
   private val tests          = ProjectName("tests")
@@ -93,6 +94,30 @@ object WorkflowSpec extends ZIOSpecDefault:
   private val hold           = Sona.described(ReleaseMode.Hold)
 
   private val render = suite("render")(
+    test("the push filter is the branch render was given"):
+      val built = graph(Splits.aggregate)
+      val main  = Workflow.render(built)(using CiBranch("main"))
+      val trunk = Workflow.render(built)(using CiBranch("trunk"))
+      assertTrue(
+        main.exists(_.contains("push:\n    branches:\n      - \"main\"")),
+        trunk.exists(_.contains("push:\n    branches:\n      - \"trunk\"")),
+        trunk.exists(text => !text.contains("branches:\n      - \"main\"")),
+        trunk.exists(_.contains("github.event.repository.default_branch")),
+        trunk.exists(text => !text.contains("${{ github.event.repository.default_branch }}")),
+      )
+    ,
+    test("origin HEAD is the name written into push"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(pointOrigin(root, "develop"))
+          found <- CiBranch.read(root)
+          rendered = Workflow.render(graph(Splits.aggregate))(using found)
+        yield assertTrue(
+          found.name == "develop",
+          rendered.exists(_.contains("push:\n    branches:\n      - \"develop\"")),
+        )
+    ,
     test("the empty split set is one aggregate test job"):
       for
         golden  <- text("aggregate.yml")
@@ -109,11 +134,10 @@ object WorkflowSpec extends ZIOSpecDefault:
         !golden.contains("playwright"),
         !golden.contains("format:"),
         !golden.contains("publish"),
-        golden.contains(
-          "push:\n    branches:\n      - \"${{ github.event.repository.default_branch }}\""
-        ),
+        golden.contains("push:\n    branches:\n      - \"main\""),
         golden.contains("pull_request:"),
-        !golden.contains("branches:\n      - \"main\""),
+        golden.contains("github.event.repository.default_branch"),
+        !golden.contains("branches:\n      - \"${{"),
         !golden.contains("branches:\n      - main"),
         !golden.contains("\"**\""),
         !golden.contains("tags:"),
@@ -582,6 +606,16 @@ object WorkflowSpec extends ZIOSpecDefault:
       .work("histos-workflow")
       .mapError(error => new java.io.IOException(error.message))
 
+  private def pointOrigin(repo: Path, branch: String): Unit =
+    def git(args: String*): Unit =
+      val process = new ProcessBuilder((Array("git", "-C", repo.toString) ++ args)*)
+        .redirectErrorStream(true)
+        .start()
+      val text = String(process.getInputStream.readAllBytes)
+      if process.waitFor() != 0 then throw new java.io.IOException(text)
+    git("init")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", s"refs/remotes/origin/$branch")
+
   private val plugins = suite("plugins")(
     test("a job that names a site directory uploads on the default branch and deploys from a pages job"):
       val rendered = Workflow.render(
@@ -777,13 +811,13 @@ object WorkflowSpec extends ZIOSpecDefault:
           case Right(files) =>
             val own = files.find(_.name == "histos-api.yml").map(_.body).getOrElse("")
             val ci  = files.find(_.name == Workflow.fileName).map(_.body).getOrElse("")
-            own.contains("push:\n    branches:\n      - \"${{ github.event.repository.default_branch }}\"") &&
+            own.contains("push:\n    branches:\n      - \"main\"") &&
             own.contains("paths:\n      - \"api/**\"") &&
             !own.contains("\"**\"") &&
-            !own.contains("branches:\n      - \"main\"") &&
+            !own.contains("branches:\n      - \"${{") &&
             ci.contains("pull_request:") &&
-            ci.contains("push:\n    branches:\n      - \"${{ github.event.repository.default_branch }}\"") &&
-            !ci.contains("branches:\n      - \"main\"") &&
+            ci.contains("push:\n    branches:\n      - \"main\"") &&
+            !ci.contains("branches:\n      - \"${{") &&
             !ci.contains("\"**\"")
           case Left(_) => false,
       )

@@ -31,7 +31,7 @@ import histos.task.{RunId, TaskError, TaskId, TaskResult}
 import histos.native.NativeOrigin
 import histos.toolchain.{Runtimes, Survey}
 import histos.version.VersionTask
-import histos.workflow.{Workflow, WorkflowAction}
+import histos.workflow.{CiBranch, Workflow, WorkflowAction}
 import histos.{Platform, ProjectGraph, ProjectName, Publishing, Sona}
 
 import zio.json.*
@@ -615,17 +615,18 @@ object Calls:
       sona: Publishing,
       action: WorkflowAction,
   ): IO[WorkflowFault, Path] =
-    val rendered = action match
-      case WorkflowAction.Check =>
-        Workflow.check(repo, graph, sona).mapError(WorkflowFault.Files(_))
-      case WorkflowAction.Update =>
-        Workflow.update(repo, graph, sona).mapError(WorkflowFault.Files(_))
-    val scripts = action match
-      case WorkflowAction.Check =>
-        LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
-      case WorkflowAction.Update =>
-        LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
-    rendered *> scripts.as(Workflow.path(repo))
+    CiBranch.read(repo).mapError(WorkflowFault.Files(_)).flatMap: branch =>
+      val rendered = action match
+        case WorkflowAction.Check =>
+          Workflow.check(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
+        case WorkflowAction.Update =>
+          Workflow.update(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
+      val scripts = action match
+        case WorkflowAction.Check =>
+          LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
+        case WorkflowAction.Update =>
+          LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
+      rendered *> scripts.as(Workflow.path(repo))
 
   def version(text: String, say: Say): IO[ServerError, Unit] =
     told(say, text) *> ok(say)

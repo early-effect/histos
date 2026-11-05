@@ -10,12 +10,13 @@ trait Trigger:
   def ++(other: Trigger): Trigger = Trigger.Combine(this, other)
 
 object Trigger:
-  /** Pull request, or a push to [[On.defaultBranch]]. */
+  /** Pull request, or a push to the repository default branch. The printer fills in the branch name. */
   case object Ci extends Trigger:
     def on: List[On] = List(On.pullRequest, On.pushDefault)
     def cond: Cond   = Cond.AnyOf(List(Cond.Event(EventKind.PullRequest), Cond.DefaultBranchPush))
 
-  /** A push to [[On.defaultBranch]]. Not a tag and not a pull request. */
+  /** A push to the repository default branch. Not a tag and not a pull request. The printer fills in the branch name.
+    */
   case object DefaultPush extends Trigger:
     def on: List[On] = List(On.pushDefault)
     def cond: Cond   = Cond.DefaultBranchPush
@@ -35,9 +36,9 @@ object Trigger:
     def on: List[On] = List(On.PullRequest(List(PullType.Labeled), Nil))
     def cond: Cond   = Cond.HasLabel(label)
 
-  /** Paths on a push to [[On.defaultBranch]]. Non-empty paths are their own file: they would wake `ci.yml`. */
+  /** Paths on a push to the repository default branch. Non-empty paths are their own file: they would wake `ci.yml`. */
   final case class Paths(paths: ::[String]) extends Trigger:
-    def on: List[On] = List(On.Push(List(On.defaultBranch), Nil, paths))
+    def on: List[On] = List(On.Push(List(PushBranch.Default), Nil, paths))
     def cond: Cond   = Cond.DefaultBranchPush
 
   final case class Combine(left: Trigger, right: Trigger) extends Trigger:
@@ -51,9 +52,14 @@ object Trigger:
     else (Cond.AnyOf(List(trigger.cond, Cond.Event(EventKind.Schedule))), extra)
 end Trigger
 
+/** A branch named in `on.push.branches`. [[Default]] is filled in when the workflow is rendered. */
+enum PushBranch:
+  case Named(name: String)
+  case Default
+
 /** A closed event. The engine prints these and does not accept a workflow string. */
 enum On:
-  case Push(branches: List[String], tags: List[String], paths: List[String])
+  case Push(branches: List[PushBranch], tags: List[String], paths: List[String])
   case PullRequest(types: List[PullType], paths: List[String])
   case Dispatch(inputs: List[DispatchInput])
   case MergeGroup
@@ -65,13 +71,8 @@ object On:
 
   def pullRequest: On = PullRequest(defaultPull, Nil)
 
-  /** `on.push.branches` entry. The short name GitHub reports as the repository default branch, the same fact as
-    * [[Cond.DefaultBranch]]. Not a literal branch name.
-    */
-  val defaultBranch: String = "${{ github.event.repository.default_branch }}"
-
-  /** A push to [[defaultBranch]]. Not every branch, and not a tag. */
-  def pushDefault: On = Push(List(defaultBranch), Nil, Nil)
+  /** A push to the repository default branch. Not every branch, and not a tag. The name is not stored here. */
+  def pushDefault: On = Push(List(PushBranch.Default), Nil, Nil)
 
   /** Would this event wake or cancel `ci.yml` if it were merged there. */
   def splits(on: On): Boolean = on match

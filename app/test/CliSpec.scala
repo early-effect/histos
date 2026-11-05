@@ -6,7 +6,7 @@ import histos.native.NativeOrigin
 import histos.load.PluginLink
 import histos.plugin.*
 import histos.publish.{LauncherPin, LauncherScript}
-import histos.workflow.{Workflow, WorkflowAction}
+import histos.workflow.{CiBranch, Workflow, WorkflowAction}
 import histos.load.{ApiJar, BuildNotes, LoadError, LoadedBuild, Loader, PluginRuntime, ScannedBuild}
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.schedule.{CacheNamespace, NamespaceError}
@@ -47,6 +47,7 @@ import zio.*
 import zio.test.*
 
 object CliSpec extends ZIOSpecDefault:
+  private given CiBranch = CiBranch("main")
   private val source =
     """import histos.*
       |object build extends HistosBuild:
@@ -138,6 +139,16 @@ object CliSpec extends ZIOSpecDefault:
 
     def links: List[PluginLink] = Nil
   end RecordingRuntime
+
+  private def pointDefault(dir: Path, branch: String): Unit =
+    def git(args: String*): Unit =
+      val process = new ProcessBuilder((Array("git", "-C", dir.toString) ++ args)*)
+        .redirectErrorStream(true)
+        .start()
+      val text = String(process.getInputStream.readAllBytes)
+      if process.waitFor() != 0 then throw new java.io.IOException(text)
+    git("init")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", s"refs/remotes/origin/$branch")
 
   private def bare: ZIO[Scope, LoadError, Path] =
     for
@@ -1295,6 +1306,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar.mapError(_.message)
           dir <- bare.mapError(_.message)
+          _   <- ZIO.attempt(pointDefault(dir, "main")).mapError(_.toString)
           _   <- ZIO
             .attempt(Files.writeString(dir.resolve("histos.scala"), ship))
             .mapError(_.toString)
@@ -1352,6 +1364,7 @@ object CliSpec extends ZIOSpecDefault:
         for
           jar <- apiJar.mapError(_.message)
           dir <- bare.mapError(_.message)
+          _   <- ZIO.attempt(pointDefault(dir, "main")).mapError(_.toString)
           _   <- ZIO
             .attempt(Files.writeString(dir.resolve("histos.scala"), ship))
             .mapError(_.toString)

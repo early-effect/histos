@@ -1,6 +1,6 @@
 package histos.workflow
 
-import histos.plugin.{CiExtra, CiHeader, On}
+import histos.plugin.{CiExtra, CiHeader}
 import histos.program.ClientBinary
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
@@ -116,14 +116,14 @@ object Workflow:
           case first :: rest => Right(TestTarget.Named(first, rest))
           case Nil           => Right(TestTarget.Entire)
 
-  def render(graph: ProjectGraph): Either[CiError, String] =
+  def render(graph: ProjectGraph)(using CiBranch): Either[CiError, String] =
     prepared(graph).map(_._1)
 
   /** `ci.yml`, `histos-release.yml` when the catalog names a ship, `histos-promote.yml` when that release's `followUp`
     * is Deployment, `histos-snapshots.yml` when a ship names an asset, then one file per dispatch, cron, or trigger
     * that must not wake `ci.yml`.
     */
-  def renderAll(graph: ProjectGraph, sona: Publishing): Either[CiError, List[RenderedWorkflow]] =
+  def renderAll(graph: ProjectGraph, sona: Publishing)(using CiBranch): Either[CiError, List[RenderedWorkflow]] =
     prepared(graph).map: (body, files) =>
       val release = releaseWorkflow(graph, sona).toList
       val promote =
@@ -133,16 +133,16 @@ object Workflow:
       val snapshots = snapshotWorkflow(graph).toList
       RenderedWorkflow(fileName, body) :: release ++ promote ++ snapshots ++ SupplyYaml.files(graph) ++ files
 
-  private def prepared(graph: ProjectGraph): Either[CiError, (String, List[RenderedWorkflow])] =
+  private def prepared(graph: ProjectGraph)(using branch: CiBranch): Either[CiError, (String, List[RenderedWorkflow])] =
     for
-      planned <- JobYaml.render(graph)
+      planned <- JobYaml.render(graph, branch.name)
       jobs    <- plan(graph, CiEvent.Other)
-    yield (document(graph, jobs, planned), planned.files)
+    yield (document(graph, jobs, planned, branch.name), planned.files)
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
     if rendered == committed then Right(()) else Left(CiError.Drift)
 
-  def check(repo: Path, graph: ProjectGraph, sona: Publishing): IO[CiError, Path] =
+  def check(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
@@ -151,7 +151,7 @@ object Workflow:
       _        <- PinScan.check(repo, graph)
     yield path(repo)
 
-  def update(repo: Path, graph: ProjectGraph, sona: Publishing): IO[CiError, Path] =
+  def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
     for
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(item => write(file(repo, item.name), item.body))
@@ -239,7 +239,7 @@ object Workflow:
     values.foldLeft(List.empty[A]): (seen, value) =>
       if seen.contains(value) then seen else seen :+ value
 
-  private def document(graph: ProjectGraph, jobs: List[TestJob], planned: JobYaml.Rendered): String =
+  private def document(graph: ProjectGraph, jobs: List[TestJob], planned: JobYaml.Rendered, branch: String): String =
     val modules = graph.projects.collect { case module: Module => module }
     val test    = jobs match
       case Nil => Nil
@@ -255,7 +255,7 @@ object Workflow:
     val body =
       boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++
         List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
-    (header(planned.header, graph) ++ body).mkString("\n") + "\n"
+    (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
   /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
     * ship that has a native client then links that client and uploads the install files to the existing `dist` release.
@@ -624,13 +624,14 @@ object Workflow:
   private def verifyNeeds: List[String] =
     List(s"    if: ${quote(s"($OnVerify) && ($NoneFailed)")}")
 
-  /** `on.push.branches` is [[On.defaultBranch]], the repository default branch GitHub reports, not a literal name.
-    * `pull_request` still validates every other branch. A push to a feature branch does not start this file, so one
-    * commit on an open pull request is one run. Verify jobs repeat [[OnVerify]], so a push to the default branch starts
-    * a run whose suite skips. `workflow_dispatch` is on this file because verify accepts it. A label, a path, a cron,
+  /** `on.push.branches` is a static glob. GitHub evaluates it before the `github` context exists, so `branch` is the
+    * short name resolved when this file is written. `pull_request` still validates every other branch. A push to a
+    * feature branch does not start this file, so one commit on an open pull request is one run. Verify jobs repeat
+    * [[OnVerify]], so a push to `branch` starts a run whose suite skips. `$default-branch` is a workflow-template token
+    * and is not written here. `workflow_dispatch` is on this file because verify accepts it. A label, a path, a cron,
     * or `workflow_run` is not: those are their own files.
     */
-  private def header(extra: CiHeader, graph: ProjectGraph): List[String] =
+  private def header(extra: CiHeader, graph: ProjectGraph, branch: String): List[String] =
     val tags =
       if extra.tags.isEmpty then Nil
       else "    tags:" :: extra.tags.map(tag => s"      - ${quote(tag)}")
@@ -642,7 +643,7 @@ object Workflow:
       "  pull_request:",
       "  push:",
       "    branches:",
-      s"      - ${quote(On.defaultBranch)}",
+      s"      - ${quote(branch)}",
     ) ++ tags ++ dispatchInputs(extra.inputs) ++ merge ++ release ++ List(
       "permissions:",
       "  contents: read",
