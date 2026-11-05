@@ -443,6 +443,9 @@ object WorkflowSpec extends ZIOSpecDefault:
         ownCi.split("cp .histos/assembly.sha256").length == 2,
         ownCi.contains("needs: [affected, toolchain]"),
         ownCi.contains("\n    needs: toolchain\n"),
+        ownCi.contains("needs.toolchain.outputs.built == 'true'"),
+        ownCi.contains("built: ${{ steps.jar.outputs.built }}"),
+        !ownCi.contains("continue-on-error:"),
         !before.contains("if [ ! -f dist/histos.jar ]"),
         workflow.contains("./histos assembly"),
         supply.contains("if [ ! -f dist/histos.jar ]; then"),
@@ -570,6 +573,34 @@ object WorkflowSpec extends ZIOSpecDefault:
           )
         ) ==
           List("./histos", "test", "--platform", "js"),
+      ),
+    test("generated jobs carry a timeout, and an unknown llvm archive is refused"):
+      val bounded = Workflow.render(graph(Splits.aggregate))
+      val open = Workflow.render(
+        ProjectGraph.trusted(
+          List(module(ProjectName("core"), Platform.Jvm, Nil)),
+          Splits.aggregate,
+          Catalog.empty,
+          None,
+          Nil,
+          ci = CiSettings.empty.copy(timeout = histos.JobTimeout.Unbounded),
+        )
+      )
+      val native = module(ProjectName("core"), Platform.Native, Nil)
+      val unknown = Workflow.render(
+        ProjectGraph.trusted(
+          List(native),
+          Splits.aggregate,
+          Catalog.empty,
+          None,
+          Nil,
+          runnerTools = RunnerTools(None, Some(ToolRevision("9.9.9")), None, None),
+        )
+      )
+      assertTrue(
+        bounded.exists(_.contains("timeout-minutes: 30")),
+        open.exists(text => !text.contains("timeout-minutes:")),
+        unknown == Left(CiError.LlvmChecksum("LLVM-9.9.9-Linux-X64.tar.xz")),
       ),
   )
 
@@ -1061,6 +1092,7 @@ object WorkflowSpec extends ZIOSpecDefault:
                   |jobs:
                   |  nightly:
                   |    runs-on: ubuntu-26.04
+                  |    timeout-minutes: 30
                   |    permissions:
                   |      contents: read
                   |    steps:
@@ -1497,6 +1529,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |jobs:
       |  snapshots:
       |    runs-on: ubuntu-26.04
+      |    timeout-minutes: 30
       |    permissions:
       |      contents: write
       |    steps:
@@ -1525,6 +1558,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |jobs:
       |  snapshots:
       |    runs-on: ubuntu-26.04
+      |    timeout-minutes: 30
       |    permissions:
       |      contents: write
       |    steps:
@@ -1559,6 +1593,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |jobs:
       |  release-histos:
       |    runs-on: ubuntu-26.04
+      |    timeout-minutes: 30
       |    permissions:
       |      contents: read
       |    steps:
@@ -1588,6 +1623,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |jobs:
       |  promote:
       |    runs-on: ubuntu-26.04
+      |    timeout-minutes: 30
       |    steps:
       |      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       |      - uses: ./.github/actions/setup

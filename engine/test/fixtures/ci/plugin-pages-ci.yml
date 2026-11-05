@@ -10,6 +10,7 @@ permissions:
 jobs:
   affected:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -42,6 +43,7 @@ jobs:
     needs: affected
     if: "(github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && (!cancelled() && !contains(needs.*.result, 'failure'))"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
@@ -77,6 +79,7 @@ jobs:
   docs:
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: write
@@ -93,6 +96,7 @@ jobs:
     needs: docs
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -110,6 +114,7 @@ jobs:
   cache-seed:
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       actions: write
       contents: read
@@ -143,6 +148,7 @@ jobs:
   workflow:
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -157,6 +163,7 @@ jobs:
       - run: "./histos workflow --check"
   supply-chain:
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: read
       issues: write
@@ -184,6 +191,7 @@ jobs:
   dependency-snapshot:
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     runs-on: ubuntu-26.04
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
@@ -191,3 +199,5 @@ jobs:
       - uses: ./.github/actions/setup
       - run: ./histos doctor --preflight dependency-snapshot
       - run: ./histos deps snapshot --submit
+        env:
+          GH_TOKEN: ${{ github.token }}

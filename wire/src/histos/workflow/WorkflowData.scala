@@ -29,6 +29,8 @@ enum CiError:
   case UnpinnedWorkflowRun(name: String)
   case Pins(text: String)
   case NoDefaultBranch
+  case JobTimeout(count: Int)
+  case LlvmChecksum(archive: String)
 
   def message: String = this match
     case BadName(raw)                 => s"'$raw' is not a project name"
@@ -61,4 +63,8 @@ enum CiError:
     case Pins(text)                => text
     case NoDefaultBranch =>
       "the repository default branch is not set. refs/remotes/origin/HEAD is absent, and origin did not answer HEAD"
+    case JobTimeout(count) =>
+      s"a job timeout is between 1 and 360 minutes, not $count"
+    case LlvmChecksum(archive) =>
+      s"no sha256 is pinned for $archive"
 end CiError
