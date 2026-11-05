@@ -91,7 +91,7 @@ Histos builds itself. [histos](histos) comes from `workflow --update`. A local a
 
 `histos.version=0.1.0` pins that release. The shim installs that toolchain from the GitHub release `dist`: the jar, the manifest, and a prebuilt client when the manifest names one. `histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel. `histos update` resolves a snapshot channel and writes that timestamp. A release pin stays. `launcher --latest` writes the snapshot pointer and does not fetch. A release pin stays there too. Any of these lines may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim. The shim fetches `channel-<histos.version>` from `dist` when the line is a snapshot pointer. Replacing that file moves the pointer. A Maven snapshot does not.
 
-The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.2.0`. Its version line is `0.1.3-SNAPSHOT`. The native client sends that version line. The server records the same line.
+The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.2.0`. Its version line is `0.2.0-SNAPSHOT`. The native client sends that version line. The server records the same line.
 
 `.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
 
@@ -138,7 +138,7 @@ flowchart TD
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 - A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-A catalog row is `ships(Ship("histos").next(0, 2, 0)(api, app))`. The number is the next release. Everyday compiles `0.2.0-ci`. `publish snapshots` derives the stored coordinate and the `0.2.0-SNAPSHOT` pointer. `0.0.1` is already on Central. This repository's `histos.scala` still writes `ship("histos", ship"0.2.0")`, the same number, so the current bootstrap can load the build. `ship"..."` is only the number.
+A catalog row is `ships(Ship("histos").next(0, 2, 0)(api, app))`. The number is the next release. Everyday compiles `0.2.0-ci`. `publish snapshots` derives the stored coordinate and the `0.2.0-SNAPSHOT` pointer. `0.0.1` is already on Central. `ship"..."` is only the number.
 
 A laptop publishes snapshots by naming the session. The catalog stays on the next release. `releases` may be empty.
 

@@ -2,7 +2,7 @@
 
 `publish` is an effect. It requires a `Publishing`. A command closes that requirement with `provideLayer`. Anything larger is `flatMap` of those effects. The engine does not look up a publisher by name.
 
-This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 0)(api, app))`. This repository's `histos.scala` still writes `ship("histos", ship"0.2.0")` so the current bootstrap can load it. Editing this file does not upload it.
+This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 0)(api, app))`. Editing this file does not upload it.
 
 The number in `.next(0, 2, 0)` is the next release. SNAPSHOT is not written in the catalog. A development session compiles `0.2.0-ci`. A snapshot session derives `0.2.0-<sha>-SNAPSHOT` and, on the default branch, the `0.2.0-SNAPSHOT` pointer. A release session publishes `0.2.0`.
 
