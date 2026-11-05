@@ -238,17 +238,17 @@ private val OnCi: String =
   s"github.event_name == 'pull_request' || $OnDefaultBranch"
 ```
 
-`on.push.branches` cannot use that expression. The filter is a static glob, evaluated before the `github` context exists. `$default-branch` is a workflow-template token, and copying it into a real workflow would be a branch with that name. The generated trigger is every branch and no tag:
+`on.push.branches` cannot use that expression. The filter is a static glob, evaluated before the `github` context exists. `$default-branch` is a workflow-template token, and copying it into a real workflow would be a branch with that name. Histos writes the short name it resolved: `refs/remotes/origin/HEAD` when present, otherwise the name `git remote set-head origin --auto` or `git ls-remote --symref origin HEAD` reports. `pull_request` still validates every other branch. A feature-branch push does not start this file, so a commit on an open pull request is one run. A repository whose default branch is `main` gets:
 
 ```yaml
 on:
   pull_request:
   push:
     branches:
-      - "**"
+      - "main"
 ```
 
-A branches filter excludes tags, so a tag push still does not start `ci.yml`. Every job in that file carries `if: "<OnCi>"`, so a push to a branch other than the default starts a run whose jobs skip. The deploy job and the upload step use `OnDefaultPush` instead. A `schedule` event does not populate `repository.default_branch`, so a cron file does not use these expressions.
+A branches filter excludes tags, so a tag push still does not start `ci.yml`. Verify jobs repeat `OnVerify` and skip on that push. The deploy job and the upload step use `OnDefaultPush`. A `schedule` event does not populate `repository.default_branch`, so a cron file does not use these expressions.
 
 The cache expressions keep the token `main`. That is `CacheNamespace.Main`, the primary line, and it is not the git branch. A default-branch push still sets `HISTOS_CACHE_NAMESPACE` to `main`.
 

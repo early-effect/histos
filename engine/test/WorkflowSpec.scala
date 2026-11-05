@@ -1,6 +1,9 @@
 package histos.workflow
 
+import histos.cli.CliExit
 import histos.doctor.DoctorPlacement
+import histos.report.{BuildFault, CallResult, WorkflowFault}
+import histos.server.Call
 import histos.supply.SupplyChain
 import histos.plugin.{
   ActionName,
@@ -83,6 +86,7 @@ import zio.{Scope, System, ZIO}
 import zio.test.*
 
 object WorkflowSpec extends ZIOSpecDefault:
+  private given CiBranch     = CiBranch("main")
   private val v390           = ScalaVersion.trusted("3.9.0")
   private val core           = ProjectName("core")
   private val tests          = ProjectName("tests")
@@ -93,6 +97,64 @@ object WorkflowSpec extends ZIOSpecDefault:
   private val hold           = Sona.described(ReleaseMode.Hold)
 
   private val render = suite("render")(
+    test("the push filter is the branch render was given"):
+      val built = graph(Splits.aggregate)
+      val main  = Workflow.render(built)(using CiBranch("main"))
+      val trunk = Workflow.render(built)(using CiBranch("trunk"))
+      assertTrue(
+        main.exists(_.contains("push:\n    branches:\n      - \"main\"")),
+        trunk.exists(_.contains("push:\n    branches:\n      - \"trunk\"")),
+        trunk.exists(text => !text.contains("branches:\n      - \"main\"")),
+        trunk.exists(_.contains("github.event.repository.default_branch")),
+        trunk.exists(text => !text.contains("${{ github.event.repository.default_branch }}")),
+      )
+    ,
+    test("ls-remote names the default branch from the ref line"):
+      assertTrue(
+        CiBranch.headFromLsRemote("ref: refs/heads/develop\tHEAD\nabc\tHEAD\n") == Some("develop"),
+        CiBranch.headFromLsRemote("ref: refs/heads/feature/x\tHEAD\n") == Some("feature/x"),
+        CiBranch.headFromLsRemote("abc\tHEAD\n").isEmpty,
+      )
+    ,
+    test("a checkout without origin/HEAD asks the remote"):
+      ZIO.scoped:
+        for
+          root <- temp
+          bare  = root.resolve("bare")
+          work  = root.resolve("work")
+          _    <- ZIO.attempt(checkoutWithoutHead(bare, work, "develop"))
+          found <- CiBranch.read(work)
+        yield assertTrue(found.name == "develop")
+    ,
+    test("a repo with no remote fails as a command, not as workflow status 6"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(git(root, "init"))
+          read <- CiBranch.read(root).either
+        yield
+          val exit = CliExit.from(
+            Call.Workflow(WorkflowAction.Check),
+            CallResult.Fault(BuildFault.Workflow(WorkflowFault.Files(CiError.NoDefaultBranch))),
+          )
+          assertTrue(
+            read == Left(CiError.NoDefaultBranch),
+            exit == CliExit.TaskFailed,
+            exit.code == 1,
+          )
+    ,
+    test("origin HEAD is the name written into push"):
+      ZIO.scoped:
+        for
+          root <- temp
+          _    <- ZIO.attempt(pointOrigin(root, "develop"))
+          found <- CiBranch.read(root)
+          rendered = Workflow.render(graph(Splits.aggregate))(using found)
+        yield assertTrue(
+          found.name == "develop",
+          rendered.exists(_.contains("push:\n    branches:\n      - \"develop\"")),
+        )
+    ,
     test("the empty split set is one aggregate test job"):
       for
         golden  <- text("aggregate.yml")
@@ -103,14 +165,35 @@ object WorkflowSpec extends ZIOSpecDefault:
         golden.contains("./histos test"),
         golden.contains("contents: read"),
         golden.contains("workflow --check"),
+        {
+          val job   = slice(golden, "  workflow:", "  supply-chain:").getOrElse("")
+          val depth = job.indexOf("fetch-depth: \"0\"")
+          val tags  = job.indexOf("fetch-tags: \"true\"")
+          val head  = job.indexOf("./.github/actions/origin-head")
+          val check = job.indexOf("workflow --check")
+          depth >= 0 && tags > depth && head > tags && check > head
+        },
+        {
+          val job   = slice(golden, "  supply-chain:", "").getOrElse("")
+          val depth = job.indexOf("fetch-depth: \"0\"")
+          val tags  = job.indexOf("fetch-tags: \"true\"")
+          val head  = job.indexOf("./.github/actions/origin-head")
+          val check = job.indexOf("workflow --check")
+          depth >= 0 && tags > depth && head > tags && check > head
+        },
         !golden.contains("setup-java"),
         !golden.contains("setup-node"),
         !golden.contains("llvm.tar.xz"),
         !golden.contains("playwright"),
         !golden.contains("format:"),
         !golden.contains("publish"),
-        golden.contains("push:\n    branches:\n      - \"**\""),
-        !golden.contains("tags:"),
+        golden.contains("push:\n    branches:\n      - \"main\""),
+        golden.contains("pull_request:"),
+        golden.contains("github.event.repository.default_branch"),
+        !golden.contains("branches:\n      - \"${{"),
+        !golden.contains("branches:\n      - main"),
+        !golden.contains("\"**\""),
+        !golden.contains("\n    tags:"),
         Workflow.differs(golden, drifted) == Left(CiError.Drift),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List(
           "./histos",
@@ -576,6 +659,43 @@ object WorkflowSpec extends ZIOSpecDefault:
       .work("histos-workflow")
       .mapError(error => new java.io.IOException(error.message))
 
+  private def checkoutWithoutHead(bare: Path, work: Path, branch: String): Unit =
+    Files.createDirectories(bare)
+    Files.createDirectories(work)
+    git(bare, "init", "--bare")
+    git(bare, "symbolic-ref", "HEAD", s"refs/heads/$branch")
+    git(work, "init", "-b", branch)
+    git(work, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "--allow-empty", "-m", "init")
+    git(work, "remote", "add", "origin", bare.toString)
+    git(work, "push", "origin", branch)
+    val removed = new ProcessBuilder("git", "-C", work.toString, "symbolic-ref", "-d", "refs/remotes/origin/HEAD")
+      .redirectErrorStream(true)
+      .start()
+    removed.getInputStream.readAllBytes
+    removed.waitFor()
+    val still = new ProcessBuilder("git", "-C", work.toString, "symbolic-ref", "refs/remotes/origin/HEAD")
+      .redirectError(ProcessBuilder.Redirect.DISCARD)
+      .start()
+    still.getInputStream.readAllBytes
+    if still.waitFor() == 0 then throw new java.io.IOException("origin/HEAD is still set")
+
+  private def git(repo: Path, args: String*): Unit =
+    val process = new ProcessBuilder((Array("git", "-C", repo.toString) ++ args)*)
+      .redirectErrorStream(true)
+      .start()
+    val text = String(process.getInputStream.readAllBytes)
+    if process.waitFor() != 0 then throw new java.io.IOException(s"${args.mkString(" ")}\n$text")
+
+  private def pointOrigin(repo: Path, branch: String): Unit =
+    def git(args: String*): Unit =
+      val process = new ProcessBuilder((Array("git", "-C", repo.toString) ++ args)*)
+        .redirectErrorStream(true)
+        .start()
+      val text = String(process.getInputStream.readAllBytes)
+      if process.waitFor() != 0 then throw new java.io.IOException(text)
+    git("init")
+    git("symbolic-ref", "refs/remotes/origin/HEAD", s"refs/remotes/origin/$branch")
+
   private val plugins = suite("plugins")(
     test("a job that names a site directory uploads on the default branch and deploys from a pages job"):
       val rendered = Workflow.render(
@@ -767,6 +887,19 @@ object WorkflowSpec extends ZIOSpecDefault:
             val own = files.find(_.name == "histos-nightly.yml").map(_.body).getOrElse("")
             own.contains("schedule:") && own.contains("workflow_dispatch:") && !own.contains("pull_request:")
           case Left(_) => false,
+        Workflow.renderAll(withJobs(List(paths)), automatic) match
+          case Right(files) =>
+            val own = files.find(_.name == "histos-api.yml").map(_.body).getOrElse("")
+            val ci  = files.find(_.name == Workflow.fileName).map(_.body).getOrElse("")
+            own.contains("push:\n    branches:\n      - \"main\"") &&
+            own.contains("paths:\n      - \"api/**\"") &&
+            !own.contains("\"**\"") &&
+            !own.contains("branches:\n      - \"${{") &&
+            ci.contains("pull_request:") &&
+            ci.contains("push:\n    branches:\n      - \"main\"") &&
+            !ci.contains("branches:\n      - \"${{") &&
+            !ci.contains("\"**\"")
+          case Left(_) => false,
       )
     ,
     test("a tag stays in ci.yml and does not widen verify"):
@@ -775,7 +908,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       assertTrue:
         rendered match
           case Right(yaml) =>
-            yaml.contains("tags:") &&
+            yaml.contains("\n    tags:\n") &&
             yaml.contains("startsWith(github.ref, 'refs/tags/v')") &&
             slice(yaml, "  test:", "  ship:").getOrElse("").contains("github.event_name == 'pull_request'") &&
             !slice(yaml, "  test:", "  ship:").getOrElse("").contains("refs/tags")
@@ -1145,7 +1278,7 @@ object WorkflowSpec extends ZIOSpecDefault:
               _,
             ) :: Nil
             if name == Workflow.releaseName && snapshots == Workflow.snapshotsName && snap == snapshotWorkflow &&
-              !ci.contains("publish") && !ci.contains("tags:") =>
+              !ci.contains("publish") && !ci.contains("\n    tags:") =>
           Right(text)
         case other => Left(other.toString)
       assertTrue(body == Right(oneShipRelease))
@@ -1244,7 +1377,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             val toolAt  = body.indexOf("  release-tool:")
             val libsJob = if libsAt >= 0 && toolAt > libsAt then body.substring(libsAt, toolAt) else ""
             val toolJob = if toolAt >= 0 then body.substring(toolAt) else ""
-            !body.contains("tags:") &&
+            !body.contains("\n    tags:") &&
             !body.contains("inputs:") &&
             !body.contains("if:") &&
             !body.contains("publish promote") &&

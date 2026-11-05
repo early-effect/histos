@@ -240,7 +240,7 @@ object JobCheck:
         Picture(events, cron)
 
   private val base: List[On] =
-    List(On.pullRequest, On.pushAll, On.Dispatch(Nil))
+    List(On.pullRequest, On.pushDefault, On.Dispatch(Nil))
 
   private def heard(picture: Picture, kind: EventKind): Boolean =
     kind match
