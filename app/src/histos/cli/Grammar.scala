@@ -59,6 +59,9 @@ object Grammar:
     case PreviewCleanFull(projects: List[String])
     case PreviewRun(name: String, platform: Option[String])
     case Observe
+    case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
+    case Deps(action: DepsAction)
+    case Setup(from: Option[String], fix: Boolean, yes: Boolean)
 
   private val version = CliCommand("version").map(_ => Wire.Version)
   private val graph   = CliCommand("graph").map(_ => Wire.Graph)
@@ -161,6 +164,34 @@ object Grammar:
       .map { case (name, platform) =>
         Wire.PreviewRun(name, platform.headOption)
       }
+  private val doctor =
+    CliCommand(
+      "doctor",
+      Options.text("area").optional ++ Options.boolean("json") ++ Options.text("preflight").optional ++
+        Options.boolean("fix") ++ Options.boolean("yes"),
+    ).map { case (area, json, preflight, fix, yes) =>
+      Wire.Doctor(area, json, preflight, fix, yes)
+    }
+  private val depsCheck  = CliCommand("check").map(_ => Wire.Deps(DepsAction.Check))
+  private val depsUpdate =
+    CliCommand("update", Options.boolean("yes") ++ Options.boolean("security")).map { (yes, security) =>
+      Wire.Deps(DepsAction.Update(yes, security))
+    }
+  private val depsAudit =
+    CliCommand("audit", Options.boolean("report")).map(report => Wire.Deps(DepsAction.Audit(report)))
+  private val depsPr =
+    CliCommand("pr", Options.boolean("security") ++ Options.boolean("open")).map { (security, open) =>
+      Wire.Deps(DepsAction.Pr(security, open))
+    }
+  private val depsAlert    = CliCommand("alert").map(_ => Wire.Deps(DepsAction.Alert))
+  private val depsSnapshot =
+    CliCommand("snapshot", Options.boolean("submit")).map(submit => Wire.Deps(DepsAction.Snapshot(submit)))
+  private val deps =
+    CliCommand("deps").subcommands(depsCheck | depsUpdate | depsAudit | depsPr | depsAlert | depsSnapshot)
+  private val supplyChain =
+    CliCommand("supply-chain", Options.text("from").optional ++ Options.boolean("fix") ++ Options.boolean("yes"))
+      .map { case (from, fix, yes) => Wire.Setup(from, fix, yes) }
+  private val setup   = CliCommand("setup").subcommands(supplyChain)
   private val client  = CliCommand("client").map(_ => Wire.Client)
   private val fresh   = CliCommand("new", Args.text("name")).map(Wire.New(_))
   private val init    = CliCommand("init").map(_ => Wire.Init)
@@ -170,7 +201,7 @@ object Grammar:
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | preview
+      version | graph | run | test | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -240,10 +271,15 @@ object Grammar:
           .map { case (modules, patterns) =>
             Command.TestQuick(modules, patterns)
           }
-      case Wire.Client            => ZIO.succeed(Command.Client)
-      case Wire.New(name)         => ZIO.succeed(Command.New(name))
-      case Wire.Init              => ZIO.succeed(Command.Init)
-      case Wire.Observe           => ZIO.succeed(Command.Observe)
+      case Wire.Client                                  => ZIO.succeed(Command.Client)
+      case Wire.New(name)                               => ZIO.succeed(Command.New(name))
+      case Wire.Init                                    => ZIO.succeed(Command.Init)
+      case Wire.Observe                                 => ZIO.succeed(Command.Observe)
+      case Wire.Doctor(area, json, preflight, fix, yes) =>
+        ZIO.succeed(Command.Doctor(area, json, preflight, fix, yes))
+      case Wire.Deps(action)          => ZIO.succeed(Command.Deps(action))
+      case Wire.Setup(from, fix, yes) =>
+        ZIO.succeed(Command.Setup(from, fix, yes))
       case Wire.Compile(projects) =>
         projectList("compile", projects).map(Command.Compile(_))
       case Wire.Clean(projects) =>

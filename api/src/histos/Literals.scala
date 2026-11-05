@@ -22,6 +22,13 @@ extension (inline sc: StringContext)
   inline def connection(inline args: String*): ScmConnection            = ${ LiteralMacro.scmConnection('sc, 'args) }
   inline def sbt(inline args: String*): SbtSeries                       = ${ LiteralMacro.sbtSeries('sc, 'args) }
   inline def promote(inline args: String*): Promote                     = ${ LiteralMacro.promote('sc, 'args) }
+  inline def ghsa(inline args: String*): histos.supply.AdvisoryId       = ${
+    histos.supply.SupplyMacros.ghsaInterp('sc, 'args)
+  }
+  inline def reason(inline args: String*): histos.supply.Reason = ${
+    histos.supply.SupplyMacros.reasonInterp('sc, 'args)
+  }
+  inline def date(inline args: String*): histos.supply.Date = ${ histos.supply.SupplyMacros.dateInterp('sc, 'args) }
 
 /** An early-effect catalog row. The number is the next release. Members are the modules that publish it. */
 inline def ship(name: String, number: histos.version.ShipNumber)(member: ProjectDef, members: ProjectDef*): ShipDef =

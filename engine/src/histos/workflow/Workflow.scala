@@ -123,8 +123,8 @@ object Workflow:
       val promote =
         release match
           case Nil => Nil
-          case _   => promoteWorkflow(sona).toList
-      RenderedWorkflow(fileName, body) :: release ++ promote ++ files
+          case _   => promoteWorkflow(graph, sona).toList
+      RenderedWorkflow(fileName, body) :: release ++ promote ++ SupplyYaml.files(graph) ++ files
 
   private def prepared(graph: ProjectGraph): Either[CiError, (String, List[RenderedWorkflow])] =
     for
@@ -141,6 +141,7 @@ object Workflow:
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
       _        <- ZIO.when(extra.nonEmpty)(ZIO.fail(CiError.Drift))
+      _        <- PinScan.check(repo, graph)
     yield path(repo)
 
   def update(repo: Path, graph: ProjectGraph, sona: Publishing): IO[CiError, Path] =
@@ -238,12 +239,14 @@ object Workflow:
       case _   => testJob(jobs, graph)
     val versions = graph.catalog match
       case Catalog.Empty => Nil
-      case _             => List(versionsJob)
+      case _             => List(versionsJob(graph))
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
       case DocCheck.On  => List(docJob(graph))
     val seed = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
-    val body = List(affectedJob) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++ List(workflowJob)
+    val body =
+      List(affectedJob(graph)) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++
+        List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph) ++ body).mkString("\n") + "\n"
 
   /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
@@ -255,10 +258,10 @@ object Workflow:
       case ships => Some(RenderedWorkflow(releaseName, releaseDocument(graph, ships, sona)))
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
-  private def promoteWorkflow(sona: Publishing): Option[RenderedWorkflow] =
+  private def promoteWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
     sona.followUp match
       case FollowUp.Finished   => None
-      case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument))
+      case FollowUp.Deployment => Some(RenderedWorkflow(promoteName, promoteDocument(graph)))
 
   private def releaseDocument(graph: ProjectGraph, ships: List[Ship], sona: Publishing): String =
     val install = installShip(graph, ships)
@@ -271,6 +274,7 @@ object Workflow:
       "jobs:",
     ) ++ ships.flatMap(ship =>
       releaseJob(
+        graph,
         ship,
         sona,
         if install.exists(_.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish,
@@ -279,7 +283,7 @@ object Workflow:
       .flatMap(ship => installJobs(graph, ships, ship))
     lines.mkString("\n") + "\n"
 
-  private def releaseJob(ship: Ship, sona: Publishing, shape: ReleaseShape): List[String] =
+  private def releaseJob(graph: ProjectGraph, ship: Ship, sona: Publishing, shape: ReleaseShape): List[String] =
     val name      = ship.name.value
     val published = List(
       s"  release-$name:",
@@ -288,7 +292,7 @@ object Workflow:
     ) ++ releasePermissions(shape) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli ++ List(
+    ) ++ coursierCli(graph, s"release-$name") ++ List(
       s"      - run: ${quote(s"./histos publish release $name")}"
     ) ++ secretEnv(sona.secretNames)
     shape match
@@ -309,7 +313,7 @@ object Workflow:
   private def jarArtifact: List[String] =
     List(
       s"      - run: ${quote("./histos assembly")}",
-      "      - uses: actions/upload-artifact@v7",
+      s"      - uses: ${ActionPins.uploadArtifact.line}",
       "        with:",
       "          name: histos-jar",
       "          path: dist/histos.jar",
@@ -345,9 +349,9 @@ object Workflow:
       case Some(pinned) =>
         val revision = pinned.value
         val needed   = ships.map(row => s"release-${row.name.value}")
-        clientJob(needed, revision) ++ distJob(shipVersion(ship))
+        clientJob(graph, needed, revision) ++ distJob(graph, shipVersion(ship))
 
-  private def clientJob(needed: List[String], revision: String): List[String] =
+  private def clientJob(graph: ProjectGraph, needed: List[String], revision: String): List[String] =
     val hosts = DistPlatforms.flatMap: (platform, runner, archive) =>
       List(
         s"          - runner: $runner",
@@ -368,9 +372,11 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ clientSetup ++ clientLlvm(revision) ++ List(
+    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ SupplyYaml.preflight(graph, "client") ++ clientLlvm(
+      revision
+    ) ++ List(
       s"      - run: ${quote("./histos client")}",
-      "      - uses: actions/upload-artifact@v7",
+      s"      - uses: ${ActionPins.uploadArtifact.line}",
       "        with:",
       "          name: client-${{ matrix.platform }}",
       "          path: dist/histos-client",
@@ -380,7 +386,7 @@ object Workflow:
   /** The installer the README curls. A piped `sh` cannot see its own file, so the release publishes this copy. */
   private def shimArtifact: List[String] =
     List(
-      "      - uses: actions/upload-artifact@v7",
+      s"      - uses: ${ActionPins.uploadArtifact.line}",
       "        with:",
       "          name: shim",
       "          path: install/histos",
@@ -395,7 +401,7 @@ object Workflow:
 
   private def clientSetup: List[String] =
     List(
-      "      - uses: actions/setup-java@v6",
+      s"      - uses: ${ActionPins.setupJava.line}",
       "        with:",
       "          distribution: temurin",
       s"          java-version: ${quote(ClientJdk)}",
@@ -435,7 +441,7 @@ object Workflow:
       "          fi",
     )
 
-  private def distJob(version: String): List[String] =
+  private def distJob(graph: ProjectGraph, version: String): List[String] =
     List(
       "  install:",
       "    needs: client",
@@ -444,7 +450,10 @@ object Workflow:
       "      actions: read",
       "      contents: write",
       "    steps:",
-      "      - uses: actions/download-artifact@v8",
+      s"      - uses: $Checkout",
+      s"      - uses: $Setup",
+    ) ++ SupplyYaml.preflight(graph, "install") ++ List(
+      s"      - uses: ${ActionPins.downloadArtifact.line}",
       "        with:",
       "          path: dist-in",
       "      - run: |",
@@ -490,7 +499,7 @@ object Workflow:
   private val promoteSecrets: List[String] =
     List("SONATYPE_USERNAME", "SONATYPE_PASSWORD")
 
-  private def promoteDocument: String =
+  private def promoteDocument(graph: ProjectGraph): String =
     val lines = List(
       "name: promote",
       "on:",
@@ -507,7 +516,7 @@ object Workflow:
       s"    runs-on: $Runner",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli ++ List(
+    ) ++ coursierCli(graph, "promote") ++ List(
       "      - run: \"./histos publish promote ${{ inputs.deployment }}\""
     ) ++ secretEnv(promoteSecrets)
     lines.mkString("\n") + "\n"
@@ -655,7 +664,7 @@ object Workflow:
       case MatrixScope.Cell  => Some(s"matrix.$flag == 'true'")
 
   /** Current major. v4 still targets Node 20. */
-  private val ToolCache = "actions/cache@v6"
+  private val ToolCache = ActionPins.cache.line
 
   private val CoursierCache = "~/.cache/coursier/v1"
 
@@ -698,15 +707,15 @@ object Workflow:
   /** The composite action in this repo. It installs the shim and restores the caches. It does not install a JDK. */
   private val Setup = "./.github/actions/setup"
 
-  private def coursierCli: List[String] =
-    List(s"      - uses: $Setup")
+  private def coursierCli(graph: ProjectGraph, job: String): List[String] =
+    List(s"      - uses: $Setup") ++ SupplyYaml.preflight(graph, job)
 
   private def nodeStep(floor: Option[NodeFloor], scope: MatrixScope): List[String] =
     floor match
       case None        => Nil
       case Some(major) =>
         val guard = cellFlag(scope, "node").toList.map(text => s"        if: $text")
-        List("      - uses: actions/setup-node@v7") ++ guard ++ List(
+        List(s"      - uses: ${ActionPins.setupNode.line}") ++ guard ++ List(
           "        with:",
           s"          node-version: ${quote(major.value.toString)}",
         )
@@ -761,7 +770,7 @@ object Workflow:
           "          node \"$dir/node_modules/playwright/cli.js\" install-deps firefox",
         ) ++ cell.toList.map(text => s"        if: $text")
 
-  private def affectedJob: String =
+  private def affectedJob(graph: ProjectGraph): String =
     val script =
       """          base=all
           |          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
@@ -774,7 +783,7 @@ object Workflow:
           |          fi
           |          modules=$(./histos affected --base "$base" || echo '["all"]')
           |          echo "modules=$modules" >> "$GITHUB_OUTPUT"""".stripMargin
-    List(
+    (List(
       "  affected:",
       s"    runs-on: $Runner",
       "    permissions:",
@@ -787,13 +796,14 @@ object Workflow:
       "        with:",
       "          fetch-depth: 0",
       s"      - uses: $Setup",
+    ) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
       "        env:",
       "          GH_TOKEN: ${{ github.token }}",
       "          PR_BASE: ${{ github.event.pull_request.base.sha }}",
       "        run: |",
       script,
-    ).mkString("\n")
+    )).mkString("\n")
 
   /** A push to the default branch compiles and saves the store. The suite does not run on that push. */
   private def cacheSeed(jobs: List[TestJob], graph: ProjectGraph): String =
@@ -810,7 +820,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli ++ prepare ++ storeRestore ++ List(
+    ) ++ coursierCli(graph, "cache-seed") ++ prepare ++ storeRestore ++ List(
       "      - run: \"./histos compile\""
     ) ++ storeSave).mkString("\n")
 
@@ -839,7 +849,9 @@ object Workflow:
           "      contents: read",
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ coursierCli ++ prepare ++ storeRestore ++ link ++ testRun(argv(aggregate).mkString(" ")) ++ storeSave
+        ) ++ coursierCli(graph, "test") ++ prepare ++ storeRestore ++ link ++ testRun(
+          argv(aggregate).mkString(" ")
+        ) ++ storeSave
       case _ =>
         List(
           "  test:",
@@ -855,7 +867,7 @@ object Workflow:
         ) ++ jobs.flatMap(job => include(job, modules, graph.runnerTools, columns)) ++ List(
           "    steps:",
           s"      - uses: $Checkout",
-        ) ++ coursierCli ++ prepare ++ link ++ testRun("${{ matrix.command }}")
+        ) ++ coursierCli(graph, "test") ++ prepare ++ link ++ testRun("${{ matrix.command }}")
 
   /** Link `dist/histos-client` before the suite, so the launcher execs that binary. LLVM is already on `PATH`. */
   private def clientStep(link: ClientLink): List[String] =
@@ -949,9 +961,9 @@ object Workflow:
     */
   private val StorePath = "~/.cache/histos"
 
-  private val StoreRestore = "actions/cache/restore@v6"
+  private val StoreRestore = s"actions/cache/restore@${ActionPins.cache.pin.sha.value} # ${ActionPins.cache.pin.tag}"
 
-  private val StoreSave = "actions/cache/save@v6"
+  private val StoreSave = s"actions/cache/save@${ActionPins.cache.pin.sha.value} # ${ActionPins.cache.pin.tag}"
 
   private def storeKey: String =
     val namespace =
@@ -1004,7 +1016,11 @@ object Workflow:
   private val Runner = "ubuntu-26.04"
 
   /** Current major. v4 still targets Node 20, which the runner rewrites to Node 24. */
-  private val Checkout = "actions/checkout@v7"
+  private val Checkout = ActionPins.checkout.line
+
+  private[workflow] def runner: String = Runner
+
+  private[workflow] def onDefaultPush: String = OnDefaultPush
 
   /** Beside the suite. No `needs`, so a scaladoc warning does not hold the tests. */
   private def docJob(graph: ProjectGraph): String =
@@ -1020,7 +1036,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli ++ prepare ++ storeRestore ++ List(
+    ) ++ coursierCli(graph, "doc") ++ prepare ++ storeRestore ++ List(
       s"      - run: ${quote("./histos run doc")}"
     )
     lines.mkString("\n")
@@ -1030,7 +1046,7 @@ object Workflow:
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
-  private def versionsJob: String =
+  private def versionsJob(graph: ProjectGraph): String =
     (List(
       "  versions:"
     ) ++ verifyIf ++ List(
@@ -1040,20 +1056,8 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
-      "      - run: \"./histos run versions\"",
-    )).mkString("\n")
-
-  private def workflowJob: String =
-    (List(
-      "  workflow:"
-    ) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
-      "    permissions:",
-      "      contents: read",
-      "    steps:",
-      s"      - uses: $Checkout",
-      s"      - uses: $Setup",
-      "      - run: \"./histos workflow --check\"",
+    ) ++ SupplyYaml.preflight(graph, "versions") ++ List(
+      "      - run: \"./histos run versions\""
     )).mkString("\n")
 
   private def quote(text: String): String =

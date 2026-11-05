@@ -315,6 +315,27 @@ object CliSpec extends ZIOSpecDefault:
       for parsed <- Cli.parse(List("toolchain"))
       yield assertTrue(parsed == Command.Toolchain)
     ,
+    test("doctor, deps, and setup are commands"):
+      for
+        doctor <- Cli.parse(List("doctor", "--area", "supply-chain", "--json", "--preflight", "test", "--fix", "--yes"))
+        check  <- Cli.parse(List("deps", "check"))
+        update <- Cli.parse(List("deps", "update", "--yes", "--security"))
+        audit  <- Cli.parse(List("deps", "audit", "--report"))
+        pull   <- Cli.parse(List("deps", "pr", "--security", "--open"))
+        alert  <- Cli.parse(List("deps", "alert"))
+        shot   <- Cli.parse(List("deps", "snapshot", "--submit"))
+        setup  <- Cli.parse(List("setup", "supply-chain", "--from", "zipx", "--fix", "--yes"))
+      yield assertTrue(
+        doctor == Command.Doctor(Some("supply-chain"), true, Some("test"), true, true),
+        check == Command.Deps(DepsAction.Check),
+        update == Command.Deps(DepsAction.Update(true, true)),
+        audit == Command.Deps(DepsAction.Audit(true)),
+        pull == Command.Deps(DepsAction.Pr(true, true)),
+        alert == Command.Deps(DepsAction.Alert),
+        shot == Command.Deps(DepsAction.Snapshot(true)),
+        setup == Command.Setup(Some("zipx"), true, true),
+      )
+    ,
     test("new and init are commands"):
       for
         created <- Cli.parse(List("new", "my-app"))

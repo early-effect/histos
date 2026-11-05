@@ -96,6 +96,17 @@ enum Command:
   case Observe
   case New(name: String)
   case Init
+  case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
+  case Deps(action: DepsAction)
+  case Setup(from: Option[String], fix: Boolean, yes: Boolean)
+
+enum DepsAction:
+  case Check
+  case Update(yes: Boolean, security: Boolean)
+  case Audit(report: Boolean)
+  case Pr(security: Boolean, open: Boolean)
+  case Alert
+  case Snapshot(submit: Boolean)
 
 enum CliParseError:
   case Help
@@ -163,7 +174,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -198,6 +209,48 @@ object Cli:
         dir => Completed(CliExit.Success, s"${dir.toAbsolutePath.normalize}\nhistos test", "", Playback.Held),
       )
     }
+
+  private def doctor(
+      repo: Path,
+      apiJar: Path,
+      area: Option[String],
+      json: Boolean,
+      preflight: Option[String],
+      fix: Boolean,
+      yes: Boolean,
+  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+    ZIO
+      .serviceWithZIO[Loader](_.load(repo, apiJar))
+      .either
+      .flatMap:
+        case Left(error) =>
+          ZIO.succeed(Completed(CliExit.TaskFailed, "", error.message, Playback.Held))
+        case Right(loaded) =>
+          histos.supply.DoctorSurface
+            .run(
+              repo,
+              loaded.graph,
+              histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes),
+            )
+            .map: (code, text) =>
+              val exit = if code == 0 then CliExit.Success else CliExit.TaskFailed
+              Completed(exit, text, "", Playback.Held)
+
+  private def deps(repo: Path, action: DepsAction): UIO[Completed] =
+    val (code, text) = action match
+      case DepsAction.Check                 => histos.supply.DepsSurface.check(repo)
+      case DepsAction.Update(yes, security) => histos.supply.DepsSurface.update(repo, yes, security)
+      case DepsAction.Audit(report)         => histos.supply.DepsSurface.audit(repo, report)
+      case DepsAction.Pr(security, open)    => histos.supply.DepsSurface.pullRequest(security, open)
+      case DepsAction.Alert                 => histos.supply.DepsSurface.alert
+      case DepsAction.Snapshot(submit)      => histos.supply.DepsSurface.snapshot(repo, submit)
+    val exit = if code == 0 then CliExit.Success else if code == 2 then CliExit.Usage else CliExit.TaskFailed
+    ZIO.succeed(Completed(exit, text, "", Playback.Held))
+
+  private def setup(repo: Path, from: Option[String], fix: Boolean, yes: Boolean): Completed =
+    val (code, text) = histos.supply.SetupSurface.run(repo, from, fix, yes)
+    val exit         = if code == 0 then CliExit.Success else if code == 2 then CliExit.Usage else CliExit.TaskFailed
+    Completed(exit, text, "", Playback.Held)
 
   /** The process entry. A socket hit names none of the compile services. Each miss provides only what that miss uses.
     */
@@ -303,9 +356,15 @@ object Cli:
         previewRun(repo, apiJar, id.value, platform)
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
-      case Command.Observe   => observe(repo)
-      case Command.New(name) => fresh(repo, Some(name))
-      case Command.Init      => fresh(repo, None)
+      case Command.Observe                                 => observe(repo)
+      case Command.New(name)                               => fresh(repo, Some(name))
+      case Command.Init                                    => fresh(repo, None)
+      case Command.Doctor(area, json, preflight, fix, yes) =>
+        doctor(repo, apiJar, area, json, preflight, fix, yes)
+      case Command.Deps(action) =>
+        deps(repo, action)
+      case Command.Setup(from, fix, yes) =>
+        ZIO.succeed(setup(repo, from, fix, yes))
 
   /** Loopback rehearsal of the Central portal. Does not load the graph. */
   private def portal(repo: Path): URIO[Machine & Scope, Completed] =
@@ -1946,6 +2005,12 @@ object Cli:
         fresh(repo, Some(name))
       case Command.Init =>
         fresh(repo, None)
+      case Command.Doctor(area, json, preflight, fix, yes) =>
+        inProcessReady(repo)((api, machine) => withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes)))
+      case Command.Deps(action) =>
+        deps(repo, action)
+      case Command.Setup(from, fix, yes) =>
+        ZIO.succeed(setup(repo, from, fix, yes))
 
   /** A call the server can answer. The local build runs only when the socket does not. */
   private def served(repo: Path, call: Call): URIO[Scope, Completed] =

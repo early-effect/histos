@@ -87,7 +87,7 @@ private def siteEnvironment(job: CiJob): List[String] =
         )
 ```
 
-`UploadPages` is `actions/upload-pages-artifact@v5`. `DeployPages` is `actions/deploy-pages@v5`. `Checkout` is `actions/checkout@v7`. The runner is `ubuntu-26.04`. Those pins stay.
+`UploadPages`, `DeployPages`, and `Checkout` are full commit SHAs with a tag comment, from the built-in pin table. The runner is `ubuntu-26.04`. A local composite action stays `./.github/actions/setup`.
 
 `ci.yml` runs on every pull request and on a push whose branch filter is the literal `main`. There is no `workflow_dispatch` on that file. The same literal is the non-PR cache namespace ([Workflow.scala](../engine/src/histos/workflow/Workflow.scala) lines 571-584, 849-852, and 884-885). A push that is not that literal does not start this workflow. That literal is the bug the correction removes: the git branch and the cache token are different facts.
 

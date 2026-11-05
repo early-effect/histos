@@ -3,6 +3,7 @@ package histos.plugin
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.collection.immutable.::
 
+import histos.doctor.DoctorCheck
 import histos.version.CommitSha
 import histos.ProjectName
 
@@ -15,6 +16,7 @@ trait CiJob:
   def permissions: JobPermissions
   def needs: List[JobName]
   def render(plugin: PluginId): List[JobRender]
+  def preflight: List[DoctorCheck] = Nil
 
 /** A task runs in `ci.yml`, or on a cron in its own file. A cron is not a site. */
 final case class TaskJob(

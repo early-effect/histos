@@ -16,10 +16,11 @@ jobs:
     outputs:
       modules: ${{ steps.affected.outputs.modules }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
+      - run: ./histos doctor --preflight affected
       - id: affected
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,9 +45,10 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - uses: actions/cache@v6
+      - run: ./histos doctor --preflight test
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
         with:
           path: "${{ runner.temp }}/llvm"
@@ -66,11 +68,11 @@ jobs:
           else
             echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
           fi
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
-      - uses: actions/cache/restore@v6
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: store
         with:
           path: "~/.cache/histos"
@@ -87,7 +89,7 @@ jobs:
             gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}
           fi
       - if: "always()"
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
@@ -98,9 +100,10 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - uses: actions/cache@v6
+      - run: ./histos doctor --preflight cache-seed
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
         with:
           path: "${{ runner.temp }}/llvm"
@@ -120,11 +123,11 @@ jobs:
           else
             echo "LD_LIBRARY_PATH=$dir/lib" >> "$GITHUB_ENV"
           fi
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/coursier/v1"
           key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
-      - uses: actions/cache/restore@v6
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: store
         with:
           path: "~/.cache/histos"
@@ -139,16 +142,39 @@ jobs:
             gh api --method DELETE /repos/${GITHUB_REPOSITORY}/actions/caches?key=${STORE_KEY}
           fi
       - if: "always()"
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
-  workflow:
-    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+  supply-chain:
     runs-on: ubuntu-26.04
     permissions:
       contents: read
+      issues: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - run: "./histos workflow --check"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/histos/advisories
+          key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}
+          restore-keys: histos-osv-
+      - run: ./histos doctor --preflight supply-chain
+      - run: ./histos doctor
+      - run: ./histos workflow --check
+      - run: ./histos resolve --check
+      - run: ./histos deps audit
+      - if: failure() && github.event_name != 'pull_request'
+        run: ./histos deps alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+  dependency-snapshot:
+    if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: ./histos doctor --preflight dependency-snapshot
+      - run: ./histos deps snapshot --submit
