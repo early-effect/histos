@@ -388,7 +388,10 @@ case $cmd in
   self)
     shift
     sub=${1:-}
-    [ "$sub" = update ] || fail "usage: histos self update"
+    [ "$sub" = update ] || fail "unknown command 'self ${sub:-}'
+did you mean self update?
+histos help
+histos help self"
     tmp=$(mktemp)
     fetch "$dist/shim.sha256" "$tmp"
     expected=$(tr -d '[:space:]' < "$tmp")
@@ -427,7 +430,10 @@ case $cmd in
         if [ ! -s "$home/default" ]; then write_default "$selected"; fi
         exit 0
         ;;
-      *) fail "usage: histos toolchain (install <version> | list)" ;;
+      *) fail "unknown command 'toolchain ${sub:-}'
+histos toolchain install <version>
+histos toolchain list
+histos help toolchain" ;;
     esac
     ;;
   update)

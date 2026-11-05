@@ -1,5 +1,6 @@
 package histos.program
 
+import histos.doctor.Suggest
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
 import histos.js.{JsLink, JsLinkRequest, JsRun, JsRunRequest}
@@ -279,13 +280,14 @@ object Program:
       graph: ProjectGraph,
       name: String,
   ): Either[ProgramError, Module] =
+    val near = Suggest.runs(name, graph.projects.map(_.name.value))
     ProjectName.from(name) match
-      case Left(_)      => Left(ProgramError.Absent(name))
+      case Left(_)      => Left(ProgramError.Absent(name, near))
       case Right(found) =>
         graph.get(found) match
           case Some(module: Module) => Right(module)
           case Some(_: Aggregate)   => Left(ProgramError.Aggregate(found))
-          case None                 => Left(ProgramError.Absent(name))
+          case None                 => Left(ProgramError.Absent(name, near))
 
   /** One platform, or a refusal. Nothing is compiled and nothing is started on the refusal.
     */

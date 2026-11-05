@@ -118,8 +118,9 @@ object Main extends ZIOAppDefault:
   private def finish(call: Call, result: CallResult): Int =
     val exit = CliExit.from(call, result)
     result match
-      case CallResult.Fault(fault) if fault.message.nonEmpty =>
-        System.err.println(fault.message)
+      case CallResult.Fault(fault) =>
+        val text = histos.doctor.FaultText.show(fault.diagnose)
+        if text.nonEmpty then System.err.println(text)
         exit.code
       case _ => exit.code
 

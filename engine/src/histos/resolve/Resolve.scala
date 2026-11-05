@@ -338,18 +338,17 @@ object Resolve:
       cell: ResolveCell,
       lock: DependencyLock,
   ): Either[ResolveError, LockedCell] =
-    val drift = drifted(cell)
     lock.cells.find(same(cell)) match
-      case None                                            => Left(drift)
-      case Some(locked) if locked.directs != directs(cell) => Left(drift)
-      case Some(locked)                                    => Right(locked)
+      case None => Left(drifted(cell, Nil))
+      case Some(locked) if locked.directs != directs(cell) =>
+        Left(drifted(cell, moved(locked.directs.map(directToken), directs(cell).map(directToken))))
+      case Some(locked) => Right(locked)
 
   private def agree(
       cell: ResolveCell,
       fresh: Classpath,
       locked: LockedCell,
   ): Either[ResolveError, Unit] =
-    val drift = drifted(cell)
     val got   = fresh.artifacts.map(artifact =>
       (
         artifact.organization,
@@ -366,7 +365,18 @@ object Resolve:
         artifact.repository,
       )
     )
-    if got != want || fresh.evictions != locked.evictions then Left(drift)
+    val freshTokens =
+      fresh.artifacts.map(artifact => s"${artifact.organization}:${artifact.name}:${artifact.revision}")
+    val lockedTokens =
+      locked.artifacts.map(artifact => s"${artifact.organization}:${artifact.name}:${artifact.revision}")
+    val freshEvict = fresh.evictions.map(eviction =>
+      s"${eviction.organization}:${eviction.name}:${eviction.requested}->${eviction.selected}"
+    )
+    val lockedEvict = locked.evictions.map(eviction =>
+      s"${eviction.organization}:${eviction.name}:${eviction.requested}->${eviction.selected}"
+    )
+    if got != want || fresh.evictions != locked.evictions then
+      Left(drifted(cell, moved(lockedTokens ++ lockedEvict, freshTokens ++ freshEvict)))
     else
       fresh.artifacts
         .zip(locked.artifacts)
@@ -417,13 +427,27 @@ object Resolve:
       locked.platform == cell.platform &&
       locked.scope == cell.scope
 
-  private def drifted(cell: ResolveCell): ResolveError =
+  private def drifted(cell: ResolveCell, changed: List[String]): ResolveError =
     ResolveError.LockDrift(
       cell.module,
       cell.scalaVersion,
       cell.platform,
       cell.scope,
+      changed,
     )
+
+  private def directToken(direct: LockedDirect): String =
+    val separator = direct.kind match
+      case DepKind.Java   => ":"
+      case DepKind.Binary => "::"
+      case DepKind.Full   => ":::"
+    s"${direct.organization}$separator${direct.name}:${direct.revision}"
+
+  /** `lock` lines are in the file. `graph` lines are what this resolve computed. */
+  private def moved(locked: List[String], fresh: List[String]): List[String] =
+    val gone  = locked.toSet -- fresh.toSet
+    val added = fresh.toSet -- locked.toSet
+    gone.toList.sorted.map(item => s"lock $item") ++ added.toList.sorted.map(item => s"graph $item")
 
   private def describe(cell: ResolveCell): String =
     val base =
@@ -587,7 +611,12 @@ object Resolve:
         artifact.classifier,
       )
     )
-    if got != want then Left(ResolveError.PluginDrift(dependency))
+    if got != want then
+      val freshTokens =
+        fresh.artifacts.map(artifact => s"${artifact.organization}:${artifact.name}:${artifact.revision}")
+      val lockedTokens =
+        locked.artifacts.map(artifact => s"${artifact.organization}:${artifact.name}:${artifact.revision}")
+      Left(ResolveError.PluginDrift(dependency, moved(lockedTokens, freshTokens)))
     else
       fresh.artifacts
         .zip(locked.artifacts)

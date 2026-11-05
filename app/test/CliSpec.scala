@@ -262,9 +262,9 @@ object CliSpec extends ZIOSpecDefault:
         duringOut == List("compiling core", ""),
         duringErr == List("unused"),
         afterOut == List("compiling core", "", "suite passed"),
-        afterErr == List("unused", "the run failed"),
+        afterErr == List("unused", "the run failed\nfix  histos help"),
         done.out == "compiling core\n\nsuite passed",
-        done.err == "unused\nthe run failed",
+        done.err == "unused\nthe run failed\nfix  histos help",
         done.exit == CliExit.TaskFailed,
         done.playback == Playback.Heard,
       )
@@ -477,7 +477,10 @@ object CliSpec extends ZIOSpecDefault:
           Command.Clean(List(ProjectName("engine"))),
           List("clean", "engine"),
         ),
-        flag == Left(CliParseError.Pattern("clean does not take --dry-run")),
+        flag match
+          case Left(CliParseError.Pattern(detail)) => detail.startsWith("clean does not take --dry-run")
+          case _                                   => false
+        ,
         extra == Left(
           CliParseError.Pattern("cleanFull does not take a project")
         ),
@@ -555,7 +558,11 @@ object CliSpec extends ZIOSpecDefault:
           case _ => false
         ,
         missing == Left(CliParseError.MissingPattern),
-        flag == Left(CliParseError.Pattern("testOnly does not take --nope")),
+        flag match
+          case Left(CliParseError.Pattern(detail)) =>
+            detail.startsWith("testOnly does not take --nope") && detail.contains("did you mean")
+          case _ => false
+        ,
       )
     ,
     test("test takes project names"):
@@ -607,9 +614,9 @@ object CliSpec extends ZIOSpecDefault:
           slashed == Left(CliParseError.ProjectName(slash)),
           clean == Left(CliParseError.ProjectName(bad)),
           empty == Left(CliParseError.RunId(TaskError.EmptyId)),
-          named.exit == CliExit.Usage && named.exit.code == 2 && named.err == bad.message,
-          pattern.exit == CliExit.Usage && pattern.err == blank.message,
-          cancel.exit == CliExit.Usage && cancel.err == TaskError.EmptyId.message,
+          named.exit == CliExit.Usage && named.exit.code == 2 && named.err.contains(bad.message),
+          pattern.exit == CliExit.Usage && pattern.err.contains(blank.message),
+          cancel.exit == CliExit.Usage && cancel.err.contains(TaskError.EmptyId.message),
         )
     ,
     test("test and testOnly run, and testQuick is quick"):
@@ -651,7 +658,8 @@ object CliSpec extends ZIOSpecDefault:
           Operation.call(parsed) == Left(CliParseError.Rejected),
           watched == Command.Watch(Command.Portal, List("portal")),
           done.exit == CliExit.PublishFailed,
-          done.err == "SONATYPE_USERNAME and SONATYPE_PASSWORD are required",
+          done.err.contains("SONATYPE_USERNAME and SONATYPE_PASSWORD are required"),
+          done.err.contains("fix"),
           done.out.isEmpty,
         )
     ,
@@ -659,7 +667,7 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for done <- invoke(List("workflow"))
         yield assertTrue(
-          done.exit == CliExit.WorkflowFailed && done.exit.code == 6 && done.err
+          done.exit == CliExit.WorkflowFailed && done.exit.code == 1 && done.err
             .contains("ci.yml")
         )
     ,
@@ -667,7 +675,7 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for done <- invoke(List("publishLocal"))
         yield assertTrue(
-          done.exit == CliExit.PublishFailed && done.exit.code == 9 && done.err
+          done.exit == CliExit.PublishFailed && done.exit.code == 1 && done.err
             .contains("nothing publishes")
         )
     ,
@@ -679,7 +687,7 @@ object CliSpec extends ZIOSpecDefault:
           missing <- invoke(List("compile"))
           unknown <- invoke(List("compile", "missing"))
         yield assertTrue(
-          missing.exit == CliExit.CompileFailed && missing.exit.code == 8 && !missing.err
+          missing.exit == CliExit.CompileFailed && missing.exit.code == 1 && !missing.err
             .contains("dependencies.lock"),
           unknown.exit == CliExit.CompileFailed && unknown.err.contains(
             "missing"
@@ -723,7 +731,7 @@ object CliSpec extends ZIOSpecDefault:
           missing.exit == CliExit.TestFailed && !missing.err.contains(
             "dependencies.lock"
           ),
-          unknown.exit == CliExit.TestFailed && unknown.exit.code == 7 && unknown.err
+          unknown.exit == CliExit.TestFailed && unknown.exit.code == 1 && unknown.err
             .contains("missing"),
         )
     ,
@@ -731,7 +739,7 @@ object CliSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for done <- invoke(List("resolve"))
         yield assertTrue(
-          done.exit == CliExit.ResolveFailed && done.exit.code == 5 && done.err
+          done.exit == CliExit.ResolveFailed && done.exit.code == 1 && done.err
             .contains("dependencies.lock")
         )
     ,
@@ -968,7 +976,7 @@ object CliSpec extends ZIOSpecDefault:
           ,
           bad == Left(CliParseError.BadPlatform(error)),
           CliParseError.BadPlatform(error).message == error.message,
-          ran.exit == CliExit.Usage && ran.exit.code == 2 && ran.err == error.message,
+          ran.exit == CliExit.Usage && ran.exit.code == 2 && ran.err.contains(error.message),
           task == Left(CliParseError.TaskPlatform("versions")),
           inspect == Left(CliParseError.TaskPlatform("inspect")),
         )
@@ -1039,7 +1047,7 @@ object CliSpec extends ZIOSpecDefault:
             .execute(List("graph"), dir, jar)
             .provideSome[Scope](layers(dir))
         yield assertTrue(
-          done.exit == CliExit.LoadFailed && done.exit.code == 3 && done.err
+          done.exit == CliExit.LoadFailed && done.exit.code == 1 && done.err
             .contains("histos.scala")
         )
     ,
@@ -1066,15 +1074,24 @@ object CliSpec extends ZIOSpecDefault:
           platform == Left(CliParseError.TaskPlatform("dev.example/echo")),
           broken == Left(CliParseError.BadPluginTask(error)),
           CliParseError.BadPluginTask(error).message == error.message,
-          ran.exit == CliExit.Usage && ran.exit.code == 2 && ran.err == error.message,
-          site == Left(CliParseError.UnknownRoot),
+          ran.exit == CliExit.Usage && ran.exit.code == 2 && ran.err.contains(error.message),
+          site match
+            case Left(CliParseError.UnknownRoot("site")) => true
+            case _                                       => false
+          ,
           watched == Command.Watch(Command.Test(Nil), List("test")),
-          cache == Left(CliParseError.UnknownCommand),
+          cache match
+            case Left(CliParseError.UnknownCommand("nope", _)) => true
+            case _                                             => false
+          ,
           flag match
-            case Left(CliParseError.UnknownRoot) => false
+            case Left(CliParseError.UnknownRoot(_)) => false
             case Left(_)                         => true
             case Right(_)                        => false,
-          list == Left(CliParseError.UnknownRoot),
+          list match
+            case Left(CliParseError.UnknownRoot("list")) => true
+            case _                                       => false
+          ,
         )
     ,
     test("built-in failures do not load, and an unknown root does"):
@@ -1107,13 +1124,13 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(
           cache.exit == CliExit.Usage && cache.exit.code == 2,
           flag.exit == CliExit.Usage,
-          typo.exit == CliExit.LoadFailed && typo.exit.code == 3,
-          usage.exit == CliExit.Usage && usage.err.contains("usage:"),
+          typo.exit == CliExit.LoadFailed && typo.exit.code == 1,
+          usage.exit == CliExit.Usage && usage.err.contains("did you mean test") && usage.err.contains("histos help"),
           missing.exit == CliExit.TaskFailed && missing.err.contains(
             "plugin task"
           ) && !missing.err.contains("is not a module"),
-          list.exit == CliExit.Usage && list.err.contains("usage:"),
-          watched.exit == CliExit.Usage && watched.err.contains("usage:"),
+          list.exit == CliExit.Usage && list.err.contains("histos help"),
+          watched.exit == CliExit.Usage && watched.err.contains("histos help"),
         )
     ,
     test("an api link prints the load error"):
@@ -1202,18 +1219,20 @@ object CliSpec extends ZIOSpecDefault:
           )
         ),
         usage.contains("list") && usage.contains("lists the site"),
-        PluginCommands.parse(List(bound), List("nope")) == Left(
-          CliParseError.UnknownCommand
-        ),
+        PluginCommands.parse(List(bound), List("nope")) match
+          case Left(CliParseError.UnknownCommand("nope", _)) => true
+          case _                                             => false
+        ,
         PluginCommands.parse(List(bound), List("list", "--1bad")) == Left(
           CliParseError.Flag(FlagNameError.Bad("1bad"))
         ),
         PluginCommands.parse(List(bound), List("list", "--")) == Left(
           CliParseError.Flag(FlagNameError.Empty)
         ),
-        PluginCommands.parse(List(bound), List("list", "--nope")) == Left(
-          CliParseError.Rejected
-        ),
+        PluginCommands.parse(List(bound), List("list", "--nope")) match
+          case Left(CliParseError.Pattern(detail)) => detail.contains("--nope") && detail.contains("histos help")
+          case _                                   => false
+        ,
         CliParseError.Flag(FlagNameError.Bad("1bad")).message == FlagNameError.Bad("1bad").message,
       )
     ,
@@ -1238,8 +1257,8 @@ object CliSpec extends ZIOSpecDefault:
             yield assertTrue(
               done.exit == CliExit.Usage,
               done.exit.code == 2,
-              done.err == bad.message,
-              done.err == CliParseError.Flag(bad).message,
+              done.err.contains(bad.message),
+              done.err.contains(CliParseError.Flag(bad).message),
             )
     ,
     test(

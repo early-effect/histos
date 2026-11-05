@@ -1,5 +1,6 @@
 package histos.workflow
 
+import histos.doctor.Suggest
 import histos.plugin.{CiExtra, CiHeader}
 import histos.program.ClientBinary
 import histos.resolve.PlatformToken
@@ -88,6 +89,23 @@ object Workflow:
   def file(repo: Path, name: String): Path =
     repo.resolve(".github").resolve("workflows").resolve(name)
 
+  private def workflowPath(name: String): String =
+    s".github/workflows/$name"
+
+  private def unknownProject(graph: ProjectGraph, name: ProjectName): CiError =
+    CiError.Unknown(name, Suggest.near(name.value, graph.projects.map(_.name.value)))
+
+  private def firstDiff(rendered: String, committed: String): String =
+    val want  = rendered.split("\n", -1).toVector
+    val have  = committed.split("\n", -1).toVector
+    val index = (0 until want.length.max(have.length)).find(i => want.lift(i) != have.lift(i))
+    index match
+      case None => "the files differ"
+      case Some(found) =>
+        val removed = have.lift(found).getOrElse("")
+        val added   = want.lift(found).getOrElse("")
+        s"line ${found + 1}\n- $removed\n+ $added"
+
   /** Test cells for this event. Pull requests keep changed modules and their dependents. */
   def plan(graph: ProjectGraph, event: CiEvent): Either[CiError, List[TestJob]] =
     val modules = graph.projects.collect { case module: Module => module }
@@ -110,7 +128,7 @@ object Workflow:
               case Right(name) if seen.contains(name) => Left(CiError.Duplicate(name))
               case Right(name)                        =>
                 graph.get(name) match
-                  case None               => Left(CiError.Unknown(name))
+                  case None               => Left(unknownProject(graph, name))
                   case Some(_: Aggregate) => Left(CiError.NotModule(name))
                   case Some(_: Module)    => Right(seen :+ name)
         .flatMap:
@@ -167,7 +185,12 @@ object Workflow:
       (linux ++ client).distinct
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
-    if rendered == committed then Right(()) else Left(CiError.Drift)
+    differsNamed(fileName, rendered, committed)
+
+  /** `name` is the workflow file, such as `ci.yml`. The error names `.github/workflows/<name>`. */
+  def differsNamed(name: String, rendered: String, committed: String): Either[CiError, Unit] =
+    if rendered == committed then Right(())
+    else Left(CiError.Drift(workflowPath(name), firstDiff(rendered, committed)))
 
   /** A missing `ci.yml` is reported before git is asked for the default branch. */
   def present(repo: Path): IO[CiError, Unit] =
@@ -182,7 +205,9 @@ object Workflow:
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
-      _        <- ZIO.when(extra.nonEmpty)(ZIO.fail(CiError.Drift))
+      _ <- ZIO.when(extra.nonEmpty)(
+        ZIO.fail(CiError.Drift(workflowPath(fileNameOf(extra.head)), "this file is not rendered by the graph"))
+      )
       _        <- PinScan.check(repo, graph)
     yield path(repo)
 
@@ -219,7 +244,7 @@ object Workflow:
   private def affected(graph: ProjectGraph, changed: Set[ProjectName]): Either[CiError, List[ProjectName]] =
     val known = graph.projects.map(_.name).toSet
     changed.toList.filter(name => !known.contains(name)).sortBy(_.value) match
-      case missing :: _ => Left(CiError.Unknown(missing))
+      case missing :: _ => Left(unknownProject(graph, missing))
       case Nil          =>
         val modules = graph.projects.collect { case module: Module => module }
         Right(close(modules, changed))
@@ -1375,10 +1400,11 @@ object Workflow:
   private def compare(repo: Path, rendered: RenderedWorkflow): IO[CiError, Unit] =
     read(file(repo, rendered.name)).foldZIO(
       {
-        case CiError.Missing(_) if rendered.name != fileName => ZIO.fail(CiError.Drift)
-        case other                                           => ZIO.fail(other)
+        case CiError.Missing(_) if rendered.name != fileName =>
+          ZIO.fail(CiError.Drift(workflowPath(rendered.name), "the file is missing"))
+        case other => ZIO.fail(other)
       },
-      committed => ZIO.fromEither(differs(rendered.body, committed)),
+      committed => ZIO.fromEither(differsNamed(rendered.name, rendered.body, committed)),
     )
 
   /** `histos-*.yml` files this graph did not emit. Other workflow names stay. */

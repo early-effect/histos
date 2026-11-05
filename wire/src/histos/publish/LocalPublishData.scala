@@ -1,5 +1,6 @@
 package histos.publish
 
+import histos.doctor.{Diagnostic, Noted}
 import histos.central.{PublishError}
 import histos.pack.{AssemblyError, JarError}
 import histos.resolve.{ResolveError}
@@ -88,4 +89,21 @@ enum LocalPublishError:
       s"'${module.value}' ${version.value} ${platform.token} failed to assemble\n${error.message}"
     case MissingClasses(module, version, platform) =>
       s"'${module.value}' has no ${version.value} ${platform.token} classes"
+
+  def diagnose: Diagnostic = this match
+    case Publish(error)   => error.diagnose
+    case Classpath(error) => error.diagnose
+    case Target(error)    => error.diagnose
+    case Credentials =>
+      Noted.error(
+        "publish.credentials",
+        message,
+        "Neither variable is set. This is not a rejected login.",
+        Noted.steps(
+          "Export SONATYPE_USERNAME and SONATYPE_PASSWORD.",
+          "A 401 after they are set says the repository rejected the credentials.",
+        ),
+      )
+    case other =>
+      Noted.carry("publish.failed", other.message, other.message, "histos help publish")
 end LocalPublishError

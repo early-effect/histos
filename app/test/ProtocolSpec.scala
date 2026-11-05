@@ -163,7 +163,13 @@ object ProtocolSpec extends ZIOSpecDefault:
       for
         mcp <- histos.cli.Cli.parse(List("mcp"))
         acp <- histos.cli.Cli.parse(List("acp")).flip
-      yield assertTrue(mcp == Command.Mcp, acp == CliParseError.UnknownCommand)
+      yield assertTrue(
+        mcp == Command.Mcp,
+        acp match
+          case CliParseError.UnknownCommand("acp", near) => near.contains("mcp")
+          case _                                         => false
+        ,
+      )
     ,
     test("tools/list is the registered set, on one page"):
       ZIO.scoped:

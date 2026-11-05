@@ -194,7 +194,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         !golden.contains("branches:\n      - main"),
         !golden.contains("\"**\""),
         !golden.contains("\n    tags:"),
-        Workflow.differs(golden, drifted) == Left(CiError.Drift),
+        driftedFile(Workflow.differs(golden, drifted)),
         Workflow.argv(TestJob.Aggregate(TestTarget.Entire)) == List(
           "./histos",
           "test",
@@ -283,7 +283,7 @@ object WorkflowSpec extends ZIOSpecDefault:
         yield assertTrue(
           file == Workflow.path(root) && wrote,
           again == file,
-          drifted == Left(CiError.Drift),
+          driftedFile(drifted),
           gone match
             case Left(CiError.Missing(path)) =>
               path == Workflow.path(root.resolve("absent"))
@@ -987,7 +987,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           kept <- ZIO.attempt(Files.readString(other))
         yield assertTrue(
           removed,
-          missing == Left(CiError.Drift),
+          driftedFile(missing),
           gone,
           kept == "release\n",
         )
@@ -1169,7 +1169,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           checked <- Workflow.check(root, withJobs(List(nightly)), automatic).either
           ci      <- ZIO.attempt(Files.readString(Workflow.path(root)))
           plain   <- ZIO.fromEither(Workflow.render(graph(Splits.aggregate)))
-        yield assertTrue(checked == Left(CiError.Drift), ci == plain)
+        yield assertTrue(driftedFile(checked), ci == plain)
     ,
     test(
       "update deletes an orphan histos workflow and leaves an unrelated file"
@@ -1191,11 +1191,18 @@ object WorkflowSpec extends ZIOSpecDefault:
           kept  <- ZIO.attempt(Files.readString(other))
           clean <- Workflow.check(root, graph(Splits.aggregate), automatic)
         yield assertTrue(
-          drifted == Left(CiError.Drift),
+          driftedFile(drifted),
           gone && kept == "release\n",
           clean == Workflow.path(root),
         ),
   )
+
+  private def driftedFile(found: Either[CiError, ?]): Boolean =
+    found match
+      case Left(error @ CiError.Drift(file, hint)) =>
+        file.nonEmpty && hint.nonEmpty &&
+          histos.doctor.FaultText.show(error.diagnose).contains("histos workflow --update")
+      case _ => false
 
   private def slice(yaml: String, start: String, end: String): Option[String] =
     val from = yaml.indexOf(start)
@@ -1507,13 +1514,13 @@ object WorkflowSpec extends ZIOSpecDefault:
         yield assertTrue(
           text == oneShipRelease,
           again == Workflow.path(root),
-          missing == Left(CiError.Drift),
+          driftedFile(missing),
           gone,
           clean == Workflow.path(root),
           heldRelease == oneShipRelease,
           heldPromote == holdPromote,
           heldCheck == Workflow.path(root),
-          early == Left(CiError.Drift),
+          driftedFile(early),
           dropped,
           kept == oneShipRelease,
           after == Workflow.path(root),

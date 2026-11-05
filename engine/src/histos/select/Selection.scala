@@ -1,5 +1,6 @@
 package histos.select
 
+import histos.doctor.Suggest
 import histos.{Aggregate, Module, ProjectGraph, ProjectName}
 
 /** The modules a compile, test, or publish name asked for. `expanded` came from an aggregate. */
@@ -23,9 +24,12 @@ object Selection:
             acc.flatMap: selected =>
               expand(graph, name, selected)
 
+  private def near(graph: ProjectGraph, name: ProjectName): List[String] =
+    Suggest.near(name.value, graph.projects.map(_.name.value))
+
   private def expand(graph: ProjectGraph, name: ProjectName, selected: Selected): Either[SelectError, Selected] =
     graph.get(name) match
-      case None                 => Left(SelectError.Unknown(name))
+      case None                 => Left(SelectError.Unknown(name, near(graph, name)))
       case Some(module: Module) =>
         if selected.modules.exists(_.name == module.name) then Left(SelectError.Duplicate(module.name))
         else Right(selected.copy(modules = selected.modules :+ module))
@@ -36,6 +40,6 @@ object Selection:
               case Some(module: Module) =>
                 if have.modules.exists(_.name == module.name) then Left(SelectError.Duplicate(module.name))
                 else Right(Selected(have.modules :+ module, have.expanded + module.name))
-              case Some(_: Aggregate) => Left(SelectError.Unknown(child))
-              case None               => Left(SelectError.Unknown(child))
+              case Some(_: Aggregate) => Left(SelectError.Unknown(child, near(graph, child)))
+              case None               => Left(SelectError.Unknown(child, near(graph, child)))
 end Selection
