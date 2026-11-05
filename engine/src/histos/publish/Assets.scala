@@ -113,6 +113,11 @@ trait Assets:
 
   /** Delete one asset by file name. A missing release or a missing name was not uploaded. */
   def delete(tag: String, name: String): IO[AssetError, Unit]
+
+  /** Delete the name when it is already on the release, then upload. GitHub refuses a second asset of the same name.
+    */
+  def replace(tag: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit] =
+    delete(tag, name) *> upload(tag, name, bytes)
 end Assets
 
 object Assets:

@@ -53,12 +53,17 @@ object AssetRun:
           case _   =>
             val tag = ReleaseTag.of(graph.catalog.ships.length, ship, version)
             for
-              access <- ZIO.fromEither(accessOf(env))
-              bases  <- ZIO.fromEither(basesOf(env))
+              access <- ZIO.fromEither(AssetAccess.access(env))
+              bases  <- ZIO.fromEither(AssetAccess.bases(env))
               _      <- erase(access, bases, tag, names)
             yield ()
 
-  private def erase(access: Access, bases: Bases, tag: String, names: List[String]): IO[AssetError, Unit] =
+  private def erase(
+      access: AssetAccess.Access,
+      bases: AssetAccess.Bases,
+      tag: String,
+      names: List[String],
+  ): IO[AssetError, Unit] =
     ZIO
       .serviceWithZIO[Assets](assets => ZIO.foreachDiscard(names)(name => assets.delete(tag, name)))
       .provide(Assets.layer(bases.api, bases.uploads, access.token, access.repository))
@@ -68,12 +73,16 @@ object AssetRun:
       case Nil => ZIO.succeed(Sent(Nil, Nil))
       case _   =>
         for
-          access <- ZIO.fromEither(accessOf(env))
-          bases  <- ZIO.fromEither(basesOf(env))
+          access <- ZIO.fromEither(AssetAccess.access(env))
+          bases  <- ZIO.fromEither(AssetAccess.bases(env))
           sent   <- send(access, bases, ready)
         yield sent
 
-  private def send(access: Access, bases: Bases, ready: List[Pending]): IO[AssetError, Sent] =
+  private def send(
+      access: AssetAccess.Access,
+      bases: AssetAccess.Bases,
+      ready: List[Pending],
+  ): IO[AssetError, Sent] =
     ZIO
       .serviceWithZIO[Assets] { assets =>
         ZIO.foreach(ready): file =>
@@ -214,31 +223,6 @@ object AssetRun:
     ship match
       case Ship.Line(_, number, _, _, _) => number.render
 
-  private def accessOf(env: Map[String, String]): Either[AssetError, Access] =
-    val token = env.get("GITHUB_TOKEN").filter(_.nonEmpty)
-    val repo  = env.get("GITHUB_REPOSITORY").map(_.trim).filter(_.nonEmpty)
-    (token, repo) match
-      case (Some(secret), Some(name)) => AssetRepo.from(name).map(parsed => Access(AssetToken(secret), parsed))
-      case _                          => Left(AssetError.Credentials)
-
-  private def basesOf(env: Map[String, String]): Either[AssetError, Bases] =
-    val api    = text(env.get("HISTOS_GITHUB"))
-    val upload = text(env.get("HISTOS_GITHUB_UPLOAD"))
-    (api, upload) match
-      case (None, None)      => Right(Bases(AssetBase.github, AssetBase.uploads))
-      case (Some(raw), None) =>
-        AssetBase.from(raw).map(base => Bases(base, base))
-      case (None, Some(raw)) =>
-        AssetBase.from(raw).map(base => Bases(AssetBase.github, base))
-      case (Some(apiRaw), Some(uploadRaw)) =>
-        for
-          apiBase    <- AssetBase.from(apiRaw)
-          uploadBase <- AssetBase.from(uploadRaw)
-        yield Bases(apiBase, uploadBase)
-
-  private def text(value: Option[String]): Option[String] =
-    value.map(_.trim).filter(_.nonEmpty)
-
   private enum Asked:
     case Named(chosen: Ship)
     case Quiet(chosen: Ship)
@@ -257,7 +241,5 @@ object AssetRun:
     def ready(files: List[Pending]): Judged = Judged(Nil, files)
     val skip: Judged                        = Judged(Nil, Nil)
 
-  private final case class Access(token: AssetToken, repository: AssetRepo)
-  private final case class Bases(api: AssetBase, uploads: AssetBase)
   private final case class Sent(failed: List[String], uploaded: List[String])
 end AssetRun

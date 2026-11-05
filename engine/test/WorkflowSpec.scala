@@ -50,9 +50,11 @@ import histos.schedule.CacheNamespace
 import histos.version.{Catalog, Ship, ShipName, ShipNumber}
 import histos.{
   Axis,
+  HttpUrl,
   MainClass,
   Module,
   NodeFloor,
+  OrganizationFacts,
   Platform,
   Platforms,
   ProjectDep,
@@ -64,6 +66,8 @@ import histos.{
   RunnerTools,
   ScalaVersion,
   ScalaVersions,
+  Scm,
+  ScmConnection,
   Sona,
   SourcePos,
   Splits,
@@ -341,18 +345,25 @@ object WorkflowSpec extends ZIOSpecDefault:
               case Right(files) => files.find(_.name == "histos-deps.yml").map(_.body)
               case Left(_)      => None
           case Left(_) => None
+      val ownCi = ciOf(own).getOrElse("")
+      val workflowAt = ownCi.indexOf("\n  workflow:\n")
+      val supplyAt   = ownCi.indexOf("\n  supply-chain:\n")
+      val before     = if workflowAt > 0 then ownCi.substring(0, workflowAt) else ownCi
+      val workflow   =
+        if workflowAt >= 0 && supplyAt > workflowAt then ownCi.substring(workflowAt, supplyAt) else ""
+      val supply = if supplyAt >= 0 then ownCi.substring(supplyAt) else ""
       assertTrue(
-        ciOf(own) match
-          case Some(ci) =>
-            ci.contains("\n  toolchain:\n") &&
-            ci.contains("\n  workflow:\n") &&
-            ci.contains("doctor --preflight workflow") &&
-            ci.contains("./histos workflow --check") &&
-            ci.split("cp .histos/assembly.sha256").length == 2 &&
-            ci.contains("needs: [affected, toolchain]") &&
-            ci.contains("\n    needs: toolchain\n")
-          case None => false
-        ,
+        ownCi.nonEmpty,
+        ownCi.contains("\n  toolchain:\n"),
+        ownCi.contains("doctor --preflight workflow"),
+        ownCi.contains("./histos workflow --check"),
+        ownCi.split("cp .histos/assembly.sha256").length == 2,
+        ownCi.contains("needs: [affected, toolchain]"),
+        ownCi.contains("\n    needs: toolchain\n"),
+        !before.contains("if [ ! -f dist/histos.jar ]"),
+        workflow.contains("./histos assembly"),
+        supply.contains("if [ ! -f dist/histos.jar ]; then"),
+        supply.contains("./histos workflow --check"),
         depsOf(own) match
           case Some(deps) => deps.contains("case \"$usage\" in") && !deps.contains("needs: toolchain")
           case None       => false
@@ -1127,9 +1138,14 @@ object WorkflowSpec extends ZIOSpecDefault:
         automatic,
       ).flatMap:
         case RenderedWorkflow("ci.yml", ci) :: RenderedWorkflow(name, text) :: RenderedWorkflow(
+              snapshots,
+              snap,
+            ) :: RenderedWorkflow(
               "histos-deps.yml",
               _,
-            ) :: Nil if name == Workflow.releaseName && !ci.contains("publish") && !ci.contains("tags:") =>
+            ) :: Nil
+            if name == Workflow.releaseName && snapshots == Workflow.snapshotsName && snap == snapshotWorkflow &&
+              !ci.contains("publish") && !ci.contains("tags:") =>
           Right(text)
         case other => Left(other.toString)
       assertTrue(body == Right(oneShipRelease))
@@ -1146,13 +1162,15 @@ object WorkflowSpec extends ZIOSpecDefault:
                 RenderedWorkflow("ci.yml", _) :: RenderedWorkflow(releaseFile, releaseBody) :: RenderedWorkflow(
                   promoteFile,
                   promoteBody,
-                ) :: RenderedWorkflow("histos-deps.yml", _) :: Nil
+                ) :: RenderedWorkflow(snapshots, snap) :: RenderedWorkflow("histos-deps.yml", _) :: Nil
               ) =>
             releaseFile == Workflow.releaseName &&
             releaseBody == oneShipRelease &&
             !releaseBody.contains("--automatic") &&
             promoteFile == "histos-promote.yml" &&
             promoteBody == holdPromote &&
+            snapshots == Workflow.snapshotsName &&
+            snap == snapshotWorkflow &&
             !promoteBody.contains("publish release") &&
             !promoteBody.contains("--automatic")
           case _ => false
@@ -1169,7 +1187,10 @@ object WorkflowSpec extends ZIOSpecDefault:
       assertTrue:
         rendered match
           case Right(
-                _ :: RenderedWorkflow("histos-release.yml", body) :: RenderedWorkflow("histos-deps.yml", _) :: Nil
+                _ :: RenderedWorkflow("histos-release.yml", body) :: RenderedWorkflow(
+                  "histos-snapshots.yml",
+                  _,
+                ) :: RenderedWorkflow("histos-deps.yml", _) :: Nil
               ) =>
             val releaseAt = body.indexOf("  release-histos:")
             val clientAt  = body.indexOf("\n  client:\n")
@@ -1214,7 +1235,10 @@ object WorkflowSpec extends ZIOSpecDefault:
       assertTrue:
         rendered match
           case Right(
-                _ :: RenderedWorkflow("histos-release.yml", body) :: RenderedWorkflow("histos-deps.yml", _) :: Nil
+                _ :: RenderedWorkflow("histos-release.yml", body) :: RenderedWorkflow(
+                  "histos-snapshots.yml",
+                  snap,
+                ) :: RenderedWorkflow("histos-deps.yml", _) :: Nil
               ) =>
             val libsAt  = body.indexOf("  release-libs:")
             val toolAt  = body.indexOf("  release-tool:")
@@ -1233,7 +1257,8 @@ object WorkflowSpec extends ZIOSpecDefault:
             !body.contains("publish assets") &&
             !body.contains("assembly") &&
             !body.contains("contents: write") &&
-            !body.contains("GITHUB_TOKEN")
+            !body.contains("GITHUB_TOKEN") &&
+            snap == snapshotWorkflow
           case _ => false
     ,
     test("a schedule is rendered after the release file"):
@@ -1248,6 +1273,9 @@ object WorkflowSpec extends ZIOSpecDefault:
         rendered match
           case Right(
                 RenderedWorkflow("ci.yml", _) :: RenderedWorkflow("histos-release.yml", _) :: RenderedWorkflow(
+                  "histos-snapshots.yml",
+                  _,
+                ) :: RenderedWorkflow(
                   "histos-deps.yml",
                   _,
                 ) :: RenderedWorkflow(
@@ -1256,6 +1284,33 @@ object WorkflowSpec extends ZIOSpecDefault:
                 ) :: Nil
               ) =>
             true
+          case _ => false
+    ,
+    test("a ship with no asset does not render the snapshots workflow"):
+      val rendered = renderRelease(List(line("libs", "1.0.0", "core")), Set.empty, automatic)
+      assertTrue:
+        rendered match
+          case Right(files) => !files.exists(_.name == Workflow.snapshotsName)
+          case _            => false
+    ,
+    test("this repository's scm renders the snapshots workflow with the bootstrap assembly"):
+      val rendered = renderRelease(
+        List(line("histos", "0.2.0", "app")),
+        Set("app"),
+        automatic,
+        facts = OrganizationFacts(scm =
+          Some(
+            Scm(
+              HttpUrl.trusted("https://github.com/early-effect/histos"),
+              ScmConnection.trusted("scm:git@github.com:early-effect/histos.git"),
+            )
+          )
+        ),
+      )
+      assertTrue:
+        rendered match
+          case Right(_ :: _ :: RenderedWorkflow(name, body) :: _) =>
+            name == Workflow.snapshotsName && body == ownedSnapshots
           case _ => false
     ,
     test("update writes the release file and an empty catalog deletes it"):
@@ -1299,6 +1354,68 @@ object WorkflowSpec extends ZIOSpecDefault:
           after == Workflow.path(root),
         ),
   )
+
+  private val snapshotWorkflow: String =
+    """name: snapshots
+      |on:
+      |  workflow_dispatch:
+      |permissions:
+      |  contents: read
+      |jobs:
+      |  snapshots:
+      |    runs-on: ubuntu-26.04
+      |    permissions:
+      |      contents: write
+      |    steps:
+      |      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      |      - uses: ./.github/actions/setup
+      |      - run: ./histos doctor --preflight snapshots
+      |      - if: "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+      |        run: "./histos assembly"
+      |      - run: "./histos publish snapshots"
+      |        env:
+      |          HISTOS_SESSION: snapshot
+      |          HISTOS_SHA: ${{ github.sha }}
+      |          HISTOS_BRANCH: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'default' || 'other' }}
+      |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+      |          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+      |          GITHUB_TOKEN: ${{ github.token }}
+      |          GITHUB_REPOSITORY: ${{ github.repository }}
+      |""".stripMargin
+
+  private val ownedSnapshots: String =
+    """name: snapshots
+      |on:
+      |  workflow_dispatch:
+      |permissions:
+      |  contents: read
+      |jobs:
+      |  snapshots:
+      |    runs-on: ubuntu-26.04
+      |    permissions:
+      |      contents: write
+      |    steps:
+      |      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      |      - uses: ./.github/actions/setup
+      |      - run: |
+      |          usage=$(./histos 2>&1 || true)
+      |          case "$usage" in
+      |            *" doctor "*) ;;
+      |            *) ./histos assembly ;;
+      |          esac
+      |      - run: ./histos doctor --preflight snapshots
+      |      - if: "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+      |        run: "./histos assembly"
+      |      - run: "./histos publish snapshots"
+      |        env:
+      |          HISTOS_SESSION: snapshot
+      |          HISTOS_SHA: ${{ github.sha }}
+      |          HISTOS_BRANCH: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'default' || 'other' }}
+      |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+      |          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+      |          GITHUB_TOKEN: ${{ github.token }}
+      |          GITHUB_REPOSITORY: ${{ github.repository }}
+      |""".stripMargin
 
   private val oneShipRelease: String =
     """name: release
@@ -1355,8 +1472,9 @@ object WorkflowSpec extends ZIOSpecDefault:
       plugins: List[RegisteredPlugin] = Nil,
       tools: RunnerTools = RunnerTools.empty,
       client: Boolean = false,
+      facts: OrganizationFacts = OrganizationFacts.empty,
   ): Either[String, List[RenderedWorkflow]] =
-    releaseGraph(rows, assets, plugins, tools, client).flatMap(graph =>
+    releaseGraph(rows, assets, plugins, tools, client, facts).flatMap(graph =>
       Workflow.renderAll(graph, sona).left.map(_.message)
     )
 
@@ -1366,6 +1484,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       plugins: List[RegisteredPlugin] = Nil,
       tools: RunnerTools = RunnerTools.empty,
       client: Boolean = false,
+      facts: OrganizationFacts = OrganizationFacts.empty,
   ): Either[String, ProjectGraph] =
     rows
       .foldLeft[Either[String, List[Ship]]](Right(Nil)): (acc, row) =>
@@ -1396,6 +1515,7 @@ object WorkflowSpec extends ZIOSpecDefault:
               Nil,
               plugins,
               runnerTools = tools,
+              facts = facts,
             )
 
   private def line(name: String, number: String, member: String): Either[String, Ship] =
