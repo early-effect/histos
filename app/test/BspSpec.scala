@@ -737,7 +737,7 @@ object BspSpec extends ZIOSpecDefault:
   private val runtimes: UIO[Runtimes] =
     System.envs
       .orElseSucceed(Map.empty[String, String])
-      .flatMap(env => Runtimes.read(Calls.idleMachine.copy(env = env)))
+      .flatMap(env => Runtimes.read(Calls.idleMachine.copy(env = env), None))
 
   private def only(modules: List[Module], name: String): Either[FixtureFault, Module] =
     modules.filter(_.name.value == name) match

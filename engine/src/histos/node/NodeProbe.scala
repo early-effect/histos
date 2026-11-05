@@ -65,7 +65,7 @@ object NodeProbe:
                   )
                 )
               case true =>
-                versionOf(file).foldZIO(
+                version(file).foldZIO(
                   {
                     case NodeError.Version(_, error) =>
                       ZIO.succeed(
@@ -79,7 +79,7 @@ object NodeProbe:
                     ),
                 )
 
-  private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
+  def version(binary: Path): IO[NodeError, NodeVersion] =
     ZIO.scoped:
       for
         work <- histos.workspace.Workspace

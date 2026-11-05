@@ -358,7 +358,8 @@ object NativeSpec extends ZIOSpecDefault:
             TestMachine.at(
               root,
               Map(NativeToolchain.Key -> empty.toUri.toString),
-            )
+            ),
+            None,
           )
           app   <- ZIO.fromEither(ProjectName.from("app"))
           built <- ZIO.fromEither(

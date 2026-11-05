@@ -1594,7 +1594,7 @@ object Cli:
                         val output = java.lang.System.out
                         val notify = (line: String) => histos.bsp.Frame.write(output, line).ignore
                         Runtimes
-                          .read(env.get[Machine])
+                          .read(env.get[Machine], loaded.graph.runnerTools.nodePath)
                           .flatMap: runtimes =>
                             Bsp
                               .open(

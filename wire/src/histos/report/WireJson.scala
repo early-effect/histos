@@ -58,10 +58,12 @@ import histos.native.{
 import histos.node.{
   NodeBinary,
   NodeError,
+  NodeFileFault,
   NodeMajor,
   NodeMiss,
   NodeOverrideError,
   NodeReject,
+  NodeSource,
   NodeSurvey,
   NodeVersion,
   NodeVersionError,
@@ -179,6 +181,7 @@ import histos.{
   PomFact,
   ProjectName,
   ProjectNameError,
+  NodePathError,
   ProjectPath,
   ProviderLibrary,
   RepositoryUrl,
@@ -498,6 +501,9 @@ private object WireBuild extends WireSupport:
   given JsonCodec[NodeVersionError]     = JsonCodec.derived
   given JsonCodec[NodeError]            = JsonCodec.derived
   given JsonCodec[NodeReject]           = JsonCodec.derived
+  given JsonCodec[NodeSource]           = JsonCodec.derived
+  given JsonCodec[NodeFileFault]        = JsonCodec.derived
+  given JsonCodec[NodePathError]        = JsonCodec.derived
   given JsonCodec[NodeVersion]          = parsed(nodeVersion, _.message, _.value)
 
   /** A probe is `major.minor.patch`. The floor is a trusted major, and a miss carries that text. */

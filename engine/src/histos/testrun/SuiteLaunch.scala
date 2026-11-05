@@ -15,7 +15,7 @@ import histos.native.{
   NativeSuiteRequest,
   NativeToolchain,
 }
-import histos.node.{NodeBinary, NodeMiss, NodeToolchain}
+import histos.node.{NodeBinary, NodeMiss, NodeSource, NodeToolchain}
 import histos.toolchain.Runtimes
 import histos.resolve.{DependencyLock, Repositories, Resolve}
 import histos.process.{ChildClasspath, ChildError, ChildEvent, ChildProcess, ChildRequest}
@@ -686,7 +686,7 @@ private[testrun] object SuiteLaunch:
       case CoverGap.Absent(module, version, platform, scope) =>
         ModuleTestError.Lock(histos.resolve.ResolveError.LockDrift(module, version, platform, scope))
       case CoverGap.NoNode =>
-        ModuleTestError.NoNode(cell.module, cell.version, NodeMiss.Absent(NodeToolchain.Floor))
+        ModuleTestError.NoNode(cell.module, cell.version, NodeMiss.Absent(NodeToolchain.Floor, NodeSource.Path))
       case CoverGap.NoApi(module, version, platform) =>
         ModuleTestError.Api(module, version, platform)
 

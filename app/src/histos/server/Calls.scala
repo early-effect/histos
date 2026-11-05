@@ -347,7 +347,7 @@ object Calls:
       .flatMap: console =>
         Ref
           .make(0)
-          .zip(Runtimes.read(machine))
+          .zip(Runtimes.read(machine, graph.runnerTools.nodePath))
           .flatMap: (status, runtimes) =>
             histos.program.Program
               .console(
@@ -413,7 +413,7 @@ object Calls:
       .open(repo)
       .flatMap: console =>
         Runtimes
-          .read(machine)
+          .read(machine, graph.runnerTools.nodePath)
           .flatMap: runtimes =>
             histos.program.Program
               .install(
@@ -957,7 +957,7 @@ object Calls:
                   }
               val ran =
                 for
-                  runtimes <- Runtimes.read(machine)
+                  runtimes <- Runtimes.read(machine, graph.runnerTools.nodePath)
                   _        <- ZIO
                     .fromEither(histos.select.Selection.select(graph, projects))
                     .mapError(ModuleTestError.Target(_))
