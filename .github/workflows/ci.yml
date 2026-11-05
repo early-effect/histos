@@ -387,6 +387,10 @@ jobs:
             mv "$jar" dist/histos.jar
             mv "$sum" .histos/assembly.sha256
           fi
+      - run: |
+          if [ ! -f dist/histos.jar ]; then
+            ./histos assembly
+          fi
       - run: ./histos doctor --preflight workflow
       - run: ./histos doctor
       - run: "./histos workflow --check"
@@ -422,6 +426,10 @@ jobs:
             mkdir -p dist .histos
             mv "$jar" dist/histos.jar
             mv "$sum" .histos/assembly.sha256
+          fi
+      - run: |
+          if [ ! -f dist/histos.jar ]; then
+            ./histos assembly
           fi
       - run: ./histos doctor --preflight supply-chain
       - run: ./histos doctor

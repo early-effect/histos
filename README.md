@@ -83,7 +83,7 @@ GitHub Actions use `.github/actions/setup` from this repo:
 
 Histos builds itself. [histos](histos) comes from `workflow --update`. A local assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim.
 
-`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through. `dist/` and `.histos/assembly.sha256` stay uncommitted. CI starts from the version line. When that toolchain does not yet have a command this checkout renders, one job assembles this tree and the other jobs reuse that jar. `workflow --check` compares the files the running jar renders with the files in the tree.
+`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through. `dist/` and `.histos/assembly.sha256` stay uncommitted. CI starts from the version line. When that toolchain does not yet have a command this checkout renders, one job assembles this tree and the other jobs reuse that jar. A pin that already has `doctor` skips that upload. The `workflow` and `supply-chain` jobs then assemble this checkout themselves, because `workflow --check` compares the files the running jar renders with the files in the tree.
 
 [histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` packed inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
 

@@ -807,6 +807,20 @@ object Workflow:
         "          fi",
       )
 
+  /** The shared bootstrap, or an assembly of this checkout when the pin skipped that upload. `workflow --check` renders
+    * with the running jar. A pin that already lists `doctor` does not upload `histos-bootstrap`, and that pin does not
+    * know a workflow file this checkout just added.
+    */
+  private[workflow] def branchJar(graph: ProjectGraph): List[String] =
+    if !selfHosted(graph) then Nil
+    else
+      fetchAssembly(graph) ++ List(
+        "      - run: |",
+        "          if [ ! -f dist/histos.jar ]; then",
+        "            ./histos assembly",
+        "          fi",
+      )
+
   /** The published jar is the one the version line names. Build this tree only when that jar has no `doctor`. */
   private[workflow] def buildAssembly(graph: ProjectGraph): List[String] =
     if !selfHosted(graph) then Nil
@@ -1208,7 +1222,7 @@ object Workflow:
     val javascript = modules.exists(_.platforms.all.contains(Platform.Js))
     ToolNeed(tools.node.isDefined && javascript, tools.llvm.isDefined && native, false)
 
-  /** The required check. It runs on a pull request, reuses this repository's assembly, and runs the full doctor. */
+  /** The required check. It runs on a pull request, uses this checkout's jar, and runs the full doctor. */
   private def workflowJob(graph: ProjectGraph): String =
     (List(
       "  workflow:"
@@ -1220,7 +1234,7 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
-    ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
+    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
       "      - run: ./histos doctor",
       "      - run: \"./histos workflow --check\"",
     )).mkString("\n")

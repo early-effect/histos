@@ -345,18 +345,25 @@ object WorkflowSpec extends ZIOSpecDefault:
               case Right(files) => files.find(_.name == "histos-deps.yml").map(_.body)
               case Left(_)      => None
           case Left(_) => None
+      val ownCi = ciOf(own).getOrElse("")
+      val workflowAt = ownCi.indexOf("\n  workflow:\n")
+      val supplyAt   = ownCi.indexOf("\n  supply-chain:\n")
+      val before     = if workflowAt > 0 then ownCi.substring(0, workflowAt) else ownCi
+      val workflow   =
+        if workflowAt >= 0 && supplyAt > workflowAt then ownCi.substring(workflowAt, supplyAt) else ""
+      val supply = if supplyAt >= 0 then ownCi.substring(supplyAt) else ""
       assertTrue(
-        ciOf(own) match
-          case Some(ci) =>
-            ci.contains("\n  toolchain:\n") &&
-            ci.contains("\n  workflow:\n") &&
-            ci.contains("doctor --preflight workflow") &&
-            ci.contains("./histos workflow --check") &&
-            ci.split("cp .histos/assembly.sha256").length == 2 &&
-            ci.contains("needs: [affected, toolchain]") &&
-            ci.contains("\n    needs: toolchain\n")
-          case None => false
-        ,
+        ownCi.nonEmpty,
+        ownCi.contains("\n  toolchain:\n"),
+        ownCi.contains("doctor --preflight workflow"),
+        ownCi.contains("./histos workflow --check"),
+        ownCi.split("cp .histos/assembly.sha256").length == 2,
+        ownCi.contains("needs: [affected, toolchain]"),
+        ownCi.contains("\n    needs: toolchain\n"),
+        !before.contains("if [ ! -f dist/histos.jar ]"),
+        workflow.contains("./histos assembly"),
+        supply.contains("if [ ! -f dist/histos.jar ]; then"),
+        supply.contains("./histos workflow --check"),
         depsOf(own) match
           case Some(deps) => deps.contains("case \"$usage\" in") && !deps.contains("needs: toolchain")
           case None       => false
