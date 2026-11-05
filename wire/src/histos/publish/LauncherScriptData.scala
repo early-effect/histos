@@ -15,5 +15,5 @@ enum ScriptError:
     case Missing(path) => s"no launcher script at $path"
     case Io(failure)   => failure.message
     case Pin(error)    => error.message
-    case Revision      => "the launcher script needs one manual ship version"
+    case Revision      => "the launcher script needs one ship version"
 end ScriptError
