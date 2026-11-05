@@ -52,7 +52,7 @@ object Trigger:
     else (Cond.AnyOf(List(trigger.cond, Cond.Event(EventKind.Schedule))), extra)
 end Trigger
 
-/** A branch named in `on.push.branches`. [[Default]] is filled in when the workflow is rendered. */
+/** A branch named in `on.push.branches`. [[PushBranch.Default]] is filled in when the workflow is rendered. */
 enum PushBranch:
   case Named(name: String)
   case Default
