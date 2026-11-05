@@ -1,6 +1,6 @@
 # Site publish modes
 
-This file is the decision for [#90](https://github.com/early-effect/histos/issues/90). The catalog is `manual("histos", manual"0.2.0")`, so a breaking change that makes this API honest is in scope.
+This file is the decision for [#90](https://github.com/early-effect/histos/issues/90). The catalog is `manual("histos", manual"0.2.0-SNAPSHOT")`, so a breaking change that makes this API honest is in scope.
 
 A job that names a site builds that site on every run of the job. Publishing it is a mode on the site. `Automatic` deploys on a push to the repository's default branch, after the site task. `Manual` deploys from a generated `workflow_dispatch` workflow. `Both` is the two together. A pull request builds the site and does not request the `github-pages` environment. The default branch is not a literal in the generated file.
 
