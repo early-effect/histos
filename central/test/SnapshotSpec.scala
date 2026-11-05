@@ -1,6 +1,6 @@
 package histos.central
 
-import histos.version.{ManualVersion, ReleaseVersion, ShipNumber}
+import histos.version.{ReleaseVersion, ShipNumber, SnapshotPointer}
 import histos.Organization
 
 import java.nio.charset.StandardCharsets
@@ -186,7 +186,7 @@ object SnapshotSpec extends ZIOSpecDefault:
   )
 
   private def artifact(group: Organization, name: ArtifactId): Artifact =
-    Artifact(group, name, Revision.Manual(ManualVersion("0.0.1-SNAPSHOT")), bytes)
+    Artifact(group, name, Revision.Pointer(SnapshotPointer(ShipNumber("0.0.1"))), bytes)
 
   private def baseOf(raw: String): SnapshotBase =
     SnapshotMetadata.parse(s"$raw-SNAPSHOT") match

@@ -52,8 +52,8 @@ private object ShipNameMacro:
             quotes.reflect.report.errorAndAbort(error.message, raw)
           case Right(_) => '{ ShipName.trusted(${ Expr(value) }) }
 
-/** One catalog row. A line derives coordinates from a ship number. A manual row publishes the version it states.
-  * Description and url replace the organization's when this ship sets them.
+/** One catalog row. The number is the next release. Sessions derive `-ci`, the snapshot, and the release. Description
+  * and url replace the organization's when this ship sets them.
   */
 enum Ship:
   case Line(
@@ -63,44 +63,31 @@ enum Ship:
       described: Option[PomText] = None,
       located: Option[HttpUrl] = None,
   )
-  case Manual(
-      shipName: ShipName,
-      version: ManualVersion,
-      modules: ::[ProjectName],
-      described: Option[PomText] = None,
-      located: Option[HttpUrl] = None,
-  )
 
   def name: ShipName = this match
-    case line: Line     => line.shipName
-    case manual: Manual => manual.shipName
+    case line: Line => line.shipName
 
   def members: ::[ProjectName] = this match
-    case line: Line     => line.modules
-    case manual: Manual => manual.modules
+    case line: Line => line.modules
 
   def description: Option[PomText] = this match
-    case line: Line     => line.described
-    case manual: Manual => manual.described
+    case line: Line => line.described
 
   def url: Option[HttpUrl] = this match
-    case line: Line     => line.located
-    case manual: Manual => manual.located
+    case line: Line => line.located
 end Ship
 
-/** How a build versions its ships. The two schemes are not mixed. Empty is an application. */
+/** How a build versions its ships. Empty is an application. SNAPSHOT never appears here. */
 enum Catalog:
   case Empty
   case Lines(rows: ::[Ship.Line])
-  case Manual(rows: ::[Ship.Manual])
 
   def get(name: ShipName): Option[Ship] =
     ships.find(_.name == name)
 
   def ships: List[Ship] = this match
-    case Empty        => Nil
-    case Lines(rows)  => rows.map(ship => ship: Ship)
-    case Manual(rows) => rows.map(ship => ship: Ship)
+    case Empty       => Nil
+    case Lines(rows) => rows.map(ship => ship: Ship)
 end Catalog
 
 object Catalog:
@@ -121,13 +108,9 @@ object Catalog:
       .flatMap(assemble)
 
   private def assemble(ships: List[Ship]): Either[CatalogError, Catalog] =
-    val lines  = ships.collect { case line: Ship.Line => line }
-    val manual = ships.collect { case row: Ship.Manual => row }
-    (lines, manual) match
-      case (Nil, Nil)           => Right(Empty)
-      case (first :: rest, Nil) => Right(Lines(::(first, rest)))
-      case (Nil, first :: rest) => Right(Manual(::(first, rest)))
-      case _                    => Left(CatalogError.MixedScheme)
+    ships.collect { case line: Ship.Line => line } match
+      case Nil          => Right(Empty)
+      case first :: rest => Right(Lines(::(first, rest)))
 
   private def repeated(ship: Ship): Option[ProjectName] =
     ship.members
@@ -148,7 +131,6 @@ enum CatalogError:
   case DuplicateName(name: ShipName)
   case RepeatedMember(ship: ShipName, member: ProjectName)
   case InTwoShips(member: ProjectName, first: ShipName, second: ShipName)
-  case MixedScheme
 
   def message: String = this match
     case DuplicateName(name)          => s"ship '${name.value}' is declared twice"
@@ -156,6 +138,4 @@ enum CatalogError:
       s"ship '${ship.value}' lists '${member.value}' twice"
     case InTwoShips(member, first, second) =>
       s"'${member.value}' is in ship '${first.value}' and ship '${second.value}'"
-    case MixedScheme =>
-      "a catalog is either early-effect ships or manual versions, and this one is both"
 end CatalogError

@@ -132,7 +132,6 @@ import histos.version.{
   BranchError,
   CiVersion,
   CommitShaError,
-  ManualVersion,
   PullRequestError,
   Refusal,
   RegistryError,
@@ -338,7 +337,6 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given Schema[RepoPath]       = text("RepoPath")
   given Schema[Organization]   = text("Organization")
   given Schema[ToolRevision]   = text("ToolRevision")
-  given Schema[ManualVersion]  = text("ManualVersion")
   given Schema[TestMain]       = text("TestMain")
   given Schema[FrameworkClass] = text("FrameworkClass")
   given Schema[MainClass]      = text("MainClass")

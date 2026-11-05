@@ -80,7 +80,7 @@ object DoctorSurface:
   ): List[DoctorCheck] =
     val pins   = pinCheck(repo, graph)
     val github = githubCheck(repo, graph, hit)
-    val all    = histos.doctor.Registry.collect(graph, List(pins, github))
+    val all    = histos.doctor.Registry.collect(graph, pins :: github :: shipChecks(repo, graph))
     request.preflight match
       case Some(job) => preflight(job)
       case None      =>
@@ -100,6 +100,33 @@ object DoctorSurface:
             case _ =>
               ZIO.succeed(List(Outcome.Ok(id, s"$job preflight")))
     )
+
+  private def shipChecks(repo: Path, graph: ProjectGraph): List[DoctorCheck] =
+    val file = repo.resolve(histos.version.VersionTask.fileName)
+    List(
+      shipCheck(graph, "ship.session", file, (catalog, env, _) =>
+        List(histos.doctor.ShipChecks.session(catalog, env))
+      ),
+      shipCheck(graph, "ship.releases", file, (catalog, _, releases) =>
+        List(histos.doctor.ShipChecks.releases(catalog, releases))
+      ),
+      shipCheck(graph, "ship.should-bump", file, (catalog, _, releases) =>
+        histos.doctor.ShipChecks.bumps(catalog, releases)
+      ),
+    )
+
+  private def shipCheck(
+      graph: ProjectGraph,
+      raw: String,
+      file: Path,
+      pick: (histos.version.Catalog, Map[String, String], histos.doctor.ReleasesFile) => List[Outcome],
+  ): DoctorCheck =
+    new DoctorCheck:
+      def id                      = CheckId.trusted(raw)
+      def area                    = Area.Release
+      def needs                   = Set(Probe.Local)
+      def run(ctx: DoctorContext) =
+        histos.doctor.ShipChecks.read(file).map(releases => pick(graph.catalog, sys.env, releases))
 
   private def pinCheck(repo: Path, graph: ProjectGraph): DoctorCheck =
     new DoctorCheck:
@@ -273,6 +300,7 @@ object DoctorSurface:
       case Area.Workflows       => "workflows"
       case Area.RepoSettings    => "repo"
       case Area.SitePublish     => "site"
+      case Area.Release         => "release"
       case Area.Plugin(id)      => id.value
 
   private def repoName(repo: Path): String =

@@ -4,7 +4,7 @@ import histos.cache.ContentStore
 import histos.central.{DeploymentState, PortalBase, PortalServer, Publisher, ReleaseMode, RepositorySecret}
 import histos.load.{ApiJar, Loader}
 import histos.resolve.Resolve
-import histos.version.{Catalog, ManualVersion}
+import histos.version.Catalog
 import histos.zinc.GraphCompile
 import histos.{
   ArtifactBase,
@@ -78,7 +78,7 @@ object ReleaseSpec extends ZIOSpecDefault:
   private val scala3 = ScalaVersion("3.10.0")
 
   private val hold =
-    test("a snapshot ship is refused and the release ship is held, then promote publishes it once"):
+    test("a release is held, then promote publishes it once"):
       ZIO.scoped {
         for
           jdk    <- GraphCompile.jdkHere
@@ -88,16 +88,14 @@ object ReleaseSpec extends ZIOSpecDefault:
           secret <- secretOf
           bound  <- PortalServer.open(portal, secret, hits.update(_ + 1))
           key    <- Keys.signing
-          built  <- ZIO.fromEither(mixed)
+          built  <- ZIO.fromEither(library)
           _      <- plant(
             root,
             built,
             List(
               "core/src/main/scala/demo/Hello.scala" -> hello,
-              "lib/src/main/scala/lib/Lib.scala"     -> libSource,
-              "app/src/main/scala/demo/App.scala"    -> appSource,
             ),
-            "cell core 3.10.0 jvm\ncell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n",
+            "cell core 3.10.0 jvm\n",
           )
           env = signing(bound.url, key.armor)
           report   <- publish(root, built, jdk, env, ReleaseMode.Hold)
@@ -105,7 +103,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           record   <- text(deployment(root, "libs"))
           state    <- states(portal, ids)
           marker   <- exists(published(portal, "core_3", "1.0.0"))
-          releases <- exists(root.resolve("releases"))
+          registry <- text(root.resolve("releases"))
           promoted <- report.deployed match
             case List(deployed) =>
               PublishRun.promote(root, env, deployed.id.value, _ => ZIO.unit) *>
@@ -117,8 +115,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           again  <- publish(root, built, jdk, env, ReleaseMode.Hold)
           stayed <- deploymentIds(portal)
         yield assertTrue(
-          report.refused.contains("snaps is 1.2.3-SNAPSHOT, which is not a release"),
-          report.refused.contains("tool depends on snapshot lib, so it is not published"),
+          report.refused.isEmpty,
           report.failed.isEmpty,
           report.deployed.map(item => (item.ship.value, item.state, item.version)) == List(
             ("libs", DeploymentState.Validated, "1.0.0")
@@ -127,7 +124,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           state == List("VALIDATED"),
           record == file(report.deployed.map(_.id.value), "VALIDATED", "1.0.0"),
           !marker,
-          !releases,
+          registry.isEmpty,
           after == file(report.deployed.map(_.id.value), "PUBLISHED", "1.0.0"),
           publishedState == List("PUBLISHED"),
           marked,
@@ -215,7 +212,8 @@ object ReleaseSpec extends ZIOSpecDefault:
             ),
             "cell core 3.10.0 jvm\ncell site 3.10.0 jvm\n",
           )
-          env = signing(bound.url, key.armor)
+          env = signing(bound.url, key.armor) + ("HISTOS_SESSION" -> "release")
+          _      <- ZIO.attempt(Files.writeString(root.resolve("releases"), "")).orDie
           staged <- ReleaseRun
             .stage(root, built, Nil, jdk, env, _ => ZIO.unit)
             .provideSomeLayer[histos.resolve.LockedTools & Scope](
@@ -230,7 +228,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           found    <- ZIO.foreach(ids)(id => token(portal, id).map(id -> _))
           good     <- text(deployment(root, "libs"))
           extra    <- exists(deployment(root, "extra"))
-          releases <- exists(root.resolve("releases"))
+          registry <- text(root.resolve("releases"))
         yield
           val failed = found.collect { case (id, "FAILED") => id }
           val held   = found.collect { case (id, "VALIDATED") => id }
@@ -243,7 +241,7 @@ object ReleaseSpec extends ZIOSpecDefault:
             ),
             good == file(held, "VALIDATED", "1.0.0"),
             !extra,
-            !releases,
+            registry.isEmpty,
             lines.exists(_.startsWith("signing ")),
             lines.exists(_.startsWith("bundling ")),
             lines.exists(_.startsWith("uploading ")),
@@ -403,7 +401,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           state  <- states(portal, if id.isEmpty then Nil else List(id))
           record <- text(deployment(root, "tool"))
           staged <- LocalPublish
-            .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+            .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
             .provideSomeLayer[histos.resolve.LockedTools](
               histos.ToolFixture.resolver ++ Publisher.local(maven)
             )
@@ -526,8 +524,12 @@ object ReleaseSpec extends ZIOSpecDefault:
         new histos.HistosBuild:
           def graph: Either[histos.BuildError, histos.ProjectGraph] = Right(built)
           override def sona                                         = histos.Sona.layer(histos.ReleaseMode.Hold)
-    PublishRun
-      .release(root, built, build, Nil, jdk, env, false, _ => ZIO.unit, _ => ZIO.unit)
+    val session = if env.contains("HISTOS_SESSION") then env else env + ("HISTOS_SESSION" -> "release")
+    ZIO.attempt {
+      val file = root.resolve("releases")
+      if !Files.exists(file) then Files.writeString(file, "")
+    }.mapError(thrown => ReleaseError.Io(thrown.toString)) *> PublishRun
+      .release(root, built, build, Nil, jdk, session, false, _ => ZIO.unit, _ => ZIO.unit)
       .provideSomeLayer[histos.resolve.LockedTools](histos.ToolFixture.resolver)
 
   private def signing(url: String, armor: Chunk[Byte]): Map[String, String] =
@@ -595,32 +597,17 @@ object ReleaseSpec extends ZIOSpecDefault:
       .developer(developerValue)
       .scm(scmValue)(catalog, modules*)
 
-  private val mixed =
-    val core = module("core", Jvm)(scala3)
-    val lib  = module("lib", Jvm)(scala3)
-    val app  = module("app", Jvm)(scala3).dependsOn(lib)
-    released(
-      histos.ships(
-        histos.manual("libs", ManualVersion("1.0.0"))(core),
-        histos.manual("snaps", ManualVersion("1.2.3-SNAPSHOT"))(lib),
-        histos.manual("tool", ManualVersion("2.0.0"))(app),
-      ),
-      core,
-      lib,
-      app,
-    )
-
   private val library =
     val core = module("core", Jvm)(scala3)
-    released(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)), core)
+    released(histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core)), core)
 
   private val pair =
     val core = module("core", Jvm)(scala3)
     val site = module("site", Jvm)(scala3)
     released(
       histos.ships(
-        histos.manual("libs", ManualVersion("1.0.0"))(core),
-        histos.manual("extra", ManualVersion("2.0.0"))(site),
+        histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core),
+        histos.ship("extra", histos.version.ShipNumber("2.0.0"))(site),
       ),
       core,
       site,
@@ -639,8 +626,8 @@ object ReleaseSpec extends ZIOSpecDefault:
       .libraryDependencies(Dep("com.example:left:1.2.3-SNAPSHOT"))
     released(
       histos.ships(
-        histos.manual("tool", ManualVersion("1.0.0"))(core, program),
-        histos.manual("plug", ManualVersion("2.0.0"))(plug),
+        histos.ship("tool", histos.version.ShipNumber("1.0.0"))(core, program),
+        histos.ship("plug", histos.version.ShipNumber("2.0.0"))(plug),
       ),
       core,
       inside,
@@ -655,7 +642,7 @@ object ReleaseSpec extends ZIOSpecDefault:
       .assembly(MainClass("demo.App"))
       .asset(asset"dist/histos.jar")
       .dependsOn(library)
-    released(histos.ships(histos.manual("histos", ManualVersion("1.0.0"))(library, program)), library, program)
+    released(histos.ships(histos.ship("histos", histos.version.ShipNumber("1.0.0"))(library, program)), library, program)
 
   private def repository: ZIO[Any, Throwable, Path] =
     System
@@ -725,7 +712,7 @@ object ReleaseSpec extends ZIOSpecDefault:
     graph.catalog match
       case Catalog.Lines(ship :: rest) =>
         rest.isEmpty && ship.name.value == "histos" && ship.number.render == "0.2.0"
-      case Catalog.Empty | Catalog.Manual(_) => false
+      case Catalog.Empty => false
 
   private def recorded(graph: histos.ProjectGraph): List[(String, Option[String])] =
     graph.projects.collect:

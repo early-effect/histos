@@ -881,32 +881,39 @@ object CliSpec extends ZIOSpecDefault:
           ),
         )
     ,
-    test("a manual version does not need a commit or a registry file"):
+    test("a line catalog derives a snapshot from the session and an empty releases file"):
       ZIO.scoped:
+        val env = Map(
+          "HISTOS_SESSION" -> "snapshot",
+          "HISTOS_SHA"     -> "1234567890abcdef1234567890abcdef12345678",
+          "HISTOS_BRANCH"  -> "default",
+        )
         for
           jar <- apiJar
           dir <- repo
           _   <- ZIO
-            .attempt(
+            .attempt {
               Files.writeString(
                 dir.resolve("histos.scala"),
                 """import histos.*
                 |object build extends HistosBuild:
                 |  def graph =
                 |    val core = module("core", Jvm)(scala"3.9.0")
-                |    Projects(ships(manual("libs", manual"1.2.3-SNAPSHOT")(core)), core)
+                |    Projects(ships(Ship("libs").next(1, 2, 3)(core)), core)
                 |""".stripMargin,
               )
-            )
+              Files.writeString(dir.resolve("releases"), "")
+            }
             .mapError(t => LoadError.Io(IoFailure(Path.of("."), IoFault.Temp)))
           done <- Cli
             .execute(List("run", "versions"), dir, jar)
-            .provideSome[Scope](layers(dir))
+            .provideSome[Scope](layers(dir, env))
         yield assertTrue(
           done.exit == CliExit.Success,
-          done.out.contains("session manual"),
-          done.out.contains("compile 1.2.3-SNAPSHOT publish 1.2.3-SNAPSHOT"),
-          !done.out.contains("-ci"),
+          done.out.contains("session snapshot default"),
+          done.out.contains("publish 1.2.3-1234567890ab-SNAPSHOT"),
+          done.out.contains("pointer 1.2.3-SNAPSHOT"),
+          done.out.contains("compile 1.2.3-ci"),
           done.err.isEmpty,
         )
     ,
@@ -1409,7 +1416,7 @@ object CliSpec extends ZIOSpecDefault:
           val workflow = utf8(rendered)
           assertTrue(
             launcher(loaded.graph),
-            pin.version == "0.0.1-SNAPSHOT",
+            pin.version == "0.0.1",
             local.exit == CliExit.Success,
             local.err.isEmpty,
             localPosix == posix,
@@ -1704,7 +1711,7 @@ object CliSpec extends ZIOSpecDefault:
         yield assertTrue(done.exit == CliExit.LoadFailed),
   )
 
-  private val launcherLock = "histos.version=0.0.1-SNAPSHOT\n"
+  private val launcherLock = "histos.version=0.0.1\n"
 
   /** The version a temp checkout runs. Plants the pointer when the file is not there yet. */
   private def runVersion(dir: Path): IO[String, String] =
@@ -1760,7 +1767,7 @@ object CliSpec extends ZIOSpecDefault:
       |      .assembly(MainClass("histos.cli.Main"))
       |    Projects
       |      .organization(organization"rocks.earlyeffect")(
-      |        ships(manual("histos", manual"0.0.1-SNAPSHOT")(api)),
+      |        ships(Ship("histos").next(0, 0, 1)(api)),
       |        api,
       |        app
       |      )

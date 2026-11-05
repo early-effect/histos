@@ -48,12 +48,7 @@ enum Decision:
   case Publish(kind: PublishKind, lines: ::[PublishLine])
   case Refused(refusals: ::[Refusal])
 
-  /** The build stated these versions. Git and the registry are not involved. */
-  case Manual(lines: ::[ManualLine])
 end Decision
-
-/** One manually versioned ship. Compile and publish use the same coordinate. */
-final case class ManualLine(ship: ShipName, version: ManualVersion)
 
 object Decision:
   /** The versions line for one ship, including a hold and its reason. */
@@ -67,8 +62,6 @@ object Decision:
       (kindText(kind) :: lines.map(publishText).toList).mkString("\n")
     case Decision.Refused(refusals) =>
       refusalText(refusals)
-    case Decision.Manual(lines) =>
-      ("session manual" :: lines.map(manualText).toList).mkString("\n")
 
   def refusalText(refusals: ::[Refusal]): String =
     refusals.map(oneRefusal).mkString("\n")
@@ -110,12 +103,9 @@ object Decision:
         s"compile ${compile.render} hold already-released"
     s"${line.ship.value} $body"
 
-  private def manualText(line: ManualLine): String =
-    s"${line.ship.value} compile ${line.version.value} publish ${line.version.value}"
-
   private def oneRefusal(refusal: Refusal): String = refusal match
     case Refusal.Unchecked =>
-      "the release registry was not checked, so nothing publishes"
+      ShipAdvice.unchecked
     case Refusal.Shadowed(ship, number) =>
       s"${ship.value} ${number.render} is released and has changes since its tag, so nothing publishes"
     case Refusal.Unproven(ship, number) =>
@@ -138,7 +128,7 @@ enum VersionError:
     case UnknownShip(name) =>
       s"ship '${name.value}' is in releases and not in the catalog"
     case Refused(refusals) => Decision.refusalText(refusals)
-    case Unreadable        => "could not read releases"
+    case Unreadable        => ShipAdvice.unreadable
     case Config(error)     => s"configuration: ${configText(error)}"
 
   private def configText(error: zio.Config.Error): String =
@@ -156,8 +146,8 @@ end VersionError
 object Versions:
   def assess(catalog: Catalog, source: SessionSource, evidence: Evidence): Either[VersionError, Decision] =
     catalog match
-      case Catalog.Empty | Catalog.Manual(_) => Right(decide(catalog, Session.Development, Evidence.Unchecked))
-      case Catalog.Lines(_)                  =>
+      case Catalog.Empty    => Right(decide(catalog, Session.Development, Evidence.Unchecked))
+      case Catalog.Lines(_) =>
         Session
           .from(source)
           .left
@@ -172,17 +162,11 @@ object Versions:
 
   def decide(catalog: Catalog, session: Session, evidence: Evidence): Decision =
     catalog match
-      case Catalog.Empty         => Decision.NoCatalog
-      case Catalog.Manual(ships) => Decision.Manual(manualLines(ships))
-      case Catalog.Lines(ships)  =>
+      case Catalog.Empty        => Decision.NoCatalog
+      case Catalog.Lines(ships) =>
         evidence match
           case Evidence.Unchecked         => unchecked(session, ships)
           case Evidence.Checked(registry) => checked(session, ships, registry)
-
-  private def manualLines(ships: ::[Ship.Manual]): ::[ManualLine] =
-    ships match
-      case ship :: rest =>
-        ::(ManualLine(ship.name, ship.version), rest.map(item => ManualLine(item.name, item.version)))
 
   private def unchecked(session: Session, ships: ::[Ship.Line]): Decision =
     session match

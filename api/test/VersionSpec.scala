@@ -211,20 +211,6 @@ object VersionSpec extends ZIOSpecDefault:
           unproven == Right(Decision.Refused(::(Refusal.Unproven(fixture.libs, number), Nil))),
         )
     ,
-    test("a manual catalog publishes the stated version and does not read git"):
-      use: fixture =>
-        val stated   = ManualVersion("1.2.3-SNAPSHOT")
-        val catalog  = Catalog.from(List(Ship.Manual(fixture.libs, stated, ::(fixture.core, Nil))))
-        val decided  = catalog.map(Versions.decide(_, Session.Snapshot(sha, Branch.Default), Evidence.Unchecked))
-        val assessed = catalog.map(
-          Versions.assess(_, SessionSource(Some("snapshot"), None, None, None), Evidence.Unchecked)
-        )
-        val manual = Decision.Manual(::(ManualLine(fixture.libs, stated), Nil))
-        assertTrue(
-          decided == Right(manual),
-          assessed == Right(Right(manual)),
-        )
-    ,
     test("a publish does not run until the registry has been read"):
       use: fixture =>
         val snapshot = Versions.decide(fixture.one, Session.Snapshot(sha, Branch.Default), Evidence.Unchecked)

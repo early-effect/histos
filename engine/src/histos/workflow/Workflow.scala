@@ -330,13 +330,14 @@ object Workflow:
         case ship :: Nil => Some(ship)
         case _           => None
 
+  /** The catalog number is the next release. A snapshot is a session, not a catalog row. */
   private def releaseVersion(ship: Ship): Boolean =
-    !shipVersion(ship).endsWith("-SNAPSHOT")
+    ship match
+      case _: Ship.Line => true
 
   private def shipVersion(ship: Ship): String =
     ship match
-      case Ship.Line(_, number, _, _, _)    => number.render
-      case Ship.Manual(_, version, _, _, _) => version.value
+      case Ship.Line(_, number, _, _, _) => number.render
 
   private def assetMember(graph: ProjectGraph, ship: Ship): Boolean =
     ship.members.toList.exists: name =>

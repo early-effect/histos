@@ -401,11 +401,6 @@ object Plan:
               acc.flatMap: seen =>
                 membersOf(catalog, line.ship).map: mods =>
                   seen :+ ShipWord.Publish(line.ship, line.compile.render, mods)
-      case Decision.Manual(lines) =>
-        lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
-          acc.flatMap: seen =>
-            membersOf(catalog, line.ship).map: mods =>
-              seen :+ ShipWord.Publish(line.ship, line.version.value, mods)
       case Decision.Publish(_, lines) =>
         lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
           acc.flatMap: seen =>

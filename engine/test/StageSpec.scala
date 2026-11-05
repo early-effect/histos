@@ -3,7 +3,7 @@ package histos.publish
 import histos.central.{Digest, Publisher}
 import histos.doc.DocTask
 import histos.pack.AssemblyError
-import histos.version.ManualVersion
+import histos.version.ShipNumber
 import histos.zinc.GraphCompile
 import histos.{
   ArtifactBase,
@@ -72,12 +72,13 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "core/src/main/scala/demo/Hello.scala", hello)
               write(root, "core/src/test/scala/demo/HelloTest.scala", "package demo\n\nobject HelloTest\n")
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(published)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
@@ -128,18 +129,43 @@ object StageSpec extends ZIOSpecDefault:
             repo <- temp
             _    <- ZIO.attempt {
               write(root, "core/src/main/scala/demo/Hello.scala", hello)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(snapshot)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Snapshots)
+              .run(
+                root,
+                built,
+                Nil,
+                jdk,
+                Map(
+                  "HISTOS_SESSION" -> "snapshot",
+                  "HISTOS_SHA"     -> "1234567890abcdef1234567890abcdef12345678",
+                  "HISTOS_BRANCH"  -> "default",
+                ),
+                PublishWrite.Snapshots,
+              )
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
             found <- files(repo)
-          yield assertTrue(
-            found == coordinateFiles("com/example/core_3/1.0.0-SNAPSHOT", "core_3", "1.0.0-SNAPSHOT", docs = false),
+          yield
+            val pointer = coordinateFiles(
+              "com/example/core_3/1.0.0-SNAPSHOT",
+              "core_3",
+              "1.0.0-SNAPSHOT",
+              docs = false,
+            )
+            val stored = coordinateFiles(
+              "com/example/core_3/1.0.0-1234567890ab-SNAPSHOT",
+              "core_3",
+              "1.0.0-1234567890ab-SNAPSHOT",
+              docs = false,
+            )
+            assertTrue(
+            found == (pointer ++ stored).sorted,
             !found.exists(_.contains("javadoc")),
           )
       ,
@@ -151,12 +177,13 @@ object StageSpec extends ZIOSpecDefault:
             repo <- temp
             _    <- ZIO.attempt {
               write(root, "core/src/main/scala/demo/Hello.scala", broken)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell core 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(published)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
@@ -182,12 +209,13 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "plug/src/main/scala/demo/Plug.scala", plug)
               write(root, "plug/src/main/resources/sbt/sbt.autoplugins", descriptor)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell plug 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(pluginProject)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
@@ -217,12 +245,13 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "lib/src/main/scala/lib/Lib.scala", lib)
               write(root, "app/src/main/scala/demo/App.scala", app)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(assemblyProject)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
@@ -259,12 +288,13 @@ object StageSpec extends ZIOSpecDefault:
             _    <- ZIO.attempt {
               write(root, "lib/src/main/scala/lib/Lib.scala", lib)
               write(root, "app/src/main/scala/demo/App.scala", app)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell lib 3.10.0 jvm\ncell app 3.10.0 jvm\n")
             }
             built <- ZIO.fromEither(applicationProject)
             _     <- histos.ToolFixture.seed(root, built)
             _     <- LocalPublish
-              .run(root, built, Nil, jdk, Map.empty, PublishWrite.Local)
+              .run(root, built, Nil, jdk, Map("HISTOS_SESSION" -> "release"), PublishWrite.Local)
               .provideSomeLayer[histos.resolve.LockedTools](
                 histos.ToolFixture.resolver ++ Publisher.local(repo)
               )
@@ -297,6 +327,7 @@ object StageSpec extends ZIOSpecDefault:
             repo <- temp
             _    <- ZIO.attempt {
               write(root, "app/src/main/scala/demo/Other.scala", other)
+              write(root, "releases", "")
               write(root, "dependencies.lock", "cell app 3.10.0 jvm\n")
             }
             built   <- ZIO.fromEither(missingMain)
@@ -359,7 +390,7 @@ object StageSpec extends ZIOSpecDefault:
 
   private val pluginProject =
     val plug = module("plug", Jvm)(ScalaVersion("3.10.0")).sbtPlugin(SbtSeries("2"))
-    released(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(plug)), plug)
+    released(histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(plug)), plug)
 
   private val assemblyProject =
     val library = module("lib", Jvm)(ScalaVersion("3.10.0"))
@@ -367,15 +398,15 @@ object StageSpec extends ZIOSpecDefault:
       .artifact(ArtifactBase("tool"))
       .assembly(MainClass("demo.App"))
       .dependsOn(library)
-    released(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(library, program)), library, program)
+    released(histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(library, program)), library, program)
 
   private val applicationProject =
     val library = module("lib", Jvm)(ScalaVersion("3.10.0"))
     val program = module("app", Jvm)(ScalaVersion("3.10.0")).application.dependsOn(library)
     released(
       histos.ships(
-        histos.manual("libs", ManualVersion("1.5.0"))(library),
-        histos.manual("tool", ManualVersion("2.0.0"))(program),
+        histos.ship("libs", histos.version.ShipNumber("1.5.0"))(library),
+        histos.ship("tool", histos.version.ShipNumber("2.0.0"))(program),
       ),
       library,
       program,
@@ -385,7 +416,7 @@ object StageSpec extends ZIOSpecDefault:
     val program = module("app", Jvm)(ScalaVersion("3.10.0")).assembly(MainClass("demo.Missing"))
     Projects
       .organization(Organization("com.example"))(
-        histos.ships(histos.manual("tool", ManualVersion("0.0.1-SNAPSHOT"))(program)),
+        histos.ships(histos.ship("tool", ShipNumber("0.0.1"))(program)),
         program,
       )
 
@@ -399,7 +430,7 @@ object StageSpec extends ZIOSpecDefault:
   private val snapshot =
     val core = module("core", Jvm)(ScalaVersion("3.10.0"))
     Projects.organization(Organization("com.example"))(
-      histos.ships(histos.manual("libs", ManualVersion("1.0.0-SNAPSHOT"))(core)),
+      histos.ships(histos.ship("libs", ShipNumber("1.0.0"))(core)),
       core,
     )
 
@@ -410,7 +441,7 @@ object StageSpec extends ZIOSpecDefault:
       .license(licenseValue)
       .developer(developerValue)
       .scm(scmValue)(
-        histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)),
+        histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core)),
         core,
       )
 

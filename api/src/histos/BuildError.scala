@@ -72,7 +72,6 @@ enum BuildError:
       second: ShipName,
       position: SourcePos,
   )
-  case MixedScheme(position: SourcePos)
   case DuplicateResolver(token: String)
   case MixedTest(name: ProjectName, position: SourcePos)
   case DuplicateDirectory(
@@ -149,9 +148,7 @@ enum BuildError:
       s"ship '${ship.value}' lists aggregate '${aggregate.value}' (${position.line}:${position.column})"
     case MemberInTwoShips(member, first, second, position) =>
       s"'${member.value}' is in ship '${first.value}' and ship '${second.value}' (${position.line}:${position.column})"
-    case MixedScheme(position) =>
-      s"a catalog is either early-effect ships or manual versions, and this one is both (${position.line}:${position.column})"
-    case DuplicateResolver(token)  => s"repository $token is listed twice"
+    case DuplicateResolver(token) => s"repository $token is listed twice"
     case MixedTest(name, position) =>
       s"'${name.value}' names a test main and a test provider (${position.line}:${position.column})"
     case DuplicateDirectory(name, other, directory) =>

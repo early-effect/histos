@@ -1,7 +1,7 @@
 package histos.publish
 
 import histos.central.{DeploymentId, DeploymentState, Finding, Gav, PortalServer, PortalStore}
-import histos.version.{ManualVersion, ShipName}
+import histos.version.ShipName
 import histos.{Jvm, MainClass, Projects, ScalaVersion, asset, module}
 
 import java.nio.charset.StandardCharsets
@@ -21,7 +21,7 @@ object AssetSpec extends ZIOSpecDefault:
   private val one =
     val api = module("api", Jvm)(scala3)
     val app = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).asset(asset"dist/histos.jar")
-    Projects(histos.ships(histos.manual("histos", ManualVersion("1.0.0"))(api, app)), api, app)
+    Projects(histos.ships(histos.ship("histos", histos.version.ShipNumber("1.0.0"))(api, app)), api, app)
 
   private val pair =
     val api  = module("api", Jvm)(scala3)
@@ -29,8 +29,8 @@ object AssetSpec extends ZIOSpecDefault:
     val site = module("site", Jvm)(scala3).assembly(MainClass("demo.Site")).asset(asset"dist/site.jar")
     Projects(
       histos.ships(
-        histos.manual("histos", ManualVersion("1.0.0"))(api, app),
-        histos.manual("pages", ManualVersion("1.0.0"))(site),
+        histos.ship("histos", histos.version.ShipNumber("1.0.0"))(api, app),
+        histos.ship("pages", histos.version.ShipNumber("1.0.0"))(site),
       ),
       api,
       app,
@@ -39,12 +39,12 @@ object AssetSpec extends ZIOSpecDefault:
 
   private val libs =
     val core = module("core", Jvm)(scala3)
-    Projects(histos.ships(histos.manual("libs", ManualVersion("1.0.0"))(core)), core)
+    Projects(histos.ships(histos.ship("libs", histos.version.ShipNumber("1.0.0"))(core)), core)
 
   private val doubled =
     val app  = module("app", Jvm)(scala3).assembly(MainClass("demo.App")).asset(asset"dist/histos.jar")
     val tool = module("tool", Jvm)(scala3).assembly(MainClass("demo.Tool")).asset(asset"out/histos.jar")
-    Projects(histos.ships(histos.manual("histos", ManualVersion("1.0.0"))(app, tool)), app, tool)
+    Projects(histos.ships(histos.ship("histos", histos.version.ShipNumber("1.0.0"))(app, tool)), app, tool)
 
   private val validated =
     test("a validated deployment uploads the jar and leaves the record"):

@@ -212,8 +212,7 @@ object AssetRun:
 
   private def versionOf(ship: Ship): String =
     ship match
-      case Ship.Manual(_, version, _, _, _) => version.value
-      case Ship.Line(_, number, _, _, _)    => number.render
+      case Ship.Line(_, number, _, _, _) => number.render
 
   private def accessOf(env: Map[String, String]): Either[AssetError, Access] =
     val token = env.get("GITHUB_TOKEN").filter(_.nonEmpty)
