@@ -40,7 +40,7 @@ object LauncherSpec extends ZIOSpecDefault:
         )
       )
     ,
-    test("the committed scripts are the manual ship"):
+    test("the committed scripts are the ship number"):
       ZIO.scoped {
         for
           root <- repository

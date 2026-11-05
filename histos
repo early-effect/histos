@@ -1,9 +1,9 @@
 #!/bin/sh
-# Generated from the manual ship. `histos workflow --update` rewrites this file.
+# Generated from the ship number. `histos workflow --update` rewrites this file.
 # A local assembly is checked against .histos/assembly.sha256. Otherwise the user shim runs.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-version=0.2.0-SNAPSHOT
+version=0.2.0
 fail() { echo "histos $version: $*" >&2; exit 1; }
 hash_of() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
