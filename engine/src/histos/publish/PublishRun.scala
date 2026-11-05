@@ -53,8 +53,14 @@ object PublishRun:
           ZIO.fromEither(PublishWhere.snapshots(env)).tapError(error => note(error.message)).unit
         )
         staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, report, note)
-        lines  <- localLines(repo, staged, layer)
-      yield Report(show(staged, lines))
+        plans  <- ZIO
+          .fromEither(DistChannel.plan(graph, staged.output.modules))
+          .tapError(error => note(error.message))
+        _     <- ZIO.fromEither(DistChannel.ready(repo, env, plans)).tapError(error => note(error.message))
+        lines <- localLines(repo, staged, layer)
+        _     <- ZIO.foreachDiscard(plans)(plan => note(s"uploading ${DistLayout.channel(plan.pointer)}"))
+        noted <- DistChannel.upload(repo, env, plans, lines).tapError(error => note(error.message))
+      yield Report(show(staged, lines) ++ noted)
 
   def release(
       repo: Path,
