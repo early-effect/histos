@@ -165,6 +165,18 @@ object WorkflowSpec extends ZIOSpecDefault:
         golden.contains("./histos test"),
         golden.contains("contents: read"),
         golden.contains("workflow --check"),
+        {
+          val job = slice(golden, "  workflow:", "  supply-chain:").getOrElse("")
+          val head = job.indexOf("./.github/actions/origin-head")
+          val check = job.indexOf("workflow --check")
+          head >= 0 && check > head
+        },
+        {
+          val job = slice(golden, "  supply-chain:", "").getOrElse("")
+          val head = job.indexOf("./.github/actions/origin-head")
+          val check = job.indexOf("workflow --check")
+          head >= 0 && check > head
+        },
         !golden.contains("setup-java"),
         !golden.contains("setup-node"),
         !golden.contains("llvm.tar.xz"),

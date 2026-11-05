@@ -32,6 +32,9 @@ object ActionPins:
 
   val localSetup: String = "./.github/actions/setup"
 
+  /** After checkout, before a step that renders a workflow. A shallow pull-request checkout does not set this ref. */
+  val originHead: String = "./.github/actions/origin-head"
+
   def line(name: ActionName, pin: ActionPin): String =
     s"${name.value}@${pin.sha.value} # ${pin.tag}"
 

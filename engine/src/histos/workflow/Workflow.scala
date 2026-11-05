@@ -1236,6 +1236,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
+      s"      - uses: ${ActionPins.originHead}",
       s"      - uses: $Setup",
     ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
       "      - run: ./histos doctor",

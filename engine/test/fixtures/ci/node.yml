@@ -119,6 +119,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/origin-head
       - uses: ./.github/actions/setup
       - run: ./histos doctor --preflight workflow
       - run: ./histos doctor
@@ -130,6 +131,7 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/origin-head
       - uses: ./.github/actions/setup
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

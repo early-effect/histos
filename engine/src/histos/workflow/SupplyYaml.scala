@@ -35,6 +35,7 @@ object SupplyYaml:
     ) ++ issues ++ List(
       "    steps:",
       s"      - uses: ${ActionPins.checkout.line}",
+      s"      - uses: ${ActionPins.originHead}",
       s"      - uses: ${ActionPins.localSetup}",
       s"      - uses: ${ActionPins.cache.line}",
       "        with:",
@@ -126,6 +127,7 @@ object SupplyYaml:
       s"      - uses: ${ActionPins.checkout.line}",
       "        with:",
       "          persist-credentials: false",
+      s"      - uses: ${ActionPins.originHead}",
       s"      - uses: ${ActionPins.localSetup}",
     ) ++ Workflow.buildAssembly(graph) ++ opened ++ List(
       "      - run: ./histos deps update --yes",
