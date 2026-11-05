@@ -88,7 +88,7 @@ object build extends HistosBuild:
         )
       )
       .docCheck(
-        ships(ship("histos", ship"0.2.0")(api, app)),
+        ships(Ship("histos").next(0, 2, 0)(api, app)),
         api,
         wire,
         client,
