@@ -1,6 +1,7 @@
 package histos.cli
 
 import heddle.LinePipe
+import histos.doctor.FaultText
 import histos.bsp.{Bsp, Connection, Frame}
 import histos.central.PortalServer
 import histos.build.{Beat, Build}
@@ -99,6 +100,7 @@ enum Command:
   case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
   case Deps(action: DepsAction)
   case Setup(from: Option[String], fix: Boolean, yes: Boolean)
+  case Help(words: List[String])
 
 enum DepsAction:
   case Check
@@ -110,8 +112,8 @@ enum DepsAction:
 
 enum CliParseError:
   case Help
-  case UnknownCommand
-  case UnknownRoot
+  case UnknownCommand(token: String, near: List[String])
+  case UnknownRoot(token: String)
   case MissingArgument
   case UnexpectedArguments
   case BadTaskId
@@ -130,23 +132,56 @@ enum CliParseError:
   case Rejected
 
   def message: String = this match
-    case Help | UnknownCommand | UnknownRoot | Rejected => Cli.usageText
-    case MissingArgument                                => "run needs one name"
-    case UnexpectedArguments                            => Cli.usageText
-    case BadTaskId                                      => "a task id is not empty"
-    case BadPluginTask(error)                           => error.message
-    case BadPlatform(error)                             => error.message
-    case TaskPlatform(name)                             => s"run $name does not take a platform"
-    case MissingPattern                                 => "testOnly needs a pattern"
-    case Pattern(detail)                                => detail
-    case ProjectName(error)                             => error.message
-    case SuitePattern(error)                            => error.message
-    case RunId(error)                                   => error.message
-    case Flag(error)                                    => error.message
-    case Namespace(error)                               => error.message
-    case WatchCommand(detail)                           => detail
-    case PublishForm                                    =>
+    case Help                        => histos.cli.Help.grouped
+    case UnknownCommand(token, near) => histos.cli.Help.unknown(token, if near.isEmpty then histos.cli.Help.names else near)
+    case UnknownRoot(token)          => histos.cli.Help.unknown(token)
+    case MissingArgument             => "run needs one name"
+    case UnexpectedArguments         => "unexpected arguments\nhistos help"
+    case BadTaskId                   => "a task id is not empty"
+    case BadPluginTask(error)        => error.message
+    case BadPlatform(error)          => error.message
+    case TaskPlatform(name)          => s"run $name does not take a platform"
+    case MissingPattern              => "testOnly needs a pattern"
+    case Pattern(detail)             => detail
+    case ProjectName(error)          => error.message
+    case SuitePattern(error)         => error.message
+    case RunId(error)                => error.message
+    case Flag(error)                 => error.message
+    case Namespace(error)            => error.message
+    case WatchCommand(detail)        => detail
+    case PublishForm                 =>
       "publish is snapshots, release, assets, promote, or drop"
+    case Rejected => "usage: histos help"
+
+  def diagnose: histos.doctor.Diagnostic = this match
+    case Help =>
+      histos.doctor.Noted.error(
+        "cli.help",
+        "histos help",
+        histos.cli.Help.grouped,
+        histos.doctor.Noted.command("histos help"),
+      )
+    case UnknownCommand(token, near) =>
+      val summary = if token.isEmpty then "unknown command" else s"unknown command '$token'"
+      val explain = near match
+        case Nil        => "histos help lists the commands.\nhistos help <command> prints one."
+        case one :: Nil => s"did you mean $one?\nhistos help\nhistos help $one"
+        case many       => s"did you mean ${many.mkString(" or ")}?\nhistos help"
+      val fix = near.headOption match
+        case Some(name) => histos.doctor.Noted.command(s"histos help $name")
+        case None       => histos.doctor.Noted.command("histos help")
+      histos.doctor.Noted.error("cli.unknown-command", summary, explain, fix)
+    case UnknownRoot(token) =>
+      histos.doctor.Noted.error(
+        "cli.unknown-command",
+        if token.isEmpty then "unknown command" else s"unknown command '$token'",
+        histos.cli.Help.unknown(token),
+        histos.doctor.Noted.command("histos help"),
+      )
+    case Rejected =>
+      histos.doctor.Noted.carry("cli.usage", message, "histos help lists the commands.", "histos help")
+    case other =>
+      histos.doctor.Noted.carry("cli.usage", other.message, other.message, "histos help")
 end CliParseError
 
 /** Heard text is already on the console. Held text is printed by finish. */
@@ -187,10 +222,10 @@ object Cli:
     Connection.ensure(repo).ignore *>
       parse(args).foldZIO(
         {
-          case CliParseError.UnknownRoot => contributed(args, repo, apiJar)
+          case CliParseError.UnknownRoot(_) => contributed(args, repo, apiJar)
           case detail                    =>
             ZIO.succeed(
-              Completed(CliExit.Usage, "", detail.message, Playback.Held)
+              Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held)
             )
         },
         command => perform(repo, apiJar, command),
@@ -287,10 +322,10 @@ object Cli:
         Connection.ensure(repo).ignore *>
           parse(args).foldZIO(
             {
-              case CliParseError.UnknownRoot =>
+              case CliParseError.UnknownRoot(_) =>
                 inProcess(repo)((api, machine) => withLocal(machine)(contributed(args, repo, api)))
               case detail =>
-                ZIO.succeed(Completed(CliExit.Usage, "", detail.message, Playback.Held))
+                ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held))
             },
             command => route(repo, command),
           )
@@ -390,18 +425,26 @@ object Cli:
         deps(repo, apiJar, action)
       case Command.Setup(from, fix, yes) =>
         ZIO.succeed(setup(repo, from, fix, yes))
+      case Command.Help(words) =>
+        ZIO.succeed(answered(words))
+
+  private def answered(words: List[String]): Completed =
+    Help.render(words) match
+      case Right(text) => Completed(CliExit.Success, s"$text\n", "", Playback.Held)
+      case Left(text)  => Completed(CliExit.Usage, "", text, Playback.Held)
 
   /** Loopback rehearsal of the Central portal. Does not load the graph. */
   private def portal(repo: Path): URIO[Machine & Scope, Completed] =
     ZIO.serviceWithZIO[Machine] { machine =>
       PortalServer.credentials(machine.env) match
         case Left(error) =>
-          ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message, Playback.Held))
+          ZIO.succeed(Completed(CliExit.PublishFailed, "", FaultText.show(error.diagnose), Playback.Held))
         case Right(secret) =>
           PortalServer
             .serve(repo.resolve(".histos").resolve("portal"), secret)
             .foldZIO(
-              error => ZIO.succeed(Completed(CliExit.PublishFailed, "", error.message, Playback.Held)),
+              error =>
+                ZIO.succeed(Completed(CliExit.PublishFailed, "", FaultText.show(error.diagnose), Playback.Held)),
               bound => say(bound.url) *> ZIO.never.as(Completed(CliExit.Success, bound.url, "", Playback.Heard)),
             )
     }
@@ -413,10 +456,10 @@ object Cli:
       .foldZIO(
         error =>
           Console
-            .printLineError(error.message)
+            .printLineError(FaultText.show(error.diagnose))
             .ignore
             .as(
-              Completed(CliExit.TaskFailed, "", error.message, Playback.Heard)
+              Completed(CliExit.TaskFailed, "", FaultText.show(error.diagnose), Playback.Heard)
             ),
         found =>
           Console
@@ -437,7 +480,7 @@ object Cli:
   ): URIO[Local, Completed] =
     Operation.operation(inner) match
       case Left(error) =>
-        ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
+        ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(error.diagnose), Playback.Held))
       case Right(call) =>
         attach(repo, Call.Watch(call), watchLocal(repo, apiJar, call))
 
@@ -455,7 +498,7 @@ object Cli:
             case CallResult.Reported(_) =>
               Completed(CliExit.from(Call.Watch(inner), done), "", "", Playback.Heard)
             case CallResult.Fault(fault) =>
-              Completed(CliExit.from(Call.Watch(inner), done), "", fault.message, Playback.Held)
+              Completed(CliExit.from(Call.Watch(inner), done), "", FaultText.show(fault.diagnose), Playback.Held)
           result.set(finished)
         case _ => ZIO.unit
       })
@@ -604,14 +647,14 @@ object Cli:
       case Beat.Heard(event) =>
         CompileConsole.show(Show(repo, event), say, sayError)
       case Beat.Finished(CallResult.Fault(fault)) =>
-        val text = fault.message
+        val text = FaultText.show(fault.diagnose)
         if text.isEmpty then ZIO.unit else sayError(text)
       case Beat.Finished(_) => ZIO.unit
 
   /** No server, so nothing was printed yet. Finish prints this once. */
   private def held(call: Call, out: String, result: CallResult): Completed =
     val err = result match
-      case CallResult.Fault(fault)     => fault.message
+      case CallResult.Fault(fault)     => FaultText.show(fault.diagnose)
       case CallResult.Reported(report) => report.err.mkString("\n")
     Completed(CliExit.from(call, result), out, err, Playback.Held)
 
@@ -1442,7 +1485,7 @@ object Cli:
         CompileConsole.show(Show(repo, event), say, sayError) *>
           feeds.update(_ :+ Feed.Event(event))
       case Message.Done(CallResult.Fault(fault)) =>
-        val text  = fault.message
+        val text  = FaultText.show(fault.diagnose)
         val shown = if text.isEmpty then ZIO.unit else sayError(text)
         shown *> feeds.update(_ :+ Feed.Done(CallResult.Fault(fault)))
       case Message.Done(result) =>
@@ -1454,7 +1497,7 @@ object Cli:
     val events               = feeds.collect { case Feed.Event(event) => event }
     val (outLines, errLines) = Show.transcript(repo, events)
     val faults               = feeds.collect {
-      case Feed.Done(CallResult.Fault(fault)) if fault.message.nonEmpty => fault.message
+      case Feed.Done(CallResult.Fault(fault)) if FaultText.show(fault.diagnose).nonEmpty => FaultText.show(fault.diagnose)
     }
     val out = outLines.mkString("\n")
     val err = (errLines ++ faults).mkString("\n")
@@ -1629,7 +1672,7 @@ object Cli:
             case CallResult.Reported(_) =>
               Completed(CliExit.from(call, done), "", "", Playback.Heard)
             case CallResult.Fault(fault) =>
-              Completed(CliExit.from(call, done), "", fault.message, Playback.Held)
+              Completed(CliExit.from(call, done), "", FaultText.show(fault.diagnose), Playback.Held)
           result.set(finished)
       } *> result.get
     }
@@ -1803,7 +1846,7 @@ object Cli:
           .parse(tokens)
           .either
           .flatMap:
-            case Left(CliParseError.UnknownRoot) =>
+            case Left(CliParseError.UnknownRoot(_)) =>
               ZIO
                 .serviceWithZIO[Loader](_.load(repo, apiJar))
                 .mapError(error => BuildFault.Load(error))
@@ -1831,10 +1874,7 @@ object Cli:
       plugin.contribution.commands.map(BoundCommand(plugin.id, _))
     PluginCommands.parse(commands, tokens) match
       case Left(error) =>
-        val text = error match
-          case CliParseError.Flag(_) => error.message
-          case _                     => PluginCommands.usage(commands)
-        TaskParsed.Usage(text)
+        TaskParsed.Usage(FaultText.show(error.diagnose))
       case Right((id, pluginArgs)) =>
         TaskParsed.Ready(Call.Task(id.render, pluginArgs))
 
@@ -2036,6 +2076,8 @@ object Cli:
         inProcessReady(repo)((api, machine) => withLoader(machine)(deps(repo, api, action)))
       case Command.Setup(from, fix, yes) =>
         ZIO.succeed(setup(repo, from, fix, yes))
+      case Command.Help(words) =>
+        ZIO.succeed(answered(words))
 
   /** A call the server can answer. The local build runs only when the socket does not. */
   private def served(repo: Path, call: Call): URIO[Scope, Completed] =

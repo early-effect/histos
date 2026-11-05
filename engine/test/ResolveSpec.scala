@@ -506,14 +506,13 @@ object ResolveSpec extends ZIOSpecDefault:
             .either
           touched = Files.exists(open.cache)
         yield assertTrue(
-          out == Left(
-            ResolveError.LockDrift(
-              open.cell.module,
-              open.cell.scalaVersion,
-              open.cell.platform,
-              ClasspathScope.Compile,
-            )
-          ),
+          out match
+            case Left(error @ ResolveError.LockDrift(module, version, platform, scope, changed)) =>
+              module == open.cell.module && version == open.cell.scalaVersion && platform == open.cell.platform &&
+              scope == ClasspathScope.Compile && changed.exists(_.contains("9.9.9")) &&
+              histos.doctor.FaultText.show(error.diagnose).contains("histos resolve --update")
+            case _ => false
+          ,
           !touched,
         )
     ,

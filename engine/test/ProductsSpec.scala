@@ -102,7 +102,7 @@ object ProductsSpec extends ZIOSpecDefault:
           bad = ProjectName.from("a/b")
         yield assertTrue(
           unknown match
-            case Left(SelectError.Unknown(name)) => name == missing
+            case Left(SelectError.Unknown(name, _)) => name == missing
             case _                               => false
           ,
           duplicate match

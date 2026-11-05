@@ -1,5 +1,6 @@
 package histos.resolve
 
+import histos.doctor.{Diagnostic, Noted, Suggest}
 import histos.jdk.Sha256
 import histos.plugin.PluginLoadError
 import histos.workspace.IoFailure
@@ -21,8 +22,9 @@ enum ResolveError:
       scalaVersion: ScalaVersion,
       platform: Platform,
       scope: ClasspathScope,
+      changed: List[String] = Nil,
   )
-  case PluginDrift(dependency: Dep)
+  case PluginDrift(dependency: Dep, changed: List[String] = Nil)
   case NoLock(path: Path)
   case UnsupportedPlatform(platform: Platform)
   case Lock(error: LockError)
@@ -45,9 +47,9 @@ enum ResolveError:
       s"$organization:$name:$revision was not found"
     case ResolveError.Checksum(path, _, _) =>
       s"checksum of $path does not match the lock"
-    case ResolveError.LockDrift(module, version, platform, scope) =>
+    case ResolveError.LockDrift(module, version, platform, scope, _) =>
       s"${scope.header} ${module.value} ${version.value} ${PlatformToken.render(platform)} does not match the dependency lock"
-    case ResolveError.PluginDrift(dependency) =>
+    case ResolveError.PluginDrift(dependency, _) =>
       s"${shown(dependency)} does not match the dependency lock"
     case ResolveError.NoLock(path)                  => s"no dependency lock at $path"
     case ResolveError.UnsupportedPlatform(platform) =>
@@ -57,6 +59,29 @@ enum ResolveError:
     case ResolveError.Plugin(error)  => error.message
     case ResolveError.Repository(op) =>
       s"resolve failed while ${op.toString.toLowerCase}"
+
+  def diagnose: Diagnostic = this match
+    case ResolveError.LockDrift(_, _, _, _, changed) =>
+      val explain =
+        if changed.isEmpty then "The cell is absent from the lock, or its coordinates moved."
+        else changed.mkString("\n")
+      Noted.carry("resolve.lock-drift", message, explain, "histos resolve --update")
+    case ResolveError.PluginDrift(_, changed) =>
+      val explain =
+        if changed.isEmpty then "The plugin coordinate does not match the lock."
+        else changed.mkString("\n")
+      Noted.carry("resolve.plugin-drift", message, explain, "histos resolve --update")
+    case ResolveError.ToolDrift(_) =>
+      Noted.carry("resolve.tool-drift", message, "The locked tool coordinate moved.", "histos resolve --update")
+    case ResolveError.NoLock(_) =>
+      Noted.carry("resolve.no-lock", message, "Resolve needs a dependency lock.", "histos resolve --update")
+    case ResolveError.NotFound(organization, name, revision) =>
+      val explain = Suggest
+        .binary(organization, name, revision)
+        .getOrElse("The coordinate is not in the configured repositories.")
+      Noted.carry("resolve.not-found", message, explain, "histos resolve --update")
+    case other =>
+      Noted.carry("resolve.failed", other.message, other.message, "histos resolve --update")
 
   private def shown(dependency: Dep): String =
     val separator = dependency.kind match

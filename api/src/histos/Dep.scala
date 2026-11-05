@@ -1,5 +1,7 @@
 package histos
 
+import histos.doctor.{Diagnostic, Noted}
+
 import _root_.scala.annotation.publicInBinary
 
 /** How a library dependency is cross-versioned. `Java` is one colon, `Binary` is `::`, `Full` is `:::`. */
@@ -92,5 +94,33 @@ enum DepError:
 
   def message: String = this match
     case Empty         => "a dependency coordinate is not empty"
-    case BadShape(raw) => s"'$raw' is not an organization:name:revision coordinate"
+    case BadShape(raw) =>
+      val base = s"'$raw' is not an organization:name:revision coordinate"
+      hint(raw).fold(base)(line => s"$base\n$line")
+
+  def diagnose: Diagnostic = this match
+    case Empty =>
+      Noted.carry("dep.empty", message, "A coordinate names an organization, a name, and a revision.", "histos help")
+    case BadShape(raw) =>
+      val summary = s"'$raw' is not an organization:name:revision coordinate"
+      Noted.carry(
+        "dep.shape",
+        summary,
+        hint(raw).getOrElse(
+          "Use organization:name:revision, organization::name:revision, or organization:::name:revision."
+        ),
+        "histos help",
+      )
+
+  private def hint(raw: String): Option[String] =
+    val colons = raw.count(_ == ':')
+    if raw.contains(":::") then Some("A full cross-version is organization:::name:revision.")
+    else if raw.contains("::") then
+      Some("A Scala binary coordinate is organization::name:revision. Three colons is organization:::name:revision.")
+    else if colons == 2 then
+      val swapped = raw.replaceFirst(":", "::")
+      Some(s"':' is a Java coordinate. A Scala library uses '::', for example $swapped.")
+    else if colons == 1 then
+      Some("A Java coordinate is organization:name:revision. A Scala library is organization::name:revision.")
+    else Some("Use organization:name:revision, organization::name:revision, or organization:::name:revision.")
 end DepError

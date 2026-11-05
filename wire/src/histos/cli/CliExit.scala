@@ -13,36 +13,31 @@ enum CliExit:
   case Program(status: Int)
   case Interrupted
 
+  /** Process status is 0, 1, or 2. The case still names which request failed. */
   def code: Int = this match
     case Success         => 0
-    case TaskFailed      => 1
-    case Program(status) => status
-    case Interrupted     => 130
     case Usage           => 2
-    case LoadFailed      => 3
-    case ToolchainFailed => 4
-    case ResolveFailed   => 5
-    case WorkflowFailed  => 6
-    case TestFailed      => 7
-    case CompileFailed   => 8
-    case PublishFailed   => 9
+    case Program(0)      => 0
+    case Program(2)      => 2
+    case Program(_)      => 1
+    case TaskFailed      => 1
+    case Interrupted     => 1
+    case LoadFailed      => 1
+    case ToolchainFailed => 1
+    case ResolveFailed   => 1
+    case WorkflowFailed  => 1
+    case TestFailed      => 1
+    case CompileFailed   => 1
+    case PublishFailed   => 1
 end CliExit
 
 object CliExit:
+  /** A child status. 0 is ok, 2 is bad usage, and every other non-zero status is a failure. */
   def fromCode(code: Int): CliExit =
     code match
-      case 0     => Success
-      case 1     => TaskFailed
-      case 2     => Usage
-      case 3     => LoadFailed
-      case 4     => ToolchainFailed
-      case 5     => ResolveFailed
-      case 6     => WorkflowFailed
-      case 7     => TestFailed
-      case 8     => CompileFailed
-      case 9     => PublishFailed
-      case 130   => Interrupted
-      case other => Program(other)
+      case 0 => Success
+      case 2 => Usage
+      case _ => TaskFailed
 
   /** Histos's own process status. The report does not store it. */
   def from(call: Call, result: CallResult): CliExit =
@@ -66,7 +61,7 @@ object CliExit:
   private def failedFacts(report: Report): Boolean =
     report.err.nonEmpty || report.diagnostics.exists(_.severity == Severity.Error)
 
-  /** A report that already failed. Publish is 9, test is 7, and every other call is 8. */
+  /** A report that already failed. Publish, test, and compile stay distinct cases. The status is 1. */
   private def failedCall(call: Call): CliExit =
     call match
       case Call.Test(_, _, _) | Call.PreviewTest(_) => TestFailed
@@ -109,7 +104,7 @@ object CliExit:
       case WorkflowFault.Files(CiError.NoDefaultBranch) => TaskFailed
       case _                                            => WorkflowFailed
 
-  /** No lock is 8 for compile and assembly, 9 for publish, and 5 for test, run, and resolve. */
+  /** No lock is a compile, publish, or resolve failure. The status is 1. */
   private def resolveExit(call: Call): CliExit =
     call match
       case Call.Compile(_) | Call.PreviewCompile(_) | Call.Assembly(_) => CompileFailed
@@ -163,7 +158,7 @@ object CliExit:
         PublishFailed
       case _ => TaskFailed
 
-  /** A missing lock file read on test or run is 5. Cache is 3. Clean is 1. */
+  /** A missing lock on test or run is resolve. Cache is load. Clean is a failed task. The status is 1. */
   private def ioExit(call: Call): CliExit =
     call match
       case Call.Test(_, _, _) | Call.Run(_, _)                         => ResolveFailed

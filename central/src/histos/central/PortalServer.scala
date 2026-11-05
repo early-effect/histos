@@ -163,4 +163,18 @@ enum PortalOpenError:
   def message: String = this match
     case Credentials => "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"
     case Bind        => "the rehearsal portal did not bind"
+
+  def diagnose: histos.doctor.Diagnostic = this match
+    case Credentials =>
+      histos.doctor.Noted.error(
+        "publish.credentials",
+        message,
+        "Neither variable is set. This is not a rejected login.",
+        histos.doctor.Noted.steps(
+          "Export SONATYPE_USERNAME and SONATYPE_PASSWORD.",
+          "A 401 after they are set says the repository rejected the credentials.",
+        ),
+      )
+    case Bind =>
+      histos.doctor.Noted.carry("publish.portal", message, "The loopback portal could not listen.", "histos help portal")
 end PortalOpenError

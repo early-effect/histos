@@ -352,7 +352,8 @@ object ReportSpec extends ZIOSpecDefault:
           path = Products.observation(repo).toString
         yield assertTrue(
           done.exit == CliExit.TaskFailed,
-          done.err == s"no observation at $path",
+          done.err.contains(s"no observation at $path"),
+          done.err.contains("histos compile"),
           err.mkString.contains(s"no observation at $path"),
           seen == 0,
         )
@@ -370,7 +371,7 @@ object ReportSpec extends ZIOSpecDefault:
           seen <- loads.get
         yield assertTrue(
           bad match
-            case Left(CliParseError.UnknownRoot) => false
+            case Left(CliParseError.UnknownRoot(_)) => false
             case Left(_)                         => true
             case Right(_)                        => false
           ,

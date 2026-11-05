@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.doctor.Suggest
 import histos.cache.CacheCleanMode
 import histos.plugin.{CommandName, PluginTaskId}
 import histos.schedule.CacheNamespace
@@ -62,6 +63,7 @@ object Grammar:
     case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
     case Deps(action: DepsAction)
     case Setup(from: Option[String], fix: Boolean, yes: Boolean)
+    case Help(words: List[String])
 
   private val version = CliCommand("version").map(_ => Wire.Version)
   private val graph   = CliCommand("graph").map(_ => Wire.Graph)
@@ -192,7 +194,9 @@ object Grammar:
     CliCommand("supply-chain", Options.text("from").optional ++ Options.boolean("fix") ++ Options.boolean("yes"))
       .map { case (from, fix, yes) => Wire.Setup(from, fix, yes) }
   private val setup   = CliCommand("setup").subcommands(supplyChain)
-  private val client  = CliCommand("client").map(_ => Wire.Client)
+  private val helpCmd =
+    CliCommand("help", Args.text("topic").*).map(words => Wire.Help(words.toList))
+  private val client = CliCommand("client").map(_ => Wire.Client)
   private val fresh   = CliCommand("new", Args.text("name")).map(Wire.New(_))
   private val init    = CliCommand("init").map(_ => Wire.Init)
   private val observe = CliCommand("observe").map(_ => Wire.Observe)
@@ -201,7 +205,7 @@ object Grammar:
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview
+      version | graph | run | test | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview | helpCmd
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -280,6 +284,8 @@ object Grammar:
       case Wire.Deps(action)          => ZIO.succeed(Command.Deps(action))
       case Wire.Setup(from, fix, yes) =>
         ZIO.succeed(Command.Setup(from, fix, yes))
+      case Wire.Help(words) =>
+        ZIO.succeed(Command.Help(words))
       case Wire.Compile(projects) =>
         projectList("compile", projects).map(Command.Compile(_))
       case Wire.Clean(projects) =>
@@ -357,7 +363,7 @@ object Grammar:
               patterns,
             )
       case flag :: _ if flag.startsWith("-") =>
-        Left(CliParseError.Pattern(s"$command does not take $flag"))
+        Left(CliParseError.Pattern(Help.flag(command, flag)))
       case token :: rest =>
         SuitePattern.from(token) match
           case Left(error)    => Left(CliParseError.SuitePattern(error))
@@ -390,7 +396,7 @@ object Grammar:
   ): IO[CliParseError, List[ProjectName]] =
     projects.find(_.startsWith("-")) match
       case Some(flag) =>
-        ZIO.fail(CliParseError.Pattern(s"$command does not take $flag"))
+        ZIO.fail(CliParseError.Pattern(Help.flag(command, flag)))
       case None => ZIO.fromEither(parsedNames(projects))
 
   private def parsedNames(raw: List[String]): Either[CliParseError, List[ProjectName]] =
@@ -457,12 +463,44 @@ object Grammar:
       error: ValidationError,
       args: List[String],
   ): CliParseError =
-    error.validationErrorType match
-      case ValidationErrorType.CommandMismatch =>
-        args match
-          case head :: _ if roots.contains(head) => CliParseError.UnknownCommand
-          case _                                 => CliParseError.UnknownRoot
-      case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>
-        CliParseError.MissingArgument
-      case _ => CliParseError.Rejected
+    args match
+      case "update" :: _ =>
+        CliParseError.Pattern("histos update is run by the installed shim\nhistos help update")
+      case "self" :: _ =>
+        CliParseError.Pattern("histos self update is run by the installed shim\nhistos help self")
+      case "toolchain" :: "install" :: _ =>
+        CliParseError.Pattern("histos toolchain install <version> is run by the installed shim\nhistos help toolchain")
+      case "toolchain" :: "list" :: _ =>
+        CliParseError.Pattern("histos toolchain list is run by the installed shim\nhistos help toolchain")
+      case _ =>
+        error.validationErrorType match
+          case ValidationErrorType.CommandMismatch => mismatched(args)
+          case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>
+            CliParseError.MissingArgument
+          case _ => CliParseError.Rejected
+
+  private def mismatched(args: List[String]): CliParseError =
+    args match
+      case "cache" :: token :: _ =>
+        CliParseError.UnknownCommand(token, Suggest.near(token, List("path", "list", "clean", "promote")))
+      case "deps" :: token :: _ =>
+        CliParseError.UnknownCommand(
+          token,
+          Suggest.near(token, List("check", "update", "audit", "pr", "alert", "snapshot")),
+        )
+      case "preview" :: token :: _ =>
+        CliParseError.UnknownCommand(
+          token,
+          Suggest.near(token, List("compile", "test", "publish", "publishLocal", "clean", "cleanFull", "run")),
+        )
+      case "setup" :: token :: _ =>
+        CliParseError.UnknownCommand(token, Suggest.near(token, List("supply-chain")))
+      case "help" :: token :: _ =>
+        CliParseError.UnknownCommand(token, Suggest.near(token, Help.names))
+      case head :: _ if roots.contains(head) =>
+        CliParseError.UnknownCommand(head, Suggest.near(head, Help.names))
+      case head :: _ =>
+        CliParseError.UnknownRoot(head)
+      case Nil =>
+        CliParseError.UnknownRoot("")
 end Grammar
