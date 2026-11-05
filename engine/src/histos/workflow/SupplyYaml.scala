@@ -29,6 +29,7 @@ object SupplyYaml:
       s"  $name:"
     ) ++ Workflow.toolchainNeeds(graph) ++ List(
       s"    runs-on: ${Workflow.runner}",
+    ) ++ Workflow.jobLimit(graph) ++ List(
       "    permissions:",
     ) ++ Workflow.actionsRead(graph) ++ List(
       "      contents: read"
@@ -64,6 +65,7 @@ object SupplyYaml:
           ) ++ Workflow.toolchainNeeds(graph) ++ List(
             s"    if: ${quote(Workflow.onDefaultPush)}",
             s"    runs-on: ${Workflow.runner}",
+          ) ++ Workflow.jobLimit(graph) ++ List(
             "    permissions:",
           ) ++ Workflow.actionsRead(graph) ++ List(
             "      contents: write",
@@ -71,7 +73,9 @@ object SupplyYaml:
             s"      - uses: ${ActionPins.checkout.line}",
             s"      - uses: ${ActionPins.localSetup}",
           ) ++ Workflow.fetchAssembly(graph) ++ preflight(graph, name) ++ List(
-            "      - run: ./histos deps snapshot --submit"
+            "      - run: ./histos deps snapshot --submit",
+            "        env:",
+            "          GH_TOKEN: ${{ github.token }}",
           )).mkString("\n")
         )
 
@@ -114,6 +118,7 @@ object SupplyYaml:
       "jobs:",
       "  deps:",
       s"    runs-on: ${Workflow.runner}",
+    ) ++ Workflow.jobLimit(graph) ++ List(
       "    steps:",
       "      - id: app",
       "        continue-on-error: true",
@@ -160,6 +165,7 @@ object SupplyYaml:
           "jobs:",
           "  audit:",
           s"    runs-on: ${Workflow.runner}",
+        ) ++ Workflow.jobLimit(graph) ++ List(
           "    outputs:",
           "      fixable: ${{ steps.audit.outputs.fixable }}",
           "    steps:",
@@ -178,6 +184,7 @@ object SupplyYaml:
       "    needs: audit",
       "    if: needs.audit.outputs.fixable == 'true'",
       s"    runs-on: ${Workflow.runner}",
+    ) ++ Workflow.jobLimit(graph) ++ List(
       "    steps:",
       "      - id: app",
       "        continue-on-error: true",
