@@ -7,13 +7,22 @@ import histos.NodePath
 
 import java.nio.file.{Files, Path}
 
-import zio.{IO, ZIO}
+import zio.{IO, UIO, ZIO}
 
 final case class NodeRuntime(
     binary: NodeBinary,
     version: NodeVersion,
     identity: RuntimeIdentity,
 )
+
+/** The Node binary that was accepted, and the source that named it. */
+final case class NodeChoice(runtime: NodeRuntime, source: NodeSource)
+
+/** One `node` binary found on `PATH`, in search order. */
+final case class NodeSight(binary: Path, version: NodeVersion)
+
+/** The first `node` on `PATH` is older than a later one. */
+final case class NodeShadow(first: NodeSight, newer: NodeSight)
 
 object NodeToolchain:
   /** Scala.js Wasm needs Node 25, so every Js launch uses that floor. */
@@ -29,11 +38,25 @@ object NodeToolchain:
   def text(survey: NodeSurvey): String =
     s"node ${survey.version.value} ${survey.binary.path}"
 
+  /** The name a doctor line uses. `node.local` is the file `.histos/node.local`. */
+  def origin(source: NodeSource): String = source match
+    case NodeSource.Environment => "HISTOS_NODE"
+    case NodeSource.Config      => "runnerTools.nodePath"
+    case NodeSource.Path        => "PATH"
+    case NodeSource.Local       => ".histos/node.local"
+
+  /** Names `HISTOS_NODE`, `.histos/node.local`, and how to install Node 25. The miss text alone does not. */
+  def failure(error: NodeMiss): String =
+    s"${error.message}. $guidance"
+
+  val guidance: String =
+    "Set HISTOS_NODE to the absolute node binary, or write the Node 25 home to .histos/node.local. Install Node 25 from https://nodejs.org/. Histos does not fetch Node and does not try the next source."
+
   /** `HISTOS_NODE`, then a [[NodePath]] on the build, then the home in `node.local`, then `node` on `PATH`. A named
     * binary that is missing, not executable, or older than [[Floor]] fails. Histos does not fetch Node and does not try
     * the next source.
     */
-  def resolve(machine: Machine, nodePath: Option[NodePath]): IO[NodeMiss, NodeRuntime] =
+  def choose(machine: Machine, nodePath: Option[NodePath]): IO[NodeMiss, NodeChoice] =
     machine.env.get(Key) match
       case Some(raw) =>
         ZIO
@@ -45,14 +68,46 @@ object NodeToolchain:
           case Some(chosen) => acceptBinary(Path.of(chosen.value), NodeSource.Config)
           case None         => inherited(machine)
 
-  private def inherited(machine: Machine): IO[NodeMiss, NodeRuntime] =
+  def resolve(machine: Machine, nodePath: Option[NodePath]): IO[NodeMiss, NodeRuntime] =
+    choose(machine, nodePath).map(_.runtime)
+
+  /** Every executable `node` on `PATH`, first to last. A directory that is not a binary is skipped. */
+  def sights(machine: Machine): UIO[List[NodeSight]] =
+    val entries =
+      machine.env
+        .get("PATH")
+        .toList
+        .flatMap(_.split(java.io.File.pathSeparator).toList)
+        .filter(_.nonEmpty)
+    ZIO.foreach(entries)(sight).map(distinct)
+
+  /** The first binary is below [[Floor]] and a later binary is newer. The newer one is the highest version. */
+  def shadow(sights: List[NodeSight]): Option[NodeShadow] =
+    sights match
+      case first :: rest =>
+        val tooOld =
+          !histos.toolchain.VersionOrder.atLeast(first.version.value, Floor.value, stripJavaOne = false)
+        val newer = rest.filter(item =>
+          histos.toolchain.VersionOrder.compare(item.version.value, first.version.value) > 0
+        )
+        if !tooOld || newer.isEmpty then None
+        else
+          val best = newer
+            .sortWith((left, right) =>
+              histos.toolchain.VersionOrder.compare(left.version.value, right.version.value) > 0
+            )
+            .head
+          Some(NodeShadow(first, best))
+      case Nil => None
+
+  private def inherited(machine: Machine): IO[NodeMiss, NodeChoice] =
     readOverride(machine.repo)
       .mapError(NodeMiss.Unresolved(_))
       .flatMap:
         case Some(home) => acceptHome(home, NodeSource.Local)
         case None       => onPath(machine)
 
-  private def onPath(machine: Machine): IO[NodeMiss, NodeRuntime] =
+  private def onPath(machine: Machine): IO[NodeMiss, NodeChoice] =
     val name = "node"
     RuntimeFiles
       .firstOnPath(machine.env.get("PATH"), List(name))
@@ -64,15 +119,15 @@ object NodeToolchain:
             case None       => ZIO.fail(NodeMiss.Absent(Floor, NodeSource.Path))
         case None => ZIO.fail(NodeMiss.Absent(Floor, NodeSource.Path))
 
-  private def acceptBinary(path: Path, source: NodeSource): IO[NodeMiss, NodeRuntime] =
+  private def acceptBinary(path: Path, source: NodeSource): IO[NodeMiss, NodeChoice] =
     ready(path, source).flatMap: binary =>
       adopt(binary, source, placed(binary))
 
-  private def acceptHome(home: Path, source: NodeSource): IO[NodeMiss, NodeRuntime] =
+  private def acceptHome(home: Path, source: NodeSource): IO[NodeMiss, NodeChoice] =
     ready(home.resolve("bin").resolve("node"), source).flatMap: binary =>
       adopt(binary, source, home)
 
-  private def adopt(binary: Path, source: NodeSource, home: Path): IO[NodeMiss, NodeRuntime] =
+  private def adopt(binary: Path, source: NodeSource, home: Path): IO[NodeMiss, NodeChoice] =
     for
       version <- NodeProbe
         .version(binary)
@@ -86,7 +141,25 @@ object NodeToolchain:
       identity <- RuntimeFiles
         .identity(home, version.value)
         .mapError(failure => NodeMiss.Unresolved(NodeError.Io(failure)))
-    yield NodeRuntime(NodeBinary(binary), version, identity)
+    yield NodeChoice(NodeRuntime(NodeBinary(binary), version, identity), source)
+
+  private def sight(entry: String): UIO[Option[NodeSight]] =
+    ZIO
+      .attemptBlocking:
+        val file = Path.of(entry).resolve("node")
+        if Files.isRegularFile(file) && Files.isExecutable(file) then Some(file.toRealPath().normalize) else None
+      .orElseSucceed(None)
+      .flatMap:
+        case None         => ZIO.succeed(None)
+        case Some(binary) =>
+          NodeProbe.version(binary).map(version => Some(NodeSight(binary, version))).orElseSucceed(None)
+
+  private def distinct(found: List[Option[NodeSight]]): List[NodeSight] =
+    found.flatten
+      .foldLeft((Set.empty[Path], List.empty[NodeSight])):
+        case ((seen, acc), item) if seen.contains(item.binary) => (seen, acc)
+        case ((seen, acc), item)                               => (seen + item.binary, acc :+ item)
+      ._2
 
   /** A `bin/node` layout keeps the home. Any other file is its own identity. */
   private def placed(binary: Path): Path =

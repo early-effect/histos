@@ -309,6 +309,7 @@ object HistosMcp:
                 repo,
                 loaded.graph,
                 histos.supply.DoctorSurface.Request(args.area, args.json, args.preflight, args.fix, args.yes),
+                machine,
               )
               .map((_, text) => DoctorText(text))
         }

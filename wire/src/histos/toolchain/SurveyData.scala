@@ -16,11 +16,15 @@ enum SurveyError:
   case Split(reached: Reached, left: ProjectName, right: ProjectName)
   case Clang(reached: Reached, error: ClangMiss)
 
+  /** JDK, Node, and clang were all probed. `report` is every line. `detail` is the failures. */
+  case Incomplete(report: String, detail: String)
+
   def message: String = this match
     case Jdk(error)            => error.message
     case Node(_, error)        => error.message
     case Undeclared(_, name)   => NativeDeclaration.Missing(name).message
     case Split(_, left, right) =>
       NativeDeclaration.Disagree(left, right).message
-    case Clang(_, error) => error.message
+    case Clang(_, error)       => error.message
+    case Incomplete(_, detail) => detail
 end SurveyError

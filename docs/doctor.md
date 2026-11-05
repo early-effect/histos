@@ -17,16 +17,31 @@ Release checks read the catalog and `releases`. They do not open a bump pull req
 ```text
 ./histos doctor
 ./histos doctor --area supply-chain
+./histos doctor --area toolchain
 ./histos doctor --json
 ./histos doctor --preflight supply-chain
 ./histos doctor --fix
 ./histos doctor --fix --yes
+./histos --explain node.floor
 ```
+
+`--explain <check-id>` prints the long explanation for that check and does not run it. The toolchain ids are `jdk.source`, `node.floor`, `node.shadowed`, `clang.source`, `runner-tools.cover`, and `runner-tools.agree`.
+
+Toolchain checks report where the JDK, Node, and clang came from.
+
+- `jdk.source` is an error when the JDK is missing or older than 21. The home is `.histos/toolchain.local` when that file exists, and otherwise `java.home`.
+- `node.floor` is an error on a Js graph when Node is missing or older than 25. The message names `HISTOS_NODE`, `.histos/node.local`, and how to install Node 25. The binary is `HISTOS_NODE`, then `runnerTools.nodePath`, then `.histos/node.local`, then `PATH`.
+- `node.shadowed` is a warning when a node older than 25 is first on `PATH` and a newer node sits further along. The fix is `export HISTOS_NODE=<newer path>`.
+- `clang.source` is an error on a Native graph when clang is missing or the major is not the modules' `ClangMajor`. Clang comes from `PATH`.
+- `runner-tools.cover` is an error when a Native module has no `runnerTools.llvm`, or a Js module has no `runnerTools.node`. The fix is the `.runnerTools(RunnerTools(...))` call to add. Without it, the generated job drops the install step.
+- `runner-tools.agree` is an error when `NodeFloor` is below 25, or the LLVM revision's major is not the modules' `ClangMajor`. The fix raises that value. It does not open a pull request.
+
+`histos toolchain` probes JDK, Node, and clang together. A failure of one does not hide the others.
 
 `--preflight <job>` is offline. It reads the job environment and does not call GitHub. Generated jobs run it after checkout and setup when `DoctorPlacement` is `PreflightPlusWorkflowJob`. `WorkflowJobOnly` omits that step. Neither placement adds a job. The full doctor runs on the `workflow` job.
 
 `--fix` applies local edits. `--yes` confirms those edits and histos commands. A GitHub setting is applied only after an interactive confirmation, which does not happen in CI or when there is no terminal. `--yes` never confirms a GitHub setting.
 
-Exit codes for this command are 0, 1, and 2. The same three codes are what `deps` and `setup` use. The other histos exit codes are unchanged.
+Process status is 0, 1, or 2, including doctor, deps, and setup.
 
 The same report is the `doctor` MCP tool. `--json` prints one object with `exit` and `findings`. In GitHub Actions the text renderer also has an annotation line and a step-summary table.
