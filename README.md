@@ -47,7 +47,9 @@ export PATH="$HOME/.histos/bin:$PATH"
 
 The script does not edit a shell rc. A second run is a no-op when the installed shim matches.
 
-`histos self update` replaces the shim when the published shim hash differs. `histos toolchain install <version>` downloads one version. `histos toolchain list` prints installed versions. `histos update` moves the selected version: outside a project it rewrites `~/.histos/default`, and inside a project it rewrites `histos.version` in `build.properties` and leaves the user default alone. `histos update --make-default` writes that same resolved version into both files. A `SNAPSHOT` pointer becomes one timestamp. A release pin stays. Nothing updates in the background.
+A first install writes `~/.histos/default` when that file is missing. The value is the published dist channel: `channel` when that file is on the dist base, otherwise the newest `channel-<version>-SNAPSHOT` asset, or the newest release when no snapshot channel is published. The next command resolves it, so `histos new` works straight after install.
+
+`histos self update` replaces the shim when the published shim hash differs. `histos toolchain install <version>` downloads one version and, when no default is set, records that version. `histos toolchain list` prints installed versions. `histos update` moves the selected version: outside a project it rewrites `~/.histos/default`, and when that file is missing it resolves the same published channel first. Inside a project it rewrites `histos.version` in `build.properties` and leaves the user default alone. `histos update --make-default` writes that same resolved version into both files. A `SNAPSHOT` pointer becomes one timestamp. A release pin stays. Nothing updates in the background.
 
 `histos new <name>` creates a one-module project pinned to the toolchain that wrote it. `histos init` writes the current directory. The next line the command prints is `histos test`.
 
@@ -81,7 +83,7 @@ GitHub Actions use `.github/actions/setup` from this repo:
 
 Histos builds itself. [histos](histos) comes from `workflow --update`. A local assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim.
 
-`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through. `dist/` and `.histos/assembly.sha256` stay uncommitted, so CI has neither jar and every job runs the version line through the shim. A local jar can compile [histos.scala](histos.scala) while CI still runs that line. `workflow --check` compares the files this jar renders with the files in the tree, so the two jars can disagree.
+`HISTOS_ASSEMBLY`, when set, is the jar. Otherwise `dist/histos.jar` is that jar when the file exists. Either jar has to match `.histos/assembly.sha256`. A missing file or a different checksum fails, and the script does not fall through. `dist/` and `.histos/assembly.sha256` stay uncommitted. CI starts from the version line. When that toolchain does not yet have a command this checkout renders, one job assembles this tree and the other jobs reuse that jar. `workflow --check` compares the files the running jar renders with the files in the tree.
 
 [histos.scala](histos.scala) compiles against `bootstrap/histos-api.jar` packed inside the running jar. `.histos/classes/api` is the api compiled for the modules after that.
 
@@ -89,7 +91,7 @@ Histos builds itself. [histos](histos) comes from `workflow --update`. A local a
 
 `histos.version=0.1.0` pins that release. The shim installs that toolchain from the GitHub release `dist`: the jar, the manifest, and a prebuilt client when the manifest names one. `histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel. `histos update` resolves a snapshot channel and writes that timestamp. A release pin stays. `launcher --latest` writes the snapshot pointer and does not fetch. A release pin stays there too. Any of these lines may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim. The shim fetches `channel-<histos.version>` from `dist` when the line is a snapshot pointer. Replacing that file moves the pointer. A Maven snapshot does not.
 
-The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.1.3`. Its version line is `0.1.3-SNAPSHOT`. The native client sends that version line. The server records the same line.
+The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.2.0`. Its version line is `0.1.3-SNAPSHOT`. The native client sends that version line. The server records the same line.
 
 `.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
 
@@ -136,7 +138,7 @@ flowchart TD
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 - A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
 
-This catalog is `manual("histos", manual"0.1.3")`. `publish release` publishes that coordinate. `publish snapshots` does not stage a release. `0.0.1` is already on Central.
+This catalog is `manual("histos", manual"0.2.0")`. `publish release` publishes that coordinate. `publish snapshots` does not stage a release. `0.0.1` is already on Central.
 
 The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. The client prints each step as it happens: `building`, `staged`, `signing`, `bundling`, `uploading`, and `installing`. A local install prints `installing`. A snapshot prints `uploading <artifact> <revision>`. A release prints `signing`, `bundling`, and `uploading <ship> to the portal`. The portal post then prints `uploading bundle to the portal`, and `uploading...` if that post is still running after 30 seconds. Each status is `portal <id> is <STATE>`. Until the waited state arrives, the line names it. The first read, a changed state, and every thirty quiet reads print. A status read that has not returned prints `reading portal <id>` after that same wait. A failure is printed when it happens. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 

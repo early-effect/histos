@@ -1,5 +1,7 @@
 package histos.plugin
 
+import histos.doctor.DoctorCheck
+
 import zio.{Scope, ZIO}
 
 /** One object in the plugin jar. `contribute` is data and is not a `ZIO`. `run` is the effect the engine calls later,
@@ -8,6 +10,8 @@ import zio.{Scope, ZIO}
 trait HistosPlugin:
   def id: PluginId
   def contribute: Contribution
+  def checks: List[DoctorCheck]    = Nil
+  def preflight: List[DoctorCheck] = Nil
   def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput]
 
 object HistosPlugin:

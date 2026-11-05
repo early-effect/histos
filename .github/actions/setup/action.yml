@@ -9,12 +9,12 @@ runs:
   using: composite
   steps:
     - name: Toolchains
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.histos/toolchains
         key: histos-toolchains-${{ inputs.version }}-${{ hashFiles('build.properties') }}-${{ runner.os }}-${{ runner.arch }}
     - name: Coursier
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.cache/coursier/v1
         key: coursier-${{ hashFiles('dependencies.lock', 'histos.scala') }}-${{ runner.os }}-${{ runner.arch }}

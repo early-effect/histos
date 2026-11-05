@@ -61,6 +61,15 @@ object HistosMcp:
       projects: List[String] = Nil,
   ) derives Schema,
         JsonCodec
+  final case class DoctorArgs(
+      area: Option[String] = None,
+      json: Boolean = false,
+      preflight: Option[String] = None,
+      fix: Boolean = false,
+      yes: Boolean = false,
+  ) derives Schema,
+        JsonCodec
+  final case class DoctorText(text: String) derives Schema, JsonCodec
 
   enum ServeError:
     case Build(errors: NonEmptyChunk[McpBuildError])
@@ -118,6 +127,7 @@ object HistosMcp:
     inline val watch            = "watch"
     inline val preview          = "preview"
     inline val observe          = "observe"
+    inline val doctor           = "doctor"
 
     val all: Set[ToolName] =
       Set(
@@ -144,6 +154,7 @@ object HistosMcp:
         ToolName(watch),
         ToolName(preview),
         ToolName(observe),
+        ToolName(doctor),
       )
   end Names
 
@@ -286,7 +297,23 @@ object HistosMcp:
         Names.observe,
         "Read the stored compile tally. Does not compile.",
       )(_ => Stored.read(repo))
-    yield observed
+      diagnosed <- observed.tool[DoctorArgs](
+        Names.doctor,
+        "Run doctor. area limits the checks. json prints json. preflight runs that job's offline checks. fix applies local edits and never changes GitHub settings.",
+      )(args =>
+        ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.flatMap {
+          case Left(error)   => ZIO.succeed(DoctorText(error.message))
+          case Right(loaded) =>
+            histos.supply.DoctorSurface
+              .run(
+                repo,
+                loaded.graph,
+                histos.supply.DoctorSurface.Request(args.area, args.json, args.preflight, args.fix, args.yes),
+              )
+              .map((_, text) => DoctorText(text))
+        }
+      )
+    yield diagnosed
 
   def compileCall(projects: List[String]): Either[Rejection, Call] =
     names(projects).map(Call.Compile(_))

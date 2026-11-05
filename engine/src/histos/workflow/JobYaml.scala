@@ -37,6 +37,11 @@ import histos.{BuildError, ProjectGraph}
 object JobYaml:
   final case class Rendered(ci: List[String], files: List[RenderedWorkflow], header: CiHeader)
 
+  def uses(use: ActionUse): String =
+    use match
+      case ActionUse.Pinned(name, pin) => ActionPins.line(name, pin)
+      case ActionUse.Local(path)       => path
+
   def render(graph: ProjectGraph): Either[CiError, Rendered] =
     JobCheck
       .arrange(graph)
@@ -47,7 +52,7 @@ object JobYaml:
           case item @ Placed(WorkflowFile.Ci, _, _) => jobBlock(graph, item)
         val pages = placed.collect:
           case Placed(WorkflowFile.Pages, plugin, JobRender.Site(job, SiteShape.Dispatch)) =>
-            RenderedWorkflow(Workflow.pagesName, dispatch(plugin, job))
+            RenderedWorkflow(Workflow.pagesName, dispatch(graph, plugin, job))
         val owned = ownedFiles(graph, placed)
         Rendered(ci.flatten, pages ++ owned, JobCheck.header(placed))
 
@@ -241,6 +246,7 @@ object JobYaml:
       permissionLines(permissions) ++
       envLines(own, matrixEnv) ++
       List("    steps:", s"      - uses: $Checkout", s"      - uses: $Setup") ++
+      SupplyYaml.preflight(graph, name.value) ++
       pre.flatMap(action => actionStep(graph.ci, action)) ++
       List(s"      - run: ${quote(s"./histos run ${PluginTaskId(plugin, taskName).render}")}") ++
       upload.toList.flatMap(uploadStep)
@@ -264,10 +270,10 @@ object JobYaml:
       "      pages: write",
       "    steps:",
       "      - id: deployment",
-      "        uses: actions/deploy-pages@v5",
+      s"        uses: ${ActionPins.deployPages.line}",
     )
 
-  private def dispatch(plugin: PluginId, job: SiteArrange): String =
+  private def dispatch(graph: ProjectGraph, plugin: PluginId, job: SiteArrange): String =
     val run   = quote(s"./histos run ${PluginTaskId(plugin, job.task).render}")
     val lines = List(
       "name: pages",
@@ -292,12 +298,13 @@ object JobYaml:
       "    steps:",
       s"      - uses: $Checkout",
       s"      - uses: $Setup",
+    ) ++ SupplyYaml.preflight(graph, "pages") ++ List(
       s"      - run: $run",
-      "      - uses: actions/upload-pages-artifact@v5",
+      s"      - uses: ${ActionPins.uploadPages.line}",
       "        with:",
       s"          path: ${quote(job.site.dir.value)}",
       "      - id: deployment",
-      "        uses: actions/deploy-pages@v5",
+      s"        uses: ${ActionPins.deployPages.line}",
     )
     lines.mkString("\n") + "\n"
 
@@ -388,7 +395,7 @@ object JobYaml:
   private def uploadStep(path: String): List[String] =
     List(
       s"      - if: ${quote(OnDefaultPush)}",
-      "        uses: actions/upload-pages-artifact@v5",
+      s"        uses: ${ActionPins.uploadPages.line}",
       "        with:",
       s"          path: ${quote(path)}",
     )
@@ -471,7 +478,7 @@ object JobYaml:
       case PullType.Labeled     => "labeled"
       case PullType.Unlabeled   => "unlabeled"
 
-  private val Checkout      = "actions/checkout@v7"
+  private val Checkout      = ActionPins.checkout.line
   private val Setup         = "./.github/actions/setup"
   private val RunnerImage   = "ubuntu-26.04"
   private val OnDefaultPush =

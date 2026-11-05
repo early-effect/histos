@@ -16,13 +16,16 @@ private[load] object ClassHome:
     else if name.startsWith("histos.") then ClassHome.Refused
     else ClassHome.Open
 
-  /** Api surface, ZIO, izumi-reflect (`zio.Tag`), and Scala. Never a plugin jar. */
+  /** Api surface a build file may name: root `histos`, plugins, versions, supply chain, and doctor. Never a plugin jar.
+    */
   def boundary(name: String): Boolean =
     name.startsWith("zio.") ||
       name.startsWith("izumi.reflect.") ||
       name.startsWith("scala.") ||
       name.startsWith("histos.version.") ||
       name.startsWith("histos.plugin.") ||
+      name.startsWith("histos.supply.") ||
+      name.startsWith("histos.doctor.") ||
       root(name)
 
   /** Package `histos` with no subpackage. `histos.HistosBuild` is in. `histos.schedule.Sendable` is not. */

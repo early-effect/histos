@@ -14,6 +14,7 @@ import histos.plugin.{
   TaskDep,
   TaskName,
 }
+import histos.supply.SupplyChain
 import histos.version.Catalog
 
 import _root_.scala.util.control.NonFatal
@@ -138,6 +139,7 @@ final case class ProjectGraph private (
     resolution: Resolution = Resolution.Solve,
     docCheck: DocCheck = DocCheck.Off,
     ci: CiSettings = CiSettings.empty,
+    supply: SupplyChain = SupplyChain(),
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -182,6 +184,7 @@ object ProjectGraph:
       resolution: Resolution = Resolution.Solve,
       docCheck: DocCheck = DocCheck.Off,
       ci: CiSettings = CiSettings.empty,
+      supply: SupplyChain = SupplyChain(),
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -198,6 +201,7 @@ object ProjectGraph:
       resolution,
       docCheck,
       ci,
+      supply,
     )
 end ProjectGraph
 
@@ -317,6 +321,7 @@ object Projects:
       resolution: Resolution = Resolution.Solve,
       docCheck: DocCheck = DocCheck.Off,
       ci: CiSettings = CiSettings.empty,
+      supply: SupplyChain = SupplyChain(),
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -333,6 +338,7 @@ object Projects:
       resolution,
       docCheck,
       ci,
+      supply,
     )
 
   private def build(
@@ -350,6 +356,7 @@ object Projects:
       resolution: Resolution = Resolution.Solve,
       docCheck: DocCheck = DocCheck.Off,
       ci: CiSettings = CiSettings.empty,
+      supply: SupplyChain = SupplyChain(),
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -380,6 +387,7 @@ object Projects:
             resolution,
             docCheck,
             ci,
+            supply,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -712,7 +720,16 @@ object Projects:
     contributed.flatMap: contribution =>
       EntryName.fromClass(plugin.getClass) match
         case Right(entry) =>
-          Right(RegisteredPlugin(plugin.id, entry, contribution))
+          Right(
+            RegisteredPlugin(
+              plugin.id,
+              entry,
+              contribution.copy(
+                checks = contribution.checks ++ plugin.checks,
+                preflight = contribution.preflight ++ plugin.preflight,
+              ),
+            )
+          )
         case Left(_) =>
           Left(BuildError.PluginDefect(plugin.id, plugin.getClass.getName))
 
@@ -873,12 +890,13 @@ final class Organized(
     resolution: Resolution = Resolution.Solve,
     checked: DocCheck = DocCheck.Off,
     ci: CiSettings = CiSettings.empty,
+    supply: SupplyChain = SupplyChain(),
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked, ci)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked, ci, supply)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, supply)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -892,18 +910,19 @@ final class Organized(
       resolution,
       checked,
       ci,
+      supply,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked, ci)
+    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked, ci, supply)
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked, ci)
+    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked, ci, supply)
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
   def testLog: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked, ci)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked, ci, supply)
 
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
@@ -913,7 +932,7 @@ final class Organized(
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked, ci)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked, ci, supply)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -936,11 +955,27 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked, ci)
+    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked, ci, supply)
+
+  /** Pins, advisories, and the weekly bump. A second call replaces the policy. */
+  def supplyChain(value: SupplyChain): Organized =
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, value)
 
   /** Runners, action pins, secrets, and graph env. A second call replaces the settings. */
   def ci(settings: CiSettings): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, settings)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      settings,
+      supply,
+    )
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     Projects.assemble(
@@ -957,6 +992,7 @@ final class Organized(
       resolution = resolution,
       docCheck = checked,
       ci = ci,
+      supply = supply,
     )
 
   def apply(
@@ -977,6 +1013,7 @@ final class Organized(
       resolution = resolution,
       docCheck = checked,
       ci = ci,
+      supply = supply,
     )
 
   def apply(
@@ -997,6 +1034,7 @@ final class Organized(
       resolution = resolution,
       docCheck = checked,
       ci = ci,
+      supply = supply,
     )
 
   def apply(
@@ -1018,6 +1056,7 @@ final class Organized(
       resolution = resolution,
       docCheck = checked,
       ci = ci,
+      supply = supply,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -1036,6 +1075,7 @@ final class Organized(
       resolution,
       checked,
       ci,
+      supply,
     )
 
   def apply(
@@ -1058,6 +1098,7 @@ final class Organized(
       resolution,
       checked,
       ci,
+      supply,
     )
 
   def apply(
@@ -1080,6 +1121,7 @@ final class Organized(
       resolution,
       checked,
       ci,
+      supply,
     )
 
   def apply(
@@ -1103,5 +1145,6 @@ final class Organized(
       resolution,
       checked,
       ci,
+      supply,
     )
 end Organized

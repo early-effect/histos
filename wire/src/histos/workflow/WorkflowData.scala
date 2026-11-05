@@ -27,6 +27,7 @@ enum CiError:
   case DispatchInputConflict(name: String)
   case ConcurrencyConflict(file: String)
   case UnpinnedWorkflowRun(name: String)
+  case Pins(text: String)
 
   def message: String = this match
     case BadName(raw)                 => s"'$raw' is not a project name"
@@ -56,4 +57,5 @@ enum CiError:
       s"workflow_dispatch input $name is declared twice with different types"
     case ConcurrencyConflict(file) => s"jobs in $file do not share a concurrency group"
     case UnpinnedWorkflowRun(name) => s"workflow $name is not rendered by this graph"
+    case Pins(text)                => text
 end CiError

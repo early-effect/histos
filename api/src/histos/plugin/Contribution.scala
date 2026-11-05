@@ -1,5 +1,6 @@
 package histos.plugin
 
+import histos.doctor.DoctorCheck
 import histos.{Platform, ProjectName, ScalaVersion}
 
 /** Data copied onto the project graph. Not an effect. */
@@ -7,6 +8,8 @@ final case class Contribution(
     tasks: List[DeclaredTask],
     commands: List[CommandSpec],
     jobs: List[CiJob],
+    checks: List[DoctorCheck] = Nil,
+    preflight: List[DoctorCheck] = Nil,
 )
 
 final case class DeclaredTask(

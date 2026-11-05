@@ -53,10 +53,14 @@ private[histos] object Tokens:
   def inputKey(raw: String): Boolean =
     raw.nonEmpty && !raw.exists(_.isWhitespace)
 
+  /** A path segment. A leading dot is one hidden directory such as `.github`, never `..`. */
   def repoSegment(part: String): Boolean =
-    part.headOption match
+    val body =
+      if part.startsWith(".") && !part.startsWith("..") && part.length > 1 then part.drop(1)
+      else part
+    body.headOption match
       case Some(head) if head.isLetter =>
-        part.forall(char => char.isLetterOrDigit || char == '.' || char == '_' || char == '-')
+        body.forall(char => char.isLetterOrDigit || char == '.' || char == '_' || char == '-')
       case _ => false
 
   /** Lowercase sha256, or None when the text is not 64 hex digits. */

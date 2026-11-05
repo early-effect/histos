@@ -73,6 +73,9 @@ object CommandName:
     trusted("new"),
     trusted("init"),
     trusted("affected"),
+    trusted("doctor"),
+    trusted("deps"),
+    trusted("setup"),
   )
 
   inline def apply(inline raw: String): CommandName = ${
@@ -101,7 +104,7 @@ enum CommandNameError:
 end CommandNameError
 
 /** A CI job name. Same token rule as a task name. `test`, `versions`, `workflow`, `affected`, `launcher`, `doc`,
-  * `pages`, and `cache-seed` are reserved.
+  * `pages`, `cache-seed`, `supply-chain`, and `dependency-snapshot` are reserved.
   */
 opaque type JobName = String
 
@@ -117,6 +120,8 @@ object JobName:
     trusted("doc"),
     trusted("pages"),
     trusted("cache-seed"),
+    trusted("supply-chain"),
+    trusted("dependency-snapshot"),
   )
 
   inline def apply(inline raw: String): JobName = ${
