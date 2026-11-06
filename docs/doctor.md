@@ -2,7 +2,7 @@
 
 `histos doctor` runs registered checks and prints how to fix each finding.
 
-A check has an id, an area, the probes it needs, and a run function. Areas are toolchain, build definition, workflows, repository settings, supply chain, site publish, release, and a plugin id. Probes are local files, GitHub read, GitHub admin, an App token, and the job environment. A missing probe is a skip, with the command that would provide it. A check that does not finish within its timeout fails the run. Warnings do not.
+A check has an id, an area, the probes it needs, and a run function. Areas are toolchain, build definition, workflows, repository settings, supply chain, site publish, release, and a plugin id. Probes are local files, GitHub read, GitHub admin, an App token, and the job environment. A missing probe is a skip, with the command that would provide it. A check that does not finish within its timeout fails the run, and the text names that check id. Warnings do not.
 
 `Diagnostic` carries a check id, a level, a title, a summary, an explanation, and a non-empty list of fixes. A fix is a settings URL, a shell command, a local edit, or a list of steps. There is no fix that sets, reads, or deletes a secret.
 

@@ -25,6 +25,9 @@ import zio.{durationInt, UIO, ZIO}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
+  /** A PATH survey and `clang --version` have to finish inside this. Past it, the check is named and the run fails. */
+  private val checkLimit = 10.seconds
+
   final case class Request(
       area: Option[String],
       json: Boolean,
@@ -67,7 +70,7 @@ object DoctorSurface:
       report <- Runner.run(
         selected(repo, graph, request, machine, hit, auth, pgp, pages),
         DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
-        2.seconds,
+        checkLimit,
       )
       written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, tty, ask, exec, setting)
     yield

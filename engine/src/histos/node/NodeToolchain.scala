@@ -7,7 +7,7 @@ import histos.NodePath
 
 import java.nio.file.{Files, Path}
 
-import zio.{IO, UIO, ZIO}
+import zio.{durationInt, IO, UIO, ZIO}
 
 final case class NodeRuntime(
     binary: NodeBinary,
@@ -71,7 +71,9 @@ object NodeToolchain:
   def resolve(machine: Machine, nodePath: Option[NodePath]): IO[NodeMiss, NodeRuntime] =
     choose(machine, nodePath).map(_.runtime)
 
-  /** Every executable `node` on `PATH`, first to last. A directory that is not a binary is skipped. */
+  /** Every executable `node` on `PATH`, first to last. A directory that is not a binary is skipped, and so is a binary
+    * that does not answer `--version`.
+    */
   def sights(machine: Machine): UIO[List[NodeSight]] =
     val entries =
       machine.env
@@ -79,7 +81,7 @@ object NodeToolchain:
         .toList
         .flatMap(_.split(java.io.File.pathSeparator).toList)
         .filter(_.nonEmpty)
-    ZIO.foreach(entries)(sight).map(distinct)
+    ZIO.foreachPar(entries)(sight).map(distinct)
 
   /** The first binary is below [[Floor]] and a later binary is newer. The newer one is the highest version. */
   def shadow(sights: List[NodeSight]): Option[NodeShadow] =
@@ -152,7 +154,31 @@ object NodeToolchain:
       .flatMap:
         case None         => ZIO.succeed(None)
         case Some(binary) =>
-          NodeProbe.version(binary).map(version => Some(NodeSight(binary, version))).orElseSucceed(None)
+          versionOf(binary)
+            .map(version => Some(NodeSight(binary, version)))
+            .timeout(2.seconds)
+            .map(_.flatten)
+            .orElseSucceed(None)
+
+  /** One PATH entry. A JVM launch per binary spends the doctor check budget before `--version` returns. */
+  private def versionOf(binary: Path): IO[NodeError, NodeVersion] =
+    histos.process.Child
+      .run(spawnVersion(binary), NodeError.Version(binary, NodeVersionError.MissingStatus))
+      .flatMap: ended =>
+        val text = ended.output.trim
+        if ended.status == 0 then
+          ZIO.fromEither(NodeVersion.from(text)).mapError(error => NodeError.Version(binary, error))
+        else ZIO.fail(NodeError.Version(binary, NodeVersionError.Status(ended.status)))
+
+  private def spawnVersion(binary: Path): IO[NodeError, Process] =
+    ZIO
+      .attemptBlocking {
+        new ProcessBuilder(binary.toString, "--version")
+          .redirectErrorStream(true)
+          .redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")))
+          .start()
+      }
+      .mapError(_ => NodeError.Version(binary, NodeVersionError.Missing))
 
   private def distinct(found: List[Option[NodeSight]]): List[NodeSight] =
     found.flatten
