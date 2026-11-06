@@ -27,22 +27,37 @@ object build extends HistosBuild:
         dep"dev.zio::zio-streams:2.1.27",
         dep"org.scala-lang::scala3-compiler:3.10.0",
         dep"org.scala-lang::scaladoc:3.10.0",
-        dep"org.scala-sbt::zinc:2.0.4",
-        // Zinc 2.0.4 still requests jars whose lazy vals call Unsafe.
+        dep"org.scala-sbt::zinc:2.0.5",
+        // Zinc still requests jars whose lazy vals call Unsafe.
         dep"org.scala-sbt::sbinary:0.6.0",
         dep"org.scala-lang.modules::scala-parser-combinators:2.5.0",
         dep"io.get-coursier::coursier:2.1.26",
         dep"org.ow2.asm:asm:9.11.1",
         dep"org.ow2.asm:asm-tree:9.11.1",
+        // scala3-compiler 3.10.0 still requests the rest of ASM at 9.10.1.
+        dep"org.ow2.asm:asm-commons:9.11.1",
+        dep"org.ow2.asm:asm-util:9.11.1",
+        dep"org.ow2.asm:asm-analysis:9.11.1",
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
         // heddle has no gRPC, and the remote-execution stubs are not published.
-        dep"io.grpc:grpc-api:1.73.0",
-        dep"io.grpc:grpc-netty-shaded:1.73.0",
+        dep"io.grpc:grpc-api:1.85.1",
+        dep"io.grpc:grpc-netty-shaded:1.85.1",
+        // scaladoc and flexmark still request Jackson and jsoup below the GHSA fixes.
+        dep"com.fasterxml.jackson.core:jackson-annotations:2.22",
+        dep"com.fasterxml.jackson.core:jackson-core:2.22.4",
+        dep"com.fasterxml.jackson.core:jackson-databind:2.22.4",
+        dep"com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.4",
+        dep"tools.jackson.core:jackson-core:3.2.4",
+        dep"tools.jackson.core:jackson-databind:3.2.4",
+        dep"tools.jackson.dataformat:jackson-dataformat-yaml:3.2.4",
+        dep"org.jsoup:jsoup:1.24.1",
+        // gRPC 1.85.1 still requests guava 33.6.0-android, inside GHSA-xxph-c9ww-hj94.
+        dep"com.google.guava:guava:33.8.0-jre",
       )
       .testDependencies(
         zioTest,
         zioTestSbt,
-        dep"io.grpc:grpc-stub:1.73.0",
+        dep"io.grpc:grpc-stub:1.85.1",
       )
     val client = module("client", Native)(scala3)
       .clang(ClangMajor(21))
