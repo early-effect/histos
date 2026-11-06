@@ -63,7 +63,7 @@ object GitHubProbe:
   private def offline(repo: RepoName, expected: BranchName, job: JobEnv, needed: List[String]): Hit =
     val (secrets, secretsSight) = secretsFrom(job, needed, None, None)
     val app                     = appFrom(job, secretsSight, secrets, needed, None)
-    val covered                 = cover(app.report, unseenRules, repoRead = false, flowRead = false)
+    val covered                 = cover(app.report, unseenRules, repoRead = false, flow = false)
     Hit.Ready(
       Read(
         view(
@@ -84,6 +84,7 @@ object GitHubProbe:
           false,
           false,
           Nil,
+          Sight.Unseen,
         ),
         covered,
       )
@@ -130,7 +131,7 @@ object GitHubProbe:
         val flow                    = workflowOf(workflow)
         val refusals                = repoRefusal(repository) ++ flow.refusals
         val defaultBranch           = branch.getOrElse(expected)
-        val covered                 = cover(app.report, rulesRead, parsedRepo.isDefined, flow.read)
+        val covered                 = cover(app.report, rulesRead, parsedRepo.isDefined, flow.report)
         Hit.Ready(
           Read(
             view(
@@ -151,6 +152,7 @@ object GitHubProbe:
               flow.write,
               flow.allow,
               refusals,
+              flow.sight,
             ),
             covered,
           )
@@ -174,7 +176,8 @@ object GitHubProbe:
   private final case class FlowRead(
       write: Boolean,
       allow: Boolean,
-      read: Boolean,
+      sight: Sight,
+      report: Boolean,
       refusals: List[(ApiCall, Int, String)],
   )
 
@@ -344,13 +347,21 @@ object GitHubProbe:
         case _ => None
     }.headOption
 
+  /** Administration read is what this document needs. A 401 or 403 is unseen, not a supply refusal. */
   private def workflowOf(reply: Reply): FlowRead =
     if reply.status >= 200 && reply.status < 300 then
       GitHubWire.decode[GitHubWire.WorkflowPermissions](reply.body) match
         case Some(doc) =>
-          FlowRead(doc.defaultWorkflowPermissions.contains("write"), doc.canApprove.contains(true), true, Nil)
-        case None => FlowRead(false, false, false, Nil)
-    else FlowRead(false, false, false, refusal(reply, ApiCall.Workflows))
+          FlowRead(
+            doc.defaultWorkflowPermissions.contains("write"),
+            doc.canApprove.contains(true),
+            Sight.Known,
+            true,
+            Nil,
+          )
+        case None => FlowRead(false, false, Sight.Unreadable, true, Nil)
+    else if reply.status == 401 || reply.status == 403 then FlowRead(false, false, Sight.Unseen, true, Nil)
+    else FlowRead(false, false, Sight.Unseen, false, refusal(reply, ApiCall.Workflows))
 
   private def repoRefusal(reply: Reply): List[(ApiCall, Int, String)] =
     if reply.status >= 200 && reply.status < 300 then Nil
@@ -368,7 +379,7 @@ object GitHubProbe:
       app: Boolean,
       rules: RulesRead,
       repoRead: Boolean,
-      flowRead: Boolean,
+      flow: Boolean,
   ): Set[String] =
     val base    = Set("supply.secret-missing", "supply.dependabot-overlap")
     val withApp =
@@ -378,7 +389,7 @@ object GitHubProbe:
       else if rules.report then withApp + "supply.required-check"
       else withApp
     val withRepo = if repoRead then withRules + "supply.default-branch" else withRules
-    if flowRead then withRepo + "supply.default-token" + "supply.allow-prs" else withRepo
+    if flow then withRepo + "supply.default-token" + "supply.allow-prs" else withRepo
 
   private def view(
       repo: RepoName,
@@ -398,6 +409,7 @@ object GitHubProbe:
       tokenWrite: Boolean,
       allowPrs: Boolean,
       refusals: List[(ApiCall, Int, String)],
+      flowSight: Sight,
   ): GitHubView =
     val kind =
       if job.actions && job.githubToken.contains(token) then TokenKind.Github
@@ -429,6 +441,7 @@ object GitHubProbe:
       secretsSight,
       app.sight,
       rulesSight,
+      flowSight,
       job.step.getOrElse(StepOutcome.Success),
     )
 

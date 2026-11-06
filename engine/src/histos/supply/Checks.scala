@@ -30,6 +30,7 @@ final case class GitHubView(
     secretsSight: Sight,
     appSight: Sight,
     rulesSight: Sight,
+    flowSight: Sight,
     tokenStep: StepOutcome = StepOutcome.Success,
 )
 
@@ -71,7 +72,7 @@ object SupplyChecks:
       alerts(view),
       branch(view),
       writes(view),
-      allow(view),
+      allow(view, policy),
       pins(view),
       schedule(view),
     ).filter(outcome => covered.contains(idOf(outcome)))
@@ -192,12 +193,20 @@ object SupplyChecks:
     else found(SupplyDiagnostic.DefaultBranchMismatch(view.expectedBranch, view.defaultBranch, view.repo))
 
   private def writes(view: GitHubView): Outcome =
-    if view.tokenWrite then found(SupplyDiagnostic.DefaultTokenWrite(view.repo))
-    else ok("supply.default-token", "the default token is read")
+    view.flowSight match
+      case Sight.Unseen     => found(SupplyDiagnostic.DefaultTokenBlind(view.repo, Blind.Refused))
+      case Sight.Unreadable => found(SupplyDiagnostic.DefaultTokenBlind(view.repo, Blind.Unreadable))
+      case Sight.Known      =>
+        if view.tokenWrite then found(SupplyDiagnostic.DefaultTokenWrite(view.repo))
+        else ok("supply.default-token", "the default token is read")
 
-  private def allow(view: GitHubView): Outcome =
-    if view.allowPrs then found(SupplyDiagnostic.AllowActionsToCreatePrs(view.repo, view.token))
-    else ok("supply.allow-prs", "Actions cannot create pull requests")
+  private def allow(view: GitHubView, policy: SupplyChain): Outcome =
+    view.flowSight match
+      case Sight.Unseen     => found(SupplyDiagnostic.AllowPullRequestsBlind(view.repo, Blind.Refused))
+      case Sight.Unreadable => found(SupplyDiagnostic.AllowPullRequestsBlind(view.repo, Blind.Unreadable))
+      case Sight.Known      =>
+        if view.allowPrs then found(SupplyDiagnostic.AllowActionsToCreatePrs(view.repo, policy.updates.author))
+        else ok("supply.allow-prs", "Actions cannot create pull requests")
 
   private def pins(view: GitHubView): Outcome =
     if view.shaPins then ok("supply.sha-pin-policy", "full sha pins are required")

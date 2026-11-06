@@ -372,6 +372,7 @@ object SupplyChecksSpec extends ZIOSpecDefault:
       Sight.Known,
       Sight.Known,
       Sight.Known,
+      Sight.Known,
     )
 
   def spec = suite("SupplyChecksSpec")(
@@ -401,6 +402,7 @@ object SupplyChecksSpec extends ZIOSpecDefault:
       val branch   = SupplyChecks.run(view().copy(defaultBranch = BranchName.trusted("trunk")), SupplyChain())
       val writes   = SupplyChecks.run(view().copy(tokenWrite = true), SupplyChain())
       val allow    = SupplyChecks.run(view(TokenKind.Github).copy(allowPrs = true), SupplyChain())
+      val unseen   = SupplyChecks.run(view().copy(flowSight = Sight.Unseen), SupplyChain())
       val pins     = SupplyChecks.run(view().copy(shaPins = false), SupplyChain())
       val schedule = SupplyChecks.run(
         view().copy(disabled = Some(RepoPath.trusted(".github/workflows/histos-deps.yml"))),
@@ -421,7 +423,13 @@ object SupplyChecksSpec extends ZIOSpecDefault:
         alerts.exists(found("supply.dependabot-alerts")),
         branch.exists(found("supply.default-branch")),
         writes.exists(found("supply.default-token")),
-        allow.exists(found("supply.allow-prs")),
+        allow.exists:
+          case Outcome.Found(diagnostic) =>
+            diagnostic.check.value == "supply.allow-prs" && diagnostic.level == Level.Info
+          case _ => false
+        ,
+        unseen.exists(warning("supply.default-token")),
+        unseen.exists(warning("supply.allow-prs")),
         pins.exists(found("supply.sha-pin-policy")),
         schedule.exists(found("supply.schedule-disabled")),
         refused.exists(_.level == Level.Error),
@@ -433,6 +441,11 @@ object SupplyChecksSpec extends ZIOSpecDefault:
   private def found(id: String)(outcome: Outcome): Boolean =
     outcome match
       case Outcome.Found(diagnostic) => diagnostic.check.value == id
+      case _                         => false
+
+  private def warning(id: String)(outcome: Outcome): Boolean =
+    outcome match
+      case Outcome.Found(diagnostic) => diagnostic.check.value == id && diagnostic.level == Level.Warning
       case _                         => false
 end SupplyChecksSpec
 

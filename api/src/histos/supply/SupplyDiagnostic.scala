@@ -223,20 +223,39 @@ enum SupplyDiagnostic(
         ),
       )
 
-  case AllowActionsToCreatePrs(repo: RepoName, token: TokenKind)
+  case DefaultTokenBlind(repo: RepoName, why: Blind)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.default-token"),
+        Level.Warning,
+        "the default token was not read",
+        workflowSight(why, repo),
+        "GET /repos/{owner}/{repo}/actions/permissions/workflow needs repository Administration read. The supply App token and the Actions token do not have it.",
+        workflowSightFixes,
+      )
+
+  case AllowActionsToCreatePrs(repo: RepoName, author: PrAuthor)
       extends SupplyDiagnostic(
         CheckId.trusted("supply.allow-prs"),
-        if token == TokenKind.Github then Level.Error else Level.Info,
+        allowLevel(author),
         "Actions may create pull requests",
         "Allow GitHub Actions to create and approve pull requests.",
-        if token == TokenKind.Github then "A GITHUB_TOKEN author needs this setting. An App token does not."
-        else "An App or a PAT opens the pull request, so this setting is not required.",
+        allowExplain(author),
         fixes(
           Fix.Settings(
             HttpUrl.trusted(s"https://github.com/${repo.value}/settings/actions"),
             "Workflow permissions",
           )
         ),
+      )
+
+  case AllowPullRequestsBlind(repo: RepoName, why: Blind)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.allow-prs"),
+        Level.Warning,
+        "pull request approval by Actions was not read",
+        workflowSight(why, repo),
+        "The same document says whether Actions may create and approve pull requests.",
+        workflowSightFixes,
       )
 
   case ShaPinPolicyOff(repo: RepoName)
@@ -436,6 +455,35 @@ private def ruleFix(rule: RuleSource, repo: RepoName, expected: JobName): Fix =
     case RuleSource.Absent =>
       (s"https://github.com/${repo.value}/settings/rules", s"add a rule that requires \"${expected.value}\"")
   Fix.Settings(HttpUrl.trusted(url), click)
+
+private def workflowSight(why: Blind, repo: RepoName): String =
+  val lead = why match
+    case Blind.Refused      => "This token cannot see workflow permissions (Administration read)"
+    case Blind.Unreadable   => "GitHub returned a document we do not understand for workflow permissions"
+    case Blind.NoCredential => "No credential can answer workflow permissions"
+    case Blind.Unreachable  => "GitHub could not be reached for workflow permissions"
+  s"$lead on ${repo.value}."
+
+private def workflowSightFixes: ::[Fix] =
+  fixes(
+    Fix.Steps(
+      lines(
+        "Read workflow permissions with a credential that has repository Administration read.",
+        "The Actions token and the supply App token do not. A user token does.",
+      )
+    )
+  )
+
+private def allowLevel(author: PrAuthor): Level =
+  author match
+    case PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) | PrAuthor.Pat(_) => Level.Info
+
+private def allowExplain(author: PrAuthor): String =
+  author match
+    case PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) =>
+      "An App opens the pull request, so this setting is not required."
+    case PrAuthor.Pat(_) =>
+      "A PAT opens the pull request, so this setting is not required."
 
 private def signingName(signing: CommitSigning): String = signing match
   case CommitSigning.ApiSigned              => "CommitSigning.ApiSigned"

@@ -78,7 +78,7 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
               ZIO.succeed:
                 host match
                   case None    => Some("from-gh")
-                  case Some(_) => None
+                  case Some(_) => None,
           )
           .map: token =>
             assertTrue(
@@ -246,6 +246,49 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
         ask(Pages(rules = Reply(200, "[]"), protection = Reply(200, classicSigned))).map: outcomes =>
           assertTrue(signing(outcomes), ok(outcomes, "supply.required-check")),
     ),
+    suite("workflow permissions")(
+      test("a 403 warns on both checks and is not a refusal"):
+        ask(Pages(flow = Reply(403, """{"message":"Resource not accessible by integration"}"""))).map: outcomes =>
+          val text = shown(outcomes)
+          assertTrue(
+            warning(outcomes, "supply.default-token"),
+            warning(outcomes, "supply.allow-prs"),
+            text.contains("cannot see workflow permissions (Administration read)"),
+            !text.contains("supply.github-refused"),
+          )
+      ,
+      test("a 200 body that does not decode is unreadable"):
+        ask(Pages(flow = Reply(200, "not-json"))).map: outcomes =>
+          val text = shown(outcomes)
+          assertTrue(
+            warning(outcomes, "supply.default-token"),
+            warning(outcomes, "supply.allow-prs"),
+            text.contains("do not understand"),
+            !text.contains("supply.github-refused"),
+          )
+      ,
+      test("a write default warns and an App author keeps approval at info when the read token is the Actions token"):
+        val job  = JobEnv.from(Map("GITHUB_ACTIONS" -> "true", "GITHUB_TOKEN" -> "token"))
+        val body =
+          """{"default_workflow_permissions":"write","can_approve_pull_request_reviews":true}"""
+        ask(Pages(flow = Reply(200, body)), job).map: outcomes =>
+          val text = shown(outcomes)
+          assertTrue(
+            warning(outcomes, "supply.default-token"),
+            level(outcomes, "supply.allow-prs").contains(histos.doctor.Level.Info),
+            text.contains("An App opens the pull request"),
+            !text.contains("supply.github-refused"),
+          )
+      ,
+      test("a 404 on workflow permissions is still a refusal"):
+        ask(Pages(flow = Reply(404, "missing"))).map: outcomes =>
+          val text = shown(outcomes)
+          assertTrue(
+            found(outcomes, "supply.github-refused"),
+            !text.contains("supply.default-token"),
+            !text.contains("supply.allow-prs"),
+          ),
+    ),
     suite("closed")(
       test("no credential fails the supply answers and the status is 1"):
         ZIO
@@ -359,6 +402,13 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
     outcomes.exists:
       case Outcome.Found(diagnostic) => diagnostic.check.value == id
       case _                         => false
+
+  private def warning(outcomes: List[Outcome], id: String): Boolean =
+    level(outcomes, id).contains(histos.doctor.Level.Warning)
+
+  private def level(outcomes: List[Outcome], id: String): Option[histos.doctor.Level] =
+    outcomes.collectFirst:
+      case Outcome.Found(diagnostic) if diagnostic.check.value == id => diagnostic.level
 
   private def signing(outcomes: List[Outcome]): Boolean =
     outcomes.exists:

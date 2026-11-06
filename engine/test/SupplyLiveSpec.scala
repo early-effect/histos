@@ -270,7 +270,7 @@ object FixAndProbeSpec extends ZIOSpecDefault:
             case _                    => false,
         )
     ,
-    test("a 403 refuses workflow permissions and does not claim the required contexts are empty"):
+    test("a 403 refuses the repository document and does not claim the required contexts are empty"):
       probe(403).flatMap: hit =>
         val ready = hit match
           case histos.doctor.GitHubProbe.Hit.Ready(read) => SupplyChecks.run(read.view, SupplyChain(), read.covered)
@@ -281,6 +281,16 @@ object FixAndProbeSpec extends ZIOSpecDefault:
           ready.exists:
             case Outcome.Found(diagnostic) => diagnostic.check.value == "supply.github-refused"
             case _                         => false
+          ,
+          ready.exists:
+            case Outcome.Found(diagnostic) =>
+              diagnostic.check.value == "supply.default-token" && diagnostic.level == histos.doctor.Level.Warning
+            case _ => false
+          ,
+          ready.exists:
+            case Outcome.Found(diagnostic) =>
+              diagnostic.check.value == "supply.allow-prs" && diagnostic.level == histos.doctor.Level.Warning
+            case _ => false
           ,
           required.exists(diagnostic => diagnostic.summary.contains("cannot see")),
           !required.exists(diagnostic => diagnostic.summary.contains("does not require")),
