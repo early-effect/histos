@@ -22,6 +22,7 @@ jobs:
       - run: ./histos doctor --preflight release-histos
       - run: "./histos publish release histos"
         env:
+          HISTOS_SESSION: release
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           PGP_SECRET: ${{ secrets.PGP_SECRET }}
