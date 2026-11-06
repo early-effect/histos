@@ -248,6 +248,31 @@ enum SupplyDiagnostic(
         ),
       )
 
+  case ActionsCannotOpenPullRequests(repo: RepoName)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.allow-prs"),
+        Level.Error,
+        "Actions cannot open pull requests",
+        "Allow GitHub Actions to create and approve pull requests is off.",
+        "The weekly pull request is opened by the Actions bot. Turn the setting on, or name an App, an owner, or a PAT as the author.",
+        fixes(
+          Fix.Settings(
+            HttpUrl.trusted(s"https://github.com/${repo.value}/settings/actions"),
+            "Workflow permissions",
+          )
+        ),
+      )
+
+  case WorkflowFiles
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.workflow-files"),
+        Level.Warning,
+        "a person commits the workflow files",
+        "The Actions bot does not commit .github/workflows.",
+        "Run ./histos workflow --update and commit the result.",
+        fixes(Fix.Command(ShellLine.trusted("./histos workflow --update"))),
+      )
+
   case AllowPullRequestsBlind(repo: RepoName, why: Blind)
       extends SupplyDiagnostic(
         CheckId.trusted("supply.allow-prs"),
@@ -476,10 +501,12 @@ private def workflowSightFixes: ::[Fix] =
 
 private def allowLevel(author: PrAuthor): Level =
   author match
-    case PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) | PrAuthor.Pat(_) => Level.Info
+    case PrAuthor.Actions | PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) | PrAuthor.Pat(_) => Level.Info
 
 private def allowExplain(author: PrAuthor): String =
   author match
+    case PrAuthor.Actions =>
+      "The Actions bot opens the pull request, so this setting is what lets it."
     case PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) =>
       "An App opens the pull request, so this setting is not required."
     case PrAuthor.Pat(_) =>

@@ -141,15 +141,22 @@ enum CommitSplit:
   case PerKind, PerDependency, Single
 
 enum PrAuthor:
+  /** The Actions bot. No app, no secrets. A person commits `.github/workflows`. */
+  case Actions
   case App(appId: SecretName, privateKey: SecretName)
   case OwnerOpens(appId: SecretName, privateKey: SecretName)
   case Pat(token: SecretName)
 
 object PrAuthor:
-  val default: PrAuthor = App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
+  val default: PrAuthor = Actions
+
+  /** The App this repository names. A build file compiled by an older driver writes the same `App` by hand. */
+  val histosDeps: PrAuthor =
+    App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
 
   extension (author: PrAuthor)
     def secretNames: List[SecretName] = author match
+      case Actions             => Nil
       case App(id, key)        => List(id, key)
       case OwnerOpens(id, key) => List(id, key)
       case Pat(token)          => List(token)

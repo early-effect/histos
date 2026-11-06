@@ -1,4 +1,6 @@
 import histos.*
+import histos.plugin.SecretName
+import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
   def graph =
@@ -101,6 +103,14 @@ object build extends HistosBuild:
           Some(NodeFloor(25)),
           Some(ToolRevision("21.1.8")),
           Some(ToolRevision("1.62.1")),
+        )
+      )
+      .supplyChain(
+        SupplyChain(updates =
+          UpdatePolicy(author =
+            // The published driver compiles this file. It has App, and it does not have PrAuthor.histosDeps.
+            PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
+          )
         )
       )
       .docCheck(

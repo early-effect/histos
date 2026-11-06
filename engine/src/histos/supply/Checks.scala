@@ -54,11 +54,24 @@ object SupplyChecks:
     "supply.allow-prs",
     "supply.sha-pin-policy",
     "supply.schedule-disabled",
+    "supply.workflow-files",
+  )
+
+  /** Asked only when the author has a credential. Actions does not ask them, and a skip is not a pass. */
+  private val appGate: Set[String] = Set(
+    "supply.app-installed",
+    "supply.secret-missing",
+    "supply.app-permissions",
+    "supply.app-token",
+    "supply.required-check",
   )
 
   def run(view: GitHubView, policy: SupplyChain, covered: Set[String] = all): List[Outcome] =
     val refused = view.refusals.flatMap: (call, status, body) =>
       histos.doctor.RefusalMap.refused(call, status, body).map(Outcome.Found(_))
+    val asked = policy.updates.author match
+      case PrAuthor.Actions => covered -- appGate
+      case _                => covered
     val checks = List(
       installed(view),
       secret(view, policy),
@@ -75,20 +88,31 @@ object SupplyChecks:
       allow(view, policy),
       pins(view),
       schedule(view),
-    ).filter(outcome => covered.contains(idOf(outcome)))
-    refused ++ checks
+    ).filter(outcome => asked.contains(idOf(outcome)))
+    refused ++ checks ++ workflowFiles(policy)
 
-  /** The three supply answers, plus App permissions, when nothing was read. A skip is not a pass. */
+  /** The three supply answers, plus App permissions, when nothing was read. A skip is not a pass. Actions does not ask
+    * them.
+    */
   def blind(repo: Option[RepoName], policy: SupplyChain, why: Blind): List[Outcome] =
-    val secret = policy.updates.author.secretNames match
-      case head :: _ => found(SupplyDiagnostic.SecretBlind(head, repo, why))
-      case Nil       => ok("supply.secret-missing", "no secret is required")
-    List(
-      secret,
-      found(SupplyDiagnostic.AppBlind(repo, why)),
-      found(SupplyDiagnostic.AppPermissionsBlind(repo, why)),
-      found(SupplyDiagnostic.RuleBlind(repo, why)),
-    )
+    policy.updates.author match
+      case PrAuthor.Actions => workflowFiles(policy)
+      case _                =>
+        val secret = policy.updates.author.secretNames match
+          case head :: _ => found(SupplyDiagnostic.SecretBlind(head, repo, why))
+          case Nil       => ok("supply.secret-missing", "no secret is required")
+        List(
+          secret,
+          found(SupplyDiagnostic.AppBlind(repo, why)),
+          found(SupplyDiagnostic.AppPermissionsBlind(repo, why)),
+          found(SupplyDiagnostic.RuleBlind(repo, why)),
+        )
+
+  /** Outside the probe cover. The Actions author always warns that a person commits workflow files. */
+  private def workflowFiles(policy: SupplyChain): List[Outcome] =
+    policy.updates.author match
+      case PrAuthor.Actions => List(found(SupplyDiagnostic.WorkflowFiles))
+      case _                => Nil
 
   private def idOf(outcome: Outcome): String =
     outcome match
@@ -205,8 +229,13 @@ object SupplyChecks:
       case Sight.Unseen     => found(SupplyDiagnostic.AllowPullRequestsBlind(view.repo, Blind.Refused))
       case Sight.Unreadable => found(SupplyDiagnostic.AllowPullRequestsBlind(view.repo, Blind.Unreadable))
       case Sight.Known      =>
-        if view.allowPrs then found(SupplyDiagnostic.AllowActionsToCreatePrs(view.repo, policy.updates.author))
-        else ok("supply.allow-prs", "Actions cannot create pull requests")
+        policy.updates.author match
+          case PrAuthor.Actions =>
+            if view.allowPrs then ok("supply.allow-prs", "Actions can create pull requests")
+            else found(SupplyDiagnostic.ActionsCannotOpenPullRequests(view.repo))
+          case other =>
+            if view.allowPrs then found(SupplyDiagnostic.AllowActionsToCreatePrs(view.repo, other))
+            else ok("supply.allow-prs", "Actions cannot create pull requests")
 
   private def pins(view: GitHubView): Outcome =
     if view.shaPins then ok("supply.sha-pin-policy", "full sha pins are required")

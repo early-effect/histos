@@ -257,8 +257,9 @@ object FixAndProbeSpec extends ZIOSpecDefault:
     test("a 200 permission view fills the checks that were read"):
       probe(200).flatMap: hit =>
         val ready = hit match
-          case histos.doctor.GitHubProbe.Hit.Ready(read) => SupplyChecks.run(read.view, SupplyChain(), read.covered)
-          case _                                         => Nil
+          case histos.doctor.GitHubProbe.Hit.Ready(read) =>
+            SupplyChecks.run(read.view, SupplyChain(updates = UpdatePolicy(author = PrAuthor.histosDeps)), read.covered)
+          case _ => Nil
         assertTrue(
           ready.exists(_.isInstanceOf[Outcome.Ok]),
           ready.exists:
@@ -273,8 +274,9 @@ object FixAndProbeSpec extends ZIOSpecDefault:
     test("a 403 refuses the repository document and does not claim the required contexts are empty"):
       probe(403).flatMap: hit =>
         val ready = hit match
-          case histos.doctor.GitHubProbe.Hit.Ready(read) => SupplyChecks.run(read.view, SupplyChain(), read.covered)
-          case _                                         => Nil
+          case histos.doctor.GitHubProbe.Hit.Ready(read) =>
+            SupplyChecks.run(read.view, SupplyChain(updates = UpdatePolicy(author = PrAuthor.histosDeps)), read.covered)
+          case _ => Nil
         val required = ready.collect:
           case Outcome.Found(diagnostic) if diagnostic.check.value == "supply.required-check" => diagnostic
         assertTrue(

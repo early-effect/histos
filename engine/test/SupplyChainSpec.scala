@@ -276,6 +276,35 @@ object PrFlowSpec extends ZIOSpecDefault:
     PrRequest(UpdatePolicy(), branch, main, headOid, changes, human, open, None)
 
   def spec = suite("PrFlowSpec")(
+    test("an Actions plan drops workflow files and names the local update"):
+      val changes = List(
+        KindChange(BumpKind.Libraries, List("dependencies.lock" -> "next")),
+        KindChange(
+          BumpKind.Actions,
+          List(".github/workflows/ci.yml" -> "yaml", "project/ActionPins.scala" -> "sha"),
+        ),
+      )
+      val planned = PrFlow.plan(request(changes))
+      val app     = PrFlow.plan(
+        request(changes).copy(policy = UpdatePolicy(author = PrAuthor.histosDeps))
+      )
+      val filesOf =
+        (calls: List[GhCall]) => calls.collect { case GhCall.CommitOnBranch(_, _, _, files) => files.map(_._1) }.flatten
+      assertTrue(
+        planned.exists(calls =>
+          !filesOf(calls).exists(PrFlow.workflowPath) &&
+            calls.exists:
+              case GhCall.OpenOrUpdate(_, body) => body.contains("./histos workflow --update")
+              case _                            => false
+        ),
+        app.exists(calls => filesOf(calls).exists(PrFlow.workflowPath)),
+        app.exists(calls =>
+          calls.exists:
+            case GhCall.OpenOrUpdate(_, body) => !body.contains("./histos workflow --update")
+            case _                            => false
+        ),
+      )
+    ,
     test("api signed commits once per kind, reuses the marker, and closes a stale pull request"):
       val changes = List(KindChange(BumpKind.Libraries, List("histos.scala" -> "next")))
       val planned = PrFlow.plan(request(changes))
@@ -375,14 +404,24 @@ object SupplyChecksSpec extends ZIOSpecDefault:
       Sight.Known,
     )
 
+  private val app = SupplyChain(updates = UpdatePolicy(author = PrAuthor.histosDeps))
+
+  private val appGate = Set(
+    "supply.secret-missing",
+    "supply.app-installed",
+    "supply.app-permissions",
+    "supply.app-token",
+    "supply.required-check",
+  )
+
   def spec = suite("SupplyChecksSpec")(
     test("a clean view is ok and each diagnostic is reachable"):
-      val clean      = SupplyChecks.run(view(), SupplyChain())
-      val secret     = SupplyChecks.run(view().copy(secrets = Set.empty), SupplyChain())
-      val missing    = SupplyChecks.run(view().copy(appInstalled = false), SupplyChain())
-      val permission = SupplyChecks.run(view().copy(permissions = Map.empty), SupplyChain())
-      val token      = SupplyChecks.run(view().copy(tokenStep = StepOutcome.Failure), SupplyChain())
-      val required   = SupplyChecks.run(view().copy(required = List(JobName("test"))), SupplyChain())
+      val clean      = SupplyChecks.run(view(), app)
+      val secret     = SupplyChecks.run(view().copy(secrets = Set.empty), app)
+      val missing    = SupplyChecks.run(view().copy(appInstalled = false), app)
+      val permission = SupplyChecks.run(view().copy(permissions = Map.empty), app)
+      val token      = SupplyChecks.run(view().copy(tokenStep = StepOutcome.Failure), app)
+      val required   = SupplyChecks.run(view().copy(required = List(JobName("test"))), app)
       val signing    = SupplyChecks.run(
         view().copy(mergeMethods = Set(MergeMethod.Merge)),
         SupplyChain().copy(updates =
@@ -395,15 +434,15 @@ object SupplyChecksSpec extends ZIOSpecDefault:
         ),
       )
       val overlap =
-        SupplyChecks.run(view().copy(dependabot = List(Ecosystem.GithubActions, Ecosystem.Npm)), SupplyChain())
-      val security = SupplyChecks.run(view().copy(securityPrs = List(Ecosystem.Maven)), SupplyChain())
-      val graph    = SupplyChecks.run(view().copy(graphOn = false), SupplyChain())
-      val alerts   = SupplyChecks.run(view().copy(alertsOn = false), SupplyChain())
-      val branch   = SupplyChecks.run(view().copy(defaultBranch = BranchName.trusted("trunk")), SupplyChain())
-      val writes   = SupplyChecks.run(view().copy(tokenWrite = true), SupplyChain())
-      val allow    = SupplyChecks.run(view(TokenKind.Github).copy(allowPrs = true), SupplyChain())
-      val unseen   = SupplyChecks.run(view().copy(flowSight = Sight.Unseen), SupplyChain())
-      val pins     = SupplyChecks.run(view().copy(shaPins = false), SupplyChain())
+        SupplyChecks.run(view().copy(dependabot = List(Ecosystem.GithubActions, Ecosystem.Npm)), app)
+      val security = SupplyChecks.run(view().copy(securityPrs = List(Ecosystem.Maven)), app)
+      val graph    = SupplyChecks.run(view().copy(graphOn = false), app)
+      val alerts   = SupplyChecks.run(view().copy(alertsOn = false), app)
+      val branch   = SupplyChecks.run(view().copy(defaultBranch = BranchName.trusted("trunk")), app)
+      val writes   = SupplyChecks.run(view().copy(tokenWrite = true), app)
+      val allow    = SupplyChecks.run(view(TokenKind.Github).copy(allowPrs = true), app)
+      val unseen   = SupplyChecks.run(view().copy(flowSight = Sight.Unseen), app)
+      val pins     = SupplyChecks.run(view().copy(shaPins = false), app)
       val schedule = SupplyChecks.run(
         view().copy(disabled = Some(RepoPath.trusted(".github/workflows/histos-deps.yml"))),
         SupplyChain(),
@@ -436,6 +475,36 @@ object SupplyChecksSpec extends ZIOSpecDefault:
         histos.doctor.RefusalMap.refused(ApiCall.Rules, 404, "missing").isDefined,
         histos.doctor.RefusalMap.refused(ApiCall.Contents, 422, "invalid").isDefined,
       )
+    ,
+    test("the Actions author warns about workflow files and does not ask the app gate"):
+      val open  = SupplyChecks.run(view().copy(allowPrs = true), SupplyChain())
+      val shut  = SupplyChecks.run(view().copy(allowPrs = false), SupplyChain())
+      val blind = SupplyChecks.run(view().copy(flowSight = Sight.Unseen, allowPrs = true), SupplyChain())
+      val ids   = open.collect:
+        case Outcome.Found(diagnostic) => diagnostic.check.value
+        case Outcome.Ok(id, _)         => id.value
+        case Outcome.Skipped(id, _, _) => id.value
+      assertTrue(
+        !ids.exists(appGate.contains),
+        open.exists(warning("supply.workflow-files")),
+        open.forall:
+          case Outcome.Found(diagnostic) => diagnostic.level != Level.Error
+          case _                         => true
+        ,
+        shut.exists:
+          case Outcome.Found(diagnostic) =>
+            diagnostic.check.value == "supply.allow-prs" && diagnostic.level == Level.Error
+          case _ => false
+        ,
+        blind.exists(warning("supply.allow-prs")),
+        blind.exists(warning("supply.workflow-files")),
+        SupplyChecks
+          .blind(Some(repo), SupplyChain(), Blind.NoCredential)
+          .forall:
+            case Outcome.Found(diagnostic) =>
+              diagnostic.check.value == "supply.workflow-files" && diagnostic.level == Level.Warning
+            case _ => false,
+      ),
   )
 
   private def found(id: String)(outcome: Outcome): Boolean =

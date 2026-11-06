@@ -397,10 +397,15 @@ object WorkflowSpec extends ZIOSpecDefault:
     test("this repository builds one assembly and other builds stay on the shim"):
       val base = graph(Splits.aggregate)
       val api  = histos.module("api", Platform.Jvm)(ScalaVersion("3.10.0"))
-      def hosted(site: histos.HttpUrl, remote: histos.ScmConnection) =
+      def hosted(
+          site: histos.HttpUrl,
+          remote: histos.ScmConnection,
+          supply: SupplyChain = SupplyChain(),
+      ) =
         histos.Projects
           .organization(histos.Organization("rocks.earlyeffect"))
-          .scm(histos.Scm(site, remote))(
+          .scm(histos.Scm(site, remote))
+          .supplyChain(supply)(
             histos.ships(histos.ship("lib", histos.version.ShipNumber("0.2.0"))(api)),
             api,
           )
@@ -443,16 +448,33 @@ object WorkflowSpec extends ZIOSpecDefault:
         ownCi.contains("\n    needs: toolchain\n"),
         ownCi.contains("needs.toolchain.outputs.built == 'true'"),
         ownCi.contains("built: ${{ steps.jar.outputs.built }}"),
-        // The app mint continues on error so doctor still runs. Nothing else in ci.yml may.
-        ownCi.split("continue-on-error:").length == 3,
-        ownCi.split("continue-on-error: true\n        uses: actions/create-github-app-token@").length == 3,
+        // The unnamed author is Actions, so ci.yml does not mint. An App author still does, twice.
+        !ownCi.contains("actions/create-github-app-token@"),
+        !ownCi.contains("continue-on-error:"),
+        ciOf(
+          hosted(
+            histos.HttpUrl("https://github.com/early-effect/histos"),
+            histos.ScmConnection("scm:git@github.com:early-effect/histos.git"),
+            SupplyChain(updates = histos.supply.UpdatePolicy(author = histos.supply.PrAuthor.histosDeps)),
+          )
+        ) match
+          case Some(yaml) =>
+            yaml.split("continue-on-error: true\n        uses: actions/create-github-app-token@").length == 3
+          case None => false,
         !before.contains("if [ ! -f dist/histos.jar ]"),
         workflow.contains("./histos assembly"),
         supply.contains("if [ ! -f dist/histos.jar ]; then"),
         supply.contains("./histos workflow --check"),
         depsOf(own) match
-          case Some(deps) => deps.contains("case \"$usage\" in") && !deps.contains("needs: toolchain")
-          case None       => false
+          case Some(deps) =>
+            deps.contains("case \"$usage\" in") && !deps.contains("needs: toolchain") &&
+            deps.contains("GH_TOKEN: ${{ github.token }}") &&
+            deps.contains("contents: write") &&
+            deps.contains("pull-requests: write") &&
+            !deps.contains("actions/create-github-app-token@") &&
+            !deps.contains("HISTOS_SECRET_PRESENT_") &&
+            !deps.contains("HISTOS_STEP_APP")
+          case None => false
         ,
         ciOf(other) match
           case Some(yaml) => !yaml.contains("toolchain:")

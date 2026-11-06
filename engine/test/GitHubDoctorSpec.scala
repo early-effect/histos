@@ -12,9 +12,18 @@ import zio.{Ref, UIO, ZIO}
 import zio.test.*
 
 object GitHubDoctorSpec extends ZIOSpecDefault:
-  private val repo           = RepoName.trusted("early-effect/specular")
-  private val main           = BranchName.trusted("main")
-  private val needed         = List("HISTOS_APP_ID", "HISTOS_APP_PRIVATE_KEY")
+  private val repo      = RepoName.trusted("early-effect/specular")
+  private val main      = BranchName.trusted("main")
+  private val needed    = List("HISTOS_APP_ID", "HISTOS_APP_PRIVATE_KEY")
+  private val appPolicy = SupplyChain(updates = UpdatePolicy(author = PrAuthor.histosDeps))
+  private val appGraph  = ProjectGraph.trusted(
+    Nil,
+    histos.Splits.aggregate,
+    histos.version.Catalog.empty,
+    None,
+    Nil,
+    supply = appPolicy,
+  )
   private val repositoryBody =
     """{"default_branch":"main","owner":{"login":"early-effect","type":"Organization"},"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}"""
   private val userBody =
@@ -300,7 +309,7 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
             DoctorSurface
               .runWith(
                 root,
-                ProjectGraph.trusted(Nil),
+                appGraph,
                 DoctorSurface.Request(Some("supply-chain"), false, None, false, false),
                 TestMachine.at(root, Map.empty),
                 net,
@@ -320,6 +329,38 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
                   text.contains("supply.required-check"),
                   text.contains("No credential can answer"),
                   !text.contains("skipped supply"),
+                )
+      ,
+      test("an Actions author with no credential warns and exits 0"):
+        ZIO
+          .attempt(Files.createTempDirectory("histos-doctor-actions"))
+          .flatMap: root =>
+            val net = new Net:
+              def send(method: String, url: String, body: String, headers: List[(String, String)]) =
+                ZIO.dieMessage("no socket")
+            DoctorSurface
+              .runWith(
+                root,
+                ProjectGraph.trusted(Nil),
+                DoctorSurface.Request(Some("supply-chain"), false, None, false, false),
+                TestMachine.at(root, Map.empty),
+                net,
+                Map.empty,
+                None,
+                false,
+                _ => ZIO.succeed(FixApply.Answer.No),
+                _ => ZIO.unit,
+                _ => ZIO.unit,
+              )
+              .map: (code, text) =>
+                assertTrue(
+                  code == 0,
+                  text.contains("supply.workflow-files"),
+                  !text.contains("supply.secret-missing"),
+                  !text.contains("supply.app-installed"),
+                  !text.contains("supply.app-permissions"),
+                  !text.contains("supply.app-token"),
+                  !text.contains("supply.required-check"),
                 )
       ,
       test("the token string is absent from the report"):
@@ -347,17 +388,23 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
               .map: (_, text) =>
                 assertTrue(!text.contains(secret)),
     ),
-    test("preflight stays offline and the full doctor mints the app token"):
-      val graph = ProjectGraph.trusted(Nil)
-      val pre   = SupplyYaml.preflight(graph, "workflow")
-      val full  = SupplyYaml.fullDoctor(graph.supply.updates.author)
-      val pat   = SupplyYaml.fullDoctor(PrAuthor.Pat(SecretName("TOKEN")))
+    test("preflight stays offline and the full doctor mints only for an author with a credential"):
+      val graph   = ProjectGraph.trusted(Nil)
+      val pre     = SupplyYaml.preflight(graph, "workflow")
+      val actions = SupplyYaml.fullDoctor(graph.supply.updates.author)
+      val app     = SupplyYaml.fullDoctor(PrAuthor.histosDeps)
+      val pat     = SupplyYaml.fullDoctor(PrAuthor.Pat(SecretName("TOKEN")))
       assertTrue(
+        graph.supply.updates.author == PrAuthor.Actions,
         pre == List("      - run: ./histos doctor --preflight workflow"),
-        full.exists(_.contains("actions/create-github-app-token@")),
-        full.exists(_.contains("GH_TOKEN: ${{ steps.app.outputs.token || github.token }}")),
-        full.count(_.contains("HISTOS_SECRET_PRESENT_")) == 2,
         !pre.exists(_.contains("GH_TOKEN")),
+        !actions.exists(_.contains("actions/create-github-app-token@")),
+        actions.exists(_.contains("GH_TOKEN: ${{ github.token }}")),
+        !actions.exists(_.contains("HISTOS_SECRET_PRESENT_")),
+        !actions.exists(_.contains("HISTOS_STEP_APP")),
+        app.exists(_.contains("actions/create-github-app-token@")),
+        app.exists(_.contains("GH_TOKEN: ${{ steps.app.outputs.token || github.token }}")),
+        app.count(_.contains("HISTOS_SECRET_PRESENT_")) == 2,
         pat.count(_.contains("HISTOS_SECRET_PRESENT_")) == 1,
         pat.exists(_.contains("HISTOS_SECRET_PRESENT_TOKEN")),
       ),
@@ -380,7 +427,7 @@ object GitHubDoctorSpec extends ZIOSpecDefault:
       urls <- sent.get
     yield
       val outcomes = hit match
-        case GitHubProbe.Hit.Ready(read) => SupplyChecks.run(read.view, SupplyChain(), read.covered)
+        case GitHubProbe.Hit.Ready(read) => SupplyChecks.run(read.view, appPolicy, read.covered)
         case _                           => Nil
       (outcomes, urls)
 

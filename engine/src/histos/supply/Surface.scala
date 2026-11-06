@@ -465,7 +465,7 @@ object DepsSurface:
     val dry = dryRun
     if token.forall(_.isEmpty) && !dry then ZIO.succeed(DepsResult(1, "GH_TOKEN is not set\n"))
     else
-      val present = files.getOrElse(changed(repo))
+      val present = PrFlow.keep(policy.updates.author, files.getOrElse(changed(repo)))
       if present.isEmpty then ZIO.succeed(DepsResult(0, "deps pr: nothing to commit\n"))
       else
         val branch  = if security then BranchName.trusted("histos/security") else policy.updates.branch
@@ -555,8 +555,8 @@ object DepsSurface:
 
   private def opens(policy: SupplyChain, open: Boolean): Boolean =
     policy.updates.author match
-      case PrAuthor.OwnerOpens(_, _) => open
-      case _                         => true
+      case PrAuthor.OwnerOpens(_, _)                               => open
+      case PrAuthor.Actions | PrAuthor.App(_, _) | PrAuthor.Pat(_) => true
 
   private def dryRun: Boolean =
     sys.env.get("HISTOS_DRY_RUN").exists(value => value == "true" || value == "1")
