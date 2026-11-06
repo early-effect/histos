@@ -6,7 +6,7 @@ import histos.workspace.IoFailure
 
 import java.nio.file.Path
 
-import zio.{Config, ConfigProvider, IO, ZIO, ZLayer}
+import zio.{Config, ConfigProvider, IO, UIO, ZIO, ZLayer}
 
 enum Os:
   case Mac, Linux, Windows, Other
@@ -102,6 +102,22 @@ final case class JdkRuntime(
     identity: RuntimeIdentity,
 )
 
+/** Where the JDK home was named. */
+enum JdkSource:
+  case Local
+  case Running
+
+  def label: String = this match
+    case Local   => ".histos/toolchain.local"
+    case Running => "java.home"
+end JdkSource
+
+/** A JDK home, or the reason none could be used, with the source that was tried. */
+enum JdkRead:
+  case Chosen(runtime: JdkRuntime, source: JdkSource)
+  case Failed(error: ToolchainError, source: Option[JdkSource])
+end JdkRead
+
 object Toolchain:
   /** Oldest JDK this process will accept. The Loom executor needs 21. */
   val Floor: JdkVersion = JdkVersion.trusted("21", JdkMajor.trusted(21))
@@ -117,22 +133,45 @@ object Toolchain:
   def text(survey: JdkSurvey): String =
     s"jdk ${survey.version.value} ${survey.home}"
 
+  /** Names `.histos/toolchain.local` and `java.home`, and how to install a JDK that meets [[Floor]]. */
+  def failure(error: ToolchainError, source: Option[JdkSource]): String =
+    val from = source match
+      case Some(found) => s" The JDK came from ${found.label}."
+      case None        => ""
+    s"${error.message}.$from Install a JDK ${Floor.value} or newer and write its home to .histos/toolchain.local, or remove that file to use java.home. Histos does not fetch a JDK."
+
   /** Fail the command when the running JVM, or `toolchain.local`, is missing or older than [[Floor]]. Histos does not
     * fetch a JDK.
     */
   def prepare(machine: Machine): IO[ToolchainError, Unit] =
     resolve(machine).unit
 
+  /** JDK from `.histos/toolchain.local`, or else `java.home`. A failure does not hide the source that was tried. */
+  def read(machine: Machine): UIO[JdkRead] =
+    readOverride(machine.repo).foldZIO(
+      error => ZIO.succeed(JdkRead.Failed(error, Some(JdkSource.Local))),
+      {
+        case Some(path) => finish(accept(path), JdkSource.Local)
+        case None       =>
+          machine.running match
+            case None       => ZIO.succeed(JdkRead.Failed(ToolchainError.Absent(Floor), Some(JdkSource.Running)))
+            case Some(home) => finish(accept(home), JdkSource.Running)
+      },
+    )
+
   def resolve(machine: Machine): IO[ToolchainError, JdkRuntime] =
-    readOverride(machine.repo).flatMap:
-      case Some(path) => accept(path)
-      case None       =>
-        machine.running match
-          case Some(home) => accept(home)
-          case None       => ZIO.fail(ToolchainError.Absent(Floor))
+    read(machine).flatMap:
+      case JdkRead.Chosen(runtime, _) => ZIO.succeed(runtime)
+      case JdkRead.Failed(error, _)   => ZIO.fail(error)
 
   def command(javaBin: Path, jar: Path, args: List[String]): List[String] =
     javaBin.toString :: NativeAccess :: "-jar" :: jar.toString :: args
+
+  private def finish(accepted: IO[ToolchainError, JdkRuntime], source: JdkSource): UIO[JdkRead] =
+    accepted.fold(
+      error => JdkRead.Failed(error, Some(source)),
+      runtime => JdkRead.Chosen(runtime, source),
+    )
 
   private def accept(path: Path): IO[ToolchainError, JdkRuntime] =
     for

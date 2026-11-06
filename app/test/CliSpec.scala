@@ -326,6 +326,28 @@ object CliSpec extends ZIOSpecDefault:
       for parsed <- Cli.parse(List("toolchain"))
       yield assertTrue(parsed == Command.Toolchain)
     ,
+    test("--explain prints a check and refuses a bare flag"):
+      ZIO.scoped:
+        for
+          named   <- Cli.parse(List("--explain", "node.floor"))
+          missing <- Cli.parse(List("--explain")).either
+          extra   <- Cli.parse(List("--explain", "node.floor", "jdk.source")).either
+          dir     <- bare
+          done    <- Cli.launch(List("--explain", "node.floor"), dir)
+          miss    <- Cli.launch(List("--explain", "no.such"), dir)
+        yield assertTrue(
+          named == Command.Explain("node.floor"),
+          missing == Left(CliParseError.Pattern("--explain needs a check id")),
+          extra == Left(CliParseError.Pattern("--explain takes one check id")),
+          done.exit == CliExit.Success,
+          done.out.contains("HISTOS_NODE"),
+          done.out.contains(".histos/node.local"),
+          done.out.contains("https://nodejs.org/"),
+          miss.exit == CliExit.Usage,
+          miss.err.contains("node.floor"),
+          miss.err.contains("runner-tools.cover"),
+        )
+    ,
     test("doctor, deps, and setup are commands"):
       for
         doctor <- Cli.parse(List("doctor", "--area", "supply-chain", "--json", "--preflight", "test", "--fix", "--yes"))
@@ -748,8 +770,9 @@ object CliSpec extends ZIOSpecDefault:
         for done <- invoke(List("toolchain"))
         yield assertTrue(
           done.exit == CliExit.Success && done.out.startsWith("jdk "),
-          !done.out.contains("node"),
-          !done.out.contains("clang"),
+          done.out.contains("from java.home"),
+          done.out.contains("node not required"),
+          done.out.contains("clang not required"),
         )
     ,
     test("toolchain prints the chosen home"):
@@ -780,8 +803,9 @@ object CliSpec extends ZIOSpecDefault:
           done.exit == CliExit.Success && done.out.contains(
             s"jdk 21.0.2 $jdk"
           ),
-          !done.out.contains("node"),
-          !done.out.contains("clang"),
+          done.out.contains("from .histos/toolchain.local"),
+          done.out.contains("node not required"),
+          done.out.contains("clang not required"),
         )
     ,
     test("a js project without Node still prints the jdk"):

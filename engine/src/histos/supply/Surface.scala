@@ -25,6 +25,9 @@ import zio.{durationInt, UIO, ZIO}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
+  /** A PATH survey and `clang --version` have to finish inside this. Past it, the check is named and the run fails. */
+  private val checkLimit = 10.seconds
+
   final case class Request(
       area: Option[String],
       json: Boolean,
@@ -33,13 +36,14 @@ object DoctorSurface:
       yes: Boolean,
   )
 
-  def run(repo: Path, graph: ProjectGraph, request: Request): UIO[(Int, String)] =
+  def run(repo: Path, graph: ProjectGraph, request: Request, machine: histos.jdk.Machine): UIO[(Int, String)] =
     val token = sys.env.get("GH_TOKEN").filter(_.nonEmpty).orElse(sys.env.get("GITHUB_TOKEN").filter(_.nonEmpty))
     val tty   = System.console() != null
     runWith(
       repo,
       graph,
       request,
+      machine,
       Net.live,
       token,
       tty,
@@ -52,6 +56,7 @@ object DoctorSurface:
       repo: Path,
       graph: ProjectGraph,
       request: Request,
+      machine: histos.jdk.Machine,
       net: Net,
       token: Option[String],
       tty: Boolean,
@@ -63,9 +68,9 @@ object DoctorSurface:
       hit                 <- github(repo, net, token)
       (auth, pgp, pages) <- probes(repo, graph, request, net, token, hit)
       report <- Runner.run(
-        selected(repo, graph, request, hit, auth, pgp, pages),
+        selected(repo, graph, request, machine, hit, auth, pgp, pages),
         DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
-        2.seconds,
+        checkLimit,
       )
       written <- applyReported(repo, report.found.flatMap(_.fixes.toList), request, tty, ask, exec, setting)
     yield
@@ -104,6 +109,7 @@ object DoctorSurface:
       repo: Path,
       graph: ProjectGraph,
       request: Request,
+      machine: histos.jdk.Machine,
       hit: histos.doctor.GitHubProbe.Hit,
       auth: histos.doctor.CentralProbe.Auth,
       pgp: histos.doctor.PgpProbe.Hit,
@@ -124,7 +130,9 @@ object DoctorSurface:
       closed("pgp.key", Area.Release, histos.doctor.HygieneChecks.key(pgp)),
       closedPages(graph, pages),
     )
-    val all = histos.doctor.Registry.collect(graph, pins :: github :: release ++ shipChecks(repo, graph))
+    val core =
+      pins :: github :: release ++ shipChecks(repo, graph) ++ histos.doctor.ToolchainChecks.checks(machine, graph)
+    val all = histos.doctor.Registry.collect(graph, core)
     request.preflight match
       case Some(job) => preflight(job)
       case None      =>

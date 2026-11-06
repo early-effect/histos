@@ -57,31 +57,34 @@ end Runner
 
 object Render:
   def text(repo: String, report: DoctorReport): String =
-    val lines = report.outcomes.flatMap(line)
+    val lines = report.outcomes.flatMap(line) ++ report.timedOut.map(late)
     val tail  =
-      s"${report.errors} errors, ${report.warnings} warnings, ${report.oks} ok, ${report.skipped} skipped"
+      val base =
+        s"${report.errors} errors, ${report.warnings} warnings, ${report.oks} ok, ${report.skipped} skipped"
+      if report.timedOut.isEmpty then base else s"$base, ${report.timedOut.size} timed out"
     ((s"histos doctor  $repo" :: lines) :+ tail).mkString("\n")
 
   def annotations(report: DoctorReport): String =
-    report.found
-      .map { diagnostic =>
-        val kind = if diagnostic.level == Level.Error then "error" else "warning"
-        val fix  = diagnostic.fixes.head match
-          case Fix.Settings(url, _) => url.value
-          case Fix.Command(line)    => line.value
-          case Fix.Config(file, _)  => file.value
-          case Fix.Steps(items)     => items.head
-        s"::${kind} title=histos doctor: ${diagnostic.check.value}::${diagnostic.summary} Fix: $fix"
-      }
-      .mkString("\n")
+    val found = report.found.map { diagnostic =>
+      val kind = if diagnostic.level == Level.Error then "error" else "warning"
+      val fix  = diagnostic.fixes.head match
+        case Fix.Settings(url, _) => url.value
+        case Fix.Command(line)    => line.value
+        case Fix.Config(file, _)  => file.value
+        case Fix.Steps(items)     => items.head
+      s"::${kind} title=histos doctor: ${diagnostic.check.value}::${diagnostic.summary} Fix: $fix"
+    }
+    val late = report.timedOut.map(id => s"::error title=histos doctor: ${id.value}::timed out")
+    (found ++ late).mkString("\n")
 
   def summary(job: String, report: DoctorReport): String =
     val rows = report.found.map { diagnostic =>
       val mark = if diagnostic.level == Level.Error then ":x:" else ":white_check_mark:"
       s"| $mark | ${diagnostic.check.value} | ${diagnostic.explain} |"
     }
-    val state = if report.errors > 0 then "failed" else "passed"
-    (s"## histos preflight: $job  ($state)" :: "" :: "| | Check | What to fix |" :: "|---|---|---|" :: rows)
+    val late  = report.timedOut.map(id => s"| :x: | ${id.value} | timed out |")
+    val state = if report.errors > 0 || report.timedOut.nonEmpty then "failed" else "passed"
+    (s"## histos preflight: $job  ($state)" :: "" :: "| | Check | What to fix |" :: "|---|---|---|" :: rows ++ late)
       .mkString("\n")
 
   def json(report: DoctorReport): String =
@@ -90,7 +93,11 @@ object Render:
           diagnostic.title
         )},"summary":${quote(diagnostic.summary)}}"""
     }
-    s"""{"exit":${report.exit},"findings":[${items.mkString(",")}]}"""
+    val late = report.timedOut.map(id => quote(id.value))
+    s"""{"exit":${report.exit},"timedOut":[${late.mkString(",")}],"findings":[${items.mkString(",")}]}"""
+
+  private def late(id: CheckId): String =
+    s"  x timed out ${id.value}"
 
   private def line(outcome: Outcome): List[String] =
     outcome match

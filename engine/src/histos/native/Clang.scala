@@ -1,9 +1,9 @@
 package histos.native
 
 import histos.ClangMajor
+import histos.process.Child
 
 import java.io.IOException
-import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, InvalidPathException, Path}
 
 import scala.annotation.tailrec
@@ -75,20 +75,25 @@ object ClangProbe:
         case ClangMiss.Absent => ClangMiss.NotOnPath(wanted)
         case other            => other
 
+  /** `clang --version` with stdin closed. An open pipe can hold a compiler that reads until EOF, and the doctor check
+    * then looks idle while its budget runs out.
+    */
   private def report(binary: Path): IO[ClangMiss, ClangReport] =
+    Child
+      .run(spawn(binary), ClangMiss.Unreadable(binary))
+      .flatMap: ended =>
+        if ended.status == 0 then ZIO.fromEither(ClangReport.parse(ended.output)).mapError(ClangMiss.Text(binary, _))
+        else ZIO.fail(ClangMiss.Status(binary, ended.status))
+
+  private def spawn(binary: Path): IO[ClangMiss, Process] =
     ZIO
-      .attemptBlockingInterrupt {
-        val process = new ProcessBuilder(binary.toString, "--version").redirectErrorStream(true).start()
-        try
-          val text = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
-          val code = process.waitFor()
-          (code, text)
-        finally process.destroy()
+      .attemptBlocking {
+        new ProcessBuilder(binary.toString, "--version")
+          .redirectErrorStream(true)
+          .redirectInput(ProcessBuilder.Redirect.from(new java.io.File("/dev/null")))
+          .start()
       }
       .mapError(_ => ClangMiss.Unreadable(binary))
-      .flatMap:
-        case (0, text) => ZIO.fromEither(ClangReport.parse(text)).mapError(ClangMiss.Text(binary, _))
-        case (code, _) => ZIO.fail(ClangMiss.Status(binary, code))
 
   private def binary(env: Map[String, String], name: String): IO[ClangMiss, Option[Path]] =
     checked(scan(entries(env), name))
