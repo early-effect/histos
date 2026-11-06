@@ -3,7 +3,7 @@ package histos
 /** `scala"3.9.0"`, `dep"dev.zio::zio:2.1.26"`, `ship"1.4.2"`, `organization"com.example"`, `artifact"histos-api"`,
   * `path"example/todo"`, `asset"dist/histos.jar"`, `pom"..."`, `url"https://..."`, `license"Apache-2.0"`,
   * `developer"early-effect"`, `connection"scm:git:..."`, `sbt"2"`, and `promote"rebuild"`. A bad literal fails
-  * compilation of the build file. A catalog row is `Ship("histos").next(0, 2, 0)(api, app)`. `ship"..."` is the ship
+  * compilation of the build file. A catalog row is `Ship("histos").next(0, 2, 1)(api, app)`. `ship"..."` is the ship
   * number alone.
   */
 extension (inline sc: StringContext)
