@@ -931,7 +931,19 @@ final class Organized(
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
   def docCheck: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, DocCheck.On, ci)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      DocCheck.On,
+      ci,
+      supply,
+    )
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
@@ -965,7 +977,9 @@ final class Organized(
   def supplyChain(value: SupplyChain): Organized =
     Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, value)
 
-  /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including this. */
+  /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including
+    * this.
+    */
   def jobTimeout(value: JobTimeout): Organized =
     ci(ci.copy(timeout = value))
 

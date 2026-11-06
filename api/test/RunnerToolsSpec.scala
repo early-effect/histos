@@ -2,6 +2,8 @@ package histos
 
 import _root_.scala.compiletime.testing.typeCheckErrors
 
+import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
+
 import zio.test.*
 
 object RunnerToolsSpec extends ZIOSpecDefault:
@@ -73,6 +75,18 @@ object RunnerToolsSpec extends ZIOSpecDefault:
           .organization(organization"rocks.earlyeffect")
           .docCheck(core)
           .map(_.docCheck) == Right(histos.DocCheck.On),
+      )
+    ,
+    test("the doc check keeps the supply the build named"):
+      val core   = module("core", Jvm)(scala3)
+      val policy = SupplyChain(updates = UpdatePolicy(author = PrAuthor.histosDeps))
+      val named  = Projects
+        .organization(organization"rocks.earlyeffect")
+        .supplyChain(policy)
+        .docCheck(core)
+      assertTrue(
+        named.map(_.docCheck) == Right(histos.DocCheck.On),
+        named.map(_.supply.updates.author) == Right(PrAuthor.histosDeps),
       )
     ,
     test("a node path is an absolute node binary and stays on the build"):
