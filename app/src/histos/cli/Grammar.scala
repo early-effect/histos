@@ -8,6 +8,7 @@ import histos.server.{LauncherAction, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction
+import histos.scaffold.ImportSource
 import histos.{Platform, ProjectName}
 
 import zio.json.*
@@ -29,9 +30,10 @@ import zio.cli.{
 object Grammar:
   private enum Wire:
     case Version, Graph, Mcp, Bsp, Server, Portal, CachePath, CacheList, Toolchain,
-      Reload, Reboot, Client, Init
+      Reload, Reboot, Client
     case Cancel(id: String)
-    case New(name: String)
+    case New(name: String, bare: Boolean, yes: Boolean, branch: Option[String])
+    case Init(bare: Boolean, yes: Boolean, from: Option[String], branch: Option[String])
     case Run(name: String, platform: Option[String])
     case Test(affected: Option[String], projects: List[String])
     case Affected(base: String)
@@ -197,8 +199,16 @@ object Grammar:
   private val helpCmd =
     CliCommand("help", Args.text("topic").*).map(words => Wire.Help(words.toList))
   private val client = CliCommand("client").map(_ => Wire.Client)
-  private val fresh   = CliCommand("new", Args.text("name")).map(Wire.New(_))
-  private val init    = CliCommand("init").map(_ => Wire.Init)
+  private val freshFlags =
+    Options.boolean("bare") ++ Options.boolean("yes") ++ Options.text("branch").optional
+  private val fresh =
+    CliCommand("new", freshFlags, Args.text("name")).map { case ((bare, yes, branch), name) =>
+      Wire.New(name, bare, yes, branch)
+    }
+  private val init =
+    CliCommand("init", freshFlags ++ Options.text("from").optional).map { case (bare, yes, branch, from) =>
+      Wire.Init(bare, yes, from, branch)
+    }
   private val observe = CliCommand("observe").map(_ => Wire.Observe)
   private val preview = CliCommand("preview").subcommands(
     previewCompile | previewTest | previewPublish | previewPublishLocal | previewClean | previewCleanFull | previewRun
@@ -282,8 +292,15 @@ object Grammar:
             Command.TestQuick(modules, patterns)
           }
       case Wire.Client                                  => ZIO.succeed(Command.Client)
-      case Wire.New(name)                               => ZIO.succeed(Command.New(name))
-      case Wire.Init                                    => ZIO.succeed(Command.Init)
+      case Wire.New(name, bare, yes, branch) =>
+        ZIO.succeed(Command.New(name, bare, yes, branch))
+      case Wire.Init(bare, yes, from, branch) =>
+        from match
+          case None => ZIO.succeed(Command.Init(bare, yes, None, branch))
+          case Some(raw) =>
+            ImportSource.from(raw) match
+              case Some(source) => ZIO.succeed(Command.Init(bare, yes, Some(source), branch))
+              case None         => ZIO.fail(CliParseError.Pattern("init --from is sbt or zipx"))
       case Wire.Observe                                 => ZIO.succeed(Command.Observe)
       case Wire.Doctor(area, json, preflight, fix, yes) =>
         ZIO.succeed(Command.Doctor(area, json, preflight, fix, yes))

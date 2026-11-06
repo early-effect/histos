@@ -373,10 +373,16 @@ object CliSpec extends ZIOSpecDefault:
       for
         created <- Cli.parse(List("new", "my-app"))
         here    <- Cli.parse(List("init"))
+        opted   <- Cli.parse(List("init", "--bare", "--yes", "--from", "sbt", "--branch", "main"))
+        zipx    <- Cli.parse(List("new", "--bare", "my-app"))
+        badFrom <- Cli.parse(List("init", "--from", "mill")).either
         bare    <- Cli.parse(List("new")).either
       yield assertTrue(
-        created == Command.New("my-app"),
-        here == Command.Init,
+        created == Command.New("my-app", false, false, None),
+        here == Command.Init(false, false, None, None),
+        opted == Command.Init(true, true, Some(histos.scaffold.ImportSource.Sbt), Some("main")),
+        zipx == Command.New("my-app", true, false, None),
+        badFrom == Left(CliParseError.Pattern("init --from is sbt or zipx")),
         bare == Left(CliParseError.MissingArgument),
       )
     ,
