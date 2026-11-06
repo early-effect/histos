@@ -17,7 +17,9 @@ import zio.test.{TestAspect, ZIOSpecDefault, assertTrue}
 object ChannelSpec extends ZIOSpecDefault:
   private val scala3   = ScalaVersion("3.10.0")
   private val revision = "0.2.0-20261105.135856-2"
+  private val later    = "0.2.0-20261106.020938-1"
   private val pointer  = "0.2.0-SNAPSHOT"
+  private val old      = Chunk.fromArray("0.2.0-20261105.000000-1\n".getBytes(StandardCharsets.UTF_8))
   private val stored   = "0.2.0-0123456789ab-SNAPSHOT"
   private val jar      = Chunk.fromArray("toolchain".getBytes(StandardCharsets.UTF_8))
 
@@ -121,6 +123,44 @@ object ChannelSpec extends ZIOSpecDefault:
             text(files(DistLayout.manifest(revision))).contains(s""""version": "$revision""""),
           )
       ,
+      test("a second upload replaces channel-0.2.0-SNAPSHOT"):
+        ZIO.scoped:
+          for
+            root  <- temp
+            stand <- AssetStand.open("asset-token").mapError(error => new IllegalStateException(error.toString))
+            graph <- must(one)
+            _     <- plant(root, "dist/histos.jar", jar)
+            plans <- must(DistChannel.plan(graph, List(row(graph, moduleName(graph, "app"), "histos", pointer))))
+            first  = receipt(graph, revision)
+            second = receipt(graph, later)
+            _    <- DistChannel.upload(root, env(stand.base), plans, List(first))
+            noted <- DistChannel.upload(root, env(stand.base), plans, List(second))
+            seen <- stand.seen
+            channels = seen.uploads.filter(_.name == DistLayout.channel(pointer))
+          yield assertTrue(
+            noted == List(s"histos dist ${DistLayout.channel(pointer)} $later"),
+            channels.map(_.bytes) == List(Chunk.fromArray(s"$later\n".getBytes(StandardCharsets.UTF_8))),
+          )
+      ,
+      test("a channel past the first asset page is replaced"):
+        ZIO.scoped:
+          for
+            root  <- temp
+            stand <- AssetStand
+              .open("asset-token", prior = pads :+ channel(old))
+              .mapError(error => new IllegalStateException(error.toString))
+            graph <- must(one)
+            _     <- plant(root, "dist/histos.jar", jar)
+            plans <- must(DistChannel.plan(graph, List(row(graph, moduleName(graph, "app"), "histos", pointer))))
+            noted <- DistChannel.upload(root, env(stand.base), plans, List(receipt(graph, revision)))
+            seen  <- stand.seen
+            channels = seen.uploads.filter(_.name == DistLayout.channel(pointer))
+          yield assertTrue(
+            noted == List(s"histos dist ${DistLayout.channel(pointer)} $revision"),
+            seen.uploads.count(_.name.startsWith("pad-")) == 100,
+            channels.map(_.bytes) == List(Chunk.fromArray(s"$revision\n".getBytes(StandardCharsets.UTF_8))),
+          )
+      ,
       test("a pointer without a timestamp is not uploaded"):
         ZIO.scoped:
           for
@@ -157,6 +197,18 @@ object ChannelSpec extends ZIOSpecDefault:
       None,
       Nil,
     )
+
+  private def receipt(graph: histos.ProjectGraph, unique: String): String =
+    row(graph, moduleName(graph, "app"), "histos", pointer).copy(unique = Some(unique)).rendered(None)
+
+  /** One hundred names fill GitHub's maximum page. The channel is the next name. */
+  private val pads: List[AssetStand.Upload] =
+    List.tabulate(100) { n =>
+      AssetStand.Upload("early-effect", "histos", s"pad-$n", Chunk.empty, "application/octet-stream")
+    }
+
+  private def channel(bytes: Chunk[Byte]): AssetStand.Upload =
+    AssetStand.Upload("early-effect", "histos", DistLayout.channel(pointer), bytes, "application/octet-stream")
 
   private def moduleName(graph: histos.ProjectGraph, name: String): histos.ProjectName =
     graph.projects.collectFirst { case found: histos.Module if found.name.value == name => found.name }.get
