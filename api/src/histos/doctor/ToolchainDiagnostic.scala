@@ -2,10 +2,6 @@ package histos.doctor
 
 import histos.RunnerTools
 
-private def fixes(head: Fix, tail: Fix*): ::[Fix] = ::(head, tail.toList)
-
-private def lines(head: String, tail: String*): ::[String] = ::(head, tail.toList)
-
 /** The `.runnerTools(RunnerTools(...))` call a build adds. */
 object RunnerCall:
   def show(tools: RunnerTools): String =
