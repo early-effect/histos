@@ -1370,6 +1370,7 @@ object WorkflowSpec extends ZIOSpecDefault:
             val release   = if releaseAt >= 0 && clientAt > releaseAt then body.substring(releaseAt, clientAt) else ""
             releaseAt >= 0 && clientAt > releaseAt && installAt > clientAt &&
             release.contains("\"./histos publish release histos\"") &&
+            release.contains("HISTOS_SESSION: release") &&
             release.contains("\"./histos assembly\"") &&
             !release.contains("contents: write") &&
             body.contains("\"./histos client\"") &&
@@ -1425,7 +1426,9 @@ object WorkflowSpec extends ZIOSpecDefault:
             !body.contains("actions/cache") &&
             !body.contains("needs:") &&
             libsJob.contains("\"./histos publish release libs\"") &&
+            libsJob.contains("HISTOS_SESSION: release") &&
             toolJob.contains("\"./histos publish release tool\"") &&
+            toolJob.contains("HISTOS_SESSION: release") &&
             !body.contains("publish assets") &&
             !body.contains("assembly") &&
             !body.contains("contents: write") &&
@@ -1609,6 +1612,7 @@ object WorkflowSpec extends ZIOSpecDefault:
       |      - run: ./histos doctor --preflight release-histos
       |      - run: "./histos publish release histos"
       |        env:
+      |          HISTOS_SESSION: release
       |          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
       |          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
       |          PGP_SECRET: ${{ secrets.PGP_SECRET }}
