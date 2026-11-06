@@ -270,19 +270,20 @@ object FixAndProbeSpec extends ZIOSpecDefault:
             case _                    => false,
         )
     ,
-    test("a 403 is a refusal and does not invent a missing required check"):
+    test("a 403 refuses workflow permissions and does not claim the required contexts are empty"):
       probe(403).flatMap: hit =>
         val ready = hit match
           case histos.doctor.GitHubProbe.Hit.Ready(read) => SupplyChecks.run(read.view, SupplyChain(), read.covered)
           case _                                         => Nil
+        val required = ready.collect:
+          case Outcome.Found(diagnostic) if diagnostic.check.value == "supply.required-check" => diagnostic
         assertTrue(
           ready.exists:
             case Outcome.Found(diagnostic) => diagnostic.check.value == "supply.github-refused"
             case _                         => false
           ,
-          !ready.exists:
-            case Outcome.Found(diagnostic) => diagnostic.check.value == "supply.required-check"
-            case _                         => false,
+          required.exists(diagnostic => diagnostic.summary.contains("cannot see")),
+          !required.exists(diagnostic => diagnostic.summary.contains("does not require")),
         ),
   )
 
@@ -322,8 +323,10 @@ object FixAndProbeSpec extends ZIOSpecDefault:
             Reply(200, """{"default_workflow_permissions":"read","can_approve_pull_request_reviews":false}""")
           else if url.endsWith("/installation") then
             Reply(200, """{"permissions":{"contents":"write","pull_requests":"write","workflows":"write"}}""")
+          else if url.endsWith("/actions/organization-secrets") then Reply(200, """{"secrets":[]}""")
           else if url.endsWith("/actions/secrets") then
             Reply(200, """{"secrets":[{"name":"HISTOS_APP_ID"},{"name":"HISTOS_APP_PRIVATE_KEY"}]}""")
+          else if url.contains("/rules/branches/") then Reply(200, "[]")
           else if url.contains("/protection") then
             Reply(
               200,
@@ -332,11 +335,19 @@ object FixAndProbeSpec extends ZIOSpecDefault:
           else
             Reply(
               200,
-              """{"id":9,"default_branch":"main","allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}""",
+              """{"id":9,"default_branch":"main","owner":{"login":"early-effect","type":"Organization"},"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false}""",
             )
       else (_: String) => Reply(status, "no")
     val net = new Net:
       def send(method: String, url: String, body: String, headers: List[(String, String)]) =
         ZIO.succeed(ok(url))
-    histos.doctor.GitHubProbe.read(net, repo, main, Some("token"))
+    histos.doctor.GitHubProbe.read(
+      net,
+      repo,
+      main,
+      Some("token"),
+      "https://api.github.com",
+      histos.doctor.JobEnv.empty,
+      List("HISTOS_APP_ID", "HISTOS_APP_PRIVATE_KEY"),
+    )
 end FixAndProbeSpec

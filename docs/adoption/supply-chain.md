@@ -5,7 +5,7 @@ histos pins every generated `uses:` to a 40-character commit SHA and a tag comme
 ## Five minutes
 
 1. Create a GitHub App named `histos-deps`. Permissions: Contents write, Pull requests write, Workflows write, Metadata read. Webhook off. Install it on the repository.
-2. Add repository secrets `HISTOS_APP_ID` and `HISTOS_APP_PRIVATE_KEY`. doctor checks that the names exist. It never reads the values.
+2. Add `HISTOS_APP_ID` and `HISTOS_APP_PRIVATE_KEY` where the workflow can read them. A repository secret counts. An organization secret shared with the repository counts. doctor checks that the names exist. It never reads the values.
 3. In `histos.scala`, before `.docCheck`, add `.supplyChain(SupplyChain())`. The defaults are the weekly Monday 06:00 `America/Chicago` schedule, branch `histos/deps`, one pull request, one commit per bump kind, and `CommitSigning.ApiSigned`. This repository leaves the call out until the published toolchain can compile it. On a toolchain that has the method, omitting it selects that same default.
 4. Run `./histos setup supply-chain --fix` and `./histos workflow --update`.
 5. Run `./histos doctor` and `./histos workflow --check`.
@@ -25,6 +25,8 @@ histos pins every generated `uses:` to a 40-character commit SHA and a tag comme
 `deps check` lists locked coordinates and changes nothing. `deps update [--yes] [--security]` applies a bump plan; `--security` picks the smallest fixed release and skips the cooldown. `deps audit [--report]` always posts one OSV `/v1/querybatch` and hydrates only new or changed advisories into `~/.cache/histos/advisories`. `deps pr [--security] [--open]` runs the pull-request flow. `deps alert` keeps one `histos-advisory` issue per advisory id. `deps snapshot --submit` builds the dependency snapshot from `dependencies.lock`.
 
 `doctor [--area supply-chain] [--json] [--preflight <job>] [--fix] [--yes]` prints findings. `--fix` may edit local files and prints histos commands. It never changes a GitHub setting without a confirmation, and `--yes` never confirms one. It never reads or writes secrets. Exit 0 is no error. Exit 1 is an error or a timed-out check. Exit 2 is usage. A warning alone stays 0.
+
+The pull request fails when a needed secret is missing or unreadable, when the histos-deps App is not installed or its contents, pull requests, and workflows writes were not seen, or when no rule on the default branch requires the supply check. No credential is an error on those checks, not a skip. Doctor reads `GH_TOKEN` or `GITHUB_TOKEN` (and `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` for a host other than `github.com`, `*.ghe.com`, or `localhost`). When `gh` is installed it also runs `gh auth token`. It does not require `gh`. A 401 from the installation endpoint means this token is not the App JWT. The generated `workflow` and `supply-chain` jobs mint that token and pass `HISTOS_SECRET_PRESENT_*`, `HISTOS_STEP_APP`, and `GH_TOKEN`. The required-check fix opens the rule GitHub enforces: a repository ruleset, an organization ruleset, or classic branch protection. `--preflight` stays offline and does not call GitHub.
 
 `workflow --check` fails when a `uses:` is unpinned, pinned without a tag comment, or different from the catalog. The message names the file and line. Fix it with `./histos workflow --update` or add the action to `SupplyChain.extraActions`.
 

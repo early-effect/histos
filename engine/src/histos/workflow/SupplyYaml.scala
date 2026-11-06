@@ -28,13 +28,13 @@ object SupplyYaml:
     (List(
       s"  $name:"
     ) ++ Workflow.toolchainNeeds(graph) ++ List(
-      s"    runs-on: ${Workflow.runner}",
+      s"    runs-on: ${Workflow.runner}"
     ) ++ Workflow.jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ Workflow.actionsRead(graph) ++ List(
       "      contents: read"
     ) ++ issues ++ List(
-      "    steps:",
+      "    steps:"
     ) ++ Workflow.fullGitCheckout() ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: ${ActionPins.localSetup}",
@@ -43,8 +43,7 @@ object SupplyYaml:
       "          path: ~/.cache/histos/advisories",
       "          key: histos-osv-${{ hashFiles('dependencies.lock') }}-${{ github.run_id }}",
       "          restore-keys: histos-osv-",
-    ) ++ Workflow.branchJar(graph) ++ preflight(graph, name) ++ List(
-      "      - run: ./histos doctor",
+    ) ++ Workflow.branchJar(graph) ++ preflight(graph, name) ++ fullDoctor(policy.updates.author) ++ List(
       "      - run: ./histos workflow --check",
       "      - run: ./histos resolve --check",
       "      - run: ./histos deps audit",
@@ -66,7 +65,7 @@ object SupplyYaml:
             s"    if: ${quote(Workflow.onDefaultPush)}",
             s"    runs-on: ${Workflow.runner}",
           ) ++ Workflow.jobLimit(graph) ++ List(
-            "    permissions:",
+            "    permissions:"
           ) ++ Workflow.actionsRead(graph) ++ List(
             "      contents: write",
             "    steps:",
@@ -204,6 +203,28 @@ object SupplyYaml:
       "      - run: ./histos deps pr --security",
       "        env:",
       "          GH_TOKEN: ${{ steps.app.outputs.token }}",
+    )
+
+  /** The full doctor. It mints the App token, then passes what the job already knows. Preflight stays offline. */
+  def fullDoctor(author: PrAuthor): List[String] =
+    val app     = secrets(author)
+    val present = List(app.id, app.key).distinct.map: name =>
+      s"          HISTOS_SECRET_PRESENT_$name: $${{ secrets.$name != '' }}"
+    List(
+      "      - id: app",
+      "        continue-on-error: true",
+      s"        uses: ${ActionPins.appToken.line}",
+      "        with:",
+      s"          app-id: $${{ secrets.${app.id} }}",
+      s"          private-key: $${{ secrets.${app.key} }}",
+      "          permission-contents: write",
+      "          permission-pull-requests: write",
+      "          permission-workflows: write",
+      "      - run: ./histos doctor",
+      "        env:",
+    ) ++ present ++ List(
+      "          HISTOS_STEP_APP: ${{ steps.app.outcome }}",
+      "          GH_TOKEN: ${{ steps.app.outputs.token || github.token }}",
     )
 
   private final case class AppSecrets(id: String, key: String)

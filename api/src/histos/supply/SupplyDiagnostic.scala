@@ -17,20 +17,24 @@ enum SupplyDiagnostic(
     val explain: String,
     val fixes: ::[Fix],
 ) extends Diagnostic:
-  case SecretMissing(name: SecretName, usedBy: JobName, repo: RepoName)
+  case SecretMissing(name: SecretName, usedBy: JobName, repo: RepoName, owner: RepoOwner)
       extends SupplyDiagnostic(
         CheckId.trusted("supply.secret-missing"),
         Level.Error,
         s"${name.value} is not set",
         s"${name.value} is not set as a repository or organization secret.",
-        s"${usedBy.value} uses it to mint the App token; without it the weekly run stops at preflight.",
-        fixes(
-          Fix.Command(ShellLine.trusted(s"gh secret set ${name.value} --repo ${repo.value}")),
-          Fix.Settings(
-            HttpUrl.trusted(s"https://github.com/${repo.value}/settings/secrets/actions/new"),
-            "settings/secrets/actions/new",
-          ),
-        ),
+        s"${usedBy.value} uses it to mint the App token. A repository secret counts. An organization secret shared with the repository counts.",
+        secretFixes(name, repo, owner),
+      )
+
+  case SecretBlind(name: SecretName, repo: Option[RepoName], why: Blind)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.secret-missing"),
+        Level.Error,
+        s"${name.value} was not read",
+        s"${why.lead} whether ${name.value} is set.",
+        "A secret the workflow can read counts, including an organization secret shared with the repository.",
+        credentialFixes,
       )
 
   case AppNotInstalled(repo: RepoName)
@@ -50,6 +54,16 @@ enum SupplyDiagnostic(
         ),
       )
 
+  case AppBlind(repo: Option[RepoName], why: Blind)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.app-installed"),
+        Level.Error,
+        "the App installation was not read",
+        s"${why.lead} whether the histos-deps App is installed${onRepo(repo)}.",
+        "GET /repos/{owner}/{repo}/installation needs the App's JWT. A user token and the Actions token are not that JWT. A 401 is not a contents refusal.",
+        credentialFixes,
+      )
+
   case AppPermissionMissing(permission: AppPermission, needed: Access, why: String)
       extends SupplyDiagnostic(
         CheckId.trusted("supply.app-permissions"),
@@ -63,6 +77,16 @@ enum SupplyDiagnostic(
             "set the permission, then accept it on the installation",
           )
         ),
+      )
+
+  case AppPermissionsBlind(repo: Option[RepoName], why: Blind)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.app-permissions"),
+        Level.Error,
+        "the App permissions were not read",
+        s"${why.lead} whether the App has contents, pull requests, and workflows write${onRepo(repo)}.",
+        "Those writes are what the weekly job requests. A token that cannot see the installation does not drop this check.",
+        credentialFixes,
       )
 
   case AppTokenFailed(stepOutcome: StepOutcome)
@@ -82,19 +106,29 @@ enum SupplyDiagnostic(
         ),
       )
 
-  case RequiredCheckMissing(branch: BranchName, expected: JobName, found: List[JobName])
-      extends SupplyDiagnostic(
+  case RequiredCheckMissing(
+      branch: BranchName,
+      expected: JobName,
+      found: List[JobName],
+      rule: RuleSource,
+      repo: RepoName,
+  ) extends SupplyDiagnostic(
         CheckId.trusted("supply.required-check"),
         Level.Error,
         s"${expected.value} is not a required check",
-        s"Branch protection on ${branch.value} requires [${found.map(_.value).mkString(", ")}]. It does not require ${expected.value}.",
+        requiredSummary(branch, expected, found, rule),
         "A pull request with an unpinned action or a High advisory can still merge.",
-        fixes(
-          Fix.Settings(
-            HttpUrl.trusted("https://github.com/settings/rules"),
-            s"add status check \"${expected.value}\"",
-          )
-        ),
+        fixes(ruleFix(rule, repo, expected)),
+      )
+
+  case RuleBlind(repo: Option[RepoName], why: Blind)
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.required-check"),
+        Level.Error,
+        "the required check was not read",
+        s"${why.lead} the rule GitHub enforces on the default branch${onRepo(repo)}.",
+        "Classic branch protection, a repository ruleset, or an organization ruleset can require the check. A 404 from classic protection means classic protection is off. It does not mean the required contexts are empty.",
+        credentialFixes,
       )
 
   case SignedCommitsConflict(rule: RuleSource, signing: CommitSigning, mergeMethods: Set[MergeMethod])
@@ -275,12 +309,46 @@ enum StepOutcome:
     case Skipped => "skipped"
 end StepOutcome
 
+object StepOutcome:
+  def parse(raw: String): Option[StepOutcome] =
+    raw match
+      case "success"               => Some(StepOutcome.Success)
+      case "failure" | "cancelled" => Some(StepOutcome.Failure)
+      case "skipped"               => Some(StepOutcome.Skipped)
+      case _                       => None
+
+/** Whether a probe read the fact, could not see it, or could not decode it. */
+enum Sight:
+  case Known, Unseen, Unreadable
+
+/** Why a supply check failed closed instead of reporting a value. */
+enum Blind:
+  case NoCredential, Refused, Unreadable, Unreachable
+
+  def lead: String = this match
+    case NoCredential => "No credential can answer"
+    case Refused      => "This token cannot see"
+    case Unreadable   => "GitHub returned a document we do not understand for"
+    case Unreachable  => "GitHub could not be reached for"
+end Blind
+
+/** Who owns the repository. The secret fix opens that owner's settings. */
+enum RepoOwner:
+  case Organization(login: String)
+  case User(login: String)
+
+/** The rule GitHub enforces on the default branch, when one was read. */
 enum RuleSource:
-  case BranchProtection, Ruleset
+  case BranchProtection(branch: BranchName)
+  case RepositoryRuleset(id: Long, source: String)
+  case OrganizationRuleset(org: String, id: Long)
+  case Absent
 
   def wire: String = this match
-    case BranchProtection => "branch protection"
-    case Ruleset          => "a ruleset"
+    case BranchProtection(branch)      => s"branch protection on ${branch.value}"
+    case RepositoryRuleset(id, source) => s"repository ruleset $id ($source)"
+    case OrganizationRuleset(org, id)  => s"organization ruleset $id on $org"
+    case Absent                        => "no branch rule"
 end RuleSource
 
 enum MergeMethod:
@@ -312,6 +380,62 @@ enum ApiCall:
     case VulnerabilityAlerts => "PUT /vulnerability-alerts"
     case Rules               => "rulesets"
 end ApiCall
+
+private def onRepo(repo: Option[RepoName]): String =
+  repo match
+    case Some(name) => s" on ${name.value}"
+    case None       => ""
+
+private def credentialFixes: ::[Fix] =
+  fixes(
+    Fix.Steps(
+      lines(
+        "Set GH_TOKEN or GITHUB_TOKEN. For a host other than github.com or *.ghe.com, set GH_ENTERPRISE_TOKEN or GITHUB_ENTERPRISE_TOKEN.",
+        "When the GitHub CLI is installed, histos reads gh auth token after those variables. gh auth login stores one.",
+      )
+    )
+  )
+
+private def secretFixes(name: SecretName, repo: RepoName, owner: RepoOwner): ::[Fix] =
+  owner match
+    case RepoOwner.Organization(login) =>
+      fixes(
+        Fix.Settings(
+          HttpUrl.trusted(s"https://github.com/organizations/$login/settings/secrets/actions"),
+          s"share ${name.value} with this repository",
+        ),
+        Fix.Settings(
+          HttpUrl.trusted(s"https://github.com/${repo.value}/settings/secrets/actions/new"),
+          "a repository secret also counts",
+        ),
+      )
+    case RepoOwner.User(_) =>
+      fixes(
+        Fix.Settings(
+          HttpUrl.trusted(s"https://github.com/${repo.value}/settings/secrets/actions/new"),
+          s"set ${name.value}",
+        )
+      )
+
+private def requiredSummary(branch: BranchName, expected: JobName, found: List[JobName], rule: RuleSource): String =
+  val seen = found.map(_.value).mkString(", ")
+  rule match
+    case RuleSource.Absent =>
+      s"No rule on ${branch.value} requires ${expected.value}. Seen checks: [$seen]."
+    case other =>
+      s"${other.wire} requires [$seen]. It does not require ${expected.value}."
+
+private def ruleFix(rule: RuleSource, repo: RepoName, expected: JobName): Fix =
+  val (url, click) = rule match
+    case RuleSource.BranchProtection(_) =>
+      (s"https://github.com/${repo.value}/settings/branches", s"add status check \"${expected.value}\"")
+    case RuleSource.RepositoryRuleset(id, _) =>
+      (s"https://github.com/${repo.value}/rules/$id", s"add status check \"${expected.value}\"")
+    case RuleSource.OrganizationRuleset(org, id) =>
+      (s"https://github.com/organizations/$org/settings/rules/$id", s"add status check \"${expected.value}\"")
+    case RuleSource.Absent =>
+      (s"https://github.com/${repo.value}/settings/rules", s"add a rule that requires \"${expected.value}\"")
+  Fix.Settings(HttpUrl.trusted(url), click)
 
 private def signingName(signing: CommitSigning): String = signing match
   case CommitSigning.ApiSigned              => "CommitSigning.ApiSigned"

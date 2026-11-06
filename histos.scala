@@ -24,6 +24,7 @@ object build extends HistosBuild:
       .dependsOn(central, api, wire)
       .libraryDependencies(
         zio,
+        zioJson,
         dep"dev.zio::zio-streams:2.1.27",
         dep"org.scala-lang::scala3-compiler:3.10.0",
         dep"org.scala-lang::scaladoc:3.10.0",

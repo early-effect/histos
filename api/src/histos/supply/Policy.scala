@@ -148,6 +148,13 @@ enum PrAuthor:
 object PrAuthor:
   val default: PrAuthor = App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
 
+  extension (author: PrAuthor)
+    def secretNames: List[SecretName] = author match
+      case App(id, key)        => List(id, key)
+      case OwnerOpens(id, key) => List(id, key)
+      case Pat(token)          => List(token)
+end PrAuthor
+
 enum CommitSigning:
   case ApiSigned
   case GitPush(identity: Identity)

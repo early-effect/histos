@@ -355,7 +355,7 @@ object SupplyChecksSpec extends ZIOSpecDefault:
       List(JobName("supply-chain")),
       true,
       Set(MergeMethod.Squash),
-      RuleSource.BranchProtection,
+      RuleSource.BranchProtection(main),
       Nil,
       Nil,
       true,
@@ -368,6 +368,10 @@ object SupplyChecksSpec extends ZIOSpecDefault:
       None,
       Nil,
       true,
+      RepoOwner.Organization("early-effect"),
+      Sight.Known,
+      Sight.Known,
+      Sight.Known,
     )
 
   def spec = suite("SupplyChecksSpec")(
@@ -462,25 +466,25 @@ object DoctorSpec extends ZIOSpecDefault:
       yield
         val shown = histos.doctor.Render.text("early-effect/histos", late)
         assertTrue(
-        skipped.outcomes.headOption.exists(_.isInstanceOf[Outcome.Skipped]),
-        skipped.exit == 0,
-        late.timedOut.map(_.value) == List("supply.slow"),
-        late.exit == 1,
-        shown.contains("  x timed out supply.slow"),
-        shown.contains("0 errors, 0 warnings, 0 ok, 0 skipped, 1 timed out"),
-        histos.doctor.Render.annotations(late).contains("::error title=histos doctor: supply.slow::timed out"),
-        histos.doctor.Render.summary("deps", late).contains("supply.slow"),
-        histos.doctor.Render.summary("deps", late).contains("failed"),
-        histos.doctor.Render.json(late).contains("\"exit\":1"),
-        histos.doctor.Render.json(late).contains("\"timedOut\":[\"supply.slow\"]"),
-        warned.exit == 0,
-        warned.warnings == 1,
-        histos.doctor.Render.text("early-effect/histos", warned).contains("supply.default-token"),
-        !histos.doctor.Render.text("early-effect/histos", warned).contains("timed out"),
-        histos.doctor.Render.annotations(warned).contains("::warning"),
-        histos.doctor.Render.summary("deps", warned).contains("supply.default-token"),
-        histos.doctor.Render.json(warned).contains("\"exit\":0"),
-      )
+          skipped.outcomes.headOption.exists(_.isInstanceOf[Outcome.Skipped]),
+          skipped.exit == 0,
+          late.timedOut.map(_.value) == List("supply.slow"),
+          late.exit == 1,
+          shown.contains("  x timed out supply.slow"),
+          shown.contains("0 errors, 0 warnings, 0 ok, 0 skipped, 1 timed out"),
+          histos.doctor.Render.annotations(late).contains("::error title=histos doctor: supply.slow::timed out"),
+          histos.doctor.Render.summary("deps", late).contains("supply.slow"),
+          histos.doctor.Render.summary("deps", late).contains("failed"),
+          histos.doctor.Render.json(late).contains("\"exit\":1"),
+          histos.doctor.Render.json(late).contains("\"timedOut\":[\"supply.slow\"]"),
+          warned.exit == 0,
+          warned.warnings == 1,
+          histos.doctor.Render.text("early-effect/histos", warned).contains("supply.default-token"),
+          !histos.doctor.Render.text("early-effect/histos", warned).contains("timed out"),
+          histos.doctor.Render.annotations(warned).contains("::warning"),
+          histos.doctor.Render.summary("deps", warned).contains("supply.default-token"),
+          histos.doctor.Render.json(warned).contains("\"exit\":0"),
+        )
   )
 end DoctorSpec
 
@@ -509,17 +513,20 @@ object FixSpec extends ZIOSpecDefault:
         applied._1("histos.scala") == "new",
         applied._2 == List("./histos workflow --update"),
         !kinds.exists(_.toString.toLowerCase.contains("secret")),
-        SupplyDiagnostic
-          .SecretMissing(
-            histos.plugin.SecretName("HISTOS_APP_ID"),
-            JobName("deps"),
-            RepoName.trusted("early-effect/histos"),
-          )
-          .fixes
-          .forall {
-            case Fix.Command(_) | Fix.Settings(_, _) => true
-            case _                                   => false
-          },
+        (
+          SupplyDiagnostic
+            .SecretMissing(
+              histos.plugin.SecretName("HISTOS_APP_ID"),
+              JobName("deps"),
+              RepoName.trusted("early-effect/histos"),
+              RepoOwner.Organization("early-effect"),
+            )
+            .fixes match
+            case Fix.Settings(url, _) :: _ =>
+              url.value.contains("organizations/early-effect/settings/secrets/actions") &&
+              !url.value.contains("gh secret set")
+            case _ => false
+        ),
       )
   )
 

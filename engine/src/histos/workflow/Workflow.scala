@@ -100,7 +100,7 @@ object Workflow:
     val have  = committed.split("\n", -1).toVector
     val index = (0 until want.length.max(have.length)).find(i => want.lift(i) != have.lift(i))
     index match
-      case None => "the files differ"
+      case None        => "the files differ"
       case Some(found) =>
         val removed = have.lift(found).getOrElse("")
         val added   = want.lift(found).getOrElse("")
@@ -162,9 +162,9 @@ object Workflow:
 
   private def limits(graph: ProjectGraph): Either[CiError, Unit] =
     graph.ci.timeout match
-      case JobTimeout.Unbounded                                      => Right(())
-      case JobTimeout.Minutes(count) if JobTimeout.admits(count)    => Right(())
-      case JobTimeout.Minutes(count)                                => Left(CiError.JobTimeout(count))
+      case JobTimeout.Unbounded                                  => Right(())
+      case JobTimeout.Minutes(count) if JobTimeout.admits(count) => Right(())
+      case JobTimeout.Minutes(count)                             => Left(CiError.JobTimeout(count))
 
   /** Archives this render will curl. A missing pin fails before any workflow text is built. */
   private def llvmPinned(graph: ProjectGraph): Either[CiError, Unit] =
@@ -175,8 +175,10 @@ object Workflow:
   private def llvmArchives(graph: ProjectGraph): List[String] =
     graph.runnerTools.llvm.toList.flatMap: pinned =>
       val version = pinned.value
-      val native  = graph.projects.collect { case module: Module => module }.exists: module =>
-        module.platforms.all.contains(Platform.Native)
+      val native  = graph.projects
+        .collect { case module: Module => module }
+        .exists: module =>
+          module.platforms.all.contains(Platform.Native)
       val linux =
         if native then List(s"LLVM-$version-Linux-X64.tar.xz") else Nil
       val client = installShip(graph, graph.catalog.ships) match
@@ -205,10 +207,10 @@ object Workflow:
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
-      _ <- ZIO.when(extra.nonEmpty)(
+      _        <- ZIO.when(extra.nonEmpty)(
         ZIO.fail(CiError.Drift(workflowPath(fileNameOf(extra.head)), "this file is not rendered by the graph"))
       )
-      _        <- PinScan.check(repo, graph)
+      _ <- PinScan.check(repo, graph)
     yield path(repo)
 
   def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
@@ -394,7 +396,7 @@ object Workflow:
       )
     )
     install match
-      case None => Right(lines.mkString("\n") + "\n")
+      case None       => Right(lines.mkString("\n") + "\n")
       case Some(ship) =>
         installJobs(graph, ships, ship).map(extra => (lines ++ extra).mkString("\n") + "\n")
 
@@ -404,7 +406,7 @@ object Workflow:
       s"  release-$name:",
       s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ releasePermissions(shape) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
@@ -473,16 +475,18 @@ object Workflow:
 
   private def clientHosts(revision: String): Either[CiError, List[String]] =
     DistPlatforms.foldLeft[Either[CiError, List[String]]](Right(Nil)):
-      case (left @ Left(_), _) => left
+      case (left @ Left(_), _)                         => left
       case (Right(lines), (platform, runner, archive)) =>
         val file = s"LLVM-$revision-$archive.tar.xz"
-        LlvmDigest.of(file).map: hex =>
-          lines ++ List(
-            s"          - runner: $runner",
-            s"            platform: $platform",
-            s"            archive: $file",
-            s"            sha256: $hex",
-          )
+        LlvmDigest
+          .of(file)
+          .map: hex =>
+            lines ++ List(
+              s"          - runner: $runner",
+              s"            platform: $platform",
+              s"            archive: $file",
+              s"            sha256: $hex",
+            )
 
   private def clientJob(
       graph: ProjectGraph,
@@ -505,10 +509,11 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ fetchAssembly(graph, Bootstrap.Required) ++ SupplyYaml.preflight(
-      graph,
-      "client",
-    ) ++ clientLlvm(
+    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ fetchAssembly(graph, Bootstrap.Required) ++ SupplyYaml
+      .preflight(
+        graph,
+        "client",
+      ) ++ clientLlvm(
       revision
     ) ++ List(
       s"      - run: ${quote("./histos client")}",
@@ -894,7 +899,7 @@ object Workflow:
         case Bootstrap.Required => Nil
         case Bootstrap.Omit     => Nil
       List(
-        s"      - uses: ${ActionPins.downloadArtifact.line}",
+        s"      - uses: ${ActionPins.downloadArtifact.line}"
       ) ++ gate ++ List(
         "        with:",
         "          name: histos-bootstrap",
@@ -1072,7 +1077,7 @@ object Workflow:
     (List(
       "  affected:"
     ) ++ toolchainNeeds(graph) ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
       "      actions: read",
@@ -1081,7 +1086,7 @@ object Workflow:
       "      modules: ${{ steps.affected.outputs.modules }}",
       "    steps:",
     ) ++ fullGitCheckout() ++ List(
-      s"      - uses: $Setup",
+      s"      - uses: $Setup"
     ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
       "        env:",
@@ -1130,7 +1135,7 @@ object Workflow:
         List(
           "  test:"
         ) ++ needsAffected(graph) ++ verifyNeeds ++ List(
-          s"    runs-on: $Runner",
+          s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
           "    permissions:",
           "      actions: write",
@@ -1144,9 +1149,9 @@ object Workflow:
         List(
           "  test:"
         ) ++ needsAffected(graph) ++ verifyNeeds ++ List(
-          s"    runs-on: $Runner",
+          s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
-          "    permissions:",
+          "    permissions:"
         ) ++ actionsRead(graph) ++ List(
           "      contents: read",
           "    strategy:",
@@ -1309,7 +1314,7 @@ object Workflow:
     */
   private[workflow] def jobLimit(graph: ProjectGraph): List[String] =
     graph.ci.timeout match
-      case JobTimeout.Unbounded                                   => Nil
+      case JobTimeout.Unbounded                                  => Nil
       case JobTimeout.Minutes(count) if JobTimeout.admits(count) => List(s"    timeout-minutes: $count")
       case JobTimeout.Minutes(_)                                 => Nil
 
@@ -1345,9 +1350,9 @@ object Workflow:
     val lines     = List(
       "  doc:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",
@@ -1367,27 +1372,28 @@ object Workflow:
     (List(
       "  workflow:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",
     ) ++ fullGitCheckout() ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: $Setup",
-    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
-      "      - run: ./histos doctor",
-      "      - run: \"./histos workflow --check\"",
+    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ SupplyYaml.fullDoctor(
+      graph.supply.updates.author
+    ) ++ List(
+      "      - run: \"./histos workflow --check\""
     )).mkString("\n")
 
   private def versionsJob(graph: ProjectGraph): String =
     (List(
       "  versions:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",

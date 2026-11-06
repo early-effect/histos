@@ -282,6 +282,7 @@ evict org.scala-lang scala3-library_3 3.3.6 3.9.0
 evict org.scala-lang scala3-library_3 3.3.8 3.9.0
 cell engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
+direct dev.zio zio-json 1.1.1 binary
 direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
 direct org.scala-lang scaladoc 3.10.0 binary
@@ -307,6 +308,7 @@ direct tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 java
 direct org.jsoup jsoup 1.24.1 java
 direct com.google.guava guava 33.8.0-jre java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact dev.zio zio-json_3 1.1.1 2d50be6acbe06bf3613520f07101f24249b04bbde2e8f44a2d0c04fdf2bed5c4 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-lang scaladoc_3 3.10.0 2f1a34c894696858c0ccc97a4ea0d6400efb7a6ba6171281c50813c956a851af central
@@ -433,6 +435,7 @@ evict com.fasterxml.jackson.core jackson-core 2.13.2 2.22.4
 evict com.fasterxml.jackson.core jackson-databind 2.13.4.2 2.22.4
 evict com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 2.22.4
 evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
+evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.5 2.41.0
 evict com.google.errorprone error_prone_annotations 2.48.0 2.52.0
 evict com.google.errorprone error_prone_annotations 2.50.0 2.52.0
 evict com.google.guava failureaccess ${failureaccess.version} 1.0.3
@@ -464,6 +467,7 @@ evict org.scala-lang scala3-library_3 3.3.6 3.10.0
 evict org.scala-lang scala3-library_3 3.3.8 3.10.0
 evict org.scala-lang scala3-library_3 3.8.3 3.10.0
 evict org.scala-lang scala3-library_3 3.8.4 3.10.0
+evict org.scala-lang scala3-library_3 3.9.0 3.10.0
 evict org.scala-lang.modules scala-parser-combinators_3 2.1.0 2.5.0
 evict org.scala-sbt compiler-interface 1.12.0 2.0.5
 evict org.scala-sbt io_3 1.13.2 1.13.6
@@ -473,6 +477,7 @@ evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.4
 evict tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 3.2.4
 test engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
+direct dev.zio zio-json 1.1.1 binary
 direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
 direct org.scala-lang scaladoc 3.10.0 binary
@@ -501,6 +506,7 @@ direct dev.zio zio-test 2.1.27 binary
 direct dev.zio zio-test-sbt 2.1.27 binary
 direct io.grpc grpc-stub 1.85.1 java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
+artifact dev.zio zio-json_3 1.1.1 2d50be6acbe06bf3613520f07101f24249b04bbde2e8f44a2d0c04fdf2bed5c4 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-lang scaladoc_3 3.10.0 2f1a34c894696858c0ccc97a4ea0d6400efb7a6ba6171281c50813c956a851af central
@@ -632,6 +638,7 @@ evict com.fasterxml.jackson.core jackson-core 2.13.2 2.22.4
 evict com.fasterxml.jackson.core jackson-databind 2.13.4.2 2.22.4
 evict com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 2.22.4
 evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
+evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.5 2.41.0
 evict com.google.errorprone error_prone_annotations 2.48.0 2.52.0
 evict com.google.errorprone error_prone_annotations 2.50.0 2.52.0
 evict com.google.guava failureaccess ${failureaccess.version} 1.0.3
@@ -664,6 +671,7 @@ evict org.scala-lang scala3-library_3 3.3.6 3.10.0
 evict org.scala-lang scala3-library_3 3.3.8 3.10.0
 evict org.scala-lang scala3-library_3 3.8.3 3.10.0
 evict org.scala-lang scala3-library_3 3.8.4 3.10.0
+evict org.scala-lang scala3-library_3 3.9.0 3.10.0
 evict org.scala-lang.modules scala-parser-combinators_3 2.1.0 2.5.0
 evict org.scala-sbt compiler-interface 1.12.0 2.0.5
 evict org.scala-sbt io_3 1.13.2 1.13.6

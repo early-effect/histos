@@ -120,9 +120,9 @@ object WorkflowSpec extends ZIOSpecDefault:
       ZIO.scoped:
         for
           root <- temp
-          bare  = root.resolve("bare")
-          work  = root.resolve("work")
-          _    <- ZIO.attempt(checkoutWithoutHead(bare, work, "develop"))
+          bare = root.resolve("bare")
+          work = root.resolve("work")
+          _     <- ZIO.attempt(checkoutWithoutHead(bare, work, "develop"))
           found <- CiBranch.read(work)
         yield assertTrue(found.name == "develop")
     ,
@@ -146,8 +146,8 @@ object WorkflowSpec extends ZIOSpecDefault:
     test("origin HEAD is the name written into push"):
       ZIO.scoped:
         for
-          root <- temp
-          _    <- ZIO.attempt(pointOrigin(root, "develop"))
+          root  <- temp
+          _     <- ZIO.attempt(pointOrigin(root, "develop"))
           found <- CiBranch.read(root)
           rendered = Workflow.render(graph(Splits.aggregate))(using found)
         yield assertTrue(
@@ -164,16 +164,14 @@ object WorkflowSpec extends ZIOSpecDefault:
         rendered == Right(golden),
         golden.contains("./histos test"),
         golden.contains("contents: read"),
-        golden.contains("workflow --check"),
-        {
+        golden.contains("workflow --check"), {
           val job   = slice(golden, "  workflow:", "  supply-chain:").getOrElse("")
           val depth = job.indexOf("fetch-depth: \"0\"")
           val tags  = job.indexOf("fetch-tags: \"true\"")
           val head  = job.indexOf("./.github/actions/origin-head")
           val check = job.indexOf("workflow --check")
           depth >= 0 && tags > depth && head > tags && check > head
-        },
-        {
+        }, {
           val job   = slice(golden, "  supply-chain:", "").getOrElse("")
           val depth = job.indexOf("fetch-depth: \"0\"")
           val tags  = job.indexOf("fetch-tags: \"true\"")
@@ -428,7 +426,7 @@ object WorkflowSpec extends ZIOSpecDefault:
               case Right(files) => files.find(_.name == "histos-deps.yml").map(_.body)
               case Left(_)      => None
           case Left(_) => None
-      val ownCi = ciOf(own).getOrElse("")
+      val ownCi      = ciOf(own).getOrElse("")
       val workflowAt = ownCi.indexOf("\n  workflow:\n")
       val supplyAt   = ownCi.indexOf("\n  supply-chain:\n")
       val before     = if workflowAt > 0 then ownCi.substring(0, workflowAt) else ownCi
@@ -445,7 +443,9 @@ object WorkflowSpec extends ZIOSpecDefault:
         ownCi.contains("\n    needs: toolchain\n"),
         ownCi.contains("needs.toolchain.outputs.built == 'true'"),
         ownCi.contains("built: ${{ steps.jar.outputs.built }}"),
-        !ownCi.contains("continue-on-error:"),
+        // The app mint continues on error so doctor still runs. Nothing else in ci.yml may.
+        ownCi.split("continue-on-error:").length == 3,
+        ownCi.split("continue-on-error: true\n        uses: actions/create-github-app-token@").length == 3,
         !before.contains("if [ ! -f dist/histos.jar ]"),
         workflow.contains("./histos assembly"),
         supply.contains("if [ ! -f dist/histos.jar ]; then"),
@@ -573,10 +573,11 @@ object WorkflowSpec extends ZIOSpecDefault:
           )
         ) ==
           List("./histos", "test", "--platform", "js"),
-      ),
+      )
+    ,
     test("generated jobs carry a timeout, and an unknown llvm archive is refused"):
       val bounded = Workflow.render(graph(Splits.aggregate))
-      val open = Workflow.render(
+      val open    = Workflow.render(
         ProjectGraph.trusted(
           List(module(ProjectName("core"), Platform.Jvm, Nil)),
           Splits.aggregate,
@@ -586,7 +587,7 @@ object WorkflowSpec extends ZIOSpecDefault:
           ci = CiSettings.empty.copy(timeout = histos.JobTimeout.Unbounded),
         )
       )
-      val native = module(ProjectName("core"), Platform.Native, Nil)
+      val native  = module(ProjectName("core"), Platform.Native, Nil)
       val unknown = Workflow.render(
         ProjectGraph.trusted(
           List(native),
@@ -1201,7 +1202,7 @@ object WorkflowSpec extends ZIOSpecDefault:
     found match
       case Left(error @ CiError.Drift(file, hint)) =>
         file.nonEmpty && hint.nonEmpty &&
-          histos.doctor.FaultText.show(error.diagnose).contains("histos workflow --update")
+        histos.doctor.FaultText.show(error.diagnose).contains("histos workflow --update")
       case _ => false
 
   private def slice(yaml: String, start: String, end: String): Option[String] =

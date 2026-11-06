@@ -8,11 +8,12 @@ import histos.doctor.{
   Fix,
   FixApply,
   FixMode,
+  GitHubCredential,
+  JobEnv,
   Outcome,
   Probe,
   Render,
   Runner,
-  ShellLine,
 }
 import histos.version.CommitSha
 import histos.workflow.PinScan
@@ -37,20 +38,24 @@ object DoctorSurface:
   )
 
   def run(repo: Path, graph: ProjectGraph, request: Request, machine: histos.jdk.Machine): UIO[(Int, String)] =
-    val token = sys.env.get("GH_TOKEN").filter(_.nonEmpty).orElse(sys.env.get("GITHUB_TOKEN").filter(_.nonEmpty))
-    val tty   = System.console() != null
-    runWith(
-      repo,
-      graph,
-      request,
-      machine,
-      Net.live,
-      token,
-      tty,
-      prompt(tty),
-      command(repo),
-      applySetting(token),
-    )
+    val env = sys.env
+    val tty = System.console() != null
+    GitHubCredential
+      .resolve(env, GitHubCredential.gh)
+      .flatMap: token =>
+        runWith(
+          repo,
+          graph,
+          request,
+          machine,
+          Net.live,
+          env,
+          token,
+          tty,
+          prompt(tty),
+          command(repo),
+          applySetting(token.map(_.value)),
+        )
 
   def runWith(
       repo: Path,
@@ -58,17 +63,19 @@ object DoctorSurface:
       request: Request,
       machine: histos.jdk.Machine,
       net: Net,
-      token: Option[String],
+      env: Map[String, String],
+      token: Option[GitHubCredential.Token],
       tty: Boolean,
       ask: Fix => UIO[FixApply.Answer],
       exec: String => UIO[Unit],
       setting: String => UIO[Unit],
   ): UIO[(Int, String)] =
+    val job = JobEnv.from(env)
     for
-      hit                 <- github(repo, net, token)
-      (auth, pgp, pages) <- probes(repo, graph, request, net, token, hit)
-      report <- Runner.run(
-        selected(repo, graph, request, machine, hit, auth, pgp, pages),
+      located            <- github(repo, net, env, token, job, graph)
+      (auth, pgp, pages) <- probes(repo, graph, request, net, env, token, located)
+      report             <- Runner.run(
+        selected(repo, graph, request, machine, located, auth, pgp, pages),
         DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
         checkLimit,
       )
@@ -83,22 +90,23 @@ object DoctorSurface:
       graph: ProjectGraph,
       request: Request,
       net: Net,
-      token: Option[String],
-      hit: histos.doctor.GitHubProbe.Hit,
+      env: Map[String, String],
+      token: Option[GitHubCredential.Token],
+      located: Located,
   ): UIO[(histos.doctor.CentralProbe.Auth, histos.doctor.PgpProbe.Hit, histos.doctor.PagesProbe.Hit)] =
     if request.preflight.isDefined then
       ZIO.succeed(
         (histos.doctor.CentralProbe.Auth.NotRun, histos.doctor.PgpProbe.Hit.Unset, histos.doctor.PagesProbe.Hit.Absent)
       )
     else
-      val auth = histos.doctor.CentralProbe.read(net, sys.env)
-      val pgp  = histos.doctor.PgpProbe.read(sys.env)
+      val auth  = histos.doctor.CentralProbe.read(net, env)
+      val pgp   = histos.doctor.PgpProbe.read(env)
       val pages =
         if !histos.doctor.HygieneChecks.publishesPages(graph) then ZIO.succeed(histos.doctor.PagesProbe.Hit.Absent)
         else
-          (token.filter(_.nonEmpty), githubRepo(repo)) match
+          (token.map(_.value).filter(_.nonEmpty), located.name) match
             case (Some(value), Some(name)) =>
-              val branch = hit match
+              val branch = located.hit match
                 case histos.doctor.GitHubProbe.Hit.Ready(read) => read.view.defaultBranch.value
                 case _                                         => "main"
               histos.doctor.PagesProbe.read(net, name, branch, value)
@@ -110,15 +118,16 @@ object DoctorSurface:
       graph: ProjectGraph,
       request: Request,
       machine: histos.jdk.Machine,
-      hit: histos.doctor.GitHubProbe.Hit,
+      located: Located,
       auth: histos.doctor.CentralProbe.Auth,
       pgp: histos.doctor.PgpProbe.Hit,
       pages: histos.doctor.PagesProbe.Hit,
   ): List[DoctorCheck] =
     val pins   = pinCheck(repo, graph)
-    val github = githubCheck(repo, graph, hit)
-    val listed = hit match
-      case histos.doctor.GitHubProbe.Hit.Ready(read) if read.covered.contains("supply.secret-missing") =>
+    val github = githubCheck(repo, graph, located)
+    val listed = located.hit match
+      case histos.doctor.GitHubProbe.Hit.Ready(read)
+          if read.covered.contains("supply.secret-missing") && read.view.secretsSight == Sight.Known =>
         Some(read.view.secrets)
       case _ => None
     val release = List(
@@ -162,8 +171,8 @@ object DoctorSurface:
 
   private def closedPages(graph: ProjectGraph, hit: histos.doctor.PagesProbe.Hit): DoctorCheck =
     new DoctorCheck:
-      def id   = CheckId.trusted("pages.enabled")
-      def area = Area.SitePublish
+      def id                      = CheckId.trusted("pages.enabled")
+      def area                    = Area.SitePublish
       def needs                   = Set.empty
       def run(ctx: DoctorContext) =
         ZIO.succeed(histos.doctor.HygieneChecks.pages(histos.doctor.HygieneChecks.publishesPages(graph), hit))
@@ -171,14 +180,18 @@ object DoctorSurface:
   private def shipChecks(repo: Path, graph: ProjectGraph): List[DoctorCheck] =
     val file = repo.resolve(histos.version.VersionTask.fileName)
     List(
-      shipCheck(graph, "ship.session", file, (catalog, env, _) =>
-        List(histos.doctor.ShipChecks.session(catalog, env))
+      shipCheck(graph, "ship.session", file, (catalog, env, _) => List(histos.doctor.ShipChecks.session(catalog, env))),
+      shipCheck(
+        graph,
+        "ship.releases",
+        file,
+        (catalog, _, releases) => List(histos.doctor.ShipChecks.releases(catalog, releases)),
       ),
-      shipCheck(graph, "ship.releases", file, (catalog, _, releases) =>
-        List(histos.doctor.ShipChecks.releases(catalog, releases))
-      ),
-      shipCheck(graph, "ship.should-bump", file, (catalog, _, releases) =>
-        histos.doctor.ShipChecks.bumps(catalog, releases)
+      shipCheck(
+        graph,
+        "ship.should-bump",
+        file,
+        (catalog, _, releases) => histos.doctor.ShipChecks.bumps(catalog, releases),
       ),
     )
 
@@ -205,18 +218,18 @@ object DoctorSurface:
           case Nil => ZIO.succeed(List(Outcome.Ok(id, "every uses is pinned")))
           case _ => ZIO.succeed(List(Outcome.Found(SupplyDiagnostic.ShaPinPolicyOff(RepoName.trusted(repoName(repo))))))
 
-  private def githubCheck(repo: Path, graph: ProjectGraph, hit: histos.doctor.GitHubProbe.Hit): DoctorCheck =
+  private def githubCheck(repo: Path, graph: ProjectGraph, located: Located): DoctorCheck =
     new DoctorCheck:
       def id                      = CheckId.trusted("supply.app-installed")
       def area                    = Area.SupplyChain
       def needs                   = Set.empty
       def run(ctx: DoctorContext) =
         ZIO.succeed:
-          hit match
+          located.hit match
             case histos.doctor.GitHubProbe.Hit.Absent =>
-              List(Outcome.Skipped(id, Probe.GitHubRead, Fix.Command(ShellLine.trusted("gh auth login"))))
+              SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential)
             case histos.doctor.GitHubProbe.Hit.Unreachable =>
-              List(Outcome.Skipped(id, Probe.GitHubRead, Fix.Command(ShellLine.trusted("GitHub could not be reached"))))
+              SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable)
             case histos.doctor.GitHubProbe.Hit.Ready(read) =>
               val text = readFile(repo.resolve(".github").resolve("dependabot.yml"))
               val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
@@ -272,11 +285,24 @@ object DoctorSurface:
         case FixApply.Answer.Yes => setting(url).as(s"applied: $url")
         case _                   => ZIO.succeed(s"skipped: $url")
 
-  private def github(repo: Path, net: Net, token: Option[String]): UIO[histos.doctor.GitHubProbe.Hit] =
-    githubRepo(repo) match
-      case None       => ZIO.succeed(histos.doctor.GitHubProbe.Hit.Absent)
+  private final case class Located(name: Option[RepoName], hit: histos.doctor.GitHubProbe.Hit)
+
+  private def github(
+      repo: Path,
+      net: Net,
+      env: Map[String, String],
+      token: Option[GitHubCredential.Token],
+      job: JobEnv,
+      graph: ProjectGraph,
+  ): UIO[Located] =
+    val needed = graph.supply.updates.author.secretNames.map(_.value)
+    githubRepo(repo, env) match
+      case None       => ZIO.succeed(Located(None, histos.doctor.GitHubProbe.Hit.Absent))
       case Some(name) =>
-        histos.doctor.GitHubProbe.read(net, name, BranchName.trusted("main"), token)
+        val api = token.fold("https://api.github.com")(_.api)
+        histos.doctor.GitHubProbe
+          .read(net, name, BranchName.trusted("main"), token.map(_.value), api, job, needed)
+          .map(hit => Located(Some(name), hit))
 
   private def prompt(tty: Boolean)(fix: Fix): UIO[FixApply.Answer] =
     if !tty then ZIO.succeed(FixApply.Answer.NonTty)
@@ -338,8 +364,8 @@ object DoctorSurface:
   private def readFile(path: Path): String =
     if Files.isRegularFile(path) then Files.readString(path) else ""
 
-  private def githubRepo(repo: Path): Option[RepoName] =
-    sys.env.get("GITHUB_REPOSITORY").flatMap(raw => RepoName.from(raw).toOption).orElse(origin(repo))
+  private def githubRepo(repo: Path, env: Map[String, String]): Option[RepoName] =
+    env.get("GITHUB_REPOSITORY").flatMap(raw => RepoName.from(raw).toOption).orElse(origin(repo))
 
   private def origin(repo: Path): Option[RepoName] =
     val text = git(repo, "remote", "get-url", "origin").trim.stripSuffix(".git")
