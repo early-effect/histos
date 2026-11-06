@@ -62,8 +62,8 @@ object AssetSpec extends ZIOSpecDefault:
           after  <- ZIO.attempt(Files.readString(path))
         yield assertTrue(
           ran == Right(AssetReport(Nil, List("histos histos.jar"))),
-          seen.requests == 2,
-          seen.tags == List("v1.0.0"),
+          seen.requests == 4,
+          seen.tags == List("v1.0.0", "v1.0.0"),
           seen.uploads == List(
             AssetStand.Upload("early-effect", "histos", "histos.jar", jar, "application/octet-stream")
           ),
@@ -103,8 +103,8 @@ object AssetSpec extends ZIOSpecDefault:
           after  <- ZIO.attempt(Files.readString(path))
         yield assertTrue(
           ran == Right(AssetReport(Nil, List("histos histos.jar"))),
-          seen.requests == 2,
-          seen.tags == List("v1.0.0"),
+          seen.requests == 4,
+          seen.tags == List("v1.0.0", "v1.0.0"),
           seen.uploads == List(
             AssetStand.Upload("early-effect", "histos", "histos.jar", jar, "application/octet-stream")
           ),
@@ -179,12 +179,12 @@ object AssetSpec extends ZIOSpecDefault:
           seen  <- stand.seen
         yield assertTrue(
           ran == Right(AssetReport(Nil, List("histos histos.jar"))),
-          seen.tags == List("histos/v1.0.0"),
+          seen.tags == List("histos/v1.0.0", "histos/v1.0.0"),
           seen.uploads == List(
             AssetStand.Upload("early-effect", "histos", "histos.jar", jar, "application/octet-stream")
           ),
           seen.uploads.exists(_.bytes == other) == false,
-          seen.requests == 2,
+          seen.requests == 4,
         )
 
   private val absent =
@@ -200,7 +200,7 @@ object AssetSpec extends ZIOSpecDefault:
           seen  <- stand.seen
         yield assertTrue(
           ran == Right(AssetReport(List("histos the release v1.0.0 was not found"), Nil)),
-          seen.requests == 1,
+          seen.requests == 2,
           seen.uploads.isEmpty,
         )
 
@@ -401,7 +401,7 @@ object AssetSpec extends ZIOSpecDefault:
           !file,
           !gone,
           seen.uploads.map(_.name) == List("histos.jar"),
-          seen.requests == 3,
+          seen.requests == 5,
         )
 
   private val libraryDrop =
@@ -501,6 +501,27 @@ object AssetSpec extends ZIOSpecDefault:
           !gone,
         )
 
+  private val replaced =
+    test("an existing jar is deleted and the new bytes are uploaded"):
+      ZIO.scoped:
+        for
+          root  <- temp
+          stand <- AssetStand.open(
+            "asset-token",
+            prior = List(AssetStand.Upload("early-effect", "histos", "histos.jar", other, "application/octet-stream")),
+          )
+          graph <- ZIO.fromEither(one)
+          _     <- plant(root, "dist/histos.jar", jar)
+          _     <- note(root, "histos", DeploymentState.Validated, "1.0.0")
+          ran   <- AssetRun.publish(root, graph, List("histos"), env(stand.base)).either
+          seen  <- stand.seen
+        yield assertTrue(
+          ran == Right(AssetReport(Nil, List("histos histos.jar"))),
+          seen.uploads == List(
+            AssetStand.Upload("early-effect", "histos", "histos.jar", jar, "application/octet-stream")
+          ),
+        )
+
   private val idle =
     test("no name with nothing validated uploads nothing"):
       ZIO.scoped:
@@ -534,6 +555,7 @@ object AssetSpec extends ZIOSpecDefault:
       rejected,
       mismatch,
       clash,
+      replaced,
       idle,
       removed,
       assetFailed,

@@ -111,13 +111,18 @@ end AssetToken
 trait Assets:
   def upload(tag: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit]
 
-  /** Delete one asset by file name. A missing release or a missing name was not uploaded. */
+  /** Delete one asset by file name. A missing release or a missing name was not uploaded. The name is sought on every
+    * page of the asset list.
+    */
   def delete(tag: String, name: String): IO[AssetError, Unit]
 
-  /** Delete the name when it is already on the release, then upload. GitHub refuses a second asset of the same name.
+  /** Delete the name when it is already on the release, then upload. GitHub answers 422 when that name is still there.
+    * One refusal is deleted and uploaded once more. A name past the first page is still that asset.
     */
   def replace(tag: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit] =
-    delete(tag, name) *> upload(tag, name, bytes)
+    delete(tag, name) *> upload(tag, name, bytes).catchSome { case AssetError.Status(422) =>
+      delete(tag, name) *> upload(tag, name, bytes)
+    }
 end Assets
 
 object Assets:
@@ -140,6 +145,10 @@ private final class AssetClient(
     client: Client,
 ) extends Assets:
   private val bearer = "Bearer " + token.render
+
+  /** GitHub's maximum page, and how many of those pages a replace will read. */
+  private val PageSize  = 100
+  private val PageLimit = 100
 
   def upload(tag: String, name: String, bytes: Chunk[Byte]): IO[AssetError, Unit] =
     lookup(tag).flatMap(id => post(id, name, bytes))
@@ -175,22 +184,64 @@ private final class AssetClient(
           case None     => ZIO.fail(AssetError.Report)
       case None => ZIO.fail(AssetError.Report)
 
-  /** `GET` the asset list on the API host and keep the numeric `id` whose `name` matches. */
+  /** `GET` each page and keep the numeric `id` whose `name` matches. GitHub returns thirty names unless `per_page` is
+    * set, and one hundred is the most one page holds. `channel-0.2.0-SNAPSHOT` on `dist` sits past that first page.
+    */
   private def listed(id: String, name: String): IO[AssetError, Option[String]] =
-    val url = api.root / "repos" / repository.owner / repository.name / "releases" / id / "assets"
-    exchange(Method.GET, url, Body.empty).flatMap: response =>
-      response.status.code match
-        case 200       => identified(response, name)
-        case 404       => ZIO.succeed(None)
-        case 401 | 403 => ZIO.fail(AssetError.Unauthorized)
-        case code      => ZIO.fail(AssetError.Status(code))
+    listedPage(id, name, 1)
 
-  private def identified(response: Response, name: String): IO[AssetError, Option[String]] =
+  private def listedPage(id: String, name: String, number: Int): IO[AssetError, Option[String]] =
+    if number > PageLimit then ZIO.fail(AssetError.Inventory)
+    else
+      val url = (api.root / "repos" / repository.owner / repository.name / "releases" / id / "assets")
+        .copy(query = QueryParams.of("per_page" -> PageSize.toString, "page" -> number.toString))
+      exchange(Method.GET, url, Body.empty).flatMap: response =>
+        response.status.code match
+          case 200       =>
+            readPage(response, name).flatMap { (found, count) =>
+              found match
+                case Some(_) => ZIO.succeed(found)
+                case None    =>
+                  nextPage(response.header("Link"), number, count) match
+                    case Some(page) => listedPage(id, name, page)
+                    case None       => ZIO.succeed(None)
+            }
+          case 404       => ZIO.succeed(None)
+          case 401 | 403 => ZIO.fail(AssetError.Unauthorized)
+          case code      => ZIO.fail(AssetError.Status(code))
+
+  private def readPage(response: Response, name: String): IO[AssetError, (Option[String], Int)] =
     response.body.strict match
       case Some(bytes) =>
         val body = new String(bytes.toArray, java.nio.charset.StandardCharsets.UTF_8)
-        ZIO.succeed(assetId(body, name))
+        val rows = objects(body)
+        val hit  = rows.iterator.flatMap { obj =>
+          if field(obj, "name").contains(name) then numberField(obj, "id") else None
+        }.nextOption()
+        ZIO.succeed((hit, rows.length))
       case None => ZIO.fail(AssetError.Inventory)
+
+  /** `rel="next"` when the host sends it. A full page with no link is still followed. A short page is the end. */
+  private def nextPage(link: Option[String], number: Int, count: Int): Option[Int] =
+    val linked = link.flatMap(pageLink).filter(_ > number)
+    val full   = Option.when(count >= PageSize)(number + 1)
+    linked.orElse(full)
+
+  private def pageLink(header: String): Option[Int] =
+    header.split(",", -1).iterator.map(_.trim).collectFirst {
+      case part if part.contains("rel=\"next\"") || part.contains("rel=next") =>
+        val open  = part.indexOf('<')
+        val close = part.indexOf('>')
+        if open >= 0 && close > open then pageQuery(part.substring(open + 1, close)) else None
+    }.flatten
+
+  private def pageQuery(url: String): Option[Int] =
+    val at = url.indexOf('?')
+    if at < 0 then None
+    else
+      url.substring(at + 1).split("&", -1).iterator.collectFirst {
+        case pair if pair.startsWith("page=") => pair.drop(5).toIntOption
+      }.flatten
 
   /** `DELETE /repos/{owner}/{repo}/releases/assets/{id}` on the API host. `404` is already gone. */
   private def erase(id: String): IO[AssetError, Unit] =
@@ -244,12 +295,6 @@ private final class AssetClient(
         val rest = opened.drop(1)
         val end  = rest.indexOf('"')
         if end < 0 then None else Some(rest.substring(0, end))
-
-  private def assetId(body: String, name: String): Option[String] =
-    objects(body).iterator
-      .flatMap: obj =>
-        if field(obj, "name").contains(name) then numberField(obj, "id") else None
-      .nextOption()
 
   /** Top-level objects. A string may contain braces. The asset list is one array of those objects. */
   private def objects(body: String): List[String] =
