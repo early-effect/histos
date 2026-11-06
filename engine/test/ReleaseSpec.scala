@@ -449,7 +449,7 @@ object ReleaseSpec extends ZIOSpecDefault:
           !insideGav,
           !plugGav,
           uploaded == AssetReport(Nil, List("tool tool.jar")),
-          sent.tags == List("tool/v1.0.0"),
+          sent.tags == List("tool/v1.0.0", "tool/v1.0.0"),
           sent.uploads == List(
             AssetStand.Upload(
               "early-effect",

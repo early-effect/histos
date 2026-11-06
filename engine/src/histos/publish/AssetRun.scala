@@ -18,7 +18,8 @@ final case class AssetReport(failed: List[String], uploaded: List[String]):
     failed.nonEmpty
 end AssetReport
 
-/** Upload each named asset whose deployment file says `VALIDATED` or `PUBLISHED`. Missing secrets fail before a socket.
+/** Upload each named asset whose deployment file says `VALIDATED` or `PUBLISHED`. A file already on the release is
+  * replaced. Missing secrets fail before a socket.
   */
 object AssetRun:
   def publish(
@@ -87,7 +88,7 @@ object AssetRun:
       .serviceWithZIO[Assets] { assets =>
         ZIO.foreach(ready): file =>
           assets
-            .upload(file.tag, file.name, file.bytes)
+            .replace(file.tag, file.name, file.bytes)
             .fold(
               error => Left(s"${file.ship.value} ${error.message}"),
               _ => Right(s"${file.ship.value} ${file.name}"),
