@@ -220,6 +220,12 @@ object Grammar:
         ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
       case "~" :: rest =>
         parseRoot(rest).map(command => Command.Watch(command, rest))
+      case "--explain" :: Nil =>
+        ZIO.fail(CliParseError.Pattern("--explain needs a check id"))
+      case "--explain" :: id :: Nil =>
+        ZIO.succeed(Command.Explain(id))
+      case "--explain" :: _ =>
+        ZIO.fail(CliParseError.Pattern("--explain takes one check id"))
       case _ => parseRoot(args)
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =

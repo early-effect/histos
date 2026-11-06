@@ -98,6 +98,7 @@ enum Command:
   case New(name: String)
   case Init
   case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
+  case Explain(id: String)
   case Deps(action: DepsAction)
   case Setup(from: Option[String], fix: Boolean, yes: Boolean)
   case Help(words: List[String])
@@ -209,7 +210,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -245,6 +246,17 @@ object Cli:
       )
     }
 
+  private def explain(raw: String): Completed =
+    histos.doctor.ToolchainExplain.text(raw) match
+      case Some(body) => Completed(CliExit.Success, body, "", Playback.Held)
+      case None       =>
+        Completed(
+          CliExit.Usage,
+          "",
+          s"no explanation for '$raw'. Known checks: ${histos.doctor.ToolchainExplain.known}.",
+          Playback.Held,
+        )
+
   private def doctor(
       repo: Path,
       apiJar: Path,
@@ -253,6 +265,7 @@ object Cli:
       preflight: Option[String],
       fix: Boolean,
       yes: Boolean,
+      machine: histos.jdk.Machine,
   ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
     ZIO
       .serviceWithZIO[Loader](_.load(repo, apiJar))
@@ -266,6 +279,7 @@ object Cli:
               repo,
               loaded.graph,
               histos.supply.DoctorSurface.Request(area, json, preflight, fix, yes),
+              machine,
             )
             .map: (code, text) =>
               val exit = if code == 0 then CliExit.Success else CliExit.TaskFailed
@@ -420,7 +434,11 @@ object Cli:
       case Command.New(name)                               => fresh(repo, Some(name))
       case Command.Init                                    => fresh(repo, None)
       case Command.Doctor(area, json, preflight, fix, yes) =>
-        doctor(repo, apiJar, area, json, preflight, fix, yes)
+        ZIO.serviceWithZIO[histos.jdk.Machine](machine =>
+          doctor(repo, apiJar, area, json, preflight, fix, yes, machine)
+        )
+      case Command.Explain(id) =>
+        ZIO.succeed(explain(id))
       case Command.Deps(action) =>
         deps(repo, apiJar, action)
       case Command.Setup(from, fix, yes) =>
@@ -670,12 +688,13 @@ object Cli:
         .foldZIO(
           {
             case LoadError.MissingFile(_) =>
-              Toolchain
-                .explain(machine)
-                .foldZIO(
-                  error => Calls.finish(say, CallResult.Fault(BuildFault.Toolchain(error))),
-                  found => Calls.tell(say, Toolchain.text(found)) *> Calls.finish(say, CallResult.reported()),
-                )
+              Toolchain.read(machine).flatMap:
+                case histos.jdk.JdkRead.Chosen(runtime, source) =>
+                  Calls.tell(say, s"jdk ${runtime.version.value} ${runtime.home} from ${source.label}") *>
+                    Calls.finish(say, CallResult.reported())
+                case histos.jdk.JdkRead.Failed(error, source) =>
+                  Calls.tell(say, Toolchain.failure(error, source)) *>
+                    Calls.finish(say, CallResult.Fault(BuildFault.Toolchain(error)))
             case error =>
               Calls.finish(say, CallResult.Fault(BuildFault.Load(error)))
           },
@@ -1297,12 +1316,20 @@ object Cli:
         .flatMap:
           case Left(LoadError.MissingFile(_)) =>
             Toolchain
-              .explain(machine)
-              .mapBoth(
-                err => held(Call.Toolchain, "", CallResult.Fault(BuildFault.Toolchain(err))),
-                found => held(Call.Toolchain, Toolchain.text(found), CallResult.reported()),
-              )
-              .merge
+              .read(machine)
+              .map:
+                case histos.jdk.JdkRead.Chosen(runtime, source) =>
+                  held(
+                    Call.Toolchain,
+                    s"jdk ${runtime.version.value} ${runtime.home} from ${source.label}",
+                    CallResult.reported(),
+                  )
+                case histos.jdk.JdkRead.Failed(error, source) =>
+                  held(
+                    Call.Toolchain,
+                    Toolchain.failure(error, source),
+                    CallResult.Fault(BuildFault.Toolchain(error)),
+                  )
           case Left(error) =>
             ZIO.succeed(held(Call.Toolchain, "", CallResult.Fault(BuildFault.Load(error))))
           case Right(loaded) =>
@@ -2071,7 +2098,11 @@ object Cli:
       case Command.Init =>
         fresh(repo, None)
       case Command.Doctor(area, json, preflight, fix, yes) =>
-        inProcessReady(repo)((api, machine) => withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes)))
+        inProcessReady(repo)((api, machine) =>
+          withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes, machine))
+        )
+      case Command.Explain(id) =>
+        ZIO.succeed(explain(id))
       case Command.Deps(action) =>
         inProcessReady(repo)((api, machine) => withLoader(machine)(deps(repo, api, action)))
       case Command.Setup(from, fix, yes) =>

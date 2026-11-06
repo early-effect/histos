@@ -459,14 +459,24 @@ object DoctorSpec extends ZIOSpecDefault:
         _         <- TestClock.adjust(2.seconds)
         late      <- lateFiber.join
         warned    <- Runner.run(List(warn), DoctorContext(Nil, Set(Probe.Local)), 1.second)
-      yield assertTrue(
+      yield
+        val shown = histos.doctor.Render.text("early-effect/histos", late)
+        assertTrue(
         skipped.outcomes.headOption.exists(_.isInstanceOf[Outcome.Skipped]),
         skipped.exit == 0,
-        late.timedOut.nonEmpty,
+        late.timedOut.map(_.value) == List("supply.slow"),
         late.exit == 1,
+        shown.contains("  x timed out supply.slow"),
+        shown.contains("0 errors, 0 warnings, 0 ok, 0 skipped, 1 timed out"),
+        histos.doctor.Render.annotations(late).contains("::error title=histos doctor: supply.slow::timed out"),
+        histos.doctor.Render.summary("deps", late).contains("supply.slow"),
+        histos.doctor.Render.summary("deps", late).contains("failed"),
+        histos.doctor.Render.json(late).contains("\"exit\":1"),
+        histos.doctor.Render.json(late).contains("\"timedOut\":[\"supply.slow\"]"),
         warned.exit == 0,
         warned.warnings == 1,
         histos.doctor.Render.text("early-effect/histos", warned).contains("supply.default-token"),
+        !histos.doctor.Render.text("early-effect/histos", warned).contains("timed out"),
         histos.doctor.Render.annotations(warned).contains("::warning"),
         histos.doctor.Render.summary("deps", warned).contains("supply.default-token"),
         histos.doctor.Render.json(warned).contains("\"exit\":0"),
