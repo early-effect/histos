@@ -285,28 +285,52 @@ direct dev.zio zio 2.1.27 binary
 direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
 direct org.scala-lang scaladoc 3.10.0 binary
-direct org.scala-sbt zinc 2.0.4 binary
+direct org.scala-sbt zinc 2.0.5 binary
 direct org.scala-sbt sbinary 0.6.0 binary
 direct org.scala-lang.modules scala-parser-combinators 2.5.0 binary
 direct io.get-coursier coursier 2.1.26 binary
 direct org.ow2.asm asm 9.11.1 java
 direct org.ow2.asm asm-tree 9.11.1 java
+direct org.ow2.asm asm-commons 9.11.1 java
+direct org.ow2.asm asm-util 9.11.1 java
+direct org.ow2.asm asm-analysis 9.11.1 java
 direct org.bouncycastle bcpg-jdk18on 1.86 java
-direct io.grpc grpc-api 1.73.0 java
-direct io.grpc grpc-netty-shaded 1.73.0 java
+direct io.grpc grpc-api 1.85.1 java
+direct io.grpc grpc-netty-shaded 1.85.1 java
+direct com.fasterxml.jackson.core jackson-annotations 2.22 java
+direct com.fasterxml.jackson.core jackson-core 2.22.4 java
+direct com.fasterxml.jackson.core jackson-databind 2.22.4 java
+direct com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.22.4 java
+direct tools.jackson.core jackson-core 3.2.4 java
+direct tools.jackson.core jackson-databind 3.2.4 java
+direct tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 java
+direct org.jsoup jsoup 1.24.1 java
+direct com.google.guava guava 33.8.0-jre java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-lang scaladoc_3 3.10.0 2f1a34c894696858c0ccc97a4ea0d6400efb7a6ba6171281c50813c956a851af central
-artifact org.scala-sbt zinc_3 2.0.4 83ef81980ff8ab819d2367b1cb23ee8df0cc2e6f4fe76b8f9cd42e70eac05bfd central
+artifact org.scala-sbt zinc_3 2.0.5 845f0ac5f30f6118b56d7bdebbb09835715433ef55070df522364cd5d046b2d0 central
 artifact org.scala-sbt sbinary_3 0.6.0 6c7e65a95d8dc2680687397fdd0e72c5c8e4a36ae257d5ed604fe71616d718b7 central
 artifact org.scala-lang.modules scala-parser-combinators_3 2.5.0 b0bd92c899104db8ce82b675a6bc54cfd9da80b81a6ce4c15451819dfd5b12cc central
 artifact io.get-coursier coursier_3 2.1.26 1761e4f15ad1749d3de0ce9e6548cc69529ebbc4cd2fe21e38584eda6c22bdad central
 artifact org.ow2.asm asm 9.11.1 ae4e6e10d59d0a1500317764b21881ad883f8550e33c66e6142f7032c6fb566c central
 artifact org.ow2.asm asm-tree 9.11.1 2b15c3c1b288a9fad3bb2cd6d988ba9521554914ed1f2a2029141fa3f483154a central
+artifact org.ow2.asm asm-commons 9.11.1 6a5095ec53726156a78b2cd2efd45bc4e877754eca7c234f61224a53d6bfa661 central
+artifact org.ow2.asm asm-util 9.11.1 23fdffacdfc38f447cbd8b80e058f462451fa5d4709e437067d530fa6513579d central
+artifact org.ow2.asm asm-analysis 9.11.1 3a91769287d0a186333d6e384e5d4eec37e4b8f705dcf920ff4aea4cc452fac2 central
 artifact org.bouncycastle bcpg-jdk18on 1.86 8a52ea45b2063f6d41b8ca94409f255a1f4604922f7451c18a7cfd3a3c5b85ab central
-artifact io.grpc grpc-api 1.73.0 bae13d4e4716a0955d316b5fcb75582504325e5b11ac946b13b64b4fce19bc6e central
-artifact io.grpc grpc-netty-shaded 1.73.0 8328289ba6b73445e982a1cadf8e651ea65354e288c825a43e7c77f16da8a056 central
+artifact io.grpc grpc-api 1.85.1 159371ce7ecb1de72f910571436f7866baa595c820271fcb930961212b7c6363 central
+artifact io.grpc grpc-netty-shaded 1.85.1 ea75fb829517724d40c1ebedd6dad1362b284203716725a1b5ae740f4c91931e central
+artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
+artifact com.fasterxml.jackson.core jackson-core 2.22.4 2d30c375cddea9657a1e1ef97547a2694b663b355facb4de53a097782b312d1a central
+artifact com.fasterxml.jackson.core jackson-databind 2.22.4 d4cbf8947087f305869826801913abdc50735a1fab2074a1993e7bc67ca974a3 central
+artifact com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.22.4 ec961697cbd631935b6fb6f673406861c75243521fb67fec10b59f1412ac50f7 central
+artifact tools.jackson.core jackson-core 3.2.4 494b9f5fccf008042d5a72c5bf00629b144c0ba7362a9864cbb02234c9772651 central
+artifact tools.jackson.core jackson-databind 3.2.4 c4af37223d5024f1294a5450598b01b65f30c53d9e906f02c3955ba1fb14a67d central
+artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 b5edac76d73f983dee7bc929557aa68c38424b9a3b851caf8a382aaca67a9f32 central
+artifact org.jsoup jsoup 1.24.1 fabbb4aaf7fb5340aed0613826ecd110427999d765d8e0367cedde2950d7097c central
+artifact com.google.guava guava 33.8.0-jre 97b79ec3f2c0a6313a0c2df51ce1abdf8907e6531803467b81efcaaf99b35161 central
 artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
 artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
 artifact org.scala-lang scala3-library_3 3.10.0 4daaede24ddfeea082bbed096ba0c492d99e8428632e9fd3c38f82cf7aad4b63 central
@@ -314,9 +338,7 @@ artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082b
 artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
 artifact org.scala-lang scala3-interfaces 3.10.0 2293237c57462efcc200e1cf9ec7b5764c17458b3886689cc16c5ec9a5552ddf central
 artifact org.scala-lang tasty-core_3 3.10.0 cd8088db4457e84610cfdf0381e8c2f92f409fb565ad5d792a3bdc7d37526058 central
-artifact org.ow2.asm asm-util 9.10.1 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c central
-artifact org.ow2.asm asm-commons 9.10.1 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895 central
-artifact org.scala-sbt compiler-interface 2.0.4 d973c89d6a0036f71501807dd2568f337f501be9dca4e72a7141fae35ba97d7d central
+artifact org.scala-sbt compiler-interface 2.0.5 909b0bf6c67361ad9794f7d36b27b8ae25390ca6427396623269536e7bc54830 central
 artifact org.scala-lang scala3-tasty-inspector_3 3.10.0 96a9e772a6d3f5c7e76f8fba9f6745cf6d68478c8c9346109b287de8cf957a12 central
 artifact com.vladsch.flexmark flexmark 0.64.8 3133878d108f0e1964d7d427f379a7433e1b71a45f9f3c1fab7ed0ac0301d3b0 central
 artifact com.vladsch.flexmark flexmark-util-ast 0.64.8 a5342f644c6a5f37d502f225c3a0cb699c263621c82e720d9c08eba5a9f3b8d3 central
@@ -331,12 +353,10 @@ artifact com.vladsch.flexmark flexmark-ext-wikilink 0.64.8 f32ef779eefb4c3b80d5b
 artifact com.vladsch.flexmark flexmark-ext-tables 0.64.8 cdf82d26e112e96ade7e370138aeb16920b7e2d411d20c6c15cb1acfacd1ef1f central
 artifact com.vladsch.flexmark flexmark-ext-yaml-front-matter 0.64.8 6c60b85db4cc851301c1a52d712dc0909c5d2da9bd17ebae4d97a3a03afe22ee central
 artifact nl.big-o liqp 0.9.2.3 1f7dc450a0e116dcf9be7f7285f531bd59c6f9a88a85377bb0f716678e2d838a central
-artifact org.jsoup jsoup 1.22.2 596785996d3c6df16f544c232d10a9a1d88783b2a4740cf5251cb616f2be704d central
-artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 b6a748ca9aab640f647079b6bfa53f16a5b65b815a19581c4afe0601e754854e central
-artifact org.scala-sbt zinc-core_3 2.0.4 cea9d9114b19c9bcfe9b137f1a135d915a003a553ff27e595bd97b7949a12f62 central
-artifact org.scala-sbt zinc-persist_3 2.0.4 174d4f169a8baf36eeead33c9485eb6f5e9c3973f4775b2c1833d1c98ec1d9f6 central
-artifact org.scala-sbt zinc-compile-core_3 2.0.4 39ab30c1368deea7050f18d0ab3bf570496e8cc4b6c21a2ae7506b6f25765c11 central
-artifact org.scala-sbt zinc-classfile_3 2.0.4 ed7f56d04913befa24a6fc6018f699b566e792aa993a5166ca0a80d1580bd615 central
+artifact org.scala-sbt zinc-core_3 2.0.5 59eb67e426307057f44f39ea66391395dd191c538dc0afa3cf343f894ee9ac02 central
+artifact org.scala-sbt zinc-persist_3 2.0.5 1b60a7b92c2c1cfd93e515b6223cf112b3b86e92d397255b6e7a6da921ad42c2 central
+artifact org.scala-sbt zinc-compile-core_3 2.0.5 5ec1108df922947077c2027cd70136567006711993e0d00680b4678fcacb2c44 central
+artifact org.scala-sbt zinc-classfile_3 2.0.5 f0e0083f8aa1ed916e6a98f7f8d746e5323f2e797a2dcb6c6c16732c94a8a8fc central
 artifact org.scala-lang.modules scala-xml_3 2.5.0 831cf06fde3143e631db9f2b4f819b0bbecc8bf83aadb908b5bc80e406976310 central
 artifact io.get-coursier dependency_3 0.3.3 254e37584fd757f3f5636d2b3d3e9fad7b994f4400f07ccbb605a17eb98dc67d central
 artifact com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.0 2ba3d5ecf2e9bc2235ed7b703228358fe43f93272632c0ebf86b31f983908e5b central
@@ -345,16 +365,19 @@ artifact io.get-coursier coursier-cache_3 2.1.26 37b78094ff5456285963c6618440cf6
 artifact org.bouncycastle bcprov-jdk18on 1.86 2af190b300cbb0b35e248ccf5f4a06b6072030aeb3da7a98ec73abe5b4cb371f central
 artifact org.bouncycastle bcutil-jdk18on 1.86 1c268e15f785aafb1e4670d8d6e5f856f69475e96c162dadcd1ff9b350e9139f central
 artifact com.google.code.findbugs jsr305 3.0.2 766ad2a0783f2687962c8ad74ceecc38a28b9f72a2d085ee438b7813e928d0c7 central
-artifact com.google.errorprone error_prone_annotations 2.30.0 144f3aefbd6e27daec55d3753b2c6b13c1afdaf0cf04816cdb564588ed92f1bd central
-artifact com.google.guava guava 33.3.1-android 2c3e41d1b380f2044d257947a3aa82dabf3ae4b978622745254aa18b6cf89ab0 central
-artifact io.grpc grpc-util 1.73.0 b7df6cbcc30b7a3219f06483a9a9d320a431beda8a1ace5b16d879f84112373f central
-artifact io.grpc grpc-core 1.73.0 cffb55f1e7268e160647e88da142c09c6175ff72970c64f7cb411d78eb661663 central
+artifact com.google.errorprone error_prone_annotations 2.52.0 24822b246a2da324006fc5a1c940b1d2cf9cd716e530155c39fea695d5ab01c4 central
+artifact io.grpc grpc-util 1.85.1 11c67cb8d0510e9e6e6c17494050df85035074b2d2ab296aa41fa1e80b61cb8d central
+artifact io.grpc grpc-core 1.85.1 f84e7108e027405aa10cd6baae38ef5f4c1610d2ba76201517b36ae166c8e837 central
 artifact io.perfmark perfmark-api 0.27.0 c7b478503ec524e55df19b424d46d27c8a68aeb801664fadd4f069b71f52d0f6 central
-artifact org.codehaus.mojo animal-sniffer-annotations 1.24 c720e6e5bcbe6b2f48ded75a47bccdb763eede79d14330102e0d352e3d89ed92 central
+artifact org.codehaus.mojo animal-sniffer-annotations 1.27 cfd7e51a828fe6b98bc0dbb99e34900c9e9012322cb9ddd57fd8dd0b02da5e27 central
+artifact org.snakeyaml snakeyaml-engine 3.0.1 0b638c8806112215e02e58e95cbd9e9a69d4bd540991f47553d053919994cc94 central
+artifact com.google.guava failureaccess 1.0.3 cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb central
+artifact com.google.guava listenablefuture 9999.0-empty-to-avoid-conflict-with-guava b372a037d4230aa57fbeffdef30fd6123f9c0c2db85d0aced00c91b974f33f99 central
+artifact org.jspecify jspecify 1.0.1 070d75f261fe4c5b8202508366715f7f2d4660f88c8ef7e6d3575e48c9683b66 central
+artifact com.google.j2objc j2objc-annotations 3.1 84d3a150518485f8140ea99b8a985656749629f6433c92b80c75b36aba3b099b central
 artifact org.scala-lang scala-library 3.10.0 b47befb29e02bbc08a10bbd387b35cf80ff9bf04fda8fdf3dda6c8ad6895f325 central
 artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
-artifact org.ow2.asm asm-analysis 9.10.1 dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc central
-artifact org.scala-sbt util-interface 2.0.0 689d4def3cd0a2521c49850f698a773363bc13d3840d417670b8ea8b5f1d45ee central
+artifact org.scala-sbt util-interface 2.0.9 9921f5a40bc0d90455a3ba013af537a2bb79d696eaa27d0b7526340cd4ddfbdf central
 artifact com.vladsch.flexmark flexmark-util-builder 0.64.8 afb9c88d9f652451e75f1ab069ad7ddd791d712eb211c51d8d2a83494240875d central
 artifact com.vladsch.flexmark flexmark-util-collection 0.64.8 031ff01408d0f54c6235db18d451dc6e6b15b859b0ec1e40ff3429a82375082a central
 artifact com.vladsch.flexmark flexmark-util-dependency 0.64.8 e41adb5e8144699b61b78d50eb004eeb7de84f90c4c63626609e6cee5ea28b42 central
@@ -366,62 +389,57 @@ artifact org.jetbrains annotations 24.0.1 61666dbce7e42e6c85b43c04fcfb8293a21dcb
 artifact com.vladsch.flexmark flexmark-util 0.64.8 1e24c891dac9532bb722be7122c7026fb47868c3de36c02400eed8e9ad535727 central
 artifact org.nibor.autolink autolink 0.6.0 a80be030f6386f18111cad9161c0b6983157352a1b59a59e6002172f0d321c04 central
 artifact com.vladsch.flexmark flexmark-jira-converter 0.64.8 ccc1c3a9659a104b75a53a2321e9c1d4cedb05acd867d4366d8b8e1647bd37dd central
-artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
-artifact com.fasterxml.jackson.core jackson-core 2.13.4 4c2e043200edd9ee7ba6fc378bd5c17784a5bf2388e152d208068b51fd0839cf central
-artifact com.fasterxml.jackson.core jackson-databind 2.13.4.2 ba1a368137f9b92f48dd07f299ff7a782a69487b853ef5578215426fcde8f08b central
-artifact com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 cf5034791afbbec5139d539c1a94194f172d52a516ad9c25aad5f235a937c747 central
 artifact ua.co.k strftime4j 1.0.6 d37cabad2f97a746fa811f04c01c9e4b5f6636fff05e294f4e5324c051dd7495 central
-artifact tools.jackson.core jackson-core 3.2.1 2688aaa60b207403287e16a71fb5644bf2f9cfc464cc601ae95c6c86a5af1f94 central
-artifact tools.jackson.core jackson-databind 3.2.1 8d005c5626b1839e2eea6bd33a437287e7a24d54e1bb3746b8f861193262b519 central
-artifact org.snakeyaml snakeyaml-engine 3.0.1 0b638c8806112215e02e58e95cbd9e9a69d4bd540991f47553d053919994cc94 central
-artifact org.scala-sbt zinc-apiinfo_3 2.0.4 5295de5a1d63fda68391546ff626f718125c430daa3b4607c84541ae1a7e6449 central
-artifact org.scala-sbt zinc-classpath_3 2.0.4 9f42b1b6e28d1fa90158750964fee58aa286e7e82f7aef48bbb9d38c74465921 central
+artifact org.scala-sbt zinc-apiinfo_3 2.0.5 8089edb863c863a131a94fe96edb4e9703b37a514ec5e79902a99ca9c105efdf central
+artifact org.scala-sbt zinc-classpath_3 2.0.5 ddfc58f3bed07e406412e538ccbe4eb872091271f001c8ff8990b240e4b478df central
 artifact org.scala-lang.modules scala-parallel-collections_3 1.2.0 de814a415584199a6e3e680319d16b25c069aa69db08938c97c04f4b28e54a84 central
-artifact org.scala-sbt io_3 1.12.2 197c2f0d117e94004c6ad99e05595e2505dbebeabdd970257b9433e738c11296 central
-artifact org.scala-sbt util-logging_3 2.0.0 60110caa6473262d386cde839890fc9d219b3c1dcf8281eb8c313e5097408742 central
-artifact org.scala-sbt util-relation_3 2.0.0 9945b3d32d81ffa813f3594ab36b389eb7e37a4274262b68cce10602654723de central
+artifact org.scala-sbt io_3 1.13.6 f9955a13363d10908c9f0d5e2bc9312d98f5b2bf0ed987673ce4c86f045a6d8f central
+artifact org.scala-sbt util-logging_3 2.0.9 342531629df0254ed77a62ac55db8f3b4c5cf7ca7f889c55c58c9494bd562d4e central
+artifact org.scala-sbt util-relation_3 2.0.9 0f245814c07c13e599fc100f15622edfddd597848af62bf9cbe5760943dc973e central
 artifact org.scala-sbt launcher-interface 1.6.0 1246aef4ba5fe940b1789d2feed34b1fbb899bed246a2411b1e4d4696cbc557e central
-artifact org.scala-sbt util-control_3 2.0.0 612281270d520a6204cfa60cad1336b207d14499b3f85a8bc9987fcff018602f central
+artifact org.scala-sbt util-control_3 2.0.9 bcdf5af4677b4c98fc0e69ccfbc29b03474cf3a6b319ebdda77cad1f8bcfc14a central
 artifact io.get-coursier versions_3 0.6.1 e6a4f3fae156d4ade6935cdaa4f3b2c90295b873886252cceba0f3fd9fd35d4a central
 artifact io.github.alexarchambault concurrent-reference-hash-map 1.1.0 552707982209afb9feffdccb2e73cc4681a1353e34a47df1bf643d1d2e0a2f61 central
 artifact io.get-coursier coursier-util_3 2.1.26 3974b526cc024793d2d466cf9315becc6864da16333a1fd0c00248a2ef0320a3 central
 artifact org.virtuslab.scala-cli config_3 1.17.1 9bf018388553a302ac119f912daacf2206003763ae333248d2b1e6f516b9a5d9 central
 artifact io.github.alexarchambault.windows-ansi windows-ansi 0.0.6 077dbdbb977c94fc8b1fb82113cfb0aa5304d4e307c4e0688f69a9895f0da482 central
 artifact io.get-coursier coursier-paths 2.1.26 4de4c30a96c0868ced639f71eb97272e126f1f3cea9891fc11460b05e1b1462d central
-artifact com.google.guava failureaccess 1.0.2 8a8f81cf9b359e3f6dfa691a1e776985c061ef2f223c9b2c80753e1b458e8064 central
-artifact com.google.guava listenablefuture 9999.0-empty-to-avoid-conflict-with-guava b372a037d4230aa57fbeffdef30fd6123f9c0c2db85d0aced00c91b974f33f99 central
-artifact org.checkerframework checker-qual 3.43.0 3fbc2e98f05854c3df16df9abaa955b91b15b3ecac33623208ed6424640ef0f6 central
-artifact com.google.j2objc j2objc-annotations 3.0.0 88241573467ddca44ffd4d74aa04c2bbfd11bf7c17e0c342c94c9de7a70a7c64 central
-artifact com.google.code.gson gson 2.11.0 57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b central
+artifact com.google.code.gson gson 2.14.0 2cbd119bf1961c28788310963dc80ba65f58cdeec1dd139c8bdb1240faa2c36f central
 artifact com.google.android annotations 4.1.1.4 ba734e1e84c09d615af6a09d33034b4f0442f8772dec120efb376d86a565ae15 central
-artifact io.grpc grpc-context 1.73.0 d8d6911e225b55501692651272ce961ba5be1f76662ceb7f0aa79ecce8f63f25 central
+artifact io.grpc grpc-context 1.85.1 44a5f4986a2dd4b791eecb3b0dc6ed1f1305599b4b24e790bd422101560686d2 central
 artifact com.vladsch.flexmark flexmark-util-options 0.64.8 2489f41e9caf1d9f8061833b311b25403925cbb631fff2b8c069192804d6fc88 central
 artifact com.vladsch.flexmark flexmark-ext-ins 0.64.8 5b61b83c31cb0bd3273cbf12aed3887b63b8bdc6dfa17b03ecf479cf1ce176bd central
 artifact com.vladsch.flexmark flexmark-ext-superscript 0.64.8 457933324d1ca9f283bc15a1842777c6df0385f318fcceade4de41621395e402 central
 artifact com.swoval file-tree-views 2.1.12 fd7373889b7a92cf3e97db36c920ba272aec158a9387b3259fca9f2dfaeda914 central
-artifact org.scala-sbt util-core_3 2.0.0 0797c940dcd41d3906519514abadf84ada4374046d12b5310afb27ebea41f103 central
-artifact com.eed3si9n sjson-new-core_3 0.15.0 b51f27ada484f6aedfcf15ac86d27029e23422a4ebf50eef0e0a93e93a8b2fdf central
+artifact org.scala-sbt util-core_3 2.0.9 5f7ae84839e5c77c448d44f63c652570909f5436dbd95d4a979b04aa725d402c central
+artifact com.eed3si9n sjson-new-core_3 0.15.1 b5833accc89949cb50ff90f49ffa3af1a57f602b844825ae8a1fa30483022222 central
 artifact org.scala-sbt.jline jline 2.14.7-sbt-9a88bc413e2b34a4580c001c654d1a7f4f65bf18 a0dbaa781954fa5ed015706d12d0044e018a5705da6791ec98a51fb365d66cb0 central
 artifact org.jline jline-terminal 3.27.1 42b7b756506bca98b505938426a35c99082f7819c333ed25bd4114bfb0e3b5f2 central
 artifact org.jline jline-terminal-jni 3.27.1 e4bc64f1e68e9fb25d80517338e76abca1e0145b82e389b5c2b2c7d71d150f82 central
 artifact org.jline jline-native 3.27.1 636646da40413e74963b3f4b40c9c5dcfb42f3d0ecf1b93d6ddf5c895effe422 central
 artifact com.lmax disruptor 3.4.2 f412ecbb235c2460b45e63584109723dea8d94b819c78c9bfc38f50cba8546c0 central
-artifact com.eed3si9n sjson-new-scalajson_3 0.15.0 5aa0f4e14e23f0be71c38035d4ff809fe88d93a7f9e18073244454460a86da73 central
+artifact com.eed3si9n sjson-new-scalajson_3 0.15.1 050669c78b1f6dcec712eb9b66fdf8b42b1592ef3e8b6030caf182dd66d8141f central
 artifact org.virtuslab.scala-cli specification-level_3 1.17.1 b1f2e9e21ca68e0b3798105dc5a44989b44e0363f50c2f2f2f97e0f4f51a639d central
 artifact org.fusesource.jansi jansi 2.4.1 2e5e775a9dc58ffa6bbd6aa6f099d62f8b62dcdeb4c3c3bbbe5cf2301bc2dcc1 central
 artifact io.github.alexarchambault is-terminal 0.1.2 721cb31b9ae87136b810758edbdf9dc1f363e2d8bf6d9ba2a3642d11abb09526 central
 artifact io.get-coursier.jniutils windows-jni-utils 0.4.0 2dd0a83362c6276050a6751fbd80efcbcf800a2baac3d175cd3b67e97a5caba1 central
 artifact com.eed3si9n shaded-scalajson_3 1.0.0-M4 d4997e6dfcdc24db0502a7bae6d44ac2e78e6f683e61b287cb756d9b2559cd33 central
-artifact com.eed3si9n shaded-jawn-parser_3 1.3.2 5b815a3b05960149a8310a288c2f5f3662fc833c1474079e76b31b2c4dc6d4b3 central
-evict com.eed3si9n sjson-new-core_3 0.10.1 0.15.0
+artifact com.eed3si9n shaded-jawn-parser_3 1.7.0 d4d812ffe12e9d910cf4bf32b6e93a311e90238cc9a59af04ee99b5887e0f5b0 central
+evict com.eed3si9n sjson-new-core_3 0.10.1 0.15.1
 evict com.fasterxml.jackson.core jackson-annotations ${jackson.version.annotations} 2.22
 evict com.fasterxml.jackson.core jackson-annotations 2.13.2 2.22
-evict com.fasterxml.jackson.core jackson-core ${jackson.version.core} 2.13.4
-evict com.fasterxml.jackson.core jackson-core 2.13.2 2.13.4
+evict com.fasterxml.jackson.core jackson-core ${jackson.version.core} 2.22.4
+evict com.fasterxml.jackson.core jackson-core 2.13.2 2.22.4
+evict com.fasterxml.jackson.core jackson-databind 2.13.4.2 2.22.4
+evict com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 2.22.4
 evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
-evict com.google.code.gson gson 2.13.2 2.11.0
-evict com.google.errorprone error_prone_annotations 2.27.0 2.30.0
-evict com.google.guava guava ${guava.version} 33.3.1-android
+evict com.google.errorprone error_prone_annotations 2.48.0 2.52.0
+evict com.google.errorprone error_prone_annotations 2.50.0 2.52.0
+evict com.google.guava failureaccess ${failureaccess.version} 1.0.3
+evict com.google.guava guava ${guava.version} 33.8.0-jre
+evict com.google.guava guava 33.5.0-jre 33.8.0-jre
+evict com.google.guava guava 33.6.0-android 33.8.0-jre
+evict com.google.guava listenablefuture ${listenablefuture.version} 9999.0-empty-to-avoid-conflict-with-guava
 evict com.vladsch.flexmark flexmark-util-ast ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-builder ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-collection ${project.version} 0.64.8
@@ -433,59 +451,83 @@ evict com.vladsch.flexmark flexmark-util-misc ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-options ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-sequence ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-visitor ${project.version} 0.64.8
+evict org.jsoup jsoup 1.22.2 1.24.1
 evict org.nibor.autolink autolink ${autolink.version} 0.6.0
-evict org.ow2.asm asm 9.10.1 9.11.1
-evict org.ow2.asm asm-tree 9.10.1 9.11.1
+evict org.ow2.asm asm-commons 9.10.1 9.11.1
+evict org.ow2.asm asm-util 9.10.1 9.11.1
 evict org.scala-lang scala-library 2.12.20 3.10.0
 evict org.scala-lang scala3-compiler_3 3.3.8 3.10.0
-evict org.scala-lang scala3-library_3 3.0.2 3.10.0
 evict org.scala-lang scala3-library_3 3.1.0 3.10.0
 evict org.scala-lang scala3-library_3 3.3.3 3.10.0
 evict org.scala-lang scala3-library_3 3.3.4 3.10.0
 evict org.scala-lang scala3-library_3 3.3.6 3.10.0
-evict org.scala-lang scala3-library_3 3.3.7 3.10.0
 evict org.scala-lang scala3-library_3 3.3.8 3.10.0
 evict org.scala-lang scala3-library_3 3.8.3 3.10.0
 evict org.scala-lang scala3-library_3 3.8.4 3.10.0
 evict org.scala-lang.modules scala-parser-combinators_3 2.1.0 2.5.0
-evict org.scala-sbt compiler-interface 1.12.0 2.0.4
-evict org.scala-sbt io_3 1.12.1 1.12.2
+evict org.scala-sbt compiler-interface 1.12.0 2.0.5
+evict org.scala-sbt io_3 1.13.2 1.13.6
 evict org.scala-sbt sbinary_3 0.5.1 0.6.0
-evict org.scala-sbt util-interface 1.11.5 2.0.0
-evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.1
+evict org.scala-sbt util-interface 1.11.5 2.0.9
+evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.4
+evict tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 3.2.4
 test engine 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
 direct dev.zio zio-streams 2.1.27 binary
 direct org.scala-lang scala3-compiler 3.10.0 binary
 direct org.scala-lang scaladoc 3.10.0 binary
-direct org.scala-sbt zinc 2.0.4 binary
+direct org.scala-sbt zinc 2.0.5 binary
 direct org.scala-sbt sbinary 0.6.0 binary
 direct org.scala-lang.modules scala-parser-combinators 2.5.0 binary
 direct io.get-coursier coursier 2.1.26 binary
 direct org.ow2.asm asm 9.11.1 java
 direct org.ow2.asm asm-tree 9.11.1 java
+direct org.ow2.asm asm-commons 9.11.1 java
+direct org.ow2.asm asm-util 9.11.1 java
+direct org.ow2.asm asm-analysis 9.11.1 java
 direct org.bouncycastle bcpg-jdk18on 1.86 java
-direct io.grpc grpc-api 1.73.0 java
-direct io.grpc grpc-netty-shaded 1.73.0 java
+direct io.grpc grpc-api 1.85.1 java
+direct io.grpc grpc-netty-shaded 1.85.1 java
+direct com.fasterxml.jackson.core jackson-annotations 2.22 java
+direct com.fasterxml.jackson.core jackson-core 2.22.4 java
+direct com.fasterxml.jackson.core jackson-databind 2.22.4 java
+direct com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.22.4 java
+direct tools.jackson.core jackson-core 3.2.4 java
+direct tools.jackson.core jackson-databind 3.2.4 java
+direct tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 java
+direct org.jsoup jsoup 1.24.1 java
+direct com.google.guava guava 33.8.0-jre java
 direct dev.zio zio-test 2.1.27 binary
 direct dev.zio zio-test-sbt 2.1.27 binary
-direct io.grpc grpc-stub 1.73.0 java
+direct io.grpc grpc-stub 1.85.1 java
 artifact dev.zio zio_3 2.1.27 08633a13f88d4b7349bba1bce1eb5bdf69d9a89331721f397605449d5e783c20 central
 artifact dev.zio zio-streams_3 2.1.27 2c6ca872943d022c9bfae3b0778c9205453fcb64a514c72465da586fd3e47bb7 central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-lang scaladoc_3 3.10.0 2f1a34c894696858c0ccc97a4ea0d6400efb7a6ba6171281c50813c956a851af central
-artifact org.scala-sbt zinc_3 2.0.4 83ef81980ff8ab819d2367b1cb23ee8df0cc2e6f4fe76b8f9cd42e70eac05bfd central
+artifact org.scala-sbt zinc_3 2.0.5 845f0ac5f30f6118b56d7bdebbb09835715433ef55070df522364cd5d046b2d0 central
 artifact org.scala-sbt sbinary_3 0.6.0 6c7e65a95d8dc2680687397fdd0e72c5c8e4a36ae257d5ed604fe71616d718b7 central
 artifact org.scala-lang.modules scala-parser-combinators_3 2.5.0 b0bd92c899104db8ce82b675a6bc54cfd9da80b81a6ce4c15451819dfd5b12cc central
 artifact io.get-coursier coursier_3 2.1.26 1761e4f15ad1749d3de0ce9e6548cc69529ebbc4cd2fe21e38584eda6c22bdad central
 artifact org.ow2.asm asm 9.11.1 ae4e6e10d59d0a1500317764b21881ad883f8550e33c66e6142f7032c6fb566c central
 artifact org.ow2.asm asm-tree 9.11.1 2b15c3c1b288a9fad3bb2cd6d988ba9521554914ed1f2a2029141fa3f483154a central
+artifact org.ow2.asm asm-commons 9.11.1 6a5095ec53726156a78b2cd2efd45bc4e877754eca7c234f61224a53d6bfa661 central
+artifact org.ow2.asm asm-util 9.11.1 23fdffacdfc38f447cbd8b80e058f462451fa5d4709e437067d530fa6513579d central
+artifact org.ow2.asm asm-analysis 9.11.1 3a91769287d0a186333d6e384e5d4eec37e4b8f705dcf920ff4aea4cc452fac2 central
 artifact org.bouncycastle bcpg-jdk18on 1.86 8a52ea45b2063f6d41b8ca94409f255a1f4604922f7451c18a7cfd3a3c5b85ab central
-artifact io.grpc grpc-api 1.73.0 bae13d4e4716a0955d316b5fcb75582504325e5b11ac946b13b64b4fce19bc6e central
-artifact io.grpc grpc-netty-shaded 1.73.0 8328289ba6b73445e982a1cadf8e651ea65354e288c825a43e7c77f16da8a056 central
+artifact io.grpc grpc-api 1.85.1 159371ce7ecb1de72f910571436f7866baa595c820271fcb930961212b7c6363 central
+artifact io.grpc grpc-netty-shaded 1.85.1 ea75fb829517724d40c1ebedd6dad1362b284203716725a1b5ae740f4c91931e central
+artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
+artifact com.fasterxml.jackson.core jackson-core 2.22.4 2d30c375cddea9657a1e1ef97547a2694b663b355facb4de53a097782b312d1a central
+artifact com.fasterxml.jackson.core jackson-databind 2.22.4 d4cbf8947087f305869826801913abdc50735a1fab2074a1993e7bc67ca974a3 central
+artifact com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.22.4 ec961697cbd631935b6fb6f673406861c75243521fb67fec10b59f1412ac50f7 central
+artifact tools.jackson.core jackson-core 3.2.4 494b9f5fccf008042d5a72c5bf00629b144c0ba7362a9864cbb02234c9772651 central
+artifact tools.jackson.core jackson-databind 3.2.4 c4af37223d5024f1294a5450598b01b65f30c53d9e906f02c3955ba1fb14a67d central
+artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.4 b5edac76d73f983dee7bc929557aa68c38424b9a3b851caf8a382aaca67a9f32 central
+artifact org.jsoup jsoup 1.24.1 fabbb4aaf7fb5340aed0613826ecd110427999d765d8e0367cedde2950d7097c central
+artifact com.google.guava guava 33.8.0-jre 97b79ec3f2c0a6313a0c2df51ce1abdf8907e6531803467b81efcaaf99b35161 central
 artifact dev.zio zio-test_3 2.1.27 6a9ae65b60c1882b21a4a5424981dc17aae24fa4c74918aa7ada7f2bd29c0369 central
 artifact dev.zio zio-test-sbt_3 2.1.27 169c96c829d462ca16b054570af26be3b5a8ca3ff47844aa801ccd880a600574 central
-artifact io.grpc grpc-stub 1.73.0 050fe139de47d8937e6b0080e8dff3d0f42df6782f147c10bb298c0e9cd94b2f central
+artifact io.grpc grpc-stub 1.85.1 755b4dbccbfa3ea68bbd6e8af78ca6997c9b118710e6c194058dd55af1acdbc4 central
 artifact dev.zio zio-internal-macros_3 2.1.27 b95c382830e74dd1ce5b43f646e1e77e265b642f23222439846dad41f856bfa1 central
 artifact dev.zio zio-stacktracer_3 2.1.27 ecdd5178029f9b85a0b3d5f8b475b42a680159ae1bad7ea64c5300f094908801 central
 artifact org.scala-lang scala3-library_3 3.10.0 4daaede24ddfeea082bbed096ba0c492d99e8428632e9fd3c38f82cf7aad4b63 central
@@ -493,9 +535,7 @@ artifact dev.zio izumi-reflect_3 3.0.11 65a7b4a7f32617da3c1bfaaa8a096527ea5d082b
 artifact org.scala-lang.modules scala-collection-compat_3 2.14.0 0d44cb0fa7f867ae9e8d76a2dfc58985aec2fe4e836ebb3b671472a23ca74d48 central
 artifact org.scala-lang scala3-interfaces 3.10.0 2293237c57462efcc200e1cf9ec7b5764c17458b3886689cc16c5ec9a5552ddf central
 artifact org.scala-lang tasty-core_3 3.10.0 cd8088db4457e84610cfdf0381e8c2f92f409fb565ad5d792a3bdc7d37526058 central
-artifact org.ow2.asm asm-util 9.10.1 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96bd8f0198b18152f09655c central
-artifact org.ow2.asm asm-commons 9.10.1 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895 central
-artifact org.scala-sbt compiler-interface 2.0.4 d973c89d6a0036f71501807dd2568f337f501be9dca4e72a7141fae35ba97d7d central
+artifact org.scala-sbt compiler-interface 2.0.5 909b0bf6c67361ad9794f7d36b27b8ae25390ca6427396623269536e7bc54830 central
 artifact org.scala-lang scala3-tasty-inspector_3 3.10.0 96a9e772a6d3f5c7e76f8fba9f6745cf6d68478c8c9346109b287de8cf957a12 central
 artifact com.vladsch.flexmark flexmark 0.64.8 3133878d108f0e1964d7d427f379a7433e1b71a45f9f3c1fab7ed0ac0301d3b0 central
 artifact com.vladsch.flexmark flexmark-util-ast 0.64.8 a5342f644c6a5f37d502f225c3a0cb699c263621c82e720d9c08eba5a9f3b8d3 central
@@ -510,12 +550,10 @@ artifact com.vladsch.flexmark flexmark-ext-wikilink 0.64.8 f32ef779eefb4c3b80d5b
 artifact com.vladsch.flexmark flexmark-ext-tables 0.64.8 cdf82d26e112e96ade7e370138aeb16920b7e2d411d20c6c15cb1acfacd1ef1f central
 artifact com.vladsch.flexmark flexmark-ext-yaml-front-matter 0.64.8 6c60b85db4cc851301c1a52d712dc0909c5d2da9bd17ebae4d97a3a03afe22ee central
 artifact nl.big-o liqp 0.9.2.3 1f7dc450a0e116dcf9be7f7285f531bd59c6f9a88a85377bb0f716678e2d838a central
-artifact org.jsoup jsoup 1.22.2 596785996d3c6df16f544c232d10a9a1d88783b2a4740cf5251cb616f2be704d central
-artifact tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 b6a748ca9aab640f647079b6bfa53f16a5b65b815a19581c4afe0601e754854e central
-artifact org.scala-sbt zinc-core_3 2.0.4 cea9d9114b19c9bcfe9b137f1a135d915a003a553ff27e595bd97b7949a12f62 central
-artifact org.scala-sbt zinc-persist_3 2.0.4 174d4f169a8baf36eeead33c9485eb6f5e9c3973f4775b2c1833d1c98ec1d9f6 central
-artifact org.scala-sbt zinc-compile-core_3 2.0.4 39ab30c1368deea7050f18d0ab3bf570496e8cc4b6c21a2ae7506b6f25765c11 central
-artifact org.scala-sbt zinc-classfile_3 2.0.4 ed7f56d04913befa24a6fc6018f699b566e792aa993a5166ca0a80d1580bd615 central
+artifact org.scala-sbt zinc-core_3 2.0.5 59eb67e426307057f44f39ea66391395dd191c538dc0afa3cf343f894ee9ac02 central
+artifact org.scala-sbt zinc-persist_3 2.0.5 1b60a7b92c2c1cfd93e515b6223cf112b3b86e92d397255b6e7a6da921ad42c2 central
+artifact org.scala-sbt zinc-compile-core_3 2.0.5 5ec1108df922947077c2027cd70136567006711993e0d00680b4678fcacb2c44 central
+artifact org.scala-sbt zinc-classfile_3 2.0.5 f0e0083f8aa1ed916e6a98f7f8d746e5323f2e797a2dcb6c6c16732c94a8a8fc central
 artifact org.scala-lang.modules scala-xml_3 2.5.0 831cf06fde3143e631db9f2b4f819b0bbecc8bf83aadb908b5bc80e406976310 central
 artifact io.get-coursier dependency_3 0.3.3 254e37584fd757f3f5636d2b3d3e9fad7b994f4400f07ccbb605a17eb98dc67d central
 artifact com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.41.0 2ba3d5ecf2e9bc2235ed7b703228358fe43f93272632c0ebf86b31f983908e5b central
@@ -524,18 +562,21 @@ artifact io.get-coursier coursier-cache_3 2.1.26 37b78094ff5456285963c6618440cf6
 artifact org.bouncycastle bcprov-jdk18on 1.86 2af190b300cbb0b35e248ccf5f4a06b6072030aeb3da7a98ec73abe5b4cb371f central
 artifact org.bouncycastle bcutil-jdk18on 1.86 1c268e15f785aafb1e4670d8d6e5f856f69475e96c162dadcd1ff9b350e9139f central
 artifact com.google.code.findbugs jsr305 3.0.2 766ad2a0783f2687962c8ad74ceecc38a28b9f72a2d085ee438b7813e928d0c7 central
-artifact com.google.errorprone error_prone_annotations 2.30.0 144f3aefbd6e27daec55d3753b2c6b13c1afdaf0cf04816cdb564588ed92f1bd central
-artifact com.google.guava guava 33.3.1-android 2c3e41d1b380f2044d257947a3aa82dabf3ae4b978622745254aa18b6cf89ab0 central
-artifact io.grpc grpc-util 1.73.0 b7df6cbcc30b7a3219f06483a9a9d320a431beda8a1ace5b16d879f84112373f central
-artifact io.grpc grpc-core 1.73.0 cffb55f1e7268e160647e88da142c09c6175ff72970c64f7cb411d78eb661663 central
+artifact com.google.errorprone error_prone_annotations 2.52.0 24822b246a2da324006fc5a1c940b1d2cf9cd716e530155c39fea695d5ab01c4 central
+artifact io.grpc grpc-util 1.85.1 11c67cb8d0510e9e6e6c17494050df85035074b2d2ab296aa41fa1e80b61cb8d central
+artifact io.grpc grpc-core 1.85.1 f84e7108e027405aa10cd6baae38ef5f4c1610d2ba76201517b36ae166c8e837 central
 artifact io.perfmark perfmark-api 0.27.0 c7b478503ec524e55df19b424d46d27c8a68aeb801664fadd4f069b71f52d0f6 central
-artifact org.codehaus.mojo animal-sniffer-annotations 1.24 c720e6e5bcbe6b2f48ded75a47bccdb763eede79d14330102e0d352e3d89ed92 central
+artifact org.codehaus.mojo animal-sniffer-annotations 1.27 cfd7e51a828fe6b98bc0dbb99e34900c9e9012322cb9ddd57fd8dd0b02da5e27 central
+artifact org.snakeyaml snakeyaml-engine 3.0.1 0b638c8806112215e02e58e95cbd9e9a69d4bd540991f47553d053919994cc94 central
+artifact com.google.guava failureaccess 1.0.3 cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb central
+artifact com.google.guava listenablefuture 9999.0-empty-to-avoid-conflict-with-guava b372a037d4230aa57fbeffdef30fd6123f9c0c2db85d0aced00c91b974f33f99 central
+artifact org.jspecify jspecify 1.0.1 070d75f261fe4c5b8202508366715f7f2d4660f88c8ef7e6d3575e48c9683b66 central
+artifact com.google.j2objc j2objc-annotations 3.1 84d3a150518485f8140ea99b8a985656749629f6433c92b80c75b36aba3b099b central
 artifact org.portable-scala portable-scala-reflect_2.13 1.1.3 920f62979293069cf721865f931e42f9f7b0b2720ee9f6a9ddff76a19ecf8d4e central
 artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
 artifact org.scala-lang scala-library 3.10.0 b47befb29e02bbc08a10bbd387b35cf80ff9bf04fda8fdf3dda6c8ad6895f325 central
 artifact dev.zio izumi-reflect-thirdparty-boopickle-shaded_3 3.0.11 290f8a4b6d35b7de2150142a75252be4eb3fbdac8156b49ec6a13b2a884b9561 central
-artifact org.ow2.asm asm-analysis 9.10.1 dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc central
-artifact org.scala-sbt util-interface 2.0.0 689d4def3cd0a2521c49850f698a773363bc13d3840d417670b8ea8b5f1d45ee central
+artifact org.scala-sbt util-interface 2.0.9 9921f5a40bc0d90455a3ba013af537a2bb79d696eaa27d0b7526340cd4ddfbdf central
 artifact com.vladsch.flexmark flexmark-util-builder 0.64.8 afb9c88d9f652451e75f1ab069ad7ddd791d712eb211c51d8d2a83494240875d central
 artifact com.vladsch.flexmark flexmark-util-collection 0.64.8 031ff01408d0f54c6235db18d451dc6e6b15b859b0ec1e40ff3429a82375082a central
 artifact com.vladsch.flexmark flexmark-util-dependency 0.64.8 e41adb5e8144699b61b78d50eb004eeb7de84f90c4c63626609e6cee5ea28b42 central
@@ -547,62 +588,57 @@ artifact org.jetbrains annotations 24.0.1 61666dbce7e42e6c85b43c04fcfb8293a21dcb
 artifact com.vladsch.flexmark flexmark-util 0.64.8 1e24c891dac9532bb722be7122c7026fb47868c3de36c02400eed8e9ad535727 central
 artifact org.nibor.autolink autolink 0.6.0 a80be030f6386f18111cad9161c0b6983157352a1b59a59e6002172f0d321c04 central
 artifact com.vladsch.flexmark flexmark-jira-converter 0.64.8 ccc1c3a9659a104b75a53a2321e9c1d4cedb05acd867d4366d8b8e1647bd37dd central
-artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
-artifact com.fasterxml.jackson.core jackson-core 2.13.4 4c2e043200edd9ee7ba6fc378bd5c17784a5bf2388e152d208068b51fd0839cf central
-artifact com.fasterxml.jackson.core jackson-databind 2.13.4.2 ba1a368137f9b92f48dd07f299ff7a782a69487b853ef5578215426fcde8f08b central
-artifact com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 cf5034791afbbec5139d539c1a94194f172d52a516ad9c25aad5f235a937c747 central
 artifact ua.co.k strftime4j 1.0.6 d37cabad2f97a746fa811f04c01c9e4b5f6636fff05e294f4e5324c051dd7495 central
-artifact tools.jackson.core jackson-core 3.2.1 2688aaa60b207403287e16a71fb5644bf2f9cfc464cc601ae95c6c86a5af1f94 central
-artifact tools.jackson.core jackson-databind 3.2.1 8d005c5626b1839e2eea6bd33a437287e7a24d54e1bb3746b8f861193262b519 central
-artifact org.snakeyaml snakeyaml-engine 3.0.1 0b638c8806112215e02e58e95cbd9e9a69d4bd540991f47553d053919994cc94 central
-artifact org.scala-sbt zinc-apiinfo_3 2.0.4 5295de5a1d63fda68391546ff626f718125c430daa3b4607c84541ae1a7e6449 central
-artifact org.scala-sbt zinc-classpath_3 2.0.4 9f42b1b6e28d1fa90158750964fee58aa286e7e82f7aef48bbb9d38c74465921 central
+artifact org.scala-sbt zinc-apiinfo_3 2.0.5 8089edb863c863a131a94fe96edb4e9703b37a514ec5e79902a99ca9c105efdf central
+artifact org.scala-sbt zinc-classpath_3 2.0.5 ddfc58f3bed07e406412e538ccbe4eb872091271f001c8ff8990b240e4b478df central
 artifact org.scala-lang.modules scala-parallel-collections_3 1.2.0 de814a415584199a6e3e680319d16b25c069aa69db08938c97c04f4b28e54a84 central
-artifact org.scala-sbt io_3 1.12.2 197c2f0d117e94004c6ad99e05595e2505dbebeabdd970257b9433e738c11296 central
-artifact org.scala-sbt util-logging_3 2.0.0 60110caa6473262d386cde839890fc9d219b3c1dcf8281eb8c313e5097408742 central
-artifact org.scala-sbt util-relation_3 2.0.0 9945b3d32d81ffa813f3594ab36b389eb7e37a4274262b68cce10602654723de central
+artifact org.scala-sbt io_3 1.13.6 f9955a13363d10908c9f0d5e2bc9312d98f5b2bf0ed987673ce4c86f045a6d8f central
+artifact org.scala-sbt util-logging_3 2.0.9 342531629df0254ed77a62ac55db8f3b4c5cf7ca7f889c55c58c9494bd562d4e central
+artifact org.scala-sbt util-relation_3 2.0.9 0f245814c07c13e599fc100f15622edfddd597848af62bf9cbe5760943dc973e central
 artifact org.scala-sbt launcher-interface 1.6.0 1246aef4ba5fe940b1789d2feed34b1fbb899bed246a2411b1e4d4696cbc557e central
-artifact org.scala-sbt util-control_3 2.0.0 612281270d520a6204cfa60cad1336b207d14499b3f85a8bc9987fcff018602f central
+artifact org.scala-sbt util-control_3 2.0.9 bcdf5af4677b4c98fc0e69ccfbc29b03474cf3a6b319ebdda77cad1f8bcfc14a central
 artifact io.get-coursier versions_3 0.6.1 e6a4f3fae156d4ade6935cdaa4f3b2c90295b873886252cceba0f3fd9fd35d4a central
 artifact io.github.alexarchambault concurrent-reference-hash-map 1.1.0 552707982209afb9feffdccb2e73cc4681a1353e34a47df1bf643d1d2e0a2f61 central
 artifact io.get-coursier coursier-util_3 2.1.26 3974b526cc024793d2d466cf9315becc6864da16333a1fd0c00248a2ef0320a3 central
 artifact org.virtuslab.scala-cli config_3 1.17.1 9bf018388553a302ac119f912daacf2206003763ae333248d2b1e6f516b9a5d9 central
 artifact io.github.alexarchambault.windows-ansi windows-ansi 0.0.6 077dbdbb977c94fc8b1fb82113cfb0aa5304d4e307c4e0688f69a9895f0da482 central
 artifact io.get-coursier coursier-paths 2.1.26 4de4c30a96c0868ced639f71eb97272e126f1f3cea9891fc11460b05e1b1462d central
-artifact com.google.guava failureaccess 1.0.2 8a8f81cf9b359e3f6dfa691a1e776985c061ef2f223c9b2c80753e1b458e8064 central
-artifact com.google.guava listenablefuture 9999.0-empty-to-avoid-conflict-with-guava b372a037d4230aa57fbeffdef30fd6123f9c0c2db85d0aced00c91b974f33f99 central
-artifact org.checkerframework checker-qual 3.43.0 3fbc2e98f05854c3df16df9abaa955b91b15b3ecac33623208ed6424640ef0f6 central
-artifact com.google.j2objc j2objc-annotations 3.0.0 88241573467ddca44ffd4d74aa04c2bbfd11bf7c17e0c342c94c9de7a70a7c64 central
-artifact com.google.code.gson gson 2.11.0 57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b central
+artifact com.google.code.gson gson 2.14.0 2cbd119bf1961c28788310963dc80ba65f58cdeec1dd139c8bdb1240faa2c36f central
 artifact com.google.android annotations 4.1.1.4 ba734e1e84c09d615af6a09d33034b4f0442f8772dec120efb376d86a565ae15 central
-artifact io.grpc grpc-context 1.73.0 d8d6911e225b55501692651272ce961ba5be1f76662ceb7f0aa79ecce8f63f25 central
+artifact io.grpc grpc-context 1.85.1 44a5f4986a2dd4b791eecb3b0dc6ed1f1305599b4b24e790bd422101560686d2 central
 artifact com.vladsch.flexmark flexmark-util-options 0.64.8 2489f41e9caf1d9f8061833b311b25403925cbb631fff2b8c069192804d6fc88 central
 artifact com.vladsch.flexmark flexmark-ext-ins 0.64.8 5b61b83c31cb0bd3273cbf12aed3887b63b8bdc6dfa17b03ecf479cf1ce176bd central
 artifact com.vladsch.flexmark flexmark-ext-superscript 0.64.8 457933324d1ca9f283bc15a1842777c6df0385f318fcceade4de41621395e402 central
 artifact com.swoval file-tree-views 2.1.12 fd7373889b7a92cf3e97db36c920ba272aec158a9387b3259fca9f2dfaeda914 central
-artifact org.scala-sbt util-core_3 2.0.0 0797c940dcd41d3906519514abadf84ada4374046d12b5310afb27ebea41f103 central
-artifact com.eed3si9n sjson-new-core_3 0.15.0 b51f27ada484f6aedfcf15ac86d27029e23422a4ebf50eef0e0a93e93a8b2fdf central
+artifact org.scala-sbt util-core_3 2.0.9 5f7ae84839e5c77c448d44f63c652570909f5436dbd95d4a979b04aa725d402c central
+artifact com.eed3si9n sjson-new-core_3 0.15.1 b5833accc89949cb50ff90f49ffa3af1a57f602b844825ae8a1fa30483022222 central
 artifact org.scala-sbt.jline jline 2.14.7-sbt-9a88bc413e2b34a4580c001c654d1a7f4f65bf18 a0dbaa781954fa5ed015706d12d0044e018a5705da6791ec98a51fb365d66cb0 central
 artifact org.jline jline-terminal 3.27.1 42b7b756506bca98b505938426a35c99082f7819c333ed25bd4114bfb0e3b5f2 central
 artifact org.jline jline-terminal-jni 3.27.1 e4bc64f1e68e9fb25d80517338e76abca1e0145b82e389b5c2b2c7d71d150f82 central
 artifact org.jline jline-native 3.27.1 636646da40413e74963b3f4b40c9c5dcfb42f3d0ecf1b93d6ddf5c895effe422 central
 artifact com.lmax disruptor 3.4.2 f412ecbb235c2460b45e63584109723dea8d94b819c78c9bfc38f50cba8546c0 central
-artifact com.eed3si9n sjson-new-scalajson_3 0.15.0 5aa0f4e14e23f0be71c38035d4ff809fe88d93a7f9e18073244454460a86da73 central
+artifact com.eed3si9n sjson-new-scalajson_3 0.15.1 050669c78b1f6dcec712eb9b66fdf8b42b1592ef3e8b6030caf182dd66d8141f central
 artifact org.virtuslab.scala-cli specification-level_3 1.17.1 b1f2e9e21ca68e0b3798105dc5a44989b44e0363f50c2f2f2f97e0f4f51a639d central
 artifact org.fusesource.jansi jansi 2.4.1 2e5e775a9dc58ffa6bbd6aa6f099d62f8b62dcdeb4c3c3bbbe5cf2301bc2dcc1 central
 artifact io.github.alexarchambault is-terminal 0.1.2 721cb31b9ae87136b810758edbdf9dc1f363e2d8bf6d9ba2a3642d11abb09526 central
 artifact io.get-coursier.jniutils windows-jni-utils 0.4.0 2dd0a83362c6276050a6751fbd80efcbcf800a2baac3d175cd3b67e97a5caba1 central
 artifact com.eed3si9n shaded-scalajson_3 1.0.0-M4 d4997e6dfcdc24db0502a7bae6d44ac2e78e6f683e61b287cb756d9b2559cd33 central
-artifact com.eed3si9n shaded-jawn-parser_3 1.3.2 5b815a3b05960149a8310a288c2f5f3662fc833c1474079e76b31b2c4dc6d4b3 central
-evict com.eed3si9n sjson-new-core_3 0.10.1 0.15.0
+artifact com.eed3si9n shaded-jawn-parser_3 1.7.0 d4d812ffe12e9d910cf4bf32b6e93a311e90238cc9a59af04ee99b5887e0f5b0 central
+evict com.eed3si9n sjson-new-core_3 0.10.1 0.15.1
 evict com.fasterxml.jackson.core jackson-annotations ${jackson.version.annotations} 2.22
 evict com.fasterxml.jackson.core jackson-annotations 2.13.2 2.22
-evict com.fasterxml.jackson.core jackson-core ${jackson.version.core} 2.13.4
-evict com.fasterxml.jackson.core jackson-core 2.13.2 2.13.4
+evict com.fasterxml.jackson.core jackson-core ${jackson.version.core} 2.22.4
+evict com.fasterxml.jackson.core jackson-core 2.13.2 2.22.4
+evict com.fasterxml.jackson.core jackson-databind 2.13.4.2 2.22.4
+evict com.fasterxml.jackson.datatype jackson-datatype-jsr310 2.13.2 2.22.4
 evict com.github.plokhotnyuk.jsoniter-scala jsoniter-scala-core_3 2.40.1 2.41.0
-evict com.google.code.gson gson 2.13.2 2.11.0
-evict com.google.errorprone error_prone_annotations 2.27.0 2.30.0
-evict com.google.guava guava ${guava.version} 33.3.1-android
+evict com.google.errorprone error_prone_annotations 2.48.0 2.52.0
+evict com.google.errorprone error_prone_annotations 2.50.0 2.52.0
+evict com.google.guava failureaccess ${failureaccess.version} 1.0.3
+evict com.google.guava guava ${guava.version} 33.8.0-jre
+evict com.google.guava guava 33.5.0-jre 33.8.0-jre
+evict com.google.guava guava 33.6.0-android 33.8.0-jre
+evict com.google.guava listenablefuture ${listenablefuture.version} 9999.0-empty-to-avoid-conflict-with-guava
 evict com.vladsch.flexmark flexmark-util-ast ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-builder ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-collection ${project.version} 0.64.8
@@ -614,27 +650,27 @@ evict com.vladsch.flexmark flexmark-util-misc ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-options ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-sequence ${project.version} 0.64.8
 evict com.vladsch.flexmark flexmark-util-visitor ${project.version} 0.64.8
+evict org.jsoup jsoup 1.22.2 1.24.1
 evict org.nibor.autolink autolink ${autolink.version} 0.6.0
-evict org.ow2.asm asm 9.10.1 9.11.1
-evict org.ow2.asm asm-tree 9.10.1 9.11.1
+evict org.ow2.asm asm-commons 9.10.1 9.11.1
+evict org.ow2.asm asm-util 9.10.1 9.11.1
 evict org.scala-lang scala-library 2.12.20 3.10.0
 evict org.scala-lang scala-library 2.13.4 3.10.0
 evict org.scala-lang scala3-compiler_3 3.3.8 3.10.0
-evict org.scala-lang scala3-library_3 3.0.2 3.10.0
 evict org.scala-lang scala3-library_3 3.1.0 3.10.0
 evict org.scala-lang scala3-library_3 3.3.3 3.10.0
 evict org.scala-lang scala3-library_3 3.3.4 3.10.0
 evict org.scala-lang scala3-library_3 3.3.6 3.10.0
-evict org.scala-lang scala3-library_3 3.3.7 3.10.0
 evict org.scala-lang scala3-library_3 3.3.8 3.10.0
 evict org.scala-lang scala3-library_3 3.8.3 3.10.0
 evict org.scala-lang scala3-library_3 3.8.4 3.10.0
 evict org.scala-lang.modules scala-parser-combinators_3 2.1.0 2.5.0
-evict org.scala-sbt compiler-interface 1.12.0 2.0.4
-evict org.scala-sbt io_3 1.12.1 1.12.2
+evict org.scala-sbt compiler-interface 1.12.0 2.0.5
+evict org.scala-sbt io_3 1.13.2 1.13.6
 evict org.scala-sbt sbinary_3 0.5.1 0.6.0
-evict org.scala-sbt util-interface 1.11.5 2.0.0
-evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.1
+evict org.scala-sbt util-interface 1.11.5 2.0.9
+evict tools.jackson.core jackson-core ${jackson.version.core} 3.2.4
+evict tools.jackson.dataformat jackson-dataformat-yaml 3.2.1 3.2.4
 cell app 3.10.0 jvm
 direct dev.zio zio 2.1.27 binary
 direct rocks.earlyeffect heddle-mcp 0.14.2 binary
