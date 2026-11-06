@@ -317,8 +317,9 @@ object Workflow:
         List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
-  /** Dispatch only. No tag, no inputs, no `if`. Secrets on the release step are `secretNames`, in that order. A release
-    * ship that has a native client then links that client and uploads the install files to the existing `dist` release.
+  /** Dispatch only. No tag, no inputs, no `if`. The publish step sets `HISTOS_SESSION` to `release`, then lists
+    * `secretNames` in that order. A release ship that has a native client then links that client and uploads the
+    * install files to the existing `dist` release.
     */
   private def releaseWorkflow(graph: ProjectGraph, sona: Publishing): Either[CiError, Option[RenderedWorkflow]] =
     graph.catalog.ships match
@@ -408,8 +409,10 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli(graph, s"release-$name", build = true) ++ List(
-      s"      - run: ${quote(s"./histos publish release $name")}"
-    ) ++ secretEnv(sona.secretNames)
+      s"      - run: ${quote(s"./histos publish release $name")}",
+      "        env:",
+      "          HISTOS_SESSION: release",
+    ) ++ sona.secretNames.map(secret)
     shape match
       case ReleaseShape.Publish     => published
       case ReleaseShape.WithInstall => published ++ jarArtifact ++ bootstrapUpload(graph) ++ shimArtifact
