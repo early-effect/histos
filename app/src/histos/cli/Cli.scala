@@ -31,8 +31,8 @@ import histos.load.{LoadError, Loader}
 import histos.plugin.{FlagNameError, PluginArgs, PluginTaskError, PluginTaskId}
 import histos.preview.{Plan, PreviewError}
 import histos.program.ProgramError
-import histos.publish.{LauncherError, LauncherPin}
-import histos.scaffold.Skeleton
+import histos.publish.{LauncherError, LauncherPin, UpgradeNotice}
+import histos.scaffold.{ImportSource, Provision, ProvisionError, ScaffoldKind, Skeleton}
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity}
 import histos.select.SelectError
 import histos.toolchain.{Runtimes, Survey}
@@ -95,8 +95,13 @@ enum Command:
   case PreviewRun(id: TaskId, platform: Option[Platform])
   case PreviewPlugin(id: PluginTaskId)
   case Observe
-  case New(name: String)
-  case Init
+  case New(name: String, bare: Boolean, yes: Boolean, branch: Option[String])
+  case Init(
+      bare: Boolean,
+      yes: Boolean,
+      source: Option[ImportSource],
+      branch: Option[String],
+  )
   case Doctor(area: Option[String], json: Boolean, preflight: Option[String], fix: Boolean, yes: Boolean)
   case Explain(id: String)
   case Deps(action: DepsAction)
@@ -210,7 +215,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -232,19 +237,62 @@ object Cli:
         command => perform(repo, apiJar, command),
       )
 
-  /** `new` and `init` write a project. They do not load a graph and they do not talk to the server. */
-  private def fresh(parent: Path, name: Option[String]): UIO[Completed] =
-    System.env("HISTOS_VERSION").orElseSucceed(None).flatMap { raw =>
-      val written = ZIO.fromEither(Skeleton.versionOf(raw)).flatMap { version =>
-        name match
-          case Some(project) => Skeleton.create(parent, project, version)
-          case None          => Skeleton.init(parent, version)
-      }
-      written.fold(
-        error => Completed(CliExit.Usage, "", error.message, Playback.Held),
-        dir => Completed(CliExit.Success, s"${dir.toAbsolutePath.normalize}\nhistos test", "", Playback.Held),
-      )
-    }
+  /** `new` and `init` write a project. They do not talk to the server. Full also loads the graph it just wrote. */
+  private def fresh(
+      parent: Path,
+      apiJar: Path,
+      name: Option[String],
+      bare: Boolean,
+      yes: Boolean,
+      source: Option[ImportSource],
+      branch: Option[String],
+  ): URIO[Loader & ContentStore & Machine & Resolve, Completed] =
+    ZIO.serviceWithZIO[Machine]: machine =>
+      kindOf(bare, yes).flatMap: kind =>
+        System.envs.orElseSucceed(Map.empty).flatMap: env =>
+          System.env("HISTOS_VERSION").orElseSucceed(None).flatMap: raw =>
+            val request = Provision.Request(kind, source, branch, askBranch(yes, branch), env)
+            val written = ZIO.fromEither(Skeleton.versionOf(raw)).mapError(ProvisionError.Files(_)).flatMap { version =>
+              name match
+                case Some(project) => Provision.create(parent, project, version, apiJar, machine, request)
+                case None          => Provision.init(parent, version, apiJar, machine, request)
+            }
+            written.fold(
+              error => Completed(CliExit.Usage, "", error.message, Playback.Held),
+              report => Completed(CliExit.Success, report.out, "", Playback.Held),
+            )
+
+  private def kindOf(bare: Boolean, yes: Boolean): UIO[ScaffoldKind] =
+    if bare || yes || java.lang.System.console() == null then
+      ZIO.succeed(if bare then ScaffoldKind.Bare else ScaffoldKind.Full)
+    else
+      ZIO
+        .attemptBlocking:
+          val console = java.lang.System.console()
+          val read    =
+            if console == null then ""
+            else
+              val line = console.readLine("Write CI, a lock, .gitignore, and ./histos? [Y/n] ")
+              if line == null then "" else line
+          val answer = read.trim.toLowerCase
+          if answer == "n" || answer == "no" || answer == "bare" then ScaffoldKind.Bare else ScaffoldKind.Full
+        .orElseSucceed(ScaffoldKind.Full)
+
+  private def askBranch(yes: Boolean, branch: Option[String]): UIO[String] =
+    branch match
+      case Some(name)                                          => ZIO.succeed(name)
+      case None if yes || java.lang.System.console() == null => ZIO.succeed(Provision.DefaultBranch)
+      case None                                                =>
+        ZIO
+          .attemptBlocking:
+            val console = java.lang.System.console()
+            val read    =
+              if console == null then ""
+              else
+                val line = console.readLine(s"CI branch [${Provision.DefaultBranch}]: ")
+                if line == null then "" else line
+            if read.trim.isEmpty then Provision.DefaultBranch else read.trim
+          .orElseSucceed(Provision.DefaultBranch)
 
   private def explain(raw: String): Completed =
     histos.doctor.ToolchainExplain.text(raw) match
@@ -333,7 +381,10 @@ object Cli:
       case Some(name) if Os.from(name) == Os.Windows =>
         ZIO.succeed(Completed(CliExit.Usage, "", HostSupport.refused, Playback.Held))
       case _ =>
-        Connection.ensure(repo).ignore *>
+        UpgradeNotice.line(repo).flatMap { note =>
+          ZIO.whenDiscard(note.nonEmpty)(ZIO.succeed(java.lang.System.err.println(note)))
+        } *>
+          Connection.ensure(repo).ignore *>
           parse(args).foldZIO(
             {
               case CliParseError.UnknownRoot(_) =>
@@ -431,8 +482,10 @@ object Cli:
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
       case Command.Observe                                 => observe(repo)
-      case Command.New(name)                               => fresh(repo, Some(name))
-      case Command.Init                                    => fresh(repo, None)
+      case Command.New(name, bare, yes, branch) =>
+        fresh(repo, apiJar, Some(name), bare, yes, None, branch)
+      case Command.Init(bare, yes, source, branch) =>
+        fresh(repo, apiJar, None, bare, yes, source, branch)
       case Command.Doctor(area, json, preflight, fix, yes) =>
         ZIO.serviceWithZIO[histos.jdk.Machine](machine =>
           doctor(repo, apiJar, area, json, preflight, fix, yes, machine)
@@ -2093,10 +2146,14 @@ object Cli:
         attach(repo, Call.PreviewRun(id.render, None), loadedMiss(repo)(previewRunLocal(_, id.render, None)))
       case Command.Observe =>
         observe(repo)
-      case Command.New(name) =>
-        fresh(repo, Some(name))
-      case Command.Init =>
-        fresh(repo, None)
+      case Command.New(name, bare, yes, branch) =>
+        inProcessReady(repo)((api, machine) =>
+          withLocal(machine)(fresh(repo, api, Some(name), bare, yes, None, branch))
+        )
+      case Command.Init(bare, yes, source, branch) =>
+        inProcessReady(repo)((api, machine) =>
+          withLocal(machine)(fresh(repo, api, None, bare, yes, source, branch))
+        )
       case Command.Doctor(area, json, preflight, fix, yes) =>
         inProcessReady(repo)((api, machine) =>
           withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes, machine))

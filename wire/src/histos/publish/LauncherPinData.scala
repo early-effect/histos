@@ -23,7 +23,8 @@ enum LauncherError:
     case Missing      => "launcher properties are missing histos.version"
     case Version(raw) =>
       s"launcher version is not a release, a snapshot pointer, or a timestamped revision: $raw"
-    case Release(raw)      => s"a release pin does not move: $raw"
+    case Release(raw) =>
+      s"a release pin does not move: $raw. Run 'histos launcher --latest'."
     case Repository(raw)   => s"launcher repository is not a supported base: $raw"
     case Resolve(detail)   => detail
     case Io(error)         => error.message

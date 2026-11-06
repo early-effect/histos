@@ -21,8 +21,11 @@ object SkeletonSpec extends ZIOSpecDefault:
           dir    <- Skeleton.create(parent, "my-app", "0.0.2-20260101.120000-1").mapError(_.message)
           jar    <- ApiJar.locate.mapError(_.message)
           loaded <- ZIO.serviceWithZIO[Loader](_.load(dir, jar)).mapError(_.message)
-          pin    <- ZIO.attempt(Files.readString(dir.resolve("build.properties"))).mapError(_.getMessage)
-          found  <- ZIO
+          pin        <- ZIO.attempt(Files.readString(dir.resolve("build.properties"))).mapError(_.getMessage)
+          ignore     <- ZIO.attempt(Files.readString(dir.resolve(".gitignore"))).mapError(_.getMessage)
+          script     <- ZIO.attempt(Files.readString(dir.resolve("histos"))).mapError(_.getMessage)
+          executable <- ZIO.attempt(Files.isExecutable(dir.resolve("histos"))).mapError(_.getMessage)
+          found      <- ZIO
             .attempt {
               val walk = Files.walk(dir)
               try walk.iterator.asScala.map(dir.relativize(_).toString).toList
@@ -36,6 +39,10 @@ object SkeletonSpec extends ZIOSpecDefault:
             case _                     => Nil
           } == List(histos.Platform.Jvm),
           pin.trim == "histos.version=0.0.2-20260101.120000-1",
+          ignore.contains(".histos/"),
+          ignore.contains("out/"),
+          script.contains("HISTOS_HOME"),
+          executable,
           found.filter(_.endsWith(".scala")).sorted == List(
             "app/src/main/scala/myapp/Main.scala",
             "app/src/test/scala/myapp/MainSpec.scala",

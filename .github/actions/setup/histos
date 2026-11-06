@@ -22,6 +22,14 @@ clang_guide='clang is not on PATH. Histos does not install it.
 macOS: brew install llvm
 Linux: install clang from your distribution.'
 home=${HISTOS_HOME:-$HOME/.histos}
+# ChannelRefresh.Default is Ttl(1 hour). every-call is ChannelRefresh.EveryCall.
+channel_ttl=3600
+channel_refresh=ttl
+case ${HISTOS_CHANNEL_REFRESH:-ttl} in
+  ttl) channel_refresh=ttl ;;
+  every-call) channel_refresh=every-call ;;
+  *) fail "HISTOS_CHANNEL_REFRESH is ttl or every-call" ;;
+esac
 dist=${HISTOS_DIST:-https://github.com/early-effect/histos/releases/download/dist}
 case $dist in
   https://*) ;;
@@ -92,16 +100,60 @@ verify_sha() {
   [ -f "$file" ] || fail "missing $file"
   [ "$(hash_of "$file")" = "$expected" ] || fail "checksum mismatch for $file"
 }
+mtime_of() {
+  file=$1
+  if stat -c %Y "$file" >/dev/null 2>&1; then
+    stat -c %Y "$file"
+  else
+    stat -f %m "$file"
+  fi
+}
+cached_channel() {
+  file=$1
+  [ "$channel_refresh" = ttl ] || return 1
+  [ -f "$file" ] || return 1
+  now=$(date +%s) || return 1
+  then=$(mtime_of "$file") || return 1
+  age=$((now - then))
+  [ "$age" -ge 0 ] && [ "$age" -lt "$channel_ttl" ] || return 1
+  resolved=$(tr -d '[:space:]' < "$file")
+  [ -n "$resolved" ] || return 1
+  printf '%s' "$resolved"
+}
+saved_channel() {
+  file=$1
+  [ -f "$file" ] || return 1
+  resolved=$(tr -d '[:space:]' < "$file")
+  [ -n "$resolved" ] || return 1
+  printf '%s' "$resolved"
+}
 resolve_channel() {
   channel=$1
   case $channel in
     *-SNAPSHOT)
+      cache=$home/channels/$channel
+      if cached=$(cached_channel "$cache"); then
+        printf '%s' "$cached"
+        return 0
+      fi
       tmp=$(mktemp)
-      fetch "$dist/channel-$channel" "$tmp"
-      resolved=$(tr -d '[:space:]' < "$tmp")
-      rm -f "$tmp"
-      [ -n "$resolved" ] || fail "channel $channel did not resolve"
-      printf '%s' "$resolved"
+      if fetch_ok "$dist/channel-$channel" "$tmp"; then
+        resolved=$(tr -d '[:space:]' < "$tmp")
+        rm -f "$tmp"
+        if [ -n "$resolved" ]; then
+          mkdir -p "$home/channels"
+          printf '%s\n' "$resolved" > "$cache"
+          printf '%s' "$resolved"
+          return 0
+        fi
+      else
+        rm -f "$tmp"
+      fi
+      if cached=$(saved_channel "$cache"); then
+        printf '%s' "$cached"
+        return 0
+      fi
+      fail "channel $channel did not resolve"
       ;;
     *) printf '%s' "$channel" ;;
   esac
@@ -425,6 +477,7 @@ histos help self"
         for flag in "$@"; do
           [ "$flag" = --compile-client ] && compile=yes
         done
+        channel_refresh=every-call
         selected=$(resolve_channel "$selected")
         ensure_toolchain "$selected" "$compile"
         if [ ! -s "$home/default" ]; then write_default "$selected"; fi
@@ -447,6 +500,7 @@ histos help toolchain" ;;
         *) fail "unknown update flag: $flag" ;;
       esac
     done
+    channel_refresh=every-call
     repo=$(find_repo || true)
     if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
       selected=$(resolve_channel "$pin")
