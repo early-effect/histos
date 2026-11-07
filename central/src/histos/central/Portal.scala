@@ -144,6 +144,14 @@ object Portal:
     ZIO.scoped:
       ZIO.sleep(keepEvery).zipRight(note(line)).forever.forkScoped *> body
 
+  /** The portal, given the HTTP client that speaks to `base`. */
+  def connected(
+      base: PortalBase,
+      credentials: RepositorySecret,
+      note: String => UIO[Unit],
+  ): ZLayer[Client, Nothing, Portal] =
+    ZLayer.fromFunction((client: Client) => PortalClient(base, credentials, client, note))
+
   def layer(
       base: PortalBase,
       credentials: RepositorySecret,
@@ -152,7 +160,7 @@ object Portal:
     val http =
       ZLayer.succeed(Client.Config.default) >>>
         Client.layer.mapError(error => PortalError.Transport(TransportFaults.from(error)))
-    http >>> ZLayer.fromFunction((client: Client) => PortalClient(base, credentials, client, note))
+    http >>> connected(base, credentials, note)
 end Portal
 
 private final class PortalClient(

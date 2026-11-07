@@ -51,11 +51,14 @@ enum ToolchainMiss:
   case Unexpected(version: ScalaVersion, jars: List[Path])
   case Library(requested: ScalaVersion, found: ScalaVersion)
   case Plugin(version: ScalaVersion)
+  case Coverage(version: ScalaVersion)
 
   def message: String = this match
     case Fetch(version)  => s"the ${version.value} compiler could not be fetched"
     case Plugin(version) =>
       s"semanticdb-scalac for ${version.value} could not be fetched"
+    case Coverage(version) =>
+      s"scoverage for ${version.value} could not be selected"
     case Missing(version, part) =>
       s"the ${version.value} fetch has no ${part.label}"
     case Duplicated(version, part) =>

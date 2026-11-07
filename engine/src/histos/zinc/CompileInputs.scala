@@ -32,7 +32,7 @@ object CompileInputs:
       CompileRow(CompileInput.Artifacts, join(request.artifactHashes)),
       CompileRow(CompileInput.Apis, join(request.upstreamApis)),
       CompileRow(CompileInput.Tools, join(request.compilationTools.map(_.fingerprint))),
-    )
+    ) ++ request.coverage.toList.map(text => CompileRow(CompileInput.Coverage, text))
 
   /** Compiler jars are not in [[declared]]. [[CompileKey.withTools]] adds the same fingerprints to the key. */
   def withCompiler(rows: List[CompileRow], hashes: List[Sha256]): List[CompileRow] =

@@ -750,6 +750,7 @@ private[testrun] object SuiteLaunch:
       repositories: Repositories,
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      coverage: Option[histos.coverage.CoverageCompile] = None,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
@@ -770,6 +771,7 @@ private[testrun] object SuiteLaunch:
         lock,
         repositories,
         onCompiled = noted,
+        coverage = coverage,
       )
       classes = TestCompile.testClasses(
         repo,
@@ -826,6 +828,7 @@ private[testrun] object SuiteLaunch:
       patterns: List[SuitePattern],
       mode: TestMode,
       noted: histos.zinc.CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      coverage: Option[histos.coverage.CoverageCompile] = None,
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & TestContext & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
@@ -892,6 +895,7 @@ private[testrun] object SuiteLaunch:
             lock,
             repositories,
             onCompiled = noted,
+            coverage = coverage,
           )
           stamp <- prepared(module, modules, cell, jdk, runtimes, lock, repositories)
           found <- SuiteNames

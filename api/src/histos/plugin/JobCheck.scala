@@ -1,7 +1,7 @@
 package histos.plugin
 
 import histos.version.Catalog
-import histos.{BuildError, CiFault, DocCheck, Module, Platform, ProjectGraph, ProjectName}
+import histos.{BuildError, CiFault, CoverageJob, DocCheck, Module, Platform, ProjectGraph, ProjectName}
 
 /** One rendered job, and the workflow file it belongs in. */
 final case class Placed(file: WorkflowFile, plugin: PluginId, render: JobRender)
@@ -51,9 +51,12 @@ object JobCheck:
     val suite   =
       if modules.nonEmpty then List(JobName.trusted("test"), JobName.trusted("cache-seed")) else Nil
     val doc      = if graph.docCheck == DocCheck.On then List(JobName.trusted("doc")) else Nil
+    val coverage = graph.coverage match
+      case CoverageJob.Off    => Nil
+      case CoverageJob.Ask(_) => List(JobName.trusted("coverage"))
     val versions = if graph.catalog != Catalog.Empty then List(JobName.trusted("versions")) else Nil
     val launch   = if launcher(graph) then List(JobName.trusted("launcher")) else Nil
-    (base ++ suite ++ doc ++ versions ++ launch).toSet
+    (base ++ suite ++ doc ++ coverage ++ versions ++ launch).toSet
 
   private def launcher(graph: ProjectGraph): Boolean =
     graph.projects.exists:

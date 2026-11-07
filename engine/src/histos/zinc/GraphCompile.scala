@@ -16,6 +16,7 @@ import histos.resolve.{
 }
 import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
+import histos.workspace.{IoFailure, IoFault}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -31,6 +32,7 @@ final case class CompileSession(
     jdk: JdkRuntime,
     native: NativeOrigin,
     lock: histos.resolve.DependencyLock,
+    coverage: Option[histos.coverage.CoverageCompile] = None,
 )
 
 object GraphCompile:
@@ -77,22 +79,29 @@ object GraphCompile:
       ).provideSomeLayer(CompilerStarts.live)
     )
 
-  /** `hold` runs before that cell compiles. A test spec uses it to keep one cell out of the way.
+  /** `hold` runs before that cell compiles. A test spec uses it to keep one cell out of the way. `after` runs once the
+    * cell is compiled, before a dependent cell starts. Coverage waits there until this cell's tests finish, so a later
+    * test compile cannot drop the measurements those tests wrote.
     */
   private[histos] def held(
       session: CompileSession,
       names: List[ProjectName],
       hold: ProjectName => UIO[Unit],
+      after: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,
   ): ZStream[Resolve & ContentStore & Compilers & CompileMemo & ResolutionService, GraphCompileError, CompileFeed] =
+    val platform = session.coverage.map(_ => Platform.Jvm)
+    val only     = session.coverage.map(_ => histos.coverage.Cell.versions(session.graph))
     watch(
       session.repo,
       session.graph,
       choose(session.graph, names),
-      None,
-      None,
+      only,
+      platform,
       session.jdk,
       session.native,
       hold,
+      coverage = session.coverage,
+      after = after,
     ).provideSomeLayer(CompilerStarts.live)
   def cellFeed(
       session: CompileSession,
@@ -379,6 +388,8 @@ object GraphCompile:
       hold: ProjectName => UIO[Unit] = _ => ZIO.unit,
       parallelism: Parallelism = Parallelism.default,
       inside: ProjectName => UIO[Unit] = _ => ZIO.unit,
+      coverage: Option[histos.coverage.CoverageCompile] = None,
+      after: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,
   ): ZStream[Fed, GraphCompileError, CompileFeed] =
     ZStream.asyncScoped[Fed, GraphCompileError, CompileFeed](
       emit =>
@@ -402,6 +413,7 @@ object GraphCompile:
                 tools,
                 stamped.stamp,
                 inside,
+                coverage,
               )
               val goal = ScheduleCells.goal(
                 plan,
@@ -410,6 +422,7 @@ object GraphCompile:
                 platform,
                 hold,
                 offer,
+                after,
               )
               ZIO
                 .serviceWithZIO[Histos](_.start(goal))
@@ -484,8 +497,8 @@ object GraphCompile:
   private[zinc] def compileCell(
       run: CellRun
   ): ZIO[Fed, GraphCompileError, String] =
-    val CellRun(plan, module, version, platform, upstreams, hold, offer) = run
-    def tell(feed: CompileFeed): UIO[Unit]                               =
+    val CellRun(plan, module, version, platform, upstreams, hold, offer, released) = run
+    def tell(feed: CompileFeed): UIO[Unit]                                         =
       ZIO.attemptBlockingInterrupt(offer(feed)).orDie
     val hear = (problem: CompileProblem) => offer(CompileFeed.Diagnostic(module.name, version, platform, problem))
     hold(module.name) *>
@@ -515,7 +528,7 @@ object GraphCompile:
                   case Some(change) =>
                     tell(CompileFeed.Miss(module.name, version, platform, change))
                   case None => ZIO.unit
-                noted *> tell(CompileFeed.Done(result.cell)).as(ScheduleCells.render(paths)),
+                noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
             )
 
   private final case class CellWork(
@@ -538,6 +551,7 @@ object GraphCompile:
       apis: List[Sha256],
       classes: Path,
       recorded: Path,
+      identity: Option[String],
   ): ZIO[CompileMemo, CompileError, Option[CompileOutput]] =
     val CellWork(plan, module, version, platform, _, _) = work
     ZIO.serviceWithZIO[CompileMemo]: memo =>
@@ -566,6 +580,7 @@ object GraphCompile:
                     hashes,
                     apis,
                     compilation,
+                    coverage = identity,
                   )
                   val key = CompileKey.withTools(
                     CompileKey.of(request, digest),
@@ -587,15 +602,16 @@ object GraphCompile:
       tests    <- ZIO.serviceWithZIO[CompileMemo](_.tests(base, version, platform)).mapError(failed)
       compiled <-
         if sources.isEmpty && tests.isEmpty then ZIO.fail(GraphCompileError.NoSources(module.name, base))
-        else if sources.isEmpty then vacant(plan.repo, module.name, version, platform)
+        else if sources.isEmpty then vacant(plan, module.name, version, platform)
         else
-          val classes  = classesDir(plan.repo, module.name, version, platform)
-          val analysis = this.analysis(plan.repo, module.name, version, platform)
+          val classes  = classRoot(plan, module.name, version, platform)
+          val analysis = analysisRoot(plan, module.name, version, platform)
           for
             upstream <- upstreams(module, chain, version, platform, done, plan)
             paths = upstream._1
             apis  = upstream._2
-            known    <- recall(work, sources, apis, classes, analysis).mapError(failed)
+            planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
+            known    <- recall(work, sources, apis, classes, analysis, planned.map(_.identity)).mapError(failed)
             compiled <- known match
               case Some(output) => ZIO.succeed(output)
               case None         =>
@@ -624,15 +640,18 @@ object GraphCompile:
                     assembled.hashes,
                     apis,
                     permitted = assembled.permitted,
+                    coverage = planned.map(_.identity),
+                    coverageTools = planned.fold(List.empty[histos.resolve.ToolInput])(_.tools),
                   )
                   compiled <- compile(
                     work,
                     request,
-                    SemanticDb.argv(plan.repo, version),
+                    SemanticDb.argv(plan.repo, version) ++ planned.fold(List.empty[String])(_.argv),
                     hear,
                     plan.admitted(module.name),
                   ).mapError(failed)
                 yield compiled
+            _ <- forgetMeasurements(plan, version, platform, classes).mapError(failed)
           yield CellResult(
             CompiledCell(
               module.name,
@@ -652,27 +671,20 @@ object GraphCompile:
   /** No main sources. The classes directory stays empty so a later test compile has a classpath root.
     */
   private def vacant(
-      repo: Path,
+      plan: CompilePlan,
       module: ProjectName,
       version: ScalaVersion,
       platform: Platform,
   ): IO[GraphCompileError, CellResult] =
-    val classes = classesDir(repo, module, version, platform)
-    ZIO
-      .attemptBlocking {
-        if Files.exists(classes) then
-          val walk  = Files.walk(classes)
-          val paths = try walk.iterator.asScala.toList
-          finally walk.close()
-          paths.sortBy(path => -path.getNameCount).foreach(Files.deleteIfExists)
-        Files.createDirectories(classes)
-      }
+    val classes = classRoot(plan, module, version, platform)
+    histos.workspace.Workspace
+      .recreate(classes)
       .mapError(_ => GraphCompileError.Output(classes)) *>
       ZIO
-        .fromEither(ApiDigest.writeEmpty(analysis(repo, module, version, platform)))
+        .fromEither(ApiDigest.writeEmpty(analysisRoot(plan, module, version, platform)))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error)) *>
       ZIO
-        .fromEither(ProductDigest.write(analysis(repo, module, version, platform), classes))
+        .fromEither(ProductDigest.write(analysisRoot(plan, module, version, platform), classes))
         .mapError(error => GraphCompileError.Failed(module, version, platform, error))
         .as(
           CellResult(
@@ -763,10 +775,14 @@ object GraphCompile:
         done.get((dependency.name, picked, platform)) match
           case None      => ZIO.fail(missing(dependency))
           case Some(dir) =>
-            ZIO
-              .fromEither(ApiDigest.read(analysis(plan.repo, dependency.name, picked, platform)))
-              .mapError(failed)
-              .map(api => (paths :+ dir, apis :+ api))
+            analysisDirOf(dir) match
+              case None =>
+                ZIO.fail(failed(CompileError.Io(IoFailure(dir, IoFault.Stat))))
+              case Some(recorded) =>
+                ZIO
+                  .fromEither(ApiDigest.read(recorded))
+                  .mapError(failed)
+                  .map(api => (paths :+ dir, apis :+ api))
 
   private def chosen(
       module: Module,
@@ -881,19 +897,85 @@ object GraphCompile:
       (platform, scalaDir) <- named(absolute)
       (scala, moduleDir)   <- named(scalaDir)
       (module, kindDir)    <- named(moduleDir)
-      (kind, histos)       <- named(kindDir)
+      (kind, above)        <- named(kindDir)
       analysisKind         <- kind match
         case "classes"      => Some("analysis")
         case "test-classes" => Some("test-analysis")
         case _              => None
-      (dot, repo) <- named(histos)
-      if dot == ".histos"
-    yield repo
-      .resolve(".histos")
+      (segments, repo) <- rooted(above)
+    yield segments
+      .foldLeft(repo.resolve(".histos"))((path, segment) => path.resolve(segment))
       .resolve(analysisKind)
       .resolve(module)
       .resolve(scala)
       .resolve(platform)
+
+  /** `.histos` is the product root. `.histos/coverage` is the coverage root. */
+  private def rooted(above: Path): Option[(List[String], Path)] =
+    named(above) match
+      case Some((".histos", repo))       => Some((Nil, repo))
+      case Some(("coverage", histosDir)) =>
+        named(histosDir) match
+          case Some((".histos", repo)) => Some((List("coverage"), repo))
+          case _                       => None
+      case _ => None
+
+  private def covered(
+      plan: CompilePlan,
+      version: ScalaVersion,
+      platform: Platform,
+  ): Option[histos.coverage.CoverageCompile] =
+    plan.coverage.filter(_ => histos.coverage.Cell.measures(version, platform))
+
+  private def classRoot(
+      plan: CompilePlan,
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+  ): Path =
+    covered(plan, version, platform) match
+      case Some(_) => histos.coverage.Flags.classesDir(plan.repo, module, version, platform)
+      case None    => classesDir(plan.repo, module, version, platform)
+
+  private def analysisRoot(
+      plan: CompilePlan,
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+  ): Path =
+    covered(plan, version, platform) match
+      case Some(_) => histos.coverage.Flags.analysisDir(plan.repo, module, version, platform)
+      case None    => analysis(plan.repo, module, version, platform)
+
+  private def coveragePlan(
+      plan: CompilePlan,
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+  ): IO[CompileError, Option[histos.coverage.Instrumented]] =
+    covered(plan, version, platform) match
+      case None       => ZIO.succeed(None)
+      case Some(spec) =>
+        ZIO
+          .fromEither(histos.coverage.Cell.instrumented(plan.repo, module, version, platform, spec))
+          .mapError:
+            case histos.coverage.CellFault.Plugin(found) =>
+              CompileError.Toolchain(ToolchainMiss.Coverage(found))
+            case histos.coverage.CellFault.Unmeasured(found, where) =>
+              if where == Platform.Jvm then CompileError.UnsupportedScala(found)
+              else CompileError.UnsupportedPlatform(where)
+          .map(Some(_))
+
+  private def forgetMeasurements(
+      plan: CompilePlan,
+      version: ScalaVersion,
+      platform: Platform,
+      classes: Path,
+  ): IO[CompileError, Unit] =
+    covered(plan, version, platform) match
+      case None    => ZIO.unit
+      case Some(_) =>
+        histos.coverage.Measurements.forget(classes).mapError(fault => CompileError.Io(fault))
 
   private def named(path: Path): Option[(String, Path)] =
     Option(path.getFileName).map(_.toString).zip(Option(path.getParent))

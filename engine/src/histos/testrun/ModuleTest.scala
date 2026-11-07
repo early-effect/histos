@@ -41,7 +41,7 @@ import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
-import zio.{Chunk, Fiber, IO, Queue, Ref, Semaphore, UIO, ZIO}
+import zio.{Chunk, Fiber, IO, Promise, Queue, Ref, Semaphore, UIO, ZIO}
 import zio.stream.{Take, ZStream}
 
 object ModuleTest:
@@ -166,7 +166,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(_, graph, names, _, _, _, patterns, _) = asked
+    val TestRun(_, graph, names, _, _, _, patterns, _, _) = asked
     ZStream.unwrap:
       for
         wanted <- ZIO.fromEither(
@@ -197,7 +197,7 @@ object ModuleTest:
     ModuleTestError,
     SessionFeed,
   ] =
-    val TestRun(_, graph, names, _, _, _, _, _) = asked
+    val TestRun(_, graph, names, _, _, _, _, _, _) = asked
     ZStream.unwrapScoped:
       for
         install <- ProviderInstall.make
@@ -235,33 +235,58 @@ object ModuleTest:
     Nothing,
     Unit,
   ] =
-    val session = histos.zinc.CompileSession(
-      asked.repo,
-      asked.graph,
-      asked.jdk,
-      asked.runtimes.native,
-      lock,
-    )
-    GraphCompile
-      .held(session, asked.names, hold)
-      .mapError(ModuleTestError.Compile(_))
-      .runForeach { feed =>
-        queue.offer(Take.single(SessionFeed.Compile(feed))).unit *>
-          (feed match
-            case histos.zinc.CompileFeed.Done(cell) if wanted.contains(cell.module) =>
-              gate
-                .withPermit(
-                  cellStream(asked, cell, lock, matched)
-                    .runForeach(item => queue.offer(Take.single(SessionFeed.Test(item))).unit)
-                    .foldCauseZIO(
-                      cause => queue.offer(Take.failCause(cause)).unit,
-                      _ => ZIO.unit,
+    Ref
+      .make(Map.empty[(ProjectName, ScalaVersion, Platform), Promise[Nothing, Unit]])
+      .flatMap: gates =>
+        def cellGate(name: ProjectName, version: ScalaVersion, platform: Platform): UIO[Promise[Nothing, Unit]] =
+          Promise
+            .make[Nothing, Unit]
+            .flatMap: fresh =>
+              gates.modify: map =>
+                val key = (name, version, platform)
+                map.get(key) match
+                  case Some(found) => (found, map)
+                  case None        => (fresh, map.updated(key, fresh))
+        val session = histos.zinc.CompileSession(
+          asked.repo,
+          asked.graph,
+          asked.jdk,
+          asked.runtimes.native,
+          lock,
+          asked.coverage,
+        )
+        val after = (name: ProjectName, version: ScalaVersion, platform: Platform) =>
+          asked.coverage match
+            case None    => ZIO.unit
+            case Some(_) =>
+              if wanted.contains(name) then cellGate(name, version, platform).flatMap(_.await)
+              else ZIO.unit
+        GraphCompile
+          .held(session, asked.names, hold, after)
+          .mapError(ModuleTestError.Compile(_))
+          .runForeach { feed =>
+            queue.offer(Take.single(SessionFeed.Compile(feed))).unit *>
+              (feed match
+                case histos.zinc.CompileFeed.Done(cell) if wanted.contains(cell.module) =>
+                  val ran =
+                    gate.withPermit(
+                      cellStream(asked, cell, lock, matched)
+                        .runForeach(item => queue.offer(Take.single(SessionFeed.Test(item))).unit)
+                        .foldCauseZIO(
+                          cause => queue.offer(Take.failCause(cause)).unit,
+                          _ => ZIO.unit,
+                        )
                     )
-                )
-                .forkIn(scope)
-                .flatMap(fiber => fibers.update(_ :+ fiber))
-            case _ => ZIO.unit)
-      }
+                  val finished =
+                    asked.coverage match
+                      case None    => ran
+                      case Some(_) =>
+                        ran.ensuring(
+                          cellGate(cell.module, cell.version, cell.platform).flatMap(_.succeed(())).unit
+                        )
+                  finished.forkIn(scope).flatMap(fiber => fibers.update(_ :+ fiber))
+                case _ => ZIO.unit)
+          }
       .foldCauseZIO(
         cause => queue.offer(Take.failCause(cause)).unit,
         _ =>
@@ -283,7 +308,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile) = asked
+    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile, coverage) = asked
     ZStream.unwrap(
       prepare(
         repo,
@@ -297,6 +322,7 @@ object ModuleTest:
         matched,
         mode,
         onTestCompile,
+        coverage,
       ).map(stream => watch(matched, stream))
     )
 
@@ -347,6 +373,7 @@ object ModuleTest:
           Platform,
           histos.zinc.CompileFacts,
       ) => UIO[Unit],
+      coverage: Option[histos.coverage.CoverageCompile],
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
@@ -393,6 +420,7 @@ object ModuleTest:
                         repositories,
                         mode,
                         note,
+                        coverage,
                       )
                     case Platform.Js =>
                       SuiteLaunch.runJs(
@@ -449,6 +477,7 @@ object ModuleTest:
                       patterns,
                       mode,
                       note,
+                      coverage,
                     )
                   case Platform.Js =>
                     SuiteLaunch.runJsProvider(
