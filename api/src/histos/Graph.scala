@@ -140,6 +140,7 @@ final case class ProjectGraph private (
     docCheck: DocCheck = DocCheck.Off,
     ci: CiSettings = CiSettings.empty,
     supply: SupplyChain = SupplyChain(),
+    coverage: CoverageJob = CoverageJob.Off,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -185,6 +186,7 @@ object ProjectGraph:
       docCheck: DocCheck = DocCheck.Off,
       ci: CiSettings = CiSettings.empty,
       supply: SupplyChain = SupplyChain(),
+      coverage: CoverageJob = CoverageJob.Off,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -202,6 +204,7 @@ object ProjectGraph:
       docCheck,
       ci,
       supply,
+      coverage,
     )
 end ProjectGraph
 
@@ -262,6 +265,10 @@ object Projects:
   /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
   def jobTimeout(value: JobTimeout): Organized =
     Organized(None, Nil, ci = CiSettings.empty.copy(timeout = value))
+
+  /** CI runs `histos coverage`. Off unless a build asks. A floor on the ask is a flag on the job. */
+  def coverage(floors: CoverageFloors = CoverageFloors()): Organized =
+    Organized(None, Nil, coverageJob = CoverageJob.Ask(floors))
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
@@ -326,6 +333,7 @@ object Projects:
       docCheck: DocCheck = DocCheck.Off,
       ci: CiSettings = CiSettings.empty,
       supply: SupplyChain = SupplyChain(),
+      coverage: CoverageJob = CoverageJob.Off,
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -343,6 +351,7 @@ object Projects:
       docCheck,
       ci,
       supply,
+      coverage,
     )
 
   private def build(
@@ -361,6 +370,7 @@ object Projects:
       docCheck: DocCheck = DocCheck.Off,
       ci: CiSettings = CiSettings.empty,
       supply: SupplyChain = SupplyChain(),
+      coverage: CoverageJob = CoverageJob.Off,
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -392,6 +402,7 @@ object Projects:
             docCheck,
             ci,
             supply,
+            coverage,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -895,12 +906,13 @@ final class Organized(
     checked: DocCheck = DocCheck.Off,
     ci: CiSettings = CiSettings.empty,
     supply: SupplyChain = SupplyChain(),
+    coverageJob: CoverageJob = CoverageJob.Off,
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked, ci, supply)
+    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked, ci, supply, coverageJob)
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, supply)
+    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, supply, coverageJob)
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -915,18 +927,19 @@ final class Organized(
       checked,
       ci,
       supply,
+      coverageJob,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked, ci, supply)
+    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked, ci, supply, coverageJob)
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked, ci, supply)
+    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked, ci, supply, coverageJob)
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
   def testLog: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked, ci, supply)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked, ci, supply, coverageJob)
 
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
@@ -943,12 +956,13 @@ final class Organized(
       DocCheck.On,
       ci,
       supply,
+      coverageJob,
     )
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked, ci, supply)
+    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked, ci, supply, coverageJob)
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -971,11 +985,41 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked, ci, supply)
+    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked, ci, supply, coverageJob)
 
   /** Pins, advisories, and the weekly bump. A second call replaces the policy. */
   def supplyChain(value: SupplyChain): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, value)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      value,
+      coverageJob,
+    )
+
+  /** CI runs `histos coverage`. Off unless a build asks. A floor on the ask is a flag on the job. */
+  def coverage(floors: CoverageFloors = CoverageFloors()): Organized =
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      CoverageJob.Ask(floors),
+    )
 
   /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including
     * this.
@@ -997,6 +1041,7 @@ final class Organized(
       checked,
       settings,
       supply,
+      coverageJob,
     )
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -1015,6 +1060,7 @@ final class Organized(
       docCheck = checked,
       ci = ci,
       supply = supply,
+      coverage = coverageJob,
     )
 
   def apply(
@@ -1036,6 +1082,7 @@ final class Organized(
       docCheck = checked,
       ci = ci,
       supply = supply,
+      coverage = coverageJob,
     )
 
   def apply(
@@ -1057,6 +1104,7 @@ final class Organized(
       docCheck = checked,
       ci = ci,
       supply = supply,
+      coverage = coverageJob,
     )
 
   def apply(
@@ -1079,6 +1127,7 @@ final class Organized(
       docCheck = checked,
       ci = ci,
       supply = supply,
+      coverage = coverageJob,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -1098,6 +1147,7 @@ final class Organized(
       checked,
       ci,
       supply,
+      coverageJob,
     )
 
   def apply(
@@ -1121,6 +1171,7 @@ final class Organized(
       checked,
       ci,
       supply,
+      coverageJob,
     )
 
   def apply(
@@ -1144,6 +1195,7 @@ final class Organized(
       checked,
       ci,
       supply,
+      coverageJob,
     )
 
   def apply(
@@ -1168,5 +1220,6 @@ final class Organized(
       checked,
       ci,
       supply,
+      coverageJob,
     )
 end Organized

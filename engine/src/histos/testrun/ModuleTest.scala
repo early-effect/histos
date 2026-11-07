@@ -166,7 +166,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(_, graph, names, _, _, _, patterns, _) = asked
+    val TestRun(_, graph, names, _, _, _, patterns, _, _) = asked
     ZStream.unwrap:
       for
         wanted <- ZIO.fromEither(
@@ -197,7 +197,7 @@ object ModuleTest:
     ModuleTestError,
     SessionFeed,
   ] =
-    val TestRun(_, graph, names, _, _, _, _, _) = asked
+    val TestRun(_, graph, names, _, _, _, _, _, _) = asked
     ZStream.unwrapScoped:
       for
         install <- ProviderInstall.make
@@ -241,6 +241,7 @@ object ModuleTest:
       asked.jdk,
       asked.runtimes.native,
       lock,
+      asked.coverage,
     )
     GraphCompile
       .held(session, asked.names, hold)
@@ -283,7 +284,7 @@ object ModuleTest:
     ModuleTestError,
     TestFeed,
   ] =
-    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile) = asked
+    val TestRun(repo, graph, _, jdk, runtimes, mode, patterns, onTestCompile, coverage) = asked
     ZStream.unwrap(
       prepare(
         repo,
@@ -297,6 +298,7 @@ object ModuleTest:
         matched,
         mode,
         onTestCompile,
+        coverage,
       ).map(stream => watch(matched, stream))
     )
 
@@ -347,6 +349,7 @@ object ModuleTest:
           Platform,
           histos.zinc.CompileFacts,
       ) => UIO[Unit],
+      coverage: Option[histos.coverage.CoverageCompile],
   ): ZIO[
     Resolve & ProviderInstall & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers,
     ModuleTestError,
@@ -393,6 +396,7 @@ object ModuleTest:
                         repositories,
                         mode,
                         note,
+                        coverage,
                       )
                     case Platform.Js =>
                       SuiteLaunch.runJs(
@@ -449,6 +453,7 @@ object ModuleTest:
                       patterns,
                       mode,
                       note,
+                      coverage,
                     )
                   case Platform.Js =>
                     SuiteLaunch.runJsProvider(

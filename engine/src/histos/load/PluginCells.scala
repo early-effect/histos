@@ -83,7 +83,7 @@ private[load] object PluginCells:
       session: histos.zinc.CompileSession,
       cell: Cell,
   ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, String] =
-    val histos.zinc.CompileSession(repo, graph, jdk, _, lock) = session
+    val histos.zinc.CompileSession(repo, graph, jdk, _, lock, _) = session
     val asked                                                 =
       cell.module.application match
         case Some(main) =>
@@ -191,7 +191,7 @@ private[load] object PluginCells:
       session: histos.zinc.CompileSession,
       cell: Cell,
   ): ZIO[Resolve & histos.cache.ContentStore & histos.resolve.ResolutionService, PluginFault, Unit] =
-    val histos.zinc.CompileSession(repo, graph, jdk, origin, lock) = session
+    val histos.zinc.CompileSession(repo, graph, jdk, origin, lock, _) = session
     ZIO.scoped:
       (histos.zinc.Compilers.live ++ histos.zinc.CompileMemo.live).build.flatMap { env =>
         val compilers = zio.ZLayer.succeed(env.get[histos.zinc.Compilers])

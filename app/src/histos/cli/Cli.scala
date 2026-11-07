@@ -56,6 +56,11 @@ enum Command:
   case Run(id: TaskId, platform: Option[Platform])
   case Plugin(id: PluginTaskId, args: PluginArgs)
   case Test(projects: List[ProjectName], affected: AffectedChoice = AffectedChoice.Unset)
+  case Coverage(
+      projects: List[ProjectName],
+      floors: histos.CoverageFloors,
+      excludes: histos.coverage.Excludes,
+  )
   case Affected(base: String)
   case TestOnly(modules: List[ProjectName], patterns: List[SuitePattern])
   case TestQuick(modules: List[ProjectName], patterns: List[SuitePattern])
@@ -139,23 +144,24 @@ enum CliParseError:
 
   def message: String = this match
     case Help                        => histos.cli.Help.grouped
-    case UnknownCommand(token, near) => histos.cli.Help.unknown(token, if near.isEmpty then histos.cli.Help.names else near)
-    case UnknownRoot(token)          => histos.cli.Help.unknown(token)
-    case MissingArgument             => "run needs one name"
-    case UnexpectedArguments         => "unexpected arguments\nhistos help"
-    case BadTaskId                   => "a task id is not empty"
-    case BadPluginTask(error)        => error.message
-    case BadPlatform(error)          => error.message
-    case TaskPlatform(name)          => s"run $name does not take a platform"
-    case MissingPattern              => "testOnly needs a pattern"
-    case Pattern(detail)             => detail
-    case ProjectName(error)          => error.message
-    case SuitePattern(error)         => error.message
-    case RunId(error)                => error.message
-    case Flag(error)                 => error.message
-    case Namespace(error)            => error.message
-    case WatchCommand(detail)        => detail
-    case PublishForm                 =>
+    case UnknownCommand(token, near) =>
+      histos.cli.Help.unknown(token, if near.isEmpty then histos.cli.Help.names else near)
+    case UnknownRoot(token)   => histos.cli.Help.unknown(token)
+    case MissingArgument      => "run needs one name"
+    case UnexpectedArguments  => "unexpected arguments\nhistos help"
+    case BadTaskId            => "a task id is not empty"
+    case BadPluginTask(error) => error.message
+    case BadPlatform(error)   => error.message
+    case TaskPlatform(name)   => s"run $name does not take a platform"
+    case MissingPattern       => "testOnly needs a pattern"
+    case Pattern(detail)      => detail
+    case ProjectName(error)   => error.message
+    case SuitePattern(error)  => error.message
+    case RunId(error)         => error.message
+    case Flag(error)          => error.message
+    case Namespace(error)     => error.message
+    case WatchCommand(detail) => detail
+    case PublishForm          =>
       "publish is snapshots, release, assets, promote, or drop"
     case Rejected => "usage: histos help"
 
@@ -215,7 +221,7 @@ object Cli:
         case LauncherError.Absent(_) => ZIO.succeed(None)
 
   val usageText: String =
-    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
+    "usage: histos (version | graph | run <name> [jvm|js|native] | test [--affected <json>] [project ...] | coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...] | affected --base <sha> | testOnly [--module project ...] <pattern> ... | testQuick [--module project ...] [pattern ...] | ~ <command> | compile [project ...] | client | clean [project ...] | cleanFull | assembly [path] | publishLocal [token ...] | publish snapshots [token ...] | publish release [token ...] [--automatic] | publish assets [token ...] | publish promote <deployment> | publish drop <deployment> | observe | mcp | bsp | server | portal | reload | reboot | cancel <id> | new [--bare] [--yes] [--branch <name>] <name> | init [--bare] [--yes] [--from sbt|zipx] [--branch <name>] | toolchain | cache path | cache list | cache clean [--dry-run] | cache promote --from <namespace> --to <namespace> | resolve [--update | --check] | workflow [--check | --update] | launcher (--update | --latest) | --explain <check-id> | doctor [--area <area>] [--json] [--preflight <job>] [--fix] [--yes] | deps (check | update [--yes] [--security] | audit [--report] | pr [--security] [--open] | alert | snapshot [--submit]) | setup supply-chain [--from zipx] [--fix] [--yes] | preview compile [project ...] | preview test [project ...] | preview publishLocal [token ...] | preview publish snapshots [token ...] | preview clean [project ...] | preview cleanFull | preview run <name> [jvm|js|native])"
 
   def parse(args: List[String]): IO[CliParseError, Command] =
     Grammar.parse(args)
@@ -229,7 +235,7 @@ object Cli:
       parse(args).foldZIO(
         {
           case CliParseError.UnknownRoot(_) => contributed(args, repo, apiJar)
-          case detail                    =>
+          case detail                       =>
             ZIO.succeed(
               Completed(CliExit.Usage, "", FaultText.show(detail.diagnose), Playback.Held)
             )
@@ -249,18 +255,24 @@ object Cli:
   ): URIO[Loader & ContentStore & Machine & Resolve, Completed] =
     ZIO.serviceWithZIO[Machine]: machine =>
       kindOf(bare, yes).flatMap: kind =>
-        System.envs.orElseSucceed(Map.empty).flatMap: env =>
-          System.env("HISTOS_VERSION").orElseSucceed(None).flatMap: raw =>
-            val request = Provision.Request(kind, source, branch, askBranch(yes, branch), env)
-            val written = ZIO.fromEither(Skeleton.versionOf(raw)).mapError(ProvisionError.Files(_)).flatMap { version =>
-              name match
-                case Some(project) => Provision.create(parent, project, version, apiJar, machine, request)
-                case None          => Provision.init(parent, version, apiJar, machine, request)
-            }
-            written.fold(
-              error => Completed(CliExit.Usage, "", error.message, Playback.Held),
-              report => Completed(CliExit.Success, report.out, "", Playback.Held),
-            )
+        System.envs
+          .orElseSucceed(Map.empty)
+          .flatMap: env =>
+            System
+              .env("HISTOS_VERSION")
+              .orElseSucceed(None)
+              .flatMap: raw =>
+                val request = Provision.Request(kind, source, branch, askBranch(yes, branch), env)
+                val written =
+                  ZIO.fromEither(Skeleton.versionOf(raw)).mapError(ProvisionError.Files(_)).flatMap { version =>
+                    name match
+                      case Some(project) => Provision.create(parent, project, version, apiJar, machine, request)
+                      case None          => Provision.init(parent, version, apiJar, machine, request)
+                  }
+                written.fold(
+                  error => Completed(CliExit.Usage, "", error.message, Playback.Held),
+                  report => Completed(CliExit.Success, report.out, "", Playback.Held),
+                )
 
   private def kindOf(bare: Boolean, yes: Boolean): UIO[ScaffoldKind] =
     if bare || yes || java.lang.System.console() == null then
@@ -280,9 +292,9 @@ object Cli:
 
   private def askBranch(yes: Boolean, branch: Option[String]): UIO[String] =
     branch match
-      case Some(name)                                          => ZIO.succeed(name)
+      case Some(name)                                        => ZIO.succeed(name)
       case None if yes || java.lang.System.console() == null => ZIO.succeed(Provision.DefaultBranch)
-      case None                                                =>
+      case None                                              =>
         ZIO
           .attemptBlocking:
             val console = java.lang.System.console()
@@ -304,6 +316,81 @@ object Cli:
           s"no explanation for '$raw'. Known checks: ${histos.doctor.ToolchainExplain.known}.",
           Playback.Held,
         )
+
+  private def stamped: UIO[Long] =
+    ZIO.attempt(java.time.Instant.now().toEpochMilli).orDie
+
+  private def printed(console: java.io.PrintStream)(line: String): UIO[Unit] =
+    ZIO
+      .attempt:
+        console.println(line)
+        console.flush()
+      .ignore
+
+  private def cover(
+      repo: Path,
+      apiJar: Path,
+      machine: histos.jdk.Machine,
+      asked: Command.Coverage,
+      at: Long,
+  ): URIO[Loader & Scope & ContentStore & Resolve, Completed] =
+    ZIO
+      .serviceWithZIO[Loader](_.load(repo, apiJar))
+      .either
+      .flatMap:
+        case Left(error) =>
+          ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message, Playback.Held))
+        case Right(loaded) =>
+          histos.zinc.GraphCompile
+            .jdk(machine)
+            .either
+            .flatMap:
+              case Left(error) =>
+                ZIO.succeed(Completed(CliExit.ToolchainFailed, "", error.message, Playback.Held))
+              case Right(jdk) =>
+                histos.toolchain.Runtimes
+                  .read(machine, loaded.graph.runnerTools.nodePath)
+                  .flatMap: runtimes =>
+                    histos.coverage.Run
+                      .execute(
+                        histos.coverage.CoverageRequest(
+                          repo,
+                          loaded.graph,
+                          asked.projects,
+                          jdk,
+                          runtimes,
+                          asked.floors,
+                          asked.excludes,
+                          at,
+                        ),
+                        histos.coverage.CoverageLines(
+                          out = printed(java.lang.System.out),
+                          err = printed(java.lang.System.err),
+                        ),
+                      )
+                      .fold(
+                        failure => Completed(coverageExit(failure), "", failure.message, Playback.Held),
+                        {
+                          case histos.coverage.CoverageResult.Met(text) =>
+                            Completed(CliExit.Success, text, "", Playback.Held)
+                          case histos.coverage.CoverageResult.Missed(text) =>
+                            Completed(CliExit.TestFailed, text, "", Playback.Held)
+                        },
+                      )
+
+  private def coverageExit(failure: histos.coverage.CoverageFailure): CliExit =
+    failure match
+      case histos.coverage.CoverageFailure.Selected(_) => CliExit.Usage
+      case histos.coverage.CoverageFailure.Resolved(_) => CliExit.ResolveFailed
+      case histos.coverage.CoverageFailure.Compiled(_) => CliExit.CompileFailed
+      case histos.coverage.CoverageFailure.Test(error) =>
+        error match
+          case histos.testrun.ModuleTestError.Lock(_) | histos.testrun.ModuleTestError.LockRead(_) =>
+            CliExit.ResolveFailed
+          case _ => CliExit.TestFailed
+      case histos.coverage.CoverageFailure.Reported(_)   => CliExit.TaskFailed
+      case histos.coverage.CoverageFailure.Instrument(_) => CliExit.TaskFailed
+      case histos.coverage.CoverageFailure.Io(_)         => CliExit.TaskFailed
 
   private def doctor(
       repo: Path,
@@ -422,6 +509,9 @@ object Cli:
             ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
           case Some(names) =>
             test(repo, apiJar, names, Nil, TestMode.Run)
+      case asked: Command.Coverage =>
+        ZIO.serviceWithZIO[Machine]: machine =>
+          stamped.flatMap(at => cover(repo, apiJar, machine, asked, at))
       case Command.Affected(base) =>
         affected(repo, apiJar, base)
       case Command.TestOnly(modules, patterns) =>
@@ -481,7 +571,7 @@ object Cli:
         previewRun(repo, apiJar, id.value, platform)
       case Command.PreviewPlugin(id) =>
         previewRun(repo, apiJar, id.render, None)
-      case Command.Observe                                 => observe(repo)
+      case Command.Observe                      => observe(repo)
       case Command.New(name, bare, yes, branch) =>
         fresh(repo, apiJar, Some(name), bare, yes, None, branch)
       case Command.Init(bare, yes, source, branch) =>
@@ -514,8 +604,7 @@ object Cli:
           PortalServer
             .serve(repo.resolve(".histos").resolve("portal"), secret)
             .foldZIO(
-              error =>
-                ZIO.succeed(Completed(CliExit.PublishFailed, "", FaultText.show(error.diagnose), Playback.Held)),
+              error => ZIO.succeed(Completed(CliExit.PublishFailed, "", FaultText.show(error.diagnose), Playback.Held)),
               bound => say(bound.url) *> ZIO.never.as(Completed(CliExit.Success, bound.url, "", Playback.Heard)),
             )
     }
@@ -741,13 +830,15 @@ object Cli:
         .foldZIO(
           {
             case LoadError.MissingFile(_) =>
-              Toolchain.read(machine).flatMap:
-                case histos.jdk.JdkRead.Chosen(runtime, source) =>
-                  Calls.tell(say, s"jdk ${runtime.version.value} ${runtime.home} from ${source.label}") *>
-                    Calls.finish(say, CallResult.reported())
-                case histos.jdk.JdkRead.Failed(error, source) =>
-                  Calls.tell(say, Toolchain.failure(error, source)) *>
-                    Calls.finish(say, CallResult.Fault(BuildFault.Toolchain(error)))
+              Toolchain
+                .read(machine)
+                .flatMap:
+                  case histos.jdk.JdkRead.Chosen(runtime, source) =>
+                    Calls.tell(say, s"jdk ${runtime.version.value} ${runtime.home} from ${source.label}") *>
+                      Calls.finish(say, CallResult.reported())
+                  case histos.jdk.JdkRead.Failed(error, source) =>
+                    Calls.tell(say, Toolchain.failure(error, source)) *>
+                      Calls.finish(say, CallResult.Fault(BuildFault.Toolchain(error)))
             case error =>
               Calls.finish(say, CallResult.Fault(BuildFault.Load(error)))
           },
@@ -1577,7 +1668,8 @@ object Cli:
     val events               = feeds.collect { case Feed.Event(event) => event }
     val (outLines, errLines) = Show.transcript(repo, events)
     val faults               = feeds.collect {
-      case Feed.Done(CallResult.Fault(fault)) if FaultText.show(fault.diagnose).nonEmpty => FaultText.show(fault.diagnose)
+      case Feed.Done(CallResult.Fault(fault)) if FaultText.show(fault.diagnose).nonEmpty =>
+        FaultText.show(fault.diagnose)
     }
     val out = outLines.mkString("\n")
     val err = (errLines ++ faults).mkString("\n")
@@ -2010,6 +2102,9 @@ object Cli:
             ZIO.succeed(Completed(CliExit.Success, "", "", Playback.Held))
           case Some(names) =>
             dispatched(Command.Test(names))(call => served(repo, call))
+      case asked: Command.Coverage =>
+        stamped.flatMap: at =>
+          inProcessReady(repo)((api, machine) => withLoader(machine)(cover(repo, api, machine, asked, at)))
       case Command.Affected(base) =>
         inProcessReady(repo)((api, machine) => withLoader(machine)(affectedLocal(repo, api, base)))
       case Command.TestOnly(modules, patterns) =>
@@ -2151,9 +2246,7 @@ object Cli:
           withLocal(machine)(fresh(repo, api, Some(name), bare, yes, None, branch))
         )
       case Command.Init(bare, yes, source, branch) =>
-        inProcessReady(repo)((api, machine) =>
-          withLocal(machine)(fresh(repo, api, None, bare, yes, source, branch))
-        )
+        inProcessReady(repo)((api, machine) => withLocal(machine)(fresh(repo, api, None, bare, yes, source, branch)))
       case Command.Doctor(area, json, preflight, fix, yes) =>
         inProcessReady(repo)((api, machine) =>
           withLoader(machine)(doctor(repo, api, area, json, preflight, fix, yes, machine))

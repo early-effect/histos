@@ -36,6 +36,7 @@ object Grammar:
     case Init(bare: Boolean, yes: Boolean, from: Option[String], branch: Option[String])
     case Run(name: String, platform: Option[String])
     case Test(affected: Option[String], projects: List[String])
+    case Coverage(projects: List[String], floors: histos.FloorInput)
     case Affected(base: String)
     case TestOnly(args: List[String])
     case TestQuick(args: List[String])
@@ -77,6 +78,31 @@ object Grammar:
   private val test =
     CliCommand("test", Options.text("affected").optional, Args.text("project").*)
       .map { case (affected, names) => Wire.Test(affected, names.toList) }
+  private val coverageFloors =
+    Options.integer("min-stmt").optional ++
+      Options.integer("min-branch").optional ++
+      Options.integer("min-stmt-file").optional ++
+      Options.integer("min-branch-file").optional ++
+      Options.integer("min-stmt-package").optional ++
+      Options.integer("min-branch-package").optional
+  private val coverage =
+    CliCommand("coverage", coverageFloors, Args.text("project").*).map {
+      case (
+            (statements, branches, fileStatements, fileBranches, packageStatements, packageBranches),
+            projects,
+          ) =>
+        Wire.Coverage(
+          projects.toList,
+          histos.FloorInput(
+            statements,
+            branches,
+            fileStatements,
+            fileBranches,
+            packageStatements,
+            packageBranches,
+          ),
+        )
+    }
   private val affected   = CliCommand("affected", Options.text("base")).map(Wire.Affected(_))
   private val testOnly   = CliCommand("testOnly", Args.text("pattern").*).map(args => Wire.TestOnly(args.toList))
   private val testQuick  = CliCommand("testQuick", Args.text("pattern").*).map(args => Wire.TestQuick(args.toList))
@@ -198,7 +224,7 @@ object Grammar:
   private val setup   = CliCommand("setup").subcommands(supplyChain)
   private val helpCmd =
     CliCommand("help", Args.text("topic").*).map(words => Wire.Help(words.toList))
-  private val client = CliCommand("client").map(_ => Wire.Client)
+  private val client     = CliCommand("client").map(_ => Wire.Client)
   private val freshFlags =
     Options.boolean("bare") ++ Options.boolean("yes") ++ Options.text("branch").optional
   private val fresh =
@@ -215,7 +241,7 @@ object Grammar:
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview | helpCmd
+      version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview | helpCmd
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -229,14 +255,19 @@ object Grammar:
       case "~" :: "~" :: _ =>
         ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
       case "~" :: rest =>
-        parseRoot(rest).map(command => Command.Watch(command, rest))
+        prepared(rest).flatMap: ready =>
+          parseRoot(ready.args)
+            .flatMap(command => withExcludes(command, ready))
+            .map(command => Command.Watch(command, rest))
       case "--explain" :: Nil =>
         ZIO.fail(CliParseError.Pattern("--explain needs a check id"))
       case "--explain" :: id :: Nil =>
         ZIO.succeed(Command.Explain(id))
       case "--explain" :: _ =>
         ZIO.fail(CliParseError.Pattern("--explain takes one check id"))
-      case _ => parseRoot(args)
+      case _ =>
+        prepared(args).flatMap: ready =>
+          parseRoot(ready.args).flatMap(command => withExcludes(command, ready))
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
     root
@@ -279,6 +310,13 @@ object Grammar:
       case Wire.Workflow(action)         => ZIO.succeed(Command.Workflow(action))
       case Wire.Test(affected, projects) =>
         choice(affected).flatMap(picked => projectList("test", projects).map(names => Command.Test(names, picked)))
+      case Wire.Coverage(projects, raw) =>
+        ZIO
+          .fromEither(histos.CoverageFloors.parse(raw))
+          .mapError(error => CliParseError.Pattern(error.message))
+          .flatMap: floors =>
+            projectList("coverage", projects).map: names =>
+              Command.Coverage(names, floors, histos.coverage.Excludes(Nil, Nil))
       case Wire.Affected(base) =>
         ZIO.succeed(Command.Affected(base))
       case Wire.TestOnly(args) =>
@@ -291,12 +329,12 @@ object Grammar:
           .map { case (modules, patterns) =>
             Command.TestQuick(modules, patterns)
           }
-      case Wire.Client                                  => ZIO.succeed(Command.Client)
+      case Wire.Client                       => ZIO.succeed(Command.Client)
       case Wire.New(name, bare, yes, branch) =>
         ZIO.succeed(Command.New(name, bare, yes, branch))
       case Wire.Init(bare, yes, from, branch) =>
         from match
-          case None => ZIO.succeed(Command.Init(bare, yes, None, branch))
+          case None      => ZIO.succeed(Command.Init(bare, yes, None, branch))
           case Some(raw) =>
             ImportSource.from(raw) match
               case Some(source) => ZIO.succeed(Command.Init(bare, yes, Some(source), branch))
@@ -353,6 +391,53 @@ object Grammar:
           case NamedRun.Module(id, platform) => Command.Run(id, platform)
           case NamedRun.Plugin(id)           =>
             Command.Plugin(id, histos.plugin.PluginArgs.empty)
+
+  private final case class Prepared(args: List[String], classlikes: List[String], files: List[String])
+
+  private def prepared(args: List[String]): IO[CliParseError, Prepared] =
+    ZIO.fromEither(splitCoverage(args))
+
+  private def splitCoverage(args: List[String]): Either[CliParseError, Prepared] =
+    args match
+      case "coverage" :: rest =>
+        takeExcludes(rest, Nil, Nil, Nil).map: (kept, classlikes, files) =>
+          Prepared("coverage" :: kept, classlikes.reverse, files.reverse)
+      case _ => Right(Prepared(args, Nil, Nil))
+
+  private def takeExcludes(
+      args: List[String],
+      classlikes: List[String],
+      files: List[String],
+      kept: List[String],
+  ): Either[CliParseError, (List[String], List[String], List[String])] =
+    args match
+      case Nil                      => Right((kept.reverse, classlikes, files))
+      case "--exclude-class" :: Nil =>
+        Left(CliParseError.Pattern("coverage --exclude-class needs a regex"))
+      case "--exclude-class" :: value :: rest =>
+        takeExcludes(rest, value :: classlikes, files, kept)
+      case "--exclude-file" :: Nil =>
+        Left(CliParseError.Pattern("coverage --exclude-file needs a regex"))
+      case "--exclude-file" :: value :: rest =>
+        takeExcludes(rest, classlikes, value :: files, kept)
+      case flag :: Nil if histos.FloorName.known(flag) =>
+        Left(CliParseError.Pattern(s"coverage $flag needs an integer"))
+      case flag :: value :: rest if histos.FloorName.known(flag) =>
+        if kept.contains(flag) then Left(CliParseError.Pattern(s"coverage $flag is already set"))
+        else takeExcludes(rest, classlikes, files, value :: flag :: kept)
+      case head :: rest =>
+        takeExcludes(rest, classlikes, files, head :: kept)
+
+  private def withExcludes(command: Command, ready: Prepared): IO[CliParseError, Command] =
+    command match
+      case Command.Coverage(projects, floors, _) =>
+        ZIO
+          .fromEither(histos.coverage.Excludes.check(ready.classlikes, ready.files))
+          .mapBoth(
+            error => CliParseError.Pattern(error.message),
+            excludes => Command.Coverage(projects, floors, excludes),
+          )
+      case other => ZIO.succeed(other)
 
   private def selection(
       command: String,
@@ -497,7 +582,7 @@ object Grammar:
         CliParseError.Pattern("histos toolchain list is run by the installed shim\nhistos help toolchain")
       case _ =>
         error.validationErrorType match
-          case ValidationErrorType.CommandMismatch => mismatched(args)
+          case ValidationErrorType.CommandMismatch                                    => mismatched(args)
           case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>
             CliParseError.MissingArgument
           case _ => CliParseError.Rejected

@@ -10,6 +10,8 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
   Axis,
+  CoverageFloors,
+  CoverageJob,
   DocCheck,
   FollowUp,
   JobTimeout,
@@ -312,10 +314,13 @@ object Workflow:
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
       case DocCheck.On  => List(docJob(graph))
+    val coverage = graph.coverage match
+      case CoverageJob.Off        => Nil
+      case CoverageJob.Ask(asked) => List(coverageJob(graph, asked))
     val seed = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
     val boot = if selfHosted(graph) then List(toolchainJob(graph)) else Nil
     val body =
-      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++
+      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ planned.ci ++ seed ++
         List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
@@ -1359,6 +1364,25 @@ object Workflow:
       s"      - uses: $Checkout",
     ) ++ coursierCli(graph, "doc") ++ prepare ++ storeRestore ++ List(
       s"      - run: ${quote("./histos run doc")}"
+    )
+    lines.mkString("\n")
+
+  /** Beside the suite. It does not wait for the suite. A floor on the ask is a flag. No floor does not fail on a rate. */
+  private def coverageJob(graph: ProjectGraph, floors: CoverageFloors): String =
+    val command = ("./histos coverage" :: floors.argv).mkString(" ")
+    val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
+    val lines   = List(
+      "  coverage:"
+    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+      s"    runs-on: $Runner"
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:"
+    ) ++ actionsRead(graph) ++ List(
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli(graph, "coverage") ++ prepare ++ storeRestore ++ List(
+      s"      - run: ${quote(command)}"
     )
     lines.mkString("\n")
 

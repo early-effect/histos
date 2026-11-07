@@ -22,6 +22,7 @@ final case class CompilePlan(
     tools: histos.resolve.LockedTools,
     stamp: LockStamp,
     admitted: ProjectName => UIO[Unit] = _ => ZIO.unit,
+    coverage: Option[histos.coverage.CoverageCompile] = None,
 )
 
 /** One cell, the class directories it may use, and where its feeds go. */

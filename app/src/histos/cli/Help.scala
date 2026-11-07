@@ -18,6 +18,12 @@ object Help:
     Entry("assembly", "build", "histos assembly [path]", "Write one jar of the application."),
     Entry("client", "build", "histos client", "Link the native client."),
     Entry("test", "test", "histos test [--affected <json>] [project ...]", "Run the selected suites."),
+    Entry(
+      "coverage",
+      "test",
+      "histos coverage [--min-stmt <n>] [--min-branch <n>] [--min-stmt-file <n>] [--min-branch-file <n>] [--min-stmt-package <n>] [--min-branch-package <n>] [--exclude-class <regex>] [--exclude-file <regex>] [project ...]",
+      "Instrument Scala 3 and Scala 2.13 on the JVM, run the suites, and write the report.",
+    ),
     Entry("testOnly", "test", "histos testOnly [--module project ...] <pattern> ...", "Run suites that match."),
     Entry(
       "testQuick",
@@ -94,6 +100,7 @@ object Help:
     "assembly",
     "client",
     "test",
+    "coverage",
     "testOnly",
     "testQuick",
     "affected",
