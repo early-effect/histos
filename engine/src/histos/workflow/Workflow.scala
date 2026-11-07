@@ -1367,9 +1367,11 @@ object Workflow:
     )
     lines.mkString("\n")
 
-  /** Beside the suite. It does not wait for the suite. A floor on the ask is a flag. No floor does not fail on a rate. */
+  /** Beside the suite. It does not wait for the suite. A floor on the ask is a flag. Excludes recorded on the build are
+    * flags too. No floor does not fail on a rate.
+    */
   private def coverageJob(graph: ProjectGraph, floors: CoverageFloors): String =
-    val command = ("./histos coverage" :: floors.argv).mkString(" ")
+    val command = ("./histos coverage" :: (floors.argv ++ graph.coverageExcludes.argv)).mkString(" ")
     val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
     val lines   = List(
       "  coverage:"

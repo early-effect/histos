@@ -34,6 +34,8 @@ private[zinc] final case class CellRun(
     upstreams: Map[ScheduleCells.CellKey, Path],
     hold: ProjectName => UIO[Unit],
     offer: CompileFeed => Unit,
+    /** Completes after this cell's tests when a coverage run must keep their measurements. */
+    after: UIO[Unit] = ZIO.unit,
 )
 
 private[zinc] object ScheduleCells:
@@ -50,6 +52,7 @@ private[zinc] object ScheduleCells:
       platform: Option[Platform],
       hold: ProjectName => UIO[Unit],
       offer: CompileFeed => Unit,
+      after: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,
   ): CellStep =
     val names                        = selected.map(_.name).toSet
     val byName                       = selected.map(module => module.name -> module).toMap
@@ -100,7 +103,16 @@ private[zinc] object ScheduleCells:
           case None         => ZIO.fail(GraphCompileError.UnknownCell(name, version))
           case Some(module) =>
             GraphCompile.compileCell(
-              CellRun(plan, module, version, chosen, parse(packed), hold, offer)
+              CellRun(
+                plan,
+                module,
+                version,
+                chosen,
+                parse(packed),
+                hold,
+                offer,
+                after(name, version, chosen),
+              )
             )
       dependencies(key, byName, names, declared) match
         case Nil  => Step.hermetic[String](info)(body(""))

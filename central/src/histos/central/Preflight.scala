@@ -159,12 +159,12 @@ object Preflight:
     ZLayer.succeed(Client.Config.default) >>>
       Client.layer.mapError(error => PreflightError.Client(TransportFaults.from(error)))
 
-  private def located(gavs: Chunk[Gav]): Either[PreflightError, Chunk[(Gav, String)]] =
+  private[central] def located(gavs: Chunk[Gav]): Either[PreflightError, Chunk[(Gav, String)]] =
     gavs.foldLeft[Either[PreflightError, Chunk[(Gav, String)]]](Right(Chunk.empty)):
       case (left @ Left(_), _) => left
       case (Right(acc), gav)   => relative(gav).map(path => acc :+ (gav, path))
 
-  private def relative(gav: Gav): Either[PreflightError, String] =
+  private[central] def relative(gav: Gav): Either[PreflightError, String] =
     if escaped(gav.group) || escaped(gav.artifact) || escaped(gav.version) then Left(PreflightError.Coordinate(gav))
     else Right(s"${gav.directory}/${gav.artifact}-${gav.version}.pom")
 
@@ -172,7 +172,7 @@ object Preflight:
     raw.isEmpty || raw.contains('/') || raw.contains('\\') || raw.contains("..") || raw == "."
 
   /** 404 is absent. A 2xx is already public. Any other status refuses the upload. */
-  private def head(client: Client, base: Registry, gav: Gav, path: String): IO[PreflightError, Unit] =
+  private[central] def head(client: Client, base: Registry, gav: Gav, path: String): IO[PreflightError, Unit] =
     client
       .batched(Request(Method.HEAD, under(base.root, path), Agent, Body.empty))
       .mapError(error => PreflightError.RepositoryDown(gav, TransportFaults.from(error)))
@@ -184,7 +184,7 @@ object Preflight:
       }
 
   /** HKP `op=get`. A 200 whose body is not a public key is a miss. Histos does not upload the key. */
-  private def lookup(client: Client, base: Registry, fingerprint: Fingerprint): IO[PreflightError, Unit] =
+  private[central] def lookup(client: Client, base: Registry, fingerprint: Fingerprint): IO[PreflightError, Unit] =
     val url = (base.root / "pks" / "lookup").copy(
       query = QueryParams.of("op" -> "get", "search" -> s"0x${fingerprint.value}")
     )

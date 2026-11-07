@@ -125,17 +125,38 @@ object Inventory:
     text.replace("\r\n", "\n").replace("\r", "\n").split("\n", -1).toList
 end Inventory
 
-/** One id per line. A blank line is skipped. The compiler writes these after the tests run. */
+/** One id per line. A blank line is skipped. The compiler writes these while it loads instrumented classes. */
 object Measurements:
   val Prefix: String = "scoverage.measurements."
 
+  /** Measurement files that already belonged to these directories. A later compile may append; [[restore]] puts these
+    * bytes back and drops what the compile added.
+    */
+  final case class Held(dirs: List[Path], files: List[(Path, String)])
+
+  /** Read the measurement files in `dirs`. An absent directory contributes no files. */
+  def hold(dirs: List[Path]): IO[IoFailure, Held] =
+    ZIO
+      .foreach(dirs): dir =>
+        files(dir).flatMap: paths =>
+          ZIO.foreach(paths)(path => Workspace.readString(path).map(text => path -> text))
+      .map(found => Held(dirs, found.flatten))
+
+  /** Drop every measurement file in the held directories, then write back the files [[hold]] read. */
+  def restore(held: Held): IO[IoFailure, Unit] =
+    ZIO.foreachDiscard(held.dirs)(forget) *>
+      ZIO.foreachDiscard(held.files)((path, text) => Workspace.writeString(path, text))
+
   /** Drop measurement files in one classes directory. The inventory stays. A missing directory is nothing to drop. */
   def forget(dir: Path): IO[IoFailure, Unit] =
+    files(dir).flatMap(paths => ZIO.foreachDiscard(paths)(Workspace.delete))
+
+  private def files(dir: Path): IO[IoFailure, List[Path]] =
     ZIO
       .attemptBlocking(Files.isDirectory(dir))
       .mapError(_ => IoFailure(dir, IoFault.Stat))
       .flatMap:
-        case false => ZIO.unit
+        case false => ZIO.succeed(Nil)
         case true  =>
           ZIO.scoped:
             for
@@ -147,8 +168,7 @@ object Measurements:
                   stream.iterator.asScala.filter(path => fileName(path).exists(_.startsWith(Prefix))).toList
                 )
                 .mapError(_ => IoFailure(dir, IoFault.Walk))
-              _ <- ZIO.foreachDiscard(paths)(Workspace.delete)
-            yield ()
+            yield paths
 
   private def fileName(path: Path): Option[String] =
     Option(path.getFileName).map(_.toString)

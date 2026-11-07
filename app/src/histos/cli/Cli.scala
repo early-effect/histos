@@ -351,32 +351,46 @@ object Cli:
                 histos.toolchain.Runtimes
                   .read(machine, loaded.graph.runnerTools.nodePath)
                   .flatMap: runtimes =>
-                    histos.coverage.Run
-                      .execute(
-                        histos.coverage.CoverageRequest(
-                          repo,
-                          loaded.graph,
-                          asked.projects,
-                          jdk,
-                          runtimes,
-                          asked.floors,
-                          asked.excludes,
-                          at,
-                        ),
-                        histos.coverage.CoverageLines(
-                          out = printed(java.lang.System.out),
-                          err = printed(java.lang.System.err),
-                        ),
-                      )
-                      .fold(
-                        failure => Completed(coverageExit(failure), "", failure.message, Playback.Held),
-                        {
-                          case histos.coverage.CoverageResult.Met(text) =>
-                            Completed(CliExit.Success, text, "", Playback.Held)
-                          case histos.coverage.CoverageResult.Missed(text) =>
-                            Completed(CliExit.TestFailed, text, "", Playback.Held)
-                        },
-                      )
+                    coverageArgs(loaded.graph, asked.floors, asked.excludes) match
+                      case Left(error) =>
+                        ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
+                      case Right(floors, excludes) =>
+                        histos.coverage.Run
+                          .execute(
+                            histos.coverage.CoverageRequest(
+                              repo,
+                              loaded.graph,
+                              asked.projects,
+                              jdk,
+                              runtimes,
+                              floors,
+                              excludes,
+                              at,
+                            ),
+                            histos.coverage.CoverageLines(
+                              out = printed(java.lang.System.out),
+                              err = printed(java.lang.System.err),
+                            ),
+                          )
+                          .fold(
+                            failure => Completed(coverageExit(failure), "", failure.message, Playback.Held),
+                            {
+                              case histos.coverage.CoverageResult.Met(text) =>
+                                Completed(CliExit.Success, text, "", Playback.Held)
+                              case histos.coverage.CoverageResult.Missed(text) =>
+                                Completed(CliExit.TestFailed, text, "", Playback.Held)
+                            },
+                          )
+
+  /** Build floors fill the flags this run omitted. Build excludes come first, then this run's regexes. */
+  private[cli] def coverageArgs(
+      graph: histos.ProjectGraph,
+      floors: histos.CoverageFloors,
+      excludes: histos.coverage.Excludes,
+  ): Either[histos.coverage.CoverageError, (histos.CoverageFloors, histos.coverage.Excludes)] =
+    val (chosen, raw) =
+      graph.coverageRequest(floors, histos.CoverageExcludes(excludes.classlikes, excludes.files))
+    histos.coverage.Excludes.check(raw.classlikes, raw.files).map(checked => (chosen, checked))
 
   private def coverageExit(failure: histos.coverage.CoverageFailure): CliExit =
     failure match

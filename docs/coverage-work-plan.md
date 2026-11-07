@@ -16,7 +16,7 @@ sbt-scoverage is the feature list: statement coverage, branch coverage, file and
 - The command writes three views of one report: the terminal text, `scoverage.xml`, and an HTML page, all under `.histos/coverage`. The XML is the scoverage document Codecov, Coveralls, and Sonar already read. The HTML is ours, built from the same rates.
 - A missed floor fails the command only when a floor is set. The flags are `--min-stmt`, `--min-branch`, `--min-stmt-file`, `--min-branch-file`, `--min-stmt-package`, and `--min-branch-package`, each an integer from 0 to 100.
 - The generated workflow grows a coverage job only when the build opts in. The job runs `./histos coverage`. It fails only when that opt-in also names a floor. No opt-in means no job.
-- Exclusions are `--exclude-file` and `--exclude-class`, repeatable. A bad regex is a typed error at the command. Each series receives the exclusion form its compiler accepts.
+- Exclusions are `--exclude-file` and `--exclude-class`, repeatable. The same regexes live on the build as `.coverageExcludes`. That setting does not turn the CI job on. `histos coverage` uses the build list, then adds regexes from the command. A floor flag replaces that one floor from `.coverage()`, and an omitted floor uses the build. When the job is on, the rendered run carries the build floors and the build excludes. A bad regex is a typed error at the command. Each series receives the exclusion form its compiler accepts.
 
 ## Dependencies
 

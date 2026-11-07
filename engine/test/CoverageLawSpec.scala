@@ -298,6 +298,22 @@ object CoverageLawSpec extends ZIOSpecDefault:
             gone <- Workspace.readIfPresent(measurement)
           yield assertTrue(kept.contains("keep"), gone.isEmpty)
     ,
+    test("restore puts back the measurements a later compile appended"):
+      Workspace
+        .work("histos-coverage")
+        .flatMap: root =>
+          val kept  = root.resolve(s"${Measurements.Prefix}kept")
+          val added = root.resolve(s"${Measurements.Prefix}added")
+          for
+            _        <- Workspace.writeString(kept, "1\n")
+            held     <- Measurements.hold(List(root))
+            _        <- Workspace.writeString(kept, "1\n9\n")
+            _        <- Workspace.writeString(added, "4\n")
+            _        <- Measurements.restore(held)
+            original <- Workspace.readIfPresent(kept)
+            extra    <- Workspace.readIfPresent(added)
+          yield assertTrue(original.contains("1\n"), extra.isEmpty)
+    ,
     test("javascript and native are named and not instrumented"):
       val built = histos.Projects(
         histos

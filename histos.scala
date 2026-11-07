@@ -18,10 +18,11 @@ object build extends HistosBuild:
       .clang(ClangMajor(21))
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
+      .testDependencies(zioTest, zioTestSbt)
     val central = module("central", Jvm)(scala3)
       .dependsOn(api, wire)
       .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.14.2")
-      .testDependencies(zioTest, zioTestSbt)
+      .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.2.0")
     val engine = module("engine", Jvm)(scala3)
       .dependsOn(central, api, wire)
       .libraryDependencies(
@@ -84,6 +85,7 @@ object build extends HistosBuild:
       .testDependencies(
         zioTest,
         zioTestSbt,
+        dep"rocks.earlyeffect::slayer:0.2.0",
         dep"org.ow2.asm:asm:9.11.1",
         dep"org.ow2.asm:asm-tree:9.11.1",
       )
@@ -114,6 +116,7 @@ object build extends HistosBuild:
           )
         )
       )
+      .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .docCheck(
         ships(Ship("histos").next(0, 2, 1)(api, app)),
         api,

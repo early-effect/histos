@@ -141,9 +141,23 @@ final case class ProjectGraph private (
     ci: CiSettings = CiSettings.empty,
     supply: SupplyChain = SupplyChain(),
     coverage: CoverageJob = CoverageJob.Off,
+    coverageExcludes: CoverageExcludes = CoverageExcludes(),
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
+
+  /** Floors from an opt-in coverage job. Off means the command has no build floor. */
+  def coverageFloors: CoverageFloors = coverage match
+    case CoverageJob.Off        => CoverageFloors()
+    case CoverageJob.Ask(asked) => asked
+
+  /** The command's floors and excludes, with the build filling what that run left out. */
+  def coverageRequest(
+      cliFloors: CoverageFloors,
+      cliExcludes: CoverageExcludes,
+  ): (CoverageFloors, CoverageExcludes) =
+    (cliFloors.orElse(coverageFloors), coverageExcludes.union(cliExcludes))
+end ProjectGraph
 
 object ProjectGraph:
   private[histos] def trusted(projects: List[Project]): ProjectGraph =
@@ -187,6 +201,7 @@ object ProjectGraph:
       ci: CiSettings = CiSettings.empty,
       supply: SupplyChain = SupplyChain(),
       coverage: CoverageJob = CoverageJob.Off,
+      coverageExcludes: CoverageExcludes = CoverageExcludes(),
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -205,6 +220,7 @@ object ProjectGraph:
       ci,
       supply,
       coverage,
+      coverageExcludes,
     )
 end ProjectGraph
 
@@ -270,6 +286,10 @@ object Projects:
   def coverage(floors: CoverageFloors = CoverageFloors()): Organized =
     Organized(None, Nil, coverageJob = CoverageJob.Ask(floors))
 
+  /** Classes and files `histos coverage` always excludes. This does not turn the CI job on. */
+  def coverageExcludes(excludes: CoverageExcludes): Organized =
+    Organized(None, Nil, coverageExcludes = excludes)
+
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
     build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
@@ -334,6 +354,7 @@ object Projects:
       ci: CiSettings = CiSettings.empty,
       supply: SupplyChain = SupplyChain(),
       coverage: CoverageJob = CoverageJob.Off,
+      coverageExcludes: CoverageExcludes = CoverageExcludes(),
   ): Either[BuildError, ProjectGraph] =
     build(
       organization,
@@ -352,6 +373,7 @@ object Projects:
       ci,
       supply,
       coverage,
+      coverageExcludes,
     )
 
   private def build(
@@ -371,6 +393,7 @@ object Projects:
       ci: CiSettings = CiSettings.empty,
       supply: SupplyChain = SupplyChain(),
       coverage: CoverageJob = CoverageJob.Off,
+      coverageExcludes: CoverageExcludes = CoverageExcludes(),
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -403,6 +426,7 @@ object Projects:
             ci,
             supply,
             coverage,
+            coverageExcludes,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -907,12 +931,41 @@ final class Organized(
     ci: CiSettings = CiSettings.empty,
     supply: SupplyChain = SupplyChain(),
     coverageJob: CoverageJob = CoverageJob.Off,
+    coverageExcludes: CoverageExcludes = CoverageExcludes(),
 ):
   def tools(catalog: ToolCatalog): Organized =
-    Organized(organization, resolvers, catalog, runnerTools, facts, promote, logged, resolution, checked, ci, supply, coverageJob)
+    Organized(
+      organization,
+      resolvers,
+      catalog,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   def organization(value: Organization): Organized =
-    Organized(Some(value), resolvers, tools, runnerTools, facts, promote, logged, resolution, checked, ci, supply, coverageJob)
+    Organized(
+      Some(value),
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
     Organized(
@@ -928,18 +981,61 @@ final class Organized(
       ci,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 
   def runnerTools(value: RunnerTools): Organized =
-    Organized(organization, resolvers, tools, value, facts, promote, logged, resolution, checked, ci, supply, coverageJob)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      value,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   def promote(value: Promote): Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, value, logged, resolution, checked, ci, supply, coverageJob)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      value,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
   def testLog: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, true, resolution, checked, ci, supply, coverageJob)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      true,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
@@ -957,12 +1053,27 @@ final class Organized(
       ci,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
   def locked: Organized =
-    Organized(organization, resolvers, tools, runnerTools, facts, promote, logged, Resolution.Lock, checked, ci, supply, coverageJob)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      Resolution.Lock,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
@@ -985,7 +1096,21 @@ final class Organized(
     withFacts(facts.copy(url = Some(value)))
 
   private def withFacts(value: OrganizationFacts): Organized =
-    Organized(organization, resolvers, tools, runnerTools, value, promote, logged, resolution, checked, ci, supply, coverageJob)
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      value,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      coverageExcludes,
+    )
 
   /** Pins, advisories, and the weekly bump. A second call replaces the policy. */
   def supplyChain(value: SupplyChain): Organized =
@@ -1002,6 +1127,7 @@ final class Organized(
       ci,
       value,
       coverageJob,
+      coverageExcludes,
     )
 
   /** CI runs `histos coverage`. Off unless a build asks. A floor on the ask is a flag on the job. */
@@ -1019,6 +1145,27 @@ final class Organized(
       ci,
       supply,
       CoverageJob.Ask(floors),
+      coverageExcludes,
+    )
+
+  /** Classes and files `histos coverage` always excludes. A second call replaces the list. This does not change whether
+    * CI runs the job.
+    */
+  def coverageExcludes(value: CoverageExcludes): Organized =
+    Organized(
+      organization,
+      resolvers,
+      tools,
+      runnerTools,
+      facts,
+      promote,
+      logged,
+      resolution,
+      checked,
+      ci,
+      supply,
+      coverageJob,
+      value,
     )
 
   /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including
@@ -1042,6 +1189,7 @@ final class Organized(
       settings,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -1061,6 +1209,7 @@ final class Organized(
       ci = ci,
       supply = supply,
       coverage = coverageJob,
+      coverageExcludes = coverageExcludes,
     )
 
   def apply(
@@ -1083,6 +1232,7 @@ final class Organized(
       ci = ci,
       supply = supply,
       coverage = coverageJob,
+      coverageExcludes = coverageExcludes,
     )
 
   def apply(
@@ -1105,6 +1255,7 @@ final class Organized(
       ci = ci,
       supply = supply,
       coverage = coverageJob,
+      coverageExcludes = coverageExcludes,
     )
 
   def apply(
@@ -1128,6 +1279,7 @@ final class Organized(
       ci = ci,
       supply = supply,
       coverage = coverageJob,
+      coverageExcludes = coverageExcludes,
     )
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
@@ -1148,6 +1300,7 @@ final class Organized(
       ci,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 
   def apply(
@@ -1172,6 +1325,7 @@ final class Organized(
       ci,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 
   def apply(
@@ -1196,6 +1350,7 @@ final class Organized(
       ci,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 
   def apply(
@@ -1221,5 +1376,6 @@ final class Organized(
       ci,
       supply,
       coverageJob,
+      coverageExcludes,
     )
 end Organized

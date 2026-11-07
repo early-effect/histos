@@ -16,6 +16,7 @@ import histos.resolve.{
 }
 import histos.select.SelectError
 import histos.schedule.{Histos, Outcome, Parallelism, StepFailure}
+import histos.workspace.{IoFailure, IoFault}
 import histos.{Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -78,12 +79,15 @@ object GraphCompile:
       ).provideSomeLayer(CompilerStarts.live)
     )
 
-  /** `hold` runs before that cell compiles. A test spec uses it to keep one cell out of the way.
+  /** `hold` runs before that cell compiles. A test spec uses it to keep one cell out of the way. `after` runs once the
+    * cell is compiled, before a dependent cell starts. Coverage waits there until this cell's tests finish, so a later
+    * test compile cannot drop the measurements those tests wrote.
     */
   private[histos] def held(
       session: CompileSession,
       names: List[ProjectName],
       hold: ProjectName => UIO[Unit],
+      after: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,
   ): ZStream[Resolve & ContentStore & Compilers & CompileMemo & ResolutionService, GraphCompileError, CompileFeed] =
     val platform = session.coverage.map(_ => Platform.Jvm)
     val only     = session.coverage.map(_ => histos.coverage.Cell.versions(session.graph))
@@ -97,6 +101,7 @@ object GraphCompile:
       session.native,
       hold,
       coverage = session.coverage,
+      after = after,
     ).provideSomeLayer(CompilerStarts.live)
   def cellFeed(
       session: CompileSession,
@@ -384,6 +389,7 @@ object GraphCompile:
       parallelism: Parallelism = Parallelism.default,
       inside: ProjectName => UIO[Unit] = _ => ZIO.unit,
       coverage: Option[histos.coverage.CoverageCompile] = None,
+      after: (ProjectName, ScalaVersion, Platform) => UIO[Unit] = (_, _, _) => ZIO.unit,
   ): ZStream[Fed, GraphCompileError, CompileFeed] =
     ZStream.asyncScoped[Fed, GraphCompileError, CompileFeed](
       emit =>
@@ -416,6 +422,7 @@ object GraphCompile:
                 platform,
                 hold,
                 offer,
+                after,
               )
               ZIO
                 .serviceWithZIO[Histos](_.start(goal))
@@ -490,8 +497,8 @@ object GraphCompile:
   private[zinc] def compileCell(
       run: CellRun
   ): ZIO[Fed, GraphCompileError, String] =
-    val CellRun(plan, module, version, platform, upstreams, hold, offer) = run
-    def tell(feed: CompileFeed): UIO[Unit]                               =
+    val CellRun(plan, module, version, platform, upstreams, hold, offer, released) = run
+    def tell(feed: CompileFeed): UIO[Unit]                                         =
       ZIO.attemptBlockingInterrupt(offer(feed)).orDie
     val hear = (problem: CompileProblem) => offer(CompileFeed.Diagnostic(module.name, version, platform, problem))
     hold(module.name) *>
@@ -521,7 +528,7 @@ object GraphCompile:
                   case Some(change) =>
                     tell(CompileFeed.Miss(module.name, version, platform, change))
                   case None => ZIO.unit
-                noted *> tell(CompileFeed.Done(result.cell)).as(ScheduleCells.render(paths)),
+                noted *> tell(CompileFeed.Done(result.cell)) *> released.as(ScheduleCells.render(paths)),
             )
 
   private final case class CellWork(
@@ -768,10 +775,14 @@ object GraphCompile:
         done.get((dependency.name, picked, platform)) match
           case None      => ZIO.fail(missing(dependency))
           case Some(dir) =>
-            ZIO
-              .fromEither(ApiDigest.read(analysis(plan.repo, dependency.name, picked, platform)))
-              .mapError(failed)
-              .map(api => (paths :+ dir, apis :+ api))
+            analysisDirOf(dir) match
+              case None =>
+                ZIO.fail(failed(CompileError.Io(IoFailure(dir, IoFault.Stat))))
+              case Some(recorded) =>
+                ZIO
+                  .fromEither(ApiDigest.read(recorded))
+                  .mapError(failed)
+                  .map(api => (paths :+ dir, apis :+ api))
 
   private def chosen(
       module: Module,

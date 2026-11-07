@@ -276,7 +276,7 @@ object Grammar:
       .flatMap:
         case CommandDirective.UserDefined(Nil, wire) => command(wire)
         case CommandDirective.UserDefined(_, _)      =>
-          ZIO.fail(CliParseError.UnexpectedArguments)
+          ZIO.fail(shim(args).getOrElse(CliParseError.UnexpectedArguments))
         case CommandDirective.BuiltIn(_) =>
           args match
             case "publish" :: Nil              => ZIO.fail(CliParseError.PublishForm)
@@ -567,20 +567,29 @@ object Grammar:
       case "preview" :: "publish" :: _                                                 => CliParseError.PublishForm
       case _                                                                           => reject(error, args)
 
+  private def shim(args: List[String]): Option[CliParseError] =
+    args match
+      case "update" :: _ =>
+        Some(CliParseError.Pattern("histos update is run by the installed shim\nhistos help update"))
+      case "self" :: _ =>
+        Some(CliParseError.Pattern("histos self update is run by the installed shim\nhistos help self"))
+      case "toolchain" :: "install" :: _ =>
+        Some(
+          CliParseError.Pattern(
+            "histos toolchain install <version> is run by the installed shim\nhistos help toolchain"
+          )
+        )
+      case "toolchain" :: "list" :: _ =>
+        Some(CliParseError.Pattern("histos toolchain list is run by the installed shim\nhistos help toolchain"))
+      case _ => None
+
   private def reject(
       error: ValidationError,
       args: List[String],
   ): CliParseError =
-    args match
-      case "update" :: _ =>
-        CliParseError.Pattern("histos update is run by the installed shim\nhistos help update")
-      case "self" :: _ =>
-        CliParseError.Pattern("histos self update is run by the installed shim\nhistos help self")
-      case "toolchain" :: "install" :: _ =>
-        CliParseError.Pattern("histos toolchain install <version> is run by the installed shim\nhistos help toolchain")
-      case "toolchain" :: "list" :: _ =>
-        CliParseError.Pattern("histos toolchain list is run by the installed shim\nhistos help toolchain")
-      case _ =>
+    shim(args) match
+      case Some(held) => held
+      case None       =>
         error.validationErrorType match
           case ValidationErrorType.CommandMismatch                                    => mismatched(args)
           case ValidationErrorType.InvalidArgument | ValidationErrorType.MissingValue =>

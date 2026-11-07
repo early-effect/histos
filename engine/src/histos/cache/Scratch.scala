@@ -22,20 +22,25 @@ object Scratch:
     made(beside, failed)((parent, name) => Files.createTempDirectory(parent, name))
 
   /** `Occupied` means something was already at `to`: `from` stays where it is, for its scope to remove.
+    *
+    * An atomic move replaces an existing file on macOS, so the destination is checked first. A move that loses the race
+    * is occupied when the destination is there afterwards.
     */
   def place[E](from: Path, to: Path, failed: E): IO[E, Placed] =
-    ZIO
-      .attemptBlocking(Files.move(from, to, StandardCopyOption.ATOMIC_MOVE))
-      .foldZIO(
-        _ =>
-          ZIO
-            .attemptBlocking(Files.exists(to, LinkOption.NOFOLLOW_LINKS))
-            .orElseFail(failed)
-            .flatMap: present =>
-              if present then ZIO.succeed(Placed.Occupied)
-              else ZIO.fail(failed),
-        _ => ZIO.succeed(Placed.Moved),
-      )
+    present(to, failed).flatMap: already =>
+      if already then ZIO.succeed(Placed.Occupied)
+      else
+        ZIO
+          .attemptBlocking(Files.move(from, to, StandardCopyOption.ATOMIC_MOVE))
+          .foldZIO(
+            _ =>
+              present(to, failed).flatMap: appeared =>
+                if appeared then ZIO.succeed(Placed.Occupied) else ZIO.fail(failed),
+            _ => ZIO.succeed(Placed.Moved),
+          )
+
+  private def present[E](path: Path, failed: E): IO[E, Boolean] =
+    ZIO.attemptBlocking(Files.exists(path, LinkOption.NOFOLLOW_LINKS)).orElseFail(failed)
 
   private def made[E](beside: Path, failed: E)(
       create: (Path, String) => Path

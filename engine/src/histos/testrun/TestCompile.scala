@@ -323,6 +323,7 @@ private[histos] object TestCompile:
         apis,
         permitted = linked.permitted,
       )
+      held  <- holdMeasured(coverage, linked.classDirs, module.name, cell.version)
       facts <- compileSuite(
         module,
         request,
@@ -331,7 +332,7 @@ private[histos] object TestCompile:
         hear,
       )
       _ <- onCompiled(facts)
-      _ <- forgetMeasured(coverage, linked.classDirs, module.name, cell.version)
+      _ <- restoreMeasured(coverage, held, module.name, cell.version)
     yield linked
 
   /** Scala 2.13 runs the instrumented classes with the scoverage runtime. Scala 3 already has it in the compiler. */
@@ -354,19 +355,35 @@ private[histos] object TestCompile:
                 CompileError.Toolchain(ToolchainMiss.Coverage(cell.version)),
               )
 
-  private def forgetMeasured(
+  /** A test compile loads upstream classes. Those classes record into their own directories, on top of the measurements
+    * their tests already wrote. Hold the files first and put them back, so the compile's own records are the only ones
+    * that disappear.
+    */
+  private def holdMeasured(
       coverage: Option[histos.coverage.CoverageCompile],
       dirs: List[Path],
+      module: ProjectName,
+      version: ScalaVersion,
+  ): IO[ModuleTestError, histos.coverage.Measurements.Held] =
+    coverage match
+      case None    => ZIO.succeed(histos.coverage.Measurements.Held(Nil, Nil))
+      case Some(_) =>
+        histos.coverage.Measurements
+          .hold(dirs)
+          .mapError(fault => ModuleTestError.Sources(module, version, CompileError.Io(fault)))
+
+  private def restoreMeasured(
+      coverage: Option[histos.coverage.CoverageCompile],
+      held: histos.coverage.Measurements.Held,
       module: ProjectName,
       version: ScalaVersion,
   ): IO[ModuleTestError, Unit] =
     coverage match
       case None    => ZIO.unit
       case Some(_) =>
-        ZIO.foreachDiscard(dirs): dir =>
-          histos.coverage.Measurements
-            .forget(dir)
-            .mapError(fault => ModuleTestError.Sources(module, version, CompileError.Io(fault)))
+        histos.coverage.Measurements
+          .restore(held)
+          .mapError(fault => ModuleTestError.Sources(module, version, CompileError.Io(fault)))
 
   private[testrun] def compileSuite(
       module: Module,
