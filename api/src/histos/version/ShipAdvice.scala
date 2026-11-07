@@ -10,8 +10,9 @@ object ShipAdvice:
   val releasesFile: String =
     "Create releases (an empty file is fine) or add a line: <ship> matches, <ship> moved, or <ship> unknown."
 
+  /** `publish release` in a development session. A local or snapshot write names HEAD and does not ask for this. */
   def development(ship: ShipName, compile: CiVersion): String =
-    s"${ship.value} compiles ${compile.render}, which is not published. $snapshotExport to publish snapshots, or export HISTOS_SESSION=release to publish ${compile.ship.render}. Then run $versionsCommand."
+    s"publishing ${ship.value} ${compile.ship.render} needs export HISTOS_SESSION=release. Then run $versionsCommand."
 
   def incomplete(error: SessionError): String =
     s"${error.message} $snapshotExport, or export HISTOS_SESSION=release. Then run $versionsCommand."

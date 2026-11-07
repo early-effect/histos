@@ -48,6 +48,7 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
           Workspace.work("histos-local-org").flatMap { repo =>
             for
               graph <- ZIO.fromEither(Projects(ships(Ship("demo").next(1, 2, 3)(app)), app)).orDieWith(blow)
+              _     <- LawGit.ready(repo)
               found <- publish(repo, graph, Nil, Map.empty, PublishWrite.Local).either
               wrote <- touched(repo)
             yield assertTrue(

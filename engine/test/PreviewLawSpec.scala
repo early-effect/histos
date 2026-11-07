@@ -1,7 +1,8 @@
 package histos.preview
 
 import histos.central.SnapshotRepository
-import histos.publish.LocalPublishError
+import histos.publish.{LawGit, LocalPublishError}
+import histos.version.SnapshotCoordinate
 import histos.select.SelectError
 import histos.version.{CiVersion, CommitSha, Refusal, SnapshotCoordinate, SnapshotPointer, VersionError}
 import histos.`scala`
@@ -35,25 +36,30 @@ object PreviewLawSpec extends ZIOSpecDefault:
   private val sha    = CommitSha("0123456789abcdef0123456789abcdef01234567")
 
   def spec = suite("preview laws")(
-    test("a development snapshot is idle, and a development local publish names the ci coordinate"):
+    test("a development local publish and a development snapshot publish name the commit coordinate"):
       catalog(module("app", Jvm)(scala3)) match
         case Left(_)      => ZIO.succeed(assertTrue(false))
         case Right(graph) =>
           ZIO.acquireRelease(directory("histos-preview-dev"))(delete).flatMap { repo =>
             for
+              sha       <- LawGit.ready(repo)
               _         <- Clock.instant
               local     <- Plan.publishLocal(repo, graph, Nil, Map.empty)
               snapshots <- Plan.publishSnapshots(repo, graph, Nil, Map.empty)
             yield
+              val revision     = SnapshotCoordinate(number, sha.abbreviate).render
               val localText    = Plan.renderPublish(local)
               val snapshotText = Plan.renderPublish(snapshots)
               assertTrue(
                 local.place == "ivy2Local",
                 localText.startsWith(local.place),
-                localText.contains(s"app demo ${CiVersion(number).render} selected"),
+                localText.contains(s"app demo $revision selected"),
+                !localText.contains(CiVersion(number).render),
                 snapshots.place == SnapshotRepository.central.root.render,
                 snapshotText.startsWith(snapshots.place),
-                snapshotText.contains(s"demo ${CiVersion(number).render} not published"),
+                snapshotText.contains(s"app demo $revision selected"),
+                !snapshotText.contains("not published"),
+                !snapshotText.contains(number.render + " selected"),
               )
           }
     ,

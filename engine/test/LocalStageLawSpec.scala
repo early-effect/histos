@@ -15,7 +15,8 @@ import java.nio.file.{Files, Path}
 import zio.*
 import zio.test.*
 
-/** A development publish compiles one library and writes the `-ci` jars. The compiler is the locked one, read offline.
+/** A development publish compiles one library and writes the snapshot coordinate of HEAD. The compiler is the locked
+  * one, read offline.
   */
 object LocalStageLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
@@ -23,7 +24,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
   private val app    = module("stage", Jvm)(scala3)
 
   def spec = suite("local stage")(
-    test("a development publish writes the ci jar, its sources, and its javadoc, and the pom has no dependencies"):
+    test("a development publish writes the snapshot jar, its sources, and its javadoc, and the pom has no dependencies"):
       ZIO.scoped {
         Workspace.work("histos-local-stage").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
@@ -35,6 +36,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                 val built  = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(app)), app)
                 for
                   graph <- ZIO.fromEither(built)
+                  sha   <- LawGit.ready(repo)
                   _     <- Workspace.writeString(source, "object Hello:\n  def ready: Int = 1\n")
                   _     <- Workspace.writeString(
                     repo.resolve("dependencies.lock"),
@@ -49,19 +51,21 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   jars    <- onDisk(maven, found.modules.flatMap(_.jar.toList))
                   sources <- onDisk(maven, found.modules.flatMap(_.sources.toList))
                   javadoc <- onDisk(maven, found.modules.flatMap(_.javadoc.toList))
+                  revision = coordinate(sha)
                 yield assertTrue(
                   found.skipped.isEmpty,
                   found.held.isEmpty,
                   found.refused.isEmpty,
                   found.modules.map(line =>
                     (line.group, line.artifact, line.revision, line.ship, line.unique, line.dependencies.isEmpty)
-                  ) == List((group, "stage_3", "1.2.3-ci", ShipName("demo"), None, true)),
+                  ) == List((group, "stage_3", revision, ShipName("demo"), None, true)),
                   jars == List(OnDisk(true, true, true)),
                   sources == List(OnDisk(true, true, true)),
                   javadoc == List(OnDisk(true, true, true)),
                   text.contains("<groupId>example.com</groupId>"),
                   text.contains("<artifactId>stage_3</artifactId>"),
-                  text.contains("<version>1.2.3-ci</version>"),
+                  text.contains(s"<version>$revision</version>"),
+                  !text.contains("-ci"),
                   !text.contains("<dependencies>"),
                 )
               }
@@ -69,7 +73,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
           }
         }
       },
-    test("a dependent module's pom names the upstream at the same ci revision"):
+    test("a dependent module's pom names the upstream at the same snapshot revision"):
       ZIO.scoped {
         Workspace.work("histos-local-edge").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
@@ -82,14 +86,9 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                 val built  = Projects
                   .organization(group)
                   .locked(ships(Ship("demo").next(1, 2, 3)(base, edge)), base, edge)
-                val block  =
-                  """    <dependency>
-                    |      <groupId>example.com</groupId>
-                    |      <artifactId>base_3</artifactId>
-                    |      <version>1.2.3-ci</version>
-                    |    </dependency>""".stripMargin
                 for
                   graph <- ZIO.fromEither(built)
+                  sha   <- LawGit.ready(repo)
                   _     <- Workspace.writeString(
                     repo.resolve("base").resolve("src").resolve("main").resolve("scala").resolve("Base.scala"),
                     "object Base:\n  def ready: Int = 1\n",
@@ -111,7 +110,14 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     onDisk(maven, line.jar.toList ++ line.sources.toList ++ line.javadoc.toList)
                   }
                   poms <- ZIO.foreach(found.modules)(pomText)
+                  revision = coordinate(sha)
                 yield {
+                  val block =
+                    s"""    <dependency>
+                       |      <groupId>example.com</groupId>
+                       |      <artifactId>base_3</artifactId>
+                       |      <version>$revision</version>
+                       |    </dependency>""".stripMargin
                   val coords = found.modules.map { line =>
                     val deps = line.dependencies.map(dep => (dep.group.value, dep.name.value, dep.version.value))
                     (line.artifact, line.revision, deps)
@@ -122,8 +128,8 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     found.held.isEmpty,
                     found.refused.isEmpty,
                     coords == List(
-                      ("base_3", "1.2.3-ci", Nil),
-                      ("edge_3", "1.2.3-ci", List(("example.com", "base_3", "1.2.3-ci"))),
+                      ("base_3", revision, Nil),
+                      ("edge_3", revision, List(("example.com", "base_3", revision))),
                     ),
                     disks == List.fill(2)(List.fill(3)(OnDisk(true, true, true))),
                     byPom.get("base_3").exists(text => !text.contains("<dependencies>")),
@@ -147,6 +153,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                 val built = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(pack)), pack)
                 for
                   graph <- ZIO.fromEither(built)
+                  sha   <- LawGit.ready(repo)
                   _     <- Workspace.writeString(
                     repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala"),
                     "object Hello:\n  def main(args: Array[String]): Unit = ()\n",
@@ -169,7 +176,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   found.held.isEmpty,
                   found.refused.isEmpty,
                   found.modules.map(line => (line.artifact, line.revision, line.dependencies.isEmpty)) == List(
-                    ("pack", "1.2.3-ci", true)
+                    ("pack", coordinate(sha), true)
                   ),
                   jars == List(OnDisk(true, true, true)),
                   sources == List(OnDisk(true, true, true)),
@@ -182,6 +189,9 @@ object LocalStageLawSpec extends ZIOSpecDefault:
         }
       },
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+
+  private def coordinate(sha: histos.version.CommitSha): String =
+    s"1.2.3-${sha.abbreviate.value}-SNAPSHOT"
 
   /** Captured before the workspace scope closes. `assertTrue` runs its arrow after that scope releases the directory. */
   private final case class OnDisk(underMaven: Boolean, zip: Boolean, sha256: Boolean)

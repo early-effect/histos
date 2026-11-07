@@ -24,7 +24,9 @@ object MessageLawSpec extends ZIOSpecDefault:
   private val unreadable =
     "could not read releases. Create releases (an empty file is fine) or add a line: <ship> matches, <ship> moved, or <ship> unknown."
   private val develop =
-    "histos compiles 1.2.3-ci, which is not published. export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default to publish snapshots, or export HISTOS_SESSION=release to publish 1.2.3. Then run histos run versions."
+    "publishing histos 1.2.3 needs export HISTOS_SESSION=release. Then run histos run versions."
+  private val noCommit =
+    "could not read the commit at HEAD. A snapshot coordinate is that commit."
 
   def spec = suite("message laws")(
     test("every select error names its sentence and its check"):
@@ -860,6 +862,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "a publish needs an organization. Name it with Projects.organization(organization\"com.example\")",
           "nothing publishes",
           develop,
+          noCommit,
           "ship 'histos' is not in the catalog",
           "'core' is not in a ship",
           "histos depends on snapshot dev.zio:zio:2.1.27-SNAPSHOT, so it is not published",
@@ -878,6 +881,7 @@ object MessageLawSpec extends ZIOSpecDefault:
         localPublishes.map(error => noted(error.diagnose)) == List(
           ("publish.failed", "histos help publish"),
           ("project.duplicate", "histos graph"),
+          ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),
           ("publish.failed", "histos help publish"),

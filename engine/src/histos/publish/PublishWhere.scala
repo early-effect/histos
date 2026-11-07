@@ -12,9 +12,10 @@ enum PublishWhere:
     case Snapshots(_, _) => "Snapshots"
 end PublishWhere
 
-/** Local writes the coordinate this session compiles, including `<ship>-ci`. Snapshots and a release refuse that
-  * coordinate. A release with no release coordinate stops before selection. When another ship is a release, the
-  * snapshot coordinate stays through selection so that ship is refused, and then it is not staged.
+/** Local and snapshots write the snapshot coordinate, or the release number when that session is already set. A
+  * development session is not a release. A release with no release coordinate stops before selection. When another
+  * ship is a release, the snapshot coordinate stays through selection so that ship is refused, and then it is not
+  * staged.
   */
 enum PublishWrite:
   case Local

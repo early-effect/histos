@@ -3,7 +3,7 @@ package histos.preview
 import histos.clean.Products
 import histos.plugin.PluginTaskId
 import histos.central.SnapshotRepository
-import histos.publish.{LocalPublishError, PublishName, PublishSelect, ShipWrite}
+import histos.publish.{LocalPublishError, PublishName, PublishSelect, PublishWrite, SessionSettle, ShipWrite}
 import histos.select.{SelectError, Selection}
 import histos.task.TaskId
 import histos.testrun.{ModuleTestError, SuitePatternError, TestCompile}
@@ -103,7 +103,7 @@ object Plan:
   ): IO[PreviewError, TestPlan] =
     modulePlan(repo, graph, projects, Tree.Test).map(TestPlan(_))
 
-  /** Reads the version decision already in the tree. Writes no jar. The place is Coursier's `ivy2Local`. */
+  /** Names the snapshot coordinate a local write would install. Writes no jar. The place is Coursier's `ivy2Local`. */
   def publishLocal(
       repo: Path,
       graph: ProjectGraph,
@@ -115,7 +115,7 @@ object Plan:
       .mapError(PreviewError.Publish(_))
       .flatMap(names => planned(repo, graph, names, env, Place.Local))
 
-  /** Reads the version decision already in the tree. Names Central. Writes no jar and opens no repository.
+  /** Names the snapshot coordinate a snapshot write would store. Names Central. Writes no jar and opens no repository.
     */
   def publishSnapshots(
       repo: Path,
@@ -135,10 +135,17 @@ object Plan:
       env: Map[String, String],
       place: Place,
   ): IO[PreviewError, PublishPlan] =
-    VersionTask
-      .decide(graph, repo, env)
-      .mapError(PreviewError.Version(_))
-      .flatMap(decision => ZIO.fromEither(publishPlan(graph, names, decision, place)))
+    val write = place match
+      case Place.Local     => PublishWrite.Local
+      case Place.Snapshots => PublishWrite.Snapshots
+    SessionSettle
+      .prepare(repo, graph.catalog, env, write)
+      .mapError(PreviewError.Publish(_))
+      .flatMap: settled =>
+        VersionTask
+          .decide(graph, repo, settled)
+          .mapError(PreviewError.Version(_))
+          .flatMap(decision => ZIO.fromEither(publishPlan(graph, names, decision, place)))
 
   /** Every product root. Does not read the graph and does not delete. */
   def cleanAll(repo: Path): CleanPlan =
@@ -361,7 +368,7 @@ object Plan:
       decision: Decision,
       place: Place,
   ): Either[PreviewError, PublishPlan] =
-    words(decision, graph.catalog, place).flatMap: found =>
+    words(decision, graph.catalog).flatMap: found =>
       val idle       = found.collect { case word: ShipWord.Idle => word }
       val held       = found.collect { case word: ShipWord.Held => word }
       val publishing = found.collect { case word: ShipWord.Publish => word }
@@ -385,7 +392,6 @@ object Plan:
   private def words(
       decision: Decision,
       catalog: histos.version.Catalog,
-      place: Place,
   ): Either[PreviewError, List[ShipWord]] =
     decision match
       case Decision.NoCatalog =>
@@ -393,14 +399,7 @@ object Plan:
       case Decision.Refused(refusals) =>
         Left(PreviewError.Version(VersionError.Refused(refusals)))
       case Decision.Develop(_, lines) =>
-        place match
-          case Place.Snapshots =>
-            Right(lines.toList.map(line => ShipWord.Idle(line.ship, line.compile.render)))
-          case Place.Local =>
-            lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
-              acc.flatMap: seen =>
-                membersOf(catalog, line.ship).map: mods =>
-                  seen :+ ShipWord.Publish(line.ship, line.compile.render, mods)
+        Right(lines.toList.map(line => ShipWord.Idle(line.ship, line.compile.render)))
       case Decision.Publish(_, lines) =>
         lines.toList.foldLeft[Either[PreviewError, List[ShipWord]]](Right(Nil)): (acc, line) =>
           acc.flatMap: seen =>
