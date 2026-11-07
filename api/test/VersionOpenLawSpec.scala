@@ -107,8 +107,7 @@ object VersionOpenLawSpec extends ZIOSpecDefault:
           s"the release registry was not checked, so nothing publishes. ${ShipAdvice.releasesFile}",
         ShipAdvice.unreadable == s"could not read releases. ${ShipAdvice.releasesFile}",
         ShipAdvice.development(histos, compile) ==
-          s"${histos.value} compiles ${compile.render}, which is not published. ${ShipAdvice.snapshotExport} " +
-          s"to publish snapshots, or export HISTOS_SESSION=release to publish ${one.render}. " +
+          s"publishing ${histos.value} ${one.render} needs export HISTOS_SESSION=release. " +
           s"Then run ${ShipAdvice.versionsCommand}.",
         ShipAdvice.incomplete(missing) ==
           s"${missing.message} ${ShipAdvice.snapshotExport}, or export HISTOS_SESSION=release. " +

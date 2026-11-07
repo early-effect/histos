@@ -271,11 +271,9 @@ object PublishLawSpec extends ZIOSpecDefault:
           case other => assertTrue(other == Left(LocalPublishError.NothingToPublish))
         }
       ,
-      test("a development session is not a snapshot"):
-        refuse(demo(module("app", Jvm)(scala3)), Map.empty, None, PublishWrite.Snapshots) {
-          case Left(LocalPublishError.Development(ship, compile)) =>
-            assertTrue(ship == ShipName("demo"), compile == CiVersion(number))
-          case other => assertTrue(other == Left(LocalPublishError.NothingToPublish))
+      test("a directory with no commit does not publish snapshots"):
+        refuse(demo(module("app", Jvm)(scala3)), Map.empty, None, PublishWrite.Snapshots) { found =>
+          assertTrue(found == Left(LocalPublishError.NoCommit))
         }
       ,
       test("a snapshot session without a registry is refused"):

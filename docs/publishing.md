@@ -4,7 +4,9 @@
 
 This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 1)(api, app))`. Editing this file does not upload it.
 
-The number in `.next(0, 2, 1)` is the next release. SNAPSHOT is not written in the catalog. A development session compiles `0.2.1-ci`. A snapshot session derives `0.2.1-<sha>-SNAPSHOT` and, on the default branch, the `0.2.1-SNAPSHOT` pointer. A release session publishes `0.2.1`.
+The number in `.next(0, 2, 1)` is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `0.2.1-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write `0.2.1-<sha>-SNAPSHOT`. On the default branch they also write the `0.2.1-SNAPSHOT` pointer. A release session publishes `0.2.1`, and that command still requires `HISTOS_SESSION=release`.
+
+`histos run versions` prints a session you name. `publish local` and `publish snapshots` do not need these exports. `publish release` does need `HISTOS_SESSION=release`.
 
 ```bash
 export HISTOS_SESSION=snapshot
@@ -65,7 +67,7 @@ The stock Sonatype publisher is one effect. It reads the ship version on the req
 
 - A snapshot (`Revision.Pointer`, the `<ship>-SNAPSHOT` form, or `Revision.Snapshot`, the unique coordinate) is the snapshot PUT.
 - A release (`Revision.Release`) is sign, then one portal bundle. The release branch signs. The snapshot branch does not.
-- A `-ci` coordinate (`Revision.Ci`) is not a Sonatype publish.
+- A `-ci` coordinate (`Revision.Ci`) is not a publish. The versions line still names it. `publish local` and `publish snapshots` do not write it.
 
 sbt and zipx already publish this way: one action, the version decides. The trait does not force two layers.
 
@@ -90,7 +92,7 @@ The local publisher's interface is Coursier, the library resolve already calls. 
 
 The high-level API is `coursier.Resolve` and `coursier.Fetch` ([API](https://get-coursier.io/docs/api)). Those types resolve and fetch. They do not publish. A local install is done when a later `Resolve`, with Coursier's default repositories, finds the coordinate. The test asks Coursier. It does not open `~/.m2` or `~/.ivy2`.
 
-`Publishing` does not take a `Path`. `publishLocal` does not take a directory. A test checks the install by resolving the coordinate through Coursier. The local effect does not sign. It accepts a snapshot, a release, and a `-ci` coordinate.
+`Publishing` does not take a `Path`. `publishLocal` does not take a directory. A test checks the install by resolving the coordinate through Coursier. The local effect does not sign. It installs a snapshot or a release. A development session installs the snapshot coordinate of HEAD. A release session already in the environment installs the release number.
 
 ## What a build overrides
 

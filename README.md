@@ -136,11 +136,14 @@ flowchart TD
 
 - A snapshot needs `SONATYPE_USERNAME` and `SONATYPE_PASSWORD`.
 - A release also needs `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
-- A `-ci` coordinate is not a Sonatype publish. `publish snapshots` and `publish release` fail that session before staging. `publishLocal` writes it.
+- `publish local` and `publish snapshots` write the snapshot coordinate of HEAD. They do not write `<ship>-ci`. A complete snapshot or pull-request session in the environment is kept. The pointer moves only on the default branch.
+- `publish release` publishes the ship number and requires `HISTOS_SESSION=release`.
 
-A catalog row is `ships(Ship("histos").next(0, 2, 1)(api, app))`. The number is the next release. Everyday compiles `0.2.1-ci`. `publish snapshots` derives the stored coordinate and the `0.2.1-SNAPSHOT` pointer. `0.0.1` is already on Central. `ship"..."` is only the number.
+A catalog row is `ships(Ship("histos").next(0, 2, 1)(api, app))`. The number is the next release. The versions line for a development session is `0.2.1-ci`. `publish snapshots` writes `0.2.1-<sha>-SNAPSHOT` and, on the default branch, the `0.2.1-SNAPSHOT` pointer. `0.0.1` is already on Central. `ship"..."` is only the number.
 
-A laptop publishes snapshots by naming the session. The catalog stays on the next release. `releases` may be empty.
+A laptop runs `./histos publish snapshots`. The commit at HEAD is the coordinate. Export the session only to choose a different commit, a pull request, or a release. The catalog stays on the next release. `releases` may be empty. An empty file means the catalog number is not released. `histos matches` means that number is already released, and both snapshot and release publishes are held.
+
+`histos run versions` prints a session you name. Publish does not need this block.
 
 ```bash
 export HISTOS_SESSION=snapshot
@@ -149,7 +152,7 @@ export HISTOS_BRANCH=default
 ./histos run versions
 ```
 
-`HISTOS_BRANCH=default` moves the `0.2.1-SNAPSHOT` pointer. `other` stores only the commit snapshot. `publish release` uses `export HISTOS_SESSION=release` and the same `releases` file. `histos doctor` warns `ship.should-bump` when that number is already released. It does not open a bump pull request.
+`HISTOS_BRANCH=default` moves the `0.2.1-SNAPSHOT` pointer when that session is already set. A checkout of the default branch does the same without the exports. `other` stores only the commit snapshot. `publish release` uses `export HISTOS_SESSION=release` and the same `releases` file. `histos doctor` warns `ship.should-bump` when that number is already released. It does not open a bump pull request.
 
 A dependency on an owned ship is a pin, not a revision string. Third-party coordinates stay `dep"..."`.
 
@@ -170,7 +173,7 @@ The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `pu
 
 Unset, `PGP_SECRET` is the key and `PGP_PASSPHRASE` unlocks it. `PGP_KEY_HEX`, when set, selects that fingerprint. `HISTOS_SIGNER=gpg` signs with gpg, and then the fingerprint is required. The release workflow sets `HISTOS_SESSION=release` on the publish step, then lists `SONATYPE_USERNAME`, `SONATYPE_PASSWORD`, `PGP_SECRET`, `PGP_PASSPHRASE`, and `PGP_KEY_HEX`.
 
-A token is a ship, an aggregate, or a module. No token publishes every ship the command can write. `publishLocal` does not take a directory and it does not write `~/.m2`. It accepts a snapshot, a release, and a `-ci` coordinate.
+A token is a ship, an aggregate, or a module. No token publishes every ship the command can write. `publishLocal` does not take a directory and it does not write `~/.m2`. It installs a snapshot, or a release when `HISTOS_SESSION=release`.
 
 `publish promote <deployment>` publishes a `VALIDATED` deployment. `publish drop <deployment>` drops the deployment first, then deletes the GitHub asset when that ship names one. A failed delete leaves the deployment dropped.
 

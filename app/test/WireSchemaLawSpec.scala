@@ -1080,7 +1080,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "SourceRead(module,version,platform,error) | " +
               "NoSources(module,version,platform) | Publish(error) | Read(path) | " +
               "NoOrganization() | NothingToPublish() | Development(ship,compile) | " +
-              "UnknownShip(ship) | NotPublished(module) | " +
+              "NoCommit() | UnknownShip(ship) | NotPublished(module) | " +
               "SnapshotDependency(ship,dependency) | Unknown(raw) | " +
               "UnpublishedDependency(module,dependency) | Facts(missing) | " +
               "BadDependency(organization,name,revision) | Credentials() | Io(path) | " +

@@ -127,6 +127,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
         .scoped {
           Workspace.work("histos-run-quiet").flatMap { repo =>
             val expected = LocalPublishError.Development(ShipName("demo"), CiVersion(number))
+            val noCommit = LocalPublishError.NoCommit
             for
               graph   <- load(Projects.organization(group)(ships(Ship("demo").next(1, 2, 3)(app)), app))
               runtime <- jdk
@@ -161,8 +162,8 @@ object PublishRunLawSpec extends ZIOSpecDefault:
               releaseNotes <- notes.get
               wrote        <- touched(repo)
             yield assertTrue(
-              snaps == Left(expected),
-              snapNotes == List(expected.message),
+              snaps == Left(noCommit),
+              snapNotes == List(noCommit.message),
               released == Left(ReleaseError.Stage(expected)),
               releaseNotes.nonEmpty,
               releaseNotes.forall(_ == expected.message),

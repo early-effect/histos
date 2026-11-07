@@ -13,7 +13,7 @@ import java.nio.file.{Files, Path}
 import zio.{Ref, Scope, ZIO, ZLayer}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 
-/** `publish local` compiles the module and installs that `-ci` coordinate where Coursier reads ivy2 local.
+/** `publish local` compiles the module and installs the snapshot coordinate where Coursier reads ivy2 local.
   */
 object PublishInstallLawSpec extends ZIOSpecDefault:
   private val scala3 = scala"3.10.0"
@@ -21,20 +21,20 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
   private val app    = module("runlaw", Jvm)(scala3)
 
   def spec = suite("publish install laws")(
-    test("a development publish installs the ci jar into ivy2 local and names that coordinate"):
+    test("a development publish installs the snapshot jar into ivy2 local and names that coordinate"):
       ZIO.scoped {
         Workspace.work("histos-publish-install").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
               ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val ivy = localRoot
+                val ivy    = localRoot
                 val source = repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
                 val store  = repo.resolve("store")
                 val built  = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(app)), app)
-                val jar    = placed(ivy, "jars", "jar")
-                val pom    = placed(ivy, "poms", "pom")
                 val run =
                   for
+                    sha <- LawGit.ready(repo)
+                    revision = s"1.2.3-${sha.abbreviate.value}-SNAPSHOT"
                     graph <- ZIO.fromEither(built).catchAll(error => ZIO.dieMessage(error.toString))
                     _     <- Workspace
                       .writeString(source, "object Hello:\n  def ready: Int = 1\n")
@@ -46,6 +46,8 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
                       )
                       .catchAll(error => ZIO.dieMessage(error.message))
                     notes <- Ref.make(List.empty[String])
+                    jar = placed(ivy, revision, "jars", "jar")
+                    pom = placed(ivy, revision, "poms", "pom")
                     found <- PublishRun
                       .local(
                         repo,
@@ -62,8 +64,9 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
                     onDisk  <- present(jar, pom)
                     _       <- wipe(ivy)
                   yield assertTrue(
-                    found.map(_.lines) == Right(List(s"${group.value} runlaw_3 1.2.3-ci")),
-                    said.contains(s"installing runlaw_3 1.2.3-ci"),
+                    found.map(_.lines) == Right(List(s"${group.value} runlaw_3 $revision")),
+                    said.contains(s"installing runlaw_3 $revision"),
+                    !said.exists(_.contains("-ci")),
                     onDisk,
                   )
                 run
@@ -83,8 +86,8 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
     Workspace.delete(root.resolve(group.value)).catchAll(error => ZIO.dieMessage(error.message))
 
   /** `Pattern.default`: `[organisation]/[module]/[revision]/[type]s/[artifact].[ext]`. */
-  private def placed(root: Path, kind: String, ext: String): Path =
-    root.resolve(group.value).resolve("runlaw_3").resolve("1.2.3-ci").resolve(kind).resolve(s"runlaw_3.$ext")
+  private def placed(root: Path, revision: String, kind: String, ext: String): Path =
+    root.resolve(group.value).resolve("runlaw_3").resolve(revision).resolve(kind).resolve(s"runlaw_3.$ext")
 
   private def localRoot: Path =
     val configured =

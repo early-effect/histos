@@ -687,6 +687,7 @@ object CodecSamples:
     LocalPublishError.NoOrganization,
     LocalPublishError.NothingToPublish,
     LocalPublishError.Development(ship, CiVersion(number)),
+    LocalPublishError.NoCommit,
     LocalPublishError.UnknownShip(ship),
     LocalPublishError.NotPublished(core),
     LocalPublishError.SnapshotDependency(ship, "dev.zio:zio:2.1.27-SNAPSHOT"),

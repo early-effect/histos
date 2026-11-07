@@ -18,7 +18,7 @@ The required check is the rule GitHub enforces on the repository's default branc
 
 Release checks read the catalog and `releases`. They do not open a bump pull request.
 
-- `ship.session` is an error when `HISTOS_SESSION` is `snapshot`, `pr`, or `release` and a required variable is missing. The fix is `export HISTOS_SESSION=snapshot HISTOS_SHA=$(git rev-parse HEAD) HISTOS_BRANCH=default`, then `histos run versions`. Development compiles `<ship>-ci`. `publish snapshots` and `publish release` in that session fail with the same next step.
+- `ship.session` is an error when `HISTOS_SESSION` is `snapshot`, `pr`, or `release` and a required variable is missing. The fix completes that session, then `histos run versions`. Development's versions line is `<ship>-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write the snapshot coordinate. `publish release` requires `HISTOS_SESSION=release`.
 - `ship.releases` is an error when a line catalog has no readable `releases` file. Create `releases`. An empty file is fine. A line is `<ship> matches`, `<ship> moved`, or `<ship> unknown`.
 - `ship.should-bump` is a warning when a catalog number is already `matches` or `moved`. Edit `Ship("name").next(...)`. Do not open a bump pull request.
 
