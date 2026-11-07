@@ -60,6 +60,7 @@ object build extends HistosBuild:
       .testDependencies(
         zioTest,
         zioTestSbt,
+        dep"rocks.earlyeffect::slayer:0.2.0",
         dep"io.grpc:grpc-stub:1.85.1",
       )
     val client = module("client", Native)(scala3)
