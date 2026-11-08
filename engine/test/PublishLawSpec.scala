@@ -70,16 +70,19 @@ object PublishLawSpec extends ZIOSpecDefault:
             written.exists { case (file, bytes) => file == DistLayout.jar(revision) && bytes == Chunk.single(1.toByte) },
           )
       ,
-      test("a timestamp is a channel revision, and a stored commit snapshot is not"):
-        val stamp = s"${number.render}-20261106.153000-1"
-        val bad   = s"${number.render}-20261306.153000-1"
+      test("a timestamp is a channel revision, and a stored commit snapshot is not a pointer timestamp"):
+        val stamp    = s"${number.render}-20261106.153000-1"
+        val shaStamp = s"${number.render}-${sha.abbreviate.value}-20261106.153000-1"
+        val bad      = s"${number.render}-20261306.153000-1"
         assertTrue(
           LauncherPin.validRevision(pointer.render, stamp),
+          LauncherPin.validRevision(stored.render, shaStamp),
           !LauncherPin.validRevision(pointer.render, stored.render),
+          !LauncherPin.validRevision(pointer.render, shaStamp),
           !LauncherPin.validRevision(pointer.render, bad),
         )
       ,
-      test("a stored commit snapshot does not move the channel, and two assets are refused"):
+      test("a stored commit snapshot has its own channel, and two assets are refused"):
         val app = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
         val cli = module("cli", Jvm)(scala3).assembly(MainClass("demo.Cli")).asset(asset"dist/cli.jar")
         val one = shipped(app)
@@ -91,11 +94,16 @@ object PublishLawSpec extends ZIOSpecDefault:
             val again  = published(moduleName, ship, pointer.render)
             val cliHit = published(ProjectName("cli"), ship, pointer.render)
             assertTrue(
-              DistChannel.plan(single, List(commit)) == Right(Nil),
-              DistChannel.plan(single, List(moved)).exists(_.map(_.pointer) == List(pointer.render)),
+              DistChannel.plan(single, List(commit)).exists(_.map(_.revision) == List(stored.render)),
+              DistChannel.plan(single, List(moved)).exists(_.map(_.revision) == List(pointer.render)),
+              DistChannel.plan(single, List(commit, moved)).exists(
+                _.map(_.revision) == List(stored.render, pointer.render)
+              ),
+              !DistChannel.plan(single, List(commit)).exists(_.exists(_.revision == pointer.render)),
               DistChannel.plan(single, List(moved, again)) ==
                 Left(LocalPublishError.Stock(s"demo app published more than one ${pointer.render}")),
               DistChannel.plan(both, List(moved, cliHit)) == Left(LocalPublishError.Stock("demo names two assets")),
+              DistChannel.plan(both, List(commit)) == Left(LocalPublishError.Stock("demo names two assets")),
             )
           case _ => assertTrue(one.isRight, two.isRight)
       ,

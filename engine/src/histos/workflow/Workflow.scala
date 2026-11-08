@@ -333,21 +333,18 @@ object Workflow:
       case Nil   => Right(None)
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
 
-  /** A ship that names an asset. The workflow publishes snapshots, and on the default branch uploads the dist channel.
-    * An empty asset list emits nothing, so update deletes a stale copy.
+  /** A ship that names an asset. The workflow publishes the commit coordinate and moves the pointer. An empty asset
+    * list emits nothing, so update deletes a stale copy.
     */
   private def snapshotWorkflow(graph: ProjectGraph): Option[RenderedWorkflow] =
     if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
       Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
     else None
 
-  /** `HISTOS_BRANCH` is `default` only on the repository's default branch. That is the session that names the pointer.
-    * Another ref stores the commit coordinate and does not upload a channel. The assembly step is the same condition:
-    * the channel reads the asset file, and `./histos assembly` writes it.
+  /** Assembly always runs. The channel reads the asset file, and `./histos assembly` writes it. `HISTOS_BRANCH` is
+    * `default` so the pointer moves from any ref.
     */
   private def snapshotDocument(graph: ProjectGraph): String =
-    val branch =
-      "github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'default' || 'other'"
     val lines = List(
       "name: snapshots",
       "on:",
@@ -363,13 +360,12 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli(graph, "snapshots", build = true) ++ List(
-      s"      - if: ${quote(OnDefaultBranch)}",
-      s"        run: ${quote("./histos assembly")}",
+      s"      - run: ${quote("./histos assembly")}",
       s"      - run: ${quote("./histos publish snapshots")}",
       "        env:",
       "          HISTOS_SESSION: snapshot",
       "          HISTOS_SHA: ${{ github.sha }}",
-      s"          HISTOS_BRANCH: $${{ $branch }}",
+      "          HISTOS_BRANCH: default",
       "          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}",
       "          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}",
       "          GITHUB_TOKEN: ${{ github.token }}",

@@ -36,6 +36,10 @@ object AssetLawSpec extends ZIOSpecDefault:
             repo.name == "demo",
             AssetRepo.from("demo") == Left(AssetError.Repository("demo")),
             AssetRepo.from("a/b/c") == Left(AssetError.Repository("a/b/c")),
+            AssetAccess.repositoryOf("https://github.com/early-effect/histos.git").contains("early-effect/histos"),
+            AssetAccess.repositoryOf("git@github.com:early-effect/histos.git").contains("early-effect/histos"),
+            AssetAccess.repositoryOf("ssh://git@github.com/early-effect/histos").contains("early-effect/histos"),
+            AssetAccess.repositoryOf("not-a-remote").isEmpty,
           )
     ,
     test("an asset upload without a token or a repository is refused before a socket"):
