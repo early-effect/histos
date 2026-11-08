@@ -5,7 +5,21 @@ import histos.native.NativeOrigin
 import histos.plugin.RepoPath
 import histos.supply.{ApiCall, Net, OutageStrategy, Reply, RepoName, SourceName, SupplyDiagnostic, SupplyFault}
 import histos.toolchain.Architecture
-import histos.version.{Catalog, Registry, RegistryError, Ship, ShipDiagnostic, ShipName, ShipNumber, TagRelation}
+import histos.central.FeedError
+import histos.publish.{LauncherChannel, LauncherChoice}
+import histos.version.{
+  BumpReason,
+  Catalog,
+  PinLag,
+  Registry,
+  RegistryError,
+  Ship,
+  ShipDiagnostic,
+  ShipName,
+  ShipNumber,
+  SnapshotPointer,
+  TagRelation,
+}
 import histos.workspace.Workspace
 import histos.{HttpUrl, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
 
@@ -21,13 +35,13 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
   private val ship     = ShipName.trusted("core")
   private val number   = ShipNumber.trusted(1, 2, 3)
   private val module   = ProjectName.trusted("core")
-  private val line = row(ship, number, ::(module, Nil))
+  private val line     = row(ship, number, ::(module, Nil))
 
   private def row(name: ShipName, number: ShipNumber, modules: ::[ProjectName]): Ship.Line =
     Ship.Line(name, number, modules) match
       case line: Ship.Line => line
-  private val catalog  = Catalog.Lines(::(line, Nil))
-  private val creds    = Map("SONATYPE_USERNAME" -> user, "SONATYPE_PASSWORD" -> password)
+  private val catalog = Catalog.Lines(::(line, Nil))
+  private val creds   = Map("SONATYPE_USERNAME" -> user, "SONATYPE_PASSWORD" -> password)
 
   def spec = suite("doctor probe laws")(
     test("central stays unread until both credentials exist, and a portal answer is not a pass by default"):
@@ -241,25 +255,65 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
       )
     ,
     test("an empty catalog is ok, a missing releases file is found, and a matches line is a bump"):
-      val empty   = ShipChecks.outcomes(Catalog.Empty, Map.empty, ReleasesFile.Missing)
+      val empty   = ShipChecks.outcomes(Catalog.Empty, Map.empty, ReleasesFile.Missing, Map.empty)
       val missing = ShipChecks.releases(catalog, ReleasesFile.Missing)
       val garbage = ShipChecks.releases(catalog, ReleasesFile.Text("not a line"))
       val read    = ShipChecks.releases(catalog, ReleasesFile.Text("core matches"))
-      val bump    = ShipChecks.bumps(catalog, ReleasesFile.Text("core matches"))
-      val moved   = ShipChecks.bumps(catalog, ReleasesFile.Text("core moved"))
-      val unknown = ShipChecks.bumps(catalog, ReleasesFile.Text("core unknown"))
+      val bump    = ShipChecks.bumps(catalog, ReleasesFile.Text("core matches"), Map.empty)
+      val moved   = ShipChecks.bumps(catalog, ReleasesFile.Text("core moved"), Map.empty)
+      val unknown = ShipChecks.bumps(catalog, ReleasesFile.Text("core unknown"), Map.empty)
       val session = ShipChecks.session(catalog, Map(histos.version.Session.Key -> "nope"))
       assertTrue(
         empty.forall(passed),
         found(missing),
         found(garbage),
         read == Outcome.Ok(ShipChecks.releasesId, "releases was read"),
-        bump == List(Outcome.Found(ShipDiagnostic.ShouldBump(ship, number, false))),
-        moved == List(Outcome.Found(ShipDiagnostic.ShouldBump(ship, number, true))),
+        bump == List(Outcome.Found(ShipDiagnostic.ShouldBump(ship, number, BumpReason.Tagged))),
+        moved == List(Outcome.Found(ShipDiagnostic.ShouldBump(ship, number, BumpReason.Shadowed))),
         unknown == List(Outcome.Ok(ShipChecks.bumpId, "catalog numbers are not released")),
         found(session),
         Registry.parse(List("core matches", "core moved")) == Left(RegistryError.Duplicate(ship)),
         TagRelation.from("matches") == Right(TagRelation.Matches),
+      )
+    ,
+    test("a listed release at or above the catalog number is a bump, below is not, and no answer is skipped"):
+      val part    = Gen.int(0, 3)
+      val numbers = (part <*> part <*> part).map((major, minor, patch) => ShipNumber.trusted(major, minor, patch))
+      val down    = FeedError.Unreachable("https://repo.test/maven-metadata.xml")
+      check(numbers): listed =>
+        val published = ShipChecks.bumps(catalog, ReleasesFile.Missing, Map(ship -> Listing.Newest(Some(listed))))
+        val expected  =
+          if Ordering[ShipNumber].gteq(listed, number) then
+            List(Outcome.Found(ShipDiagnostic.ShouldBump(ship, number, BumpReason.Published(listed))))
+          else List(Outcome.Ok(ShipChecks.bumpId, "releases was not read"))
+        val tagged =
+          ShipChecks.bumps(catalog, ReleasesFile.Text("core matches"), Map(ship -> Listing.Unreachable(down)))
+        val none = ShipChecks.bumps(catalog, ReleasesFile.Missing, Map(ship -> Listing.Newest(None)))
+        val gone = ShipChecks.bumps(catalog, ReleasesFile.Missing, Map(ship -> Listing.Unreachable(down)))
+        assertTrue(
+          published == expected,
+          tagged == List(Outcome.Found(ShipDiagnostic.ShouldBump(ship, number, BumpReason.Tagged))),
+          none == List(Outcome.Ok(ShipChecks.bumpId, "releases was not read")),
+          gone.collect { case Outcome.Skipped(id, probe, _) => (id, probe) } ==
+            List((ShipChecks.bumpId, Probe.Registry)),
+        )
+    ,
+    test("a pin a published release passed is that lag, a current pin is ok, and no answer is skipped"):
+      val newer   = ShipNumber.trusted(1, 3, 0)
+      val down    = FeedError.Status("https://repo.test/maven-metadata.xml", 500)
+      val release = LauncherChoice.Release(number)
+      val line    = LauncherChoice.Pointer(LauncherChannel.Line(SnapshotPointer(number)))
+      assertTrue(
+        ShipChecks.pin(Some(release), Listing.Newest(Some(newer))) ==
+          Outcome.Found(ShipDiagnostic.PinBehind(PinLag.NewerRelease(number, newer))),
+        ShipChecks.pin(Some(line), Listing.Newest(Some(number))) ==
+          Outcome.Found(ShipDiagnostic.PinBehind(PinLag.LineReleased(number, number))),
+        passed(ShipChecks.pin(Some(release), Listing.Newest(Some(number)))),
+        passed(ShipChecks.pin(Some(line), Listing.Newest(None))),
+        passed(ShipChecks.pin(None, Listing.Newest(Some(newer)))),
+        ShipChecks.pin(Some(release), Listing.Unreachable(down)) match
+          case Outcome.Skipped(id, probe, _) => id == ShipChecks.pinId && probe == Probe.Registry
+          case _                             => false,
       )
     ,
     test("json quotes a title, and checks sort by id"):

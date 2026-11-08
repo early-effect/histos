@@ -49,9 +49,11 @@ enum Area:
   case Toolchain, BuildDefinition, Workflows, RepoSettings, SupplyChain, SitePublish, Release
   case Plugin(id: PluginId)
 
-/** What a check reads. A missing probe is [[Outcome.Skipped]], never a crash. */
+/** What a check reads. A missing probe is [[Outcome.Skipped]], never a crash. `Registry` is the Maven metadata a
+  * release is listed in.
+  */
 enum Probe:
-  case Local, GitHubRead, GitHubAdmin, AppToken, JobEnv
+  case Local, GitHubRead, GitHubAdmin, AppToken, JobEnv, Registry
 
 enum Level derives CanEqual:
   case Error, Warning, Info

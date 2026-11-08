@@ -3,6 +3,7 @@ package histos.workflow
 import histos.doctor.Suggest
 import histos.plugin.{CiExtra, CiHeader}
 import histos.program.ClientBinary
+import histos.publish.{DistLayout, DistPlatform}
 import histos.resolve.PlatformToken
 import histos.schedule.CacheNamespace
 import histos.version.{Catalog, Ship}
@@ -10,6 +11,7 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
   Axis,
+  ClientBuilds,
   CoverageFloors,
   CoverageJob,
   DocCheck,
@@ -145,14 +147,17 @@ object Workflow:
     * that must not wake `ci.yml`.
     */
   def renderAll(graph: ProjectGraph, sona: Publishing)(using CiBranch): Either[CiError, List[RenderedWorkflow]] =
-    prepared(graph).flatMap: (body, files) =>
-      releaseWorkflow(graph, sona).map: release =>
-        val promote =
-          release match
-            case None => Nil
-            case _    => promoteWorkflow(graph, sona).toList
-        val snapshots = snapshotWorkflow(graph).toList
-        RenderedWorkflow(fileName, body) :: release.toList ++ promote ++ snapshots ++ SupplyYaml.files(graph) ++ files
+    for
+      (body, files) <- prepared(graph)
+      release       <- releaseWorkflow(graph, sona)
+      snapshots     <- snapshotWorkflow(graph)
+    yield
+      val promote =
+        release match
+          case None => Nil
+          case _    => promoteWorkflow(graph, sona).toList
+      RenderedWorkflow(fileName, body) :: release.toList ++ promote ++ snapshots.toList ++ SupplyYaml.files(graph) ++
+        files
 
   private def prepared(graph: ProjectGraph)(using branch: CiBranch): Either[CiError, (String, List[RenderedWorkflow])] =
     for
@@ -185,7 +190,7 @@ object Workflow:
         if native then List(s"LLVM-$version-Linux-X64.tar.xz") else Nil
       val client = installShip(graph, graph.catalog.ships) match
         case None    => Nil
-        case Some(_) => DistPlatforms.map { case (_, _, archive) => s"LLVM-$version-$archive.tar.xz" }
+        case Some(_) => DistPlatform.values.toList.map(platform => llvmArchive(version, clientHost(platform)))
       (linux ++ client).distinct
 
   def differs(rendered: String, committed: String): Either[CiError, Unit] =
@@ -334,17 +339,40 @@ object Workflow:
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
 
   /** A ship that names an asset. The workflow publishes the commit coordinate and moves the pointer. An empty asset
-    * list emits nothing, so update deletes a stale copy.
+    * list emits nothing, so update deletes a stale copy. A ship that asks for snapshot clients and is not the install
+    * ship fails the render, because no job would link them.
     */
-  private def snapshotWorkflow(graph: ProjectGraph): Option[RenderedWorkflow] =
-    if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
-      Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
-    else None
+  private def snapshotWorkflow(graph: ProjectGraph): Either[CiError, Option[RenderedWorkflow]] =
+    snapshotLink(graph).map: link =>
+      if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
+        Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph, link)))
+      else None
+
+  private def snapshotLink(graph: ProjectGraph): Either[CiError, SnapshotLink] =
+    val install = installShip(graph, graph.catalog.ships)
+    graph.catalog.ships.filter(asksSnapshotClients).filterNot(ship => install.exists(_.ship.name == ship.name)) match
+      case ship :: _ => Left(CiError.SnapshotClients(ship.name))
+      case Nil       =>
+        install.filter(found => asksSnapshotClients(found.ship)) match
+          case None        => Right(SnapshotLink.JarOnly)
+          case Some(found) =>
+            clientHosts(found.llvm.value).map: hosts =>
+              SnapshotLink.WithClients(clientJob(graph, Nil, buildAssembly(graph), found.llvm.value, hosts))
+
+  private def asksSnapshotClients(ship: Ship): Boolean =
+    ship.clients match
+      case ClientBuilds.Releases             => false
+      case ClientBuilds.ReleasesAndSnapshots => true
 
   /** Assembly always runs. The channel reads the asset file, and `./histos assembly` writes it. `HISTOS_BRANCH` is
-    * `default` so the pointer moves from any ref.
+    * `default` so the pointer moves from any ref. With clients, the publish job waits for the client matrix and
+    * downloads each artifact where `publish snapshots` reads it.
     */
-  private def snapshotDocument(graph: ProjectGraph): String =
+  private def snapshotDocument(graph: ProjectGraph, link: SnapshotLink): String =
+    val (clients, needs, grant, fetch) = link match
+      case SnapshotLink.JarOnly          => (Nil, Nil, Nil, Nil)
+      case SnapshotLink.WithClients(job) =>
+        (job, List("    needs: client"), List("      actions: read"), downloadClients)
     val lines = List(
       "name: snapshots",
       "on:",
@@ -352,15 +380,19 @@ object Workflow:
       "permissions:",
       "  contents: read",
       "jobs:",
-      "  snapshots:",
-      s"    runs-on: $Runner",
+    ) ++ clients ++ List(
+      "  snapshots:"
+    ) ++ needs ++ List(
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
+    ) ++ grant ++ List(
       "      contents: write",
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli(graph, "snapshots", build = true) ++ List(
-      s"      - run: ${quote("./histos assembly")}",
+      s"      - run: ${quote("./histos assembly")}"
+    ) ++ fetch ++ List(
       s"      - run: ${quote("./histos publish snapshots")}",
       "        env:",
       "          HISTOS_SESSION: snapshot",
@@ -372,6 +404,15 @@ object Workflow:
       "          GITHUB_REPOSITORY: ${{ github.repository }}",
     )
     lines.mkString("\n") + "\n"
+
+  /** One directory per artifact, `dist/clients/client-<platform>`, which is [[DistLayout.builtClient]]. */
+  private def downloadClients: List[String] =
+    List(
+      s"      - uses: ${ActionPins.downloadArtifact.line}",
+      "        with:",
+      s"          pattern: ${DistLayout.ClientArtifact}*",
+      s"          path: ${DistLayout.BuiltClients}",
+    )
 
   /** Promote follows a release file. An empty catalog emits neither, so update deletes a stale copy. */
   private def promoteWorkflow(graph: ProjectGraph, sona: Publishing): Option[RenderedWorkflow] =
@@ -393,13 +434,13 @@ object Workflow:
         graph,
         ship,
         sona,
-        if install.exists(_.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish,
+        if install.exists(_.ship.name == ship.name) then ReleaseShape.WithInstall else ReleaseShape.Publish,
       )
     )
     install match
-      case None       => Right(lines.mkString("\n") + "\n")
-      case Some(ship) =>
-        installJobs(graph, ships, ship).map(extra => (lines ++ extra).mkString("\n") + "\n")
+      case None        => Right(lines.mkString("\n") + "\n")
+      case Some(found) =>
+        installJobs(graph, ships, found).map(extra => (lines ++ extra).mkString("\n") + "\n")
 
   private def releaseJob(graph: ProjectGraph, ship: Ship, sona: Publishing, shape: ReleaseShape): List[String] =
     val name      = ship.name.value
@@ -441,14 +482,17 @@ object Workflow:
       "          if-no-files-found: error",
     )
 
-  /** One non-snapshot ship that names an asset, and a native client the launcher can exec. */
-  private def installShip(graph: ProjectGraph, ships: List[Ship]): Option[Ship] =
-    val llvm = graph.runnerTools.llvm
-    if !ClientBinary.present(graph) || llvm.isEmpty then None
-    else
-      ships.filter(ship => releaseVersion(ship) && assetMember(graph, ship)) match
-        case ship :: Nil => Some(ship)
-        case _           => None
+  /** The ship whose publishes link the native client, and the LLVM revision that links it. */
+  private final case class Install(ship: Ship, llvm: ToolRevision)
+
+  /** One non-snapshot ship that names an asset, a native client the launcher can exec, and an LLVM pin. */
+  private def installShip(graph: ProjectGraph, ships: List[Ship]): Option[Install] =
+    graph.runnerTools.llvm match
+      case Some(llvm) if ClientBinary.present(graph) =>
+        ships.filter(ship => releaseVersion(ship) && assetMember(graph, ship)) match
+          case ship :: Nil => Some(Install(ship, llvm))
+          case _           => None
+      case _ => None
 
   /** The catalog number is the next release. A snapshot is a session, not a catalog row. */
   private def releaseVersion(ship: Ship): Boolean =
@@ -457,7 +501,7 @@ object Workflow:
 
   private def shipVersion(ship: Ship): String =
     ship match
-      case Ship.Line(_, number, _, _, _) => number.render
+      case line: Ship.Line => line.number.render
 
   private def assetMember(graph: ProjectGraph, ship: Ship): Boolean =
     ship.members.toList.exists: name =>
@@ -465,40 +509,57 @@ object Workflow:
         case Some(module: Module) => module.asset.isDefined
         case _                    => false
 
-  private def installJobs(graph: ProjectGraph, ships: List[Ship], ship: Ship): Either[CiError, List[String]] =
-    graph.runnerTools.llvm match
-      case None         => Right(Nil)
-      case Some(pinned) =>
-        val revision = pinned.value
-        val needed   = ships.map(row => s"release-${row.name.value}")
-        clientHosts(revision).map: hosts =>
-          clientJob(graph, needed, revision, hosts) ++ distJob(graph, shipVersion(ship))
+  private def installJobs(graph: ProjectGraph, ships: List[Ship], install: Install): Either[CiError, List[String]] =
+    val revision = install.llvm.value
+    val needed   = ships.map(row => s"release-${row.name.value}")
+    clientHosts(revision).map: hosts =>
+      clientJob(graph, needed, fetchAssembly(graph, Bootstrap.Required), revision, hosts) ++
+        distJob(graph, shipVersion(install.ship))
+
+  /** The runner that links one platform's client, and the LLVM release name for that runner. */
+  private final case class ClientHost(runner: String, archive: String)
+
+  private def clientHost(platform: DistPlatform): ClientHost =
+    platform match
+      case DistPlatform.LinuxX86_64  => ClientHost(Runner, "Linux-X64")
+      case DistPlatform.MacosAarch64 => ClientHost("macos-26", "macOS-ARM64")
+
+  private def llvmArchive(revision: String, host: ClientHost): String =
+    s"LLVM-$revision-${host.archive}.tar.xz"
 
   private def clientHosts(revision: String): Either[CiError, List[String]] =
-    DistPlatforms.foldLeft[Either[CiError, List[String]]](Right(Nil)):
-      case (left @ Left(_), _)                         => left
-      case (Right(lines), (platform, runner, archive)) =>
-        val file = s"LLVM-$revision-$archive.tar.xz"
+    DistPlatform.values.toList.foldLeft[Either[CiError, List[String]]](Right(Nil)):
+      case (left @ Left(_), _)      => left
+      case (Right(lines), platform) =>
+        val host = clientHost(platform)
+        val file = llvmArchive(revision, host)
         LlvmDigest
           .of(file)
           .map: hex =>
             lines ++ List(
-              s"          - runner: $runner",
-              s"            platform: $platform",
+              s"          - runner: ${host.runner}",
+              s"            platform: ${platform.token}",
               s"            archive: $file",
               s"            sha256: $hex",
             )
 
+  /** The client matrix. A release waits on its publish jobs and runs that assembly. A snapshot needs no job first and
+    * builds the tree when the pinned jar is too old, the same as the snapshots job.
+    */
   private def clientJob(
       graph: ProjectGraph,
       needed: List[String],
+      bootstrap: List[String],
       revision: String,
       hosts: List[String],
   ): List[String] =
+    val needs = needed match
+      case Nil   => Nil
+      case names => List(s"    needs: [${names.mkString(", ")}]")
     List(
-      "  client:",
-      s"    needs: [${needed.mkString(", ")}]",
-      "    runs-on: ${{ matrix.runner }}",
+      "  client:"
+    ) ++ needs ++ List(
+      "    runs-on: ${{ matrix.runner }}"
     ) ++ jobLimit(graph) ++ List(
       "    strategy:",
       "      fail-fast: false",
@@ -510,7 +571,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ fetchAssembly(graph, Bootstrap.Required) ++ SupplyYaml
+    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ bootstrap ++ SupplyYaml
       .preflight(
         graph,
         "client",
@@ -520,7 +581,7 @@ object Workflow:
       s"      - run: ${quote("./histos client")}",
       s"      - uses: ${ActionPins.uploadArtifact.line}",
       "        with:",
-      "          name: client-${{ matrix.platform }}",
+      "          name: " + DistLayout.ClientArtifact + "${{ matrix.platform }}",
       "          path: dist/histos-client",
       "          if-no-files-found: error",
     )
@@ -635,12 +696,6 @@ object Workflow:
       "          GH_TOKEN: ${{ github.token }}",
     )
 
-  /** Install platforms. The archive token is the LLVM release name for that runner. */
-  private val DistPlatforms: List[(String, String, String)] = List(
-    ("linux-x86_64", "ubuntu-26.04", "Linux-X64"),
-    ("macos-aarch64", "macos-26", "macOS-ARM64"),
-  )
-
   /** Promote does not sign, so this file does not list `secretNames`. */
   private val promoteSecrets: List[String] =
     List("SONATYPE_USERNAME", "SONATYPE_PASSWORD")
@@ -695,6 +750,11 @@ object Workflow:
   private enum ReleaseShape:
     case Publish
     case WithInstall
+
+  /** A snapshot publishes the jar alone, or waits on this client matrix job. */
+  private enum SnapshotLink:
+    case JarOnly
+    case WithClients(job: List[String])
 
   /** On a push, `github.ref` is `refs/heads/<branch>` and `repository.default_branch` is the short name. */
   private val OnDefaultBranch: String =

@@ -16,7 +16,7 @@ import histos.central.{
   Revision as CentralRevision,
   SnapshotRepository,
 }
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.version.Revision as ShipRevision
 import histos.{
   FollowUp,
@@ -108,7 +108,7 @@ object SonaStock:
             .tapError(error => note(centralFault(request, error).message))
             .mapError(centralFault(request, _))
         unique <- done match
-          case Published.Snapshot(unique, _) => ZIO.succeed(unique.value)
+          case Published.Snapshot(unique, _)  => ZIO.succeed(unique.value)
           case Published.Local(_, _, _, _, _) =>
             ZIO.fail(PublishFault.Refused("the snapshot repository returned a local coordinate"))
       yield PublishedModule(
@@ -121,7 +121,7 @@ object SonaStock:
         module.sources,
         module.javadoc,
         module.ship,
-        Sha256.of(jar),
+        Sha256Digest.of(jar),
         Some(unique),
         deps,
       ).rendered(None)
@@ -168,7 +168,7 @@ object SonaStock:
           module.sources,
           module.javadoc,
           module.ship,
-          Sha256.of(jar),
+          Sha256Digest.of(jar),
           None,
           deps,
         )
@@ -204,14 +204,14 @@ object SonaStock:
 
   private def releaseFault(error: ReleaseError): PublishFault =
     error match
-      case ReleaseError.Credentials                          => PublishFault.Credentials
-      case ReleaseError.Rejected                             => PublishFault.Rejected
-      case ReleaseError.Signer(_)                            => PublishFault.Signer
-      case ReleaseError.Portal(_)                            => PublishFault.Portal
-      case ReleaseError.Bundle(_)                            => PublishFault.Bundle
+      case ReleaseError.Credentials                                     => PublishFault.Credentials
+      case ReleaseError.Rejected                                        => PublishFault.Rejected
+      case ReleaseError.Signer(_)                                       => PublishFault.Signer
+      case ReleaseError.Portal(_)                                       => PublishFault.Portal
+      case ReleaseError.Bundle(_)                                       => PublishFault.Bundle
       case ReleaseError.Client(histos.central.PortalError.Unauthorized) =>
         PublishFault.Rejected
-      case ReleaseError.Client(_)                            => PublishFault.Client
+      case ReleaseError.Client(_)    => PublishFault.Client
       case ReleaseError.Io(path)     => PublishFault.Write(path)
       case ReleaseError.Record(ship) => PublishFault.Record(ship)
       case ReleaseError.Stage(error) => PublishFault.Refused(error.message)

@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.cache.ContentStore
-import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
+import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256, Sha256Digest}
 import histos.schedule.{CacheError, Digest}
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, IoFault, Workspace}
@@ -60,8 +60,8 @@ object CompileReplayLawSpec extends ZIOSpecDefault:
           val classes   = dir.resolve("classes")
           val analysis  = dir.resolve("analysis")
           val request   = cell(classes, analysis, List(dir.resolve("A.scala")))
-          val key       = Sha256.of(Chunk.fromArray("compile-replay".getBytes(StandardCharsets.UTF_8)))
-          val other     = Sha256.of(Chunk.fromArray("other-key".getBytes(StandardCharsets.UTF_8)))
+          val key       = Sha256Digest.of(Chunk.fromArray("compile-replay".getBytes(StandardCharsets.UTF_8)))
+          val other     = Sha256Digest.of(Chunk.fromArray("other-key".getBytes(StandardCharsets.UTF_8)))
           val original  = classBytes("demo/A", "n")
           val changed   = classBytes("demo/A", "m")
           val classFile = classes.resolve("demo").resolve("A.class")
@@ -131,7 +131,7 @@ object CompileReplayLawSpec extends ZIOSpecDefault:
           val classes   = dir.resolve("classes")
           val analysis  = dir.resolve("analysis")
           val request   = cell(classes, analysis, Nil)
-          val key       = Sha256.of(Chunk.fromArray("corrupt-replay".getBytes(StandardCharsets.UTF_8)))
+          val key       = Sha256Digest.of(Chunk.fromArray("corrupt-replay".getBytes(StandardCharsets.UTF_8)))
           val classFile = classes.resolve("A.class")
           val leftover  = classes.resolve("B.class")
           val store     = ContentStore.in(dir.resolve("cas"))
@@ -166,7 +166,7 @@ object CompileReplayLawSpec extends ZIOSpecDefault:
           val classes   = dir.resolve("classes")
           val analysis  = dir.resolve("analysis")
           val request   = cell(classes, analysis, Nil)
-          val key       = Sha256.of(Chunk.fromArray("slip-replay".getBytes(StandardCharsets.UTF_8)))
+          val key       = Sha256Digest.of(Chunk.fromArray("slip-replay".getBytes(StandardCharsets.UTF_8)))
           val classFile = classes.resolve("A.class")
           val store     = ContentStore.in(dir.resolve("cas"))
           Digest.from(key.value) match
@@ -194,7 +194,7 @@ object CompileReplayLawSpec extends ZIOSpecDefault:
           val classes  = dir.resolve("classes")
           val analysis = dir.resolve("analysis")
           val request  = cell(classes, analysis, Nil)
-          val key      = Sha256.of(Chunk.fromArray("recall-bytes".getBytes(StandardCharsets.UTF_8)))
+          val key      = Sha256Digest.of(Chunk.fromArray("recall-bytes".getBytes(StandardCharsets.UTF_8)))
           for
             _      <- Workspace.writeString(classes.resolve("A.class"), "one")
             _      <- Workspace.writeString(analysis.resolve("inc.zip"), "not-zinc")
@@ -211,7 +211,7 @@ object CompileReplayLawSpec extends ZIOSpecDefault:
           val classes  = dir.resolve("classes")
           val analysis = dir.resolve("analysis")
           val request  = cell(classes, analysis, Nil)
-          val key      = Sha256.of(Chunk.fromArray("missing-classes".getBytes(StandardCharsets.UTF_8)))
+          val key      = Sha256Digest.of(Chunk.fromArray("missing-classes".getBytes(StandardCharsets.UTF_8)))
           val store    = ContentStore.in(dir.resolve("cas"))
           Digest.from(key.value) match
             case None =>

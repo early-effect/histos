@@ -1,6 +1,6 @@
 package histos.toolchain
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.charset.StandardCharsets
@@ -97,7 +97,7 @@ object RuntimeFiles:
       .attemptBlocking(home.toRealPath().normalize)
       .mapError(_ => IoFailure(home, IoFault.Stat))
       .map: canonical =>
-        val salt = Sha256.of(
+        val salt = Sha256Digest.of(
           Chunk.fromArray(
             s"$canonical\n$build".getBytes(StandardCharsets.UTF_8)
           )

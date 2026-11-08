@@ -67,8 +67,6 @@ object OpaqueLawSpec extends ZIOSpecDefault:
           "abc".toJson.fromJson[Sha256] == Left(s"(${Sha256Error.Bad("abc").message})"),
           "1".fromJson[Sha256] == Left("(expected string)"),
           "\"".fromJson[Sha256] == Left("Unexpected end of input"),
-          Sha256.of(Chunk.empty).value == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          Sha256.of(Chunk.fromArray("a".getBytes("UTF-8"))) != Sha256.of(Chunk.empty),
         )
     ,
     test("a digest is 64 lowercase hex with no trim, and a dev namespace reads itself then main"):

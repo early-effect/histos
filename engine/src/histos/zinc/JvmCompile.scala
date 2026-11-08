@@ -2,7 +2,7 @@ package histos.zinc
 
 import histos.cache.ContentStore
 import histos.jdk.JdkRuntime
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.schedule.CacheError
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Platform, ScalaVersion}
@@ -142,7 +142,7 @@ end SemanticDb
 object CompileKey:
   /** Compiler-jar fingerprints. The named `compiler` row records the same list. */
   def withTools(key: Sha256, hashes: List[Sha256]): Sha256 =
-    Sha256.of(
+    Sha256Digest.of(
       Chunk.fromArray(
         (key.value + "\n" + hashes.map(_.value).mkString("\n"))
           .getBytes(StandardCharsets.UTF_8)
@@ -154,7 +154,7 @@ object CompileKey:
     * jars.
     */
   def of(request: CompileRequest, sources: Sha256): Sha256 =
-    Sha256.of(CompileInputs.encode(CompileInputs.declared(request, sources)))
+    Sha256Digest.of(CompileInputs.encode(CompileInputs.declared(request, sources)))
 end CompileKey
 
 object JvmCompile:
@@ -284,7 +284,7 @@ object JvmCompile:
             ) ++ Chunk.single(0.toByte) ++ Chunk.fromArray(body)
           }
           .mapError(_ => CompileError.Io(IoFailure(path, IoFault.Read)))
-      .map(parts => Sha256.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
+      .map(parts => Sha256Digest.of(parts.foldLeft(Chunk.empty[Byte])(_ ++ _)))
 
   /** Compiler jars plus the library they linked against. BSP names this Scala version with these jars.
     */

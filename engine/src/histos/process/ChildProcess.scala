@@ -371,7 +371,7 @@ object ChildProcess:
 
   /** Changes when `ExecSource` changes, so a stale class file is not reused. */
   private val launcherId: String =
-    histos.jdk.Sha256
+    histos.jdk.Sha256Digest
       .of(
         Chunk.fromArray(
           ExecSource.getBytes(java.nio.charset.StandardCharsets.UTF_8)

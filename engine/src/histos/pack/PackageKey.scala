@@ -1,6 +1,6 @@
 package histos.pack
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 
 import java.nio.charset.StandardCharsets
 
@@ -15,4 +15,4 @@ object PackageKey:
       s"""products
          |${products.map(_.value).mkString("\n")}
          |""".stripMargin
-    Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
+    Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))

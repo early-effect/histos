@@ -22,6 +22,9 @@ clang_guide='clang is not on PATH. Histos does not install it.
 macOS: brew install llvm
 Linux: install clang from your distribution.'
 home=${HISTOS_HOME:-$HOME/.histos}
+# `update` sets these. The no-client message names the newest release.
+newest_release=
+stable=no
 # ChannelRefresh.Default is Ttl(1 hour). every-call is ChannelRefresh.EveryCall.
 channel_ttl=3600
 channel_refresh=ttl
@@ -171,33 +174,37 @@ read_default() {
 write_default() {
   printf '%s\n' "$1" > "$home/default"
 }
-pick_channel() {
-  awk '
+# The newest `release` (X.Y.Z) or `snapshot` pointer (X.Y.Z-SNAPSHOT) among asset names on stdin, at or above the
+# X.Y.Z in $2. An empty floor takes any. Fails when none qualifies.
+newest() {
+  awk -v kind="$1" -v floor_version="${2:-}" '
     function num(v, a, n) {
       n = split(v, a, ".")
       if (n != 3) return -1
       if (a[1] !~ /^[0-9]+$/ || a[2] !~ /^[0-9]+$/ || a[3] !~ /^[0-9]+$/) return -1
       return a[1] * 1000000 + a[2] * 1000 + a[3]
     }
-    function consider(name, ver, r) {
-      if (name ~ /^channel-[0-9]+\.[0-9]+\.[0-9]+-SNAPSHOT$/) {
-        ver = substr(name, 9)
+    BEGIN { floor = num(floor_version); best = -1 }
+    {
+      if (kind == "snapshot" && $0 ~ /^channel-[0-9]+\.[0-9]+\.[0-9]+-SNAPSHOT$/) {
+        ver = substr($0, 9)
         r = num(substr(ver, 1, length(ver) - 9))
-        if (r > snap_rank) { snap_rank = r; snap = ver }
-      } else if (name ~ /^[0-9]+\.[0-9]+\.[0-9]+-manifest\.json$/) {
-        ver = substr(name, 1, length(name) - 14)
+      } else if (kind == "release" && $0 ~ /^[0-9]+\.[0-9]+\.[0-9]+-manifest\.json$/) {
+        ver = substr($0, 1, length($0) - 14)
         r = num(ver)
-        if (r > rel_rank) { rel_rank = r; rel = ver }
-      }
+      } else next
+      if (r >= floor && r > best) { best = r; pick = ver }
     }
-    BEGIN { snap_rank = -1; rel_rank = -1 }
-    { consider($0) }
-    END {
-      if (snap != "") print snap
-      else if (rel != "") print rel
-      else exit 1
-    }
+    END { if (pick == "") exit 1; print pick }
   '
+}
+# X.Y.Z of a pointer or a timestamp pin. A release is not a snapshot line.
+snapshot_line() {
+  case $1 in
+    *-SNAPSHOT) printf '%s' "${1%-SNAPSHOT}" ;;
+    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].[0-9][0-9][0-9][0-9][0-9][0-9]-[1-9]*) printf '%s' "${1%-*-*}" ;;
+    *) return 1 ;;
+  esac
 }
 asset_names() {
   awk '
@@ -212,41 +219,92 @@ asset_names() {
     }
   ' "$1"
 }
-published_channel() {
-  tmp=$(mktemp)
-  names=$(mktemp)
-  if fetch_ok "$dist/channel" "$tmp"; then
-    channel=$(tr -d '[:space:]' < "$tmp")
-    if [ -n "$channel" ]; then
-      rm -f "$tmp" "$names"
-      printf '%s' "$channel"
-      return 0
-    fi
-  fi
+# Asset names on the dist base, one per line. A GitHub release lists its own. Any other base serves `assets`.
+dist_assets() {
+  listing=$(mktemp)
+  listed=no
   case $dist in
     https://github.com/*/releases/download/*)
       owner_repo=${dist#https://github.com/}
       owner_repo=${owner_repo%%/releases/download/*}
-      tag=${dist##*/}
-      if fetch_ok "https://api.github.com/repos/$owner_repo/releases/tags/$tag" "$tmp"; then
-        asset_names "$tmp" > "$names"
-        if channel=$(pick_channel < "$names"); then
-          rm -f "$tmp" "$names"
-          printf '%s' "$channel"
-          return 0
-        fi
+      if fetch_ok "https://api.github.com/repos/$owner_repo/releases/tags/${dist##*/}" "$listing"; then
+        asset_names "$listing"
+        listed=yes
       fi
       ;;
   esac
-  if fetch_ok "$dist/assets" "$tmp"; then
-    if channel=$(pick_channel < "$tmp"); then
-      rm -f "$tmp" "$names"
+  if [ "$listed" = no ] && fetch_ok "$dist/assets" "$listing"; then
+    cat "$listing"
+    listed=yes
+  fi
+  rm -f "$listing"
+  [ "$listed" = yes ]
+}
+published_channel() {
+  tmp=$(mktemp)
+  if fetch_ok "$dist/channel" "$tmp"; then
+    channel=$(tr -d '[:space:]' < "$tmp")
+    if [ -n "$channel" ]; then
+      rm -f "$tmp"
       printf '%s' "$channel"
       return 0
     fi
   fi
-  rm -f "$tmp" "$names"
+  if dist_assets > "$tmp" && { channel=$(newest snapshot < "$tmp") || channel=$(newest release < "$tmp"); }; then
+    rm -f "$tmp"
+    printf '%s' "$channel"
+    return 0
+  fi
+  rm -f "$tmp"
   return 1
+}
+# Yes when --stable was passed or the terminal answers y. Without a terminal, prints how to switch.
+take_stable() {
+  release=$1
+  pin=$2
+  [ "$stable" = yes ] && return 0
+  if [ -t 0 ] && [ -t 2 ] && { [ -z "${CI:-}" ] || [ "${CI:-}" = false ]; }; then
+    printf 'histos %s is a stable release newer than %s. Switch to %s? [y/N] ' "$release" "$pin" "$release" >&2
+    answer=
+    read -r answer < /dev/tty || answer=
+    case $answer in
+      y|Y|yes|Yes|YES) return 0 ;;
+      *) return 1 ;;
+    esac
+  fi
+  echo "histos $release is a stable release. histos update --stable switches." >&2
+  return 1
+}
+# Sets `next`, the pin `update` writes for $1. A release moves to the newest release. A snapshot moves to the newest
+# line at or above its own and keeps its form unless `form` is freeze or follow. A release at or above that line is
+# offered first.
+next_pin() {
+  pin=$1
+  names=$(mktemp)
+  dist_assets > "$names" || echo "histos: $dist does not list its assets. update keeps the line of $pin." >&2
+  newest_release=$(newest release < "$names" || true)
+  if ! line=$(snapshot_line "$pin"); then
+    next=$(newest release "$pin" < "$names" || printf '%s' "$pin")
+    rm -f "$names"
+    return 0
+  fi
+  pointer=$(newest snapshot "$line" < "$names" || printf '%s-SNAPSHOT' "$line")
+  offer=$(newest release "$line" < "$names" || true)
+  rm -f "$names"
+  if [ -n "$offer" ] && take_stable "$offer" "$pin"; then
+    next=$offer
+    return 0
+  fi
+  if [ "$form" = keep ]; then
+    case $pin in
+      *-SNAPSHOT) form=follow ;;
+      *) form=freeze ;;
+    esac
+  fi
+  case $form in
+    follow) next=$pointer ;;
+    freeze) next=$(resolve_channel "$pointer") ;;
+  esac
 }
 no_default() {
   fail "no default toolchain. Run 'histos toolchain install <version>'"
@@ -351,12 +409,23 @@ ensure_toolchain() {
     mv "$fetched" "$client"
     chmod +x "$client"
     printf 'prebuilt\n' > "$origin"
-  else
-    if [ ! -x "$client" ]; then
-      echo "histos: no prebuilt client for ${platform:-this platform}. java -jar will run. --compile-client links one when clang is available." >&2
-      rm -f "$client" "$origin"
+  elif [ ! -x "$client" ]; then
+    rm -f "$client" "$origin"
+    if snapshot_line "$selected" >/dev/null; then
+      echo "histos $selected is a snapshot. Snapshots have no prebuilt client$(release_client). java -jar will run." >&2
+    else
+      echo "histos $selected has no prebuilt client for ${platform:-this platform}. java -jar will run. --compile-client links one when clang is available." >&2
     fi
   fi
+}
+# "; <release> has one" when the newest release `update` saw names a client for this platform.
+release_client() {
+  [ -n "$newest_release" ] && [ -n "$platform" ] || return 0
+  listing=$(mktemp)
+  if fetch_ok "$dist/$newest_release-manifest.json" "$listing" && [ -n "$(json_string "$listing" "$platform")" ]; then
+    printf '; %s has one' "$newest_release"
+  fi
+  rm -f "$listing"
 }
 exec_jar() {
   jar=$1
@@ -493,27 +562,34 @@ histos help toolchain" ;;
     shift
     make_default=no
     compile=no
+    form=keep
     for flag in "$@"; do
       case $flag in
         --make-default) make_default=yes ;;
         --compile-client) compile=yes ;;
+        --stable) stable=yes ;;
+        --freeze|--follow)
+          [ "$form" = keep ] || [ "$form" = "${flag#--}" ] || fail "--freeze and --follow are opposites. Pass one."
+          form=${flag#--}
+          ;;
         *) fail "unknown update flag: $flag" ;;
       esac
     done
     channel_refresh=every-call
     repo=$(find_repo || true)
     if [ -n "$repo" ] && pin=$(read_pin "$repo"); then
-      selected=$(resolve_channel "$pin")
-      write_pin "$selected" "$repo"
-      if [ "$make_default" = yes ]; then printf '%s\n' "$selected" > "$home/default"; fi
+      next_pin "$pin"
+      write_pin "$next" "$repo"
+      if [ "$make_default" = yes ]; then write_default "$next"; fi
     else
       current=$(read_default || true)
       if [ -z "$current" ]; then
         current=$(published_channel) || no_default
       fi
-      selected=$(resolve_channel "$current")
-      write_default "$selected"
+      next_pin "$current"
+      write_default "$next"
     fi
+    selected=$(resolve_channel "$next")
     ensure_toolchain "$selected" "$compile"
     exit 0
     ;;

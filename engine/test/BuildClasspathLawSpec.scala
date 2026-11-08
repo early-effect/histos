@@ -1,6 +1,6 @@
 package histos.load
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.pack.JarError
 import histos.workspace.Workspace
 
@@ -94,7 +94,7 @@ object BuildClasspathLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-classpath-assembly").flatMap { root =>
           val assembly = root.resolve("histos.jar")
           val cache    = root.resolve("cache")
-          val sha      = Sha256.of(Chunk.fromArray(apiBytes)).value
+          val sha      = Sha256Digest.of(Chunk.fromArray(apiBytes)).value
           val dest     = cache.resolve("api").resolve(sha).resolve("histos-api.jar")
           val planted  = Array[Byte](9, 9)
           for
@@ -114,46 +114,40 @@ object BuildClasspathLawSpec extends ZIOSpecDefault:
             fresh.toList == apiBytes.toList,
           )
         }
-      }
+      },
   )
 
   private def write(path: Path, text: String) =
     Workspace.writeString(path, text).catchAll(error => ZIO.dieMessage(error.message))
 
   private def writeBytes(path: Path, bytes: Array[Byte]) =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        Files.write(path, bytes)
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      Files.write(path, bytes)
+    }.orDie
 
   private def entryBytes(jar: Path, name: String) =
-    ZIO
-      .attemptBlocking {
-        val zip = new ZipFile(jar.toFile)
-        try
-          Option(zip.getEntry(name)).map { entry =>
-            val input = zip.getInputStream(entry)
-            try input.readAllBytes().toList
-            finally input.close()
-          }
-        finally zip.close()
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      val zip = new ZipFile(jar.toFile)
+      try
+        Option(zip.getEntry(name)).map { entry =>
+          val input = zip.getInputStream(entry)
+          try input.readAllBytes().toList
+          finally input.close()
+        }
+      finally zip.close()
+    }.orDie
 
   private def zip(path: Path, entries: (String, Array[Byte])*) =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        val out = new ZipOutputStream(Files.newOutputStream(path))
-        try
-          entries.foreach { (name, bytes) =>
-            out.putNextEntry(new ZipEntry(name))
-            out.write(bytes)
-            out.closeEntry()
-          }
-        finally out.close()
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try
+        entries.foreach { (name, bytes) =>
+          out.putNextEntry(new ZipEntry(name))
+          out.write(bytes)
+          out.closeEntry()
+        }
+      finally out.close()
+    }.orDie
 end BuildClasspathLawSpec

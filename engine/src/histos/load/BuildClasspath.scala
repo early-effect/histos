@@ -1,6 +1,6 @@
 package histos.load
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.pack.{ClassJar, JarError}
 import histos.workspace.{IoFailure, IoFault}
 
@@ -69,7 +69,7 @@ object BuildClasspath:
       .flatMap(bytes => place(cache, bytes))
 
   private def place(cache: Path, bytes: Array[Byte]): IO[LoadError, Path] =
-    val sha         = Sha256.of(Chunk.fromArray(bytes)).value
+    val sha         = Sha256Digest.of(Chunk.fromArray(bytes)).value
     val destination = cache.resolve("api").resolve(sha).resolve("histos-api.jar")
     ZIO
       .attemptBlocking {
@@ -105,7 +105,7 @@ object BuildClasspath:
         val base = classes.toAbsolutePath.normalize
         if !Files.isDirectory(base) then Left(JarError.NotADirectory(classes))
         else
-          val walk = Files.walk(base)
+          val walk  = Files.walk(base)
           val files =
             try walk.iterator.asScala.filter(path => Files.isRegularFile(path)).toList
             finally walk.close()

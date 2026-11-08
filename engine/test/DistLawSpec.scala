@@ -19,12 +19,14 @@ object DistLawSpec extends ZIOSpecDefault:
       val packed  = Dist.bundle(
         "9.9.9",
         jar,
-        List("macos-aarch64" -> mac, "linux-x86_64" -> linux),
+        List(DistPlatform.MacosAarch64 -> mac, DistPlatform.LinuxX86_64 -> linux),
         sources,
       )
-      val text = packed.collectFirst { case ("9.9.9-manifest.json", bytes) =>
-        new String(bytes, StandardCharsets.UTF_8)
-      }.getOrElse("")
+      val text = packed
+        .collectFirst { case ("9.9.9-manifest.json", bytes) =>
+          new String(bytes, StandardCharsets.UTF_8)
+        }
+        .getOrElse("")
       assertTrue(
         packed.map(_._1) == List(
           "9.9.9-manifest.json",
@@ -49,11 +51,11 @@ object DistLawSpec extends ZIOSpecDefault:
         Workspace.work("histos-dist").flatMap { repo =>
           val deep = "n" * 80 + ".scala"
           for
-            _    <- Workspace.writeString(
+            _ <- Workspace.writeString(
               repo.resolve("api").resolve("src").resolve("main").resolve("scala").resolve(deep),
               "object OnlyQuick\n",
             )
-            tar  <- ZIO.attemptBlocking(Dist.sources(repo)).orDie
+            tar <- ZIO.attemptBlocking(Dist.sources(repo)).orDie
             names = tarNames(tar)
           yield assertTrue(
             names.contains("histos.scala"),
@@ -63,7 +65,7 @@ object DistLawSpec extends ZIOSpecDefault:
             new String(tar, StandardCharsets.US_ASCII).contains("object build extends HistosBuild"),
           )
         }
-      }
+      },
   )
 
   /** USTAR names. A path longer than the name field is prefix plus name. */
@@ -76,7 +78,7 @@ object DistLawSpec extends ZIOSpecDefault:
         val prefix = field(bytes, at + 345, 155)
         val path   = if prefix.isEmpty then name else s"$prefix/$name"
         octal(field(bytes, at + 124, 12)) match
-          case None => acc.reverse
+          case None       => acc.reverse
           case Some(size) =>
             val data = ((size + 511) / 512) * 512
             go(at + 512 + data, path :: acc)

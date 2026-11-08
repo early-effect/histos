@@ -1,7 +1,7 @@
 package histos.load
 
 import histos.cache.ContentStore
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{
   ApiDigest,
   Contribution,
@@ -37,7 +37,8 @@ import slayer.{any, stub, stubbed}
 import zio.{Chunk, IO, Ref, Scope, ZIO, ZLayer}
 import zio.test.{TestAspect, ZIOSpecDefault, assertTrue, suite, test}
 
-/** A hit is the stored text. A defect names the missing class, or the exception when the class is not the point. A declared file is the manifest the cache stores.
+/** A hit is the stored text. A defect names the missing class, or the exception when the class is not the point. A
+  * declared file is the manifest the cache stores.
   */
 object PluginOutcomeLawSpec extends ZIOSpecDefault:
   private val pluginId = PluginId.trusted("law")
@@ -50,15 +51,15 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
   private val absent   = TaskName.trusted("absent")
   private val out      = OutputName("out")
   private val path     = RepoPath.trusted("notes/out.txt")
-  private val missing = RepoPath.trusted("notes/missing.txt")
+  private val missing  = RepoPath.trusted("notes/missing.txt")
 
   def spec = suite("plugin outcome laws")(
     test("a cache hit is the stored text, and the plugin does not run"):
       Workspace.work("histos-plugin-hit").catchAll(error => ZIO.dieMessage(error.message)).flatMap { root =>
         val run =
           for
-            _ <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
-            _ <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
+            _     <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
+            _     <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
             found <- ZIO.scoped {
               loaded(root, List(task(pack, Nil)), die("ran")).flatMap { runtime =>
                 for
@@ -67,13 +68,12 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
                 yield (hit, bound)
               }
             }
-          yield {
+          yield
             val key = TaskId.from("law/pack")
             assertTrue(
               found._1 == Right(PluginOutput(PluginRuntime.cacheHit("stored-body"), Nil)),
               found._2.map(_.keySet) == key.map(Set(_)),
             )
-          }
         run.provideSomeLayer[Scope](layers(root, hitCache))
       }
     ,
@@ -81,8 +81,8 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
       Workspace.work("histos-plugin-defect").catchAll(error => ZIO.dieMessage(error.message)).flatMap { root =>
         val run =
           for
-            _ <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
-            _ <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
+            _     <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
+            _     <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
             found <- ZIO.scoped {
               loaded(root, List(task(link, Nil), task(gone, Nil), task(bare, Nil), task(boom, Nil)), DefectPlugin)
                 .flatMap { runtime =>
@@ -108,8 +108,8 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
         Ref.make(List.empty[String]).flatMap { kept =>
           val run =
             for
-              _ <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
-              _ <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
+              _     <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
+              _     <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
               found <- ZIO.scoped {
                 loaded(
                   root,
@@ -126,8 +126,8 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
                 }
               }
               stored <- kept.get
-            yield {
-              val sha  = Sha256.of(Chunk.fromArray("body".getBytes(StandardCharsets.UTF_8)))
+            yield
+              val sha  = Sha256Digest.of(Chunk.fromArray("body".getBytes(StandardCharsets.UTF_8)))
               val line = s"${sha.value} ${path.value}"
               assertTrue(
                 found._1 == Right(PluginOutput("wrote", List(WrittenFile(out, path)))),
@@ -135,7 +135,6 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
                 stored.headOption.contains(s"${PluginManifest.Header}\n1\n$line\nwrote"),
                 found._2 == Left(PluginFault.Task(PluginRunError.MissingOutput(out))),
               )
-            }
           run.provideSomeLayer[Scope](layers(root, remembering(kept)))
         }
       },
@@ -186,19 +185,19 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
     def put(digest: Digest, value: String): IO[CacheError, Unit] = ZIO.dieMessage("stored a hit")
 
   private def remembering(kept: Ref[List[String]]): ActionCache = new ActionCache:
-    def get(digest: Digest): IO[CacheError, Option[String]] = ZIO.none
+    def get(digest: Digest): IO[CacheError, Option[String]]      = ZIO.none
     def put(digest: Digest, value: String): IO[CacheError, Unit] =
       kept.update(_ :+ value)
 
   private def die(text: String): HistosPlugin = new HistosPlugin:
-    def id: PluginId = pluginId
-    def contribute   = Contribution(Nil, Nil, Nil)
+    def id: PluginId             = pluginId
+    def contribute               = Contribution(Nil, Nil, Nil)
     def run(request: RunRequest) =
       ZIO.dieMessage(text)
 
   private object DefectPlugin extends HistosPlugin:
-    def id: PluginId = pluginId
-    def contribute   = Contribution(Nil, Nil, Nil)
+    def id: PluginId             = pluginId
+    def contribute               = Contribution(Nil, Nil, Nil)
     def run(request: RunRequest) =
       if request.id.name == link then ZIO.die(new ClassNotFoundException("com.example.Missing"))
       else if request.id.name == gone then ZIO.die(new NoClassDefFoundError("com.example.Gone"))
@@ -206,17 +205,19 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
       else ZIO.die(new IllegalStateException("boom"))
 
   private object FilePlugin extends HistosPlugin:
-    def id: PluginId = pluginId
-    def contribute   = Contribution(Nil, Nil, Nil)
+    def id: PluginId             = pluginId
+    def contribute               = Contribution(Nil, Nil, Nil)
     def run(request: RunRequest) =
       val write =
         if request.id.name == filed then
-          ZIO.attemptBlocking {
-            val file = request.repo.resolve(path.value)
-            Option(file.getParent).foreach(dir => Files.createDirectories(dir))
-            Files.writeString(file, "body")
-            ()
-          }.orElseFail(PluginRunError.Defect("write"))
+          ZIO
+            .attemptBlocking {
+              val file = request.repo.resolve(path.value)
+              Option(file.getParent).foreach(dir => Files.createDirectories(dir))
+              Files.writeString(file, "body")
+              ()
+            }
+            .orElseFail(PluginRunError.Defect("write"))
         else ZIO.unit
       val declared = if request.id.name == filed then path else missing
       write.as(

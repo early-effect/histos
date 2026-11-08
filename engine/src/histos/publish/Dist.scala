@@ -7,8 +7,6 @@ import scala.jdk.CollectionConverters.*
 
 /** The files a published version puts on the dist base: a manifest, the jar, prebuilt clients, and client sources. */
 object Dist:
-  val clientPlatforms: List[String] = List("linux-x86_64", "macos-aarch64")
-
   /** The build the shim compiles with `java -jar <histos.jar> client`. It names api, wire, and client only. */
   val buildFile: String =
     """import histos.*
@@ -41,7 +39,7 @@ object Dist:
   def bundle(
       version: String,
       jar: Array[Byte],
-      clients: List[(String, Array[Byte])],
+      clients: List[(DistPlatform, Array[Byte])],
       sources: Array[Byte],
   ): List[(String, Array[Byte])] =
     val manifest = DistLayout.manifestJson(
@@ -61,10 +59,13 @@ object Dist:
     else
       val stream = Files.walk(root)
       try
-        stream.iterator.asScala.filter(Files.isRegularFile(_)).map { path =>
-          val relative = root.relativize(path).iterator.asScala.map(_.toString).mkString("/")
-          s"$prefix/$relative" -> Files.readAllBytes(path)
-        }.toList
+        stream.iterator.asScala
+          .filter(Files.isRegularFile(_))
+          .map { path =>
+            val relative = root.relativize(path).iterator.asScala.map(_.toString).mkString("/")
+            s"$prefix/$relative" -> Files.readAllBytes(path)
+          }
+          .toList
       finally stream.close()
 
   private object Tar:
@@ -104,4 +105,5 @@ object Dist:
       val bytes = text.getBytes(StandardCharsets.US_ASCII)
       val count = math.min(bytes.length, width)
       System.arraycopy(bytes, 0, block, at, count)
+  end Tar
 end Dist

@@ -4,6 +4,7 @@ import histos.doctor.{Diagnostic, Noted}
 import histos.plugin.{ActionName, JobName, RunnerName, SecretName, TargetName}
 import histos.workspace.IoFailure
 import histos.ProjectName
+import histos.version.ShipName
 import java.nio.file.Path
 
 enum CiError:
@@ -32,6 +33,7 @@ enum CiError:
   case NoDefaultBranch
   case JobTimeout(count: Int)
   case LlvmChecksum(archive: String)
+  case SnapshotClients(ship: ShipName)
 
   def message: String = this match
     case BadName(raw)                 => s"'$raw' is not a project name"
@@ -62,12 +64,14 @@ enum CiError:
     case ConcurrencyConflict(file) => s"jobs in $file do not share a concurrency group"
     case UnpinnedWorkflowRun(name) => s"workflow $name is not rendered by this graph"
     case Pins(text)                => text
-    case NoDefaultBranch =>
+    case NoDefaultBranch           =>
       "the repository default branch is not set. refs/remotes/origin/HEAD is absent, and origin did not answer HEAD"
     case JobTimeout(count) =>
       s"a job timeout is between 1 and 360 minutes, not $count"
     case LlvmChecksum(archive) =>
       s"no sha256 is pinned for $archive"
+    case SnapshotClients(ship) =>
+      s"ship ${ship.value} builds clients on snapshots, and it is not the one asset ship with a native client and an LLVM pin"
 
   def diagnose: Diagnostic = this match
     case Drift(file, hint) =>

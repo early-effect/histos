@@ -222,7 +222,7 @@ object AssetRun:
 
   private def versionOf(ship: Ship): String =
     ship match
-      case Ship.Line(_, number, _, _, _) => number.render
+      case line: Ship.Line => line.number.render
 
   private enum Asked:
     case Named(chosen: Ship)

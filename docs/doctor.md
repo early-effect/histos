@@ -16,11 +16,13 @@ A secret the workflow can read counts. In a generated job, `HISTOS_SECRET_PRESEN
 
 The required check is the rule GitHub enforces on the repository's default branch. Doctor reads classic protection and `GET /repos/{owner}/{repo}/rules/branches/{branch}`. A repository ruleset, an organization ruleset, or classic protection can require the check. The finding names that rule. The branch-rules document carries the ruleset id, not its name, and the fix opens that rule: `/{owner}/{repo}/rules/{id}`, the organization rules settings, classic branch settings, or the repository rules page when no rule was seen. It does not open `https://github.com/settings/rules`. A 401 or 403 from the rules endpoint is "cannot see the rule", including when classic protection answered. Signing is reported only when the rules were read. A ruleset `required_signatures` rule counts, and so does classic `required_signatures` when that document was read.
 
-Release checks read the catalog and `releases`. They do not open a bump pull request.
+Release checks read the catalog, `releases`, `histos.version`, and the newest release Maven Central lists. They do not open a bump pull request or rewrite a pin.
 
 - `ship.session` is an error when `HISTOS_SESSION` is `snapshot`, `pr`, or `release` and a required variable is missing. The fix completes that session, then `histos run versions`. Development's versions line is `<ship>-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write the snapshot coordinate. `publish release` requires `HISTOS_SESSION=release`.
 - `ship.releases` is an error when a line catalog has no readable `releases` file. Create `releases`. An empty file is fine. A line is `<ship> matches`, `<ship> moved`, or `<ship> unknown`.
-- `ship.should-bump` is a warning when a catalog number is already `matches` or `moved`. Edit `Ship("name").next(...)`. Do not open a bump pull request.
+- `ship.should-bump` is a warning when a catalog number is already `matches` or `moved`, or when Central lists a release of that ship at or above it. `releases` speaks first. Edit `Ship("name").next(...)` in `histos.scala`. Do not open a bump pull request.
+- `ship.pin` is a warning when `histos.version` trails a published Histos release: a release pin behind a newer release, or a snapshot pin whose line is released (`0.2.1-SNAPSHOT` after `0.2.1`). The fix is `histos update` for a release pin and `histos update --stable` for a snapshot pin.
+- Both registry checks are skipped, not failed, when Central does not answer.
 
 ```text
 ./histos doctor

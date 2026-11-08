@@ -3,7 +3,7 @@ package histos.version
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
 
-import histos.{HttpUrl, PomText, ProjectName}
+import histos.{ClientBuilds, HttpUrl, PomText, ProjectName}
 
 /** The catalog identity of a ship. A letter, then letters, digits, `_`, or `-`. Not a project name. */
 opaque type ShipName = String
@@ -62,6 +62,7 @@ enum Ship:
       modules: ::[ProjectName],
       described: Option[PomText] = None,
       located: Option[HttpUrl] = None,
+      builds: ClientBuilds = ClientBuilds.Releases,
   )
 
   def name: ShipName = this match
@@ -75,6 +76,9 @@ enum Ship:
 
   def url: Option[HttpUrl] = this match
     case line: Line => line.located
+
+  def clients: ClientBuilds = this match
+    case line: Line => line.builds
 end Ship
 
 /** How a build versions its ships. Empty is an application. SNAPSHOT never appears here. */
@@ -109,7 +113,7 @@ object Catalog:
 
   private def assemble(ships: List[Ship]): Either[CatalogError, Catalog] =
     ships.collect { case line: Ship.Line => line } match
-      case Nil          => Right(Empty)
+      case Nil           => Right(Empty)
       case first :: rest => Right(Lines(::(first, rest)))
 
   private def repeated(ship: Ship): Option[ProjectName] =

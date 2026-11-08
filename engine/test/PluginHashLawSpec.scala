@@ -1,6 +1,6 @@
 package histos.load
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{
   DeclaredInput,
   DeclaredTask,
@@ -40,16 +40,16 @@ object PluginHashLawSpec extends ZIOSpecDefault:
       Workspace
         .work("histos-plugin-hash")
         .flatMap: root =>
-          val file   = root.resolve("notes").resolve("readme.txt")
-          val link   = root.resolve("notes").resolve("link.txt")
-          val dir    = root.resolve("data")
-          val first  = dir.resolve("a.txt")
-          val second = dir.resolve("b.txt")
-          val alias  = dir.resolve("alias.txt")
+          val file    = root.resolve("notes").resolve("readme.txt")
+          val link    = root.resolve("notes").resolve("link.txt")
+          val dir     = root.resolve("data")
+          val first   = dir.resolve("a.txt")
+          val second  = dir.resolve("b.txt")
+          val alias   = dir.resolve("alias.txt")
           val outside = root.resolve("outside.txt")
-          val module = noted
-          val graph  = ProjectGraph.trusted(List(module))
-          val asked  = task(
+          val module  = noted
+          val graph   = ProjectGraph.trusted(List(module))
+          val asked   = task(
             List(
               DeclaredInput.File(RepoPath("notes/readme.txt")),
               DeclaredInput.Directory(RepoPath("data")),
@@ -90,9 +90,9 @@ object PluginHashLawSpec extends ZIOSpecDefault:
               )
               .either
           yield
-            val one    = Sha256.of(Chunk.fromArray("one".getBytes(StandardCharsets.UTF_8)))
-            val envSha = Sha256.of(Chunk.fromArray("desk".getBytes(StandardCharsets.UTF_8)))
-            val empty  = Sha256.of(Chunk.fromArray(Array.emptyByteArray))
+            val one    = Sha256Digest.of(Chunk.fromArray("one".getBytes(StandardCharsets.UTF_8)))
+            val envSha = Sha256Digest.of(Chunk.fromArray("desk".getBytes(StandardCharsets.UTF_8)))
+            val empty  = Sha256Digest.of(Chunk.fromArray(Array.emptyByteArray))
             assertTrue(
               value(hashed, "in:file:notes/readme.txt") == Some(InputValue.Hash(one)),
               value(hashed, "in:text:label") == Some(InputValue.Text("hello")),
@@ -134,7 +134,9 @@ object PluginHashLawSpec extends ZIOSpecDefault:
             same    <- PluginInputs.hash(request(root, graph, asked, List(left.toString, right.toString), Map.empty))
             differ  <- PluginInputs.hash(request(root, graph, asked, List(left.toString, extra.toString), Map.empty))
             folder  <- PluginInputs.hash(request(root, graph, asked, List(tree.toString), Map.empty))
-            missing <- PluginInputs.hash(request(root, graph, asked, List(root.resolve("nope.jar").toString), Map.empty)).either
+            missing <- PluginInputs
+              .hash(request(root, graph, asked, List(root.resolve("nope.jar").toString), Map.empty))
+              .either
           yield
             val jars = same.inputs.map(_.name.value).filter(_.startsWith("plugin.jar:"))
             val two  = differ.inputs.map(_.name.value).filter(_.startsWith("plugin.jar:"))
@@ -176,8 +178,7 @@ object PluginHashLawSpec extends ZIOSpecDefault:
             value(before, label) != value(after, label),
             value(linked, label) == value(after, label),
             lost == Left(failed("module missing is not in the graph")),
-          )
-    ,
+          ),
   )
 
   private val noted: Module =
@@ -219,7 +220,7 @@ object PluginHashLawSpec extends ZIOSpecDefault:
   private def fileShaOf(hashed: PluginInputs.Hashed, label: String): Sha256 =
     value(hashed, label) match
       case Some(InputValue.Hash(sha)) => sha
-      case _                          => Sha256.of(Chunk.empty)
+      case _                          => Sha256Digest.of(Chunk.empty)
 
   private def content(sha: Sha256): histos.plugin.ContentHash =
     histos.plugin.ContentHash.from(sha.value) match
@@ -248,3 +249,4 @@ object PluginHashLawSpec extends ZIOSpecDefault:
         ()
       }
       .catchAll(error => ZIO.dieMessage(error.getClass.getName))
+end PluginHashLawSpec

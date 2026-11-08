@@ -1,6 +1,6 @@
 package histos.testrun
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.native.NativeOrigin
 import histos.resolve.{
   ClasspathScope,
@@ -83,7 +83,7 @@ private[histos] object SuiteCover:
 
   /** Sha256 of the token [[TestContext]] records for one runtime. */
   private[histos] def tokenHash(identity: RuntimeIdentity): Sha256 =
-    Sha256.of(
+    Sha256Digest.of(
       Chunk.fromArray(Runtimes.identityToken(identity).getBytes(StandardCharsets.UTF_8))
     )
 

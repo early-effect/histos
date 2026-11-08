@@ -23,9 +23,11 @@ object ShipAdvice:
   def unreadable: String =
     s"could not read releases. $releasesFile"
 
-  def shouldBump(ship: ShipName, number: ShipNumber, shadowed: Boolean): String =
-    val state =
-      if shadowed then s"${ship.value} ${number.render} is released and has changes since its tag"
-      else s"${ship.value} ${number.render} is already released"
+  def shouldBump(ship: ShipName, number: ShipNumber, reason: BumpReason): String =
+    val state = reason match
+      case BumpReason.Tagged             => s"${ship.value} ${number.render} is already released"
+      case BumpReason.Shadowed           => s"${ship.value} ${number.render} is released and has changes since its tag"
+      case BumpReason.Published(release) =>
+        s"${ship.value} ${release.render} is published and the catalog still names ${number.render}"
     s"$state. Edit Ship(\"${ship.value}\").next(...) to the next number. Do not open a bump pull request."
 end ShipAdvice

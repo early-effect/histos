@@ -1,7 +1,7 @@
 package histos.assembly
 
 import histos.cache.ContentStore
-import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Machine, Sha256}
+import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Machine, Sha256, Sha256Digest}
 import histos.native.NativeOrigin
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
 import histos.toolchain.RuntimeIdentity
@@ -43,7 +43,7 @@ object AssembleLawSpec extends ZIOSpecDefault:
       val jdk = JdkRuntime(
         Path.of("jdk"),
         JdkVersion.trusted("21", JdkMajor.trusted(21)),
-        RuntimeIdentity.Local(Path.of("jdk"), Sha256.of(Chunk.empty)),
+        RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)),
       )
       val missing =
         Assemble
@@ -70,7 +70,7 @@ object AssembleLawSpec extends ZIOSpecDefault:
             GraphCompile.jdk(machine).flatMap { jdk =>
               ZIO.serviceWithZIO[DependencyLock] { lock =>
                 val destination = repo.resolve("dist").resolve("histos.jar")
-                val run =
+                val run         =
                   for
                     _ <- Workspace
                       .writeString(
@@ -154,8 +154,8 @@ object AssembleLawSpec extends ZIOSpecDefault:
     )
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    val drop = Set(api, app)
-    val kept = lock.cells.filterNot(cell => drop.contains(cell.module))
+    val drop  = Set(api, app)
+    val kept  = lock.cells.filterNot(cell => drop.contains(cell.module))
     val added = List(api, app).map: name =>
       LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
     lock.copy(cells = added ++ kept)

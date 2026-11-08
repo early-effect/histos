@@ -1,6 +1,6 @@
 package histos.zinc
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault}
 
 import java.io.IOException
@@ -40,7 +40,7 @@ object ApiDigest:
     store(dir, empty)
 
   private def digest(lines: List[String]): Sha256 =
-    Sha256.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8)))
+    Sha256Digest.of(Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8)))
 
   private def store(dir: Path, sha: Sha256): Either[CompileError, Sha256] =
     val path = dir.resolve(fileName)

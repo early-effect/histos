@@ -372,7 +372,7 @@ object LocalPublish:
       case Revision.Ci(_)       => RevisionKind.Ci
       case Revision.Release(_)  => RevisionKind.Release
       case Revision.Snapshot(_) => RevisionKind.Snapshot
-      case Revision.Pointer(_) => RevisionKind.Pointer
+      case Revision.Pointer(_)  => RevisionKind.Pointer
 
   private def jobs(
       plans: List[Planned],
@@ -713,15 +713,9 @@ object LocalPublish:
       version: ScalaVersion,
       platform: Platform,
   ): String =
-    val base = graph.get(name) match
-      case Some(module: Module) =>
-        module.published.fold(module.name.value)(_.value)
-      case _ => name.value
-    publication(graph, name) match
-      case Publication.Assembly(_)       => base
-      case Publication.SbtPlugin(series) => ArtifactName.plugin(base, version, platform, series)
-      case Publication.Library           => ArtifactName.published(base, version, platform)
-      case Publication.Application       => ArtifactName.published(base, version, platform)
+    graph.get(name) match
+      case Some(module: Module) => ArtifactName.module(module, version, platform)
+      case _                    => ArtifactName.published(name.value, version, platform)
 
   /** Upstream modules on every platform the module builds. */
   private def upstream(module: Module): List[ProjectName] =

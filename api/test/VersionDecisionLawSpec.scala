@@ -112,8 +112,9 @@ object VersionDecisionLawSpec extends ZIOSpecDefault:
     test("a ship finding is that check, and should-bump says whether the tag moved"):
       val session = ShipDiagnostic.Session("detail")
       val unread  = ShipDiagnostic.Releases("detail")
-      val moved   = ShipDiagnostic.ShouldBump(histos, one, shadowed = true)
-      val still   = ShipDiagnostic.ShouldBump(histos, one, shadowed = false)
+      val moved   = ShipDiagnostic.ShouldBump(histos, one, BumpReason.Shadowed)
+      val still   = ShipDiagnostic.ShouldBump(histos, one, BumpReason.Tagged)
+      val listed  = ShipDiagnostic.ShouldBump(histos, one, BumpReason.Published(ShipNumber("2.0.0")))
       assertTrue(
         session.check.value == "ship.session",
         session.level == Level.Error,
@@ -128,9 +129,39 @@ object VersionDecisionLawSpec extends ZIOSpecDefault:
         still.summary.contains("already released"),
         !still.summary.contains("has changes"),
         steps(moved).nonEmpty,
+        listed.summary.contains("histos 2.0.0 is published"),
+        listed.summary.contains(one.render),
+        steps(listed).exists(_.contains("Ship(\"histos\").next(...) in histos.scala")),
         Catalog.Empty.get(histos).isEmpty,
         single.get(histos).contains(row),
         single.get(api).isEmpty,
+      )
+    ,
+    test("ship numbers order by major, then minor, then patch"):
+      val part = Gen.int(0, 3)
+      val gen  = (part <*> part <*> part).map((major, minor, patch) => ShipNumber.trusted(major, minor, patch))
+      check(gen, gen): (left, right) =>
+        val tuple = Ordering[(Int, Int, Int)].compare(
+          (left.major, left.minor, left.patch),
+          (right.major, right.minor, right.patch),
+        )
+        assertTrue(Ordering[ShipNumber].compare(left, right).sign == tuple.sign)
+    ,
+    test("a pin lag names the command that moves that kind of pin"):
+      val release = PinLag.NewerRelease(one, two)
+      val line    = PinLag.LineReleased(one, two)
+      val pinned  = ShipDiagnostic.PinBehind(line)
+      assertTrue(
+        release.command.value == "histos update",
+        line.command.value == "histos update --stable",
+        release.text.contains(s"`histos update`"),
+        line.text.contains(s"`histos update --stable`"),
+        release.text.contains(two.render) && release.text.contains(one.render),
+        line.text.contains(two.render) && line.text.contains(one.render),
+        pinned.check.value == "ship.pin",
+        pinned.level == Level.Warning,
+        pinned.summary == line.text,
+        steps(pinned) == List("Run histos update --stable."),
       ),
   )
 
