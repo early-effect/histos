@@ -38,6 +38,7 @@ object PublishRecordLawSpec extends ZIOSpecDefault:
       Workspace.work("histos-record-org").flatMap: dir =>
         val program =
           for
+            _ <- LawGit.ready(dir)
             graph <- ZIO
               .fromEither(Projects(ships(Ship("demo").next(1, 2, 3)(named)), named))
               .catchAll(error => ZIO.dieMessage(error.message))
@@ -69,6 +70,7 @@ object PublishRecordLawSpec extends ZIOSpecDefault:
           val source = dir.resolve("recordlaw").resolve("src").resolve("main").resolve("scala").resolve("Ready.scala")
           val program =
             for
+              _ <- LawGit.ready(dir)
               graph <- ZIO
                 .fromEither(Projects.organization(group)(ships(Ship("demo").next(1, 2, 3)(named)), named))
                 .catchAll(error => ZIO.dieMessage(error.message))

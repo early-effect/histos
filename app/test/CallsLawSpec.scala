@@ -123,11 +123,14 @@ object CallsLawSpec extends ZIOSpecDefault:
     ,
     test("cancel removes the id before it interrupts the fiber"):
       for
-        runs  <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
-        seen  <- Ref.make(Option.empty[Boolean])
-        fiber <- ZIO.never
+        runs    <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
+        seen    <- Ref.make(Option.empty[Boolean])
+        started <- Promise.make[Nothing, Unit]
+        // The body has to be running, so the interrupt handler is in place before cancel.
+        fiber <- (started.succeed(()) *> ZIO.never)
           .onInterrupt(runs.get.flatMap(map => seen.set(Some(!map.contains(id)))))
           .fork
+        _               <- started.await
         _               <- runs.set(Map(id -> fiber))
         (result, heard) <- speak(say => Calls.cancel(runs, id, say))
         gone            <- seen.get
