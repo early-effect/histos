@@ -101,22 +101,23 @@ object PerformLawSpec extends ZIOSpecDefault:
       val inner   = Call.Compile(Nil)
       val program =
         for
-          seen <- Ref.make(Option.empty[Call])
+          seen <- Ref.make(Option.empty[(Call, WatchPolicy)])
           hit  <- Ref.make(List.empty[String])
           watch = Perform.Edges[Any](
-            (call, say) => seen.set(Some(call)) *> say(Message.Event(BuildEvent.Out("watch"))),
+            (call, policy, say) =>
+              seen.set(Some(call -> policy)) *> say(Message.Event(BuildEvent.Out("watch"))),
             die("reload"),
             die("reboot"),
             die("bsp"),
           )
-          watched <- drive(Right(None), Call.Watch(inner), watch)
+          watched <- drive(Right(None), Call.Watch(inner, WatchPolicy.After), watch)
           found   <- seen.get
           _       <- drive(Right(None), Call.Reload, edge(hit, "reload"))
           _       <- drive(Right(None), Call.Reboot, edge(hit, "reboot"))
           _       <- drive(Right(None), Call.Bsp, edge(hit, "bsp"))
           order   <- hit.get
         yield assertTrue(
-          found == Some(inner),
+          found == Some(inner -> WatchPolicy.After),
           watched == Chunk(Message.Event(BuildEvent.Out("watch"))),
           order == List("reload", "reboot", "bsp"),
         )
@@ -164,11 +165,11 @@ object PerformLawSpec extends ZIOSpecDefault:
     ZIO.die(new IllegalStateException(name))
 
   private def quietEdges: Perform.Edges[Any] =
-    Perform.Edges((_, _) => die("watch"), die("reload"), die("reboot"), die("bsp"))
+    Perform.Edges((_, _, _) => die("watch"), die("reload"), die("reboot"), die("bsp"))
 
   private def edge(hit: Ref[List[String]], name: String): Perform.Edges[Any] =
     Perform.Edges(
-      (_, _) => die("watch"),
+      (_, _, _) => die("watch"),
       mark(hit, "reload", name),
       mark(hit, "reboot", name),
       mark(hit, "bsp", name),
@@ -296,7 +297,7 @@ object PerformLawSpec extends ZIOSpecDefault:
     ("cache clean", Call.CacheClean(CacheCleanMode.Remove), false),
     ("cache promote", Call.CachePromote(CacheNamespace.Main, CacheNamespace.Main), false),
     ("launcher", Call.Launcher(LauncherAction.Update), false),
-    ("watch", Call.Watch(Call.Version), false),
+    ("watch", Call.Watch(Call.Version, WatchPolicy.After), false),
     ("bsp", Call.Bsp, false),
     ("preview clean full", Call.PreviewCleanFull, false),
   )

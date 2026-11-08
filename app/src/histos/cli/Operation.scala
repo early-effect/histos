@@ -1,7 +1,7 @@
 package histos.cli
 
 import histos.plugin.PluginArgs
-import histos.server.Call
+import histos.server.{Call, WatchPolicy}
 import histos.task.TaskId
 import histos.testrun.TestMode
 
@@ -10,16 +10,23 @@ import histos.testrun.TestMode
 object Operation:
   def call(command: Command): Either[CliParseError, Call] =
     command match
-      case Command.Watch(inner, _) => operation(inner).map(Call.Watch(_))
+      case Command.Watch(inner, args) =>
+        operation(inner).map(call => Call.Watch(call, policyOf(args)))
       case other                   => operation(other)
 
-  /** A watch payload is already a call. A nested watch or `bsp` is usage. */
-  def underWatch(inner: Call): Either[CliParseError, Call] =
-    inner match
-      case Call.Watch(_) =>
+  /** A watch payload is already a call. A nested watch or `bsp` is usage. `--restart` repeats a program. */
+  def underWatch(inner: Call, policy: WatchPolicy): Either[CliParseError, Call] =
+    (inner, policy) match
+      case (Call.Watch(_, _), _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Call.Bsp => Left(CliParseError.Rejected)
-      case other    => Right(other)
+      case (Call.Bsp, _) => Left(CliParseError.Rejected)
+      case (Call.Run(_, _), WatchPolicy.Restart) => Right(inner)
+      case (_, WatchPolicy.Restart) =>
+        Left(CliParseError.WatchCommand("--restart watches a program"))
+      case (other, WatchPolicy.After) => Right(other)
+
+  private def policyOf(args: List[String]): WatchPolicy =
+    if args.headOption.contains("--restart") then WatchPolicy.Restart else WatchPolicy.After
 
   /** The command under `~`. A nested watch is not an operation. */
   def operation(command: Command): Either[CliParseError, Call] =

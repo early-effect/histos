@@ -63,7 +63,36 @@ object WatchLawSpec extends ZIOSpecDefault:
               fiber <- SourceWatch.since(roots, start).fork
               _     <- zio.test.TestClock.adjust(SourceWatch.Poll + SourceWatch.Settle)
               paths <- fiber.join
-            yield assertTrue(paths == List(build.toAbsolutePath.normalize)),
+            yield assertTrue(paths == List(build.toAbsolutePath.normalize))
+    ,
+    test("a declared output inside a watched directory does not wake, and another file there does"):
+      ZIO.scoped:
+        Workspace
+          .work("histos-watch-output")
+          .flatMap: repo =>
+            val docs   = repo.resolve("docs")
+            val stamp  = docs.resolve("dev-stamp")
+            val source = docs.resolve("index.md")
+            for
+              _     <- Workspace.createDirectories(docs)
+              _     <- Workspace.writeString(stamp, "1\n")
+              _     <- Workspace.writeString(source, "page\n")
+              start <- SourceWatch.take(List(docs), Set(stamp))
+              quiet <- SourceWatch.since(List(docs), start, Set(stamp)).fork
+              _     <- Workspace.writeString(stamp, "2\n")
+              _     <- zio.test.TestClock.adjust(SourceWatch.Poll * 3)
+              held  <- quiet.poll
+              _     <- quiet.interrupt
+              woke  <- SourceWatch.since(List(docs), start, Set(stamp)).fork
+              _     <- Workspace.writeString(source, "next\n")
+              _     <- zio.test.TestClock.adjust(SourceWatch.Poll + SourceWatch.Settle)
+              paths <- woke.join
+            yield assertTrue(
+              held == None,
+              start.entries.map(_.path).contains(source.toAbsolutePath.normalize.toString),
+              !start.entries.map(_.path).contains(stamp.toAbsolutePath.normalize.toString),
+              paths == List(source.toAbsolutePath.normalize),
+            ),
   )
 
   private def module(name: String): Module =

@@ -19,7 +19,7 @@ import zio.{Fiber, Ref, ZIO}
   */
 object Perform:
   final case class Edges[R](
-      watch: (Call, Say) => ZIO[R, ServerError, Unit],
+      watch: (Call, WatchPolicy, Say) => ZIO[R, ServerError, Unit],
       reload: ZIO[R, ServerError, Unit],
       reboot: ZIO[R, ServerError, Unit],
       bsp: ZIO[R, ServerError, Unit],
@@ -40,7 +40,7 @@ object Perform:
         true
       case Call.PublishPromote(_) | Call.Cancel(_) | Call.Resolve(_) | Call.CleanFull | Call.Reload | Call.Reboot |
           Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.Launcher(_) | Call.Watch(_) | Call.Bsp | Call.PreviewCleanFull =>
+          Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCleanFull =>
         false
 
   /** Publish keeps the compile fault so the exit stays 9. A test lock is a resolve fault. */
@@ -184,8 +184,8 @@ object Perform:
             Calls.cachePromote(from, to, say)
           case Call.Launcher(action) =>
             Calls.launcher(repo, action, say)
-          case Call.Watch(inner) =>
-            edges.watch(inner, say)
+          case Call.Watch(inner, policy) =>
+            edges.watch(inner, policy, say)
           case Call.Reload =>
             edges.reload
           case Call.Reboot =>

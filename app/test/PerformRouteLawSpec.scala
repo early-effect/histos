@@ -197,7 +197,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
 
   private def quiet: Perform.Edges[Any] =
     Perform.Edges(
-      (_, _) => ZIO.die(new IllegalStateException("watch")),
+      (_, _, _) => ZIO.die(new IllegalStateException("watch")),
       ZIO.die(new IllegalStateException("reload")),
       ZIO.die(new IllegalStateException("reboot")),
       ZIO.die(new IllegalStateException("bsp")),

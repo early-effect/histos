@@ -1,7 +1,20 @@
 package histos.server
 
 import histos.cache.CacheCleanMode
-import histos.plugin.PluginArgs
+import histos.plugin.{
+  Contribution,
+  DeclaredInput,
+  DeclaredOutput,
+  DeclaredTask,
+  EntryName,
+  OutputName,
+  PluginArgs,
+  PluginId,
+  RegisteredPlugin,
+  RepoPath,
+  Seal,
+  TaskName,
+}
 import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.TestMode
@@ -27,7 +40,20 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
       val bad = roots.collect {
         case (label, call, want) if Watching.roots(repo, call, graph) != want => label
       }
-      assertTrue(bad == Nil),
+      assertTrue(bad == Nil)
+    ,
+    test("a plugin task watches its declared inputs and excludes its declared outputs"):
+      val watched = Watching.watched(repo, Call.Task("docs/site", PluginArgs.empty), pluginGraph)
+      assertTrue(
+        watched.paths == List(
+          repo.resolve("docs"),
+          repo.resolve("notes").resolve("src"),
+          repo.resolve("notes").resolve("test"),
+        ),
+        watched.excluded == Set(repo.resolve("docs").resolve("dev-stamp")),
+        Watching.roots(repo, Call.Task("docs/quiet", PluginArgs.empty), pluginGraph) == List(buildFile),
+        Watching.roots(repo, Call.Task("missing/site", PluginArgs.empty), pluginGraph) == List(buildFile),
+      ),
   )
 
   private val core = ProjectName("core")
@@ -44,6 +70,41 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
 
   private def graph: ProjectGraph =
     ProjectGraph.trusted(List(module(api), module(core)))
+
+  private val docs = PluginId.trusted("docs")
+
+  private def pluginGraph: ProjectGraph =
+    ProjectGraph.trusted(
+      List(module(ProjectName("notes"))),
+      histos.Splits.aggregate,
+      histos.version.Catalog.empty,
+      None,
+      Nil,
+      List(
+        RegisteredPlugin(
+          docs,
+          EntryName.trusted("demo.Plugin$"),
+          Contribution(
+            List(
+              DeclaredTask(
+                TaskName.trusted("site"),
+                Seal.Open,
+                Set.empty,
+                List(
+                  DeclaredInput.Directory(RepoPath.trusted("docs")),
+                  DeclaredInput.Module(ProjectName("notes"), None, None),
+                ),
+                List(DeclaredOutput(OutputName.trusted("stamp"), RepoPath.trusted("docs/dev-stamp"))),
+                Nil,
+              ),
+              DeclaredTask(TaskName.trusted("quiet"), Seal.Open, Set.empty, Nil, Nil, Nil),
+            ),
+            Nil,
+            Nil,
+          ),
+        )
+      ),
+    )
 
   private def owned(name: String): List[Path] =
     val base = repo.resolve(name)
@@ -105,7 +166,7 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
     ("cache clean", Call.CacheClean(CacheCleanMode.Remove), false),
     ("cache promote", Call.CachePromote(CacheNamespace.Main, CacheNamespace.Main), false),
     ("launcher", Call.Launcher(LauncherAction.Update), false),
-    ("watch", Call.Watch(Call.Version), false),
+    ("watch", Call.Watch(Call.Version, WatchPolicy.After), false),
     ("bsp", Call.Bsp, false),
     ("preview compile", Call.PreviewCompile(Nil), false),
     ("preview test", Call.PreviewTest(Nil), false),
