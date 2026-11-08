@@ -22,6 +22,7 @@ import histos.server.{
   Say,
   ServerError,
   ServerIo,
+  WatchPolicy,
   Watching,
 }
 import histos.load.BuildClasspath
@@ -660,12 +661,16 @@ object Cli:
       case Left(error) =>
         ZIO.succeed(Completed(CliExit.Usage, "", FaultText.show(error.diagnose), Playback.Held))
       case Right(call) =>
-        attach(repo, Call.Watch(call), watchLocal(repo, apiJar, call))
+        attach(repo, Call.Watch(call, WatchPolicy.After), watchLocal(repo, apiJar, call, WatchPolicy.After))
+
+  private def policyOf(args: List[String]): WatchPolicy =
+    if args.headOption.contains("--restart") then WatchPolicy.Restart else WatchPolicy.After
 
   private def watchLocal(
       repo: Path,
       apiJar: Path,
       inner: Call,
+      policy: WatchPolicy,
   ): URIO[Local, Completed] =
     Ref.make(Completed(CliExit.Success, "", "", Playback.Held)).flatMap { result =>
       val printing = new Say({
@@ -674,22 +679,40 @@ object Cli:
         case Message.Done(done) =>
           val finished = done match
             case CallResult.Reported(_) =>
-              Completed(CliExit.from(Call.Watch(inner), done), "", "", Playback.Heard)
+              Completed(CliExit.from(Call.Watch(inner, WatchPolicy.After), done), "", "", Playback.Heard)
             case CallResult.Fault(fault) =>
-              Completed(CliExit.from(Call.Watch(inner), done), "", FaultText.show(fault.diagnose), Playback.Held)
+              Completed(
+                CliExit.from(Call.Watch(inner, WatchPolicy.After), done),
+                "",
+                FaultText.show(fault.diagnose),
+                Playback.Held,
+              )
           result.set(finished)
         case _ => ZIO.unit
       })
-      Watching
-        .session(
-          repo,
-          printing,
-          operate(repo, apiJar, inner, printing.dropExit),
-          ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
-            case Left(_)       => List(repo.resolve("histos.scala"))
-            case Right(loaded) => Watching.roots(repo, inner, loaded.graph)
-          },
-        )
+      val roots = ZIO.serviceWithZIO[Loader](_.load(repo, apiJar)).either.map {
+        case Left(_)       => Watching.Watched(List(repo.resolve("histos.scala")), Set.empty)
+        case Right(loaded) => Watching.watched(repo, inner, loaded.graph)
+      }
+      val loop = policy match
+        case WatchPolicy.Restart =>
+          Watching.beside(
+            printing,
+            operate(repo, apiJar, inner, printing),
+            roots,
+            changed =>
+              val compile = inner match
+                case Call.Run(id, _) =>
+                  ProjectName.from(id) match
+                    case Right(name) => Call.Compile(List(name))
+                    case Left(_)     => Call.Compile(Nil)
+                case _ => Call.Compile(Nil)
+              operate(repo, apiJar, compile, printing.dropExit) *>
+                roots.map(found => changed.exists(path => found.paths.exists(root => Watching.covers(root, path)))),
+          )
+        case WatchPolicy.After =>
+          Watching.session(repo, printing, operate(repo, apiJar, inner, printing.dropExit), roots)
+      loop
         .foldZIO(
           error =>
             ZIO.succeed(
@@ -805,7 +828,7 @@ object Cli:
 
   private def cliEdges(repo: Path, apiJar: Path, say: Say): Perform.Edges[Local] =
     Perform.Edges(
-      watch = (_, edge) =>
+      watch = (_, _, edge) =>
         Calls.finish(
           edge,
           CallResult.Fault(
@@ -2090,7 +2113,8 @@ object Cli:
             case TaskParsed.Usage(message) =>
               ZIO.succeed(Completed(CliExit.Usage, "", message, Playback.Held))
             case TaskParsed.Ready(task) =>
-              if watched then attach(repo, Call.Watch(task), watchLocal(repo, apiJar, task))
+              if watched then
+                attach(repo, Call.Watch(task, WatchPolicy.After), watchLocal(repo, apiJar, task, WatchPolicy.After))
               else attach(repo, task, locally(repo, apiJar, task))
 
   /** MCP watch. Tokens are the inner command, with no leading tilde. The grammar and, for an unknown root,
@@ -2119,14 +2143,14 @@ object Cli:
                   taskFrom(loaded, tokens) match
                     case TaskParsed.Usage(message) =>
                       ZIO.fail(BuildFault.Rejected(Rejection.Watch(message)))
-                    case TaskParsed.Ready(task) => ZIO.succeed(Call.Watch(task))
+                    case TaskParsed.Ready(task) => ZIO.succeed(Call.Watch(task, WatchPolicy.After))
             case Left(error) =>
               ZIO.fail(BuildFault.Rejected(Rejection.Watch(error.message)))
             case Right(command) =>
               ZIO.fromEither(
                 Operation
                   .operation(command)
-                  .map(Call.Watch(_))
+                  .map(call => Call.Watch(call, WatchPolicy.After))
                   .left
                   .map(error => BuildFault.Rejected(Rejection.Watch(error.message)))
               )
@@ -2204,14 +2228,14 @@ object Cli:
         served(repo, Call.Test(modules, patterns, TestMode.Run))
       case Command.TestQuick(modules, patterns) =>
         served(repo, Call.Test(modules, patterns, TestMode.Quick))
-      case Command.Watch(inner, _) =>
+      case Command.Watch(inner, args) =>
         Operation.operation(inner) match
           case Left(error) => ZIO.succeed(Completed(CliExit.Usage, "", error.message, Playback.Held))
           case Right(call) =>
             attach(
               repo,
-              Call.Watch(call),
-              inProcessReady(repo)((api, machine) => withLocal(machine)(watchLocal(repo, api, call))),
+              Call.Watch(call, policyOf(args)),
+              inProcessReady(repo)((api, machine) => withLocal(machine)(watchLocal(repo, api, call, policyOf(args)))),
             )
       case Command.Compile(projects) =>
         dispatched(command)(call => compileAt(repo, projects, compileServices(repo, call)))

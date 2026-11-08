@@ -199,7 +199,7 @@ The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` a
 
 `publishLocal`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, and `publish drop` are the commands in Publishing. `preview` of `compile`, `test`, `publishLocal`, `publish snapshots`, `clean`, `cleanFull`, or `run` writes nothing. Compile and test name the sources the last analysis says are stale. A test preview names the suites a quick run would skip and the ones it would run. When the analysis cannot be read, the line says the staleness is unknown. When a digest cannot be read, the line says the suite is not known to be skippable.
 
-`~` runs a command again after a source save. The server does that when one is up. This process does it otherwise. `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested `~` are usage and do not start that loop. `observe` reads the stored tally and does not load the graph. `cancel` names the run id the command minted. `server` keeps a warm process. `reload` asks that process to load the build again, and fails when no server is up. `reboot` replaces a running server, or starts one. A mismatch of the version line or the assembly checksum does that before the command. `mcp` and `bsp` open a transport.
+`~` runs a command again after a source save. The server does that when one is up. This process does it otherwise. A plugin task watches the files, directories, and modules that task declared, and a file the task declared as an output is not a change. A task that declares no inputs watches `histos.scala` only. `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested `~` are usage and do not start that loop. `observe` reads the stored tally and does not load the graph. `cancel` names the run id the command minted. `server` keeps a warm process. `reload` asks that process to load the build again, and fails when no server is up. `reboot` replaces a running server, or starts one. A mismatch of the version line or the assembly checksum does that before the command. `mcp` and `bsp` open a transport.
 
 `cache path` prints the store. `cache list` prints each digest and its size. `cache clean` removes an entry older than 30 days that no project keeps. `--dry-run` names those entries and leaves them. `cache promote --from` and `--to` take `main`, `pr/<n>`, or `dev/<name>`. The remote cache is not configured, so that command reports `remote cache is not configured` and does not open a connection.
 
@@ -208,6 +208,29 @@ The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` a
 A word the grammar does not own is a plugin command, when the build registered it. A reserved root word cannot be one.
 
 The tally names files compiled, files skipped, modules, and classes written. A count that is unknown is omitted. A failure count is added when one happened.
+
+## Restarting a program
+
+`~ run app --restart` compiles `app`, starts it, and keeps watching while it runs. A source change compiles again. The compile failing leaves the running process up. The compile succeeding, and the change being one of that program's sources, stops the process and starts it again. Cancelling the watch stops the process. The process exiting on its own ends the watch with that status.
+
+`~ run app` does not do this. It runs the program and watches only after the process exits.
+
+This is the job [sbt-reload](https://github.com/jamesward/sbt-reload) does with a plugin. Nothing is added to the build.
+
+| sbt-reload | Histos |
+| --- | --- |
+| `~runReload` | `~ run <module> --restart` |
+| `reloadRestart` | run the command again |
+| `runReloadArgs`, `run / javaOptions`, `run / envVars` | the program's arguments, the module's java options, and the environment `run` already passes |
+| a compile failure | the running process stays up |
+| leaving the watch | the process stops |
+| `reloadPause`, `reloadResume`, `reloadStatus` | not this command |
+| `reloadOutput` from a second client | the watch client already has the program's stdout and stderr |
+| a plugin in `project/plugins.sbt` | nothing to install |
+
+sbt-reload exists because sbt's `~run` blocks inside the forked process and never returns to the watch. Histos has the same fact for a long-running main, and the answer is this flag.
+
+A plugin task is the other case. `run` receives a `Scope` that closes when the task returns. `PluginScopes` names that scope and the generation scope, and `Server.install` extended into the generation scope keeps the socket open across saves. The socket closes when the build or a plugin source changes, and when the server shuts down. `~ run <plugin>/<task>` rebuilds underneath that socket and does not take `--restart`. `--restart` on `~ compile`, `~ test`, or a plugin task is a usage error.
 
 ## An editor
 
@@ -341,6 +364,8 @@ Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be
 ## Plugins
 
 A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. A command name the grammar owns is reserved. `acp` is reserved and has no command. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
+
+`run` is called inside a `Scope`. That scope closes when the task returns, including when the task is interrupted. A temp file and a fork that must not outlive the task belong there. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope. An acquire extended into `ResourceLife.Generation` stays open after the task returns and closes when this generation of plugin classes is released. `Server.install` is that acquire. `Server.serve` never returns, so the watch never starts.
 
 ## Scenarios
 

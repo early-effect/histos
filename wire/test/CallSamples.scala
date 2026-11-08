@@ -5,6 +5,7 @@ import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.schedule.CacheNamespace
 import histos.task.RunId
 import histos.testrun.{SuitePattern, TestMode}
+import histos.server.WatchPolicy
 import histos.workflow.WorkflowAction
 import histos.{Platform, WireSamples}
 
@@ -56,7 +57,7 @@ object CallSamples:
               Call.CacheClean(CacheCleanMode.Remove),
               Call.CachePromote(CacheNamespace.Main, CacheNamespace.Dev(dev)),
               Call.Launcher(LauncherAction.Update),
-              Call.Watch(Call.Compile(names)),
+              Call.Watch(Call.Compile(names), WatchPolicy.After),
               Call.Bsp,
               Call.PreviewCompile(names),
               Call.PreviewTest(names),
@@ -92,8 +93,13 @@ object CallSamples:
           List(call, Call.CachePromote(CacheNamespace.PullRequest(pr), CacheNamespace.Main))
         case Call.Launcher(_) =>
           List(call, Call.Launcher(LauncherAction.Latest))
-        case Call.Watch(_) =>
-          List(call, Call.Watch(Call.Test(Nil, Nil, TestMode.Run)), Call.Watch(Call.Watch(Call.Compile(List(core)))))
+        case Call.Watch(_, _) =>
+          List(
+            call,
+            Call.Watch(Call.Test(Nil, Nil, TestMode.Run), WatchPolicy.After),
+            Call.Watch(Call.Run(core.value, None), WatchPolicy.Restart),
+            Call.Watch(Call.Watch(Call.Compile(List(core)), WatchPolicy.After), WatchPolicy.After),
+          )
         case Call.PreviewRun(id, _) =>
           List(call, Call.PreviewRun(id, Some(Platform.Native)))
         case other =>

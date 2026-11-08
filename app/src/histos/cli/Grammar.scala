@@ -255,9 +255,13 @@ object Grammar:
       case "~" :: "~" :: _ =>
         ZIO.fail(CliParseError.WatchCommand("watch does not nest"))
       case "~" :: rest =>
-        prepared(rest).flatMap: ready =>
+        val (policy, body) = rest match
+          case "--restart" :: tail => (histos.server.WatchPolicy.Restart, tail)
+          case other               => (histos.server.WatchPolicy.After, other)
+        prepared(body).flatMap: ready =>
           parseRoot(ready.args)
             .flatMap(command => withExcludes(command, ready))
+            .flatMap(command => watched(command, policy))
             .map(command => Command.Watch(command, rest))
       case "--explain" :: Nil =>
         ZIO.fail(CliParseError.Pattern("--explain needs a check id"))
@@ -268,6 +272,16 @@ object Grammar:
       case _ =>
         prepared(args).flatMap: ready =>
           parseRoot(ready.args).flatMap(command => withExcludes(command, ready))
+
+  /** `--restart` repeats a program. Every other watched command runs, then polls. */
+  private def watched(command: Command, policy: histos.server.WatchPolicy): IO[CliParseError, Command] =
+    policy match
+      case histos.server.WatchPolicy.After => ZIO.succeed(command)
+      case histos.server.WatchPolicy.Restart =>
+        command match
+          case Command.Run(id, _) if !id.builtIn => ZIO.succeed(command)
+          case _                                 =>
+            ZIO.fail(CliParseError.WatchCommand("--restart watches a program"))
 
   private def parseRoot(args: List[String]): IO[CliParseError, Command] =
     root

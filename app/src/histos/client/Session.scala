@@ -281,7 +281,7 @@ object Session:
   ): Say => Perform.Edges[Env] =
     say =>
       Perform.Edges(
-        watch = (inner, edge) => watch(repo, apiJar, machine, desk, inner, edge),
+        watch = (inner, policy, edge) => watch(repo, apiJar, machine, desk, inner, policy, edge),
         reload = ZIO.fail(ServerError.NoServer),
         reboot = Cli.bootCall(repo, apiJar).provideSomeLayer(ZLayer.succeed(machine)).flatMap(Calls.finish(say, _)),
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
@@ -293,28 +293,49 @@ object Session:
       machine: Machine,
       desk: Desk,
       inner: Call,
+      policy: histos.server.WatchPolicy,
       say: Say,
   ): ZIO[
     Loader & histos.resolve.Resolve & histos.cache.ContentStore & Scope,
     ServerError,
     Unit,
   ] =
-    Operation.underWatch(inner) match
+    Operation.underWatch(inner, policy) match
       case Left(error) =>
         Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))
       case Right(call) =>
-        Watching.session(
-          repo,
-          say,
-          answer(repo, apiJar, machine, desk, call, say.dropExit),
-          fresh(repo, apiJar, desk).foldZIO(
-            {
-              case _: LoadError       => ZIO.succeed(List(repo.resolve("histos.scala")))
-              case error: ServerError => ZIO.fail(error)
-            },
-            loaded => ZIO.succeed(Watching.roots(repo, call, loaded.graph)),
-          ),
+        val watched = fresh(repo, apiJar, desk).foldZIO(
+          {
+            case _: LoadError       => ZIO.succeed(Watching.Watched(List(repo.resolve("histos.scala")), Set.empty))
+            case error: ServerError => ZIO.fail(error)
+          },
+          loaded => ZIO.succeed(Watching.watched(repo, call, loaded.graph)),
         )
+        policy match
+          case histos.server.WatchPolicy.Restart =>
+            Watching.beside(
+              say,
+              answer(repo, apiJar, machine, desk, call, say),
+              watched,
+              changed =>
+                val compile = call match
+                  case Call.Run(id, _) =>
+                    histos.ProjectName.from(id) match
+                      case Right(name) => Call.Compile(List(name))
+                      case Left(_)     => Call.Compile(Nil)
+                  case _ => Call.Compile(Nil)
+                answer(repo, apiJar, machine, desk, compile, say.dropExit) *>
+                  watched.map(found =>
+                    changed.exists(path => found.paths.exists(root => Watching.covers(root, path)))
+                  ),
+            )
+          case histos.server.WatchPolicy.After =>
+            Watching.session(
+              repo,
+              say,
+              answer(repo, apiJar, machine, desk, call, say.dropExit),
+              watched,
+            )
 
   private def fresh(
       repo: Path,

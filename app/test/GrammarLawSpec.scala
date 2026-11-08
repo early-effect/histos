@@ -30,6 +30,11 @@ object GrammarLawSpec extends ZIOSpecDefault:
           List("~", "run", "inspect") -> Right(
             Command.Watch(Command.Run(ready.inspect, None), List("run", "inspect"))
           ),
+          List("~", "--restart", "run", "api") -> Right(
+            Command.Watch(Command.Run(ready.api, None), List("--restart", "run", "api"))
+          ),
+          List("~", "--restart", "compile") -> Left(CliParseError.WatchCommand("--restart watches a program")),
+          List("~", "--restart", "run", "inspect") -> Left(CliParseError.WatchCommand("--restart watches a program")),
         )
     ,
     test("explain takes one check id"):

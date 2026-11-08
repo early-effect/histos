@@ -3,7 +3,7 @@ package histos.cli
 import histos.coverage.Excludes
 import histos.plugin.{PluginArgs, PluginId, PluginTaskId, TaskName}
 import histos.scaffold.ImportSource
-import histos.server.Call
+import histos.server.{Call, WatchPolicy}
 import histos.task.{RunId, TaskId}
 import histos.testrun.{SuitePattern, TestMode}
 import histos.{CoverageFloors, Platform, ProjectName}
@@ -47,10 +47,15 @@ object OperationLawSpec extends ZIOSpecDefault:
     ,
     test("a nested watch and bsp are not a watch payload"):
       assertTrue(
-        Operation.underWatch(Call.Watch(Call.Version)) == Left(CliParseError.WatchCommand("watch does not nest")),
-        Operation.underWatch(Call.Bsp) == Left(CliParseError.Rejected),
-        Operation.underWatch(Call.Version) == Right(Call.Version),
-        Operation.call(Command.Watch(Command.Version, Nil)) == Right(Call.Watch(Call.Version)),
+        Operation.underWatch(Call.Watch(Call.Version, WatchPolicy.After), WatchPolicy.After) == Left(
+          CliParseError.WatchCommand("watch does not nest")
+        ),
+        Operation.underWatch(Call.Compile(Nil), WatchPolicy.Restart) == Left(
+          CliParseError.WatchCommand("--restart watches a program")
+        ),
+        Operation.underWatch(Call.Bsp, WatchPolicy.After) == Left(CliParseError.Rejected),
+        Operation.underWatch(Call.Version, WatchPolicy.After) == Right(Call.Version),
+        Operation.call(Command.Watch(Command.Version, Nil)) == Right(Call.Watch(Call.Version, WatchPolicy.After)),
       )
     ,
     test("nothing affected is a pattern and every other test choice is a run"):
