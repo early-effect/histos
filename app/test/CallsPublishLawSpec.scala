@@ -5,6 +5,7 @@ import histos.cache.ContentStore
 import histos.jdk.Machine
 import histos.report.CallResult
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
+import histos.version.VersionTask
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
 import histos.{
@@ -24,6 +25,7 @@ import histos.{
 }
 import histos.`scala`
 
+import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
@@ -43,6 +45,7 @@ object CallsPublishLawSpec extends ZIOSpecDefault:
             dir.resolve("publishlaw").resolve("src").resolve("main").resolve("scala").resolve("Ready.scala")
           val program =
             for
+              _ <- commitHead(dir)
               bare <- ZIO
                 .fromEither(Projects(ships(Ship("demo").next(1, 2, 3)(named)), named))
                 .catchAll(error => ZIO.dieMessage(error.message))
@@ -159,6 +162,31 @@ object CallsPublishLawSpec extends ZIOSpecDefault:
           case Some(parent) => walk(parent, left - 1)
           case None         => None
     walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
+
+  /** A snapshot coordinate is the commit at HEAD. An empty releases file is a checked registry. */
+  private def commitHead(repo: Path): ZIO[Any, Nothing, Unit] =
+    for
+      _ <- git(repo, "init", "-b", "topic")
+      _ <- git(repo, "config", "user.email", "law@example.com")
+      _ <- git(repo, "config", "user.name", "Law")
+      _ <- Workspace.writeString(repo.resolve("ready"), "ready\n").catchAll(error => ZIO.dieMessage(error.message))
+      _ <- git(repo, "add", "ready")
+      _ <- git(repo, "commit", "--no-gpg-sign", "-m", "ready")
+      _ <- Workspace.writeString(VersionTask.path(repo), "").catchAll(error => ZIO.dieMessage(error.message))
+    yield ()
+
+  private def git(repo: Path, args: String*): ZIO[Any, Nothing, Unit] =
+    val command = List("git", "-C", repo.toString) ++ args
+    ZIO
+      .attemptBlocking {
+        val process = new ProcessBuilder(command*).redirectErrorStream(true).start()
+        val text    = new String(process.getInputStream.readAllBytes, StandardCharsets.UTF_8)
+        (process.waitFor(), text)
+      }
+      .orDie
+      .flatMap: (code, text) =>
+        if code == 0 then ZIO.unit
+        else ZIO.dieMessage(s"${command.mkString(" ")} ($code) $text")
 
   private def parentOf(path: Path): Path =
     Option(path.getParent).getOrElse(path)
