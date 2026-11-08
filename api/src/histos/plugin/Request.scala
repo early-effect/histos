@@ -73,9 +73,12 @@ final case class RunRequest(
     linked: List[LinkedScript] = Nil,
 )
 
-/** The contribution stored on the graph. Not the trait, the classloader, or a function. */
+/** What `use` registered. `contribution` is the data the graph keeps. `plugin` is the value `contribute` ran on, and
+  * the runtime calls `run` on it. The second parameter list keeps the value out of equality, so two evaluations of one
+  * build still produce equal graphs.
+  */
 final case class RegisteredPlugin(
     id: PluginId,
     entry: EntryName,
     contribution: Contribution,
-)
+)(val plugin: HistosPlugin)

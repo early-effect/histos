@@ -1,16 +1,13 @@
 package histos.load
 
 import histos.cache.ContentStore
-import histos.pack.ClassJar
 import histos.resolve.Resolve
-import histos.workspace.{IoFailure, IoFault, Workspace}
+import histos.workspace.Workspace
 import histos.{Module, Platform, Resolution}
-
-import java.nio.file.{Files, Path}
 
 import slayer.stubbed
 
-import zio.{IO, Scope, ZIO, ZLayer}
+import zio.{Scope, ZIO, ZLayer}
 import zio.test.*
 
 object LoaderProjectLawSpec extends ZIOSpecDefault:
@@ -26,7 +23,7 @@ object LoaderProjectLawSpec extends ZIOSpecDefault:
               (stubbed[Resolve] ++ ZLayer.succeed(ContentStore.in(root.resolve("store")))) >>> Loader.live
             val run =
               for
-                api   <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+                api   <- LoaderApiJar.of(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
                 _     <- Workspace.writeString(source, buildFile).mapError(LoadError.Io(_))
                 found <- ZIO.serviceWithZIO[Loader](_.load(root, api))
               yield found.graph.projects match
@@ -57,20 +54,4 @@ object LoaderProjectLawSpec extends ZIOSpecDefault:
       |    val loaderlaw = module("loaderlaw", Jvm)(scala"3.10.0")
       |    Projects(loaderlaw)
       |""".stripMargin
-
-  /** `prepare` hashes this path with `Files.readAllBytes`, so a classes directory is zipped first. */
-  private def apiJar(cls: Class[?], dest: Path): IO[LoadError, Path] =
-    Boundary.codeSource(cls) match
-      case None       => ZIO.fail(LoadError.MissingFile(dest))
-      case Some(path) =>
-        ZIO
-          .attemptBlocking(Files.isRegularFile(path))
-          .mapError(_ => LoadError.Io(IoFailure(path, IoFault.Stat)))
-          .flatMap: file =>
-            if file then ZIO.succeed(path)
-            else
-              ClassJar
-                .write(path, dest)
-                .mapBoth(_ => LoadError.Io(IoFailure(dest, IoFault.Write)), _.path)
-
 end LoaderProjectLawSpec

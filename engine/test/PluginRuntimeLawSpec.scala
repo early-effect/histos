@@ -36,7 +36,6 @@ object PluginRuntimeLawSpec extends ZIOSpecDefault:
                 ClassLoader.getSystemClassLoader,
                 threads,
                 Nil,
-                Nil,
                 ApiDigest.trusted("ab" * 32),
               )
               out <- runtime.run(id, PluginArgs.empty).either

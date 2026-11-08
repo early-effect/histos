@@ -365,6 +365,8 @@ Histos does not install a JDK, Coursier, Node, or clang. The running JVM must be
 
 A plugin is a Scala 3 library with one [HistosPlugin](api/src/histos/plugin/HistosPlugin.scala). The build file names it in the header and registers it with `use`. It compiles against `histos.api`. It does not see the engine. A command name the grammar owns is reserved. `acp` is reserved and has no command. [PluginSpec](api/test/PluginSpec.scala) locks that contract.
 
+`use` takes a plugin value, and the engine calls `contribute` and `run` on that same value. An object plugin is its own value. A plugin that takes configuration at `use` returns a value of another class that closes over it and overrides `entryClass` with the entry object's class. The jar still names one entry object in `META-INF/histos/plugin`. The loader loads that entry, checks it is a plugin with the id `use` registered, and runs the value `use` passed. [LoaderConfiguredPluginLawSpec](engine/test/LoaderConfiguredPluginLawSpec.scala) locks that.
+
 `run` is called inside a `Scope`. That scope closes when the task returns, including when the task is interrupted. A temp file and a fork that must not outlive the task belong there. [PluginScopes](api/src/histos/plugin/PluginScopes.scala) also names the generation scope. An acquire extended into `ResourceLife.Generation` stays open after the task returns and closes when this generation of plugin classes is released. `Server.install` is that acquire. `Server.serve` never returns, so the watch never starts.
 
 ## Scenarios

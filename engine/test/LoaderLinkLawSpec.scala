@@ -2,7 +2,6 @@ package histos.load
 
 import histos.cache.ContentStore
 import histos.jdk.{Sha256, Sha256Digest}
-import histos.pack.ClassJar
 import histos.plugin.{ApiDigest, HistosPlugin, LinkStrategy, PluginCoordinate, PluginLoadError}
 import histos.resolve.{
   ArtifactName,
@@ -41,7 +40,7 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
         val store = ContentStore.in(root.resolve("store"))
         val run   =
           for
-            api   <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+            api   <- LoaderApiJar.of(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
             bytes <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
             sha = Sha256Digest.of(Chunk.fromArray(bytes))
             launcher <- ZIO.fromEither(ApiDigest.from(sha.value)).catchAll(error => ZIO.dieMessage(error.message))
@@ -102,7 +101,7 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
         val store = ContentStore.in(root.resolve("store"))
         val run   =
           for
-            api   <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+            api   <- LoaderApiJar.of(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
             bytes <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
             sha = Sha256Digest.of(Chunk.fromArray(bytes))
             launcher <- ZIO.fromEither(ApiDigest.from(sha.value)).catchAll(error => ZIO.dieMessage(error.message))
@@ -192,18 +191,4 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
     out.putNextEntry(new ZipEntry(name))
     out.write(text.getBytes(StandardCharsets.UTF_8))
     out.closeEntry()
-
-  private def apiJar(cls: Class[?], dest: Path): zio.IO[LoadError, Path] =
-    Boundary.codeSource(cls) match
-      case None       => ZIO.fail(LoadError.MissingFile(dest))
-      case Some(path) =>
-        ZIO
-          .attemptBlocking(Files.isRegularFile(path))
-          .mapError(_ => LoadError.Io(histos.workspace.IoFailure(path, histos.workspace.IoFault.Stat)))
-          .flatMap: file =>
-            if file then ZIO.succeed(path)
-            else
-              ClassJar
-                .write(path, dest)
-                .mapBoth(_ => LoadError.Io(histos.workspace.IoFailure(dest, histos.workspace.IoFault.Write)), _.path)
 end LoaderLinkLawSpec

@@ -88,7 +88,6 @@ object PluginRuntime:
       graph: ProjectGraph,
       loader: ClassLoader,
       threads: PluginThreads,
-      instances: List[HistosPlugin],
       links: List[PluginLink],
       launcher: ApiDigest,
   ): ZIO[Scope, Nothing, PluginRuntime] =
@@ -101,7 +100,6 @@ object PluginRuntime:
       graph,
       loader,
       threads,
-      instances,
       links,
       launcher,
       environment.get[Histos],
@@ -113,7 +111,6 @@ object PluginRuntime:
       graph: ProjectGraph,
       loader: ClassLoader,
       threads: PluginThreads,
-      instances: List[HistosPlugin],
       val links: List[PluginLink],
       launcher: ApiDigest,
       runner: Histos,
@@ -454,7 +451,8 @@ object PluginRuntime:
         case (found, task) if found == id => task
 
     private def instance(id: PluginId): Option[HistosPlugin] =
-      instances.find(_.id == id)
+      graph.plugins.collectFirst:
+        case registered if registered.id == id => registered.plugin
 
     private def hashRequest(
         id: PluginTaskId,

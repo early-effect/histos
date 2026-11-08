@@ -61,6 +61,16 @@ final class Fixed(val id: PluginId, value: Contribution) extends HistosPlugin:
     ZIO.succeed(PluginOutput("fixed", Nil))
 end Fixed
 
+/** A value of its own class that closes over `tag`. The jar entry stays `entry`. */
+final class Configured(entry: HistosPlugin, tag: String) extends HistosPlugin:
+  def id: PluginId                  = entry.id
+  override def entryClass: Class[?] = entry.getClass
+  def contribute: Contribution      = entry.contribute
+
+  def run(request: RunRequest): ZIO[Scope, PluginRunError, PluginOutput] =
+    ZIO.succeed(PluginOutput(tag, Nil))
+end Configured
+
 object PluginSpec extends ZIOSpecDefault:
   private val digest = "ab" * 32
   private val other  = "cd" * 32
@@ -329,6 +339,9 @@ object PluginSpec extends ZIOSpecDefault:
   private def site(name: JobName, taskName: TaskName, published: Site): CiJob =
     SiteJob(name, taskName, published)
 
+  private def instances(built: Either[BuildError, ProjectGraph]): List[HistosPlugin] =
+    built.toOption.toList.flatMap(_.plugins.map(_.plugin))
+
   private val registration = suite("registration")(
     test("use copies the contribution and does not call run"):
       val built = Projects(use(Echo, Quiet), jvm("core"))
@@ -346,13 +359,37 @@ object PluginSpec extends ZIOSpecDefault:
         Nil,
         Nil,
       )
-      assertTrue:
+      assertTrue(
         built.map(_.plugins) == Right(
           List(
-            RegisteredPlugin(Echo.id, EntryName("histos.plugin.Echo$"), echo),
-            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet),
+            RegisteredPlugin(Echo.id, EntryName("histos.plugin.Echo$"), echo)(Echo),
+            RegisteredPlugin(Quiet.id, EntryName("histos.plugin.Quiet$"), quiet)(Quiet),
           )
-        )
+        ),
+        instances(built).corresponds(List(Echo, Quiet))(_ eq _),
+      )
+    ,
+    test("a configured value is the registered instance and names the entry object"):
+      val configured = Configured(Echo, "x")
+      val built      = Projects(use(configured), jvm("core"))
+      assertTrue(
+        built.map(_.plugins.map(_.entry)) == Right(List(EntryName("histos.plugin.Echo$"))),
+        instances(built).corresponds(List(configured))(_ eq _),
+      )
+    ,
+    test("two evaluations of one build give equal graphs although the plugin values differ"):
+      def evaluate = Projects(use(Configured(Echo, "x")), jvm("core"))
+      assertTrue(evaluate == evaluate)
+    ,
+    test("a value whose entry class has no entry name is a plugin defect"):
+      val anonymous = new HistosPlugin:
+        def id: PluginId             = PluginId("test.anonymous")
+        def contribute: Contribution = Contribution(Nil, Nil, Nil)
+
+        def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+          ZIO.succeed(PluginOutput("anonymous", Nil))
+      val built = Projects(use(anonymous), jvm("core"))
+      assertTrue(built == Left(BuildError.PluginDefect(anonymous.id, anonymous.getClass.getName)))
     ,
     test("a build that does not call use stores no plugins"):
       assertTrue(Projects(jvm("core")).map(_.plugins) == Right(Nil))

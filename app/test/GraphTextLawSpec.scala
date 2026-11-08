@@ -9,6 +9,7 @@ import histos.plugin.{
   DeclaredTask,
   EntryName,
   EnvName,
+  HistosPlugin,
   InputKey,
   JobName,
   Need,
@@ -17,6 +18,7 @@ import histos.plugin.{
   PluginLinked,
   RegisteredPlugin,
   RepoPath,
+  RunRequest,
   Seal,
   TaskJob,
   TaskName,
@@ -36,12 +38,18 @@ import histos.{
   Platform,
 }
 
+import zio.ZIO
 import zio.test.*
 
 object GraphTextLawSpec extends ZIOSpecDefault:
   private val digest =
     ApiDigest("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
   private val id = PluginId("demo")
+
+  private object Unrun extends HistosPlugin:
+    def id: PluginId             = GraphTextLawSpec.id
+    def contribute: Contribution = Contribution(Nil, Nil, Nil)
+    def run(request: RunRequest) = ZIO.dieMessage("a graph listing never runs a plugin")
 
   def spec = suite("graph text laws")(
     test("a module and an aggregate render their tokens and a plugin hides env and text"):
@@ -98,6 +106,6 @@ object GraphTextLawSpec extends ZIOSpecDefault:
       id,
       EntryName.trusted("demo.Pack"),
       Contribution(List(task), List(command), List(TaskJob(JobName("nightly"), TaskName("pack")))),
-    )
+    )(Unrun)
     ProjectGraph.trusted(List(api, root), Splits.aggregate, Catalog.empty, None, Nil, List(plugin))
 end GraphTextLawSpec

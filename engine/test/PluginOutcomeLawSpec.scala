@@ -152,16 +152,15 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
       threads <- PluginThreads.make(ClassLoader.getSystemClassLoader)
       runtime <- PluginRuntime.loaded(
         root,
-        graph(tasks),
+        graph(tasks, plugin),
         ClassLoader.getSystemClassLoader,
         threads,
-        List(plugin),
         Nil,
         ApiDigest.trusted("ab" * 32),
       )
     yield runtime
 
-  private def graph(tasks: List[DeclaredTask]) =
+  private def graph(tasks: List[DeclaredTask], plugin: HistosPlugin) =
     ProjectGraph.trusted(
       Nil,
       Splits.aggregate,
@@ -173,7 +172,7 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
           pluginId,
           EntryName.trusted("demo.Plugin$"),
           Contribution(tasks, Nil, Nil),
-        )
+        )(plugin)
       ),
     )
 
