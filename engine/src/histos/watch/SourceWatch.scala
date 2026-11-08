@@ -29,7 +29,15 @@ object SourceWatch:
     (repo.resolve("histos.scala") :: owned ::: shared).distinct
 
   def take(roots: List[Path]): IO[WatchError, Snapshot] =
-    ZIO.foreach(roots)(one).map(found => Snapshot(found.flatten.sortBy(_.path)))
+    take(roots, Set.empty)
+
+  /** `excluded` are files a task wrote. A directory root still walks, and those files are not a change. */
+  def take(roots: List[Path], excluded: Set[Path]): IO[WatchError, Snapshot] =
+    ZIO
+      .foreach(roots)(one)
+      .map: found =>
+        val skip = excluded.map(_.toAbsolutePath.normalize.toString)
+        Snapshot(found.flatten.filterNot(entry => skip.contains(entry.path)).sortBy(_.path))
 
   private def one(root: Path): IO[WatchError, List[Entry]] =
     ZIO.attemptBlocking(entries(root)).mapError(_ => WatchError.Read(root))
@@ -42,12 +50,15 @@ object SourceWatch:
     * differ from `start`.
     */
   def since(roots: List[Path], start: Snapshot): IO[WatchError, List[Path]] =
+    since(roots, start, Set.empty)
+
+  def since(roots: List[Path], start: Snapshot, excluded: Set[Path]): IO[WatchError, List[Path]] =
     def poll(seen: Snapshot): IO[WatchError, Snapshot] =
-      ZIO.sleep(Poll) *> take(roots).flatMap { now =>
+      ZIO.sleep(Poll) *> take(roots, excluded).flatMap { now =>
         if now == seen then poll(seen) else settle(now)
       }
     def settle(seen: Snapshot): IO[WatchError, Snapshot] =
-      ZIO.sleep(Settle) *> take(roots).flatMap { now =>
+      ZIO.sleep(Settle) *> take(roots, excluded).flatMap { now =>
         if now == seen then ZIO.succeed(now) else settle(now)
       }
     poll(start).map(done => woke(start, done))

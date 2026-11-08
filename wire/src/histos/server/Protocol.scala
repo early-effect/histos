@@ -117,6 +117,11 @@ private object CallJson:
 
 import CallJson.given
 
+/** How a watch repeats. `After` runs the call and then polls. `Restart` polls while a program runs and replaces it. */
+enum WatchPolicy derives JsonCodec:
+  case After
+  case Restart
+
 enum Call derives JsonCodec:
   case Compile(projects: List[ProjectName])
   case Test(projects: List[ProjectName], patterns: List[SuitePattern], mode: TestMode)
@@ -147,7 +152,7 @@ enum Call derives JsonCodec:
   case CacheClean(mode: CacheCleanMode)
   case CachePromote(from: CacheNamespace, to: CacheNamespace)
   case Launcher(action: LauncherAction)
-  case Watch(inner: Call)
+  case Watch(inner: Call, policy: WatchPolicy)
   case Bsp
   case PreviewCompile(projects: List[ProjectName])
   case PreviewTest(projects: List[ProjectName])

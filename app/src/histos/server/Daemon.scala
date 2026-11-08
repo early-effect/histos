@@ -623,7 +623,7 @@ object Daemon:
                   histos.zinc.CompileMemo & histos.resolve.ResolutionService
               ] =
                 Perform.Edges(
-                  watch = (inner, edge) => watched(inner, edge),
+                  watch = (inner, policy, edge) => watched(inner, policy, edge),
                   reload = Calls.finish(out, CallResult.Reported(Report.empty)),
                   reboot = reboot(repo, bound, server, life, output),
                   bsp = bsp(
@@ -689,6 +689,7 @@ object Daemon:
 
               def watched(
                   inner: Call,
+                  policy: WatchPolicy,
                   out: Say,
               ): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
@@ -696,29 +697,62 @@ object Daemon:
                 ServerError,
                 Unit,
               ] =
-                Operation.underWatch(inner) match
+                Operation.underWatch(inner, policy) match
                   case Left(error) =>
                     Calls.finish(out, CallResult.Fault(BuildFault.Rejected(Rejection.Watch(error.message))))
                   case Right(call) =>
-                    Watching.session(
-                      repo,
-                      out,
-                      run(call, out.dropExit),
-                      watchRoots(call),
-                    )
+                    policy match
+                      case WatchPolicy.Restart =>
+                        Watching.beside(
+                          out,
+                          run(call, out),
+                          watchRoots(call),
+                          changed => replace(call, changed, out),
+                        )
+                      case WatchPolicy.After =>
+                        Watching.session(
+                          repo,
+                          out,
+                          run(call, out.dropExit),
+                          watchRoots(call),
+                        )
+
+              /** Compile before the fork is touched. A failed compile keeps it. A successful compile replaces it only when
+                * the change is one of the program's roots.
+                */
+              def replace(
+                  call: Call,
+                  changed: List[Path],
+                  out: Say,
+              ): ZIO[
+                histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                  histos.zinc.CompileMemo & histos.resolve.ResolutionService,
+                ServerError,
+                Boolean,
+              ] =
+                val compile = call match
+                  case Call.Run(id, _) =>
+                    ProjectName.from(id) match
+                      case Right(name) => Call.Compile(List(name))
+                      case Left(_)     => Call.Compile(Nil)
+                  case _ => Call.Compile(Nil)
+                run(compile, out.dropExit) *>
+                  watchRoots(call).map(watched =>
+                    changed.exists(path => watched.paths.exists(root => Watching.covers(root, path)))
+                  )
 
               def watchRoots(call: Call): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
                   histos.zinc.CompileMemo & histos.resolve.ResolutionService,
                 ServerError,
-                List[Path],
+                Watching.Watched,
               ] =
                 adopt(repo, apiJar, version, bound, warm).flatMap:
                   case Left(_) =>
-                    ZIO.succeed(List(repo.resolve("histos.scala")))
+                    ZIO.succeed(Watching.Watched(List(repo.resolve("histos.scala")), Set.empty))
                   case Right(held) =>
                     ZIO
-                      .succeed(Watching.roots(repo, call, held.graph))
+                      .succeed(Watching.watched(repo, call, held.graph))
                       .ensuring(release(held))
 
               /** A graph command adopts a generation. Reload forces one. Bsp drops that lease before the session, which
@@ -882,7 +916,7 @@ object Daemon:
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
           Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
           Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
-          Call.Launcher(_) | Call.Watch(_) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
+          Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
           Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull |
           Call.PreviewRun(_, _) =>
         false

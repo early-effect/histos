@@ -12,6 +12,7 @@ import histos.plugin.{
   PluginLinked,
   PluginOutput,
   PluginRunError,
+  PluginScopes,
   PluginTaskId,
   RunRequest,
   WrittenFile,
@@ -54,8 +55,10 @@ final case class PluginLink(
     artifacts: List[String],
 )
 
-/** Loaded plugin classes. The load `Scope` owns `loader` and `threads` and closes them when the caller finishes. `run`
-  * uses an inner `Scope`, so a plugin's finalizer runs when the task ends, including on interrupt.
+/** Loaded plugin classes. The load `Scope` owns `loader`, `threads`, and the generation scope, and closes them when the
+  * caller finishes. `run` uses an inner `Scope`, so a finalizer on the environment `Scope` runs when the task ends,
+  * including on interrupt. `PluginScopes` names that scope and the generation scope, and a task extends the one an
+  * acquire should die with.
   */
 trait PluginRuntime:
   def run(
@@ -89,17 +92,21 @@ object PluginRuntime:
       links: List[PluginLink],
       launcher: ApiDigest,
   ): ZIO[Scope, Nothing, PluginRuntime] =
-    (Parallelism.live >>> Histos.live).build.map: environment =>
-      Running(
-        repo,
-        graph,
-        loader,
-        threads,
-        instances,
-        links,
-        launcher,
-        environment.get[Histos],
-      )
+    for
+      generation  <- Scope.make
+      _           <- ZIO.addFinalizer(generation.close(zio.Exit.unit))
+      environment <- (Parallelism.live >>> Histos.live).build
+    yield Running(
+      repo,
+      graph,
+      loader,
+      threads,
+      instances,
+      links,
+      launcher,
+      environment.get[Histos],
+      generation,
+    )
 
   private final class Running(
       repo: Path,
@@ -110,6 +117,7 @@ object PluginRuntime:
       val links: List[PluginLink],
       launcher: ApiDigest,
       runner: Histos,
+      generation: Scope.Closeable,
   ) extends PluginRuntime:
     def run(
         id: PluginTaskId,
@@ -338,7 +346,7 @@ object PluginRuntime:
       val ran = ZIO
         .suspendSucceed(plugin.run(request))
         .catchSomeDefect(defect => ZIO.fail(classify(defect)))
-      ZIO.scoped(ran).flatMap(leak).catchAll(refuse)
+      ZIO.scoped(ran.provideSomeLayer(PluginScopes.live(generation))).flatMap(leak).catchAll(refuse)
 
     private def leak(output: PluginOutput): IO[PluginRunError, PluginOutput] =
       refused match

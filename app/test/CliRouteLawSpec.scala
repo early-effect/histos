@@ -3,7 +3,7 @@ package histos.cli
 import histos.doctor.FaultText
 import histos.load.{LoadError, Loader}
 import histos.report.{BuildFault, CallResult, Rejection}
-import histos.server.{Call, Message, ServerError}
+import histos.server.{Call, Message, ServerError, WatchPolicy}
 import slayer.{stub, stubbed}
 
 import java.nio.file.Path
@@ -72,7 +72,7 @@ object CliRouteLawSpec extends ZIOSpecDefault:
           .watchCall(List("compile"), repo, jar)
           .either
           .map: got =>
-            assertTrue(got == Right(Call.Watch(Call.Compile(Nil))))
+            assertTrue(got == Right(Call.Watch(Call.Compile(Nil), WatchPolicy.After)))
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader])
     ,
     test("watch of bsp is usage and does not load the build"):
