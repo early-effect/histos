@@ -1,6 +1,7 @@
 package histos.zinc
 
 import histos.jdk.Sha256
+import histos.pack.JarError
 import histos.resolve.{
   ArtifactName,
   Classpath,
@@ -194,7 +195,8 @@ object ScalacClasspath:
     dependencies.exists: dep =>
       dep.name == "histos-api" || ArtifactName.of(dep, version, platform).startsWith("histos-api")
 
-  /** The pure api jar inside this process. An assembly carries it at `bootstrap/histos-api.jar`.
+  /** The pure api jar inside this process. An assembly carries it at `bootstrap/histos-api.jar`. Class files are packed
+    * into the repo cache.
     */
   private[histos] def hostApi(repo: Path): IO[GraphCompileError, Path] =
     codeSource match
@@ -215,6 +217,17 @@ object ScalacClasspath:
       case histos.load.LoadError.Plugin(_)         => GraphCompileError.RootRead(repo)
       case histos.load.LoadError.Resolve(_)        => GraphCompileError.RootRead(repo)
       case histos.load.LoadError.NoHome            => GraphCompileError.RootRead(repo)
+      case histos.load.LoadError.Jar(error)        => GraphCompileError.RootRead(jarPath(repo, error))
+
+  private def jarPath(repo: Path, error: JarError): Path =
+    error match
+      case JarError.NotADirectory(path)     => path
+      case JarError.Empty(path)             => path
+      case JarError.DestinationInside(path) => path
+      case JarError.Io(op)                  => op.location
+      case JarError.Escaped(_)              => repo
+      case JarError.Duplicate(_)            => repo
+      case JarError.Scaladoc(_)             => repo
 
   private def codeSource: Option[Path] =
     Option(classOf[histos.HistosBuild].getProtectionDomain)

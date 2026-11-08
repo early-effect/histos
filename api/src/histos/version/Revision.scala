@@ -1,6 +1,6 @@
 package histos.version
 
-/** `<ship>-ci`. publishLocal writes it. Snapshots refuse it. */
+/** `<ship>-ci`. The versions line names it. A publish does not write it, and it is not a pin. */
 opaque type CiVersion = ShipNumber
 
 object CiVersion:

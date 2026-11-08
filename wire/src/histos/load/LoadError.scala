@@ -2,6 +2,7 @@ package histos.load
 
 import histos.doctor.{Diagnostic, Noted}
 import histos.BuildError
+import histos.pack.JarError
 import histos.plugin.PluginLoadError
 import histos.resolve.ResolveError
 import histos.workspace.IoFailure
@@ -39,6 +40,7 @@ enum LoadError:
   case MissingApi(path: Path)
   case NoHome
   case Io(failure: IoFailure)
+  case Jar(error: JarError)
 
   def message: String = this match
     case Runtime(error)             => error.message
@@ -53,7 +55,8 @@ enum LoadError:
     case Resolve(error)     => error.message
     case MissingApi(path)   => s"$path has no bootstrap api jar"
     case NoHome             => "no user home, so the api jar cannot be cached"
-    case Io(failure) => failure.message
+    case Io(failure)        => failure.message
+    case Jar(error)         => error.message
 
   def diagnose: Diagnostic = this match
     case Resolve(error) => error.diagnose

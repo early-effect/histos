@@ -44,6 +44,7 @@ import histos.zinc.{
   ScalacFlags,
   SemanticDb,
   Sources,
+  ToolchainMiss,
 }
 import histos.pack.{MainClass, MainClassError}
 import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
@@ -155,13 +156,17 @@ private[histos] object TestCompile:
       modules: List[Module],
       version: ScalaVersion,
       platform: Platform,
+      coverage: Option[histos.coverage.CoverageCompile] = None,
   ): IO[ModuleTestError, List[Path]] =
     ZIO.foreach(Module.chain(module, modules, platform)): dependency =>
       histos.zinc.UpstreamCells.chosen(version, dependency, platform, modules) match
         case None =>
           ZIO.fail(ModuleTestError.MissingUpstream(module.name, dependency.name, version))
         case Some(chosen) =>
-          val path = GraphCompile.classesDir(repo, dependency.name, chosen, platform)
+          val measured = coverage.isDefined && histos.coverage.Cell.measures(chosen, platform)
+          val path     =
+            if measured then histos.coverage.Flags.classesDir(repo, dependency.name, chosen, platform)
+            else GraphCompile.classesDir(repo, dependency.name, chosen, platform)
           ZIO
             .attemptBlocking(Files.isDirectory(path))
             .mapError(_ => ModuleTestError.Root(path))
@@ -196,6 +201,7 @@ private[histos] object TestCompile:
       cell: CompiledCell,
       lock: DependencyLock,
       repositories: Repositories,
+      coverage: Option[histos.coverage.CoverageCompile] = None,
   ): ZIO[Resolve & LockedTools, ModuleTestError, Linked] =
     for
       fetched <- classpath(
@@ -211,6 +217,7 @@ private[histos] object TestCompile:
         modules,
         cell.version,
         cell.platform,
+        coverage,
       )
       libraries <- dependencyJars(
         module,
@@ -243,8 +250,9 @@ private[histos] object TestCompile:
       upstreamHashes =
         libraries.map(_.sha256).distinct.filterNot(own.contains)
       resources = (ownResources ++ upstreamResources.flatten).distinct
+      classes <- extendRuntime(coverage, cell, cell.classes :: (upstream ++ library ++ jars))
     yield Linked(
-      cell.classes :: (upstream ++ library ++ jars),
+      classes,
       kept.map(_._2),
       upstreamHashes,
       cell.classes :: upstream,
@@ -290,6 +298,7 @@ private[histos] object TestCompile:
       repositories: Repositories,
       hear: CompileProblem => Unit = _ => (),
       onCompiled: CompileFacts => UIO[Unit] = _ => ZIO.unit,
+      coverage: Option[histos.coverage.CoverageCompile] = None,
   ): ZIO[Resolve & LockedTools & histos.cache.ContentStore & histos.zinc.Compilers, ModuleTestError, Linked] =
     val classes  = testClasses(repo, module.name, cell.version, cell.platform)
     val analysis = testAnalysis(repo, module.name, cell.version, cell.platform)
@@ -301,6 +310,7 @@ private[histos] object TestCompile:
         cell,
         lock,
         repositories,
+        coverage,
       )
       apis <- ZIO.foreach(linked.classDirs)(readApi(module.name, cell.version, _))
       request = CompileRequest(
@@ -313,6 +323,7 @@ private[histos] object TestCompile:
         apis,
         permitted = linked.permitted,
       )
+      held  <- holdMeasured(coverage, linked.classDirs, module.name, cell.version)
       facts <- compileSuite(
         module,
         request,
@@ -321,7 +332,58 @@ private[histos] object TestCompile:
         hear,
       )
       _ <- onCompiled(facts)
+      _ <- restoreMeasured(coverage, held, module.name, cell.version)
     yield linked
+
+  /** Scala 2.13 runs the instrumented classes with the scoverage runtime. Scala 3 already has it in the compiler. */
+  private def extendRuntime(
+      coverage: Option[histos.coverage.CoverageCompile],
+      cell: CompiledCell,
+      classes: List[Path],
+  ): IO[ModuleTestError, List[Path]] =
+    coverage match
+      case None       => ZIO.succeed(classes)
+      case Some(spec) =>
+        val runtime = spec.plugin(cell.version).map(_.runtime)
+        ZIO
+          .fromEither(histos.coverage.Classpath.tests(classes, cell.version, runtime))
+          .mapError:
+            case histos.coverage.ClasspathGap.MissingRuntime =>
+              ModuleTestError.Sources(
+                cell.module,
+                cell.version,
+                CompileError.Toolchain(ToolchainMiss.Coverage(cell.version)),
+              )
+
+  /** A test compile loads upstream classes. Those classes record into their own directories, on top of the measurements
+    * their tests already wrote. Hold the files first and put them back, so the compile's own records are the only ones
+    * that disappear.
+    */
+  private def holdMeasured(
+      coverage: Option[histos.coverage.CoverageCompile],
+      dirs: List[Path],
+      module: ProjectName,
+      version: ScalaVersion,
+  ): IO[ModuleTestError, histos.coverage.Measurements.Held] =
+    coverage match
+      case None    => ZIO.succeed(histos.coverage.Measurements.Held(Nil, Nil))
+      case Some(_) =>
+        histos.coverage.Measurements
+          .hold(dirs)
+          .mapError(fault => ModuleTestError.Sources(module, version, CompileError.Io(fault)))
+
+  private def restoreMeasured(
+      coverage: Option[histos.coverage.CoverageCompile],
+      held: histos.coverage.Measurements.Held,
+      module: ProjectName,
+      version: ScalaVersion,
+  ): IO[ModuleTestError, Unit] =
+    coverage match
+      case None    => ZIO.unit
+      case Some(_) =>
+        histos.coverage.Measurements
+          .restore(held)
+          .mapError(fault => ModuleTestError.Sources(module, version, CompileError.Io(fault)))
 
   private[testrun] def compileSuite(
       module: Module,

@@ -10,6 +10,8 @@ import histos.workspace.{IoFailure, IoFault}
 import histos.{
   Aggregate,
   Axis,
+  CoverageFloors,
+  CoverageJob,
   DocCheck,
   FollowUp,
   JobTimeout,
@@ -100,7 +102,7 @@ object Workflow:
     val have  = committed.split("\n", -1).toVector
     val index = (0 until want.length.max(have.length)).find(i => want.lift(i) != have.lift(i))
     index match
-      case None => "the files differ"
+      case None        => "the files differ"
       case Some(found) =>
         val removed = have.lift(found).getOrElse("")
         val added   = want.lift(found).getOrElse("")
@@ -162,9 +164,9 @@ object Workflow:
 
   private def limits(graph: ProjectGraph): Either[CiError, Unit] =
     graph.ci.timeout match
-      case JobTimeout.Unbounded                                      => Right(())
-      case JobTimeout.Minutes(count) if JobTimeout.admits(count)    => Right(())
-      case JobTimeout.Minutes(count)                                => Left(CiError.JobTimeout(count))
+      case JobTimeout.Unbounded                                  => Right(())
+      case JobTimeout.Minutes(count) if JobTimeout.admits(count) => Right(())
+      case JobTimeout.Minutes(count)                             => Left(CiError.JobTimeout(count))
 
   /** Archives this render will curl. A missing pin fails before any workflow text is built. */
   private def llvmPinned(graph: ProjectGraph): Either[CiError, Unit] =
@@ -175,8 +177,10 @@ object Workflow:
   private def llvmArchives(graph: ProjectGraph): List[String] =
     graph.runnerTools.llvm.toList.flatMap: pinned =>
       val version = pinned.value
-      val native  = graph.projects.collect { case module: Module => module }.exists: module =>
-        module.platforms.all.contains(Platform.Native)
+      val native  = graph.projects
+        .collect { case module: Module => module }
+        .exists: module =>
+          module.platforms.all.contains(Platform.Native)
       val linux =
         if native then List(s"LLVM-$version-Linux-X64.tar.xz") else Nil
       val client = installShip(graph, graph.catalog.ships) match
@@ -205,10 +209,10 @@ object Workflow:
       rendered <- ZIO.fromEither(renderAll(graph, sona))
       _        <- ZIO.foreachDiscard(rendered)(compare(repo, _))
       extra    <- orphans(repo, rendered.map(_.name).toSet)
-      _ <- ZIO.when(extra.nonEmpty)(
+      _        <- ZIO.when(extra.nonEmpty)(
         ZIO.fail(CiError.Drift(workflowPath(fileNameOf(extra.head)), "this file is not rendered by the graph"))
       )
-      _        <- PinScan.check(repo, graph)
+      _ <- PinScan.check(repo, graph)
     yield path(repo)
 
   def update(repo: Path, graph: ProjectGraph, sona: Publishing)(using CiBranch): IO[CiError, Path] =
@@ -310,10 +314,13 @@ object Workflow:
     val doc = graph.docCheck match
       case DocCheck.Off => Nil
       case DocCheck.On  => List(docJob(graph))
+    val coverage = graph.coverage match
+      case CoverageJob.Off        => Nil
+      case CoverageJob.Ask(asked) => List(coverageJob(graph, asked))
     val seed = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
     val boot = if selfHosted(graph) then List(toolchainJob(graph)) else Nil
     val body =
-      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ planned.ci ++ seed ++
+      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ planned.ci ++ seed ++
         List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
@@ -326,21 +333,18 @@ object Workflow:
       case Nil   => Right(None)
       case ships => releaseDocument(graph, ships, sona).map(body => Some(RenderedWorkflow(releaseName, body)))
 
-  /** A ship that names an asset. The workflow publishes snapshots, and on the default branch uploads the dist channel.
-    * An empty asset list emits nothing, so update deletes a stale copy.
+  /** A ship that names an asset. The workflow publishes the commit coordinate and moves the pointer. An empty asset
+    * list emits nothing, so update deletes a stale copy.
     */
   private def snapshotWorkflow(graph: ProjectGraph): Option[RenderedWorkflow] =
     if graph.catalog.ships.exists(ship => assetMember(graph, ship)) then
       Some(RenderedWorkflow(snapshotsName, snapshotDocument(graph)))
     else None
 
-  /** `HISTOS_BRANCH` is `default` only on the repository's default branch. That is the session that names the pointer.
-    * Another ref stores the commit coordinate and does not upload a channel. The assembly step is the same condition:
-    * the channel reads the asset file, and `./histos assembly` writes it.
+  /** Assembly always runs. The channel reads the asset file, and `./histos assembly` writes it. `HISTOS_BRANCH` is
+    * `default` so the pointer moves from any ref.
     */
   private def snapshotDocument(graph: ProjectGraph): String =
-    val branch =
-      "github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && 'default' || 'other'"
     val lines = List(
       "name: snapshots",
       "on:",
@@ -356,13 +360,12 @@ object Workflow:
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli(graph, "snapshots", build = true) ++ List(
-      s"      - if: ${quote(OnDefaultBranch)}",
-      s"        run: ${quote("./histos assembly")}",
+      s"      - run: ${quote("./histos assembly")}",
       s"      - run: ${quote("./histos publish snapshots")}",
       "        env:",
       "          HISTOS_SESSION: snapshot",
       "          HISTOS_SHA: ${{ github.sha }}",
-      s"          HISTOS_BRANCH: $${{ $branch }}",
+      "          HISTOS_BRANCH: default",
       "          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}",
       "          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}",
       "          GITHUB_TOKEN: ${{ github.token }}",
@@ -394,7 +397,7 @@ object Workflow:
       )
     )
     install match
-      case None => Right(lines.mkString("\n") + "\n")
+      case None       => Right(lines.mkString("\n") + "\n")
       case Some(ship) =>
         installJobs(graph, ships, ship).map(extra => (lines ++ extra).mkString("\n") + "\n")
 
@@ -404,7 +407,7 @@ object Workflow:
       s"  release-$name:",
       s"    runs-on: $Runner",
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ releasePermissions(shape) ++ List(
       "    steps:",
       s"      - uses: $Checkout",
@@ -473,16 +476,18 @@ object Workflow:
 
   private def clientHosts(revision: String): Either[CiError, List[String]] =
     DistPlatforms.foldLeft[Either[CiError, List[String]]](Right(Nil)):
-      case (left @ Left(_), _) => left
+      case (left @ Left(_), _)                         => left
       case (Right(lines), (platform, runner, archive)) =>
         val file = s"LLVM-$revision-$archive.tar.xz"
-        LlvmDigest.of(file).map: hex =>
-          lines ++ List(
-            s"          - runner: $runner",
-            s"            platform: $platform",
-            s"            archive: $file",
-            s"            sha256: $hex",
-          )
+        LlvmDigest
+          .of(file)
+          .map: hex =>
+            lines ++ List(
+              s"          - runner: $runner",
+              s"            platform: $platform",
+              s"            archive: $file",
+              s"            sha256: $hex",
+            )
 
   private def clientJob(
       graph: ProjectGraph,
@@ -505,10 +510,11 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ fetchAssembly(graph, Bootstrap.Required) ++ SupplyYaml.preflight(
-      graph,
-      "client",
-    ) ++ clientLlvm(
+    ) ++ clientSetup ++ List(s"      - uses: $Setup") ++ fetchAssembly(graph, Bootstrap.Required) ++ SupplyYaml
+      .preflight(
+        graph,
+        "client",
+      ) ++ clientLlvm(
       revision
     ) ++ List(
       s"      - run: ${quote("./histos client")}",
@@ -894,7 +900,7 @@ object Workflow:
         case Bootstrap.Required => Nil
         case Bootstrap.Omit     => Nil
       List(
-        s"      - uses: ${ActionPins.downloadArtifact.line}",
+        s"      - uses: ${ActionPins.downloadArtifact.line}"
       ) ++ gate ++ List(
         "        with:",
         "          name: histos-bootstrap",
@@ -1072,7 +1078,7 @@ object Workflow:
     (List(
       "  affected:"
     ) ++ toolchainNeeds(graph) ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
       "    permissions:",
       "      actions: read",
@@ -1081,7 +1087,7 @@ object Workflow:
       "      modules: ${{ steps.affected.outputs.modules }}",
       "    steps:",
     ) ++ fullGitCheckout() ++ List(
-      s"      - uses: $Setup",
+      s"      - uses: $Setup"
     ) ++ fetchAssembly(graph) ++ SupplyYaml.preflight(graph, "affected") ++ List(
       "      - id: affected",
       "        env:",
@@ -1130,7 +1136,7 @@ object Workflow:
         List(
           "  test:"
         ) ++ needsAffected(graph) ++ verifyNeeds ++ List(
-          s"    runs-on: $Runner",
+          s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
           "    permissions:",
           "      actions: write",
@@ -1144,9 +1150,9 @@ object Workflow:
         List(
           "  test:"
         ) ++ needsAffected(graph) ++ verifyNeeds ++ List(
-          s"    runs-on: $Runner",
+          s"    runs-on: $Runner"
         ) ++ jobLimit(graph) ++ List(
-          "    permissions:",
+          "    permissions:"
         ) ++ actionsRead(graph) ++ List(
           "      contents: read",
           "    strategy:",
@@ -1309,7 +1315,7 @@ object Workflow:
     */
   private[workflow] def jobLimit(graph: ProjectGraph): List[String] =
     graph.ci.timeout match
-      case JobTimeout.Unbounded                                   => Nil
+      case JobTimeout.Unbounded                                  => Nil
       case JobTimeout.Minutes(count) if JobTimeout.admits(count) => List(s"    timeout-minutes: $count")
       case JobTimeout.Minutes(_)                                 => Nil
 
@@ -1345,15 +1351,36 @@ object Workflow:
     val lines     = List(
       "  doc:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
     ) ++ coursierCli(graph, "doc") ++ prepare ++ storeRestore ++ List(
       s"      - run: ${quote("./histos run doc")}"
+    )
+    lines.mkString("\n")
+
+  /** Beside the suite. It does not wait for the suite. A floor on the ask is a flag. Excludes recorded on the build are
+    * flags too. No floor does not fail on a rate.
+    */
+  private def coverageJob(graph: ProjectGraph, floors: CoverageFloors): String =
+    val command = ("./histos coverage" :: (floors.argv ++ graph.coverageExcludes.argv)).mkString(" ")
+    val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
+    val lines   = List(
+      "  coverage:"
+    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+      s"    runs-on: $Runner"
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:"
+    ) ++ actionsRead(graph) ++ List(
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli(graph, "coverage") ++ prepare ++ storeRestore ++ List(
+      s"      - run: ${quote(command)}"
     )
     lines.mkString("\n")
 
@@ -1367,27 +1394,28 @@ object Workflow:
     (List(
       "  workflow:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",
     ) ++ fullGitCheckout() ++ List(
       s"      - uses: ${ActionPins.originHead}",
       s"      - uses: $Setup",
-    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ List(
-      "      - run: ./histos doctor",
-      "      - run: \"./histos workflow --check\"",
+    ) ++ branchJar(graph) ++ SupplyYaml.preflight(graph, "workflow") ++ SupplyYaml.fullDoctor(
+      graph.supply.updates.author
+    ) ++ List(
+      "      - run: \"./histos workflow --check\""
     )).mkString("\n")
 
   private def versionsJob(graph: ProjectGraph): String =
     (List(
       "  versions:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
-      s"    runs-on: $Runner",
+      s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
-      "    permissions:",
+      "    permissions:"
     ) ++ actionsRead(graph) ++ List(
       "      contents: read",
       "    steps:",

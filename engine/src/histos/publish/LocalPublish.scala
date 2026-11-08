@@ -16,7 +16,7 @@ import histos.native.NativeOrigin
 import histos.doc.DocClasspath
 import histos.pack.{Assembly, AssemblyError, AssemblyFile, ClassJar, JarError, JavadocJar, PackageKey, Resources}
 import histos.resolve.{ArtifactName, BuildResolvers, ClasspathScope, LockedTools, Resolve, ResolveCell, ResolveError}
-import histos.version.{CiVersion, Decision, PublishAction, ShipName, VersionError, VersionTask}
+import histos.version.{Decision, PublishAction, ShipName, VersionError, VersionTask}
 import histos.select.SelectError
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.{CompileError, GraphCompile, GraphCompileError, JvmCompile, ProductDigest, Sources}
@@ -83,8 +83,8 @@ final case class PublishOutput(
 )
 
 object LocalPublish:
-  /** Compile the modules a decision releases and write them. A hold is reported and not written. `<ship>-ci` is written
-    * only when `write` is local.
+  /** Compile the modules a decision releases and write them. A hold is reported and not written. A development session
+    * is the snapshot at HEAD for a local or snapshot write. A release write is not settled.
     */
   def run(
       repo: Path,
@@ -96,10 +96,11 @@ object LocalPublish:
       report: histos.zinc.CompileFeed => zio.UIO[Unit] = _ => zio.ZIO.unit,
   ): ZIO[histos.resolve.Resolve & Publisher & histos.cache.ContentStore, LocalPublishError, PublishOutput] =
     for
+      prepared <- SessionSettle.prepare(repo, graph.catalog, env, write)
       decision <- VersionTask
-        .decide(graph, repo, env)
+        .decide(graph, repo, prepared)
         .mapError(LocalPublishError.Version(_))
-      chosen  <- ZIO.fromEither(scheme(decision, graph.catalog, write))
+      chosen  <- ZIO.fromEither(scheme(decision, graph.catalog))
       written <-
         val skipped = (picked: Picked) => picked.skipped.map(name => LocalPublishError.NotPublished(name).message)
         val refused = (picked: Picked) => picked.refused.map(_.message)
@@ -226,25 +227,13 @@ object LocalPublish:
   private def scheme(
       decision: Decision,
       catalog: histos.version.Catalog,
-      write: PublishWrite,
   ): Either[LocalPublishError, Scheme] =
     decision match
       case Decision.NoCatalog         => Left(LocalPublishError.NothingToPublish)
       case Decision.Develop(_, lines) =>
-        write match
-          case PublishWrite.Snapshots | PublishWrite.Release =>
-            lines match
-              case line :: _ =>
-                Left(LocalPublishError.Development(line.ship, line.compile))
-          case PublishWrite.Local =>
-            lines.toList
-              .foldLeft[Either[LocalPublishError, List[Planned]]](Right(Nil)): (acc, line) =>
-                acc.flatMap: seen =>
-                  members(catalog, line.ship).map(mods =>
-                    seen :+ Planned(line.ship, Revision.Ci(line.compile), mods.toList)
-                  )
-              .flatMap(present)
-              .map(plans => Scheme(plans, Nil))
+        lines match
+          case line :: _ =>
+            Left(LocalPublishError.Development(line.ship, line.compile))
       case Decision.Refused(refusals) =>
         Left(LocalPublishError.Version(VersionError.Refused(refusals)))
       case Decision.Publish(_, lines) =>
@@ -273,13 +262,6 @@ object LocalPublish:
           .flatMap: (plans, held) =>
             if plans.isEmpty && held.isEmpty then Left(LocalPublishError.NothingToPublish)
             else Right(Scheme(plans, held))
-
-  private def present(
-      plans: List[Planned]
-  ): Either[LocalPublishError, List[Planned]] =
-    plans match
-      case Nil  => Left(LocalPublishError.NothingToPublish)
-      case some => Right(some)
 
   private def members(
       catalog: histos.version.Catalog,
@@ -313,7 +295,7 @@ object LocalPublish:
       case Some(group) => Right(group)
       case None        => Left(LocalPublishError.NoOrganization)
 
-  /** A release coordinate needs a license, a developer, and an scm. `-ci` and a snapshot do not. */
+  /** A release coordinate needs a license, a developer, and an scm. A snapshot does not. */
   private def requireFacts(
       graph: ProjectGraph,
       plans: List[Planned],

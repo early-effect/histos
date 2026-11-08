@@ -1,4 +1,6 @@
 import histos.*
+import histos.plugin.SecretName
+import histos.supply.{PrAuthor, SupplyChain, UpdatePolicy}
 
 object build extends HistosBuild:
   def graph =
@@ -16,14 +18,16 @@ object build extends HistosBuild:
       .clang(ClangMajor(21))
       .dependsOn(api)
       .libraryDependencies(zio, zioJson)
+      .testDependencies(zioTest, zioTestSbt)
     val central = module("central", Jvm)(scala3)
       .dependsOn(api, wire)
       .libraryDependencies(zio, dep"rocks.earlyeffect::heddle:0.14.2")
-      .testDependencies(zioTest, zioTestSbt)
+      .testDependencies(zioTest, zioTestSbt, dep"rocks.earlyeffect::slayer:0.2.0")
     val engine = module("engine", Jvm)(scala3)
       .dependsOn(central, api, wire)
       .libraryDependencies(
         zio,
+        zioJson,
         dep"dev.zio::zio-streams:2.1.27",
         dep"org.scala-lang::scala3-compiler:3.10.0",
         dep"org.scala-lang::scaladoc:3.10.0",
@@ -57,6 +61,7 @@ object build extends HistosBuild:
       .testDependencies(
         zioTest,
         zioTestSbt,
+        dep"rocks.earlyeffect::slayer:0.2.0",
         dep"io.grpc:grpc-stub:1.85.1",
       )
     val client = module("client", Native)(scala3)
@@ -80,6 +85,7 @@ object build extends HistosBuild:
       .testDependencies(
         zioTest,
         zioTestSbt,
+        dep"rocks.earlyeffect::slayer:0.2.0",
         dep"org.ow2.asm:asm:9.11.1",
         dep"org.ow2.asm:asm-tree:9.11.1",
       )
@@ -102,6 +108,15 @@ object build extends HistosBuild:
           Some(ToolRevision("1.62.1")),
         )
       )
+      .supplyChain(
+        SupplyChain(updates =
+          UpdatePolicy(author =
+            // The published driver compiles this file. It has App, and it does not have PrAuthor.histosDeps.
+            PrAuthor.App(SecretName("HISTOS_APP_ID"), SecretName("HISTOS_APP_PRIVATE_KEY"))
+          )
+        )
+      )
+      .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .docCheck(
         ships(Ship("histos").next(0, 2, 1)(api, app)),
         api,

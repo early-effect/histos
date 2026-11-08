@@ -3,7 +3,7 @@ package histos.client
 import histos.bsp.Frame
 import histos.build.BuildEvent
 import histos.cli.{CliExit, CompileConsole, Show}
-import histos.server.{Call, Message, ServerError}
+import histos.server.{AssemblyMark, Call, Message, ServerError, ServerFile}
 import histos.report.CallResult
 
 import java.nio.file.{Files, Path, StandardOpenOption}
@@ -54,13 +54,13 @@ object Main extends ZIOAppDefault:
     readRecord(repo).flatMap:
       case None         => boot(repo).flatMap(socket => exchange(repo, socket, call))
       case Some(record) =>
-        version(record).flatMap: ok =>
-          if !ok then ZIO.fail(ServerError.DifferentVersion)
-          else
-            val socket = Path.of(record.socket)
+        agrees(repo, record).flatMap: ok =>
+          val socket = Path.of(record.socket)
+          if ok then
             exchange(repo, socket, call).catchSome:
               case ServerError.Unreachable(_) =>
                 boot(repo).flatMap(fresh => exchange(repo, fresh, call))
+          else replace(repo, socket, call)
 
   private def exchange(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
     ZIO
@@ -124,24 +124,37 @@ object Main extends ZIOAppDefault:
         exit.code
       case _ => exit.code
 
-  private final case class Recorded(version: String, fingerprint: String, socket: String) derives JsonCodec
+  private def replace(repo: Path, socket: Path, call: Call): ZIO[Scope, ServerError, Int] =
+    exchange(repo, socket, Call.Reboot).ignore *>
+      boot(repo).flatMap { fresh =>
+        readRecord(repo).flatMap {
+          case Some(record) =>
+            agrees(repo, record).flatMap: ok =>
+              if ok then exchange(repo, fresh, call)
+              else ZIO.fail(ServerError.DifferentVersion)
+          case None =>
+            exchange(repo, fresh, call)
+        }
+      }
 
-  private def readRecord(repo: Path): IO[ServerError, Option[Recorded]] =
+  private def readRecord(repo: Path): IO[ServerError, Option[ServerFile]] =
     val file = repo.resolve(".histos").resolve("server.json")
     ZIO
       .attemptBlocking {
         if !Files.isRegularFile(file) then None
-        else Files.readString(file).fromJson[Recorded].toOption
+        else ServerFile.parse(Files.readString(file))
       }
       .mapError(_ => ServerError.Io(histos.server.ServerIo.Read(file)))
 
-  private def version(record: Recorded): IO[ServerError, Boolean] =
+  /** Unset `HISTOS_VERSION` is a client the wrapper did not launch. It does not judge the server. */
+  private def agrees(repo: Path, record: ServerFile): IO[ServerError, Boolean] =
     ZIO
       .attempt(Option(System.getenv("HISTOS_VERSION")).filter(_.nonEmpty))
       .mapError(_ => ServerError.Protocol)
-      .map:
-        case None        => true
-        case Some(found) => found == record.version
+      .flatMap:
+        case None => ZIO.succeed(true)
+        case Some(found) =>
+          AssemblyMark.read(repo).map(mark => found == record.version && mark == record.assembly)
 
   /** One starter holds the gate. Everyone waits until `server.sock` accepts. */
   private def boot(repo: Path): IO[ServerError, Path] =

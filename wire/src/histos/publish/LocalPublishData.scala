@@ -32,6 +32,7 @@ enum LocalPublishError:
   case NoOrganization
   case NothingToPublish
   case Development(ship: ShipName, compile: CiVersion)
+  case NoCommit
   case UnknownShip(ship: ShipName)
   case NotPublished(module: ProjectName)
   case SnapshotDependency(ship: ShipName, dependency: String)
@@ -69,6 +70,8 @@ enum LocalPublishError:
     case NothingToPublish           => "nothing publishes"
     case Development(ship, compile) =>
       histos.version.ShipAdvice.development(ship, compile)
+    case NoCommit =>
+      "could not read the commit at HEAD. A snapshot coordinate is that commit."
     case UnknownShip(ship)                    => s"ship '${ship.value}' is not in the catalog"
     case NotPublished(module)                 => s"'${module.value}' is not in a ship"
     case SnapshotDependency(ship, dependency) =>

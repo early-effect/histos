@@ -1,6 +1,9 @@
 package histos
 
-final case class CompilerTools(semanticdb: ToolRevision)
+final case class CompilerTools(
+    semanticdb: ToolRevision,
+    scoverage: ToolRevision = ToolRevision("2.5.2"),
+)
 final case class JsTools(
     revision: JsVersion,
     bridgeScala: ScalaVersion,

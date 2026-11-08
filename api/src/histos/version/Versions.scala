@@ -1,6 +1,6 @@
 package histos.version
 
-/** `<ship>-ci` for one ship. publishLocal writes it. Snapshots refuse it. */
+/** `<ship>-ci` for one ship. The versions line names it. A publish does not write it. */
 final case class DevelopLine(ship: ShipName, compile: CiVersion)
 
 /** What a publish session does with one ship. A hold publishes nothing. */
