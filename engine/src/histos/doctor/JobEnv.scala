@@ -1,17 +1,18 @@
 package histos.doctor
 
-import histos.supply.StepOutcome
+import histos.supply.{StepOutcome, Venue}
 
-/** Facts the generated job already knows. Secret presence sees organization secrets. The app step used the App JWT. */
+/** Facts the generated job already knows. Secret presence sees organization secrets. The app step outcome says whether
+  * the mint step produced the App token. `venue` is `Actions` only inside a GitHub Actions run.
+  */
 final case class JobEnv(
     present: Map[String, Boolean],
     step: Option[StepOutcome],
-    actions: Boolean,
-    githubToken: Option[String],
+    venue: Venue,
 )
 
 object JobEnv:
-  val empty: JobEnv = JobEnv(Map.empty, None, false, None)
+  val empty: JobEnv = JobEnv(Map.empty, None, Venue.Laptop)
 
   def from(env: Map[String, String]): JobEnv =
     val present = env.flatMap: (key, value) =>
@@ -21,7 +22,6 @@ object JobEnv:
     JobEnv(
       present,
       env.get("HISTOS_STEP_APP").flatMap(StepOutcome.parse),
-      env.get("GITHUB_ACTIONS").contains("true"),
-      env.get("GITHUB_TOKEN").filter(_.nonEmpty),
+      if env.get("GITHUB_ACTIONS").contains("true") then Venue.Actions else Venue.Laptop,
     )
 end JobEnv

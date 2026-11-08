@@ -103,13 +103,13 @@ object Render:
     outcome match
       case Outcome.Ok(check, note) =>
         List(s"  ok         ${check.value}           $note")
-      case Outcome.Skipped(check, _, how) =>
-        val hint = how match
-          case Fix.Command(line)    => line.value
-          case Fix.Settings(url, _) => url.value
-          case Fix.Config(file, _)  => file.value
-          case Fix.Steps(items)     => items.head
-        List(s"  -  skipped ${check.value}", s"             $hint")
+      case Outcome.Skipped(check, missing, how) =>
+        val hints = how match
+          case Fix.Command(line)    => List(line.value)
+          case Fix.Settings(url, _) => List(url.value)
+          case Fix.Config(file, _)  => List(file.value)
+          case Fix.Steps(items)     => items.toList
+        s"  -  skipped ${check.value}  (needs $missing)" :: hints.map(hint => s"             $hint")
       case Outcome.Found(diagnostic) =>
         val mark = diagnostic.level match
           case Level.Error   => "x error   "

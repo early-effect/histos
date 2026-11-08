@@ -244,8 +244,10 @@ object DoctorProbeLawSpec extends ZIOSpecDefault:
         env.present.get("HISTOS_APP_ID").contains(true),
         env.present.get("OTHER").contains(false),
         env.step.contains(histos.supply.StepOutcome.Failure),
-        env.actions,
-        env.githubToken.isEmpty,
+        env.venue == histos.supply.Venue.Actions,
+        JobEnv.from(Map.empty).venue == histos.supply.Venue.Laptop,
+        JobEnv.from(Map("GITHUB_ACTIONS" -> "false")).venue == histos.supply.Venue.Laptop,
+        JobEnv.empty.venue == histos.supply.Venue.Laptop,
         hosts.forall(host =>
           GitHubCredential.fromEnv(Map("GH_TOKEN" -> "", "GITHUB_TOKEN" -> "hub"), host).contains("hub")
         ),

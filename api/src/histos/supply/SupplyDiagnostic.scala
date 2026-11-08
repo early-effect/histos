@@ -34,7 +34,12 @@ enum SupplyDiagnostic(
         s"${name.value} was not read",
         s"${why.lead} whether ${name.value} is set.",
         "A secret the workflow can read counts, including an organization secret shared with the repository.",
-        credentialFixes,
+        blindFixes(
+          why,
+          lines(
+            "This token cannot list Actions secrets. Run doctor in the generated workflow job, which reads secret presence from the workflow, or use a token with the repo scope and collaborator access to this repository."
+          ),
+        ),
       )
 
   case AppNotInstalled(repo: RepoName)
@@ -47,7 +52,7 @@ enum SupplyDiagnostic(
         fixes(
           Fix.Settings(
             HttpUrl.trusted(
-              s"https://github.com/apps/histos-deps/installations/new/permissions?target_id=${repo.value}"
+              s"https://github.com/apps/${AppSlug.histosDeps.value}/installations/new/permissions?target_id=${repo.value}"
             ),
             "install the App on this repository",
           )
@@ -60,8 +65,8 @@ enum SupplyDiagnostic(
         Level.Error,
         "the App installation was not read",
         s"${why.lead} whether the histos-deps App is installed${onRepo(repo)}.",
-        "GET /repos/{owner}/{repo}/installation needs the App's JWT. A user token and the Actions token are not that JWT. A 401 is not a contents refusal.",
-        credentialFixes,
+        "An organization owner's user token reads GET /orgs/{org}/installations. The generated job reads HISTOS_STEP_APP from the mint step. An App installed on selected repositories only cannot be listed by a user token.",
+        blindFixes(why, appRefused),
       )
 
   case AppPermissionMissing(permission: AppPermission, needed: Access, why: String)
@@ -73,7 +78,7 @@ enum SupplyDiagnostic(
         why,
         fixes(
           Fix.Settings(
-            HttpUrl.trusted("https://github.com/settings/apps/histos-deps/permissions"),
+            HttpUrl.trusted(s"https://github.com/settings/apps/${AppSlug.histosDeps.value}/permissions"),
             "set the permission, then accept it on the installation",
           )
         ),
@@ -86,7 +91,7 @@ enum SupplyDiagnostic(
         "the App permissions were not read",
         s"${why.lead} whether the App has contents, pull requests, and workflows write${onRepo(repo)}.",
         "Those writes are what the weekly job requests. A token that cannot see the installation does not drop this check.",
-        credentialFixes,
+        blindFixes(why, appRefused),
       )
 
   case AppTokenFailed(stepOutcome: StepOutcome)
@@ -101,6 +106,23 @@ enum SupplyDiagnostic(
             lines(
               "Open the histos-deps run and read the app step.",
               "Confirm the App is installed on this repository and the private key matches HISTOS_APP_ID.",
+            )
+          )
+        ),
+      )
+
+  case AppTokenUnreported
+      extends SupplyDiagnostic(
+        CheckId.trusted("supply.app-token"),
+        Level.Error,
+        "the App token step reported nothing",
+        "this run did not pass HISTOS_STEP_APP, so the mint cannot be shown.",
+        "The generated workflow and supply-chain jobs pass HISTOS_STEP_APP from the App token step. A job that runs doctor without it cannot show that the token minted.",
+        fixes(
+          Fix.Steps(
+            lines(
+              "If a generated job runs doctor without HISTOS_STEP_APP, run ./histos workflow --update and commit the result.",
+              "A laptop run cannot answer this check: only the generated workflow and supply-chain jobs set HISTOS_STEP_APP, from the mint step.",
             )
           )
         ),
@@ -128,7 +150,12 @@ enum SupplyDiagnostic(
         "the required check was not read",
         s"${why.lead} the rule GitHub enforces on the default branch${onRepo(repo)}.",
         "Classic branch protection, a repository ruleset, or an organization ruleset can require the check. A 404 from classic protection means classic protection is off. It does not mean the required contexts are empty.",
-        credentialFixes,
+        blindFixes(
+          why,
+          lines(
+            "This token cannot read the default branch rules. Use a token with the repo scope on a repository you can read, or run doctor in the generated workflow job."
+          ),
+        ),
       )
 
   case SignedCommitsConflict(rule: RuleSource, signing: CommitSigning, mergeMethods: Set[MergeMethod])
@@ -438,6 +465,29 @@ private def credentialFixes: ::[Fix] =
         "When the GitHub CLI is installed, histos reads gh auth token after those variables. gh auth login stores one.",
       )
     )
+  )
+
+/** The repair that fits why a check was blind. A skipped check prints every step, so the order is the order to try. */
+private def blindFixes(why: Blind, refused: ::[String]): ::[Fix] =
+  why match
+    case Blind.NoCredential => credentialFixes
+    case Blind.Refused      => fixes(Fix.Steps(refused))
+    case Blind.Unreadable   =>
+      fixes(
+        Fix.Steps(
+          lines(
+            "GitHub returned a document histos does not decode. File an issue at https://github.com/early-effect/histos with this check id."
+          )
+        )
+      )
+    case Blind.Unreachable =>
+      fixes(Fix.Steps(lines("Reach api.github.com, then run histos doctor again.")))
+
+private def appRefused: ::[String] =
+  lines(
+    "This token cannot read the App installation. Run doctor in the generated workflow job, where the mint step answers it.",
+    "For an organization-owned repository, a token with organization administration read also answers it: gh auth refresh -h github.com -s admin:read:org.",
+    "An App installed on selected repositories only cannot be listed by a user token.",
   )
 
 private def secretFixes(name: SecretName, repo: RepoName, owner: RepoOwner): ::[Fix] =

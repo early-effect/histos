@@ -57,6 +57,10 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
         ),
         identity(token) == ("supply.app-token", Level.Error),
         steps(token) == List("Open the histos-deps run and read the app step."),
+        identity(SupplyDiagnostic.AppTokenUnreported) == ("supply.app-token", Level.Error),
+        steps(SupplyDiagnostic.AppTokenUnreported).exists(_.contains("workflow --update")),
+        commands(SupplyDiagnostic.AppTokenUnreported).isEmpty,
+        AppSlug.histosDeps.value == "histos-deps",
         identity(rule) == ("supply.required-check", Level.Error),
         identity(SupplyDiagnostic.RuleBlind(None, Blind.Unreachable)) == ("supply.required-check", Level.Error),
         identity(overlap) == ("supply.dependabot-overlap", Level.Warning),
@@ -139,6 +143,32 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
           found.level == Level.Info && found.explain.contains(token),
       )
     ,
+    test("a blind finding tells the reader what fits that blindness, and offers no command to run"):
+      def blinds(why: Blind): List[SupplyDiagnostic] =
+        List(
+          SupplyDiagnostic.SecretBlind(secret, Some(repo), why),
+          SupplyDiagnostic.AppBlind(Some(repo), why),
+          SupplyDiagnostic.AppPermissionsBlind(Some(repo), why),
+          SupplyDiagnostic.RuleBlind(Some(repo), why),
+        )
+      def lead(diagnostic: SupplyDiagnostic): String = steps(diagnostic).headOption.getOrElse("")
+      val apps                                       = List(
+        SupplyDiagnostic.AppBlind(Some(repo), Blind.Refused),
+        SupplyDiagnostic.AppPermissionsBlind(Some(repo), Blind.Refused),
+      )
+      assertTrue(
+        Blind.values.forall(why => blinds(why).forall(commands(_).isEmpty)),
+        blinds(Blind.NoCredential).forall(lead(_).contains("GH_TOKEN")),
+        List(Blind.Refused, Blind.Unreadable, Blind.Unreachable).forall: why =>
+          blinds(why).forall(diagnostic => lead(diagnostic).nonEmpty && !lead(diagnostic).contains("GH_TOKEN")),
+        blinds(Blind.Unreachable).forall(lead(_).contains("api.github.com")),
+        blinds(Blind.Unreadable).forall(lead(_).contains("early-effect/histos")),
+        apps.forall(lead(_).contains("generated workflow job")),
+        apps.forall(allSteps(_).exists(_.contains("admin:read:org"))),
+        apps.forall(allSteps(_).exists(_.contains("selected repositories"))),
+        allSteps(SupplyDiagnostic.AppTokenUnreported).length == 2,
+      )
+    ,
     test("wire values and a step outcome are the protocol, and a blind lead is that case"):
       val outcomes = List(
         "success"   -> Some(StepOutcome.Success),
@@ -192,5 +222,10 @@ object SupplyDiagnosticLawSpec extends ZIOSpecDefault:
   private def steps(diagnostic: SupplyDiagnostic): List[String] =
     diagnostic.fixes.toList.collect:
       case Fix.Steps(head :: _) => head
+
+  private def allSteps(diagnostic: SupplyDiagnostic): List[String] =
+    diagnostic.fixes.toList.flatMap:
+      case Fix.Steps(items) => items.toList
+      case _                => Nil
 
 end SupplyDiagnosticLawSpec

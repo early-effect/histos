@@ -5,6 +5,7 @@ import histos.supply.{
   Access,
   ApiCall,
   AppPermission,
+  AppSlug,
   BranchName,
   Ecosystem,
   GitHubView,
@@ -17,12 +18,11 @@ import histos.supply.{
   Sight,
   SupplyFault,
   StepOutcome,
-  TokenKind,
 }
 
 import zio.{UIO, ZIO}
 
-/** What a token can read. A missing credential is fail-closed on the supply answers, not a skip. */
+/** What a token can read. A fact the token cannot see stays unseen; the venue decides whether that fails or skips. */
 object GitHubProbe:
   final case class Read(view: GitHubView, covered: Set[String])
 
@@ -71,7 +71,6 @@ object GitHubProbe:
           expected,
           expected,
           job,
-          "",
           secrets,
           secretsSight,
           app,
@@ -103,18 +102,16 @@ object GitHubProbe:
     val envCovers = needed.nonEmpty && needed.forall(job.present.contains)
     for
       repository <- get(net, root, token)
-      workflow   <- get(net, s"$root/actions/permissions/workflow", token)
-      install    <-
-        if job.step.contains(StepOutcome.Success) then ZIO.succeed(None)
-        else get(net, s"$root/installation", token).map(Some(_))
+      parsedRepo = GitHubWire.decode[GitHubWire.Repository](repository.body)
+      workflow    <- get(net, s"$root/actions/permissions/workflow", token)
+      install     <- installations(net, api, token, job, ownerOf(repo, parsedRepo.flatMap(_.owner)))
       repoSecrets <-
         if envCovers then ZIO.succeed(None)
         else get(net, s"$root/actions/secrets", token).map(Some(_))
       orgSecrets <-
         if envCovers then ZIO.succeed(None)
         else get(net, s"$root/actions/organization-secrets", token).map(Some(_))
-      parsedRepo = GitHubWire.decode[GitHubWire.Repository](repository.body)
-      branch     = parsedRepo.flatMap(doc => BranchName.from(doc.defaultBranch).toOption)
+      branch = parsedRepo.flatMap(doc => BranchName.from(doc.defaultBranch).toOption)
       protection <- branch match
         case Some(name) => get(net, s"$root/branches/${name.value}/protection", token).map(Some(_))
         case None       => ZIO.succeed(None)
@@ -139,7 +136,6 @@ object GitHubProbe:
               defaultBranch,
               expected,
               job,
-              token,
               secrets,
               secretsSight,
               app,
@@ -157,6 +153,21 @@ object GitHubProbe:
             covered,
           )
         )
+
+  /** An organization owner's user token lists installations. A user owner has no list that token can read, and a mint
+    * step that succeeded already answered.
+    */
+  private def installations(
+      net: Net,
+      api: String,
+      token: String,
+      job: JobEnv,
+      owner: RepoOwner,
+  ): ZIO[Any, SupplyFault, Option[Reply]] =
+    owner match
+      case RepoOwner.Organization(login) if !job.step.contains(StepOutcome.Success) =>
+        get(net, s"$api/orgs/$login/installations?per_page=100", token).map(Some(_))
+      case RepoOwner.Organization(_) | RepoOwner.User(_) => ZIO.succeed(None)
 
   private final case class AppRead(
       installed: Boolean,
@@ -226,21 +237,30 @@ object GitHubProbe:
       install: Option[Reply],
   ): AppRead =
     val missing = secretsSight == Sight.Known && needed.exists(name => !secrets.contains(name))
+    val unseen  = AppRead(false, Map.empty, Sight.Unseen, !missing)
     job.step match
       case Some(StepOutcome.Success) => AppRead(true, writes, Sight.Known, true)
       case _                         =>
         install match
-          case Some(reply) if reply.status == 404 =>
-            AppRead(false, Map.empty, Sight.Known, true)
           case Some(reply) if reply.status >= 200 && reply.status < 300 =>
-            GitHubWire.decode[GitHubWire.Installation](reply.body) match
-              case Some(doc) =>
-                AppRead(true, doc.permissions.fold(Map.empty)(permissionMap), Sight.Known, true)
-              case None => AppRead(false, Map.empty, Sight.Unreadable, true)
-          case _ if missing =>
-            AppRead(false, Map.empty, Sight.Unseen, false)
-          case _ =>
-            AppRead(false, Map.empty, Sight.Unseen, true)
+            GitHubWire.decode[GitHubWire.AppInstallations](reply.body) match
+              case Some(page) => installationIn(page, unseen)
+              case None       => AppRead(false, Map.empty, Sight.Unreadable, true)
+          case _ => unseen
+
+  /** `All` proves the repository. `Selected` names repositories a user token cannot list, so it proves nothing. A row
+    * that is absent from a complete list is a real answer, and one that is absent from a truncated list is not.
+    */
+  private def installationIn(page: GitHubWire.AppInstallations, unseen: AppRead): AppRead =
+    page.installations.find(_.appSlug == AppSlug.histosDeps.value) match
+      case Some(row) =>
+        row.repositorySelection match
+          case GitHubWire.RepositorySelection.All =>
+            AppRead(true, row.permissions.fold(Map.empty)(permissionMap), Sight.Known, true)
+          case GitHubWire.RepositorySelection.Selected => unseen
+      case None =>
+        if page.totalCount <= page.installations.size then AppRead(false, Map.empty, Sight.Known, true)
+        else unseen
 
   private def rulesOf(
       branch: Option[BranchName],
@@ -396,7 +416,6 @@ object GitHubProbe:
       defaultBranch: BranchName,
       expected: BranchName,
       job: JobEnv,
-      token: String,
       secrets: Set[String],
       secretsSight: Sight,
       app: AppRead,
@@ -411,13 +430,8 @@ object GitHubProbe:
       refusals: List[(ApiCall, Int, String)],
       flowSight: Sight,
   ): GitHubView =
-    val kind =
-      if job.actions && job.githubToken.contains(token) then TokenKind.Github
-      else if app.installed && app.sight == Sight.Known then TokenKind.App
-      else TokenKind.Pat
     GitHubView(
       repo,
-      kind,
       app.installed,
       app.permissions,
       secrets,
@@ -442,7 +456,8 @@ object GitHubProbe:
       app.sight,
       rulesSight,
       flowSight,
-      job.step.getOrElse(StepOutcome.Success),
+      job.step,
+      job.venue,
     )
 
   private def ownerOf(repo: RepoName, owner: Option[GitHubWire.Owner]): RepoOwner =
