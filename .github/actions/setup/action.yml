@@ -2,7 +2,7 @@ name: Setup Histos
 description: Install the Histos shim and restore toolchains and Coursier
 inputs:
   version:
-    description: Histos version. Empty reads build.properties when a command runs.
+    description: Histos version. Empty installs histos.version from build.properties.
     required: false
     default: ""
 runs:
@@ -24,9 +24,29 @@ runs:
         HISTOS_VERSION: ${{ inputs.version }}
       run: |
         shim="${GITHUB_ACTION_PATH}/histos"
-        "$shim"
-        echo "$HOME/.histos/bin" >> "$GITHUB_PATH"
-        if [ -n "$HISTOS_VERSION" ]; then
-          "$HOME/.histos/bin/histos" toolchain install "$HISTOS_VERSION"
-          printf '%s\n' "$HISTOS_VERSION" > "$HOME/.histos/default"
+        version=$HISTOS_VERSION
+        if [ -z "$version" ] && [ -f build.properties ]; then
+          version=$(awk '
+            /^[ \t]*#/ || /^[ \t]*$/ { next }
+            {
+              eq = index($0, "=")
+              if (eq <= 1) exit 1
+              key = substr($0, 1, eq - 1)
+              value = substr($0, eq + 1)
+              gsub(/^[ \t]+|[ \t]+$/, "", key)
+              gsub(/^[ \t]+|[ \t]+$/, "", value)
+              if (key == "histos.version" && value != "") { print value; found = 1; exit }
+            }
+            END { if (!found) exit 1 }
+          ' build.properties) || {
+            echo "histos: could not read histos.version from build.properties" >&2
+            exit 1
+          }
         fi
+        if [ -n "$version" ]; then
+          "$shim" toolchain install "$version"
+          printf '%s\n' "$version" > "$HOME/.histos/default"
+        else
+          "$shim"
+        fi
+        echo "$HOME/.histos/bin" >> "$GITHUB_PATH"
