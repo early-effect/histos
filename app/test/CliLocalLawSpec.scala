@@ -61,7 +61,7 @@ object CliLocalLawSpec extends ZIOSpecDefault:
           absent.exit == CliExit.ResolveFailed && absent.err.contains("launcher pin is absent"),
           moved.exit == CliExit.Success && moved.out == "histos.version=0.1.0-SNAPSHOT" && moved.err == "",
           wrote == "histos.version=0.1.0-SNAPSHOT\n",
-          held.exit == CliExit.ResolveFailed && held.err.contains("a release pin does not move: 1.2.3"),
+          held.exit == CliExit.ResolveFailed && held.err.contains("1.2.3 is a release pin. Run 'histos update'."),
           stayed == "histos.version=1.2.3\n",
         )
   ) @@ TestAspect.withLiveSystem

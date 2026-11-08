@@ -12,12 +12,16 @@ final case class ShipDef private (
     position: SourcePos,
     description: Option[PomText] = None,
     url: Option[HttpUrl] = None,
+    clients: ClientBuilds = ClientBuilds.Releases,
 ):
   /** Replaces the organization's description for every member of this ship. */
   def description(text: PomText): ShipDef = copy(description = Some(text))
 
   /** Replaces the organization's url for every member of this ship. */
   def url(value: HttpUrl): ShipDef = copy(url = Some(value))
+
+  /** Which publishes link the native client. Unset is `Releases`. */
+  def clients(builds: ClientBuilds): ShipDef = copy(clients = builds)
 end ShipDef
 
 object ShipDef:
@@ -29,7 +33,6 @@ object ShipDef:
       position: SourcePos,
   ): ShipDef =
     new ShipDef(name, number, members, position)
-end ShipDef
 
 /** One or more ships. The empty catalog is [[CatalogSpec.empty]], not a call with no ships. */
 final case class CatalogSpec private (ships: List[ShipDef])
@@ -63,7 +66,7 @@ object ShipLink:
           case Some(first) => Left(BuildError.DuplicateShip(name, first, defn.position))
           case None        =>
             members(defn, name, projects, seen.map(_._1)).map: parsed =>
-              CatalogShip.Line(name, defn.number, parsed, defn.description, defn.url)
+              CatalogShip.Line(name, defn.number, parsed, defn.description, defn.url, defn.clients)
 
   private def members(
       defn: ShipDef,

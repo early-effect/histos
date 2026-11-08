@@ -1,6 +1,6 @@
 package histos.cache
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.schedule.{ActionCache, CacheError, Digest}
 import histos.workspace.{IoFailure, IoFault}
 
@@ -17,7 +17,7 @@ opaque type CacheProject = String
 
 object CacheProject:
   def of(repo: Path): CacheProject =
-    Sha256.of(Chunk.fromArray(repo.toAbsolutePath.normalize.toString.getBytes(StandardCharsets.UTF_8))).value
+    Sha256Digest.of(Chunk.fromArray(repo.toAbsolutePath.normalize.toString.getBytes(StandardCharsets.UTF_8))).value
 
   extension (project: CacheProject) def value: String = project
 end CacheProject

@@ -64,6 +64,21 @@ object ShipDraftLawSpec extends ZIOSpecDefault:
           Some("replaced"),
           Some("library"),
         ),
+      )
+    ,
+    test("a ship builds clients on releases unless it asks for snapshots too, and the catalog row keeps that choice"):
+      val core  = module("core", Jvm)(scala"3.10.0")
+      val row   = ShipDef.line(name.value, number, ::(core, Nil), here)
+      val asked = row.clients(ClientBuilds.ReleasesAndSnapshots)
+      assertTrue(
+        row.clients == ClientBuilds.Releases,
+        asked.clients == ClientBuilds.ReleasesAndSnapshots,
+        asked.description == row.description,
+        linked(row, core) == Some(ClientBuilds.Releases),
+        linked(asked, core) == Some(ClientBuilds.ReleasesAndSnapshots),
       ),
   )
+
+  private def linked(row: ShipDef, member: ProjectDef): Option[ClientBuilds] =
+    Projects(CatalogSpec(row), member).toOption.flatMap(_.catalog.get(name)).map(_.clients)
 end ShipDraftLawSpec

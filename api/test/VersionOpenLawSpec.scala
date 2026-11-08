@@ -112,10 +112,10 @@ object VersionOpenLawSpec extends ZIOSpecDefault:
         ShipAdvice.incomplete(missing) ==
           s"${missing.message} ${ShipAdvice.snapshotExport}, or export HISTOS_SESSION=release. " +
           s"Then run ${ShipAdvice.versionsCommand}.",
-        ShipAdvice.shouldBump(histos, one, shadowed = true) ==
+        ShipAdvice.shouldBump(histos, one, BumpReason.Shadowed) ==
           s"${histos.value} ${one.render} is released and has changes since its tag. " +
           s"Edit Ship(\"${histos.value}\").next(...) to the next number. Do not open a bump pull request.",
-        ShipAdvice.shouldBump(histos, one, shadowed = false) ==
+        ShipAdvice.shouldBump(histos, one, BumpReason.Tagged) ==
           s"${histos.value} ${one.render} is already released. " +
           s"Edit Ship(\"${histos.value}\").next(...) to the next number. Do not open a bump pull request.",
       ),

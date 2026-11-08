@@ -1,14 +1,14 @@
 package histos.publish
 
 import histos.doctor.{Diagnostic, Noted}
-import histos.central.{PublishError}
+import histos.central.PublishError
 import histos.pack.{AssemblyError, JarError}
-import histos.resolve.{ResolveError}
+import histos.resolve.ResolveError
 import histos.version.{CiVersion, ShipName, VersionError}
 import histos.select.SelectError
 import histos.zinc.{CompileError, GraphCompileError}
 import histos.{Platform, PomFact, ProjectName, ScalaVersion}
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum LocalPublishError:
   case Version(error: VersionError)
@@ -52,6 +52,7 @@ enum LocalPublishError:
       error: AssemblyError,
   )
   case MissingClasses(module: ProjectName, version: ScalaVersion, platform: Platform)
+  case MissingClient(ship: ShipName, path: Path)
 
   def message: String = this match
     case Version(error)                        => error.message
@@ -92,12 +93,14 @@ enum LocalPublishError:
       s"'${module.value}' ${version.value} ${platform.token} failed to assemble\n${error.message}"
     case MissingClasses(module, version, platform) =>
       s"'${module.value}' has no ${version.value} ${platform.token} classes"
+    case MissingClient(ship, path) =>
+      s"${ship.value} builds clients on snapshots, and $path is not a file. The snapshots workflow downloads each client there."
 
   def diagnose: Diagnostic = this match
     case Publish(error)   => error.diagnose
     case Classpath(error) => error.diagnose
     case Target(error)    => error.diagnose
-    case Credentials =>
+    case Credentials      =>
       Noted.error(
         "publish.credentials",
         message,

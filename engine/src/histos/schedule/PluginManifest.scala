@@ -1,6 +1,6 @@
 package histos.schedule
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.RepoPath
 
 import java.nio.file.{Files, LinkOption, Path}
@@ -55,7 +55,7 @@ object PluginManifest:
   private def same(root: Path, sha: String, path: String): Boolean =
     val file = root.resolve(path)
     Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) &&
-    Sha256.of(Chunk.fromArray(Files.readAllBytes(file))).value == sha
+    Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(file))).value == sha
 
   private def read(stored: String): Option[Listed] =
     stored.split("\n", -1).toList match

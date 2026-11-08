@@ -3,7 +3,7 @@ package histos.server
 import histos.jdk.JdkRuntime
 import histos.bsp.{Bsp, Frame, Rpc}
 import histos.cli.Operation
-import histos.jdk.Sha256
+import histos.jdk.Sha256Digest
 import histos.load.{HeaderScan, LoadError, LoadedBuild}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult, Rejection, Report}
@@ -39,6 +39,7 @@ enum Decision:
   /** The process at `socket` was started with another driver. The command reboots it. */
   case DifferentVersion(socket: Path)
   case Open(socket: Path)
+end Decision
 
 opaque type Fingerprint = String
 
@@ -58,7 +59,7 @@ object Fingerprint:
       built <- tagged(build)
       lock  <- pin
       extra <- pathBytes(repo, build)
-    yield Sha256.of(built ++ Chunk.single(0.toByte) ++ lock ++ extra).value
+    yield Sha256Digest.of(built ++ Chunk.single(0.toByte) ++ lock ++ extra).value
 
   private[server] def trusted(raw: String): Fingerprint = raw
 
@@ -199,7 +200,7 @@ object Attach:
   def decide(repo: Path, version: String): UIO[Decision] =
     AssemblyMark.read(repo).flatMap { mark =>
       Record.read(repo).flatMap {
-        case None => ZIO.succeed(Decision.Absent)
+        case None                                                                 => ZIO.succeed(Decision.Absent)
         case Some(record) if record.version != version || record.assembly != mark =>
           ZIO.succeed(Decision.DifferentVersion(record.socket))
         case Some(record) =>

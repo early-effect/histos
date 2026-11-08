@@ -3,7 +3,7 @@ package histos.cli
 import heddle.LinePipe
 import histos.doctor.FaultText
 import histos.bsp.{Bsp, Connection, Frame}
-import histos.central.PortalServer
+import histos.central.{PortalServer, ReleaseFeed}
 import histos.build.{Beat, Build}
 import histos.load.LoadedBuild
 import histos.server.{
@@ -483,9 +483,12 @@ object Cli:
       case Some(name) if Os.from(name) == Os.Windows =>
         ZIO.succeed(Completed(CliExit.Usage, "", HostSupport.refused, Playback.Held))
       case _ =>
-        UpgradeNotice.line(repo).flatMap { note =>
-          ZIO.whenDiscard(note.nonEmpty)(ZIO.succeed(java.lang.System.err.println(note)))
-        } *>
+        UpgradeNotice
+          .advice(repo)
+          .provideLayer(ReleaseFeed.live)
+          .flatMap { lag =>
+            ZIO.foreachDiscard(lag)(found => ZIO.succeed(java.lang.System.err.println(found.text)))
+          } *>
           Connection.ensure(repo).ignore *>
           parse(args).foldZIO(
             {
@@ -1769,7 +1772,7 @@ object Cli:
       Attach
         .decide(repo, text)
         .flatMap:
-          case Decision.Absent => miss
+          case Decision.Absent       => miss
           case Decision.Open(socket) =>
             asked(repo, socket, miss)
           case Decision.DifferentVersion(socket) =>

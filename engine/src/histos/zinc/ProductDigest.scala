@@ -1,6 +1,6 @@
 package histos.zinc
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault}
 
 import java.io.{
@@ -50,7 +50,7 @@ object ProductDigest:
               normalize(bytes) match
                 case Right(clean) => Right(acc :+ piece(name, clean))
                 case Left(_)      => Left(CompileError.Io(IoFailure(path, IoFault.Read)))
-        .map(parts => Sha256.of(Chunk.fromArray(parts.flatten.toArray)))
+        .map(parts => Sha256Digest.of(Chunk.fromArray(parts.flatten.toArray)))
 
   def ofJar(path: Path): Either[CompileError, Sha256] =
     try
@@ -97,7 +97,7 @@ object ProductDigest:
                 case Left(_)      => Left(CompileError.Io(IoFailure(Path.of(name), IoFault.Read)))
             else Right(scrubBytes(raw))
           body.map(clean => acc :+ piece(scrubUtf8(name), clean))
-      .map(parts => Sha256.of(Chunk.fromArray(parts.flatten.toArray)))
+      .map(parts => Sha256Digest.of(Chunk.fromArray(parts.flatten.toArray)))
 
   private def classFiles(root: Path): Either[CompileError, List[(String, Path)]] =
     if !Files.isDirectory(root) then Left(CompileError.Io(IoFailure(root, IoFault.Stat)))

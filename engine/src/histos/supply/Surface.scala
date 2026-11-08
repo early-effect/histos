@@ -15,6 +15,7 @@ import histos.doctor.{
   Render,
   Runner,
 }
+import histos.central.ReleaseFeed
 import histos.version.CommitSha
 import histos.workflow.PinScan
 import histos.ProjectGraph
@@ -22,7 +23,7 @@ import histos.ProjectGraph
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
-import zio.{durationInt, UIO, ZIO}
+import zio.{durationInt, UIO, URIO, ZIO}
 
 /** In-process doctor. GitHub settings are applied only after an explicit yes on a terminal. */
 object DoctorSurface:
@@ -55,7 +56,7 @@ object DoctorSurface:
           prompt(tty),
           command(repo),
           applySetting(token.map(_.value)),
-        )
+        ).provideLayer(ReleaseFeed.live)
 
   def runWith(
       repo: Path,
@@ -69,13 +70,14 @@ object DoctorSurface:
       ask: Fix => UIO[FixApply.Answer],
       exec: String => UIO[Unit],
       setting: String => UIO[Unit],
-  ): UIO[(Int, String)] =
+  ): URIO[ReleaseFeed, (Int, String)] =
     val job = JobEnv.from(env)
     for
+      feed               <- ZIO.service[ReleaseFeed]
       located            <- github(repo, net, env, token, job, graph)
       (auth, pgp, pages) <- probes(repo, graph, request, net, env, token, located)
       report             <- Runner.run(
-        selected(repo, graph, request, machine, located, auth, pgp, pages),
+        selected(repo, graph, request, machine, env, feed, located, auth, pgp, pages),
         DoctorContext(Nil, Set(Probe.Local, Probe.JobEnv)),
         checkLimit,
       )
@@ -118,6 +120,8 @@ object DoctorSurface:
       graph: ProjectGraph,
       request: Request,
       machine: histos.jdk.Machine,
+      env: Map[String, String],
+      feed: ReleaseFeed,
       located: Located,
       auth: histos.doctor.CentralProbe.Auth,
       pgp: histos.doctor.PgpProbe.Hit,
@@ -140,7 +144,8 @@ object DoctorSurface:
       closedPages(graph, pages),
     )
     val core =
-      pins :: github :: release ++ shipChecks(repo, graph) ++ histos.doctor.ToolchainChecks.checks(machine, graph)
+      pins :: github :: release ++ histos.doctor.ShipChecks.checks(repo, graph, env, feed) ++
+        histos.doctor.ToolchainChecks.checks(machine, graph)
     val all = histos.doctor.Registry.collect(graph, core)
     request.preflight match
       case Some(job) => preflight(job)
@@ -176,37 +181,6 @@ object DoctorSurface:
       def needs                   = Set.empty
       def run(ctx: DoctorContext) =
         ZIO.succeed(histos.doctor.HygieneChecks.pages(histos.doctor.HygieneChecks.publishesPages(graph), hit))
-
-  private def shipChecks(repo: Path, graph: ProjectGraph): List[DoctorCheck] =
-    val file = repo.resolve(histos.version.VersionTask.fileName)
-    List(
-      shipCheck(graph, "ship.session", file, (catalog, env, _) => List(histos.doctor.ShipChecks.session(catalog, env))),
-      shipCheck(
-        graph,
-        "ship.releases",
-        file,
-        (catalog, _, releases) => List(histos.doctor.ShipChecks.releases(catalog, releases)),
-      ),
-      shipCheck(
-        graph,
-        "ship.should-bump",
-        file,
-        (catalog, _, releases) => histos.doctor.ShipChecks.bumps(catalog, releases),
-      ),
-    )
-
-  private def shipCheck(
-      graph: ProjectGraph,
-      raw: String,
-      file: Path,
-      pick: (histos.version.Catalog, Map[String, String], histos.doctor.ReleasesFile) => List[Outcome],
-  ): DoctorCheck =
-    new DoctorCheck:
-      def id                      = CheckId.trusted(raw)
-      def area                    = Area.Release
-      def needs                   = Set(Probe.Local)
-      def run(ctx: DoctorContext) =
-        histos.doctor.ShipChecks.read(file).map(releases => pick(graph.catalog, sys.env, releases))
 
   private def pinCheck(repo: Path, graph: ProjectGraph): DoctorCheck =
     new DoctorCheck:

@@ -6,6 +6,18 @@ private def fixes(head: Fix, tail: Fix*): ::[Fix] = ::(head, tail.toList)
 
 private def lines(head: String, tail: String*): ::[String] = ::(head, tail.toList)
 
+/** Why a catalog number should move. */
+enum BumpReason:
+  /** `releases` says the tag matches. */
+  case Tagged
+
+  /** `releases` says the tag moved. */
+  case Shadowed
+
+  /** The registry lists this release, at or above the catalog number. */
+  case Published(release: ShipNumber)
+end BumpReason
+
 /** Ship findings. The first fix is the one to apply. Nothing opens a bump pull request. */
 enum ShipDiagnostic(
     val check: CheckId,
@@ -46,20 +58,32 @@ enum ShipDiagnostic(
         ),
       )
 
-  case ShouldBump(ship: ShipName, number: ShipNumber, shadowed: Boolean)
+  case ShouldBump(ship: ShipName, number: ShipNumber, reason: BumpReason)
       extends ShipDiagnostic(
         CheckId.trusted("ship.should-bump"),
         Level.Warning,
         s"${ship.value} ${number.render} should move",
-        ShipAdvice.shouldBump(ship, number, shadowed),
-        "The catalog stores the next release. After that number is on the registry, edit .next(...). Histos does not open a bump pull request.",
+        ShipAdvice.shouldBump(ship, number, reason),
+        "The catalog stores the next release. After that number is tagged or published, edit .next(...). Histos does not rewrite the catalog or open a bump pull request.",
         fixes(
           Fix.Steps(
             lines(
-              s"Edit Ship(\"${ship.value}\").next(...) in the catalog.",
+              s"Edit Ship(\"${ship.value}\").next(...) in histos.scala.",
               "Do not open a bump pull request.",
             )
           )
+        ),
+      )
+
+  case PinBehind(lag: PinLag)
+      extends ShipDiagnostic(
+        CheckId.trusted("ship.pin"),
+        Level.Warning,
+        "histos.version trails a published release",
+        lag.text,
+        "build.properties pins the Histos this checkout runs. A published release does not move it. Histos does not rewrite the pin.",
+        fixes(
+          Fix.Steps(lines(s"Run ${lag.command.value}.", "Or edit histos.version in build.properties."))
         ),
       )
 end ShipDiagnostic

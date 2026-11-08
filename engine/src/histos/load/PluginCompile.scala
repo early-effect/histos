@@ -2,7 +2,7 @@ package histos.load
 
 import histos.cache.ContentStore
 import histos.workspace.{IoFailure, IoFault, Workspace}
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{ApiDigest, PluginIo, PluginLoadError}
 import histos.schedule.Digest
 import histos.zinc.Dotty
@@ -145,7 +145,7 @@ private[load] object PluginCompile:
         s"sources $sources",
       ) ++
         checksums.sorted.map(sha => s"artifact $sha")
-    Sha256
+    Sha256Digest
       .of(
         Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))
       )
@@ -279,7 +279,7 @@ private[load] object PluginCompile:
   private def fileSha(path: Path): IO[LoadError, String] =
     ZIO
       .attemptBlocking(
-        Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
+        Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path))).value
       )
       .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(path))))
 
@@ -297,9 +297,9 @@ private[load] object PluginCompile:
                 .sortBy(path => rel(root, path))
             finally walk.close()
         val lines = files.map: path =>
-          val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
+          val sha = Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path))).value
           s"${rel(root, path)} $sha"
-        Sha256
+        Sha256Digest
           .of(
             Chunk
               .fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))

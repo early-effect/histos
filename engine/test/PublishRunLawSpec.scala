@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.central.{DeploymentId, DeploymentState}
-import histos.jdk.{JdkRuntime, JdkVersion, Sha256}
+import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
 import histos.resolve.Resolve
 import histos.toolchain.RuntimeIdentity
 import histos.version.{CiVersion, ShipName}
@@ -240,7 +240,7 @@ object PublishRunLawSpec extends ZIOSpecDefault:
 
   private def jdk: ZIO[Any, Nothing, JdkRuntime] =
     ZIO.fromEither(JdkVersion.from("21")).orDieWith(blow).map { version =>
-      JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256.of(Chunk.empty)))
+      JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)))
     }
 
   private def note(notes: Ref[List[String]])(line: String): ZIO[Any, Nothing, Unit] =

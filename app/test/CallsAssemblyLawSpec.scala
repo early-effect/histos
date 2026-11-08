@@ -2,7 +2,7 @@ package histos.server
 
 import histos.build.BuildEvent
 import histos.cache.ContentStore
-import histos.jdk.{Machine, Sha256}
+import histos.jdk.{Machine, Sha256Digest}
 import histos.report.CallResult
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
 import histos.version.Catalog
@@ -38,48 +38,59 @@ object CallsAssemblyLawSpec extends ZIOSpecDefault:
   def spec = suite("calls assembly laws")(
     test("the jar contains api and the launcher main, and a broken destination is a fault"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-calls-assembly").flatMap: dir =>
-          val jar = dir.resolve("dist").resolve("histos.jar")
-          val pin = dir.resolve(".histos").resolve("assembly.sha256")
-          val program =
-            for
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              (refused, refusedHeard) <- speak(say =>
-                Calls.assembly(dir, graph, jdk, machine, Some("\u0000"), say)
-              )
-              _ <- Workspace.writeString(
-                dir.resolve("api").resolve("src").resolve("main").resolve("scala").resolve("Api.scala"),
-                "object ApiLib:\n  def ready: Int = 1\n",
-              )
-              _ <- Workspace.writeString(
-                dir.resolve("app").resolve("src").resolve("main").resolve("scala").resolve("histos").resolve("cli").resolve("Main.scala"),
-                "package histos.cli\nobject Main:\n  def main(args: Array[String]): Unit = ()\n",
-              )
-              (assembled, heard) <- speak(say => Calls.assembly(dir, graph, jdk, machine, None, say))
-              names <- ZIO.attempt(entryNames(jar)).orDie
-              digest <- ZIO.attempt(if Files.isRegularFile(jar) then Sha256.of(Chunk.fromArray(Files.readAllBytes(jar))).value else "").orDie
-              written <- ZIO.attempt(if Files.isRegularFile(pin) then Files.readString(pin) else "").orDie
-            yield
-              val text = outs(heard)
-              assertTrue(
-                refused == Right(()),
-                done(refusedHeard).exists(faultHas("assembly path is not a path")),
-                assembled == Right(()),
-                modulesOf(done(heard)) == List("api", "app"),
-                text == "files compiled: 2 skipped: 0; modules: 2; classes: 4\ndist/histos.jar",
-                names.contains("ApiLib.class"),
-                names.contains("histos/cli/Main.class"),
-                written == s"$digest\n",
-                digest.nonEmpty,
-              )
-          program.provideSomeLayer[Resolve & Scope](session(dir, lock))
+        Workspace
+          .work("histos-calls-assembly")
+          .flatMap: dir =>
+            val jar     = dir.resolve("dist").resolve("histos.jar")
+            val pin     = dir.resolve(".histos").resolve("assembly.sha256")
+            val program =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                (refused, refusedHeard) <- speak(say => Calls.assembly(dir, graph, jdk, machine, Some("\u0000"), say))
+                _                       <- Workspace.writeString(
+                  dir.resolve("api").resolve("src").resolve("main").resolve("scala").resolve("Api.scala"),
+                  "object ApiLib:\n  def ready: Int = 1\n",
+                )
+                _ <- Workspace.writeString(
+                  dir
+                    .resolve("app")
+                    .resolve("src")
+                    .resolve("main")
+                    .resolve("scala")
+                    .resolve("histos")
+                    .resolve("cli")
+                    .resolve("Main.scala"),
+                  "package histos.cli\nobject Main:\n  def main(args: Array[String]): Unit = ()\n",
+                )
+                (assembled, heard) <- speak(say => Calls.assembly(dir, graph, jdk, machine, None, say))
+                names              <- ZIO.attempt(entryNames(jar)).orDie
+                digest             <- ZIO
+                  .attempt(if Files.isRegularFile(jar) then
+                    Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(jar))).value
+                  else "")
+                  .orDie
+                written <- ZIO.attempt(if Files.isRegularFile(pin) then Files.readString(pin) else "").orDie
+              yield
+                val text = outs(heard)
+                assertTrue(
+                  refused == Right(()),
+                  done(refusedHeard).exists(faultHas("assembly path is not a path")),
+                  assembled == Right(()),
+                  modulesOf(done(heard)) == List("api", "app"),
+                  text == "files compiled: 2 skipped: 0; modules: 2; classes: 4\ndist/histos.jar",
+                  names.contains("ApiLib.class"),
+                  names.contains("histos/cli/Main.class"),
+                  written == s"$digest\n",
+                  digest.nonEmpty,
+                )
+            program.provideSomeLayer[Resolve & Scope](session(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def faultHas(text: String)(result: CallResult): Boolean =
@@ -138,8 +149,8 @@ object CallsAssemblyLawSpec extends ZIOSpecDefault:
       ResolutionService.pinned(pinned(lock))
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    val drop = Set(api, app)
-    val kept = lock.cells.filterNot(cell => drop.contains(cell.module))
+    val drop  = Set(api, app)
+    val kept  = lock.cells.filterNot(cell => drop.contains(cell.module))
     val added = List(api, app).map: name =>
       LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
     lock.copy(cells = added ++ kept)

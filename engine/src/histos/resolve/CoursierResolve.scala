@@ -1,6 +1,6 @@
 package histos.resolve
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Dep, Platform, ScalaVersion}
 
@@ -436,7 +436,7 @@ private[resolve] final class CoursierResolve(
 
   private def digest(path: Path): IO[ResolveError, Sha256] =
     ZIO
-      .attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(path))))
+      .attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path))))
       .mapError(_ => ResolveError.Io(IoFailure(path, IoFault.Read)))
 
   private def lift(error: coursier.error.CoursierError): ResolveError =

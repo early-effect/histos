@@ -115,7 +115,7 @@ object ExecuteLawSpec extends ZIOSpecDefault:
         )
       val shown   = "histos 9.9.9"
       val release =
-        "a release pin does not move: 9.9.9. Run 'histos launcher --latest'."
+        "launcher --update follows snapshots, and 9.9.9 is a release pin. Run 'histos update'."
       for
         _       <- failLoad
         before  <- Cli.execute(missing.args, repo, apiJar)

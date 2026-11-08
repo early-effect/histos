@@ -20,7 +20,7 @@ import histos.testrun.{
 import histos.preview.Plan
 import histos.zinc.{CompileFeed, GraphCompile, GraphCompileError}
 import histos.jdk.{Machine, Os}
-import histos.jdk.Sha256
+import histos.jdk.Sha256Digest
 import histos.load.{LoadError, LoadedBuild, Loader, PluginLink, PluginRuntime}
 import histos.load.PluginFault
 import histos.plugin.{PluginArgs, PluginRunError, PluginTaskId}
@@ -618,18 +618,21 @@ object Calls:
     val present = action match
       case WorkflowAction.Check  => Workflow.present(repo).mapError(WorkflowFault.Files(_))
       case WorkflowAction.Update => ZIO.unit
-    present *> CiBranch.read(repo).mapError(WorkflowFault.Files(_)).flatMap: branch =>
-      val rendered = action match
-        case WorkflowAction.Check =>
-          Workflow.check(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
-        case WorkflowAction.Update =>
-          Workflow.update(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
-      val scripts = action match
-        case WorkflowAction.Check =>
-          LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
-        case WorkflowAction.Update =>
-          LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
-      rendered *> scripts.as(Workflow.path(repo))
+    present *> CiBranch
+      .read(repo)
+      .mapError(WorkflowFault.Files(_))
+      .flatMap: branch =>
+        val rendered = action match
+          case WorkflowAction.Check =>
+            Workflow.check(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
+          case WorkflowAction.Update =>
+            Workflow.update(repo, graph, sona)(using branch).mapError(WorkflowFault.Files(_))
+        val scripts = action match
+          case WorkflowAction.Check =>
+            LauncherScript.check(repo, graph).mapError(WorkflowFault.Scripts(_))
+          case WorkflowAction.Update =>
+            LauncherScript.update(repo, graph).mapError(WorkflowFault.Scripts(_))
+        rendered *> scripts.as(Workflow.path(repo))
 
   def version(text: String, say: Say): IO[ServerError, Unit] =
     told(say, text) *> ok(say)
@@ -1143,7 +1146,7 @@ object Calls:
         .attemptBlocking(Files.readAllBytes(jar))
         .mapError(_ => histos.workspace.IoFailure(jar, histos.workspace.IoFault.Read))
         .flatMap: bytes =>
-          histos.workspace.Workspace.writeString(dest, Sha256.of(Chunk.fromArray(bytes)).value + "\n")
+          histos.workspace.Workspace.writeString(dest, Sha256Digest.of(Chunk.fromArray(bytes)).value + "\n")
 
   private def speak(
       say: Say,

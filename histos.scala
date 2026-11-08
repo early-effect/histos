@@ -118,7 +118,7 @@ object build extends HistosBuild:
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
       .docCheck(
-        ships(Ship("histos").next(0, 2, 1)(api, app)),
+        ships(Ship("histos").next(0, 2, 2)(api, app)),
         api,
         wire,
         client,

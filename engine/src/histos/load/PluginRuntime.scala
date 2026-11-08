@@ -1,6 +1,6 @@
 package histos.load
 
-import histos.jdk.{Machine, Sha256}
+import histos.jdk.{Machine, Sha256, Sha256Digest}
 import histos.plugin.{
   ApiDigest,
   DeclaredTask,
@@ -280,7 +280,7 @@ object PluginRuntime:
       if upstream.isEmpty then ZIO.succeed(inputs)
       else
         val sha =
-          Sha256.of(Chunk.fromArray(upstream.getBytes(StandardCharsets.UTF_8)))
+          Sha256Digest.of(Chunk.fromArray(upstream.getBytes(StandardCharsets.UTF_8)))
         ZIO
           .fromEither(InputName.from("upstream"))
           .mapBoth(
@@ -381,7 +381,7 @@ object PluginRuntime:
           .attemptBlocking {
             val files = task.outputs.map: declaredOutput =>
               val file = repo.resolve(declaredOutput.path.value)
-              declaredOutput.path -> Sha256.of(
+              declaredOutput.path -> Sha256Digest.of(
                 Chunk.fromArray(Files.readAllBytes(file))
               )
             PluginManifest.store(output.text, files)

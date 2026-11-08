@@ -1,5 +1,7 @@
 package histos
 
+import histos.publish.{DistLayout, DistPlatform}
+import histos.version.ShipName
 import histos.workflow.*
 
 import zio.test.*
@@ -141,6 +143,101 @@ object WorkflowInstallLawSpec extends ZIOSpecDefault:
         release.contains("""- run: "./histos client""""),
         !release.contains("histos-bootstrap"),
         !ci.contains("\n  toolchain:"),
+      )
+    ,
+    test("a ship that keeps the default publishes snapshots without a client job"):
+      val app      = demoApp
+      val rendered = assemble(
+        ToolRevision("21.1.8"),
+        None,
+        ships(Ship("demo").next(1, 2, 3)(app)),
+        app,
+        linkedClient,
+      ).flatMap(Workflow.renderAll(_, finished))
+      val snapshots = text(rendered, Workflow.snapshotsName)
+      assertTrue(
+        fault(rendered) == "",
+        snapshots.contains("\n  snapshots:\n    runs-on: ubuntu-26.04\n"),
+        snapshots.contains("""- run: "./histos publish snapshots""""),
+        !snapshots.contains("\n  client:"),
+        !snapshots.contains("needs:"),
+        !snapshots.contains("llvm"),
+        !snapshots.contains("download-artifact"),
+        !snapshots.contains("actions: read"),
+      )
+    ,
+    test("snapshot clients link on both runners, and the publish job downloads them after the jar is assembled"):
+      val app   = demoApp
+      val asked = ships(Ship("demo").next(1, 2, 3)(app).clients(ClientBuilds.ReleasesAndSnapshots))
+      val opted = assemble(ToolRevision("21.1.8"), Some(own), asked, app, linkedClient)
+        .flatMap(Workflow.renderAll(_, finished))
+      val default =
+        assemble(ToolRevision("21.1.8"), Some(own), ships(Ship("demo").next(1, 2, 3)(app)), app, linkedClient)
+          .flatMap(Workflow.renderAll(_, finished))
+      val snapshots         = text(opted, Workflow.snapshotsName)
+      val (client, publish) = snapshots.split("\n  snapshots:\n", 2) match
+        case Array(head, tail) => (head, tail)
+        case _                 => ("", "")
+      val missing = List(
+        "          - runner: ubuntu-26.04",
+        "            platform: linux-x86_64",
+        "            archive: LLVM-21.1.8-Linux-X64.tar.xz",
+        s"            sha256: $linux",
+        "          - runner: macos-26",
+        "            platform: macos-aarch64",
+        "            archive: LLVM-21.1.8-macOS-ARM64.tar.xz",
+        s"            sha256: $mac",
+        """            [ "$got" = "$expected" ] || { echo "llvm checksum mismatch" >&2; exit 1; }""",
+        """      - run: "./histos client"""",
+        "          name: client-${{ matrix.platform }}",
+        "          path: dist/histos-client",
+      ).filterNot(client.contains)
+      val steps = List(
+        """      - run: "./histos assembly"""",
+        "          pattern: client-*",
+        "          path: dist/clients",
+        """      - run: "./histos publish snapshots"""",
+      ).map(publish.indexOf)
+      assertTrue(
+        fault(opted) == "",
+        client.contains("\n  client:\n    runs-on: ${{ matrix.runner }}\n"),
+        !client.contains("needs:"),
+        !client.contains("histos-bootstrap"),
+        missing == Nil,
+        publish.startsWith("    needs: client\n"),
+        publish.contains("      actions: read\n      contents: write\n"),
+        steps.forall(_ >= 0),
+        steps == steps.sorted,
+        DistPlatform.values.toList.map(DistLayout.builtClient) == List(
+          "dist/clients/client-linux-x86_64/histos-client",
+          "dist/clients/client-macos-aarch64/histos-client",
+        ),
+        text(opted, Workflow.releaseName) == text(default, Workflow.releaseName),
+      )
+    ,
+    test("a ship that asks for snapshot clients and is not the install ship fails the render"):
+      val app      = demoApp
+      val extra    = extraApp
+      val twoAsset = assemble(
+        ToolRevision("21.1.8"),
+        None,
+        ships(
+          Ship("demo").next(1, 2, 3)(app).clients(ClientBuilds.ReleasesAndSnapshots),
+          Ship("other").next(1, 2, 3)(extra),
+        ),
+        app,
+        extra,
+        linkedClient,
+      ).flatMap(Workflow.renderAll(_, finished))
+      val noClient = assemble(
+        ToolRevision("21.1.8"),
+        None,
+        ships(Ship("demo").next(1, 2, 3)(app).clients(ClientBuilds.ReleasesAndSnapshots)),
+        app,
+      ).flatMap(Workflow.renderAll(_, finished))
+      assertTrue(
+        twoAsset == Left(CiError.SnapshotClients(ShipName("demo"))),
+        noClient == Left(CiError.SnapshotClients(ShipName("demo"))),
       ),
   )
 

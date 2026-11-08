@@ -1,7 +1,7 @@
 package histos.publish
 
 import histos.central.{Fingerprint, PortalBase, ReleaseMode, RepositorySecret, RepositoryUser}
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.version.{CiVersion, Revision, ShipName, SnapshotPointer}
 import histos.{PublishFault, PublishRequest, SonaPublish, organization, ship}
 
@@ -171,7 +171,7 @@ object SignerLawSpec extends ZIOSpecDefault:
       None,
       None,
       ShipName("demo"),
-      Sha256.of(Chunk.empty),
+      Sha256Digest.of(Chunk.empty),
       None,
       Nil,
     )

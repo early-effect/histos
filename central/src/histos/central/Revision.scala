@@ -29,6 +29,8 @@ object ArtifactId:
     else Left(ArtifactIdError.Bad(raw))
 
   extension (name: ArtifactId) def value: String = name
+
+  private[histos] def trusted(raw: String): ArtifactId = raw
 end ArtifactId
 
 enum ArtifactIdError:

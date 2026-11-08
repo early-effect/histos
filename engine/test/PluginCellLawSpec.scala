@@ -1,13 +1,23 @@
 package histos.load
 
-import histos.jdk.{JdkRuntime, JdkVersion, Sha256}
+import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
 import histos.plugin.{DeclaredTask, PluginDetail, PluginRunError, Seal, TaskDep, TaskName}
 import histos.resolve.{DependencyLock, ResolutionService, Resolve}
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.Workspace
 import histos.native.NativeOrigin
 import histos.zinc.CompileSession
-import histos.{MainClass, Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVersion, ScalaVersions, SourcePos}
+import histos.{
+  MainClass,
+  Module,
+  Platform,
+  Platforms,
+  ProjectGraph,
+  ProjectName,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+}
 
 import java.nio.file.{Files, Path}
 
@@ -22,9 +32,9 @@ object PluginCellLawSpec extends ZIOSpecDefault:
 
   def spec = suite("plugin cell laws")(
     test("a same-task dependency does not compile, and a missing module fails before the lock"):
-      val graph = ProjectGraph.trusted(List(jvm))
-      val same  = task(TaskDep.Same(TaskName.trusted("other")))
-      val gone  = task(TaskDep.Compile(ProjectName.trusted("missing"), None, None))
+      val graph   = ProjectGraph.trusted(List(jvm))
+      val same    = task(TaskDep.Same(TaskName.trusted("other")))
+      val gone    = task(TaskDep.Compile(ProjectName.trusted("missing"), None, None))
       val program =
         for
           idle    <- PluginCells.classpath(Path.of("repo"), graph, same, ZIO.dieMessage("lock"))
@@ -36,17 +46,25 @@ object PluginCellLawSpec extends ZIOSpecDefault:
       program.provideSomeLayer[TestEnvironment](stubbed[Resolve])
     ,
     test("a jvm cell is not a script, and a bad main is refused as a main"):
-      val graph = ProjectGraph.trusted(List(jvm))
-      val named = jvm.copy(application = Some(MainClass.trusted("demo.Main")))
-      val bad   = jvm.copy(application = Some(MainClass.trusted("not a class")))
+      val graph   = ProjectGraph.trusted(List(jvm))
+      val named   = jvm.copy(application = Some(MainClass.trusted("demo.Main")))
+      val bad     = jvm.copy(application = Some(MainClass.trusted("not a class")))
       val program =
         for
           version <- ZIO.fromEither(JdkVersion.from("21")).catchAll(error => ZIO.dieMessage(error.message))
-          runtime = JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256.of(Chunk.empty)))
+          runtime = JdkRuntime(
+            Path.of("jdk"),
+            version,
+            RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)),
+          )
           session = CompileSession(Path.of("repo"), graph, runtime, NativeOrigin.Central, DependencyLock(Nil))
           plain <- PluginCells.link(session, PluginCells.Cell(jvm, v3, Platform.Jvm)).either
-          main  <- PluginCells.link(session.copy(graph = ProjectGraph.trusted(List(named))), PluginCells.Cell(named, v3, Platform.Jvm)).either
-          junk  <- PluginCells.link(session.copy(graph = ProjectGraph.trusted(List(bad))), PluginCells.Cell(bad, v3, Platform.Jvm)).either
+          main  <- PluginCells
+            .link(session.copy(graph = ProjectGraph.trusted(List(named))), PluginCells.Cell(named, v3, Platform.Jvm))
+            .either
+          junk <- PluginCells
+            .link(session.copy(graph = ProjectGraph.trusted(List(bad))), PluginCells.Cell(bad, v3, Platform.Jvm))
+            .either
         yield assertTrue(
           plain == Left(PluginFault.Task(failed("'core' has no main class to link"))),
           main == Left(PluginFault.Task(failed("'core' is not a JavaScript module"))),
@@ -63,10 +81,10 @@ object PluginCellLawSpec extends ZIOSpecDefault:
           val asked  = task(TaskDep.Link(core, Some(v3)))
           for
             missing <- PluginCells.scripts(root, graph, asked).either
-            _       <- Workspace.writeString(record, "  /opt/app.js \n").catchAll(error => ZIO.dieMessage(error.message))
-            found   <- PluginCells.scripts(root, graph, asked)
-            none    <- PluginCells.scripts(root, graph, task())
-            lost    <- PluginCells.scripts(root, graph, task(TaskDep.Link(ProjectName.trusted("missing"), None))).either
+            _     <- Workspace.writeString(record, "  /opt/app.js \n").catchAll(error => ZIO.dieMessage(error.message))
+            found <- PluginCells.scripts(root, graph, asked)
+            none  <- PluginCells.scripts(root, graph, task())
+            lost  <- PluginCells.scripts(root, graph, task(TaskDep.Link(ProjectName.trusted("missing"), None))).either
           yield
             val linked = Files.isRegularFile(record)
             assertTrue(
@@ -75,8 +93,7 @@ object PluginCellLawSpec extends ZIOSpecDefault:
               none == Nil,
               lost == Left(failed("module missing is not in the graph")),
               linked,
-            )
-    ,
+            ),
   )
 
   private val jvm: Module =
@@ -90,3 +107,4 @@ object PluginCellLawSpec extends ZIOSpecDefault:
 
   private def failed(message: String): PluginRunError =
     PluginRunError.Failed(PluginDetail.trusted(message))
+end PluginCellLawSpec

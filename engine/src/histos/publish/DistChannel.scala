@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.plugin.RepoPath
 import histos.version.{Revision, ShipName}
-import histos.{Module, ProjectGraph, ProjectName}
+import histos.{ClientBuilds, Module, ProjectGraph, ProjectName}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -17,11 +17,13 @@ final case class ChannelPlan(
     artifact: String,
     revision: String,
     asset: RepoPath,
+    clients: List[DistPlatform],
 )
 
-/** The shim reads `channel-<version>` from the existing `dist` release for a pin that ends in `-SNAPSHOT`. The body
-  * is the timestamp Maven stored for that coordinate. The manifest and the jar use that same timestamp. A stored
-  * commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer channel.
+/** The shim reads `channel-<version>` from the existing `dist` release for a pin that ends in `-SNAPSHOT`. The body is
+  * the timestamp Maven stored for that coordinate. The manifest, the jar, and any clients use that same timestamp. A
+  * stored commit coordinate uploads `channel-<ship>-<sha>-SNAPSHOT` and does not move the pointer channel. A ship whose
+  * snapshots build clients reads each one from [[DistLayout.builtClient]].
   */
 object DistChannel:
   val Tag: String = "dist"
@@ -37,7 +39,9 @@ object DistChannel:
       acc.flatMap: seen =>
         one(graph, ship, modules.filter(_.ship == ship)).map(seen ++ _)
 
-  /** The asset file, then GitHub credentials. An empty plan checks neither and does not read `gh` or `origin`. */
+  /** The asset file and each client, then GitHub credentials. An empty plan checks neither and does not read `gh` or
+    * `origin`.
+    */
   def prepare(
       repo: Path,
       env: Map[String, String],
@@ -47,12 +51,14 @@ object DistChannel:
   ): zio.IO[LocalPublishError, Map[String, String]] =
     if plans.isEmpty then ZIO.succeed(env)
     else
-      ZIO.fromEither(assets(repo, plans)).flatMap: _ =>
-        AssetAccess
-          .complete(repo, env, readToken, remote)
-          .mapError(error => LocalPublishError.Stock(error.message))
+      ZIO
+        .fromEither(assets(repo, plans))
+        .flatMap: _ =>
+          AssetAccess
+            .complete(repo, env, readToken, remote)
+            .mapError(error => LocalPublishError.Stock(error.message))
 
-  /** The asset file and the release credentials. An empty plan checks neither. */
+  /** The asset file, each client, and the release credentials. An empty plan checks neither. */
   def ready(repo: Path, env: Map[String, String], plans: List[ChannelPlan]): Either[LocalPublishError, Unit] =
     val files = assets(repo, plans)
     files.flatMap: _ =>
@@ -63,8 +69,7 @@ object DistChannel:
           _ <- AssetAccess.bases(env).left.map(error => LocalPublishError.Stock(error.message))
         yield ()
 
-  /** Replace the channel, then the timestamped manifest and jar. The receipt line is `group artifact revision unique`.
-    */
+  /** Replace the timestamped files, then the channel. The receipt line is `group artifact revision unique`. */
   def upload(
       repo: Path,
       env: Map[String, String],
@@ -80,16 +85,24 @@ object DistChannel:
           noted  <- ZIO.foreach(plans)(plan => send(repo, access, bases, plan, lines))
         yield noted
 
-  /** Channel body, manifest, and jar. `coordinate` is the pin (`<ship>-SNAPSHOT` or `<ship>-<sha>-SNAPSHOT`). `clients`
-    * is empty. The shim falls back to `java -jar`.
+  /** The jar, each client, the manifest, and last the channel body, in upload order. `coordinate` is the pin
+    * (`<ship>-SNAPSHOT` or `<ship>-<sha>-SNAPSHOT`). The channel goes last so it never names a manifest that is not up
+    * yet. With no clients the manifest's `clients` is empty and the shim runs `java -jar`.
     */
-  def files(coordinate: String, revision: String, jar: Chunk[Byte]): List[(String, Chunk[Byte])] =
-    val manifest = DistLayout.manifestJson(revision, DistLayout.sha256(jar.toArray), Nil, None)
-    List(
-      DistLayout.channel(coordinate) -> text(revision + "\n"),
-      DistLayout.manifest(revision) -> text(manifest),
-      DistLayout.jar(revision) -> jar,
-    )
+  def files(
+      coordinate: String,
+      revision: String,
+      jar: Chunk[Byte],
+      clients: List[(DistPlatform, Chunk[Byte])],
+  ): List[(String, Chunk[Byte])] =
+    val shas     = clients.map((platform, bytes) => platform -> DistLayout.sha256(bytes.toArray))
+    val manifest = DistLayout.manifestJson(revision, DistLayout.sha256(jar.toArray), shas, None)
+    List(DistLayout.jar(revision) -> jar) ++
+      clients.map((platform, bytes) => DistLayout.client(revision, platform) -> bytes) ++
+      List(
+        DistLayout.manifest(revision)  -> text(manifest),
+        DistLayout.channel(coordinate) -> text(revision + "\n"),
+      )
 
   private def one(
       graph: ProjectGraph,
@@ -97,12 +110,14 @@ object DistChannel:
       modules: List[PublishedModule],
   ): Either[LocalPublishError, List[ChannelPlan]] =
     val assets   = assetMembers(graph, ship)
+    val clients  = snapshotClients(graph, ship)
     val channels = modules.filter(module => channel(module.revision))
     assets match
       case Nil                 => Right(Nil)
       case (name, path) :: Nil =>
-        channels.filter(_.module == name).foldLeft[Either[LocalPublishError, List[ChannelPlan]]](Right(Nil)):
-          (acc, hit) =>
+        channels
+          .filter(_.module == name)
+          .foldLeft[Either[LocalPublishError, List[ChannelPlan]]](Right(Nil)): (acc, hit) =>
             acc.flatMap: seen =>
               if seen.exists(_.revision == hit.revision) then
                 Left(
@@ -110,7 +125,7 @@ object DistChannel:
                     s"${ship.value} ${hit.module.value} published more than one ${hit.revision}"
                   )
                 )
-              else Right(seen :+ ChannelPlan(ship, name, hit.group.value, hit.artifact, hit.revision, path))
+              else Right(seen :+ ChannelPlan(ship, name, hit.group.value, hit.artifact, hit.revision, path, clients))
       case _ =>
         val named = assets.map(_._1).toSet
         if channels.exists(module => named.contains(module.module)) then
@@ -126,6 +141,11 @@ object DistChannel:
             case Some(module: Module) => module.asset.toList.map(name -> _)
             case _                    => Nil
 
+  private def snapshotClients(graph: ProjectGraph, ship: ShipName): List[DistPlatform] =
+    graph.catalog.get(ship).map(_.clients) match
+      case Some(ClientBuilds.ReleasesAndSnapshots) => DistPlatform.values.toList
+      case Some(ClientBuilds.Releases) | None      => Nil
+
   private def channel(revision: String): Boolean =
     Revision.parse(revision) match
       case Right(Revision.Pointer(_) | Revision.Snapshot(_)) => true
@@ -136,18 +156,26 @@ object DistChannel:
       acc.flatMap(_ => present(repo, plan))
 
   private def present(repo: Path, plan: ChannelPlan): Either[LocalPublishError, Unit] =
-    val path = repo.resolve(plan.asset.value).normalize
-    val file =
-      try Right(Files.isRegularFile(path))
-      catch case _: java.io.IOException => Left(LocalPublishError.Read(path))
-    file.flatMap:
-      case true  => Right(())
+    isFile(repo.resolve(plan.asset.value).normalize).flatMap:
+      case true  => clientsPresent(repo, plan)
       case false =>
         Left(
           LocalPublishError.Stock(
             s"${plan.asset.value} is not a file. ./histos assembly writes the install jar."
           )
         )
+
+  private def clientsPresent(repo: Path, plan: ChannelPlan): Either[LocalPublishError, Unit] =
+    plan.clients.foldLeft[Either[LocalPublishError, Unit]](Right(())): (acc, platform) =>
+      val relative = Path.of(DistLayout.builtClient(platform))
+      acc.flatMap: _ =>
+        isFile(repo.resolve(relative).normalize).flatMap:
+          case true  => Right(())
+          case false => Left(LocalPublishError.MissingClient(plan.ship, relative))
+
+  private def isFile(path: Path): Either[LocalPublishError, Boolean] =
+    try Right(Files.isRegularFile(path))
+    catch case _: java.io.IOException => Left(LocalPublishError.Read(path))
 
   private def send(
       repo: Path,
@@ -157,9 +185,12 @@ object DistChannel:
       lines: List[String],
   ): IO[LocalPublishError, String] =
     for
-      unique <- ZIO.fromEither(timestamp(plan, lines))
-      jar    <- read(repo, plan)
-      _      <- replace(access, bases, plan, files(plan.revision, unique, jar))
+      unique  <- ZIO.fromEither(timestamp(plan, lines))
+      jar     <- bytes(repo.resolve(plan.asset.value).normalize)
+      clients <- ZIO.foreach(plan.clients)(platform =>
+        bytes(repo.resolve(DistLayout.builtClient(platform)).normalize).map(platform -> _)
+      )
+      _ <- replace(access, bases, plan, files(plan.revision, unique, jar, clients))
     yield s"${plan.ship.value} dist ${DistLayout.channel(plan.revision)} $unique"
 
   private def timestamp(plan: ChannelPlan, lines: List[String]): Either[LocalPublishError, String] =
@@ -167,7 +198,7 @@ object DistChannel:
       case Some(unique) if LauncherPin.validRevision(plan.revision, unique) => Right(unique)
       case Some(unique)                                                     =>
         Left(LocalPublishError.Stock(s"$unique is not a timestamp of ${plan.revision}"))
-      case None                                                             =>
+      case None =>
         Left(LocalPublishError.Stock(s"${plan.artifact} ${plan.revision} did not publish a timestamp"))
 
   /** `group artifact revision unique`, the snapshot receipt from [[PublishedModule.rendered]]. */
@@ -178,8 +209,7 @@ object DistChannel:
         Some(unique)
       case _ => None
 
-  private def read(repo: Path, plan: ChannelPlan): IO[LocalPublishError, Chunk[Byte]] =
-    val path = repo.resolve(plan.asset.value).normalize
+  private def bytes(path: Path): IO[LocalPublishError, Chunk[Byte]] =
     ZIO
       .attemptBlocking(Chunk.fromArray(Files.readAllBytes(path)))
       .mapError(_ => LocalPublishError.Read(path))

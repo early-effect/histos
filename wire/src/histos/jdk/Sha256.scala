@@ -1,11 +1,7 @@
 package histos.jdk
 
-import java.security.MessageDigest
-
 import _root_.scala.annotation.publicInBinary
 import _root_.scala.quoted.*
-
-import zio.Chunk
 
 opaque type Sha256 = String
 
@@ -20,10 +16,6 @@ object Sha256:
     val hex = raw.trim.toLowerCase(java.util.Locale.ROOT)
     if hex.length == 64 && hex.forall(isHex) then Right(trusted(hex))
     else Left(Sha256Error.Bad(raw))
-
-  def of(bytes: Chunk[Byte]): Sha256 = fromDigest(
-    MessageDigest.getInstance("SHA-256").digest(bytes.toArray)
-  )
 
   private[histos] def fromDigest(bytes: Array[Byte]): Sha256 =
     bytes.map(b => f"${b & 0xff}%02x").mkString

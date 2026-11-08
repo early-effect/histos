@@ -1,7 +1,7 @@
 package histos.zinc
 
 import histos.cache.ContentStore
-import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256}
+import histos.jdk.{JdkMajor, JdkRuntime, JdkVersion, Sha256, Sha256Digest}
 import histos.resolve.{DependencyLock, LockedTools, Repositories, Resolve, ResolveError}
 import histos.toolchain.RuntimeIdentity
 import histos.workspace.{IoFailure, IoFault, Workspace}
@@ -24,7 +24,7 @@ object CompileIdentityLawSpec extends ZIOSpecDefault:
         val key     = CompileKey.of(asked, sources)
         assertTrue(
           key == CompileKey.of(asked, sources),
-          key == Sha256.of(CompileInputs.encode(CompileInputs.declared(asked, sources))),
+          key == Sha256Digest.of(CompileInputs.encode(CompileInputs.declared(asked, sources))),
           key.value.length == 64,
         )
       ,
