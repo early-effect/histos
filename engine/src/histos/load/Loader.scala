@@ -143,7 +143,6 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
         graph,
         opened.build,
         threads,
-        live,
         links(matched, live),
         prepared.launcher,
       )

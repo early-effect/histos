@@ -242,6 +242,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
       doc: DocCheck = DocCheck.Off,
       coverage: CoverageJob = CoverageJob.Off,
   ): Either[BuildError, List[Placed]] =
+    val contribution = Contribution(Nil, Nil, jobs)
     JobCheck.arrange(
       ProjectGraph.trusted(
         projects,
@@ -249,7 +250,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
         catalog,
         None,
         Nil,
-        List(RegisteredPlugin(echo, EntryName("histos.law.Echo$"), Contribution(Nil, Nil, jobs))),
+        List(RegisteredPlugin(echo, EntryName("histos.law.Echo$"), contribution)(Fixed(echo, contribution))),
         docCheck = doc,
         ci = ci,
         supply = SupplyChain(),

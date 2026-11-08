@@ -7,11 +7,13 @@ import histos.plugin.{
   DeclaredOutput,
   DeclaredTask,
   EntryName,
+  HistosPlugin,
   OutputName,
   PluginArgs,
   PluginId,
   RegisteredPlugin,
   RepoPath,
+  RunRequest,
   Seal,
   TaskName,
 }
@@ -23,6 +25,7 @@ import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, ScalaVers
 
 import java.nio.file.Path
 
+import zio.ZIO
 import zio.test.*
 
 object DaemonWatchLawSpec extends ZIOSpecDefault:
@@ -73,6 +76,11 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
 
   private val docs = PluginId.trusted("docs")
 
+  private object Unrun extends HistosPlugin:
+    def id: PluginId             = docs
+    def contribute: Contribution = Contribution(Nil, Nil, Nil)
+    def run(request: RunRequest) = ZIO.dieMessage("watching never runs a plugin")
+
   private def pluginGraph: ProjectGraph =
     ProjectGraph.trusted(
       List(module(ProjectName("notes"))),
@@ -102,7 +110,7 @@ object DaemonWatchLawSpec extends ZIOSpecDefault:
             Nil,
             Nil,
           ),
-        )
+        )(Unrun)
       ),
     )
 

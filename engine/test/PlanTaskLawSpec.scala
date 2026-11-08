@@ -1,9 +1,20 @@
 package histos.preview
 
-import histos.plugin.{Contribution, DeclaredTask, EntryName, PluginId, RegisteredPlugin, Seal, TaskName}
+import histos.plugin.{
+  Contribution,
+  DeclaredTask,
+  EntryName,
+  HistosPlugin,
+  PluginId,
+  RegisteredPlugin,
+  RunRequest,
+  Seal,
+  TaskName,
+}
 import histos.version.Catalog
 import histos.{Platform, ProjectGraph, ProjectNameError, Splits}
 
+import zio.ZIO
 import zio.test.{ZIOSpecDefault, assertTrue, test}
 
 /** A built-in name and a plugin task are runs. A platform on either name is refused. */
@@ -21,9 +32,14 @@ object PlanTaskLawSpec extends ZIOSpecDefault:
         plugin,
         EntryName("demo.Law$"),
         Contribution(List(DeclaredTask(pack, Seal.Hermetic, Set.empty, Nil, Nil, Nil)), Nil, Nil),
-      )
+      )(Unrun)
     ),
   )
+
+  private object Unrun extends HistosPlugin:
+    def id: PluginId             = plugin
+    def contribute: Contribution = Contribution(Nil, Nil, Nil)
+    def run(request: RunRequest) = ZIO.dieMessage("a plan never runs a plugin")
 
   def spec = suite("plan task laws")(
     test("a built-in name and a known plugin task are that run, and a platform is refused"):

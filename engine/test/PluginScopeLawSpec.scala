@@ -45,8 +45,8 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
       Workspace.work("histos-plugin-scope").catchAll(error => ZIO.dieMessage(error.message)).flatMap { root =>
         val run =
           for
-            _ <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
-            _ <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
+            _     <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
+            _     <- stub[Resolve](_.fetch(any[histos.resolve.LockedArtifact]))(ZIO.dieMessage("fetched"))
             found <- ZIO.scoped {
               for
                 threads <- PluginThreads.make(ClassLoader.getSystemClassLoader)
@@ -55,11 +55,10 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
                   graph,
                   ClassLoader.getSystemClassLoader,
                   threads,
-                  List(BindPlugin),
                   Nil,
                   ApiDigest.trusted("ab" * 32),
                 )
-                stayed <- runtime.run(PluginTaskId(pluginId, held), PluginArgs.empty)
+                stayed         <- runtime.run(PluginTaskId(pluginId, held), PluginArgs.empty)
                 generationPort <- portOf(stayed.text)
                 whileLoaded    <- ask(generationPort)
                 dropped        <- runtime.run(PluginTaskId(pluginId, brief), PluginArgs.empty)
@@ -117,7 +116,7 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
           pluginId,
           EntryName.trusted("demo.Plugin$"),
           Contribution(List(task(held), task(brief)), Nil, Nil),
-        )
+        )(BindPlugin)
       ),
     )
 
@@ -125,8 +124,8 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
     DeclaredTask(name, Seal.Open, Set.empty, Nil, Nil, Nil)
 
   private object BindPlugin extends HistosPlugin:
-    def id: PluginId = pluginId
-    def contribute   = Contribution(Nil, Nil, Nil)
+    def id: PluginId             = pluginId
+    def contribute               = Contribution(Nil, Nil, Nil)
     def run(request: RunRequest) =
       val life = if request.id.name == held then ResourceLife.Generation else ResourceLife.Invocation
       ZIO.serviceWithZIO[PluginScopes] { scopes =>

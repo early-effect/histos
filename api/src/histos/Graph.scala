@@ -757,7 +757,7 @@ object Projects:
         case NonFatal(err) =>
           Left(BuildError.PluginDefect(plugin.id, err.getClass.getName))
     contributed.flatMap: contribution =>
-      EntryName.fromClass(plugin.getClass) match
+      EntryName.fromClass(plugin.entryClass) match
         case Right(entry) =>
           Right(
             RegisteredPlugin(
@@ -767,10 +767,10 @@ object Projects:
                 checks = contribution.checks ++ plugin.checks,
                 preflight = contribution.preflight ++ plugin.preflight,
               ),
-            )
+            )(plugin)
           )
         case Left(_) =>
-          Left(BuildError.PluginDefect(plugin.id, plugin.getClass.getName))
+          Left(BuildError.PluginDefect(plugin.id, plugin.entryClass.getName))
 
   private def checkPlugins(
       registered: List[RegisteredPlugin]
