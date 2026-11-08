@@ -56,10 +56,11 @@ object PublishRun:
         plans  <- ZIO
           .fromEither(DistChannel.plan(graph, staged.output.modules))
           .tapError(error => note(error.message))
-        _     <- ZIO.fromEither(DistChannel.ready(repo, env, plans)).tapError(error => note(error.message))
-        lines <- localLines(repo, staged, layer)
-        _     <- ZIO.foreachDiscard(plans)(plan => note(s"uploading ${DistLayout.channel(plan.pointer)}"))
-        noted <- DistChannel.upload(repo, env, plans, lines).tapError(error => note(error.message))
+        filled <- DistChannel.prepare(repo, env, plans).tapError(error => note(error.message))
+        _      <- ZIO.fromEither(DistChannel.ready(repo, filled, plans)).tapError(error => note(error.message))
+        lines  <- localLines(repo, staged, layer)
+        _      <- ZIO.foreachDiscard(plans)(plan => note(s"uploading ${DistLayout.channel(plan.revision)}"))
+        noted  <- DistChannel.upload(repo, filled, plans, lines).tapError(error => note(error.message))
       yield Report(show(staged, lines) ++ noted)
 
   def release(

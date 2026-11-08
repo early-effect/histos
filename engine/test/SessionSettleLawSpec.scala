@@ -43,7 +43,7 @@ object SessionSettleLawSpec extends ZIOSpecDefault:
         SessionSettle.prepare(repo, Catalog.Empty, Map.empty, PublishWrite.Snapshots).map: found =>
           assertTrue(found == Map.empty)
     ,
-    test("a development write names HEAD, and a non-default branch does not move the pointer"):
+    test("a development write names HEAD, and publish snapshots moves the pointer off the default branch"):
       Workspace.work("histos-settle-head").flatMap: repo =>
         for
           sha   <- LawGit.commit(repo)
@@ -52,7 +52,23 @@ object SessionSettleLawSpec extends ZIOSpecDefault:
         yield assertTrue(
           session(local) == Right(Session.Snapshot(sha, Branch.Other)),
           snaps.get("SONATYPE_USERNAME").contains("user"),
-          session(snaps) == Right(Session.Snapshot(sha, Branch.Other)),
+          session(snaps) == Right(Session.Snapshot(sha, Branch.Default)),
+        )
+    ,
+    test("publish snapshots keeps an explicit sha and still moves the pointer"):
+      Workspace.work("histos-settle-other").flatMap: repo =>
+        val other = Map(
+          "HISTOS_SESSION" -> "snapshot",
+          "HISTOS_SHA"     -> fixed.value,
+          "HISTOS_BRANCH"  -> "other",
+        )
+        for
+          _     <- LawGit.commit(repo)
+          snaps <- SessionSettle.prepare(repo, catalog, other, PublishWrite.Snapshots)
+          local <- SessionSettle.prepare(repo, catalog, other, PublishWrite.Local)
+        yield assertTrue(
+          session(snaps) == Right(Session.Snapshot(fixed, Branch.Default)),
+          local == other,
         )
     ,
     test("the recorded default branch moves the pointer"):

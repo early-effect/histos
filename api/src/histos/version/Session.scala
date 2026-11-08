@@ -12,7 +12,9 @@ enum Session:
   case PullRequest(number: PullRequestNumber, commit: CommitSha)
   case Release
 
-/** The default branch is the only place the `<ship>-SNAPSHOT` pointer moves. */
+/** `default` publishes the `<ship>-SNAPSHOT` pointer. `other` stores the commit coordinate. `publish snapshots` settles
+  * to `default`.
+  */
 enum Branch:
   case Default
   case Other

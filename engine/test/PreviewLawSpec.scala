@@ -50,14 +50,17 @@ object PreviewLawSpec extends ZIOSpecDefault:
               val revision     = SnapshotCoordinate(number, sha.abbreviate).render
               val localText    = Plan.renderPublish(local)
               val snapshotText = Plan.renderPublish(snapshots)
+              val moved = s"${number.render}-SNAPSHOT"
               assertTrue(
                 local.place == "ivy2Local",
                 localText.startsWith(local.place),
                 localText.contains(s"app demo $revision selected"),
+                !localText.contains(s"app demo $moved selected"),
                 !localText.contains(CiVersion(number).render),
                 snapshots.place == SnapshotRepository.central.root.render,
                 snapshotText.startsWith(snapshots.place),
                 snapshotText.contains(s"app demo $revision selected"),
+                snapshotText.contains(s"app demo $moved selected"),
                 !snapshotText.contains("not published"),
                 !snapshotText.contains(number.render + " selected"),
               )
