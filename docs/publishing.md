@@ -2,9 +2,9 @@
 
 `publish` is an effect. It requires a `Publishing`. A command closes that requirement with `provideLayer`. Anything larger is `flatMap` of those effects. The engine does not look up a publisher by name.
 
-This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 1)(api, app))`. Editing this file does not upload it.
+This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 2)(api, app))`. Editing this file does not upload it.
 
-The number in `.next(0, 2, 1)` is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `0.2.1-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write `0.2.1-<sha>-SNAPSHOT`. `publish snapshots` also writes the `0.2.1-SNAPSHOT` pointer from any checkout. `publish local` writes that pointer only on the default branch. A release session publishes `0.2.1`, and that command still requires `HISTOS_SESSION=release`.
+The number in `.next(0, 2, 2)` is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `0.2.2-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write `0.2.2-<sha>-SNAPSHOT`. `publish snapshots` also writes the `0.2.2-SNAPSHOT` pointer from any checkout. `publish local` writes that pointer only on the default branch. A release session publishes `0.2.2`, and that command still requires `HISTOS_SESSION=release`.
 
 `histos run versions` prints a session you name. `publish local` and `publish snapshots` do not need these exports. `publish release` does need `HISTOS_SESSION=release`.
 
@@ -20,7 +20,7 @@ export HISTOS_BRANCH=default
 Depend on an owned ship with a pin. `.pointer`, `.commit`, and `.released` are different types.
 
 ```scala
-Ship("histos").next(0, 2, 1).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
+Ship("histos").next(0, 2, 2).pointer.dep(organization"rocks.earlyeffect", artifact"histos-api")
 ```
 
 Third-party Maven coordinates stay `dep"org::name:revision"`.

@@ -79,7 +79,7 @@ object ReleasePin:
     new ReleasePin(number)
 end ReleasePin
 
-/** `Ship("histos").next(0, 2, 1)(api, app)` is one catalog row. The number is the next release. */
+/** `Ship("histos").next(0, 2, 2)(api, app)` is one catalog row. The number is the next release. */
 object Ship:
   inline def apply(inline name: String): ShipStart =
     ${ ShipDslMacro.start('name) }
