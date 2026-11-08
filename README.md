@@ -20,7 +20,7 @@ flowchart TD
   jvm --> store["content store"]
 ```
 
-A batch command execs the native client. The client reads `.histos/server.json` and talks to that JVM server, starting one when none is listening. `server`, `bsp`, and `mcp` stay on the jar. When the recorded version matches, BSP copies frames onto that server and MCP sends the same call. No server means that process does the work. A different version stops.
+A batch command execs the native client. The client reads `.histos/server.json` and talks to that JVM server, starting one when none is listening. `server`, `bsp`, and `mcp` stay on the jar. When the recorded version matches, BSP copies frames onto that server and MCP sends the same call. No server means that process does the work. A different version reboots that server, and the call runs on the replacement.
 
 This is pre-release. The API may break when that makes it more honest. Other repositories take snapshots.
 
@@ -91,7 +91,9 @@ Histos builds itself. [histos](histos) comes from `workflow --update`. A local a
 
 `histos.version=0.1.0` pins that release. The shim installs that toolchain from the GitHub release `dist`: the jar, the manifest, and a prebuilt client when the manifest names one. `histos.version=0.1.0-SNAPSHOT` follows the development snapshot. A timestamp such as `0.1.0-20261101.030257-1` freezes that channel. `histos update` resolves a snapshot channel and writes that timestamp. A release pin stays. `launcher --latest` writes the snapshot pointer and does not fetch. A release pin stays there too. Any of these lines may be hand-edited. A bad line fails at boot. CI runs the committed line through the shim. The shim fetches `channel-<histos.version>` from `dist` when the line is a snapshot pointer. The body of that file is one timestamp revision. Run the `snapshots` workflow on the default branch. That is the publish. On that branch it runs `./histos assembly`, then `./histos publish snapshots` with `HISTOS_SESSION=snapshot`, `HISTOS_SHA` set to the commit, and `HISTOS_BRANCH=default`. The command uploads `channel-<ship>-SNAPSHOT`, `<rev>-manifest.json`, and `<rev>-histos.jar` to the existing `dist` release. `<rev>` is the timestamp Maven stored for the module that names the asset, and it is the channel body. The manifest leaves `clients` empty, so the shim runs `java -jar`. A dispatch from another branch sets `HISTOS_BRANCH=other`, stores the commit coordinate, and uploads no channel.
 
-The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.2.1`. Its version line is `0.2.0-SNAPSHOT`. The native client sends that version line. The server records the same line.
+The wrapper script names the ship. That number is the prefix on its errors. `build.properties` names the published Histos that builds this tree, and that toolchain can be another release or a snapshot. A bad line fails at boot. This checkout's script is `0.2.1`. Its version line is `0.2.0-SNAPSHOT`. The native client sends that version line. The server records the same line, and `.histos/assembly.sha256` when that file is present.
+
+A running server keeps the driver it started with. `publish local`, a new `dist/histos.jar`, or `HISTOS_ASSEMBLY` does not replace that process. The next command compares the version line and that checksum. A mismatch reboots the server and the command runs on the replacement. `histos reboot` does the same thing when you ask for it. If publish or version stays on the older driver, that JVM is still the one that started: run `histos reboot`, or stop the process, and run the command again.
 
 `.bsp/histos.json` takes its `version` from that line, and `histos version` prints `histos` and the same line. The next `./histos` rewrites the connection file when the line changes. A missing or bad line does not name a version: the connection file stays untouched, and `histos version` fails. The file's `graph` is a hash of the build files. A running `bsp` rewrites it when that hash changes, and Metals treats the new file as a build change.
 
@@ -197,7 +199,7 @@ The ship `histos` publishes `api`, a library, and `app`, an assembly. `engine` a
 
 `publishLocal`, `publish snapshots`, `publish release`, `publish assets`, `publish promote`, and `publish drop` are the commands in Publishing. `preview` of `compile`, `test`, `publishLocal`, `publish snapshots`, `clean`, `cleanFull`, or `run` writes nothing. Compile and test name the sources the last analysis says are stale. A test preview names the suites a quick run would skip and the ones it would run. When the analysis cannot be read, the line says the staleness is unknown. When a digest cannot be read, the line says the suite is not known to be skippable.
 
-`~` runs a command again after a source save. The server does that when one is up. This process does it otherwise. `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested `~` are usage and do not start that loop. `observe` reads the stored tally and does not load the graph. `cancel` names the run id the command minted. `server` keeps a warm process. `reload` asks that process to load the build again, and fails when no server is up. `reboot` replaces a running server, or starts one. `mcp` and `bsp` open a transport.
+`~` runs a command again after a source save. The server does that when one is up. This process does it otherwise. `mcp`, `bsp`, `server`, `portal`, `observe`, and a nested `~` are usage and do not start that loop. `observe` reads the stored tally and does not load the graph. `cancel` names the run id the command minted. `server` keeps a warm process. `reload` asks that process to load the build again, and fails when no server is up. `reboot` replaces a running server, or starts one. A mismatch of the version line or the assembly checksum does that before the command. `mcp` and `bsp` open a transport.
 
 `cache path` prints the store. `cache list` prints each digest and its size. `cache clean` removes an entry older than 30 days that no project keeps. `--dry-run` names those entries and leaves them. `cache promote --from` and `--to` take `main`, `pr/<n>`, or `dev/<name>`. The remote cache is not configured, so that command reports `remote cache is not configured` and does not open a connection.
 
@@ -232,7 +234,7 @@ A command writes that file when the pin parses and the build fingerprint can be 
 
 One target is one cell: the module, the Scala version, the platform, and a scope of `main` or `test`. `histos.scala` is its own target. A compile from the editor is `buildTarget/compile` for that target. The scalac options include `-Xsemanticdb` and `-sourceroot`, which is what Metals uses to navigate. Diagnostics are `build/publishDiagnostics` on each source file. A compile that fails is still that report.
 
-`bsp` runs on the jar. A server recorded at the same version receives the session. No server means the `bsp` process compiles. `histos reload` asks a running server to load the build again. `histos reboot` replaces that server, or starts one. `~ bsp` is usage and does not start a session.
+`bsp` runs on the jar. A server recorded at the same version and assembly checksum receives the session. A mismatch replaces that server. No server means the `bsp` process compiles. `histos reload` asks a running server to load the build again. `histos reboot` replaces that server, or starts one. `~ bsp` is usage and does not start a session.
 
 ## An agent
 
@@ -266,7 +268,7 @@ Point the client's stdio server at the shim. In this checkout the command is `./
 
 `tools/list` is `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, and `observe`. `compile` with an empty project list compiles every module. `test` takes suite globs in `patterns` and `run` or `quick` in `mode`. An absent mode runs the suites. `run` takes a main, `inspect`, `versions`, or a plugin task id. `watch` takes the inner command and does not take a leading `~`.
 
-When `.histos/server.json` names this version, the tool sends the call there and prints each line as it arrives. No server means this process keeps one graph and runs the call. A different version fails the tool. A compile or a test that ran and failed comes back as a report. A request that never started fails the tool.
+When `.histos/server.json` names this version and assembly checksum, the tool sends the call there and prints each line as it arrives. No server means this process keeps one graph and runs the call. A different version reboots the server and the tool sends the call again. A compile or a test that ran and failed comes back as a report. A request that never started fails the tool.
 
 `acp` is a reserved word and has no command. `~ mcp` is usage and does not start a session.
 
