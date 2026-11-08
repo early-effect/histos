@@ -74,29 +74,43 @@ object Session:
         },
         text =>
           Attach.decide(repo, text).flatMap {
-            case Decision.DifferentVersion =>
-              drop(desk) *> ZIO.fail(SessionError.DifferentVersion)
-            case Decision.Open(socket) =>
+            case Decision.DifferentVersion(socket) =>
               drop(desk) *>
-                Build
-                  .attached(socket)
-                  .perform(call)
-                  .tap {
-                    case Beat.Heard(event) => Notice.show(repo, event)
-                    case Beat.Finished(_)  => ZIO.unit
-                  }
-                  .runCollect
-                  .foldZIO(
-                    {
-                      case ServerError.Unreachable(_) =>
-                        locally(repo, apiJar, machine, desk, call, text)
-                      case other => ZIO.fail(SessionError.Remote(other))
-                    },
-                    beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
-                  )
+                Attach.replace(repo, text, socket).flatMap {
+                  case Some(fresh) => ask(repo, apiJar, machine, desk, call, text, fresh)
+                  case None        => ZIO.fail(SessionError.DifferentVersion)
+                }
+            case Decision.Open(socket) =>
+              drop(desk) *> ask(repo, apiJar, machine, desk, call, text, socket)
             case Decision.Absent =>
               locally(repo, apiJar, machine, desk, call, text)
           },
+      )
+
+  private def ask(
+      repo: Path,
+      apiJar: Path,
+      machine: Machine,
+      desk: Desk,
+      call: Call,
+      shown: String,
+      socket: Path,
+  ): ZIO[Env, SessionError, CallResult] =
+    Build
+      .attached(socket)
+      .perform(call)
+      .tap {
+        case Beat.Heard(event) => Notice.show(repo, event)
+        case Beat.Finished(_)  => ZIO.unit
+      }
+      .runCollect
+      .foldZIO(
+        {
+          case ServerError.Unreachable(_) =>
+            locally(repo, apiJar, machine, desk, call, shown)
+          case other => ZIO.fail(SessionError.Remote(other))
+        },
+        beats => ZIO.fromEither(spoken(repo, beats.map(Build.feed).toList)),
       )
 
   /** A report is the tool value, including a compile or test that ran and failed. A fault fails the tool. */

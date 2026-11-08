@@ -7,6 +7,7 @@ import histos.central.PortalServer
 import histos.build.{Beat, Build}
 import histos.load.LoadedBuild
 import histos.server.{
+  AssemblyMark,
   Attach,
   Call,
   Calls,
@@ -922,18 +923,18 @@ object Cli:
               },
               done => ZIO.succeed(done),
             )
-          case Decision.DifferentVersion =>
-            ZIO.succeed(stopped(ServerError.DifferentVersion))
+          case Decision.DifferentVersion(socket) =>
+            supplant(repo, socket, started(repo, call, miss))(next =>
+              remote(repo, next, call).foldZIO(
+                {
+                  case ServerError.Unreachable(_) => started(repo, call, miss)
+                  case error                      => ZIO.succeed(stopped(error))
+                },
+                ZIO.succeed,
+              )
+            )
           case Decision.Absent =>
-            ensureServer(repo).flatMap {
-              case Left(error)         => ZIO.succeed(stopped(error))
-              case Right(None)         => miss
-              case Right(Some(socket)) =>
-                remote(repo, socket, call).foldZIO(
-                  error => ZIO.succeed(stopped(error)),
-                  done => ZIO.succeed(done),
-                )
-            }
+            started(repo, call, miss)
         }
     )
 
@@ -999,6 +1000,50 @@ object Cli:
 
   private def stopped(error: ServerError): Completed =
     Completed(CliExit.LoadFailed, "", error.message, Playback.Held)
+
+  /** No `./histos` means `miss`. A script starts one server and this command attaches to it. */
+  private def started[R](
+      repo: Path,
+      call: Call,
+      miss: => URIO[R, Completed],
+  ): URIO[R, Completed] =
+    ensureServer(repo).flatMap {
+      case Left(error)         => ZIO.succeed(stopped(error))
+      case Right(None)         => miss
+      case Right(Some(socket)) =>
+        remote(repo, socket, call).foldZIO(
+          error => ZIO.succeed(stopped(error)),
+          done => ZIO.succeed(done),
+        )
+    }
+
+  /** Reboot the recorded server, then run `use` on the replacement. `fallback` runs when it does not come back. */
+  private def supplant[R](
+      repo: Path,
+      socket: Path,
+      fallback: => URIO[R, Completed],
+  )(use: Path => URIO[R, Completed]): URIO[R, Completed] =
+    versionOf(repo).orElseSucceed(None).flatMap {
+      case None       => fallback
+      case Some(text) =>
+        Attach.replace(repo, text, socket).flatMap {
+          case Some(next) => use(next)
+          case None       => fallback
+        }
+    }
+
+  private def asked[R](
+      repo: Path,
+      socket: Path,
+      miss: => URIO[R, Completed],
+  ): URIO[R, Completed] =
+    remote(repo, socket, Call.Reboot).foldZIO(
+      {
+        case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
+        case error                                                     => ZIO.succeed(stopped(error))
+      },
+      ZIO.succeed,
+    )
 
   /** Only the local path loads. A matching server already holds the graph. */
   private def loaded[R](repo: Path, apiJar: Path)(
@@ -1554,8 +1599,26 @@ object Cli:
                     )
                   ),
               )
-          case Decision.DifferentVersion =>
-            ZIO.succeed(stopped(ServerError.DifferentVersion))
+          case Decision.DifferentVersion(socket) =>
+            supplant(repo, socket, miss)(next =>
+              Client
+                .splice(next)
+                .foldZIO(
+                  {
+                    case ServerError.Unreachable(_) => miss
+                    case error                      => ZIO.succeed(stopped(error))
+                  },
+                  code =>
+                    ZIO.succeed(
+                      Completed(
+                        if code == 0 then CliExit.Success else CliExit.TaskFailed,
+                        "",
+                        "",
+                        Playback.Held,
+                      )
+                    ),
+                )
+            )
           case Decision.Absent => miss
         }
     )
@@ -1569,13 +1632,17 @@ object Cli:
       Attach
         .decide(repo, text)
         .flatMap {
-          case Decision.DifferentVersion =>
-            ZIO.succeed(
-              Completed(
-                CliExit.LoadFailed,
-                "",
-                ServerError.DifferentVersion.message,
-                Playback.Held,
+          case Decision.DifferentVersion(socket) =>
+            val quiet =
+              ZIO.succeed(Completed(CliExit.LoadFailed, "", ServerError.NoServer.message, Playback.Held))
+            supplant(repo, socket, quiet)(next =>
+              remote(repo, next, Call.Reload).foldZIO(
+                {
+                  case ServerError.Unreachable(_) => quiet
+                  case error                      =>
+                    ZIO.succeed(Completed(CliExit.LoadFailed, "", error.message, Playback.Held))
+                },
+                ZIO.succeed,
               )
             )
           case Decision.Absent =>
@@ -1702,15 +1769,11 @@ object Cli:
       Attach
         .decide(repo, text)
         .flatMap:
+          case Decision.Absent => miss
           case Decision.Open(socket) =>
-            remote(repo, socket, Call.Reboot).foldZIO(
-              {
-                case ServerError.Unreachable(_) | ServerError.DifferentVersion => miss
-                case error                                                     => ZIO.succeed(stopped(error))
-              },
-              done => ZIO.succeed(done),
-            )
-          case Decision.Absent | Decision.DifferentVersion => miss
+            asked(repo, socket, miss)
+          case Decision.DifferentVersion(socket) =>
+            asked(repo, socket, miss)
     )
 
   private enum Boot:
@@ -1749,29 +1812,32 @@ object Cli:
                               case None =>
                                 ZIO.succeed(Boot.Pin(LauncherError.Absent(repo.resolve(LauncherPin.file))))
                               case Some(text) =>
-                                Daemon
-                                  .open(
-                                    repo,
-                                    loaded.graph,
-                                    loaded.build,
-                                    jdk,
-                                    text,
-                                    apiJar,
-                                    classpath,
-                                    loader.reportBuild(repo, apiJar).provideEnvironment(env),
-                                    loaded.plugins,
-                                    machine,
-                                  )
-                                  .flatMap { running =>
-                                    say(running.record.socket.toString) *> running.done
-                                  }
-                                  .foldCauseZIO(
-                                    cause =>
-                                      cause.failureOrCause match
-                                        case Left(error) => ZIO.succeed(Boot.Transport(error))
-                                        case Right(rest) => ZIO.failCause(rest),
-                                    _ => ZIO.succeed(Boot.Up),
-                                  )
+                                AssemblyMark.read(repo).flatMap { mark =>
+                                  Daemon
+                                    .open(
+                                      repo,
+                                      loaded.graph,
+                                      loaded.build,
+                                      jdk,
+                                      text,
+                                      apiJar,
+                                      classpath,
+                                      loader.reportBuild(repo, apiJar).provideEnvironment(env),
+                                      loaded.plugins,
+                                      machine,
+                                      assembly = mark,
+                                    )
+                                    .flatMap { running =>
+                                      say(running.record.socket.toString) *> running.done
+                                    }
+                                    .foldCauseZIO(
+                                      cause =>
+                                        cause.failureOrCause match
+                                          case Left(error) => ZIO.succeed(Boot.Transport(error))
+                                          case Right(rest) => ZIO.failCause(rest),
+                                      _ => ZIO.succeed(Boot.Up),
+                                    )
+                                }
                             },
                           ),
                       ),
@@ -1804,7 +1870,8 @@ object Cli:
       case Boot.Pin(error)       => ZIO.succeed(CallResult.Fault(BuildFault.Launcher(error)))
       case Boot.Transport(error) => ZIO.fail(error)
 
-  /** A matching server runs the command. `local` is forced only when the socket is missing or dead.
+  /** A matching server runs the command. Another driver is rebooted first. `local` runs when that socket is missing or
+    * dead.
     */
   private def attach[R](
       repo: Path,
@@ -1831,13 +1898,22 @@ object Cli:
               },
               done => ZIO.succeed(done),
             )
-          case Decision.DifferentVersion =>
-            ZIO.succeed(
-              Completed(
-                CliExit.LoadFailed,
-                "",
-                ServerError.DifferentVersion.message,
-                Playback.Held,
+          case Decision.DifferentVersion(socket) =>
+            supplant(repo, socket, local)(next =>
+              remote(repo, next, call).foldZIO(
+                {
+                  case ServerError.Unreachable(_) => local
+                  case error                      =>
+                    ZIO.succeed(
+                      Completed(
+                        CliExit.LoadFailed,
+                        "",
+                        error.message,
+                        Playback.Held,
+                      )
+                    )
+                },
+                ZIO.succeed,
               )
             )
           case Decision.Absent => local

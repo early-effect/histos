@@ -30,12 +30,14 @@ import histos.report.WireJson.given JsonCodec[BuildEvent]
 import histos.report.WireJson.given JsonCodec[Platform]
 import histos.report.WireJson.given JsonCodec[ProjectName]
 import zio.stream.ZStream
-import zio.{Chunk, Exit, Fiber, IO, Promise, Queue, Ref, Scope, Semaphore, UIO, ZIO, ZLayer}
+import zio.{Chunk, Exit, Fiber, IO, Promise, Queue, Ref, Scope, Semaphore, UIO, ZIO, ZLayer, durationInt}
 
 /** What a batch command found in `.histos/server.json`. */
 enum Decision:
   case Absent
-  case DifferentVersion
+
+  /** The process at `socket` was started with another driver. The command reboots it. */
+  case DifferentVersion(socket: Path)
   case Open(socket: Path)
 
 opaque type Fingerprint = String
@@ -130,12 +132,8 @@ object Record:
       version: String,
       fingerprint: Fingerprint,
       socket: Path,
+      assembly: Option[String] = None,
   )
-  private final case class Stored(
-      version: String,
-      fingerprint: String,
-      socket: String,
-  ) derives JsonCodec
 
   def file(repo: Path): Path =
     repo.resolve(".histos").resolve("server.json")
@@ -148,14 +146,18 @@ object Record:
       version: String,
       fingerprint: Fingerprint,
       socket: Path,
+      assembly: Option[String] = None,
   ): IO[ServerError, Unit] =
     val dest = file(repo)
     val tmp  = dest.resolveSibling("server.json.tmp")
-    val json = Stored(
-      version,
-      fingerprint.value,
-      socket.toAbsolutePath.normalize.toString,
-    ).toJson
+    val json = ServerFile.render(
+      ServerFile(
+        version,
+        fingerprint.value,
+        socket.toAbsolutePath.normalize.toString,
+        assembly,
+      )
+    )
     ZIO
       .attemptBlocking {
         Files.createDirectories(dest.getParent)
@@ -180,30 +182,57 @@ object Record:
       .map(_.flatMap(parse))
 
   private def parse(text: String): Option[Written] =
-    text
-      .fromJson[Stored]
-      .toOption
-      .map(stored =>
-        Written(
-          stored.version,
-          Fingerprint.trusted(stored.fingerprint),
-          Path.of(stored.socket),
-        )
+    ServerFile.parse(text).map { stored =>
+      Written(
+        stored.version,
+        Fingerprint.trusted(stored.fingerprint),
+        Path.of(stored.socket),
+        stored.assembly,
       )
+    }
 end Record
 
 object Attach:
-  /** Missing, corrupt, or unreadable is [[Decision.Absent]]. The command then runs in-process.
+  /** Missing, corrupt, or unreadable is [[Decision.Absent]]. The command then runs in-process. A checksum the server
+    * did not record is [[Decision.DifferentVersion]], including a record that predates the field.
     */
   def decide(repo: Path, version: String): UIO[Decision] =
-    Record
-      .read(repo)
-      .flatMap:
-        case None                                      => ZIO.succeed(Decision.Absent)
-        case Some(record) if record.version != version =>
-          ZIO.succeed(Decision.DifferentVersion)
+    AssemblyMark.read(repo).flatMap { mark =>
+      Record.read(repo).flatMap {
+        case None => ZIO.succeed(Decision.Absent)
+        case Some(record) if record.version != version || record.assembly != mark =>
+          ZIO.succeed(Decision.DifferentVersion(record.socket))
         case Some(record) =>
           ZIO.succeed(Decision.Open(record.socket))
+      }
+    }
+
+  /** Poll until the recorded driver matches. The wait is the same as a cold start. */
+  def await(repo: Path, version: String): IO[ServerError, Path] =
+    def poll(left: Int): IO[ServerError, Path] =
+      decide(repo, version).flatMap {
+        case Decision.Open(socket) => ZIO.succeed(socket)
+        case _ if left <= 0        => ZIO.fail(ServerError.Unreachable(Record.socket(repo)))
+        case _                     => ZIO.sleep(50.millis) *> poll(left - 1)
+      }
+    poll(1200)
+
+  /** Ask `socket` to reboot. The replacement's socket when that process records this driver. */
+  def replace(repo: Path, version: String, socket: Path): UIO[Option[Path]] =
+    Client
+      .talk(socket, Call.Reboot)
+      .runCollect
+      .foldZIO(
+        _ => ZIO.succeed(None),
+        feeds =>
+          val rebooted = feeds.exists {
+            case Feed.Done(CallResult.Reported(_)) => true
+            case _                                 => false
+          }
+          if rebooted then await(repo, version).map(Some(_)).orElseSucceed(None)
+          else ZIO.succeed(None),
+      )
+end Attach
 
 object Client:
   def talk(socket: Path, call: Call): ZStream[Any, ServerError, Feed] =
@@ -319,6 +348,7 @@ object Daemon:
       plugins: histos.load.PluginRuntime = Calls.quiet,
       machine: histos.jdk.Machine = Calls.idleMachine,
       relaunch: Path => IO[ServerError, Unit] = successor,
+      assembly: Option[String] = None,
   ): ZIO[
     Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
@@ -339,6 +369,7 @@ object Daemon:
         machine,
         relaunch(repo),
         listening,
+        assembly,
       ).tapErrorCause(listening.failCause).forkScoped
       record <- listening.await
     yield Running(record, serving.join)
@@ -379,6 +410,7 @@ object Daemon:
       machine: histos.jdk.Machine,
       relaunch: IO[ServerError, Unit],
       listening: Promise[ServerError, Record.Written],
+      assembly: Option[String],
   ): ZIO[
     histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
     ServerError,
@@ -396,7 +428,7 @@ object Daemon:
           stopping <- Promise.make[Nothing, Unit]
           life = Lifecycle(armed, stopping, relaunch)
           fingerprint <- Fingerprint.read(repo, graph.resolution)
-          _           <- Record.write(repo, version, fingerprint, socket)
+          _           <- Record.write(repo, version, fingerprint, socket, assembly)
           held        <- Scope.make
           uses        <- Ref.make[Uses](Uses.Live(0))
           graphs      <- Ref.make(graph)
@@ -408,7 +440,7 @@ object Daemon:
           report    <- histos.resolve.ResolutionService
             .open(repo, graph)
             .mapError(ServerError.Resolve(_))
-          warm = Warm(live, graphs, reloading, spliced, report)
+          warm = Warm(live, graphs, reloading, spliced, report, assembly)
           permit <- Semaphore.make(1)
           runs   <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
           _      <- listening
@@ -417,6 +449,7 @@ object Daemon:
                 version,
                 fingerprint,
                 socket.toAbsolutePath.normalize,
+                assembly,
               )
             )
             .unit
@@ -483,6 +516,7 @@ object Daemon:
       reloading: Semaphore,
       spliced: Ref[Set[Bsp.Session]],
       report: histos.resolve.ResolutionService,
+      assembly: Option[String],
   )
 
   private def accept(
@@ -794,7 +828,7 @@ object Daemon:
           for
             _     <- warm.report.adopt(found.graph).mapError(ServerError.Resolve(_))
             fresh <- Fingerprint.read(repo, found.graph.resolution)
-            _     <- Record.write(repo, version, fresh, bound)
+            _     <- Record.write(repo, version, fresh, bound, warm.assembly)
             uses  <- Ref.make[Uses](Uses.Live(1))
             next = Generation(found.graph, found.plugins, found.build, fresh, scope, uses)
             previous <- warm.live.getAndSet(next)
