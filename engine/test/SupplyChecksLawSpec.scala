@@ -1,6 +1,6 @@
 package histos.supply
 
-import histos.doctor.Outcome
+import histos.doctor.{Fix, Level, Outcome, Probe}
 import histos.plugin.{JobName, RepoPath, SecretName}
 
 import zio.test.*
@@ -52,8 +52,45 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
     test("a token step passes only when it succeeded"):
       assertTrue:
         StepOutcome.values.forall: step =>
-          val outcome = one(run(view(tokenStep = step), app), "supply.app-token")
+          val outcome = one(run(view(tokenStep = Some(step)), app), "supply.app-token")
           if step == StepOutcome.Success then passed(outcome) else found(outcome) && !passed(outcome)
+    ,
+    test("a step that never ran is an Actions failure and a laptop skip, and never a pass"):
+      val actions = one(run(view(venue = Venue.Actions, tokenStep = None), app), "supply.app-token")
+      val laptop  = one(run(view(venue = Venue.Laptop, tokenStep = None), app), "supply.app-token")
+      assertTrue(
+        errored(actions),
+        skipped(laptop, Probe.JobEnv),
+        !passed(actions),
+        !passed(laptop),
+      )
+    ,
+    test("a fact the token could not see fails in Actions and is skipped with its fix on a laptop"):
+      def blinded(venue: Venue, sight: Sight): List[(String, Probe, GitHubView)] =
+        List(
+          ("supply.secret-missing", Probe.GitHubAdmin, view(venue = venue, secretsSight = sight)),
+          ("supply.app-installed", Probe.GitHubAdmin, view(venue = venue, appSight = sight)),
+          ("supply.app-permissions", Probe.GitHubAdmin, view(venue = venue, appSight = sight)),
+          ("supply.required-check", Probe.GitHubRead, view(venue = venue, rulesSight = sight)),
+        )
+      val unseen = List(Sight.Unseen, Sight.Unreadable)
+      assertTrue(
+        unseen.forall: sight =>
+          blinded(Venue.Laptop, sight).forall: (check, probe, seen) =>
+            skipped(one(run(seen, app), check), probe),
+        unseen.forall: sight =>
+          blinded(Venue.Actions, sight).forall: (check, _, seen) =>
+            errored(one(run(seen, app), check)),
+      )
+    ,
+    test("a fact the token did see is a finding on every venue"):
+      assertTrue:
+        Venue.values.forall: venue =>
+          errored(one(run(view(venue = venue, appInstalled = false), app), "supply.app-installed")) &&
+            errored(one(run(view(venue = venue, permissions = Map.empty), app), "supply.app-permissions")) &&
+            errored(one(run(view(venue = venue, secrets = Set.empty), app), "supply.secret-missing")) &&
+            errored(one(run(view(venue = venue, required = Nil), app), "supply.required-check")) &&
+            errored(one(run(view(venue = venue, tokenStep = Some(StepOutcome.Failure)), app), "supply.app-token"))
     ,
     test("a required check passes only when the job was read"):
       assertTrue(
@@ -139,11 +176,14 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
             case Sight.Known => passed(outcome)
             case _           => found(outcome) && !passed(outcome)
     ,
-    test("a blind answer for an author with a credential is four findings and never a pass"):
+    test("a blind answer for an author with a credential is four answers and never a pass"):
+      val repo = Some(RepoName.trusted("early-effect/histos"))
       assertTrue:
         Blind.values.forall: why =>
-          val outcomes = SupplyChecks.blind(Some(RepoName.trusted("early-effect/histos")), policy(app), why)
-          outcomes.length == 4 && outcomes.forall(found) && !outcomes.exists(passed),
+          val actions = SupplyChecks.blind(repo, policy(app), why, Venue.Actions)
+          val laptop  = SupplyChecks.blind(repo, policy(app), why, Venue.Laptop)
+          actions.length == 4 && actions.forall(found) && !actions.exists(passed) &&
+          laptop.length == 4 && laptop.forall(skipped) && !laptop.exists(passed),
   )
 
   private def policy(author: PrAuthor, signing: CommitSigning = CommitSigning.ApiSigned): SupplyChain =
@@ -162,7 +202,8 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
         AppPermission.PullRequests -> Access.Write,
         AppPermission.Workflows    -> Access.Write,
       ),
-      tokenStep: StepOutcome = StepOutcome.Success,
+      tokenStep: Option[StepOutcome] = Some(StepOutcome.Success),
+      venue: Venue = Venue.Actions,
       rulesSight: Sight = Sight.Known,
       required: List[JobName] = List(JobName("supply-chain")),
       signedCommits: Boolean = true,
@@ -181,7 +222,6 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
   ): GitHubView =
     GitHubView(
       repo = RepoName.trusted("early-effect/histos"),
-      token = TokenKind.Github,
       appInstalled = appInstalled,
       permissions = permissions,
       secrets = secrets,
@@ -207,6 +247,7 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
       rulesSight = rulesSight,
       flowSight = flowSight,
       tokenStep = tokenStep,
+      venue = venue,
     )
 
   private def one(outcomes: List[Outcome], id: String): Option[Outcome] =
@@ -234,4 +275,19 @@ object SupplyChecksLawSpec extends ZIOSpecDefault:
     outcome match
       case Outcome.Found(_) => true
       case _                => false
+
+  private def errored(outcome: Option[Outcome]): Boolean =
+    outcome match
+      case Some(Outcome.Found(diagnostic)) => diagnostic.level == Level.Error
+      case _                               => false
+
+  private def skipped(outcome: Outcome): Boolean =
+    outcome match
+      case Outcome.Skipped(_, _, Fix.Steps(_)) => true
+      case _                                   => false
+
+  private def skipped(outcome: Option[Outcome], probe: Probe): Boolean =
+    outcome match
+      case Some(Outcome.Skipped(_, missing, Fix.Steps(_))) => missing == probe
+      case _                                               => false
 end SupplyChecksLawSpec

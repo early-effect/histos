@@ -399,9 +399,16 @@ final case class ChosenBump(
 enum Event derives CanEqual:
   case PullRequest, Push, Schedule
 
-/** The token a recorded GitHub view was made with. */
-enum TokenKind derives CanEqual:
-  case App, Pat, User, Github
+/** The GitHub App that opens dependency pull requests. */
+opaque type AppSlug = String
+
+object AppSlug:
+  given CanEqual[AppSlug, AppSlug] = CanEqual.derived
+
+  val histosDeps: AppSlug = "histos-deps"
+
+  extension (slug: AppSlug) def value: String = slug
+end AppSlug
 
 /** A GitHub label. */
 opaque type LabelName = String

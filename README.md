@@ -289,7 +289,7 @@ Point the client's stdio server at the shim. In this checkout the command is `./
 }
 ```
 
-`tools/list` is `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, and `observe`. `compile` with an empty project list compiles every module. `test` takes suite globs in `patterns` and `run` or `quick` in `mode`. An absent mode runs the suites. `run` takes a main, `inspect`, `versions`, or a plugin task id. `watch` takes the inner command and does not take a leading `~`.
+`tools/list` is `graph`, `run`, `cancel`, `compile`, `test`, `publishLocal`, `publishSnapshots`, `toolchain`, `version`, `assembly`, `clean`, `cleanFull`, `resolve`, `workflow`, `reload`, `reboot`, `cachePath`, `cacheList`, `cacheClean`, `launcherUpdate`, `watch`, `preview`, `observe`, and `doctor`. `compile` with an empty project list compiles every module. `test` takes suite globs in `patterns` and `run` or `quick` in `mode`. An absent mode runs the suites. `run` takes a main, `inspect`, `versions`, or a plugin task id. `watch` takes the inner command and does not take a leading `~`.
 
 When `.histos/server.json` names this version and assembly checksum, the tool sends the call there and prints each line as it arrives. No server means this process keeps one graph and runs the call. A different version reboots the server and the tool sends the call again. A compile or a test that ran and failed comes back as a report. A request that never started fails the tool.
 

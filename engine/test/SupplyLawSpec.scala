@@ -36,7 +36,12 @@ object SupplyLawSpec extends ZIOSpecDefault:
           val actions = author == PrAuthor.Actions
           val ran     = SupplyChecks.run(view(Sight.Known, allowPrs = true), policy(author))
           val unread  =
-            SupplyChecks.blind(Some(RepoName.trusted("early-effect/histos")), policy(author), Blind.NoCredential)
+            SupplyChecks.blind(
+              Some(RepoName.trusted("early-effect/histos")),
+              policy(author),
+              Blind.NoCredential,
+              Venue.Actions,
+            )
           val ids       = ran.map(checkId)
           val unreadIds = unread.map(checkId)
           kept.contains("dependencies.lock") &&
@@ -108,7 +113,6 @@ object SupplyLawSpec extends ZIOSpecDefault:
     val branch = BranchName.trusted("main")
     GitHubView(
       repo = RepoName.trusted("early-effect/histos"),
-      token = TokenKind.Github,
       appInstalled = true,
       permissions = Map.empty,
       secrets = Set.empty,
@@ -133,5 +137,7 @@ object SupplyLawSpec extends ZIOSpecDefault:
       appSight = Sight.Known,
       rulesSight = Sight.Known,
       flowSight = sight,
+      tokenStep = Some(StepOutcome.Success),
+      venue = Venue.Actions,
     )
 end SupplyLawSpec

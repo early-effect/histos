@@ -201,9 +201,9 @@ object DoctorSurface:
         ZIO.succeed:
           located.hit match
             case histos.doctor.GitHubProbe.Hit.Absent =>
-              SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential)
+              SupplyChecks.blind(located.name, graph.supply, Blind.NoCredential, located.venue)
             case histos.doctor.GitHubProbe.Hit.Unreachable =>
-              SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable)
+              SupplyChecks.blind(located.name, graph.supply, Blind.Unreachable, located.venue)
             case histos.doctor.GitHubProbe.Hit.Ready(read) =>
               val text = readFile(repo.resolve(".github").resolve("dependabot.yml"))
               val view = read.view.copy(dependabot = histos.doctor.GitHubProbe.ecosystems(text))
@@ -259,7 +259,7 @@ object DoctorSurface:
         case FixApply.Answer.Yes => setting(url).as(s"applied: $url")
         case _                   => ZIO.succeed(s"skipped: $url")
 
-  private final case class Located(name: Option[RepoName], hit: histos.doctor.GitHubProbe.Hit)
+  private final case class Located(name: Option[RepoName], hit: histos.doctor.GitHubProbe.Hit, venue: Venue)
 
   private def github(
       repo: Path,
@@ -271,12 +271,12 @@ object DoctorSurface:
   ): UIO[Located] =
     val needed = graph.supply.updates.author.secretNames.map(_.value)
     githubRepo(repo, env) match
-      case None       => ZIO.succeed(Located(None, histos.doctor.GitHubProbe.Hit.Absent))
+      case None       => ZIO.succeed(Located(None, histos.doctor.GitHubProbe.Hit.Absent, job.venue))
       case Some(name) =>
         val api = token.fold("https://api.github.com")(_.api)
         histos.doctor.GitHubProbe
           .read(net, name, BranchName.trusted("main"), token.map(_.value), api, job, needed)
-          .map(hit => Located(Some(name), hit))
+          .map(hit => Located(Some(name), hit, job.venue))
 
   private def prompt(tty: Boolean)(fix: Fix): UIO[FixApply.Answer] =
     if !tty then ZIO.succeed(FixApply.Answer.NonTty)

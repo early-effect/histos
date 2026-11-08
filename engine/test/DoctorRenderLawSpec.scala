@@ -49,17 +49,21 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
         shown.contains("1 errors, 1 warnings, 0 ok, 0 skipped, 1 timed out"),
       )
     ,
-    test("a skipped check prints the command, the settings url, the file, or the first step"):
+    test("a skipped check names the probe it needs and prints the command, the settings url, the file, or every step"):
       val command  = Outcome.Skipped(mark, Probe.Local, Fix.Command(ShellLine.trusted("histos test")))
-      val settings = Outcome.Skipped(mark, Probe.GitHubAdmin, Fix.Settings(HttpUrl.trusted("https://example.test/s"), "click"))
-      val config   = Outcome.Skipped(mark, Probe.JobEnv, Fix.Config(RepoPath.trusted(".github/workflows/ci.yml"), Edit("a", "b")))
-      val steps    = Outcome.Skipped(mark, Probe.GitHubRead, Fix.Steps(::("gh auth login", Nil)))
-      val shown    = Render.text("repo", DoctorReport(List(command, settings, config, steps), Nil))
+      val settings =
+        Outcome.Skipped(mark, Probe.GitHubAdmin, Fix.Settings(HttpUrl.trusted("https://example.test/s"), "click"))
+      val config =
+        Outcome.Skipped(mark, Probe.JobEnv, Fix.Config(RepoPath.trusted(".github/workflows/ci.yml"), Edit("a", "b")))
+      val steps = Outcome.Skipped(mark, Probe.GitHubRead, Fix.Steps(::("gh auth login", List("gh auth status"))))
+      val shown = Render.text("repo", DoctorReport(List(command, settings, config, steps), Nil))
       assertTrue(
         shown.contains("histos test"),
         shown.contains("https://example.test/s"),
         shown.contains(".github/workflows/ci.yml"),
         shown.contains("gh auth login"),
+        shown.contains("gh auth status"),
+        List("Local", "GitHubAdmin", "JobEnv", "GitHubRead").forall(probe => shown.contains(s"(needs $probe)")),
         shown.contains("0 errors, 0 warnings, 0 ok, 4 skipped"),
       )
     ,
@@ -72,12 +76,19 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
       val steps    = Fix.Steps(::("first step", Nil))
       val kinds    = Set(FixKind.LocalEdit, FixKind.HistosCommand, FixKind.GitHubSetting)
       val printed  = FixApply.applyAll(List(edit, command), FixMode.Print, _ => FixApply.Answer.Yes, files)
-      val applied  = FixApply.applyAll(List(edit, missing, command, settings, steps), FixMode.Apply(kinds), {
-        case Fix.Settings(_, _) => FixApply.Answer.Yes
-        case _                  => FixApply.Answer.NonTty
-      }, files)
-      val denied   = FixApply.applyAll(List(settings), FixMode.Apply(Set(FixKind.GitHubSetting)), _ => FixApply.Answer.No, files)
-      val held     = FixApply.applyAll(List(command), FixMode.Apply(Set(FixKind.LocalEdit)), _ => FixApply.Answer.Yes, files)
+      val applied  = FixApply.applyAll(
+        List(edit, missing, command, settings, steps),
+        FixMode.Apply(kinds),
+        {
+          case Fix.Settings(_, _) => FixApply.Answer.Yes
+          case _                  => FixApply.Answer.NonTty
+        },
+        files,
+      )
+      val denied =
+        FixApply.applyAll(List(settings), FixMode.Apply(Set(FixKind.GitHubSetting)), _ => FixApply.Answer.No, files)
+      val held =
+        FixApply.applyAll(List(command), FixMode.Apply(Set(FixKind.LocalEdit)), _ => FixApply.Answer.Yes, files)
       assertTrue(
         printed == (files, Nil),
         applied._1 == Map("histos.scala" -> "keep after tail", "gone.scala" -> ""),
@@ -89,7 +100,7 @@ object DoctorRenderLawSpec extends ZIOSpecDefault:
         FixApply.kindOf(settings) == FixKind.GitHubSetting,
         FixApply.kindOf(steps) == FixKind.HistosCommand,
         RefusalMap.refused(ApiCall.Rules, 500, "closed") == None,
-      )
+      ),
   )
 
   private def found(level: Level, fix: Fix): Outcome =

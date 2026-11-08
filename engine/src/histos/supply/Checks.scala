@@ -1,12 +1,11 @@
 package histos.supply
 
-import histos.doctor.{CheckId, Outcome}
+import histos.doctor.{CheckId, Outcome, Probe}
 import histos.plugin.{JobName, RepoPath}
 
-/** A recorded GitHub view. Tests build one and never open a socket. */
+/** A recorded GitHub view. Tests build one and never open a socket. `tokenStep` is `None` when no job step ran. */
 final case class GitHubView(
     repo: RepoName,
-    token: TokenKind,
     appInstalled: Boolean,
     permissions: Map[AppPermission, Access],
     secrets: Set[String],
@@ -31,7 +30,8 @@ final case class GitHubView(
     appSight: Sight,
     rulesSight: Sight,
     flowSight: Sight,
-    tokenStep: StepOutcome = StepOutcome.Success,
+    tokenStep: Option[StepOutcome],
+    venue: Venue,
 )
 
 object SupplyChecks:
@@ -91,22 +91,28 @@ object SupplyChecks:
     ).filter(outcome => asked.contains(idOf(outcome)))
     refused ++ checks ++ workflowFiles(policy)
 
-  /** The three supply answers, plus App permissions, when nothing was read. A skip is not a pass. Actions does not ask
-    * them.
+  /** The three supply answers, plus App permissions, when nothing was read. Actions fails each one and a laptop skips
+    * it with the fix. The Actions author does not ask them.
     */
-  def blind(repo: Option[RepoName], policy: SupplyChain, why: Blind): List[Outcome] =
+  def blind(repo: Option[RepoName], policy: SupplyChain, why: Blind, venue: Venue): List[Outcome] =
     policy.updates.author match
       case PrAuthor.Actions => workflowFiles(policy)
       case _                =>
         val secret = policy.updates.author.secretNames match
-          case head :: _ => found(SupplyDiagnostic.SecretBlind(head, repo, why))
+          case head :: _ => sightless(venue, Probe.GitHubAdmin, SupplyDiagnostic.SecretBlind(head, repo, why))
           case Nil       => ok("supply.secret-missing", "no secret is required")
         List(
           secret,
-          found(SupplyDiagnostic.AppBlind(repo, why)),
-          found(SupplyDiagnostic.AppPermissionsBlind(repo, why)),
-          found(SupplyDiagnostic.RuleBlind(repo, why)),
+          sightless(venue, Probe.GitHubAdmin, SupplyDiagnostic.AppBlind(repo, why)),
+          sightless(venue, Probe.GitHubAdmin, SupplyDiagnostic.AppPermissionsBlind(repo, why)),
+          sightless(venue, Probe.GitHubRead, SupplyDiagnostic.RuleBlind(repo, why)),
         )
+
+  /** A fact this run could not see. Actions fails on it. A laptop skips it and prints the first fix. */
+  private def sightless(venue: Venue, probe: Probe, diagnostic: SupplyDiagnostic): Outcome =
+    venue match
+      case Venue.Actions => found(diagnostic)
+      case Venue.Laptop  => Outcome.Skipped(diagnostic.check, probe, diagnostic.fixes.head)
 
   /** Outside the probe cover. The Actions author always warns that a person commits workflow files. */
   private def workflowFiles(policy: SupplyChain): List[Outcome] =
@@ -125,8 +131,10 @@ object SupplyChecks:
       case Sight.Known =>
         if view.appInstalled then ok("supply.app-installed", s"installed on ${view.repo.value}")
         else found(SupplyDiagnostic.AppNotInstalled(view.repo))
-      case Sight.Unseen     => found(SupplyDiagnostic.AppBlind(Some(view.repo), Blind.Refused))
-      case Sight.Unreadable => found(SupplyDiagnostic.AppBlind(Some(view.repo), Blind.Unreadable))
+      case Sight.Unseen =>
+        sightless(view.venue, Probe.GitHubAdmin, SupplyDiagnostic.AppBlind(Some(view.repo), Blind.Refused))
+      case Sight.Unreadable =>
+        sightless(view.venue, Probe.GitHubAdmin, SupplyDiagnostic.AppBlind(Some(view.repo), Blind.Unreadable))
 
   private def secret(view: GitHubView, policy: SupplyChain): Outcome =
     view.secretsSight match
@@ -142,14 +150,21 @@ object SupplyChecks:
 
   private def blindSecret(view: GitHubView, policy: SupplyChain, why: Blind): Outcome =
     policy.updates.author.secretNames match
-      case head :: _ => found(SupplyDiagnostic.SecretBlind(head, Some(view.repo), why))
-      case Nil       => ok("supply.secret-missing", "no secret is required")
+      case head :: _ =>
+        sightless(view.venue, Probe.GitHubAdmin, SupplyDiagnostic.SecretBlind(head, Some(view.repo), why))
+      case Nil => ok("supply.secret-missing", "no secret is required")
 
   private def permission(view: GitHubView): Outcome =
     view.appSight match
-      case Sight.Unseen     => found(SupplyDiagnostic.AppPermissionsBlind(Some(view.repo), Blind.Refused))
-      case Sight.Unreadable => found(SupplyDiagnostic.AppPermissionsBlind(Some(view.repo), Blind.Unreadable))
-      case Sight.Known      =>
+      case Sight.Unseen =>
+        sightless(view.venue, Probe.GitHubAdmin, SupplyDiagnostic.AppPermissionsBlind(Some(view.repo), Blind.Refused))
+      case Sight.Unreadable =>
+        sightless(
+          view.venue,
+          Probe.GitHubAdmin,
+          SupplyDiagnostic.AppPermissionsBlind(Some(view.repo), Blind.Unreadable),
+        )
+      case Sight.Known =>
         val needed = List(AppPermission.Contents, AppPermission.PullRequests, AppPermission.Workflows)
         needed.find(item => view.permissions.get(item) != Some(Access.Write)) match
           case None       => ok("supply.app-permissions", "contents, pull-requests, and workflows are write")
@@ -158,14 +173,17 @@ object SupplyChecks:
 
   private def token(view: GitHubView): Outcome =
     view.tokenStep match
-      case StepOutcome.Success => ok("supply.app-token", "the token step can mint")
-      case other               => found(SupplyDiagnostic.AppTokenFailed(other))
+      case Some(StepOutcome.Success) => ok("supply.app-token", "the token step can mint")
+      case Some(other)               => found(SupplyDiagnostic.AppTokenFailed(other))
+      case None                      => sightless(view.venue, Probe.JobEnv, SupplyDiagnostic.AppTokenUnreported)
 
   private def required(view: GitHubView, policy: SupplyChain): Outcome =
     view.rulesSight match
-      case Sight.Unseen     => found(SupplyDiagnostic.RuleBlind(Some(view.repo), Blind.Refused))
-      case Sight.Unreadable => found(SupplyDiagnostic.RuleBlind(Some(view.repo), Blind.Unreadable))
-      case Sight.Known      =>
+      case Sight.Unseen =>
+        sightless(view.venue, Probe.GitHubRead, SupplyDiagnostic.RuleBlind(Some(view.repo), Blind.Refused))
+      case Sight.Unreadable =>
+        sightless(view.venue, Probe.GitHubRead, SupplyDiagnostic.RuleBlind(Some(view.repo), Blind.Unreadable))
+      case Sight.Known =>
         if view.required.exists(_.value == policy.checkName.value) then
           ok("supply.required-check", policy.checkName.value)
         else

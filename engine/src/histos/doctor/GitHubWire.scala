@@ -27,8 +27,22 @@ object GitHubWire:
       workflows: Option[String],
   ) derives JsonDecoder
 
-  final case class Installation(
-      permissions: Option[Permissions]
+  /** How much of an account an App installation covers. An unknown value fails the decode. */
+  enum RepositorySelection derives JsonDecoder:
+    @jsonHint("all") case All
+    @jsonHint("selected") case Selected
+
+  /** One row of `GET /orgs/{org}/installations`. */
+  final case class AppInstallation(
+      @jsonAliases("app_slug") appSlug: String,
+      @jsonAliases("repository_selection") repositorySelection: RepositorySelection,
+      permissions: Option[Permissions],
+  ) derives JsonDecoder
+
+  /** `totalCount` is the full number of installations. `installations` is the page that came back. */
+  final case class AppInstallations(
+      @jsonAliases("total_count") totalCount: Int,
+      installations: List[AppInstallation],
   ) derives JsonDecoder
 
   final case class SecretName(name: String) derives JsonDecoder
