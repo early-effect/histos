@@ -35,7 +35,7 @@ enum ServerError:
     case Resolve(error)    => error.message
     case Unreachable(path) => s"histos server at $path is not listening"
     case DifferentVersion  =>
-      "histos server is a different version. Run histos reboot"
+      "histos server is a different version and the restart did not finish"
     case NoServer => "no histos server is running"
     case Protocol =>
       "histos server sent a frame this client does not understand"

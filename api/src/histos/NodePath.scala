@@ -19,6 +19,7 @@ object NodePath:
   def from(raw: String): Either[NodePathError, NodePath] =
     val text = raw.strip
     if text.isEmpty then Left(NodePathError.Empty)
+    else if text.exists(_ == '\u0000') then Left(NodePathError.Invalid(text))
     else
       Try(Path.of(text)).toEither.left
         .map(_ => NodePathError.Invalid(text))

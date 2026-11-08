@@ -21,7 +21,7 @@ enum ShipDiagnostic(
         Level.Error,
         "the publish session is not ready",
         detail,
-        "Development compiles <ship>-ci and does not publish it. A snapshot session needs HISTOS_SESSION, HISTOS_SHA, and HISTOS_BRANCH. A release session needs HISTOS_SESSION=release.",
+        "A snapshot session needs HISTOS_SHA and HISTOS_BRANCH. A pull-request session needs HISTOS_PR and HISTOS_SHA. publish release needs HISTOS_SESSION=release. publish local and publish snapshots use the commit at HEAD when the session is development.",
         fixes(
           Fix.Command(ShellLine.trusted(ShipAdvice.snapshotExport)),
           Fix.Steps(lines(ShipAdvice.versionsCommand, "Read the session line before publishing.")),

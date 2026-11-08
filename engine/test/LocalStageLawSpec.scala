@@ -1,0 +1,262 @@
+package histos.publish
+
+import histos.cache.ContentStore
+import histos.central.Publisher
+import histos.jdk.Machine
+import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
+import histos.workspace.Workspace
+import histos.zinc.GraphCompile
+import histos.version.ShipName
+import histos.{Jvm, MainClass, Platform, ProjectName, Projects, Ship, module, organization, ships}
+import histos.scala
+
+import java.nio.file.{Files, Path}
+
+import zio.*
+import zio.test.*
+
+/** A development publish compiles one library and writes the snapshot coordinate of HEAD. The compiler is the locked
+  * one, read offline.
+  */
+object LocalStageLawSpec extends ZIOSpecDefault:
+  private val scala3 = scala"3.10.0"
+  private val group  = organization"example.com"
+  private val app    = module("stage", Jvm)(scala3)
+
+  def spec = suite("local stage")(
+    test("a development publish writes the snapshot jar, its sources, and its javadoc, and the pom has no dependencies"):
+      ZIO.scoped {
+        Workspace.work("histos-local-stage").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[DependencyLock] { lock =>
+                val source = repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+                val maven  = repo.resolve("maven")
+                val store  = repo.resolve("store")
+                val built  = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(app)), app)
+                for
+                  graph <- ZIO.fromEither(built)
+                  sha   <- LawGit.ready(repo)
+                  _     <- Workspace.writeString(source, "object Hello:\n  def ready: Int = 1\n")
+                  _     <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock.render(pinned(lock, ProjectName("stage"))),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  text    <- pomOf(found)
+                  jars    <- onDisk(maven, found.modules.flatMap(_.jar.toList))
+                  sources <- onDisk(maven, found.modules.flatMap(_.sources.toList))
+                  javadoc <- onDisk(maven, found.modules.flatMap(_.javadoc.toList))
+                  revision = coordinate(sha)
+                yield assertTrue(
+                  found.skipped.isEmpty,
+                  found.held.isEmpty,
+                  found.refused.isEmpty,
+                  found.modules.map(line =>
+                    (line.group, line.artifact, line.revision, line.ship, line.unique, line.dependencies.isEmpty)
+                  ) == List((group, "stage_3", revision, ShipName("demo"), None, true)),
+                  jars == List(OnDisk(true, true, true)),
+                  sources == List(OnDisk(true, true, true)),
+                  javadoc == List(OnDisk(true, true, true)),
+                  text.contains("<groupId>example.com</groupId>"),
+                  text.contains("<artifactId>stage_3</artifactId>"),
+                  text.contains(s"<version>$revision</version>"),
+                  !text.contains("-ci"),
+                  !text.contains("<dependencies>"),
+                )
+              }
+            }
+          }
+        }
+      },
+    test("a dependent module's pom names the upstream at the same snapshot revision"):
+      ZIO.scoped {
+        Workspace.work("histos-local-edge").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[DependencyLock] { lock =>
+                val base   = module("base", Jvm)(scala3)
+                val edge   = module("edge", Jvm)(scala3).dependsOn(base)
+                val maven  = repo.resolve("maven")
+                val store  = repo.resolve("store")
+                val built  = Projects
+                  .organization(group)
+                  .locked(ships(Ship("demo").next(1, 2, 3)(base, edge)), base, edge)
+                for
+                  graph <- ZIO.fromEither(built)
+                  sha   <- LawGit.ready(repo)
+                  _     <- Workspace.writeString(
+                    repo.resolve("base").resolve("src").resolve("main").resolve("scala").resolve("Base.scala"),
+                    "object Base:\n  def ready: Int = 1\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("edge").resolve("src").resolve("main").resolve("scala").resolve("Edge.scala"),
+                    "object Edge:\n  def ready: Int = Base.ready\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock.render(pinned(lock, ProjectName("base"), ProjectName("edge"))),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  disks <- ZIO.foreach(found.modules) { line =>
+                    onDisk(maven, line.jar.toList ++ line.sources.toList ++ line.javadoc.toList)
+                  }
+                  poms <- ZIO.foreach(found.modules)(pomText)
+                  revision = coordinate(sha)
+                yield {
+                  val block =
+                    s"""    <dependency>
+                       |      <groupId>example.com</groupId>
+                       |      <artifactId>base_3</artifactId>
+                       |      <version>$revision</version>
+                       |    </dependency>""".stripMargin
+                  val coords = found.modules.map { line =>
+                    val deps = line.dependencies.map(dep => (dep.group.value, dep.name.value, dep.version.value))
+                    (line.artifact, line.revision, deps)
+                  }
+                  val byPom = found.modules.map(_.artifact).zip(poms).toMap
+                  assertTrue(
+                    found.skipped.isEmpty,
+                    found.held.isEmpty,
+                    found.refused.isEmpty,
+                    coords == List(
+                      ("base_3", revision, Nil),
+                      ("edge_3", revision, List(("example.com", "base_3", revision))),
+                    ),
+                    disks == List.fill(2)(List.fill(3)(OnDisk(true, true, true))),
+                    byPom.get("base_3").exists(text => !text.contains("<dependencies>")),
+                    byPom.get("edge_3").exists(_.contains(block)),
+                  )
+                }
+              }
+            }
+          }
+        }
+      },
+    test("an assembly publishes the unsuffixed jar and its manifest names the main class"):
+      ZIO.scoped {
+        Workspace.work("histos-local-assembly").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[DependencyLock] { lock =>
+                val pack  = module("pack", Jvm)(scala3).assembly(MainClass("Hello"))
+                val maven = repo.resolve("maven")
+                val store = repo.resolve("store")
+                val built = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(pack)), pack)
+                for
+                  graph <- ZIO.fromEither(built)
+                  sha   <- LawGit.ready(repo)
+                  _     <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala"),
+                    "object Hello:\n  def main(args: Array[String]): Unit = ()\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock.render(pinned(lock, ProjectName("pack"))),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  jars    <- onDisk(maven, found.modules.flatMap(_.jar.toList))
+                  sources <- onDisk(maven, found.modules.flatMap(_.sources.toList))
+                  javadoc <- onDisk(maven, found.modules.flatMap(_.javadoc.toList))
+                  text    <- manifestOf(found)
+                yield assertTrue(
+                  found.skipped.isEmpty,
+                  found.held.isEmpty,
+                  found.refused.isEmpty,
+                  found.modules.map(line => (line.artifact, line.revision, line.dependencies.isEmpty)) == List(
+                    ("pack", coordinate(sha), true)
+                  ),
+                  jars == List(OnDisk(true, true, true)),
+                  sources == List(OnDisk(true, true, true)),
+                  javadoc == List(OnDisk(true, true, true)),
+                  text.contains("Main-Class: Hello\r\n"),
+                )
+              }
+            }
+          }
+        }
+      },
+  ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
+
+  private def coordinate(sha: histos.version.CommitSha): String =
+    s"1.2.3-${sha.abbreviate.value}-SNAPSHOT"
+
+  /** Captured before the workspace scope closes. `assertTrue` runs its arrow after that scope releases the directory. */
+  private final case class OnDisk(underMaven: Boolean, zip: Boolean, sha256: Boolean)
+
+  private def onDisk(maven: Path, paths: List[Path]): UIO[List[OnDisk]] =
+    ZIO.attemptBlocking(paths.map(path => readOne(maven, path))).orDie
+
+  private def readOne(maven: Path, path: Path): OnDisk =
+    val bytes = Files.readAllBytes(path)
+    val zip   = bytes.length >= 2 && bytes(0) == 0x50.toByte && bytes(1) == 0x4b.toByte
+    val name  = Option(path.getFileName).map(_.toString).getOrElse("")
+    val side  = path.resolveSibling(s"$name.sha256")
+    val sha256 =
+      if Files.isRegularFile(side) then
+        val text = Files.readString(side)
+        text.endsWith("\n") && text.trim.nonEmpty
+      else false
+    OnDisk(path.startsWith(maven), zip, sha256)
+
+  private def pomOf(found: PublishOutput): UIO[String] =
+    found.modules.flatMap(_.pom.toList) match
+      case path :: Nil =>
+        ZIO.attemptBlocking(Files.readString(path)).orDie
+      case _ => ZIO.succeed("")
+
+  private def manifestOf(found: PublishOutput): UIO[String] =
+    found.modules.flatMap(_.jar.toList) match
+      case path :: Nil =>
+        ZIO.attemptBlocking {
+          val zip = new java.util.zip.ZipFile(path.toFile)
+          try
+            Option(zip.getEntry("META-INF/MANIFEST.MF")) match
+              case Some(entry) =>
+                val stream = zip.getInputStream(entry)
+                try new String(stream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
+                finally stream.close()
+              case None => ""
+          finally zip.close()
+        }.orDie
+      case _ => ZIO.succeed("")
+
+  private def pomText(line: PublishedModule): UIO[String] =
+    line.pom match
+      case Some(path) => ZIO.attemptBlocking(Files.readString(path)).orDie
+      case None       => ZIO.succeed("")
+
+  private def pinned(lock: DependencyLock, names: ProjectName*): DependencyLock =
+    val added = names.toList.map: name =>
+      LockedCell(name, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile)
+    lock.copy(cells = added ++ lock.cells)
+
+  private def opened =
+    Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
+      ZLayer.fromZIO(Resolve.readLock(repository))
+
+  private def repository: Path =
+    def walk(path: Path, left: Int): Option[Path] =
+      if left == 0 then None
+      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
+          path.resolve("histos.scala")
+        )
+      then Some(path)
+      else
+        Option(path.getParent) match
+          case Some(parent) => walk(parent, left - 1)
+          case None         => None
+    walk(Path.of("").toAbsolutePath.normalize, 8).getOrElse(Path.of("").toAbsolutePath.normalize)
+end LocalStageLawSpec

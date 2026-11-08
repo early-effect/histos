@@ -66,4 +66,5 @@ final case class TestRun(
         Platform,
         histos.zinc.CompileFacts,
     ) => UIO[Unit] = (_, _, _, _) => ZIO.unit,
+    coverage: Option[histos.coverage.CoverageCompile] = None,
 )

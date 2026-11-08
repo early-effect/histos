@@ -228,8 +228,10 @@ private trait WireSupport:
 end WireSupport
 private object WireLeaves extends WireSupport:
   private def readPath(raw: String): Either[String, Path] =
-    try Right(Path.of(raw))
-    catch case _: InvalidPathException => Left(s"invalid path $raw")
+    if raw.exists(_ == '\u0000') then Left(s"invalid path $raw")
+    else
+      try Right(Path.of(raw))
+      catch case _: InvalidPathException => Left(s"invalid path $raw")
 
   given JsonCodec[Path] =
     JsonCodec.string.transformOrFail(readPath, _.toString)
@@ -341,8 +343,8 @@ private object WireLeaves extends WireSupport:
   given JsonCodec[ProjectPath]      = parsed(ProjectPath.from, _.message, _.value)
   given JsonCodec[RepoPath]         = parsed(RepoPath.from, _.message, _.value)
   given JsonCodec[Organization]     = parsed(Organization.from, _.message, _.value)
-  given JsonCodec[ToolRevision] = parsed(ToolRevision.from, _.message, _.value)
-  given JsonCodec[TestMain]     = parsed(TestMain.from, _.message, _.value)
+  given JsonCodec[ToolRevision]     = parsed(ToolRevision.from, _.message, _.value)
+  given JsonCodec[TestMain]         = parsed(TestMain.from, _.message, _.value)
   given JsonCodec[FrameworkClass]   = parsed(FrameworkClass.from, _.message, _.value)
   given JsonCodec[MainClass]        = parsed(MainClass.from, _.message, _.value)
   given JsonCodec[PackMain]         = parsed(PackMain.from, _.message, _.binary)

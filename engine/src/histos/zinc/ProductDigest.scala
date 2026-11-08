@@ -261,7 +261,9 @@ object ProductDigest:
     scrubUtf8(text).getBytes(StandardCharsets.ISO_8859_1)
 
   private def leaf(path: String): String =
-    val cut  = path.lastIndexWhere(char => char == '/' || char == '\\')
-    val name = if cut < 0 || cut == path.length - 1 then "path" else path.substring(cut + 1)
-    if name.isEmpty then "path" else name
+    val cut = path.lastIndexWhere(char => char == '/' || char == '\\')
+    if cut < 0 then path
+    else
+      val name = path.substring(cut + 1)
+      if name.isEmpty then "path" else name
 end ProductDigest

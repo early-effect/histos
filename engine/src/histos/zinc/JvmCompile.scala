@@ -54,6 +54,10 @@ final case class CompileRequest(
     compilerPlugins: List[histos.resolve.ToolInput] = Nil,
     /** The host api jar, when a compile-only edge asked for it. A resolved second copy is not in this list. */
     permitted: List[Path] = Nil,
+    /** Present only for a coverage compile. The path is baked into the class file, so it is part of the key. */
+    coverage: Option[String] = None,
+    /** Scala 2 coverage jars on the compiler classloader. They are not part of the compile-cache key. */
+    coverageTools: List[histos.resolve.ToolInput] = Nil,
 )
 
 final case class CompileOutput(
@@ -424,7 +428,7 @@ object JvmCompile:
               inputs = List(
                 compiler,
                 semantic,
-              ) ++ request.compilerPlugins ++ request.compilationTools
+              ) ++ request.compilerPlugins ++ request.compilationTools ++ request.coverageTools
               prints = (List(compiler, semantic) ++ request.compilerPlugins).map(_.fingerprint)
               compiled <- cached(
                 request,

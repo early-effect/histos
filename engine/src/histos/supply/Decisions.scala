@@ -259,34 +259,58 @@ object PrFlow:
 
   def marker(oid: CommitSha): String = s"<!-- histos-deps head=${oid.value} -->"
 
+  def workflowPath(path: String): Boolean =
+    path == ".github/workflows" || path.startsWith(".github/workflows/")
+
+  /** Actions commits the catalog and the lock. Workflow files stay for a person to regenerate and push. */
+  def keep(author: PrAuthor, files: List[(String, String)]): List[(String, String)] =
+    author match
+      case PrAuthor.Actions => files.filterNot((path, _) => workflowPath(path))
+      case PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) | PrAuthor.Pat(_) => files
+
   def plan(request: PrRequest): Either[SupplyFault, List[GhCall]] =
-    if request.changes.isEmpty then Right(if request.openPr then List(GhCall.Close(request.branch)) else Nil)
-    else if request.human.nonEmpty && request.policy.humanEdits == HumanEdits.CommentOnly then
+    val kept = dropWorkflows(request)
+    if kept.changes.isEmpty then Right(if kept.openPr then List(GhCall.Close(kept.branch)) else Nil)
+    else if kept.human.nonEmpty && kept.policy.humanEdits == HumanEdits.CommentOnly then
       Right(
         List(
           GhCall.Comment(
-            s"${request.branch.value} has human commits ${request.human.map(_.abbreviate.value).mkString(", ")}"
+            s"${kept.branch.value} has human commits ${kept.human.map(_.abbreviate.value).mkString(", ")}"
           )
         )
       )
     else
-      identity(request).map: _ =>
-        val create = request.head.isEmpty
+      identity(kept).map: _ =>
+        val create = kept.head.isEmpty
         val ref    =
-          if request.human.nonEmpty then Nil
-          else List(GhCall.UpdateRef(request.branch, request.main, create))
-        val commits = request.policy.signing match
+          if kept.human.nonEmpty then Nil
+          else List(GhCall.UpdateRef(kept.branch, kept.main, create))
+        val commits = kept.policy.signing match
           case CommitSigning.ApiSigned =>
             // UpdateRef points the branch at main. GhRun replaces every later
             // expectedHeadOid with the oid createCommitOnBranch just returned.
-            request.changes.map: change =>
-              GhCall.CommitOnBranch(request.branch, request.main, s"deps: ${change.kind}", change.files)
+            kept.changes.map: change =>
+              GhCall.CommitOnBranch(kept.branch, kept.main, s"deps: ${change.kind}", change.files)
           case CommitSigning.GitPush(_) =>
-            List(GhCall.Push(request.branch, false))
+            List(GhCall.Push(kept.branch, false))
           case CommitSigning.GitPushSshSigned(_, _) =>
-            List(GhCall.Push(request.branch, true))
-        val body = request.changes.map(_.kind.toString).mkString(", ") + "\n" + marker(request.main)
+            List(GhCall.Push(kept.branch, true))
+        val body = kept.changes.map(_.kind.toString).mkString(", ") + "\n" + regenerate(kept.policy.author) + marker(
+          kept.main
+        )
         ref ++ commits ++ List(GhCall.OpenOrUpdate(title, body))
+
+  private def dropWorkflows(request: PrRequest): PrRequest =
+    val changes = request.changes.flatMap: change =>
+      val files = keep(request.policy.author, change.files)
+      if files.isEmpty then Nil else List(change.copy(files = files))
+    request.copy(changes = changes)
+
+  private def regenerate(author: PrAuthor): String =
+    author match
+      case PrAuthor.Actions =>
+        "Run ./histos workflow --update and push the workflow files.\n"
+      case PrAuthor.App(_, _) | PrAuthor.OwnerOpens(_, _) | PrAuthor.Pat(_) => ""
 
   def committed(branch: BranchName, expected: CommitSha, actual: CommitSha): Either[SupplyFault, CommitSha] =
     if expected == actual then Right(actual) else Left(SupplyFault.HeadMoved(branch, expected))
