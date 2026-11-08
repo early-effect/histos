@@ -1,6 +1,6 @@
 package histos.testrun
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.native.{NativeOrigin, NativeToolchainError}
 import histos.resolve.{
   ClasspathScope,
@@ -140,7 +140,7 @@ object SuiteCoverLawSpec extends ZIOSpecDefault:
         Nil,
         List(tool(compile, toolSha)),
       )
-      val digest = Sha256.of(Chunk.fromArray("core-api".getBytes))
+      val digest = Sha256Digest.of(Chunk.fromArray("core-api".getBytes))
       val finger = ToolInput.fingerprint(compile.id, compile.roots.map(row(_, toolSha)))
       val token  = SuiteCover.tokenHash(jdk).value
       val base   =

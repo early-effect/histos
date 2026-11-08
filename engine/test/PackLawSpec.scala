@@ -1,6 +1,6 @@
 package histos.pack
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -38,8 +38,8 @@ object PackLawSpec extends ZIOSpecDefault:
       }
     ,
     test("a package key is the product list, and order is part of it"):
-      val left  = Sha256.of(Chunk.single(1.toByte))
-      val right = Sha256.of(Chunk.single(2.toByte))
+      val left  = Sha256Digest.of(Chunk.single(1.toByte))
+      val right = Sha256Digest.of(Chunk.single(2.toByte))
       assertTrue(
         PackageKey.of(List(left)) != left,
         PackageKey.of(List(left, right)) != PackageKey.of(List(right, left)),

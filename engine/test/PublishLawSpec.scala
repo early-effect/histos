@@ -1,12 +1,22 @@
 package histos.publish
 
 import histos.cache.ContentStore
-import histos.central.Publisher
-import histos.jdk.{JdkRuntime, JdkVersion, Sha256, VersionError as JdkVersionError}
+import histos.central.{MavenModule, Publisher, ReleaseFeed}
+import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest, VersionError as JdkVersionError}
 import histos.resolve.Resolve
 import histos.select.SelectError
 import histos.toolchain.RuntimeIdentity
-import histos.version.{CiVersion, CommitSha, Refusal, ShipName, SnapshotCoordinate, SnapshotPointer, VersionError}
+import histos.version.{
+  CiVersion,
+  CommitSha,
+  PinLag,
+  Refusal,
+  ShipName,
+  ShipNumber,
+  SnapshotCoordinate,
+  SnapshotPointer,
+  VersionError,
+}
 import histos.`scala`
 import histos.{
   Dep,
@@ -34,7 +44,7 @@ import java.util.zip.ZipFile
 
 import _root_.scala.jdk.CollectionConverters.*
 
-import slayer.stubbed
+import slayer.{any, stub, stubbed}
 
 import zio.{Chunk, Clock, Scope, ZIO}
 import zio.test.*
@@ -60,7 +70,7 @@ object PublishLawSpec extends ZIOSpecDefault:
     suite("a publish value")(
       test("a channel file is one body, and that body is the revision"):
         check(Gen.string(Gen.alphaNumericChar), Gen.string(Gen.alphaNumericChar)): (name, revision) =>
-          val written  = DistChannel.files(name, revision, Chunk.single(1.toByte))
+          val written  = DistChannel.files(name, revision, Chunk.single(1.toByte), Nil)
           val channels = written.filter { case (file, _) => file.startsWith("channel-") }
           val body     = Chunk.fromArray((revision + "\n").getBytes(StandardCharsets.UTF_8))
           assertTrue(
@@ -96,9 +106,11 @@ object PublishLawSpec extends ZIOSpecDefault:
             assertTrue(
               DistChannel.plan(single, List(commit)).exists(_.map(_.revision) == List(stored.render)),
               DistChannel.plan(single, List(moved)).exists(_.map(_.revision) == List(pointer.render)),
-              DistChannel.plan(single, List(commit, moved)).exists(
-                _.map(_.revision) == List(stored.render, pointer.render)
-              ),
+              DistChannel
+                .plan(single, List(commit, moved))
+                .exists(
+                  _.map(_.revision) == List(stored.render, pointer.render)
+                ),
               !DistChannel.plan(single, List(commit)).exists(_.exists(_.revision == pointer.render)),
               DistChannel.plan(single, List(moved, again)) ==
                 Left(LocalPublishError.Stock(s"demo app published more than one ${pointer.render}")),
@@ -111,7 +123,7 @@ object PublishLawSpec extends ZIOSpecDefault:
         val revision = s"${number.render}-20261106.153000-1"
         val jar      = Array[Byte](1, 2)
         val sources  = Array[Byte](3)
-        Dist.clientPlatforms match
+        DistPlatform.values.toList match
           case platform :: _ =>
             val client = Array[Byte](4)
             val files  = Dist.bundle(revision, jar, List(platform -> client), sources).toMap
@@ -124,10 +136,10 @@ object PublishLawSpec extends ZIOSpecDefault:
                 body.contains(s""""version": "$revision"""") &&
                   body.contains(DistLayout.sha256(jar)) &&
                   body.contains(DistLayout.sha256(sources)) &&
-                  body.contains(platform)
+                  body.contains(platform.token)
               ),
             )
-          case Nil => assertTrue(Dist.clientPlatforms.nonEmpty)
+          case Nil => assertTrue(DistPlatform.values.nonEmpty)
       ,
       test("a snapshot coordinate is a revision that ends in -SNAPSHOT"):
         check(Gen.string(Gen.alphaNumericChar)): raw =>
@@ -224,9 +236,9 @@ object PublishLawSpec extends ZIOSpecDefault:
         (LauncherPin.from(pointer.render), LauncherPin.from(stamp), LauncherPin.from(number.render)) match
           case (Right(channel), Right(revision), Right(release)) =>
             assertTrue(
-              channel.choice == LauncherChoice.Pointer(pointer.render),
-              revision.choice == LauncherChoice.Revision(pointer.render, stamp),
-              release.choice == LauncherChoice.Release(number.render),
+              channel.choice == LauncherChoice.Pointer(LauncherChannel.Line(pointer)),
+              revision.choice == LauncherChoice.Revision(LauncherChannel.Line(pointer), stamp),
+              release.choice == LauncherChoice.Release(number),
               LauncherPin.parse(LauncherPin.render(revision)).exists(_.choice == revision.choice),
               LauncherPin.parse("") == Left(LauncherError.Missing),
               LauncherPin.parse(s"${LauncherPin.Key}=${pointer.render}\n${LauncherPin.Key}=again\n") ==
@@ -242,8 +254,7 @@ object PublishLawSpec extends ZIOSpecDefault:
             )
           case _ => assertTrue(false)
       ,
-      test("a notice is quiet in CI, remembered inside a day, and it names a newer release"):
-        val pin       = number
+      test("a notice is quiet in CI and remembered inside a day"):
         val published = ship"1.3.0"
         val at        = Instant.parse("2026-11-06T00:00:00Z")
         val record    = UpgradeNotice.Record(at, Some(published))
@@ -257,13 +268,29 @@ object PublishLawSpec extends ZIOSpecDefault:
             UpgradeNotice.inCi(Map("CI" -> "yes")),
             UpgradeNotice.inCi(Map("GITHUB_ACTIONS" -> "true")),
             !UpgradeNotice.inCi(Map("CI" -> "no")),
-            UpgradeNotice.newer(published, pin),
-            !UpgradeNotice.newer(pin, published),
-            UpgradeNotice.text(pin, published).contains(published.render),
-            UpgradeNotice.text(published, pin).isEmpty,
             UpgradeNotice.parse(UpgradeNotice.render(record)) == Some(record),
-            UpgradeNotice.newest("<version>1.2.3</version><version>1.3.0</version><version>nope</version>") ==
+            ReleaseFeed.newest("<version>1.2.3</version><version>1.3.0</version><version>nope</version>") ==
               Some(published),
+          )
+      ,
+      test("a release pin trails a newer release, and a snapshot pin trails a release of its line or later"):
+        val part    = Gen.int(0, 3)
+        val numbers = (part <*> part <*> part).map((major, minor, patch) => ShipNumber.trusted(major, minor, patch))
+        check(numbers, numbers): (pinned, published) =>
+          val order    = Ordering[ShipNumber]
+          val release  = LauncherChoice.Release(pinned)
+          val snapshot = LauncherChoice.Pointer(LauncherChannel.Line(SnapshotPointer(pinned)))
+          val stamp    = LauncherChoice.Revision(
+            LauncherChannel.Line(SnapshotPointer(pinned)),
+            s"${pinned.render}-20261106.153000-1",
+          )
+          val lineLag = Option.when(order.gteq(published, pinned))(PinLag.LineReleased(pinned, published))
+          assertTrue(
+            release.lag(published) == Option.when(order.gt(published, pinned))(PinLag.NewerRelease(pinned, published)),
+            snapshot.lag(published) == lineLag,
+            stamp.lag(published) == lineLag,
+            release.lag(published).forall(_.command.value == "histos update"),
+            snapshot.lag(published).forall(_.command.value == "histos update --stable"),
           ),
     ),
     suite("a publish that must not compile")(
@@ -424,36 +451,39 @@ object PublishLawSpec extends ZIOSpecDefault:
             _        <- ZIO.attemptBlocking(Files.writeString(file, LauncherPin.render(release))).orDie
             stayed   <- LauncherPin.latest(repo)
           yield assertTrue(
-            moved.choice == LauncherChoice.Pointer(pointer.render),
+            moved.choice == LauncherChoice.Pointer(LauncherChannel.Line(pointer)),
             text == LauncherPin.render(moved),
             !text.contains(stamp),
-            stayed.choice == LauncherChoice.Release(number.render),
+            stayed.choice == LauncherChoice.Release(number),
           )
         }
       ,
-      test("a notice fetches only through the body it was given"):
-        ZIO.acquireRelease(directory("histos-notice"))(delete).flatMap { repo =>
+      test("a notice asks the feed once, is quiet in CI, and remembers the answer inside a day"):
+        val newer   = ship"1.3.0"
+        val program = ZIO.acquireRelease(directory("histos-notice"))(delete).flatMap { repo =>
           val home = repo.resolve("home")
           val pin  = repo.resolve(LauncherPin.file)
-          val xml  = "<version>1.2.3</version><version>1.3.0</version>"
           val at   = Instant.parse("2026-11-06T00:00:00Z")
+          val gone = ZIO.die(new IllegalStateException("fetched"))
           for
             _          <- TestClock.setTime(at)
             _          <- TestSystem.putEnv("HISTOS_HOME", home.toString)
             _          <- TestSystem.putProperty("user.home", home.toString)
             _          <- ZIO.attemptBlocking(Files.writeString(pin, s"histos.version=${number.render}\n")).orDie
-            fetched    <- UpgradeNotice.line(repo, ZIO.succeed(Some(xml)))
+            _          <- stub[ReleaseFeed](_.newest(any[MavenModule]))(ZIO.succeed(Some(newer)))
+            fetched    <- UpgradeNotice.advice(repo)
+            _          <- stub[ReleaseFeed](_.newest(any[MavenModule]))(gone)
             _          <- TestSystem.putEnv("CI", "1")
-            quiet      <- UpgradeNotice.line(repo, ZIO.die(new IllegalStateException("fetched")))
+            quiet      <- UpgradeNotice.advice(repo)
             _          <- TestSystem.putEnv("CI", "")
-            remembered <- UpgradeNotice.line(repo, ZIO.die(new IllegalStateException("fetched")))
+            remembered <- UpgradeNotice.advice(repo)
           yield assertTrue(
-            fetched.contains(ship"1.3.0".render),
-            fetched.contains(number.render),
+            fetched == Some(PinLag.NewerRelease(number, newer)),
             quiet.isEmpty,
-            remembered.contains(ship"1.3.0".render),
+            remembered == fetched,
           )
-        },
+        }
+        program.provideSomeLayer[TestEnvironment & Scope](stubbed[ReleaseFeed]),
     ).provideSomeLayerShared[TestEnvironment & Scope](stock) @@ TestAspect.sequential,
   )
 
@@ -482,7 +512,9 @@ object PublishLawSpec extends ZIOSpecDefault:
       env: Map[String, String],
       releases: Option[String],
       write: PublishWrite,
-  )(claim: PublishOutput => TestResult): ZIO[Resolve & Publisher & ContentStore & Scope, LocalPublishError, TestResult] =
+  )(
+      claim: PublishOutput => TestResult
+  ): ZIO[Resolve & Publisher & ContentStore & Scope, LocalPublishError, TestResult] =
     built match
       case Left(_)      => ZIO.succeed(assertTrue(built.isRight))
       case Right(graph) =>
@@ -515,7 +547,7 @@ object PublishLawSpec extends ZIOSpecDefault:
       None,
       None,
       ship,
-      Sha256.of(Chunk.empty),
+      Sha256Digest.of(Chunk.empty),
       None,
       Nil,
     )
@@ -536,7 +568,7 @@ object PublishLawSpec extends ZIOSpecDefault:
     JdkVersion
       .from("21")
       .map: version =>
-        JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256.of(Chunk.empty)))
+        JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)))
 
   private def directory(prefix: String): ZIO[Any, Nothing, Path] =
     ZIO.attemptBlocking(Files.createTempDirectory(prefix)).orDie

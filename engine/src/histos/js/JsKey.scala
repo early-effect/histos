@@ -1,6 +1,6 @@
 package histos.js
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.pack.MainClass
 import histos.{JsModuleKind, JsVersion, ScalaVersion}
 
@@ -30,4 +30,4 @@ object JsKey:
          |products
          |${products.map(_.value).mkString("\n")}
          |""".stripMargin
-    Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
+    Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))

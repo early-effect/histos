@@ -1,6 +1,6 @@
 package histos.publish
 
-import histos.version.ShipNumber
+import histos.version.{PinLag, Revision, ShipNumber, SnapshotCoordinate, SnapshotPointer}
 import histos.workspace.{IoFailure, IoFault}
 
 import java.nio.file.{Files, LinkOption, Path}
@@ -15,22 +15,55 @@ import zio.{IO, ZIO}
   */
 final class LauncherPin private (val choice: LauncherChoice):
   def version: String = choice match
-    case LauncherChoice.Release(version)      => version
-    case LauncherChoice.Pointer(channel)      => channel
+    case LauncherChoice.Release(number)       => number.render
+    case LauncherChoice.Pointer(channel)      => channel.render
     case LauncherChoice.Revision(_, revision) => revision
-
-  def channel: String = choice match
-    case LauncherChoice.Release(version)     => version
-    case LauncherChoice.Pointer(channel)     => channel
-    case LauncherChoice.Revision(channel, _) => channel
 
   def shown: String = s"${LauncherPin.Key}=${version}"
 end LauncherPin
 
+/** The snapshot a pin follows: the line's pointer, or one commit's stored coordinate. */
+enum LauncherChannel:
+  case Line(pointer: SnapshotPointer)
+  case Commit(coordinate: SnapshotCoordinate)
+
+  def line: ShipNumber = this match
+    case Line(pointer)      => pointer.ship
+    case Commit(coordinate) => coordinate.ship
+
+  def render: String = this match
+    case Line(pointer)      => pointer.render
+    case Commit(coordinate) => coordinate.render
+end LauncherChannel
+
+object LauncherChannel:
+  def from(raw: String): Option[LauncherChannel] =
+    Revision.parse(raw) match
+      case Right(Revision.Pointer(pointer))     => Some(Line(pointer))
+      case Right(Revision.Snapshot(coordinate)) => Some(Commit(coordinate))
+      case _                                    => None
+
+/** `revision` is the timestamp the shim reads: `<channel without -SNAPSHOT>-<yyyyMMdd.HHmmss>-<build>`. */
 enum LauncherChoice:
-  case Release(version: String)
-  case Pointer(channel: String)
-  case Revision(channel: String, revision: String)
+  case Release(number: ShipNumber)
+  case Pointer(channel: LauncherChannel)
+  case Revision(channel: LauncherChannel, revision: String)
+
+  /** The release line this pin runs. A snapshot's line is the release it leads to. */
+  def line: ShipNumber = this match
+    case Release(number)      => number
+    case Pointer(channel)     => channel.line
+    case Revision(channel, _) => channel.line
+
+  /** A release pin trails a newer release. A snapshot pin trails a release of its line or a later one. */
+  def lag(published: ShipNumber): Option[PinLag] =
+    val order = Ordering[ShipNumber]
+    this match
+      case Release(number) =>
+        Option.when(order.gt(published, number))(PinLag.NewerRelease(number, published))
+      case Pointer(_) | Revision(_, _) =>
+        Option.when(order.gteq(published, line))(PinLag.LineReleased(line, published))
+end LauncherChoice
 
 object LauncherPin:
   val file: Path = Path.of("build.properties")
@@ -57,21 +90,13 @@ object LauncherPin:
         case Some(value) => from(value)
 
   def from(raw: String): Either[LauncherError, LauncherPin] =
-    if validPointer(raw) then Right(new LauncherPin(LauncherChoice.Pointer(raw)))
-    else
-      channelOf(raw) match
-        case Some(channel) => Right(new LauncherPin(LauncherChoice.Revision(channel, raw)))
-        case None          =>
-          releaseOf(raw) match
-            case Some(version) => Right(new LauncherPin(LauncherChoice.Release(version)))
-            case None          => Left(LauncherError.Version(raw))
-
-  /** The channel a pointer, a timestamp, or a release belongs to. A release's channel is the ship number. */
-  def channel(raw: String): Option[String] =
-    if validPointer(raw) then Some(raw) else channelOf(raw).orElse(releaseOf(raw))
-
-  private def releaseOf(raw: String): Option[String] =
-    ShipNumber.from(raw).toOption.map(_.render)
+    LauncherChannel
+      .from(raw)
+      .map(LauncherChoice.Pointer(_))
+      .orElse(revisionOf(raw))
+      .orElse(ShipNumber.from(raw).toOption.map(LauncherChoice.Release(_)))
+      .map(new LauncherPin(_))
+      .toRight(LauncherError.Version(raw))
 
   def render(pin: LauncherPin): String = s"${pin.shown}\n"
 
@@ -89,21 +114,26 @@ object LauncherPin:
   def latest(repo: Path): IO[LauncherError, LauncherPin] =
     for
       current <- read(repo)
-      pin     <- ZIO.fromEither(from(current.channel))
-      _       <- write(repo, pin)
+      pin = current.choice match
+        case LauncherChoice.Revision(channel, _)                   => new LauncherPin(LauncherChoice.Pointer(channel))
+        case LauncherChoice.Release(_) | LauncherChoice.Pointer(_) => current
+      _ <- write(repo, pin)
     yield pin
 
   private[publish] def updateAt(repo: Path, cache: Path): IO[LauncherError, LauncherPin] =
     read(repo).flatMap: current =>
       current.choice match
-        case LauncherChoice.Release(version) => ZIO.fail(LauncherError.Release(version))
-        case _                               =>
-          for
-            base     <- repository
-            selected <- fetch(base, current.channel, cache)
-            pin      <- ZIO.fromEither(from(selected))
-            _        <- write(repo, pin)
-          yield pin
+        case LauncherChoice.Release(number)      => ZIO.fail(LauncherError.Release(number.render))
+        case LauncherChoice.Pointer(channel)     => refresh(repo, channel, cache)
+        case LauncherChoice.Revision(channel, _) => refresh(repo, channel, cache)
+
+  private def refresh(repo: Path, channel: LauncherChannel, cache: Path): IO[LauncherError, LauncherPin] =
+    for
+      base     <- repository
+      selected <- fetch(base, channel.render, cache)
+      pin      <- ZIO.fromEither(from(selected))
+      _        <- write(repo, pin)
+    yield pin
 
   def renderBase(raw: String): Either[LauncherError, String] =
     val supported =
@@ -114,21 +144,19 @@ object LauncherPin:
     if supported && raw.nonEmpty && !raw.exists(_.isWhitespace) then Right(raw)
     else Left(LauncherError.Repository(raw))
 
-  private[publish] def validPointer(raw: String): Boolean =
-    "[0-9]+\\.[0-9]+\\.[0-9]+(-[A-Za-z0-9]+([.-][A-Za-z0-9]+)*)?-SNAPSHOT".r.matches(raw)
-
   private[publish] def validRevision(version: String, raw: String): Boolean =
     val prefix = version.stripSuffix("-SNAPSHOT") + "-"
     val tail   = raw.stripPrefix(prefix)
     raw.startsWith(prefix) && "[0-9]{8}\\.[0-9]{6}-[1-9][0-9]*".r.matches(tail) &&
     tail.drop(16).toIntOption.exists(_ > 0) && validStamp(tail.take(15))
 
-  private def channelOf(raw: String): Option[String] =
+  private def revisionOf(raw: String): Option[LauncherChoice] =
     raw match
-      case Stamp(ship, stamp, build) =>
-        val channel  = s"$ship-SNAPSHOT"
-        val revision = s"$ship-$stamp-$build"
-        if validPointer(channel) && validRevision(channel, revision) then Some(channel) else None
+      case Stamp(ship, _, _) =>
+        LauncherChannel
+          .from(s"$ship-SNAPSHOT")
+          .filter(channel => validRevision(channel.render, raw))
+          .map(LauncherChoice.Revision(_, raw))
       case _ => None
 
   private val Stamp = "^(.+)-([0-9]{8}\\.[0-9]{6})-([1-9][0-9]*)$".r

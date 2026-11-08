@@ -6,7 +6,7 @@ import java.nio.file.attribute.BasicFileAttributes
 
 import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Opcodes, Type}
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault}
 
 import zio.{Chunk, IO, ZIO}
@@ -150,7 +150,7 @@ object SuiteStamp:
           readBytes(path).flatMap: bytes =>
             references(path, bytes).map: refs =>
               Some(
-                binary -> Print(Sha256.of(Chunk.fromArray(bytes)).value, refs)
+                binary -> Print(Sha256Digest.of(Chunk.fromArray(bytes)).value, refs)
               )
 
   private def readBytes(path: Path): Either[StampError, Array[Byte]] =
@@ -194,7 +194,7 @@ object SuiteStamp:
       cover.apis.sorted.map(api => s"api $api")
 
   private def hash(text: String): Sha256 =
-    Sha256.of(
+    Sha256Digest.of(
       Chunk.fromArray(text.getBytes(java.nio.charset.StandardCharsets.UTF_8))
     )
 

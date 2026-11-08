@@ -1,6 +1,6 @@
 package histos.zinc
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.resolve.{ClasspathScope, DependencyLock, Repositories, Resolve}
 import histos.workspace.{IoFailure, IoFault}
 import histos.{Module, Platform, ScalaVersion}
@@ -249,7 +249,7 @@ object CompileMemo:
         val artifacts = cell.artifacts.map(_.sha256.value).mkString(",")
         s"${cell.module.value} ${cell.scalaVersion.value} ${cell.platform.token} ${cell.scope.header} $artifacts"
       .mkString("\n")
-    LockStamp.content(Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))))
+    LockStamp.content(Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))))
 
   private def fileStamps(sources: List[Path]): List[FileStamp] =
     sources

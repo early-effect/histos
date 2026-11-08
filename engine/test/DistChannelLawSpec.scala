@@ -2,9 +2,22 @@ package histos.publish
 
 import com.sun.net.httpserver.{HttpExchange, HttpServer}
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.version.{CommitSha, ShipName, SnapshotCoordinate, SnapshotPointer}
-import histos.{Jvm, MainClass, ProjectName, Projects, Ship, asset, module, organization, ship, ships}
+import histos.{
+  BuildError,
+  ClientBuilds,
+  Jvm,
+  MainClass,
+  ProjectName,
+  Projects,
+  Ship,
+  asset,
+  module,
+  organization,
+  ship,
+  ships,
+}
 import histos.`scala`
 
 import java.net.InetSocketAddress
@@ -32,13 +45,13 @@ object DistChannelLawSpec extends ZIOSpecDefault:
       ZIO.acquireRelease(directory("histos-channel-empty"))(delete).flatMap { repo =>
         val die = ZIO.dieMessage("gh")
         graph match
-          case Left(_)    => ZIO.succeed(assertTrue(false))
+          case Left(_)      => ZIO.succeed(assertTrue(false))
           case Right(built) =>
             val plans = DistChannel.plan(built, List(row(stored.render)))
             for
               quiet   <- DistChannel.prepare(repo, Map("KEEP" -> "1"), Nil, die, _ => sys.error("origin"))
               missing <- plans match
-                case Left(_)     => ZIO.succeed(Left(LocalPublishError.NothingToPublish))
+                case Left(_)      => ZIO.succeed(Left(LocalPublishError.NothingToPublish))
                 case Right(found) =>
                   DistChannel.prepare(repo, Map.empty, found, die, _ => None).either
             yield assertTrue(
@@ -52,8 +65,8 @@ object DistChannelLawSpec extends ZIOSpecDefault:
     test("gh and origin fill the channel credentials, and an env token is left alone"):
       ZIO.acquireRelease(directory("histos-channel-cred"))(delete).flatMap { repo =>
         graph match
-          case Left(_)         => ZIO.succeed(assertTrue(false))
-          case Right(built)    =>
+          case Left(_)      => ZIO.succeed(assertTrue(false))
+          case Right(built) =>
             DistChannel.plan(built, List(row(stored.render))) match
               case Left(_)      => ZIO.succeed(assertTrue(false))
               case Right(plans) =>
@@ -99,9 +112,9 @@ object DistChannelLawSpec extends ZIOSpecDefault:
                     )
                     noted <- DistChannel.upload(repo, env, plans, List(receipt(stored.render), receipt(pointer.render)))
                   yield
-                    val posts = seen.toArray(Array.empty[Hit]).toList.filter(_.method == "POST")
-                    val names = posts.map(hit => value(hit.query, "name"))
-                    val shaChannel = DistLayout.channel(stored.render)
+                    val posts          = seen.toArray(Array.empty[Hit]).toList.filter(_.method == "POST")
+                    val names          = posts.map(hit => value(hit.query, "name"))
+                    val shaChannel     = DistLayout.channel(stored.render)
                     val pointerChannel = DistLayout.channel(pointer.render)
                     assertTrue(
                       plans.map(_.revision) == List(stored.render, pointer.render),
@@ -117,11 +130,93 @@ object DistChannelLawSpec extends ZIOSpecDefault:
                       names.contains(Some(DistLayout.jar(pointerUnique))),
                       names.contains(Some(DistLayout.manifest(storedUnique))),
                       names.contains(Some(DistLayout.manifest(pointerUnique))),
+                      names.lastOption == Some(Some(pointerChannel)),
                     )
                 }
       }
     ,
+    test("a ship that builds snapshot clients refuses a missing client before a token"):
+      ZIO.acquireRelease(directory("histos-channel-no-client"))(delete).flatMap { repo =>
+        clientPlans match
+          case Left(_)      => ZIO.succeed(assertTrue(clientPlans.isRight))
+          case Right(plans) =>
+            for
+              _       <- plant(repo)
+              _       <- plantClient(repo, DistPlatform.LinuxX86_64)
+              missing <- DistChannel.prepare(repo, Map.empty, plans, ZIO.dieMessage("gh"), _ => None).either
+            yield assertTrue(
+              plans.map(_.clients) == List(DistPlatform.values.toList),
+              missing == Left(
+                LocalPublishError.MissingClient(
+                  ShipName("demo"),
+                  Path.of("dist/clients/client-macos-aarch64/histos-client"),
+                )
+              ),
+            )
+      }
+    ,
+    test("snapshot clients upload before the manifest that names their shas, and the channel goes last"):
+      ZIO.acquireRelease(directory("histos-channel-clients"))(delete).flatMap { repo =>
+        clientPlans match
+          case Left(_)      => ZIO.succeed(assertTrue(clientPlans.isRight))
+          case Right(plans) =>
+            val seen = new ConcurrentLinkedQueue[Hit]()
+            ZIO.scoped {
+              for
+                port <- listen(seen)
+                _    <- plant(repo)
+                _    <- ZIO.foreachDiscard(DistPlatform.values.toList)(platform => plantClient(repo, platform))
+                env = Map(
+                  "HISTOS_GITHUB"     -> s"http://127.0.0.1:$port",
+                  "GITHUB_TOKEN"      -> "secret",
+                  "GITHUB_REPOSITORY" -> "early-effect/histos",
+                )
+                _ <- DistChannel.upload(repo, env, plans, List(receipt(pointer.render)))
+              yield
+                val posts    = seen.toArray(Array.empty[Hit]).toList.filter(_.method == "POST")
+                val manifest = body(posts, DistLayout.manifest(pointerUnique)).getOrElse("")
+                assertTrue(
+                  posts.map(hit => value(hit.query, "name")) == List(
+                    Some(DistLayout.jar(pointerUnique)),
+                    Some(s"$pointerUnique-client-linux-x86_64"),
+                    Some(s"$pointerUnique-client-macos-aarch64"),
+                    Some(DistLayout.manifest(pointerUnique)),
+                    Some(DistLayout.channel(pointer.render)),
+                  ),
+                  posts.collect {
+                    case hit if value(hit.query, "name").contains(s"$pointerUnique-client-macos-aarch64") =>
+                      hit.body.toList
+                  } == List(clientBytes(DistPlatform.MacosAarch64).toList),
+                  manifest.contains(
+                    s""""linux-x86_64": "${DistLayout.sha256(clientBytes(DistPlatform.LinuxX86_64))}""""
+                  ),
+                  manifest.contains(
+                    s""""macos-aarch64": "${DistLayout.sha256(clientBytes(DistPlatform.MacosAarch64))}""""
+                  ),
+                )
+            }
+      },
   )
+
+  private def clientPlans: Either[BuildError | LocalPublishError, List[ChannelPlan]] =
+    val app = module("app", Jvm)(scala3).assembly(MainClass("demo.Main")).asset(asset"dist/app.jar")
+    Projects
+      .organization(organization"example.com")(
+        ships(Ship("demo").next(1, 2, 3)(app).clients(ClientBuilds.ReleasesAndSnapshots)),
+        app,
+      )
+      .flatMap(built => DistChannel.plan(built, List(row(pointer.render))))
+
+  private def clientBytes(platform: DistPlatform): Array[Byte] =
+    platform.token.getBytes(StandardCharsets.UTF_8)
+
+  private def plantClient(repo: Path, platform: DistPlatform): ZIO[Any, Nothing, Unit] =
+    ZIO.attemptBlocking {
+      val path = repo.resolve(DistLayout.builtClient(platform))
+      Files.createDirectories(path.getParent)
+      Files.write(path, clientBytes(platform))
+      ()
+    }.orDie
 
   private def storedUnique: String =
     s"${number.render}-${commit.abbreviate.value}-$stamp"
@@ -144,7 +239,7 @@ object DistChannelLawSpec extends ZIOSpecDefault:
       None,
       None,
       ShipName("demo"),
-      Sha256.of(Chunk.empty),
+      Sha256Digest.of(Chunk.empty),
       None,
       Nil,
     )
@@ -173,14 +268,16 @@ object DistChannelLawSpec extends ZIOSpecDefault:
     }.orDie
 
   private def listen(seen: ConcurrentLinkedQueue[Hit]): ZIO[Scope, Nothing, Int] =
-    ZIO.acquireRelease(
-      ZIO.attempt {
-        val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
-        server.createContext("/", exchange => reply(exchange, seen))
-        server.start()
-        server
-      }.orDie
-    )(server => ZIO.attempt(server.stop(0)).orDie).map(_.getAddress.getPort)
+    ZIO
+      .acquireRelease(
+        ZIO.attempt {
+          val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
+          server.createContext("/", exchange => reply(exchange, seen))
+          server.start()
+          server
+        }.orDie
+      )(server => ZIO.attempt(server.stop(0)).orDie)
+      .map(_.getAddress.getPort)
 
   private def reply(exchange: HttpExchange, seen: ConcurrentLinkedQueue[Hit]): Unit =
     val bytes = exchange.getRequestBody.readAllBytes()

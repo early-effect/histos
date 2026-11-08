@@ -2,7 +2,7 @@ package histos.testrun
 
 import histos.jdk.JdkRuntime
 import histos.resolve.LockedTools
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.zinc.{
   CompileRequest,
   CompileToolchain,
@@ -102,5 +102,5 @@ private[testrun] object ProviderInstall:
       version.value + "\n" +
         classpath.map(_.toAbsolutePath.toString).sorted.mkString("\n") + "\n" +
         ProviderRunner.source
-    Sha256.of(Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8)))
+    Sha256Digest.of(Chunk.fromArray(body.getBytes(StandardCharsets.UTF_8)))
 end ProviderInstall

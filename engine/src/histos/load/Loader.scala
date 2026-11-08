@@ -1,7 +1,7 @@
 package histos.load
 
 import histos.cache.{CacheProject, ContentStore}
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{
   ApiDigest,
   EntryName,
@@ -653,7 +653,7 @@ private final class LoaderLive(resolve: Resolve, store: ContentStore) extends Lo
 
   private def digestOf(apiJar: Path): IO[LoadError, ApiDigest] =
     ZIO
-      .attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(apiJar))))
+      .attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(apiJar))))
       .mapError(BuildFile.failed(apiJar, IoFault.Read))
       .flatMap: sha =>
         ApiDigest.from(sha.value) match

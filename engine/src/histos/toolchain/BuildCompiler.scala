@@ -3,7 +3,7 @@ package histos.toolchain
 import histos.{ScalaVersion, ScalaVersionError}
 import histos.resolve.ResolveError
 import zio.{IO, ZIO, Chunk}
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.{IoFailure, IoFault}
 import java.nio.file.{Files, Path}
 import java.nio.charset.StandardCharsets
@@ -26,7 +26,7 @@ object BuildCompiler:
         )
       )(locationOf)
       hashes <- ZIO.foreach((locations ++ boundary).distinct)(content)
-    yield Sha256.of(
+    yield Sha256Digest.of(
       Chunk.fromArray(
         hashes.map(_.value).mkString("\n").getBytes(StandardCharsets.UTF_8)
       )
@@ -63,7 +63,7 @@ final case class CompilerIdentity(
     embedded: Sha256,
     runtime: RuntimeIdentity,
 ):
-  def fingerprint: Sha256 = Sha256.of(
+  def fingerprint: Sha256 = Sha256Digest.of(
     Chunk.fromArray(
       s"${version.value}\n${embedded.value}\n${Runtimes.identityToken(runtime)}"
         .getBytes(StandardCharsets.UTF_8)

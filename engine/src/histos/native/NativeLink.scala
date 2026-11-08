@@ -1,7 +1,7 @@
 package histos.native
 
 import histos.jdk.JdkRuntime
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.resolve.LockedTools
 import histos.pack.MainClass
 import histos.process.{ChildClasspath, ChildProcess, ChildRequest}
@@ -42,7 +42,7 @@ object NativeKey:
          |${sources.value}
          |${artifacts.map(_.value).mkString("\n")}
          |""".stripMargin
-    Sha256.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
+    Sha256Digest.of(Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8)))
 
 final case class Linked(binary: Path, key: Sha256)
 

@@ -2,7 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.central.Publisher
-import histos.jdk.{JdkRuntime, JdkVersion, Sha256}
+import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
 import histos.resolve.Resolve
 import histos.toolchain.RuntimeIdentity
 import histos.version.{ShipName, VersionTask}
@@ -157,7 +157,8 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
       write: PublishWrite,
   ): ZIO[Resolve & Publisher & ContentStore, LocalPublishError, PublishOutput] =
     ZIO.fromEither(JdkVersion.from("21")).orDieWith(blow).flatMap { version =>
-      val runtime = JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256.of(Chunk.empty)))
+      val runtime =
+        JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)))
       LocalPublish.run(repo, graph, names, runtime, env, write)
     }
 
@@ -172,7 +173,7 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
       None,
       None,
       ShipName("demo"),
-      Sha256.of(Chunk.empty),
+      Sha256Digest.of(Chunk.empty),
       unique,
       Nil,
     )

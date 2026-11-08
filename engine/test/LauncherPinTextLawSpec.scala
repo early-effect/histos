@@ -1,5 +1,7 @@
 package histos.publish
 
+import histos.version.{ShipNumber, SnapshotPointer}
+
 import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 
 /** A pin file is one field. A base is https, loopback http, or a file URL. */
@@ -14,8 +16,13 @@ object LauncherPinTextLawSpec extends ZIOSpecDefault:
       val repeated = LauncherPin.parse("histos.version=1.2.3\nhistos.version=1.2.4\n")
       val version  = LauncherPin.parse("histos.version=nope")
       assertTrue(
-        release.exists(pin => pin.version == "1.2.3" && pin.channel == "1.2.3" && pin.shown == "histos.version=1.2.3"),
-        pointer.exists(pin => pin.version == "1.2.3-SNAPSHOT" && pin.channel == "1.2.3-SNAPSHOT"),
+        release.exists(pin =>
+          pin.version == "1.2.3" && pin.choice == LauncherChoice.Release(number) && pin.shown == "histos.version=1.2.3"
+        ),
+        pointer.exists(pin =>
+          pin.version == "1.2.3-SNAPSHOT" &&
+            pin.choice == LauncherChoice.Pointer(LauncherChannel.Line(SnapshotPointer(number)))
+        ),
         missing == Left(LauncherError.Missing),
         line == Left(LauncherError.Line("nope")),
         unknown == Left(LauncherError.Unknown("other")),
@@ -29,12 +36,12 @@ object LauncherPinTextLawSpec extends ZIOSpecDefault:
       )
     ,
     test("https, loopback, and file are bases, and any other spelling is refused"):
-      val https     = LauncherPin.renderBase("https://example.test/repo")
-      val loopback  = LauncherPin.renderBase("http://127.0.0.1:9/repo")
-      val local     = LauncherPin.renderBase("http://localhost/repo")
-      val file      = LauncherPin.renderBase("file:///tmp/repo")
-      val remote    = LauncherPin.renderBase("http://example.test/repo")
-      val spaced    = LauncherPin.renderBase("https://example.test/has space")
+      val https    = LauncherPin.renderBase("https://example.test/repo")
+      val loopback = LauncherPin.renderBase("http://127.0.0.1:9/repo")
+      val local    = LauncherPin.renderBase("http://localhost/repo")
+      val file     = LauncherPin.renderBase("file:///tmp/repo")
+      val remote   = LauncherPin.renderBase("http://example.test/repo")
+      val spaced   = LauncherPin.renderBase("https://example.test/has space")
       assertTrue(
         https == Right("https://example.test/repo"),
         loopback == Right("http://127.0.0.1:9/repo"),
@@ -43,8 +50,10 @@ object LauncherPinTextLawSpec extends ZIOSpecDefault:
         remote == Left(LauncherError.Repository("http://example.test/repo")),
         spaced == Left(LauncherError.Repository("https://example.test/has space")),
         message(remote) == "launcher repository is not a supported base: http://example.test/repo",
-      )
+      ),
   )
+
+  private val number = ShipNumber("1.2.3")
 
   private def message(found: Either[LauncherError, ?]): String =
     found match

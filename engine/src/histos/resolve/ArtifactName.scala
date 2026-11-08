@@ -1,6 +1,6 @@
 package histos.resolve
 
-import histos.{Dep, DepKind, Platform, SbtSeries, ScalaVersion}
+import histos.{Dep, DepKind, Module, Platform, Publication, SbtSeries, ScalaVersion}
 
 /** Platform suffixes from design section 5.2. The fetch uses these values. */
 object PlatformSuffix:
@@ -27,6 +27,15 @@ object ArtifactName:
       series: SbtSeries,
   ): String =
     s"$base${platformSuffix(platform)}_sbt${series.value}_${binary(version)}"
+
+  /** The artifact id a module publishes under. An assembly keeps its bare base. */
+  def module(module: Module, version: ScalaVersion, platform: Platform): String =
+    val base = module.published.fold(module.name.value)(_.value)
+    module.publication match
+      case Publication.Assembly(_)       => base
+      case Publication.SbtPlugin(series) => plugin(base, version, platform, series)
+      case Publication.Library           => published(base, version, platform)
+      case Publication.Application       => published(base, version, platform)
 
   def of(dependency: Dep, version: ScalaVersion, platform: Platform): String =
     dependency.kind match

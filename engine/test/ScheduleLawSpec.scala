@@ -1,6 +1,6 @@
 package histos.schedule
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{Need, RepoPath, Seal}
 import histos.step.{Need as StepNeed, Step, StepId, StepInfo}
 import histos.version.PullRequestError
@@ -83,7 +83,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
         val edited  = core("a", List(text("m", "2"), text("z", "9")), List(b, c))
         val digests = Map(b -> bHash, c -> cHash)
         val swapped = Map(b -> cHash, c -> bHash)
-        val sha     = Sha256.of(utf8("2"))
+        val sha     = Sha256Digest.of(utf8("2"))
         val asText  = core("a", List(Input(InputName.trusted("m"), InputValue.Text(sha.value))))
         val asHash  = core("a", List(Input(InputName.trusted("m"), InputValue.Hash(sha))))
         val missing = ActionDigest.of(core("a", deps = List(b)), Map.empty)
@@ -123,7 +123,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
         val bytes = utf8("action")
         val other = utf8("other")
         assertTrue(
-          ActionDigest.ofBytes(bytes) == Digest.trusted(Sha256.of(bytes).value),
+          ActionDigest.ofBytes(bytes) == Digest.trusted(Sha256Digest.of(bytes).value),
           ActionDigest.ofBytes(bytes) != ActionDigest.ofBytes(other),
         ),
     ),
@@ -299,9 +299,9 @@ object ScheduleLawSpec extends ZIOSpecDefault:
           .flatMap: root =>
             val file    = root.resolve("out.txt")
             val path    = RepoPath("out.txt")
-            val sha     = Sha256.of(utf8("body"))
+            val sha     = Sha256Digest.of(utf8("body"))
             val stored  = PluginManifest.store("task", List(path -> sha))
-            val changed = PluginManifest.store("task", List(path -> Sha256.of(utf8("BODY"))))
+            val changed = PluginManifest.store("task", List(path -> Sha256Digest.of(utf8("BODY"))))
             for
               _       <- Workspace.writeString(file, "body")
               ok      <- PluginManifest.accept(stored, root, List(path))
@@ -325,7 +325,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
           .flatMap: root =>
             val real = root.resolve("real.txt")
             val link = root.resolve("link.txt")
-            val sha  = Sha256.of(utf8("body"))
+            val sha  = Sha256Digest.of(utf8("body"))
             for
               _ <- Workspace.writeString(real, "body")
               _ <- ZIO
@@ -659,7 +659,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
       ,
       test("a plugin with no outputs returns the stored manifest and does not run"):
         val action = plugin(Seal.Hermetic)
-        val stored = PluginManifest.store("task", List(RepoPath("a.txt") -> Sha256.of(utf8("x"))))
+        val stored = PluginManifest.store("task", List(RepoPath("a.txt") -> Sha256Digest.of(utf8("x"))))
         val digest = ActionDigest.of(action, Map.empty)
         for
           runs   <- Ref.make(0)
@@ -676,7 +676,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
       test("a plugin hit whose declared file is gone runs the task"):
         val action =
           plugin(Seal.Hermetic, root = Some(Path.of("/missing-plugin-root")), outputs = List(RepoPath("missing.txt")))
-        val stored = PluginManifest.store("task", List(RepoPath("missing.txt") -> Sha256.of(utf8("x"))))
+        val stored = PluginManifest.store("task", List(RepoPath("missing.txt") -> Sha256Digest.of(utf8("x"))))
         for
           runs  <- Ref.make(0)
           _     <- arm(RemoteMode.Off, _ => ZIO.none, _ => ZIO.some(stored))
@@ -688,7 +688,7 @@ object ScheduleLawSpec extends ZIOSpecDefault:
       ,
       test("an empty output list returns the raw blob, and a missing file is a miss"):
         val digest   = Digest.trusted("ef" * 32)
-        val sha      = Sha256.of(utf8("x"))
+        val sha      = Sha256Digest.of(utf8("x"))
         val manifest = PluginManifest.store("task", List(RepoPath("a.txt") -> sha))
         val empty    = plugin(Seal.Hermetic)
         val missing  =

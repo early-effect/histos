@@ -1,6 +1,6 @@
 package histos.resolve
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.workspace.Workspace
 import histos.{Dep, DepKind, Platform, ProjectName, ScalaVersion}
 
@@ -243,7 +243,7 @@ object CoursierLawSpec extends ZIOSpecDefault:
     store(jar(repo, artifact, version, Some("sources")), body)
 
   private def shaOf(path: Path) =
-    ZIO.attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(path)))).orDie
+    ZIO.attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path)))).orDie
 
   private def store(path: Path, text: String) =
     ZIO

@@ -1,6 +1,6 @@
 package histos.load
 
-import histos.jdk.{JdkRuntime, Sha256}
+import histos.jdk.{JdkRuntime, Sha256, Sha256Digest}
 import histos.js.{JsLink, JsLinkRequest}
 import histos.plugin.{CellClasspath, DeclaredTask, LinkedScript, PluginDetail, PluginRunError, TaskDep}
 import histos.program.Program
@@ -84,7 +84,7 @@ private[load] object PluginCells:
       cell: Cell,
   ): ZIO[Resolve & histos.resolve.ResolutionService, PluginFault, String] =
     val histos.zinc.CompileSession(repo, graph, jdk, _, lock, _) = session
-    val asked                                                 =
+    val asked                                                    =
       cell.module.application match
         case Some(main) =>
           histos.pack.MainClass.from(main.value) match
@@ -177,10 +177,10 @@ private[load] object PluginCells:
               .flatMap: text =>
                 val script = Path.of(text.trim)
                 ZIO
-                  .attemptBlocking(Sha256.of(Chunk.fromArray(Files.readAllBytes(script))))
+                  .attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(script))))
                   .orElseFail(failed(s"could not read ${script}"))
           .map: hashes =>
-            Sha256.of(
+            Sha256Digest.of(
               Chunk.fromArray(hashes.map(_.value).mkString("\n").getBytes(java.nio.charset.StandardCharsets.UTF_8))
             )
 

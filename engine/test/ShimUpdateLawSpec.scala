@@ -26,8 +26,8 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
           for
             rig <- loopback
             _   <- rig.publish(Published(published, Nil))
-            oldest = published.minBy(_.number)(using order)
-            newest = published.maxBy(_.number)(using order)
+            oldest = published.minBy(_.number)
+            newest = published.maxBy(_.number)
             _      <- rig.pin(oldest.number.render)
             ran    <- rig.update()
             choice <- rig.choice
@@ -35,7 +35,7 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
             jar    <- rig.installed(newest.number.render)
           yield assertTrue(
             ran.exit == 0,
-            choice == LauncherChoice.Release(newest.number.render),
+            choice == LauncherChoice.Release(newest.number),
             jar,
             origin == Option.when(newest.clients)("prebuilt"),
             ran.err.exists(clientless(newest.number.render)) == !newest.clients,
@@ -44,8 +44,8 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
     test("a timestamp pin moves to the newest timestamp of the newest line, and a later build moves it again"):
       check(lines): stamps =>
         ZIO.scoped:
-          val oldest = stamps.minBy(stamp => (stamp.line, stamp.build))(using Ordering.Tuple2(order, Ordering.Int))
-          val newest = stamps.maxBy(stamp => (stamp.line, stamp.build))(using Ordering.Tuple2(order, Ordering.Int))
+          val oldest = stamps.minBy(stamp => (stamp.line, stamp.build))
+          val newest = stamps.maxBy(stamp => (stamp.line, stamp.build))
           val later  = newest.copy(build = newest.build + 1)
           for
             rig    <- loopback
@@ -61,14 +61,14 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
             next   <- rig.choice
           yield assertTrue(
             first.exit == 0,
-            moved == LauncherChoice.Revision(newest.pointer, newest.render),
+            moved == LauncherChoice.Revision(newest.channel, newest.render),
             origin.isEmpty,
             first.err == List(
               s"histos ${newest.render} is a snapshot. Snapshots have no prebuilt client. java -jar will run."
             ),
             again.exit == 0,
             held == moved,
-            next == LauncherChoice.Revision(later.pointer, later.render),
+            next == LauncherChoice.Revision(later.channel, later.render),
           )
     ,
     test("a pointer stays a pointer, and without a terminal the release is a hint"):
@@ -83,7 +83,7 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
           origin <- rig.origin(build021.render)
         yield assertTrue(
           ran.exit == 0,
-          choice == LauncherChoice.Pointer(build021.pointer),
+          choice == LauncherChoice.Pointer(build021.channel),
           jar,
           origin.isEmpty,
           ran.err == List(
@@ -105,7 +105,7 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
         yield assertTrue(
           ran.exit == 0,
           ran.err.isEmpty,
-          choice == LauncherChoice.Release(release021.render),
+          choice == LauncherChoice.Release(release021),
           default == choice,
           origin.contains("prebuilt"),
         )
@@ -122,8 +122,8 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
           both     <- rig.update("--freeze", "--follow")
           kept     <- rig.choice
         yield assertTrue(
-          frozen == LauncherChoice.Revision(build021.pointer, build021.render),
-          followed == LauncherChoice.Pointer(build021.pointer),
+          frozen == LauncherChoice.Revision(build021.channel, build021.render),
+          followed == LauncherChoice.Pointer(build021.channel),
           both.exit != 0,
           both.err == List("histos: --freeze and --follow are opposites. Pass one."),
           kept == followed,
@@ -140,15 +140,15 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
           pin     <- rig.pinned
         yield assertTrue(
           ran.exit == 0,
-          default == LauncherChoice.Revision(build021.pointer, build021.render),
+          default == LauncherChoice.Revision(build021.channel, build021.render),
           !pin,
         ),
   ) @@ TestAspect.withLiveSystem @@ TestAspect.samples(4)
 
   /** One timestamped build of a snapshot line. A higher build is a later stamp. */
   final case class Stamp(line: ShipNumber, build: Int):
-    def pointer: String = SnapshotPointer(line).render
-    def render: String  = f"${line.render}-20261107.0100$build%02d-$build"
+    def channel: LauncherChannel = LauncherChannel.Line(SnapshotPointer(line))
+    def render: String           = f"${line.render}-20261107.0100$build%02d-$build"
 
   final case class Release(number: ShipNumber, clients: Boolean)
 
@@ -272,7 +272,8 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
   private def bundle(version: String, clients: Boolean): List[(String, String)] =
     val jar      = s"jar $version\n"
     val binaries =
-      if clients then platforms.map(platform => platform -> s"client $version $platform\n") else Nil
+      if clients then DistPlatform.values.toList.map(platform => platform -> s"client $version ${platform.token}\n")
+      else Nil
     val manifest = DistLayout.manifestJson(
       version,
       sha(jar),
@@ -287,10 +288,6 @@ object ShimUpdateLawSpec extends ZIOSpecDefault:
   private def clientless(version: String)(line: String): Boolean =
     line.startsWith(s"histos $version has no prebuilt client for ") &&
       line.endsWith(". java -jar will run. --compile-client links one when clang is available.")
-
-  private val platforms = List("linux-x86_64", "linux-aarch64", "macos-aarch64", "macos-x86_64")
-
-  private val order: Ordering[ShipNumber] = Ordering.by(number => (number.major, number.minor, number.patch))
 
   private val line020    = ShipNumber("0.2.0")
   private val release021 = ShipNumber("0.2.1")

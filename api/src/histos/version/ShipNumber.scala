@@ -9,6 +9,8 @@ final case class ShipNumber private (major: Int, minor: Int, patch: Int):
 object ShipNumber:
   given CanEqual[ShipNumber, ShipNumber] = CanEqual.derived
 
+  given Ordering[ShipNumber] = Ordering.by(number => (number.major, number.minor, number.patch))
+
   /** A literal (`ShipNumber("1.4.2")`), rejected at compile time when it is not a ship number. */
   inline def apply(inline raw: String): ShipNumber = ${ ShipNumberMacro.literal('raw) }
 

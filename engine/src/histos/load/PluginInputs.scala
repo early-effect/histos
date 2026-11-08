@@ -1,6 +1,6 @@
 package histos.load
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{
   ApiDigest,
   ContentHash,
@@ -100,7 +100,7 @@ private[load] object PluginInputs:
             )
           case Some(value) =>
             val sha =
-              Sha256.of(Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8)))
+              Sha256Digest.of(Chunk.fromArray(value.getBytes(StandardCharsets.UTF_8)))
             pair(
               s"in:env:${name.value}",
               InputValue.Hash(sha),
@@ -182,7 +182,7 @@ private[load] object PluginInputs:
             s"${item.value} ${target.token} ${sha.value}"
           )
         lines.map: found =>
-          Sha256.of(
+          Sha256Digest.of(
             Chunk.fromArray(
               found.mkString("\n").getBytes(StandardCharsets.UTF_8)
             )
@@ -198,7 +198,7 @@ private[load] object PluginInputs:
         case true  =>
           ZIO
             .attemptBlocking(
-              Sha256.of(Chunk.fromArray(Files.readAllBytes(file)))
+              Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(file)))
             )
             .orElseFail(missing(path.value))
 
@@ -217,9 +217,9 @@ private[load] object PluginInputs:
             finally walk.close()
         val lines = files.map: path =>
           val rel = root.relativize(path).toString.replace('\\', '/')
-          val sha = Sha256.of(Chunk.fromArray(Files.readAllBytes(path))).value
+          val sha = Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(path))).value
           s"$rel $sha"
-        Sha256.of(
+        Sha256Digest.of(
           Chunk.fromArray(lines.mkString("\n").getBytes(StandardCharsets.UTF_8))
         )
       }
@@ -247,7 +247,7 @@ private[load] object PluginInputs:
         case PluginFile.Jar       =>
           ZIO
             .attemptBlocking(
-              Sha256.of(Chunk.fromArray(Files.readAllBytes(file)))
+              Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(file)))
             )
             .orElseFail(missing(path))
             .flatMap(byContent)
@@ -278,7 +278,7 @@ private[load] object PluginInputs:
     Sha256.from(hex) match
       case Right(sha) => sha
       case Left(_)    =>
-        Sha256.of(Chunk.fromArray(hex.getBytes(StandardCharsets.UTF_8)))
+        Sha256Digest.of(Chunk.fromArray(hex.getBytes(StandardCharsets.UTF_8)))
 
   private def content(sha: Sha256): ContentHash =
     ContentHash.from(sha.value) match

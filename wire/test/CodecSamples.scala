@@ -702,6 +702,7 @@ object CodecSamples:
     LocalPublishError.Runtime(noSources),
     LocalPublishError.Pack(core, scala3, Platform.Jvm, AssemblyError.NoClasses),
     LocalPublishError.MissingClasses(core, scala3, Platform.Native),
+    LocalPublishError.MissingClient(ship, path),
   )
 
   val runMisses: List[RunMiss] = List(
@@ -806,6 +807,7 @@ object CodecSamples:
     CiError.NoDefaultBranch,
     CiError.JobTimeout(2),
     CiError.LlvmChecksum("clang.tar.gz"),
+    CiError.SnapshotClients(ship),
   )
 
   val scriptErrors: List[ScriptError] = List(

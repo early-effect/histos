@@ -1,7 +1,7 @@
 package histos.load
 
 import histos.cache.ContentStore
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.pack.ClassJar
 import histos.plugin.{ApiDigest, HistosPlugin, LinkStrategy, PluginCoordinate, PluginLoadError}
 import histos.resolve.{
@@ -41,28 +41,30 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
         val store = ContentStore.in(root.resolve("store"))
         val run   =
           for
-            api     <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
-            bytes   <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
-            sha     = Sha256.of(Chunk.fromArray(bytes))
+            api   <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+            bytes <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
+            sha = Sha256Digest.of(Chunk.fromArray(bytes))
             launcher <- ZIO.fromEither(ApiDigest.from(sha.value)).catchAll(error => ZIO.dieMessage(error.message))
-            version <- BuildCompiler.version.catchAll(error => ZIO.dieMessage(error.message))
+            version  <- BuildCompiler.version.catchAll(error => ZIO.dieMessage(error.message))
             published = ArtifactName.of(dep, version, Platform.Jvm)
             mismatch <- pack(root.resolve("mismatch.jar"), wrong.value)
             leaked   <- pack(root.resolve("leak.jar"), launcher.value, leak = true)
             matched  <- pack(root.resolve("match.jar"), launcher.value, leak = false)
             sources  <- pack(root.resolve("sources.jar"), launcher.value, leak = false)
-            _        <- Workspace.writeString(root.resolve("histos.scala"), pathHeader).catchAll(error => ZIO.dieMessage(error.message))
-            _        <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.dieMessage("fetched"))
-            _        <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            _        <- Workspace
+              .writeString(root.resolve("histos.scala"), pathHeader)
+              .catchAll(error => ZIO.dieMessage(error.message))
+            _ <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.dieMessage("fetched"))
+            _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
               ZIO.dieMessage("sources")
             )
             missingDir <- load(root, api, DependencyLock(Nil))
-            _          <- Workspace.writeString(root.resolve("histos.scala"), depHeader).catchAll(error =>
-              ZIO.dieMessage(error.message)
-            )
-            unlocked   <- load(root, api, DependencyLock(Nil))
-            apiLink    <- load(root, api, lock(published, LinkStrategy.Api, None, sha))
-            _          <- stub[Resolve](_.fetch(any[LockedArtifact]))(
+            _          <- Workspace
+              .writeString(root.resolve("histos.scala"), depHeader)
+              .catchAll(error => ZIO.dieMessage(error.message))
+            unlocked <- load(root, api, DependencyLock(Nil))
+            apiLink  <- load(root, api, lock(published, LinkStrategy.Api, None, sha))
+            _        <- stub[Resolve](_.fetch(any[LockedArtifact]))(
               ZIO.succeed(fetched("not-the-plugin", root.resolve("nope.jar"), sha))
             )
             unnamed  <- load(root, api, lock(published, LinkStrategy.ExactBinary, None, sha))
@@ -74,8 +76,8 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
             noSource <- load(root, api, lock(published, LinkStrategy.Source, None, sha))
             _        <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.succeed(fetched(published, mismatch, sha)))
             either   <- load(root, api, lock(published, LinkStrategy.BinaryOrSource, None, sha))
-            wanted     = LockedArtifact("org.example", "demo", "1.0.0", sha, Repository.Central)
-            _          <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            wanted = LockedArtifact("org.example", "demo", "1.0.0", sha, Repository.Central)
+            _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
               ZIO.succeed(fetched("demo", sources, otherSha))
             )
             checksum <- load(root, api, lock(published, LinkStrategy.Source, Some(wanted), sha))
@@ -100,16 +102,18 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
         val store = ContentStore.in(root.resolve("store"))
         val run   =
           for
-            api      <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
-            bytes    <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
-            sha      = Sha256.of(Chunk.fromArray(bytes))
+            api   <- apiJar(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+            bytes <- ZIO.attemptBlocking(Files.readAllBytes(api)).orDie
+            sha = Sha256Digest.of(Chunk.fromArray(bytes))
             launcher <- ZIO.fromEither(ApiDigest.from(sha.value)).catchAll(error => ZIO.dieMessage(error.message))
             version  <- BuildCompiler.version.catchAll(error => ZIO.dieMessage(error.message))
             published = ArtifactName.of(dep, version, Platform.Jvm)
-            jar      <- pack(root.resolve("match.jar"), launcher.value, leak = false)
-            _        <- Workspace.writeString(root.resolve("histos.scala"), build).catchAll(error => ZIO.dieMessage(error.message))
-            _        <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.succeed(fetched(published, jar, sha)))
-            _        <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            jar <- pack(root.resolve("match.jar"), launcher.value, leak = false)
+            _   <- Workspace
+              .writeString(root.resolve("histos.scala"), build)
+              .catchAll(error => ZIO.dieMessage(error.message))
+            _ <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.succeed(fetched(published, jar, sha)))
+            _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
               ZIO.dieMessage("sources")
             )
             defined <- load(root, api, lock(published, LinkStrategy.ExactBinary, None, sha))
@@ -119,8 +123,7 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
             )
           )
         run.provideSomeLayer[Scope](wired(store))
-      }
-    ,
+      },
   )
 
   private val missingPath = ProjectPath.trusted("plugins/missing")
@@ -174,18 +177,16 @@ object LoaderLinkLawSpec extends ZIOSpecDefault:
     ResolvedArtifact(dep.organization, name, dep.revision, path, sha, Repository.Central)
 
   private def pack(path: Path, version: String, leak: Boolean = false): zio.UIO[Path] =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        val out = new ZipOutputStream(Files.newOutputStream(path))
-        try
-          write(out, HistosPlugin.EntryResourceName, "demo.Plugin$\n")
-          write(out, ApiDigest.resource, version + "\n")
-          if leak then write(out, "histos/Foo.class", "x")
-        finally out.close()
-        path
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try
+        write(out, HistosPlugin.EntryResourceName, "demo.Plugin$\n")
+        write(out, ApiDigest.resource, version + "\n")
+        if leak then write(out, "histos/Foo.class", "x")
+      finally out.close()
+      path
+    }.orDie
 
   private def write(out: ZipOutputStream, name: String, text: String): Unit =
     out.putNextEntry(new ZipEntry(name))

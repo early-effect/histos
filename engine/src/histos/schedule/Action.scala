@@ -1,6 +1,6 @@
 package histos.schedule
 
-import histos.jdk.Sha256
+import histos.jdk.{Sha256, Sha256Digest}
 import histos.plugin.{Need, RepoPath, Seal}
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
@@ -11,7 +11,7 @@ import zio.{Chunk, IO, UIO, ZIO}
 /** Hash of an action. The digest value stays data. */
 object ActionDigest:
   def ofBytes(bytes: Chunk[Byte]): Digest =
-    Digest.trusted(Sha256.of(bytes).value)
+    Digest.trusted(Sha256Digest.of(bytes).value)
 
   def of(action: Action, dependencyDigests: Map[ActionId, Digest]): Digest =
     val inputs = action.inputs
