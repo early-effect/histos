@@ -807,6 +807,12 @@ object ScheduleLawSpec extends ZIOSpecDefault:
   private def finished[E](events: Chunk[StepEvent[E]]): Chunk[Source] =
     events.collect { case StepEvent.Finished(_, source, _) => source }
 
+  /** Started is not enough: the queue still holds the terminal event until a consumer takes it. */
+  private def terminal[E](events: Chunk[StepEvent[E]]): Boolean =
+    events.exists:
+      case StepEvent.Started(_) => false
+      case _                    => true
+
   private final case class Seen(
       gets: Ref[Int],
       puts: Ref[Chunk[String]],
@@ -862,12 +868,19 @@ object ScheduleLawSpec extends ZIOSpecDefault:
       pair <- ZIO.serviceWithZIO[Histos]: histos =>
         ZIO.scoped:
           for
-            running <- histos.start(step)
-            found   <- Ref.make(Chunk.empty[StepEvent[ScheduleError[E]]])
-            _       <- running.events.tap(event => found.update(_ :+ event)).runDrain.fork
+            running  <- histos.start(step)
+            found    <- Ref.make(Chunk.empty[StepEvent[ScheduleError[E]]])
+            recorded <- Promise.make[Nothing, Chunk[StepEvent[ScheduleError[E]]]]
+            _        <- running.events
+              .tap(event =>
+                found.updateAndGet(_ :+ event).flatMap { chunk =>
+                  ZIO.when(terminal(chunk))(recorded.succeed(chunk)).unit
+                }
+              )
+              .runDrain
+              .fork
             outcome <- running.outcome
-            _       <- ZIO.yieldNow.repeat(Schedule.recurs(32))
-            events  <- found.get
+            events  <- recorded.await
           yield (outcome, events)
     yield pair
 
