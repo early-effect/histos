@@ -272,11 +272,17 @@ object Signer:
         payload.toString,
       )
 
+    /** A child that exits while the passphrase is written closes the pipe. That exit is the status. */
     private def feed(process: Process): Int =
       val stdin = process.getOutputStream
-      stdin.write(passphrase.getBytes(StandardCharsets.UTF_8))
-      stdin.write("\n".getBytes(StandardCharsets.UTF_8))
-      stdin.close()
+      try
+        stdin.write(passphrase.getBytes(StandardCharsets.UTF_8))
+        stdin.write("\n".getBytes(StandardCharsets.UTF_8))
+        stdin.close()
+      catch
+        case _: IOException =>
+          try stdin.close()
+          catch case _: IOException => ()
       process.waitFor()
 
     private def read(signed: Path): IO[SignerError, Armor] =
