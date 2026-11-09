@@ -16,8 +16,10 @@ object QuickAnswerLawSpec extends ZIOSpecDefault:
   def spec = suite("quick answer")(
     test("a missing class directory is uncompiled"):
       inRepo: (repo, graph, mod) =>
-        QuickAnswer.read(repo, mod, List(mod), scala3, Jvm, graph).map: answer =>
-          assertTrue(answer == QuickAnswer.Uncompiled)
+        QuickAnswer
+          .read(repo, mod, List(mod), scala3, Jvm, graph)
+          .map: answer =>
+            assertTrue(answer == QuickAnswer.Uncompiled)
     ,
     test("an empty class directory with no records is uncompiled"):
       inRepo: (repo, graph, mod) =>
@@ -51,7 +53,7 @@ object QuickAnswerLawSpec extends ZIOSpecDefault:
           _      <- emptyDir(classes(repo))
           _      <- touch(records(repo).resolve("demo").resolve("Hello$$anon"))
           answer <- QuickAnswer.read(repo, mod, List(mod), scala3, Jvm, graph)
-        yield assertTrue(answer == QuickAnswer.Named(Nil, Nil, List("demo.Hello$$anon")))
+        yield assertTrue(answer == QuickAnswer.Named(Nil, Nil, List("demo.Hello$$anon"))),
   )
 
   private def inRepo(

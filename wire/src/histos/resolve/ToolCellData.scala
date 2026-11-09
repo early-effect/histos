@@ -4,7 +4,8 @@ import histos.{Dep, DepKind, JsVersion, NativeVersion, ScalaVersion, JsEnv}
 
 enum ToolRole:
   case Compiler, Semanticdb, JsLibraries, JsLinker, JsEnvironment, JsSuite,
-    JsTestBridge, NativeLibraries, NativeLinker, NativeSuite, NativeTestInterface, Scoverage
+    JsTestBridge, NativeLibraries, NativeLinker, NativeSuite, NativeTestInterface, Scoverage, ScalafmtDynamic,
+    ScalafmtCore
   def token: String = productPrefix.toLowerCase(java.util.Locale.ROOT)
 
 object ToolRole:

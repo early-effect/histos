@@ -4,4 +4,3 @@ package histos.jdk
 object HostSupport:
   val refused: String =
     "Histos runs on macOS and Linux. On Windows, use WSL. A native Windows build may come later."
-end HostSupport

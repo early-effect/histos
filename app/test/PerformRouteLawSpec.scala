@@ -31,8 +31,8 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
 
   def spec = suite("perform route laws")(
     test("a tracked inspect with arguments names the run and then refuses"):
-      val loaded = Right(Some(LoadedBuild(graph, Calls.quiet)))
-      val args   = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
+      val loaded  = Right(Some(LoadedBuild(graph, Calls.quiet)))
+      val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for
           _             <- TestRandom.feedUUIDs(runId)
@@ -61,7 +61,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
         ".histos/provider",
         ".histos/provider-src",
       ).mkString("\n")
-      val full = s"$clean\ncontent-store entries for this repo would be forgotten"
+      val full    = s"$clean\ncontent-store entries for this repo would be forgotten"
       val program =
         for
           (preview, _) <- drive(Right(None), Call.PreviewClean(Nil))
@@ -77,7 +77,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       val args    = PluginArgs(List(NamedText(ParamName("name"), "ada")), Set.empty)
       val program =
         for
-          (names, _) <- drive(loaded, Call.Task("inspect", PluginArgs.empty))
+          (names, _)   <- drive(loaded, Call.Task("inspect", PluginArgs.empty))
           (refused, _) <- drive(loaded, Call.Task("inspect", args))
           (empty, _)   <- drive(loaded, Call.Task("", PluginArgs.empty))
         yield assertTrue(
@@ -94,19 +94,19 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
         val failure = CacheError.Io(IoFailure(Path.of("cas"), IoFault.Read))
         val program =
           for
-            root <- ZIO.service[Path]
-            gone <- LawDir.child(root, "clean")
-            kept <- LawDir.child(root, "clean-fail")
-            _    <- plant(gone)
-            _    <- plant(kept)
-            _    <- stub[CompileMemo](_.forget)(ZIO.unit)
-            _    <- stub[Compilers](_.drop)(ZIO.unit)
-            _    <- stubForget(gone, ZIO.die(new IllegalStateException("clean forgets the store")))
+            root         <- ZIO.service[Path]
+            gone         <- LawDir.child(root, "clean")
+            kept         <- LawDir.child(root, "clean-fail")
+            _            <- plant(gone)
+            _            <- plant(kept)
+            _            <- stub[CompileMemo](_.forget)(ZIO.unit)
+            _            <- stub[Compilers](_.drop)(ZIO.unit)
+            _            <- stubForget(gone, ZIO.die(new IllegalStateException("clean forgets the store")))
             (cleaned, _) <- drive(Right(None), Call.Clean(Nil), where = gone)
             removed      <- absent(gone)
             _            <- stubForget(kept, ZIO.fail(failure))
-            (failed, _) <- drive(Right(None), Call.CleanFull, where = kept)
-            wiped       <- absent(kept)
+            (failed, _)  <- drive(Right(None), Call.CleanFull, where = kept)
+            wiped        <- absent(kept)
           yield assertTrue(
             cleaned == Chunk(Message.Event(BuildEvent.Out("cleaned")), Message.Done(CallResult.reported())),
             removed,
@@ -145,7 +145,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
 
   private def services =
     stubbed[Resolve] ++ stubbed[Loader] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ stubbed[CompileMemo] ++
-      stubbed[ResolutionService]
+      stubbed[ResolutionService] ++ stubbed[histos.format.Formatters]
 
   private def stubForget(
       repo: Path,
@@ -157,15 +157,13 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
     }
 
   private def plant(repo: Path): UIO[Unit] =
-    ZIO
-      .attemptBlocking {
-        val classes = repo.resolve(".histos").resolve("classes")
-        Files.createDirectories(classes)
-        Files.writeString(classes.resolve("keep.txt"), "x")
-        Files.writeString(Products.observation(repo), "{}")
-        ()
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      val classes = repo.resolve(".histos").resolve("classes")
+      Files.createDirectories(classes)
+      Files.writeString(classes.resolve("keep.txt"), "x")
+      Files.writeString(Products.observation(repo), "{}")
+      ()
+    }.orDie
 
   private def absent(repo: Path): UIO[Boolean] =
     ZIO
@@ -182,7 +180,7 @@ object PerformRouteLawSpec extends ZIOSpecDefault:
       track: Boolean = false,
       where: Path = repo,
   ): ZIO[
-    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService,
+    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters,
     ServerError,
     (Chunk[Message], Map[RunId, Fiber[ServerError, Unit]]),
   ] =

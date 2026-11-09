@@ -13,9 +13,11 @@ object HygieneChecks:
   def publishesPages(graph: ProjectGraph): Boolean =
     graph.plugins.exists: plugin =>
       plugin.contribution.jobs.exists: job =>
-        job.render(plugin.id).exists:
-          case JobRender.Site(_, _) => true
-          case _                    => false
+        job
+          .render(plugin.id)
+          .exists:
+            case JobRender.Site(_, _) => true
+            case _                    => false
 
   def credentials(
       catalog: Catalog,
@@ -24,7 +26,7 @@ object HygieneChecks:
       auth: CentralProbe.Auth,
   ): Outcome =
     catalog match
-      case Catalog.Empty => Outcome.Ok(credentialsId, "no catalog")
+      case Catalog.Empty    => Outcome.Ok(credentialsId, "no catalog")
       case Catalog.Lines(_) =>
         val user     = env.get("SONATYPE_USERNAME").map(_.trim).filter(_.nonEmpty)
         val password = env.get("SONATYPE_PASSWORD").filter(_.nonEmpty)

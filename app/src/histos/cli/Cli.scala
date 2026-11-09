@@ -89,6 +89,7 @@ enum Command:
   case CachePromote(from: CacheNamespace, to: CacheNamespace)
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
+  case Fmt(targets: histos.format.FormatTargets, mode: histos.format.FormatMode)
   case Launcher(action: LauncherAction)
   case Reload
   case Reboot
@@ -114,6 +115,20 @@ enum Command:
   case Deps(action: DepsAction)
   case Setup(from: Option[String], fix: Boolean, yes: Boolean)
   case Help(words: List[String])
+
+/** Why `histos fmt` arguments are not a format request. */
+enum FmtUsage:
+  case NoFiles
+  case Flag(raw: String)
+  case Absolute(raw: String)
+  case BadPath(raw: String)
+
+  def message: String = this match
+    case NoFiles       => "fmt --file names at least one file"
+    case Flag(raw)     => s"fmt does not take $raw\nhistos help fmt"
+    case Absolute(raw) => s"fmt --file takes a path relative to the repository, not $raw"
+    case BadPath(raw)  => s"'$raw' is not a path"
+end FmtUsage
 
 enum DepsAction:
   case Check
@@ -143,6 +158,7 @@ enum CliParseError:
   case WatchCommand(detail: String)
   case PublishForm
   case Rejected
+  case Fmt(usage: FmtUsage)
 
   def message: String = this match
     case Help                        => histos.cli.Help.grouped
@@ -165,7 +181,8 @@ enum CliParseError:
     case WatchCommand(detail) => detail
     case PublishForm          =>
       "publish is snapshots, release, assets, promote, or drop"
-    case Rejected => "usage: histos help"
+    case Rejected   => "usage: histos help"
+    case Fmt(usage) => usage.message
 
   def diagnose: histos.doctor.Diagnostic = this match
     case Help =>
@@ -567,8 +584,11 @@ object Cli:
         attach(repo, Call.CacheClean(mode), cacheClean(mode))
       case Command.CachePromote(from, to) =>
         attach(repo, Call.CachePromote(from, to), cachePromote(from, to))
-      case Command.Resolve(action)  => resolve(repo, apiJar, action)
-      case Command.Workflow(action) => workflow(repo, apiJar, action)
+      case Command.Resolve(action)    => resolve(repo, apiJar, action)
+      case Command.Workflow(action)   => workflow(repo, apiJar, action)
+      case Command.Fmt(targets, mode) =>
+        val call = Call.Format(targets, mode)
+        attach(repo, call, locally(repo, apiJar, call))
       case Command.Launcher(action) =>
         attach(repo, Call.Launcher(action), launcherLocal(repo, action))
       case Command.Reload                   => reload(repo)
@@ -805,7 +825,7 @@ object Cli:
                             say,
                             cliEdges(repo, apiJar, say),
                           )
-                          .provideSomeLayer(zio.ZLayer.succeed(report))
+                          .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                       )
                     )
                   }
@@ -2193,7 +2213,9 @@ object Cli:
         )
       case Command.Clean(projects) => Some(Call.Clean(projects))
       case Command.CleanFull       => Some(Call.CleanFull)
-      case _                       => None
+      case Command.Fmt(targets @ (histos.format.FormatTargets.Build | histos.format.FormatTargets.Projects(_)), mode) =>
+        Some(Call.Format(targets, mode))
+      case _ => None
 
   private def dispatched(command: Command)(use: Call => URIO[Scope, Completed]): URIO[Scope, Completed] =
     callOf(command) match
@@ -2241,6 +2263,8 @@ object Cli:
         dispatched(command)(call => compileAt(repo, projects, compileServices(repo, call)))
       case Command.Client =>
         served(repo, Call.Client)
+      case Command.Fmt(targets, mode) =>
+        served(repo, Call.Format(targets, mode))
       case Command.Clean(projects) =>
         dispatched(command)(call =>
           attach(

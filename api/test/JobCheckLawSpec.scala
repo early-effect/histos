@@ -20,7 +20,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
       assertTrue(
         names(Projects()) == Right(Set("workflow", "affected")),
         names(Projects(core)) == Right(Set("workflow", "affected", "test", "cache-seed")),
-        names(Projects.docCheck(core)) == Right(Set("workflow", "affected", "test", "cache-seed", "doc")),
+        names(Projects.docCheck(core)) == Right(Set("workflow", "affected", "test", "cache-seed", "scaladoc")),
         names(Projects.coverage()(core)) == Right(Set("workflow", "affected", "test", "cache-seed", "coverage")),
         names(Projects(ships(row), core)) == Right(Set("workflow", "affected", "test", "cache-seed", "versions")),
         names(Projects(client)) == Right(Set("workflow", "affected", "test", "cache-seed", "launcher")),
@@ -47,7 +47,7 @@ object JobCheckLawSpec extends ZIOSpecDefault:
       val nightly = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("test")))
       val doubled = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("test"), JobName("test")))
       val itself  = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("nightly")))
-      val doc     = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("doc")))
+      val doc     = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("scaladoc")))
       val cover   = TaskJob(JobName("nightly"), TaskName("echo"), needs = List(JobName("coverage")))
       assertTrue(
         fault(arrange(List(nightly))) == "UnknownNeed",

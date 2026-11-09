@@ -17,6 +17,12 @@ object Help:
     Entry("cleanFull", "build", "histos cleanFull", "Delete every output, including the cache."),
     Entry("assembly", "build", "histos assembly [path]", "Write one jar of the application."),
     Entry("client", "build", "histos client", "Link the native client."),
+    Entry(
+      "fmt",
+      "build",
+      "histos fmt [--check] [project ... | --file <path> ...]",
+      "Format with the locked scalafmt the build declares. No project is every module and histos.scala. --check writes nothing and fails on an unformatted file.",
+    ),
     Entry("test", "test", "histos test [--affected <json>] [project ...]", "Run the selected suites."),
     Entry(
       "coverage",
@@ -110,6 +116,7 @@ object Help:
     "cleanFull",
     "assembly",
     "client",
+    "fmt",
     "test",
     "coverage",
     "testOnly",

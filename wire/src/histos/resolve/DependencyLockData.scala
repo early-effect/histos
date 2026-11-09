@@ -1,6 +1,6 @@
 package histos.resolve
 
-import histos.{Platform}
+import histos.Platform
 
 /** Which classpath a lock cell is. Compile is published. Test is not. */
 enum ClasspathScope:

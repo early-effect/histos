@@ -219,7 +219,7 @@ jobs:
           fi
       - run: ./histos doctor --preflight versions
       - run: "./histos run versions"
-  doc:
+  scaladoc:
     needs: toolchain
     if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
     runs-on: ubuntu-26.04
@@ -248,7 +248,7 @@ jobs:
             mv "$jar" dist/histos.jar
             mv "$sum" .histos/assembly.sha256
           fi
-      - run: ./histos doctor --preflight doc
+      - run: ./histos doctor --preflight scaladoc
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: llvm
         with:
@@ -282,6 +282,41 @@ jobs:
           path: "~/.cache/histos"
           key: "histos-store-${{ case(github.event_name == 'pull_request', format('pr-{0}', github.event.pull_request.number), 'main') }}-${{ runner.os }}-${{ runner.arch }}"
       - run: "./histos run doc"
+  format:
+    needs: toolchain
+    if: "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: "needs.toolchain.outputs.built == 'true'"
+        with:
+          name: histos-bootstrap
+          path: histos-bootstrap
+      - run: |
+          if [ -f histos-bootstrap/dist/histos.jar ]; then
+            jar=histos-bootstrap/dist/histos.jar
+            sum=histos-bootstrap/dist/assembly.sha256
+          else
+            jar=histos-bootstrap/histos.jar
+            sum=histos-bootstrap/assembly.sha256
+          fi
+          if [ -f "$jar" ] && [ -f "$sum" ]; then
+            mkdir -p dist .histos
+            mv "$jar" dist/histos.jar
+            mv "$sum" .histos/assembly.sha256
+          fi
+      - run: ./histos doctor --preflight format
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: "~/.cache/coursier/v1"
+          key: "coursier-${{ hashFiles('histos.scala') }}-${{ runner.os }}-${{ runner.arch }}"
+      - run: "./histos fmt --check"
   cache-seed:
     needs: toolchain
     if: "github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"

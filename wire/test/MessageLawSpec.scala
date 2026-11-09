@@ -139,6 +139,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           read,
           "'x' is not an exact plugin coordinate",
           "resolve failed while fetch",
+          "/work/repo has no top-level version line",
         ),
         resolveErrors.map(error => noted(error.diagnose)) == List(
           ("resolve.failed", "histos resolve --update"),
@@ -157,6 +158,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           ("resolve.failed", "histos resolve --update"),
           ("resolve.failed", "histos resolve --update"),
           ("resolve.failed", "histos resolve --update"),
+          ("format.config", "histos resolve --update"),
         ),
       )
     ,

@@ -32,7 +32,7 @@ import zio.{Scope, ZIO, ZLayer}
 object BspTargetLawSpec extends ZIOSpecDefault:
   private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("bsplaw")
-  private val jdk = JdkRuntime(
+  private val jdk     = JdkRuntime(
     Path.of("jdk"),
     JdkVersion.trusted("21", JdkMajor.trusted(21)),
     RuntimeIdentity.Local(Path.of("jdk"), Sha256.trusted("ab")),
@@ -41,111 +41,120 @@ object BspTargetLawSpec extends ZIOSpecDefault:
   def spec = suite("bsp target laws")(
     test("a module and the build file are targets, and each source file is named"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-bsp-target").flatMap: dir =>
-          val source   = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-          val build    = dir.resolve("histos.scala")
-          val pin      = dir.resolve(LauncherPin.file)
-          val mainUri  = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
-          val buildUri = Bsp.buildUri(dir)
-          val classes  =
-            GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toUri.toString
-          val program =
-            for
-              _        <- Workspace.createDirectories(parentOf(source))
-              _        <- Workspace.writeString(source, "object Hello\n")
-              _        <- Workspace.writeString(build, "// law\n")
-              _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
-              runtimes <- Runtimes.read(Calls.idleMachine, None)
-              session  <- Bsp.open(dir, graph, jdk, runtimes)
-              _        <- ask(session, request(1, "build/initialize"))
-              _        <- ask(session, note("build/initialized"))
-              listed   <- ask(session, request(2, "workspace/buildTargets"))
-              sourced  <- ask(session, asked(3, "buildTarget/sources", List(mainUri, buildUri)))
-              opted    <- ask(session, asked(4, "buildTarget/scalacOptions", List(mainUri, buildUri)))
-              unknown  <- ask(session, asked(5, "buildTarget/sources", List("file:///nope")))
-              missing  <- ask(session, request(6, "buildTarget/sources"))
-            yield
-              val targets = rpcOk[Rpc.BuildTargetsResult](listed).map(_.result.targets)
-              val files   = rpcOk[Rpc.SourcesResult](sourced).map(_.result.items.flatMap(_.sources))
-              val options = rpcOk[Rpc.ScalacOptionsResult](opted).map(_.result.items)
-              val module  = targets.toOption.flatMap(_.find(_.displayName == lawName.value))
-              val file    = targets.toOption.flatMap(_.find(_.displayName == "histos.scala"))
-              val mainOpt = options.toOption.flatMap(_.find(_.target.uri == mainUri))
-              val buildOpt = options.toOption.flatMap(_.find(_.target.uri == buildUri))
-              assertTrue(
-                targets.map(_.map(_.displayName).sorted) == Right(List(lawName.value, "histos.scala")),
-                module.exists(lawTarget(mainUri)),
-                file.exists(buildTarget(buildUri)),
-                files.exists(rows =>
-                  rows.exists(item => item.uri.endsWith("Hello.scala") && item.kind == 1 && !item.generated) &&
-                    rows.exists(item => item.uri.endsWith("histos.scala") && item.kind == 1 && !item.generated)
-                ),
-                mainOpt.exists(item =>
-                  item.classDirectory == classes &&
-                    item.options.contains("-Xsemanticdb") &&
-                    item.classpath.nonEmpty
-                ),
-                buildOpt.exists(item => item.options.contains("-Xsemanticdb") && item.options.contains("-sourceroot")),
-                rpcError(unknown).exists(_.error.message == "unknown build target"),
-                rpcError(missing).exists(_.error.message == "bsp params are required"),
-              )
-          program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
+        Workspace
+          .work("histos-bsp-target")
+          .flatMap: dir =>
+            val source =
+              dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val build    = dir.resolve("histos.scala")
+            val pin      = dir.resolve(LauncherPin.file)
+            val mainUri  = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
+            val buildUri = Bsp.buildUri(dir)
+            val classes  =
+              GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toUri.toString
+            val program =
+              for
+                _        <- Workspace.createDirectories(parentOf(source))
+                _        <- Workspace.writeString(source, "object Hello\n")
+                _        <- Workspace.writeString(build, "// law\n")
+                _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
+                runtimes <- Runtimes.read(Calls.idleMachine, None)
+                session  <- Bsp.open(dir, graph, jdk, runtimes)
+                _        <- ask(session, request(1, "build/initialize"))
+                _        <- ask(session, note("build/initialized"))
+                listed   <- ask(session, request(2, "workspace/buildTargets"))
+                sourced  <- ask(session, asked(3, "buildTarget/sources", List(mainUri, buildUri)))
+                opted    <- ask(session, asked(4, "buildTarget/scalacOptions", List(mainUri, buildUri)))
+                unknown  <- ask(session, asked(5, "buildTarget/sources", List("file:///nope")))
+                missing  <- ask(session, request(6, "buildTarget/sources"))
+              yield
+                val targets  = rpcOk[Rpc.BuildTargetsResult](listed).map(_.result.targets)
+                val files    = rpcOk[Rpc.SourcesResult](sourced).map(_.result.items.flatMap(_.sources))
+                val options  = rpcOk[Rpc.ScalacOptionsResult](opted).map(_.result.items)
+                val module   = targets.toOption.flatMap(_.find(_.displayName == lawName.value))
+                val file     = targets.toOption.flatMap(_.find(_.displayName == "histos.scala"))
+                val mainOpt  = options.toOption.flatMap(_.find(_.target.uri == mainUri))
+                val buildOpt = options.toOption.flatMap(_.find(_.target.uri == buildUri))
+                assertTrue(
+                  targets.map(_.map(_.displayName).sorted) == Right(List(lawName.value, "histos.scala")),
+                  module.exists(lawTarget(mainUri)),
+                  file.exists(buildTarget(buildUri)),
+                  files.exists(rows =>
+                    rows.exists(item => item.uri.endsWith("Hello.scala") && item.kind == 1 && !item.generated) &&
+                      rows.exists(item => item.uri.endsWith("histos.scala") && item.kind == 1 && !item.generated)
+                  ),
+                  mainOpt.exists(item =>
+                    item.classDirectory == classes &&
+                      item.options.contains("-Xsemanticdb") &&
+                      item.classpath.nonEmpty
+                  ),
+                  buildOpt
+                    .exists(item => item.options.contains("-Xsemanticdb") && item.options.contains("-sourceroot")),
+                  rpcError(unknown).exists(_.error.message == "unknown build target"),
+                  rpcError(missing).exists(_.error.message == "bsp params are required"),
+                )
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
     ,
     test("compiling the module writes its class, and a type error is not success"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-bsp-compile").flatMap: dir =>
-          val source = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-          val pin    = dir.resolve(LauncherPin.file)
-          val uri    = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
-          val buildUri = Bsp.buildUri(dir)
-          val classFile =
-            GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Hello.class")
-          val work =
-            Program.workDir(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toString
-          val program =
-            for
-              loaded  <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk   <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              _        <- Workspace.createDirectories(parentOf(source))
-              _        <- Workspace.writeString(
-                source,
-                "object Hello:\n  def main(args: Array[String]): Unit = ()\n",
-              )
-              _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
-              runtimes <- Runtimes.read(machine, None)
-              session  <- Bsp.open(dir, graph, jdk, runtimes)
-              _        <- ask(session, request(1, "build/initialize"))
-              _        <- ask(session, note("build/initialized"))
-              compiled <- ask(session, asked(2, "buildTarget/compile", List(uri)))
-              wrote    <- ZIO.attempt(Files.isRegularFile(classFile)).orDie
-              mains    <- ask(session, asked(4, "buildTarget/scalaMainClasses", List(uri)))
-              room     <- ask(session, asked(5, "buildTarget/jvmRunEnvironment", List(uri)))
-              refused  <- ask(session, asked(6, "buildTarget/jvmRunEnvironment", List(buildUri)))
-              _        <- Workspace.writeString(source, "object Hello:\n  def ready: Int = \"no\"\n")
-              broken   <- ask(session, asked(3, "buildTarget/compile", List(uri)))
-            yield
-              val ok      = rpcOk[Rpc.CompileResult](compiled).map(_.result.statusCode)
-              val bad     = rpcOk[Rpc.CompileResult](broken).map(_.result.statusCode)
-              val classes = rpcOk[Rpc.ScalaMainClassesResult](mains).map(_.result.items.flatMap(_.classes.map(_.className)))
-              val ran     = rpcOk[Rpc.JvmEnvironmentResult](room).toOption.flatMap(_.result.items.find(_.target.uri == uri))
-              assertTrue(
-                ok == Right(1),
-                wrote,
-                bad == Right(2),
-                classes == Right(List("Hello")),
-                ran.exists(item =>
-                  item.classpath.nonEmpty && item.workingDirectory == work &&
-                    item.environmentVariables.get("HISTOS_REPO").contains(dir.toAbsolutePath.normalize.toString)
-                ),
-                rpcError(refused).exists(_.error.message == "jvmRunEnvironment needs a main target"),
-              )
-          program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
+        Workspace
+          .work("histos-bsp-compile")
+          .flatMap: dir =>
+            val source =
+              dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val pin       = dir.resolve(LauncherPin.file)
+            val uri       = Bsp.mainUri(dir, lawName.value, scala3, Platform.Jvm)
+            val buildUri  = Bsp.buildUri(dir)
+            val classFile =
+              GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Hello.class")
+            val work =
+              Program.workDir(dir, lawName, scala3, Platform.Jvm).toAbsolutePath.normalize.toString
+            val program =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                _ <- Workspace.createDirectories(parentOf(source))
+                _ <- Workspace.writeString(
+                  source,
+                  "object Hello:\n  def main(args: Array[String]): Unit = ()\n",
+                )
+                _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
+                runtimes <- Runtimes.read(machine, None)
+                session  <- Bsp.open(dir, graph, jdk, runtimes)
+                _        <- ask(session, request(1, "build/initialize"))
+                _        <- ask(session, note("build/initialized"))
+                compiled <- ask(session, asked(2, "buildTarget/compile", List(uri)))
+                wrote    <- ZIO.attempt(Files.isRegularFile(classFile)).orDie
+                mains    <- ask(session, asked(4, "buildTarget/scalaMainClasses", List(uri)))
+                room     <- ask(session, asked(5, "buildTarget/jvmRunEnvironment", List(uri)))
+                refused  <- ask(session, asked(6, "buildTarget/jvmRunEnvironment", List(buildUri)))
+                _        <- Workspace.writeString(source, "object Hello:\n  def ready: Int = \"no\"\n")
+                broken   <- ask(session, asked(3, "buildTarget/compile", List(uri)))
+              yield
+                val ok      = rpcOk[Rpc.CompileResult](compiled).map(_.result.statusCode)
+                val bad     = rpcOk[Rpc.CompileResult](broken).map(_.result.statusCode)
+                val classes =
+                  rpcOk[Rpc.ScalaMainClassesResult](mains).map(_.result.items.flatMap(_.classes.map(_.className)))
+                val ran =
+                  rpcOk[Rpc.JvmEnvironmentResult](room).toOption.flatMap(_.result.items.find(_.target.uri == uri))
+                assertTrue(
+                  ok == Right(1),
+                  wrote,
+                  bad == Right(2),
+                  classes == Right(List("Hello")),
+                  ran.exists(item =>
+                    item.classpath.nonEmpty && item.workingDirectory == work &&
+                      item.environmentVariables.get("HISTOS_REPO").contains(dir.toAbsolutePath.normalize.toString)
+                  ),
+                  rpcError(refused).exists(_.error.message == "jvmRunEnvironment needs a main target"),
+                )
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock)),
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def lawTarget(uri: String)(item: Rpc.BuildTarget): Boolean =
@@ -198,9 +207,7 @@ object BspTargetLawSpec extends ZIOSpecDefault:
       ResolutionService.pinned(pinned(lock))
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells =
-      LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells
-    )
+    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
 
   private def opened =
     Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++
@@ -238,7 +245,7 @@ object BspTargetLawSpec extends ZIOSpecDefault:
   private def rpcError(answer: Bsp.Answer): Option[Rpc.RpcErr] =
     answer match
       case Bsp.Answer.Reply(line) => line.fromJson[Rpc.RpcErr].toOption
-      case _                       => None
+      case _                      => None
 
   private def rpcOk[A: JsonCodec](answer: Bsp.Answer): Either[String, Rpc.RpcOk[A]] =
     answer match

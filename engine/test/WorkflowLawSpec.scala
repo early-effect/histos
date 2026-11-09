@@ -29,14 +29,15 @@ object WorkflowLawSpec extends ZIOSpecDefault:
     "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
 
   def spec = suite("workflow laws")(
-    test("a doc job is present exactly when the graph asks, and it does not wait for the suite"):
+    test("a scaladoc job is present exactly when the graph asks, and it does not wait for the suite"):
       val plain = Projects.organization(organization"example.com")(module("core", Jvm)(scala3))
       val asked = Projects.organization(organization"example.com").docCheck(module("core", Jvm)(scala3))
       (plain.flatMap(Workflow.render), asked.flatMap(Workflow.render)) match
         case (Right(off), Right(on)) =>
-          val doc = job(on, "doc")
+          val doc = job(on, "scaladoc")
           assertTrue(
-            job(off, "doc").isEmpty,
+            job(off, "scaladoc").isEmpty,
+            job(on, "doc").isEmpty,
             doc.nonEmpty,
             doc.contains("""- run: "./histos run doc""""),
             !doc.contains("needs:"),

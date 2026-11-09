@@ -55,7 +55,7 @@ enum TaskError:
     case UnknownRun(id) => s"no run '${id.value}'"
     case Version(error) => error.message
     case Plugin(error)  => error.message
-    case Doc(lines) => lines.mkString("\n")
+    case Doc(lines)     => lines.mkString("\n")
 
   def diagnose: Diagnostic = this match
     case UnknownRun(id) =>

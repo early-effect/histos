@@ -51,9 +51,12 @@ private[publish] object AssetAccess:
       repository <- named match
         case Some(value) => ZIO.succeed(value)
         case None        =>
-          ZIO.attemptBlocking(remote(repo)).orDie.flatMap:
-            case Some(value) => ZIO.succeed(value)
-            case None        => ZIO.fail(AssetError.Credentials)
+          ZIO
+            .attemptBlocking(remote(repo))
+            .orDie
+            .flatMap:
+              case Some(value) => ZIO.succeed(value)
+              case None        => ZIO.fail(AssetError.Credentials)
       filled = env.updated("GITHUB_TOKEN", token).updated("GITHUB_REPOSITORY", repository)
       _ <- ZIO.fromEither(access(filled))
     yield filled

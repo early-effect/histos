@@ -2,9 +2,9 @@ package histos.assembly
 
 import histos.pack.{AssemblyError, JarError}
 import histos.resolve.ResolveError
-import histos.zinc.{GraphCompileError}
+import histos.zinc.GraphCompileError
 import histos.{ProjectName, ScalaVersion}
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum AssembleError:
   case Toolchain(error: histos.zinc.CompileError)

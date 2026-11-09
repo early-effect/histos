@@ -7,7 +7,18 @@ import histos.report.CallResult
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, Compilers}
-import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, Resolution, ScalaVersion, ScalaVersions, SourcePos, Splits}
+import histos.{
+  Module,
+  Platform,
+  Platforms,
+  ProjectGraph,
+  ProjectName,
+  Resolution,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+  Splits,
+}
 
 import java.nio.file.{Files, Path}
 
@@ -21,45 +32,47 @@ object CallsProductLawSpec extends ZIOSpecDefault:
 
   def spec = suite("calls product laws")(
     test("an unknown name deletes nothing, a named clean leaves the shared root, and a full clean forgets nothing"):
-      Workspace.work("histos-calls-product").flatMap: dir =>
-        val clazz  = dir.resolve(".histos").resolve("classes").resolve(lawName.value).resolve("Kept.class")
-        val shared = dir.resolve(".histos").resolve("provider").resolve("stay.txt")
-        val tally  = Products.observation(dir)
-        val program =
-          for
-            _ <- write(clazz)
-            _ <- write(shared)
-            _ <- write(tally)
-            (missed, missedHeard) <- speak(say => Calls.clean(dir, graph, List(ProjectName.trusted("missing")), say))
-            missedKept            <- exists(clazz)
-            missedShared          <- exists(shared)
-            (named, namedHeard)   <- speak(say => Calls.clean(dir, graph, List(lawName), say))
-            namedGone             <- exists(clazz)
-            namedShared           <- exists(shared)
-            namedTally            <- exists(tally)
-            _                     <- write(tally)
-            (wiped, wipedHeard) <- speak(say => Calls.wipe(dir, say))
-            wipedShared         <- exists(shared)
-            wipedTally          <- exists(tally)
-            (full, fullHeard)   <- speak(say => Calls.cleanFull(dir, say))
-          yield assertTrue(
-            missed == Right(()),
-            done(missedHeard).exists(faultNamesMissing),
-            missedKept,
-            missedShared,
-            named == Right(()),
-            outs(namedHeard) == "cleaned productlaw",
-            !namedGone,
-            namedShared,
-            !namedTally,
-            wiped == Right(()),
-            outs(wipedHeard) == "cleaned",
-            !wipedShared,
-            !wipedTally,
-            full == Right(()),
-            outs(fullHeard) == Products.forgotten(Nil),
-          )
-        program.provideSomeLayer[Scope](session(dir))
+      Workspace
+        .work("histos-calls-product")
+        .flatMap: dir =>
+          val clazz   = dir.resolve(".histos").resolve("classes").resolve(lawName.value).resolve("Kept.class")
+          val shared  = dir.resolve(".histos").resolve("provider").resolve("stay.txt")
+          val tally   = Products.observation(dir)
+          val program =
+            for
+              _                     <- write(clazz)
+              _                     <- write(shared)
+              _                     <- write(tally)
+              (missed, missedHeard) <- speak(say => Calls.clean(dir, graph, List(ProjectName.trusted("missing")), say))
+              missedKept            <- exists(clazz)
+              missedShared          <- exists(shared)
+              (named, namedHeard)   <- speak(say => Calls.clean(dir, graph, List(lawName), say))
+              namedGone             <- exists(clazz)
+              namedShared           <- exists(shared)
+              namedTally            <- exists(tally)
+              _                     <- write(tally)
+              (wiped, wipedHeard)   <- speak(say => Calls.wipe(dir, say))
+              wipedShared           <- exists(shared)
+              wipedTally            <- exists(tally)
+              (full, fullHeard)     <- speak(say => Calls.cleanFull(dir, say))
+            yield assertTrue(
+              missed == Right(()),
+              done(missedHeard).exists(faultNamesMissing),
+              missedKept,
+              missedShared,
+              named == Right(()),
+              outs(namedHeard) == "cleaned productlaw",
+              !namedGone,
+              namedShared,
+              !namedTally,
+              wiped == Right(()),
+              outs(wipedHeard) == "cleaned",
+              !wipedShared,
+              !wipedTally,
+              full == Right(()),
+              outs(fullHeard) == Products.forgotten(Nil),
+            )
+          program.provideSomeLayer[Scope](session(dir))
   )
 
   private def faultNamesMissing(result: CallResult): Boolean =

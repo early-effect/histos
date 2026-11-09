@@ -187,6 +187,7 @@ object CodecSamples:
     ResolveError.Io(io),
     ResolveError.Plugin(PluginLoadError.BadCoordinate("x")),
     ResolveError.Repository(RepositoryIo.Fetch),
+    ResolveError.Scalafmt(histos.format.ScalafmtConfError.NoVersion(path)),
   )
 
   val lockErrors: List[LockError] = List(

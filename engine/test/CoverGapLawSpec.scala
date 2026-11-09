@@ -14,9 +14,9 @@ object CoverGapLawSpec extends ZIOSpecDefault:
     test("a lock error, a missing cell, node, and an API digest each name the gap"):
       val missing = ResolveError.UnsupportedPlatform(Platform.Js)
       val locked  = CoverGap.Locked(missing)
-      val absent = CoverGap.Absent(name, version, Platform.Jvm, ClasspathScope.Test)
-      val node   = CoverGap.NoNode
-      val api    = CoverGap.NoApi(name, version, Platform.Native)
+      val absent  = CoverGap.Absent(name, version, Platform.Jvm, ClasspathScope.Test)
+      val node    = CoverGap.NoNode
+      val api     = CoverGap.NoApi(name, version, Platform.Native)
       assertTrue(
         locked.message == missing.message,
         absent.message == "test cover 3.10.0 jvm is not in the dependency lock",

@@ -20,44 +20,45 @@ object ProviderInstallLawSpec extends ZIOSpecDefault:
   def spec = suite("provider install laws")(
     test("one install keeps the compiled provider, and a new install writes it again"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-provider").flatMap: dir =>
-          val program =
-            for
-              graph <- ZIO.fromEither(Projects(module("providelaw", Jvm)(scala3))).catchAll(error =>
-                ZIO.dieMessage(error.message)
+        Workspace
+          .work("histos-provider")
+          .flatMap: dir =>
+            val program =
+              for
+                graph <- ZIO
+                  .fromEither(Projects(module("providelaw", Jvm)(scala3)))
+                  .catchAll(error => ZIO.dieMessage(error.message))
+                machine  <- Machine.load(dir).catchAll(error => ZIO.dieMessage(error.message))
+                jdk      <- GraphCompile.jdk(machine).catchAll(error => ZIO.dieMessage(error.message))
+                tools    <- LockedTools.make(lock, graph)
+                libs     <- libraries
+                install  <- ProviderInstall.make
+                first    <- install.classes(dir, name, scala3, jdk, libs).provideSomeLayer(ZLayer.succeed(tools))
+                wrote    <- classFile(first)
+                _        <- ZIO.attemptBlocking(Files.delete(providerClass(first))).orDie
+                second   <- install.classes(dir, name, scala3, jdk, libs).provideSomeLayer(ZLayer.succeed(tools))
+                kept     <- classFile(second)
+                fresh    <- ProviderInstall.make
+                third    <- fresh.classes(dir, name, scala3, jdk, libs).provideSomeLayer(ZLayer.succeed(tools))
+                restored <- classFile(third)
+                widened  <-
+                  install
+                    .classes(dir, name, scala3, jdk, libs :+ libs.head)
+                    .provideSomeLayer(ZLayer.succeed(tools))
+                failed <-
+                  install.classes(dir, name, scala3, jdk, Nil).provideSomeLayer(ZLayer.succeed(tools)).either
+              yield assertTrue(
+                wrote,
+                second == first,
+                !kept,
+                third == first,
+                restored,
+                widened != first,
+                failed match
+                  case Left(ModuleTestError.Sources(module, version, _)) => module == name && version == scala3
+                  case _                                                 => false,
               )
-              machine <- Machine.load(dir).catchAll(error => ZIO.dieMessage(error.message))
-              jdk     <- GraphCompile.jdk(machine).catchAll(error => ZIO.dieMessage(error.message))
-              tools   <- LockedTools.make(lock, graph)
-              libs    <- libraries
-              install <- ProviderInstall.make
-              first   <- install.classes(dir, name, scala3, jdk, libs).provideSomeLayer(ZLayer.succeed(tools))
-              wrote   <- classFile(first)
-              _       <- ZIO.attemptBlocking(Files.delete(providerClass(first))).orDie
-              second  <- install.classes(dir, name, scala3, jdk, libs).provideSomeLayer(ZLayer.succeed(tools))
-              kept    <- classFile(second)
-              fresh   <- ProviderInstall.make
-              third   <- fresh.classes(dir, name, scala3, jdk, libs).provideSomeLayer(ZLayer.succeed(tools))
-              restored <- classFile(third)
-              widened <-
-                install
-                  .classes(dir, name, scala3, jdk, libs :+ libs.head)
-                  .provideSomeLayer(ZLayer.succeed(tools))
-              failed <-
-                install.classes(dir, name, scala3, jdk, Nil).provideSomeLayer(ZLayer.succeed(tools)).either
-            yield assertTrue(
-              wrote,
-              second == first,
-              !kept,
-              third == first,
-              restored,
-              widened != first,
-              failed match
-                case Left(ModuleTestError.Sources(module, version, _)) => module == name && version == scala3
-                case _                                                  => false
-              ,
-            )
-          program
+            program
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def providerClass(classes: Path): Path =

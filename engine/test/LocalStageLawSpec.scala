@@ -24,7 +24,9 @@ object LocalStageLawSpec extends ZIOSpecDefault:
   private val app    = module("stage", Jvm)(scala3)
 
   def spec = suite("local stage")(
-    test("a development publish writes the snapshot jar, its sources, and its javadoc, and the pom has no dependencies"):
+    test(
+      "a development publish writes the snapshot jar, its sources, and its javadoc, and the pom has no dependencies"
+    ):
       ZIO.scoped {
         Workspace.work("histos-local-stage").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
@@ -72,18 +74,19 @@ object LocalStageLawSpec extends ZIOSpecDefault:
             }
           }
         }
-      },
+      }
+    ,
     test("a dependent module's pom names the upstream at the same snapshot revision"):
       ZIO.scoped {
         Workspace.work("histos-local-edge").flatMap { repo =>
           Machine.load(repo).flatMap { machine =>
             GraphCompile.jdk(machine).flatMap { jdk =>
               ZIO.serviceWithZIO[DependencyLock] { lock =>
-                val base   = module("base", Jvm)(scala3)
-                val edge   = module("edge", Jvm)(scala3).dependsOn(base)
-                val maven  = repo.resolve("maven")
-                val store  = repo.resolve("store")
-                val built  = Projects
+                val base  = module("base", Jvm)(scala3)
+                val edge  = module("edge", Jvm)(scala3).dependsOn(base)
+                val maven = repo.resolve("maven")
+                val store = repo.resolve("store")
+                val built = Projects
                   .organization(group)
                   .locked(ships(Ship("demo").next(1, 2, 3)(base, edge)), base, edge)
                 for
@@ -111,7 +114,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   }
                   poms <- ZIO.foreach(found.modules)(pomText)
                   revision = coordinate(sha)
-                yield {
+                yield
                   val block =
                     s"""    <dependency>
                        |      <groupId>example.com</groupId>
@@ -135,12 +138,12 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     byPom.get("base_3").exists(text => !text.contains("<dependencies>")),
                     byPom.get("edge_3").exists(_.contains(block)),
                   )
-                }
               }
             }
           }
         }
-      },
+      }
+    ,
     test("an assembly publishes the unsuffixed jar and its manifest names the main class"):
       ZIO.scoped {
         Workspace.work("histos-local-assembly").flatMap { repo =>
@@ -193,17 +196,18 @@ object LocalStageLawSpec extends ZIOSpecDefault:
   private def coordinate(sha: histos.version.CommitSha): String =
     s"1.2.3-${sha.abbreviate.value}-SNAPSHOT"
 
-  /** Captured before the workspace scope closes. `assertTrue` runs its arrow after that scope releases the directory. */
+  /** Captured before the workspace scope closes. `assertTrue` runs its arrow after that scope releases the directory.
+    */
   private final case class OnDisk(underMaven: Boolean, zip: Boolean, sha256: Boolean)
 
   private def onDisk(maven: Path, paths: List[Path]): UIO[List[OnDisk]] =
     ZIO.attemptBlocking(paths.map(path => readOne(maven, path))).orDie
 
   private def readOne(maven: Path, path: Path): OnDisk =
-    val bytes = Files.readAllBytes(path)
-    val zip   = bytes.length >= 2 && bytes(0) == 0x50.toByte && bytes(1) == 0x4b.toByte
-    val name  = Option(path.getFileName).map(_.toString).getOrElse("")
-    val side  = path.resolveSibling(s"$name.sha256")
+    val bytes  = Files.readAllBytes(path)
+    val zip    = bytes.length >= 2 && bytes(0) == 0x50.toByte && bytes(1) == 0x4b.toByte
+    val name   = Option(path.getFileName).map(_.toString).getOrElse("")
+    val side   = path.resolveSibling(s"$name.sha256")
     val sha256 =
       if Files.isRegularFile(side) then
         val text = Files.readString(side)

@@ -136,13 +136,14 @@ object PluginScopeLawSpec extends ZIOSpecDefault:
 
   private def bind: ServerSocket =
     val socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress)
-    val accept = new Thread(() =>
+    // A named Runnable: scalafmt 3.11.5 rewrites a try/catch lambda argument into code that does not parse.
+    val serve: Runnable = () =>
       try
         val client = socket.accept()
         try client.getOutputStream.write("open".getBytes(StandardCharsets.US_ASCII))
         finally client.close()
       catch case _: java.io.IOException => ()
-    , "histos-plugin-scope")
+    val accept = new Thread(serve, "histos-plugin-scope")
     accept.setDaemon(true)
     accept.start()
     socket

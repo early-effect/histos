@@ -36,57 +36,63 @@ object DaemonMoreLawSpec extends ZIOSpecDefault:
 
   def spec = suite("daemon reload laws")(
     test("reload of a repo with no build file is a fault, and version still answers"):
-      ZIO.scoped {
-        for
-          repo <- ZIO.acquireRelease(
-            ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "hd")).orDie
-          )(path => Workspace.delete(path).catchAll(error => ZIO.dieMessage(error.message)))
-          _ <- ZIO.attemptBlocking(
-            Files.copy(
-              repository.resolve("dependencies.lock"),
-              repo.resolve("dependencies.lock"),
-              StandardCopyOption.REPLACE_EXISTING,
+      ZIO
+        .scoped {
+          for
+            repo <- ZIO.acquireRelease(
+              ZIO.attemptBlocking(Files.createTempDirectory(Path.of("/tmp"), "hd")).orDie
+            )(path => Workspace.delete(path).catchAll(error => ZIO.dieMessage(error.message)))
+            _ <- ZIO
+              .attemptBlocking(
+                Files.copy(
+                  repository.resolve("dependencies.lock"),
+                  repo.resolve("dependencies.lock"),
+                  StandardCopyOption.REPLACE_EXISTING,
+                )
+              )
+              .orDie
+            api = repo.resolve("api.jar")
+            _       <- ZIO.attemptBlocking(Files.write(api, Array.emptyByteArray)).orDie
+            loaded  <- Machine.load(repo).either
+            machine <- loaded match
+              case Left(error)  => ZIO.dieMessage(error.message)
+              case Right(value) => ZIO.succeed(value)
+            found <- GraphCompile.jdk(machine).either
+            jdk   <- found match
+              case Left(error)  => ZIO.dieMessage(error.message)
+              case Right(value) => ZIO.succeed(value)
+            running <- Daemon.open(
+              repo,
+              graph,
+              HistosBuild.fixed(graph),
+              jdk,
+              version,
+              api,
+              Nil,
+              ZIO.dieMessage("reload loads through the loader"),
+              Calls.quiet,
+              machine,
+              _ => ZIO.unit,
             )
-          ).orDie
-          api = repo.resolve("api.jar")
-          _ <- ZIO.attemptBlocking(Files.write(api, Array.emptyByteArray)).orDie
-          loaded <- Machine.load(repo).either
-          machine <- loaded match
-            case Left(error)  => ZIO.dieMessage(error.message)
-            case Right(value) => ZIO.succeed(value)
-          found <- GraphCompile.jdk(machine).either
-          jdk <- found match
-            case Left(error)  => ZIO.dieMessage(error.message)
-            case Right(value) => ZIO.succeed(value)
-          running <- Daemon.open(
-            repo,
-            graph,
-            HistosBuild.fixed(graph),
-            jdk,
-            version,
-            api,
-            Nil,
-            ZIO.dieMessage("reload loads through the loader"),
-            Calls.quiet,
-            machine,
-            _ => ZIO.unit,
+            socket = running.record.socket
+            reloaded     <- Client.talk(socket, Call.Reload).runCollect
+            versionFeeds <- Client.talk(socket, Call.Version).runCollect
+            message = done(reloaded) match
+              case Some(CallResult.Fault(fault)) => fault.message
+              case other                         => other.fold("no done")(_.toString)
+          yield assertTrue(
+            message.contains("no build file at"),
+            message.contains("histos.scala"),
+            outs(versionFeeds) == version,
+            done(versionFeeds).contains(CallResult.reported()),
           )
-          socket = running.record.socket
-          reloaded <- Client.talk(socket, Call.Reload).runCollect
-          versionFeeds <- Client.talk(socket, Call.Version).runCollect
-          message = done(reloaded) match
-            case Some(CallResult.Fault(fault)) => fault.message
-            case other                         => other.fold("no done")(_.toString)
-        yield assertTrue(
-          message.contains("no build file at"),
-          message.contains("histos.scala"),
-          outs(versionFeeds) == version,
-          done(versionFeeds).contains(CallResult.reported()),
-        )
-      }.timeout(Duration.fromSeconds(30)).flatMap {
-        case Some(result) => ZIO.succeed(result)
-        case None         => ZIO.dieMessage("daemon did not answer")
-      }.provideSomeLayer[Scope](opened)
+        }
+        .timeout(Duration.fromSeconds(30))
+        .flatMap {
+          case Some(result) => ZIO.succeed(result)
+          case None         => ZIO.dieMessage("daemon did not answer")
+        }
+        .provideSomeLayer[Scope](opened)
   ) @@ TestAspect.withLiveSystem @@ TestAspect.withLiveClock
 
   private def outs(heard: zio.Chunk[Feed]): String =

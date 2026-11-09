@@ -1,6 +1,7 @@
 package histos.server
 
 import histos.cache.CacheCleanMode
+import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.schedule.CacheNamespace
 import histos.task.RunId
@@ -8,6 +9,8 @@ import histos.testrun.{SuitePattern, TestMode}
 import histos.server.WatchPolicy
 import histos.workflow.WorkflowAction
 import histos.{Platform, WireSamples}
+
+import zio.NonEmptyChunk
 
 /** Every `Call` constructor, plus the variants whose fields change an exit or a document. */
 object CallSamples:
@@ -46,6 +49,7 @@ object CallSamples:
               Call.Toolchain,
               Call.Resolve(ResolveAction.Verify),
               Call.Workflow(WorkflowAction.Check),
+              Call.Format(FormatTargets.Build, FormatMode.Check),
               Call.Assembly(Some("dist/app.jar")),
               Call.Clean(names),
               Call.CleanFull,
@@ -85,6 +89,12 @@ object CallSamples:
           List(call, Call.Resolve(ResolveAction.Update), Call.Resolve(ResolveAction.Check))
         case Call.Workflow(_) =>
           List(call, Call.Workflow(WorkflowAction.Update))
+        case Call.Format(_, _) =>
+          List(
+            call,
+            Call.Format(FormatTargets.Projects(NonEmptyChunk(core)), FormatMode.Write),
+            Call.Format(FormatTargets.Files(NonEmptyChunk(java.nio.file.Path.of("core/src/A.scala"))), FormatMode.Write),
+          )
         case Call.Assembly(_) =>
           List(call, Call.Assembly(None))
         case Call.CacheClean(_) =>

@@ -10,6 +10,7 @@ enum ResourceLife:
 
   /** Released when this generation of plugin classes is retired, and when the process shuts down. */
   case Generation
+end ResourceLife
 
 /** The scopes a plugin task can acquire into. A test supplies its own. The loader builds the live one.
   */

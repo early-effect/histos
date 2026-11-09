@@ -558,11 +558,7 @@ object PublishLawSpec extends ZIOSpecDefault:
   private def shipped(first: histos.ProjectDef, rest: histos.ProjectDef*): Either[histos.BuildError, ProjectGraph] =
     val org  = Projects.organization(organization"example.com")
     val spec = ships(Ship("demo").next(1, 2, 3)(first, rest*))
-    rest.toList match
-      case Nil           => org(spec, first)
-      case second :: Nil => org(spec, first, second)
-      case _             =>
-        Projects.assemble(Some(organization"example.com"), Nil, Splits.aggregate, spec, first :: rest.toList)
+    org(spec, (first :: rest.toList)*)
 
   private def jdk: Either[JdkVersionError, JdkRuntime] =
     JdkVersion

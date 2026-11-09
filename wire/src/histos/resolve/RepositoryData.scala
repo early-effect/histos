@@ -1,6 +1,6 @@
 package histos.resolve
 
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 /** A `file:` or `https:` repository root. An empty string is not a url. */
 opaque type RepoUrl = String

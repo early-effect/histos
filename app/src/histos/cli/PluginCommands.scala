@@ -9,7 +9,7 @@ final case class BoundCommand(plugin: PluginId, spec: CommandSpec)
 object PluginCommands:
   def parse(commands: List[BoundCommand], args: List[String]): Either[CliParseError, (PluginTaskId, PluginArgs)] =
     args match
-      case Nil => Left(CliParseError.UnknownCommand("", Nil))
+      case Nil          => Left(CliParseError.UnknownCommand("", Nil))
       case name :: rest =>
         commands.find(_.spec.name.value == name) match
           case None =>
@@ -20,7 +20,7 @@ object PluginCommands:
 
   def usage(commands: List[BoundCommand]): String =
     val extra = commands.map(bound => s"       ${bound.spec.name.value}  ${bound.spec.summary.value}")
-    val head = Help.grouped
+    val head  = Help.grouped
     if extra.isEmpty then head else (head :: "" :: "plugins" :: extra).mkString("\n")
 
   private def arguments(bound: BoundCommand, args: List[String]): Either[CliParseError, PluginArgs] =

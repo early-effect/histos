@@ -15,3 +15,4 @@ object LlvmDigest:
     "LLVM-20.1.8-Linux-X64.tar.xz" ->
       "1ead36b3dfcb774b57be530df42bec70ab2d239fbce9889447c7a29a4ddc1ae6",
   )
+end LlvmDigest

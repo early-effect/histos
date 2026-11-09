@@ -1,8 +1,8 @@
 package histos.toolchain
 
 import histos.jdk.Sha256
-import histos.workspace.{IoFailure}
-import java.nio.file.{Path}
+import histos.workspace.IoFailure
+import java.nio.file.Path
 
 enum RuntimeIdentity:
   /** `salt` is the canonical home and the build the runtime already published. */

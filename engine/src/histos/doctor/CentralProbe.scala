@@ -38,13 +38,13 @@ object CentralProbe:
 
   private def classify(reply: Reply): Auth =
     reply.status match
-      case 401 | 403                               => Auth.Rejected(reply.status)
-      case code if code >= 200 && code < 500      => Auth.Accepted
-      case _                                       => Auth.Unreachable
+      case 401 | 403                         => Auth.Rejected(reply.status)
+      case code if code >= 200 && code < 500 => Auth.Accepted
+      case _                                 => Auth.Unreachable
 
   private def root(env: Map[String, String]): Option[String] =
     env.get("HISTOS_PORTAL").map(_.trim).filter(_.nonEmpty) match
-      case None => Some("https://central.sonatype.com")
+      case None      => Some("https://central.sonatype.com")
       case Some(raw) =>
         val text = raw.stripSuffix("/")
         if text.startsWith("https://") || text.startsWith("http://") then Some(text) else None

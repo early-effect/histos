@@ -24,8 +24,8 @@ enum SkeletonError:
     case Io(failure)    => failure.message
 end SkeletonError
 
-/** The one-module project `histos new` and `histos init` write. The pin is the toolchain that wrote it.
-  * `scalaVersion` and `zioVersion` are the versions this repository builds with.
+/** The one-module project `histos new` and `histos init` write. The pin is the toolchain that wrote it. `scalaVersion`
+  * and `zioVersion` are the versions this repository builds with.
   */
 object Skeleton:
   val scalaVersion: String = "3.10.0"
@@ -74,9 +74,9 @@ object Skeleton:
 
   def versionOf(raw: Option[String]): Either[SkeletonError, String] =
     raw.map(_.trim).filter(_.nonEmpty) match
-      case Some(s"histos $version") if version.nonEmpty => Right(version)
+      case Some(s"histos $version") if version.nonEmpty   => Right(version)
       case Some(version) if !version.startsWith("histos") => Right(version)
-      case _                                             => Left(SkeletonError.Version)
+      case _                                              => Left(SkeletonError.Version)
 
   private def packageName(name: String): String =
     val stripped = name.replace("-", "")
@@ -88,7 +88,7 @@ object Skeleton:
         if !Files.exists(dir) then Right(())
         else if !Files.isDirectory(dir) then Left(SkeletonError.NotEmpty(dir))
         else
-          val listed = Files.list(dir)
+          val listed   = Files.list(dir)
           val occupied =
             try listed.iterator.asScala.nonEmpty
             finally listed.close()
@@ -120,9 +120,9 @@ object Skeleton:
         )
       case None =>
         List(
-          dir.resolve("build.properties") -> s"histos.version=$version\n",
-          dir.resolve("histos.scala")     -> buildFile(pkg),
-          dir.resolve(s"app/src/main/scala/$pkg/Main.scala") -> mainSource(pkg),
+          dir.resolve("build.properties")                        -> s"histos.version=$version\n",
+          dir.resolve("histos.scala")                            -> buildFile(pkg),
+          dir.resolve(s"app/src/main/scala/$pkg/Main.scala")     -> mainSource(pkg),
           dir.resolve(s"app/src/test/scala/$pkg/MainSpec.scala") -> specSource(pkg),
         )
     ZIO.foreachDiscard(sources): (path, text) =>

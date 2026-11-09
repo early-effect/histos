@@ -22,7 +22,7 @@ object PublishWatchLawSpec extends ZIOSpecDefault:
         extra,
       )
       built match
-        case Left(_) => assertTrue(false)
+        case Left(_)      => assertTrue(false)
         case Right(graph) =>
           val demo    = ShipName("demo")
           val appName = ProjectName("app")

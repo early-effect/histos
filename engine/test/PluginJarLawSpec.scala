@@ -103,7 +103,7 @@ object PluginJarLawSpec extends ZIOSpecDefault:
             file == None,
           )
         }
-      }
+      },
   )
 
   private def digestOf(raw: String) =
@@ -116,19 +116,17 @@ object PluginJarLawSpec extends ZIOSpecDefault:
     pack(path, entries*).flatMap(_ => PluginJar.read(dep, path).either)
 
   private def pack(path: Path, entries: (String, String)*): zio.UIO[Unit] =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        val out = new ZipOutputStream(Files.newOutputStream(path))
-        try
-          entries.foreach { (name, text) =>
-            out.putNextEntry(new ZipEntry(name))
-            out.write(text.getBytes(StandardCharsets.UTF_8))
-            out.closeEntry()
-          }
-        finally out.close()
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try
+        entries.foreach { (name, text) =>
+          out.putNextEntry(new ZipEntry(name))
+          out.write(text.getBytes(StandardCharsets.UTF_8))
+          out.closeEntry()
+        }
+      finally out.close()
+    }.orDie
 
   private def write(path: Path, text: String) =
     Workspace.writeString(path, text).catchAll((error: IoFailure) => ZIO.dieMessage(error.message))

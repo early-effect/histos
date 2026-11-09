@@ -609,6 +609,26 @@ object Calls:
     ZIO.service[Publishing].provideLayer(ZLayer.succeed(Sona.idle) >>> loaded.build.sona)
 
   /** Workflow files and launcher scripts. The pin is not advanced. */
+  /** Each file the run changed, or would change under a check, is a line. A check that found one, or any fault, is a
+    * failed run.
+    */
+  def format(
+      repo: Path,
+      graph: ProjectGraph,
+      targets: histos.format.FormatTargets,
+      mode: histos.format.FormatMode,
+      say: Say,
+  ): ZIO[histos.resolve.ResolutionService & histos.format.Formatters, ServerError, Unit] =
+    histos.format.FormatRun
+      .run(repo, graph, targets, mode)
+      .foldZIO(
+        why => fault(say, BuildFault.Format(why)),
+        report =>
+          ZIO.foreachDiscard(report.detail)(told(say, _)) *>
+            (if report.failed then finish(say, CallResult.reported(report.summary))
+             else told(say, report.summary) *> ok(say)),
+      )
+
   def workflowWork(
       repo: Path,
       graph: ProjectGraph,

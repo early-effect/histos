@@ -67,7 +67,7 @@ object AttachLawSpec extends ZIOSpecDefault:
         drifted <- Attach.decide(repo, version)
         _       <- Record.write(repo, version, fingerprint, socket, Some(sha))
         matched <- Attach.decide(repo, version)
-        _ <- ZIO.attemptBlocking {
+        _       <- ZIO.attemptBlocking {
           Files.writeString(
             Record.file(repo),
             s"""{"version":"$version","fingerprint":"abc","socket":"${socket.toAbsolutePath.normalize}"}""",

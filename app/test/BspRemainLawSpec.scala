@@ -9,7 +9,18 @@ import histos.toolchain.Runtimes
 import histos.version.Catalog
 import histos.workspace.Workspace
 import histos.zinc.{CompileMemo, CompileProblem, CompileSeverity, Compilers, GraphCompile, PositionBase}
-import histos.{Module, Platform, Platforms, ProjectGraph, ProjectName, Resolution, ScalaVersion, ScalaVersions, SourcePos, Splits}
+import histos.{
+  Module,
+  Platform,
+  Platforms,
+  ProjectGraph,
+  ProjectName,
+  Resolution,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+  Splits,
+}
 
 import java.nio.file.{Files, Path}
 
@@ -25,46 +36,48 @@ object BspRemainLawSpec extends ZIOSpecDefault:
   def spec = suite("bsp build target laws")(
     test("a quiet build is status 1, a failed note and a load error are status 2"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-bsp-remain").flatMap: dir =>
-          val pin = dir.resolve(LauncherPin.file)
-          val uri = Bsp.buildUri(dir)
-          val problem = CompileProblem(
-            "build law",
-            None,
-            CompileSeverity.Error,
-            None,
-            None,
-            None,
-            None,
-            PositionBase.Dotty,
-          )
-          val program =
-            for
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              _ <- Workspace.writeString(pin, "histos.version=9.8.7\n")
-              runtimes <- Runtimes.read(machine, None)
-              quiet <- compileBuild(dir, jdk, runtimes, uri, ZIO.succeed(BuildNotes(false, Nil)))
-              failed <- compileBuild(dir, jdk, runtimes, uri, ZIO.succeed(BuildNotes(true, List(problem))))
-              missing <- compileBuild(dir, jdk, runtimes, uri, ZIO.fail(LoadError.NoEntry))
-            yield
-              val quietStatus = statusOf(quiet.answer)
-              val failedStatus = statusOf(failed.answer)
-              val missingStatus = statusOf(missing.answer)
-              assertTrue(
-                quietStatus == Right(1),
-                failedStatus == Right(2),
-                failed.notes.exists(_.contains("build law")),
-                missingStatus == Right(2),
-                missing.notes.exists(_.contains(LoadError.NoEntry.message)),
-              )
-          program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
+        Workspace
+          .work("histos-bsp-remain")
+          .flatMap: dir =>
+            val pin     = dir.resolve(LauncherPin.file)
+            val uri     = Bsp.buildUri(dir)
+            val problem = CompileProblem(
+              "build law",
+              None,
+              CompileSeverity.Error,
+              None,
+              None,
+              None,
+              None,
+              PositionBase.Dotty,
+            )
+            val program =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                _        <- Workspace.writeString(pin, "histos.version=9.8.7\n")
+                runtimes <- Runtimes.read(machine, None)
+                quiet    <- compileBuild(dir, jdk, runtimes, uri, ZIO.succeed(BuildNotes(false, Nil)))
+                failed   <- compileBuild(dir, jdk, runtimes, uri, ZIO.succeed(BuildNotes(true, List(problem))))
+                missing  <- compileBuild(dir, jdk, runtimes, uri, ZIO.fail(LoadError.NoEntry))
+              yield
+                val quietStatus   = statusOf(quiet.answer)
+                val failedStatus  = statusOf(failed.answer)
+                val missingStatus = statusOf(missing.answer)
+                assertTrue(
+                  quietStatus == Right(1),
+                  failedStatus == Right(2),
+                  failed.notes.exists(_.contains("build law")),
+                  missingStatus == Right(2),
+                  missing.notes.exists(_.contains(LoadError.NoEntry.message)),
+                )
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private final case class Heard(answer: Bsp.Answer, notes: Chunk[String])
@@ -75,14 +88,18 @@ object BspRemainLawSpec extends ZIOSpecDefault:
       runtimes: Runtimes,
       uri: String,
       build: ZIO[Any, LoadError, BuildNotes],
-  ): ZIO[Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & ResolutionService, ResolveError, Heard] =
+  ): ZIO[
+    Resolve & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo & ResolutionService,
+    ResolveError,
+    Heard,
+  ] =
     for
-      notes <- Ref.make(Chunk.empty[String])
+      notes   <- Ref.make(Chunk.empty[String])
       session <- Bsp.open(dir, graph, jdk, runtimes, notify = line => notes.update(_ :+ line), build = build)
-      _ <- ask(session, """{"id":1,"method":"build/initialize"}""")
-      _ <- ask(session, """{"method":"build/initialized"}""")
-      answer <- ask(session, asked(2, List(uri)))
-      heard <- notes.get
+      _       <- ask(session, """{"id":1,"method":"build/initialize"}""")
+      _       <- ask(session, """{"method":"build/initialized"}""")
+      answer  <- ask(session, asked(2, List(uri)))
+      heard   <- notes.get
     yield Heard(answer, heard)
 
   private def graph: ProjectGraph =

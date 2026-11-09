@@ -1,6 +1,6 @@
 package histos.native
 
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum ClassShapeError:
   case Failed(kind: String)

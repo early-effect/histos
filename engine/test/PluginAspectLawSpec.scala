@@ -1,6 +1,16 @@
 package histos.load
 
-import histos.plugin.{DeclaredOutput, DeclaredTask, OutputName, PluginOutput, PluginRunError, RepoPath, Seal, TaskName, WrittenFile}
+import histos.plugin.{
+  DeclaredOutput,
+  DeclaredTask,
+  OutputName,
+  PluginOutput,
+  PluginRunError,
+  RepoPath,
+  Seal,
+  TaskName,
+  WrittenFile,
+}
 import histos.step.{Need, Phase, Step, StepId, StepInfo}
 import histos.workspace.Workspace
 import histos.{Jvm, ProjectName, ScalaVersion}
@@ -59,7 +69,7 @@ object PluginAspectLawSpec extends ZIOSpecDefault:
           val step = Step.local[Int](info)(ZIO.succeed(7)) @@ PluginAspects.loader(threads)
           Step.run(step).map(value => assertTrue(value == 7))
         }
-      }
+      },
   )
 
   private def declared(outputs: List[DeclaredOutput]): DeclaredTask =
@@ -77,10 +87,8 @@ object PluginAspectLawSpec extends ZIOSpecDefault:
     yield ran
 
   private def write(path: Path) =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        Files.writeString(path, "jar")
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      Files.writeString(path, "jar")
+    }.orDie
 end PluginAspectLawSpec

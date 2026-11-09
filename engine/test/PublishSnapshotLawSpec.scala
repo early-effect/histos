@@ -37,58 +37,70 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** A snapshot with no asset still stages. The channel plan is empty, so nothing is uploaded. */
 object PublishSnapshotLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"example.com"
-  private val named  = module("snaplaw", Jvm)(scala3)
+  private val scala3   = scala"3.10.0"
+  private val group    = organization"example.com"
+  private val named    = module("snaplaw", Jvm)(scala3)
   private val sha      = "0123456789abcdef0123456789abcdef01234567"
   private val revision = "1.2.3-SNAPSHOT"
 
   def spec = suite("publish snapshot laws")(
     test("a snapshot with no asset stages and does not upload a channel"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-snapshot-channel").flatMap: dir =>
-          val source = dir.resolve("snaplaw").resolve("src").resolve("main").resolve("scala").resolve("Ready.scala")
-          val env    = Map(
-            "HISTOS_SESSION" -> "snapshot",
-            "HISTOS_SHA"     -> sha,
-            "HISTOS_BRANCH"  -> "default",
-          )
-          val program =
-            for
-              graph <- ZIO.fromEither(released(named)).catchAll(error => ZIO.dieMessage(error.message))
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value.copy(env = Map.empty))
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              seen  <- Ref.make(Option.empty[Seen])
-              notes <- Ref.make(List.empty[String])
-              _     <- Workspace.writeString(VersionTask.path(dir), "").catchAll(error => ZIO.dieMessage(error.message))
-              _     <- Workspace.createDirectories(parentOf(source)).catchAll(error => ZIO.dieMessage(error.message))
-              _     <- Workspace.writeString(source, "object Ready:\n  def n: Int = 1\n").catchAll(error =>
-                ZIO.dieMessage(error.message)
-              )
-              _     <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
-                .catchAll(error => ZIO.dieMessage(error.message))
-              ran <- PublishRun
-                .snapshots(dir, graph, recording(graph, seen), Nil, jdk, env, _ => ZIO.unit, line => notes.update(line :: _))
-                .either
-              recorded <- seen.get
-              told     <- notes.get
-            yield
-              val lines = ran.fold(_.message, _.lines.mkString("\n"))
-              assertTrue(
-                ran.isRight,
-                recorded.exists(_.revision == revision),
-                recorded.exists(_.jars),
-                lines.contains(s"published $revision"),
-                told.exists(_.startsWith("staged ")),
-                told.forall(line => !line.contains("uploading")),
-              )
-          program.provideSomeLayer[Resolve & zio.Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+        Workspace
+          .work("histos-snapshot-channel")
+          .flatMap: dir =>
+            val source = dir.resolve("snaplaw").resolve("src").resolve("main").resolve("scala").resolve("Ready.scala")
+            val env    = Map(
+              "HISTOS_SESSION" -> "snapshot",
+              "HISTOS_SHA"     -> sha,
+              "HISTOS_BRANCH"  -> "default",
+            )
+            val program =
+              for
+                graph   <- ZIO.fromEither(released(named)).catchAll(error => ZIO.dieMessage(error.message))
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value.copy(env = Map.empty))
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                seen  <- Ref.make(Option.empty[Seen])
+                notes <- Ref.make(List.empty[String])
+                _ <- Workspace.writeString(VersionTask.path(dir), "").catchAll(error => ZIO.dieMessage(error.message))
+                _ <- Workspace.createDirectories(parentOf(source)).catchAll(error => ZIO.dieMessage(error.message))
+                _ <- Workspace
+                  .writeString(source, "object Ready:\n  def n: Int = 1\n")
+                  .catchAll(error => ZIO.dieMessage(error.message))
+                _ <- Workspace
+                  .writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
+                  .catchAll(error => ZIO.dieMessage(error.message))
+                ran <- PublishRun
+                  .snapshots(
+                    dir,
+                    graph,
+                    recording(graph, seen),
+                    Nil,
+                    jdk,
+                    env,
+                    _ => ZIO.unit,
+                    line => notes.update(line :: _),
+                  )
+                  .either
+                recorded <- seen.get
+                told     <- notes.get
+              yield
+                val lines = ran.fold(_.message, _.lines.mkString("\n"))
+                assertTrue(
+                  ran.isRight,
+                  recorded.exists(_.revision == revision),
+                  recorded.exists(_.jars),
+                  lines.contains(s"published $revision"),
+                  told.exists(_.startsWith("staged ")),
+                  told.forall(line => !line.contains("uploading")),
+                )
+            program.provideSomeLayer[Resolve & zio.Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
   ).provideSomeLayerShared[TestEnvironment & zio.Scope](opened) @@ TestAspect.withLiveSystem
 
   private def released(member: histos.ProjectDef): Either[histos.BuildError, histos.ProjectGraph] =
@@ -108,7 +120,7 @@ object PublishSnapshotLawSpec extends ZIOSpecDefault:
   private def recording(graph: histos.ProjectGraph, seen: Ref[Option[Seen]]): HistosBuild =
     val found = graph
     new HistosBuild:
-      def graph: Either[histos.BuildError, histos.ProjectGraph] = Right(found)
+      def graph: Either[histos.BuildError, histos.ProjectGraph]          = Right(found)
       override def sona: ZLayer[histos.SonaPublish, Nothing, Publishing] =
         ZLayer.succeed(new Publishing:
           def publish(request: PublishRequest): zio.IO[PublishFault, PublishReceipt] =
@@ -117,8 +129,7 @@ object PublishSnapshotLawSpec extends ZIOSpecDefault:
               request.modules.forall(module => Files.isRegularFile(module.jar) && Files.isRegularFile(module.pom))
             seen.set(Some(Seen(revision, jars))).as(PublishReceipt(Chunk(s"published $revision"), Chunk.empty))
           def secretNames: List[String] = Nil
-          def followUp: FollowUp        = FollowUp.Finished
-        )
+          def followUp: FollowUp        = FollowUp.Finished)
 
   private def pinned(lock: DependencyLock): DependencyLock =
     lock.copy(cells =
@@ -140,7 +151,9 @@ object PublishSnapshotLawSpec extends ZIOSpecDefault:
   private def repository: Path =
     def walk(path: Path, left: Int): Option[Path] =
       if left == 0 then None
-      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(path.resolve("histos.scala"))
+      else if Files.isRegularFile(path.resolve("dependencies.lock")) && Files.isRegularFile(
+          path.resolve("histos.scala")
+        )
       then Some(path)
       else
         Option(path.getParent) match

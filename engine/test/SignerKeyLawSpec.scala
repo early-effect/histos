@@ -35,7 +35,7 @@ object SignerKeyLawSpec extends ZIOSpecDefault:
       flags.setKeyFlags(false, KeyFlags.SIGN_DATA)
       val digests = new JcaPGPDigestCalculatorProviderBuilder().setProvider(provider).build()
       val sha1    = digests.get(HashAlgorithmTags.SHA1)
-      val ring = new PGPKeyRingGenerator(
+      val ring    = new PGPKeyRingGenerator(
         PGPSignature.POSITIVE_CERTIFICATION,
         key,
         "law <law@example.test>",
@@ -67,4 +67,3 @@ object SignerKeyLawSpec extends ZIOSpecDefault:
         found.value.equalsIgnoreCase(finger),
       )
   )
-end SignerKeyLawSpec

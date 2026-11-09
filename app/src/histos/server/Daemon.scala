@@ -441,7 +441,8 @@ object Daemon:
           report    <- histos.resolve.ResolutionService
             .open(repo, graph)
             .mapError(ServerError.Resolve(_))
-          warm = Warm(live, graphs, reloading, spliced, report, assembly)
+          formatters <- histos.format.Formatters.make
+          warm = Warm(live, graphs, reloading, spliced, report, assembly, formatters)
           permit <- Semaphore.make(1)
           runs   <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
           _      <- listening
@@ -518,6 +519,7 @@ object Daemon:
       spliced: Ref[Set[Bsp.Session]],
       report: histos.resolve.ResolutionService,
       assembly: Option[String],
+      formatters: histos.format.Formatters,
   )
 
   private def accept(
@@ -653,18 +655,23 @@ object Daemon:
                 ServerError,
                 Unit,
               ] =
-                Perform.run(
-                  repo,
-                  apiJar,
-                  loaded,
-                  chosen,
-                  runs,
-                  track = true,
-                  version,
-                  target,
-                  out,
-                  edges(out),
-                )
+                Perform
+                  .run(
+                    repo,
+                    apiJar,
+                    loaded,
+                    chosen,
+                    runs,
+                    track = true,
+                    version,
+                    target,
+                    out,
+                    edges(out),
+                  )
+                  .provideSomeEnvironment[
+                    histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
+                      histos.zinc.CompileMemo & histos.resolve.ResolutionService
+                  ](_.add(warm.formatters))
 
               def run(
                   target: Call,
@@ -717,8 +724,8 @@ object Daemon:
                           watchRoots(call),
                         )
 
-              /** Compile before the fork is touched. A failed compile keeps it. A successful compile replaces it only when
-                * the change is one of the program's roots.
+              /** Compile before the fork is touched. A failed compile keeps it. A successful compile replaces it only
+                * when the change is one of the program's roots.
                 */
               def replace(
                   call: Call,
@@ -737,9 +744,8 @@ object Daemon:
                       case Left(_)     => Call.Compile(Nil)
                   case _ => Call.Compile(Nil)
                 run(compile, out.dropExit) *>
-                  watchRoots(call).map(watched =>
-                    changed.exists(path => watched.paths.exists(root => Watching.covers(root, path)))
-                  )
+                  watchRoots(call)
+                    .map(watched => changed.exists(path => watched.paths.exists(root => Watching.covers(root, path))))
 
               def watchRoots(call: Call): ZIO[
                 histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore & histos.zinc.Compilers &
@@ -914,8 +920,8 @@ object Daemon:
           Call.CleanFull =>
         true
       case Call.PublishPromote(_) | Call.PublishDrop(_) | Call.PublishAssets(_) | Call.Graph | Call.Task(_, _) |
-          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Reload | Call.Reboot |
-          Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
+          Call.Cancel(_) | Call.Toolchain | Call.Resolve(_) | Call.Workflow(_) | Call.Format(_, _) | Call.Reload |
+          Call.Reboot | Call.Version | Call.CachePath | Call.CacheList | Call.CacheClean(_) | Call.CachePromote(_, _) |
           Call.Launcher(_) | Call.Watch(_, _) | Call.Bsp | Call.PreviewCompile(_) | Call.PreviewTest(_) |
           Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) | Call.PreviewClean(_) | Call.PreviewCleanFull |
           Call.PreviewRun(_, _) =>

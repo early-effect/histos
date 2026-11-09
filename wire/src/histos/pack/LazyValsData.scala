@@ -1,6 +1,5 @@
 package histos.pack
 
-
 enum LazyValFrame:
   case Rejected
   case MethodTooLarge(owner: String, method: String, descriptor: String, codeSize: Int)

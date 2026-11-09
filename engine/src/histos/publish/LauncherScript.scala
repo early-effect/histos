@@ -8,9 +8,9 @@ import java.nio.file.{Files, Path}
 
 import zio.{IO, ZIO}
 
-/** `histos`, rendered from the ship number the way a workflow file is. A line states the next release. A local
-  * assembly is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim. JVM arguments come
-  * from a repository `.jvmopts`, one per line. Histos does not install a JDK.
+/** `histos`, rendered from the ship number the way a workflow file is. A line states the next release. A local assembly
+  * is checked against `.histos/assembly.sha256`. Otherwise the script execs the user shim. JVM arguments come from a
+  * repository `.jvmopts`, one per line. Histos does not install a JDK.
   */
 object LauncherScript:
   def check(repo: Path, graph: ProjectGraph): IO[ScriptError, Unit] =

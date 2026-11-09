@@ -13,9 +13,8 @@ enum PublishWhere:
 end PublishWhere
 
 /** Local and snapshots write the snapshot coordinate, or the release number when that session is already set. A
-  * development session is not a release. A release with no release coordinate stops before selection. When another
-  * ship is a release, the snapshot coordinate stays through selection so that ship is refused, and then it is not
-  * staged.
+  * development session is not a release. A release with no release coordinate stops before selection. When another ship
+  * is a release, the snapshot coordinate stays through selection so that ship is refused, and then it is not staged.
   */
 enum PublishWrite:
   case Local

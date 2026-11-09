@@ -52,21 +52,21 @@ object SuiteNamesLawSpec extends ZIOSpecDefault:
             _ <- writeClass(tests.resolve("demo/Other.class"), "demo/Other", "java/lang/Object")
             _ <- writeClass(tests.resolve("Bad.class"), bytes = Array[Byte](1, 2, 3))
             entries = List(
-              "demo/Parent.class" -> classBytes("demo/Parent", "java/lang/Object"),
-              "demo/Mid.class"    -> classBytes("demo/Mid", "demo/Parent"),
-              "fw/Marker.class"   -> classBytes("fw/Marker", "java/lang/Object"),
-              "demo/Finger.class" -> fingerprint("demo/Finger", "demo.Parent", module = true),
+              "demo/Parent.class"    -> classBytes("demo/Parent", "java/lang/Object"),
+              "demo/Mid.class"       -> classBytes("demo/Mid", "demo/Parent"),
+              "fw/Marker.class"      -> classBytes("fw/Marker", "java/lang/Object"),
+              "demo/Finger.class"    -> fingerprint("demo/Finger", "demo.Parent", module = true),
               "demo/PlainMark.class" -> fingerprint("demo/PlainMark", "demo.Parent", module = false),
-              "demo/Odd.class"    -> odd("demo/Odd"),
+              "demo/Odd.class"       -> odd("demo/Odd"),
             )
-            _       <- jar(lib, entries*)
-            broken  <- SuiteNames.discover(tests, List(lib), "fw.Marker").either
-            _       <- ZIO.attemptBlocking(Files.delete(tests.resolve("Bad.class"))).orDie
-            found   <- SuiteNames.discover(tests, List(lib), "fw.Marker")
+            _      <- jar(lib, entries*)
+            broken <- SuiteNames.discover(tests, List(lib), "fw.Marker").either
+            _      <- ZIO.attemptBlocking(Files.delete(tests.resolve("Bad.class"))).orDie
+            found  <- SuiteNames.discover(tests, List(lib), "fw.Marker")
           yield assertTrue(
             broken match
               case Left(ClassShapeError.ClassFile(label)) => label.endsWith("Bad.class")
-              case _                                       => false
+              case _                                      => false
             ,
             found == SuiteNames.Found.Suites(List("demo.HelloSpec", "demo.Plain")),
           )
@@ -84,7 +84,7 @@ object SuiteNamesLawSpec extends ZIOSpecDefault:
       assertTrue(
         SuiteNames.choose(List(loop, anon, hidden, hit, parent), world, marks) == List("demo.Hit", "demo.Parent"),
         SuiteNames.choose(List(hit), world, List(SuiteNames.Mark("demo.Parent", module = false))) == Nil,
-      )
+      ),
   )
 
   private def writeClass(path: Path, name: String = "", superName: String = "", bytes: Array[Byte] = Array.empty) =
@@ -144,25 +144,21 @@ object SuiteNamesLawSpec extends ZIOSpecDefault:
     writer.toByteArray
 
   private def writeBytes(path: Path, bytes: Array[Byte]) =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        Files.write(path, bytes)
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      Files.write(path, bytes)
+    }.orDie
 
   private def jar(path: Path, entries: (String, Array[Byte])*) =
-    ZIO
-      .attemptBlocking {
-        Option(path.getParent).foreach(parent => Files.createDirectories(parent))
-        val out = new ZipOutputStream(Files.newOutputStream(path))
-        try
-          entries.foreach { (name, bytes) =>
-            out.putNextEntry(new ZipEntry(name))
-            out.write(bytes)
-            out.closeEntry()
-          }
-        finally out.close()
-      }
-      .orDie
+    ZIO.attemptBlocking {
+      Option(path.getParent).foreach(parent => Files.createDirectories(parent))
+      val out = new ZipOutputStream(Files.newOutputStream(path))
+      try
+        entries.foreach { (name, bytes) =>
+          out.putNextEntry(new ZipEntry(name))
+          out.write(bytes)
+          out.closeEntry()
+        }
+      finally out.close()
+    }.orDie
 end SuiteNamesLawSpec

@@ -18,50 +18,53 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object CallsResolveLawSpec extends ZIOSpecDefault:
   def spec = suite("calls resolve laws")(
     test("verify needs a lock, and update then check name the cell"):
-      Workspace.work("histos-calls-resolve").flatMap: dir =>
-        val store = ContentStore.in(dir.resolve("store"))
-        val layer = (Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++ ZLayer.succeed(store)) >+>
-          Loader.live
-        val program =
-          for
-            api <- apiJar(dir.resolve("histos-api.jar"))
-            _   <- Workspace.writeString(dir.resolve("histos.scala"), buildFile).catchAll(error =>
-              ZIO.dieMessage(error.message)
+      Workspace
+        .work("histos-calls-resolve")
+        .flatMap: dir =>
+          val store = ContentStore.in(dir.resolve("store"))
+          val layer =
+            (Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++ ZLayer.succeed(store)) >+>
+              Loader.live
+          val program =
+            for
+              api <- apiJar(dir.resolve("histos-api.jar"))
+              _   <- Workspace
+                .writeString(dir.resolve("histos.scala"), buildFile)
+                .catchAll(error => ZIO.dieMessage(error.message))
+              (missing, missingHeard) <- speak(say =>
+                Calls.resolve(dir, api, ResolveAction.Verify, say, NativeOrigin.Central)
+              )
+              (updated, updatedHeard) <- speak(say =>
+                Calls.resolve(dir, api, ResolveAction.Update, say, NativeOrigin.Central)
+              )
+              lockPath = dir.resolve("dependencies.lock")
+              lockFile                  <- ZIO.attemptBlocking(Files.isRegularFile(lockPath)).orDie
+              lockText                  <- ZIO.attemptBlocking(Files.readString(lockPath)).orDie
+              (verified, verifiedHeard) <- speak(say =>
+                Calls.resolve(dir, api, ResolveAction.Verify, say, NativeOrigin.Central)
+              )
+              (checked, checkedHeard) <- speak(say =>
+                Calls.resolve(dir, api, ResolveAction.Check, say, NativeOrigin.Central)
+              )
+            yield assertTrue(
+              missing == Right(()),
+              done(missingHeard).exists(faultHas("no dependency lock at")),
+              updated == Right(()),
+              done(updatedHeard).contains(CallResult.reported()),
+              outs(updatedHeard).startsWith(lockPath.toString),
+              outs(updatedHeard).contains("evict org.scala-lang scala-library 2.12.20 3.10.0"),
+              outs(updatedHeard).contains("evict org.scala-lang scala-library 2.13.17 3.10.0"),
+              lockFile,
+              lockText.contains("resolvelaw"),
+              lockText.contains("3.10.0"),
+              verified == Right(()),
+              done(verifiedHeard).contains(CallResult.reported()),
+              outs(verifiedHeard).contains("resolvelaw 3.10.0 jvm"),
+              checked == Right(()),
+              done(checkedHeard).contains(CallResult.reported()),
+              outs(checkedHeard).contains("resolvelaw 3.10.0 jvm"),
             )
-            (missing, missingHeard) <- speak(say =>
-              Calls.resolve(dir, api, ResolveAction.Verify, say, NativeOrigin.Central)
-            )
-            (updated, updatedHeard) <- speak(say =>
-              Calls.resolve(dir, api, ResolveAction.Update, say, NativeOrigin.Central)
-            )
-            lockPath = dir.resolve("dependencies.lock")
-            lockFile <- ZIO.attemptBlocking(Files.isRegularFile(lockPath)).orDie
-            lockText <- ZIO.attemptBlocking(Files.readString(lockPath)).orDie
-            (verified, verifiedHeard) <- speak(say =>
-              Calls.resolve(dir, api, ResolveAction.Verify, say, NativeOrigin.Central)
-            )
-            (checked, checkedHeard) <- speak(say =>
-              Calls.resolve(dir, api, ResolveAction.Check, say, NativeOrigin.Central)
-            )
-          yield assertTrue(
-            missing == Right(()),
-            done(missingHeard).exists(faultHas("no dependency lock at")),
-            updated == Right(()),
-            done(updatedHeard).contains(CallResult.reported()),
-            outs(updatedHeard).startsWith(lockPath.toString),
-            outs(updatedHeard).contains("evict org.scala-lang scala-library 2.12.20 3.10.0"),
-            outs(updatedHeard).contains("evict org.scala-lang scala-library 2.13.17 3.10.0"),
-            lockFile,
-            lockText.contains("resolvelaw"),
-            lockText.contains("3.10.0"),
-            verified == Right(()),
-            done(verifiedHeard).contains(CallResult.reported()),
-            outs(verifiedHeard).contains("resolvelaw 3.10.0 jvm"),
-            checked == Right(()),
-            done(checkedHeard).contains(CallResult.reported()),
-            outs(checkedHeard).contains("resolvelaw 3.10.0 jvm"),
-          )
-        program.provideSomeLayer[Scope](layer)
+          program.provideSomeLayer[Scope](layer)
   )
 
   private val buildFile =
@@ -81,13 +84,16 @@ object CallsResolveLawSpec extends ZIOSpecDefault:
     source match
       case None       => ZIO.dieMessage("api classes have no code source")
       case Some(path) =>
-        ZIO.attemptBlocking(Files.isRegularFile(path)).orDie.flatMap: file =>
-          if file then ZIO.succeed(path)
-          else
-            ClassJar
-              .write(path, dest)
-              .map(_.path)
-              .catchAll(error => ZIO.dieMessage(error.toString))
+        ZIO
+          .attemptBlocking(Files.isRegularFile(path))
+          .orDie
+          .flatMap: file =>
+            if file then ZIO.succeed(path)
+            else
+              ClassJar
+                .write(path, dest)
+                .map(_.path)
+                .catchAll(error => ZIO.dieMessage(error.toString))
 
   private def faultHas(text: String)(result: CallResult): Boolean =
     result match

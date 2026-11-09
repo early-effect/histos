@@ -41,12 +41,12 @@ object CompileLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a coverage row is absent from a normal compile and present on a coverage compile"):
-      val plain = CompileInputs.declared(request, Sha256.trusted("src"))
+      val plain   = CompileInputs.declared(request, Sha256.trusted("src"))
       val covered = CompileInputs.declared(request.copy(coverage = Some("on")), Sha256.trusted("src"))
       assertTrue(
         !plain.exists(_.input == CompileInput.Coverage),
         CompileInputs.diff(plain, covered) == List(CompileInput.Coverage),
-      )
+      ),
   )
 
   private def request: CompileRequest =
@@ -68,3 +68,4 @@ object CompileLawSpec extends ZIOSpecDefault:
       Nil,
       Nil,
     )
+end CompileLawSpec

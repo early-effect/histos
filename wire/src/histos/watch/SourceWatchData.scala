@@ -1,6 +1,6 @@
 package histos.watch
 
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum WatchError:
   case Read(path: Path)

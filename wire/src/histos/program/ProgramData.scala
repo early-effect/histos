@@ -2,11 +2,11 @@ package histos.program
 
 import histos.doctor.{Diagnostic, Noted}
 import histos.node.NodeMiss
-import histos.pack.{MainClassError}
-import histos.resolve.{ResolveError}
-import histos.zinc.{GraphCompileError}
+import histos.pack.MainClassError
+import histos.resolve.ResolveError
+import histos.zinc.GraphCompileError
 import histos.{Aggregate, Platform, ProjectName, ScalaVersion}
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum ProgramError:
   case Tool(
@@ -43,7 +43,7 @@ enum ProgramError:
 
   def message: String = this match
     case Tool(_, _, error)       => error.message
-    case Absent(name, _)        => s"'$name' is not a module"
+    case Absent(name, _)         => s"'$name' is not a module"
     case Aggregate(name)         => s"'${name.value}' is an aggregate"
     case NoMain(name)            => s"'${name.value}' does not name a main"
     case Choose(name, platforms) =>

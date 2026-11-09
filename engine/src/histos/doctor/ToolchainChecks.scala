@@ -12,12 +12,12 @@ import zio.{UIO, ZIO}
 
 /** JDK, Node, clang, and the runnerTools the generated jobs install. */
 object ToolchainChecks:
-  val jdkId: CheckId      = CheckId.trusted("jdk.source")
+  val jdkId: CheckId       = CheckId.trusted("jdk.source")
   val nodeFloorId: CheckId = CheckId.trusted("node.floor")
-  val shadowId: CheckId   = CheckId.trusted("node.shadowed")
-  val clangId: CheckId    = CheckId.trusted("clang.source")
-  val coverId: CheckId    = CheckId.trusted("runner-tools.cover")
-  val agreeId: CheckId    = CheckId.trusted("runner-tools.agree")
+  val shadowId: CheckId    = CheckId.trusted("node.shadowed")
+  val clangId: CheckId     = CheckId.trusted("clang.source")
+  val coverId: CheckId     = CheckId.trusted("runner-tools.cover")
+  val agreeId: CheckId     = CheckId.trusted("runner-tools.agree")
 
   def checks(machine: Machine, graph: ProjectGraph): List[DoctorCheck] =
     List(
@@ -30,37 +30,44 @@ object ToolchainChecks:
     )
 
   def jdk(machine: Machine): UIO[List[Outcome]] =
-    Toolchain.read(machine).map:
-      case JdkRead.Chosen(runtime, source) =>
-        List(Outcome.Ok(jdkId, s"jdk ${runtime.version.value} at ${runtime.home} from ${source.label}"))
-      case JdkRead.Failed(error, source) =>
-        List(Outcome.Found(ToolchainDiagnostic.Jdk(Toolchain.failure(error, source))))
+    Toolchain
+      .read(machine)
+      .map:
+        case JdkRead.Chosen(runtime, source) =>
+          List(Outcome.Ok(jdkId, s"jdk ${runtime.version.value} at ${runtime.home} from ${source.label}"))
+        case JdkRead.Failed(error, source) =>
+          List(Outcome.Found(ToolchainDiagnostic.Jdk(Toolchain.failure(error, source))))
 
   def nodeFloor(machine: Machine, graph: ProjectGraph): UIO[List[Outcome]] =
     if !histos.node.Node.required(graph) then ZIO.succeed(List(Outcome.Ok(nodeFloorId, "no Js module")))
     else
-      NodeToolchain.choose(machine, graph.runnerTools.nodePath).either.map:
-        case Right(choice) =>
-          val runtime = choice.runtime
-          List(
-            Outcome.Ok(
-              nodeFloorId,
-              s"node ${runtime.version.value} at ${runtime.binary.path} from ${NodeToolchain.origin(choice.source)}",
+      NodeToolchain
+        .choose(machine, graph.runnerTools.nodePath)
+        .either
+        .map:
+          case Right(choice) =>
+            val runtime = choice.runtime
+            List(
+              Outcome.Ok(
+                nodeFloorId,
+                s"node ${runtime.version.value} at ${runtime.binary.path} from ${NodeToolchain.origin(choice.source)}",
+              )
             )
-          )
-        case Left(error) =>
-          List(Outcome.Found(ToolchainDiagnostic.NodeFloor(NodeToolchain.failure(error))))
+          case Left(error) =>
+            List(Outcome.Found(ToolchainDiagnostic.NodeFloor(NodeToolchain.failure(error))))
 
   def nodeShadow(machine: Machine): UIO[List[Outcome]] =
-    NodeToolchain.sights(machine).map: found =>
-      NodeToolchain.shadow(found) match
-        case None =>
-          List(Outcome.Ok(shadowId, "PATH does not hide a newer node"))
-        case Some(hidden) =>
-          val line = exportLine(hidden.newer.binary)
-          val summary =
-            s"node ${hidden.first.version.value} at ${hidden.first.binary} is first on PATH and hides node ${hidden.newer.version.value} at ${hidden.newer.binary}."
-          List(Outcome.Found(ToolchainDiagnostic.NodeShadowed(line, summary)))
+    NodeToolchain
+      .sights(machine)
+      .map: found =>
+        NodeToolchain.shadow(found) match
+          case None =>
+            List(Outcome.Ok(shadowId, "PATH does not hide a newer node"))
+          case Some(hidden) =>
+            val line    = exportLine(hidden.newer.binary)
+            val summary =
+              s"node ${hidden.first.version.value} at ${hidden.first.binary} is first on PATH and hides node ${hidden.newer.version.value} at ${hidden.newer.binary}."
+            List(Outcome.Found(ToolchainDiagnostic.NodeShadowed(line, summary)))
 
   def clang(machine: Machine, graph: ProjectGraph): UIO[List[Outcome]] =
     NativeProject.declaration(graph) match
@@ -68,7 +75,11 @@ object ToolchainChecks:
         ZIO.succeed(List(Outcome.Ok(clangId, "no Native module")))
       case NativeDeclaration.Missing(name) =>
         ZIO.succeed(
-          List(Outcome.Found(ToolchainDiagnostic.Clang(s"${NativeDeclaration.Missing(name).message} clang is resolved from PATH.")))
+          List(
+            Outcome.Found(
+              ToolchainDiagnostic.Clang(s"${NativeDeclaration.Missing(name).message} clang is resolved from PATH.")
+            )
+          )
         )
       case NativeDeclaration.Disagree(left, right) =>
         ZIO.succeed(
@@ -81,11 +92,14 @@ object ToolchainChecks:
           )
         )
       case NativeDeclaration.Major(major) =>
-        ClangProbe.resolve(major, machine.env).either.map:
-          case Right(found) =>
-            List(Outcome.Ok(clangId, s"clang ${found.version.value} at ${found.clang} from PATH"))
-          case Left(error) =>
-            List(Outcome.Found(ToolchainDiagnostic.Clang(Survey.clangProblem(error))))
+        ClangProbe
+          .resolve(major, machine.env)
+          .either
+          .map:
+            case Right(found) =>
+              List(Outcome.Ok(clangId, s"clang ${found.version.value} at ${found.clang} from PATH"))
+            case Left(error) =>
+              List(Outcome.Found(ToolchainDiagnostic.Clang(Survey.clangProblem(error))))
 
   def cover(graph: ProjectGraph): Outcome =
     val native   = nativeModules(graph)
@@ -112,11 +126,13 @@ object ToolchainChecks:
     s"export HISTOS_NODE=$shown"
 
   private def nodeAgree(graph: ProjectGraph): Option[Outcome] =
-    graph.runnerTools.node.filter(_.value < 25).map: floor =>
-      val raised  = graph.runnerTools.copy(node = Some(NodeFloor.trusted(25)))
-      val shape   = RunnerCall.show(raised)
-      val summary = s"NodeFloor(${floor.value}) is below 25. Raise it to NodeFloor(25). Add $shape."
-      Outcome.Found(ToolchainDiagnostic.Agree(summary, shape))
+    graph.runnerTools.node
+      .filter(_.value < 25)
+      .map: floor =>
+        val raised  = graph.runnerTools.copy(node = Some(NodeFloor.trusted(25)))
+        val shape   = RunnerCall.show(raised)
+        val summary = s"NodeFloor(${floor.value}) is below 25. Raise it to NodeFloor(25). Add $shape."
+        Outcome.Found(ToolchainDiagnostic.Agree(summary, shape))
 
   private def llvmAgree(graph: ProjectGraph): Option[Outcome] =
     graph.runnerTools.llvm.flatMap: revision =>
@@ -133,7 +149,7 @@ object ToolchainChecks:
             s"LLVM ${revision.value} is major $have, and the modules name ClangMajor(${major.value}). Raise the revision. Add $shape."
           Some(Outcome.Found(ToolchainDiagnostic.Agree(summary, shape)))
         case many =>
-          val shape = RunnerCall.show(graph.runnerTools)
+          val shape   = RunnerCall.show(graph.runnerTools)
           val summary =
             s"LLVM ${revision.value} cannot match ClangMajor ${many.map(_.value).mkString(" and ")}. Make the Native modules name one clang major, then set the ToolRevision major to that number. Add $shape."
           Some(Outcome.Found(ToolchainDiagnostic.Agree(summary, shape)))

@@ -1,6 +1,6 @@
 package histos.node
 
-import histos.toolchain.{RuntimeIdentity}
+import histos.toolchain.RuntimeIdentity
 
 /** The Node a Js launch will run. */
 final case class NodeSurvey(

@@ -14,12 +14,18 @@ final case class JsTools(
 )
 final case class NativeTools(revision: NativeVersion, bridgeScala: ScalaVersion)
 
+/** `dynamic` is the scalafmt-dynamic-core revision. `scala` is the Scala version that revision loads scalafmt-core for.
+  * The scalafmt-core revision is the `version` line in the configuration.
+  */
+final case class FormatTools(dynamic: ToolRevision, scala: ScalaVersion)
+
 /** Build-level defaults. A module may override its platform toolchain revision.
   */
 final case class ToolCatalog(
     compilers: CompilerTools,
     js: JsTools,
     native: NativeTools,
+    format: FormatTools,
 )
 
 object ToolCatalog:
@@ -36,4 +42,5 @@ object ToolCatalog:
     // 0.5.12 aborts in libunwind on Apple Silicon. The newer nightly
     // 0.5.13-20261031-4e8508c-SNAPSHOT publishes a javalib whose checksum does not match.
     NativeTools(NativeVersion("0.5.13-20261030-eb3f3b8-SNAPSHOT"), ScalaVersion("3.9.0")),
+    FormatTools(ToolRevision("3.11.5"), ScalaVersion("2.13.18")),
   )

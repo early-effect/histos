@@ -1,6 +1,6 @@
 package histos.pack
 
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 enum AssemblyError:
   case NotADirectory(path: Path)

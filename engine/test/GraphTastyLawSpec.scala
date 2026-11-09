@@ -35,40 +35,43 @@ object GraphTastyLawSpec extends ZIOSpecDefault:
   def spec = suite("graph tasty laws")(
     test("3.9 refuses a 3.10 upstream after that upstream has classes"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-graph-tasty").flatMap: dir =>
-          val coreSrc = dir.resolve(coreName.value).resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
-          val appSrc = dir.resolve(appName.value).resolve("src").resolve("main").resolve("scala").resolve("App.scala")
-          val coreClass = GraphCompile.classesDir(dir, coreName, scala310, Platform.Jvm).resolve("Core.class")
-          val program =
-            for
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              _ <- Workspace.createDirectories(parentOf(coreSrc))
-              _ <- Workspace.createDirectories(parentOf(appSrc))
-              _ <- Workspace.writeString(coreSrc, "object Core:\n  def ready: Int = 1\n")
-              _ <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
-              compiled <- GraphCompile
-                .run(
-                  CompileSession(dir, graph, jdk, NativeOrigin.read(machine.env), lock = pinned(lock)),
-                  List(appName),
-                  Some(Platform.Jvm),
-                  _ => ZIO.unit,
+        Workspace
+          .work("histos-graph-tasty")
+          .flatMap: dir =>
+            val coreSrc =
+              dir.resolve(coreName.value).resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
+            val appSrc = dir.resolve(appName.value).resolve("src").resolve("main").resolve("scala").resolve("App.scala")
+            val coreClass = GraphCompile.classesDir(dir, coreName, scala310, Platform.Jvm).resolve("Core.class")
+            val program   =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                _        <- Workspace.createDirectories(parentOf(coreSrc))
+                _        <- Workspace.createDirectories(parentOf(appSrc))
+                _        <- Workspace.writeString(coreSrc, "object Core:\n  def ready: Int = 1\n")
+                _        <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
+                compiled <- GraphCompile
+                  .run(
+                    CompileSession(dir, graph, jdk, NativeOrigin.read(machine.env), lock = pinned(lock)),
+                    List(appName),
+                    Some(Platform.Jvm),
+                    _ => ZIO.unit,
+                  )
+                  .either
+                wrote <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
+              yield
+                val detail = compiled.fold(_.message, _ => "")
+                assertTrue(
+                  wrote,
+                  detail.contains("'tastyapp' 3.9.0 cannot read 'tastycore' 3.10.0 jvm"),
                 )
-                .either
-              wrote <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
-            yield
-              val detail = compiled.fold(_.message, _ => "")
-              assertTrue(
-                wrote,
-                detail.contains("'tastyapp' 3.9.0 cannot read 'tastycore' 3.10.0 jvm"),
-              )
-          program.provideSomeLayer[Resolve & Scope](session(dir, lock))
+            program.provideSomeLayer[Resolve & Scope](session(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def graph: ProjectGraph =

@@ -1,10 +1,13 @@
 package histos.client
 
+import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{PluginArgs, PluginTaskId}
 import histos.server.Call
 import histos.task.TaskId
 import histos.testrun.TestMode
 import histos.{Platform, ProjectName}
+
+import zio.NonEmptyChunk
 
 /** Batch argv the native client sends. Anything else is the JVM client's command. */
 object Batch:
@@ -17,9 +20,15 @@ object Batch:
           case Nil          => runCall(name, None)
           case token :: Nil => runCall(name, Some(token))
           case _            => None
-      case "clean" :: rest    => projects(rest).map(Call.Clean(_))
-      case "cleanFull" :: Nil => Some(Call.CleanFull)
-      case _                  => None
+      case "clean" :: rest            => projects(rest).map(Call.Clean(_))
+      case "cleanFull" :: Nil         => Some(Call.CleanFull)
+      case "fmt" :: "--check" :: rest => projects(rest).map(names => Call.Format(targets(names), FormatMode.Check))
+      case "fmt" :: rest              => projects(rest).map(names => Call.Format(targets(names), FormatMode.Write))
+      case _                          => None
+
+  /** No project is the build. */
+  private def targets(names: List[ProjectName]): FormatTargets =
+    NonEmptyChunk.fromIterableOption(names).fold(FormatTargets.Build)(FormatTargets.Projects(_))
 
   private def projects(raw: List[String]): Option[List[ProjectName]] =
     raw.foldLeft[Option[List[ProjectName]]](Some(Nil)): (acc, token) =>

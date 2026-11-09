@@ -23,11 +23,12 @@ object CliGapLawSpec extends ZIOSpecDefault:
 
   def spec = suite("cli gap laws")(
     test("one failed cell, many failed cells, and any other compile error keep their own text"):
-      val name = ProjectName.trusted("gaplaw")
-      val one  = GraphCompileError.Failed(name, ScalaVersion("3.10.0"), Platform.Jvm, CompileError.NoSources)
-      val root = GraphCompileError.NoRoot(name)
+      val name   = ProjectName.trusted("gaplaw")
+      val one    = GraphCompileError.Failed(name, ScalaVersion("3.10.0"), Platform.Jvm, CompileError.NoSources)
+      val root   = GraphCompileError.NoRoot(name)
       val single = GraphCompileError.Cells(zio.NonEmptyChunk(root))
-      val many   = GraphCompileError.Cells(zio.NonEmptyChunk(root, GraphCompileError.NoRoot(ProjectName.trusted("other"))))
+      val many   =
+        GraphCompileError.Cells(zio.NonEmptyChunk(root, GraphCompileError.NoRoot(ProjectName.trusted("other"))))
       assertTrue(
         Cli.compileFailure(one) == "'gaplaw' 3.10.0 failed to compile",
         Cli.compileFailure(single) == "1 cell failed to compile",
@@ -37,8 +38,10 @@ object CliGapLawSpec extends ZIOSpecDefault:
     ,
     test("a repo that is not a git checkout treats the diff as the whole suite"):
       stand("histos-cli-gap-absent").flatMap: dir =>
-        Cli.launch(List("affected", "--base", "HEAD"), dir).map: done =>
-          assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[\"all\"]\n")
+        Cli
+          .launch(List("affected", "--base", "HEAD"), dir)
+          .map: done =>
+            assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[\"all\"]\n")
     ,
     test("an empty diff against HEAD selects nothing"):
       stand("histos-cli-gap-empty").flatMap: dir =>
@@ -48,7 +51,7 @@ object CliGapLawSpec extends ZIOSpecDefault:
           _    <- git(dir, "add", "histos.scala")
           _    <- git(dir, "-c", "user.email=law@example.test", "-c", "user.name=law", "commit", "-m", "law")
           done <- Cli.launch(List("affected", "--base", "HEAD"), dir)
-        yield assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[]\n")
+        yield assertTrue(done.exit == CliExit.Success, done.err == "", done.out == "[]\n"),
   )
 
   private def stand(prefix: String) =

@@ -42,7 +42,7 @@ object ImportDraft:
     val coords = if names.length > 1 then Nil else mapped
     val parked =
       if names.length > 1 then mapped.map(coord => s"// unmapped: ${coord.shown}") else Nil
-    val head = names.head
+    val head     = names.head
     val compiled = names.map { name =>
       val own = if name == head then coords else Nil
       Compiled(
@@ -58,7 +58,15 @@ object ImportDraft:
       )
     }
     val idents = assign(compiled.map(_.name))
-    render(compiled.map(mod => mod.copy(ident = idents(mod.name))), None, missed ++ other ++ extra ++ parked, Nil, Nil, fallbackName, Some(scalaAll))
+    render(
+      compiled.map(mod => mod.copy(ident = idents(mod.name))),
+      None,
+      missed ++ other ++ extra ++ parked,
+      Nil,
+      Nil,
+      fallbackName,
+      Some(scalaAll),
+    )
 
   private final case class Coord(dep: Dep, test: Boolean):
     def shown: String = renderDep(dep)
@@ -115,18 +123,18 @@ object ImportDraft:
   private def localScala(text: String, vals: Map[String, String], scalaAll: ScalaPin): List[String] =
     val chosen = versionOf(scalaAll)
     scalaPin(text, vals) match
-      case ScalaPin.Missing                         => Nil
+      case ScalaPin.Missing                             => Nil
       case ScalaPin.Found(version) if version == chosen => Nil
-      case ScalaPin.Found(version)                  => List(s"// unmapped: module scala version $version")
-      case ScalaPin.Bad(raw)                        => List(s"// unmapped: scalaVersion $raw")
+      case ScalaPin.Found(version)                      => List(s"// unmapped: module scala version $version")
+      case ScalaPin.Bad(raw)                            => List(s"// unmapped: scalaVersion $raw")
 
   private final case class Dir(directory: Option[String], notes: List[String])
 
   private def directoryOf(name: String, text: String): Dir =
     FilePat.findFirstMatchIn(text).map(_.group(1)).filter(_.nonEmpty) match
-      case None | Some(".")        => Dir(None, Nil)
+      case None | Some(".")           => Dir(None, Nil)
       case Some(path) if path == name => Dir(None, Nil)
-      case Some(path)              =>
+      case Some(path)                 =>
         ProjectPath.from(path) match
           case Right(_) => Dir(Some(path), Nil)
           case Left(_)  => Dir(None, List(s"// unmapped: directory $path"))
@@ -149,32 +157,36 @@ object ImportDraft:
           case None => MainFound(None, List(s"// unmapped: $line"))
 
   private def depends(text: String): (List[String], List[String]) =
-    DepsOn.findAllMatchIn(text).foldLeft((List.empty[String], List.empty[String])):
-      case ((edges, notes), hit) =>
-        val body = hit.group(1).trim
-        if body.nonEmpty && IdentList.matches(body) then (edges ++ body.split(",").map(_.trim).toList, notes)
-        else (edges, notes :+ s"// unmapped: .dependsOn($body)")
+    DepsOn
+      .findAllMatchIn(text)
+      .foldLeft((List.empty[String], List.empty[String])):
+        case ((edges, notes), hit) =>
+          val body = hit.group(1).trim
+          if body.nonEmpty && IdentList.matches(body) then (edges ++ body.split(",").map(_.trim).toList, notes)
+          else (edges, notes :+ s"// unmapped: .dependsOn($body)")
 
   private def depsIn(text: String, vals: Map[String, String]): (List[Dep], List[Dep], List[String]) =
-    DepPat.findAllMatchIn(text).foldLeft((List.empty[Dep], List.empty[Dep], List.empty[String])):
-      case ((compile, test, notes), hit) =>
-        val line = lineAt(text, hit.start)
-        if line.contains("classifier") || line.contains("exclude(") then
-          (compile, test, notes :+ s"// unmapped: ${line.trim}")
-        else
-          val version = Option(hit.group(4)).orElse(Option(hit.group(5)).flatMap(vals.get))
-          val config  = Option(hit.group(6)).orElse(Option(hit.group(7)))
-          version match
-            case None =>
-              (compile, test, notes :+ s"// unmapped: ${line.trim}")
-            case Some(_) if config.exists(token => !compileConfig(token) && !testConfig(token)) =>
-              (compile, test, notes :+ s"// unmapped: ${line.trim}")
-            case Some(revision) =>
-              coordinate(hit.group(1), hit.group(2), hit.group(3), revision) match
-                case None      => (compile, test, notes :+ s"// unmapped: ${line.trim}")
-                case Some(dep) =>
-                  if config.exists(testConfig) then (compile, test :+ dep, notes)
-                  else (compile :+ dep, test, notes)
+    DepPat
+      .findAllMatchIn(text)
+      .foldLeft((List.empty[Dep], List.empty[Dep], List.empty[String])):
+        case ((compile, test, notes), hit) =>
+          val line = lineAt(text, hit.start)
+          if line.contains("classifier") || line.contains("exclude(") then
+            (compile, test, notes :+ s"// unmapped: ${line.trim}")
+          else
+            val version = Option(hit.group(4)).orElse(Option(hit.group(5)).flatMap(vals.get))
+            val config  = Option(hit.group(6)).orElse(Option(hit.group(7)))
+            version match
+              case None =>
+                (compile, test, notes :+ s"// unmapped: ${line.trim}")
+              case Some(_) if config.exists(token => !compileConfig(token) && !testConfig(token)) =>
+                (compile, test, notes :+ s"// unmapped: ${line.trim}")
+              case Some(revision) =>
+                coordinate(hit.group(1), hit.group(2), hit.group(3), revision) match
+                  case None      => (compile, test, notes :+ s"// unmapped: ${line.trim}")
+                  case Some(dep) =>
+                    if config.exists(testConfig) then (compile, test :+ dep, notes)
+                    else (compile :+ dep, test, notes)
 
   private def thisBuildDeps(text: String, vals: Map[String, String]): Shared =
     val lines = text.linesIterator.filter(line => line.contains("ThisBuild") && line.contains("libraryDependencies"))
@@ -201,7 +213,7 @@ object ImportDraft:
     token == "Test" || token == "test"
 
   private def lib(body: String, vals: Map[String, String]): Either[String, Coord] =
-    val trimmed = body.trim
+    val trimmed     = body.trim
     val (raw, rest) = trimmed.headOption match
       case Some('s') if trimmed.startsWith("s\"") || trimmed.startsWith("s\"") =>
         quoted(trimmed.drop(1), vals)
@@ -234,7 +246,7 @@ object ImportDraft:
       hit =>
         vals.get(hit.group(1)) match
           case Some(value) => java.util.regex.Matcher.quoteReplacement(value)
-          case None        => java.util.regex.Matcher.quoteReplacement(hit.matched)
+          case None        => java.util.regex.Matcher.quoteReplacement(hit.matched),
     )
 
   private def projects(text: String): List[Span] =
@@ -274,9 +286,13 @@ object ImportDraft:
             case Left(_)        => ScalaPin.Bad(text)
 
   private def organization(text: String, vals: Map[String, String]): Option[String] =
-    OrgPat.findAllMatchIn(text).toList.headOption.flatMap: hit =>
-      val raw = Option(hit.group(1)).orElse(Option(hit.group(2)).flatMap(vals.get))
-      raw.filter(value => Organization.from(value).isRight)
+    OrgPat
+      .findAllMatchIn(text)
+      .toList
+      .headOption
+      .flatMap: hit =>
+        val raw = Option(hit.group(1)).orElse(Option(hit.group(2)).flatMap(vals.get))
+        raw.filter(value => Organization.from(value).isRight)
 
   private def nameOf(text: String): Option[String] =
     NamePat.findFirstMatchIn(text).map(_.group(1))
@@ -288,12 +304,17 @@ object ImportDraft:
     plugins.linesIterator.map(_.trim).filter(_.startsWith("addSbtPlugin")).map(line => s"// unmapped: $line").toList
 
   private def settingNotes(text: String): List[String] =
-    text.linesIterator.map(_.trim).filter(_.nonEmpty).filterNot(_.startsWith("//")).filterNot(_.startsWith("/*")).flatMap {
-      line =>
+    text.linesIterator
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .filterNot(_.startsWith("//"))
+      .filterNot(_.startsWith("/*"))
+      .flatMap { line =>
         if Unmapped.exists(line.contains) && !line.contains("scalaVersion") && !line.contains("libraryDependencies")
         then Some(clip(line))
         else None
-    }.toList
+      }
+      .toList
 
   private def clip(line: String): String =
     val shown = if line.length > 160 then line.take(157) + "..." else line
@@ -308,30 +329,33 @@ object ImportDraft:
       fallbackName: String,
       scalaFixed: Option[ScalaPin] = None,
   ): String =
-    val usable = compiled.filter(mod => ProjectName.from(mod.name).isRight)
+    val usable   = compiled.filter(mod => ProjectName.from(mod.name).isRight)
     val rejected = compiled.filterNot(mod => ProjectName.from(mod.name).isRight).map { mod =>
       s"// unmapped: project ${mod.name}"
     }
-    val base = if usable.nonEmpty then usable else List(fallbackModule(fallbackName))
+    val base       = if usable.nonEmpty then usable else List(fallbackModule(fallbackName))
     val withShared =
       if sharedCompile.isEmpty && sharedTest.isEmpty then base
-      else base.map(mod => if mod.aggregate then mod else mod.copy(compile = mod.compile ++ sharedCompile, test = mod.test ++ sharedTest))
+      else
+        base.map(mod =>
+          if mod.aggregate then mod else mod.copy(compile = mod.compile ++ sharedCompile, test = mod.test ++ sharedTest)
+        )
     val idents = assign(withShared.map(_.name))
     val known  = withShared.map(_.name).toSet
     val named  = withShared.map: mod =>
       val (ok, bad) = mod.edges.partition(known.contains)
       val extra     = bad.map(edge => s"// unmapped: ${mod.name} depends on $edge")
       mod.copy(ident = idents(mod.name), edges = ok, notes = mod.notes ++ extra)
-    val modules = named.filterNot(_.aggregate)
-    val aggs    = named.filter(_.aggregate)
+    val modules          = named.filterNot(_.aggregate)
+    val aggs             = named.filter(_.aggregate)
     val (ordered, cycle) = schedule(modules)
-    val scalaRaw = scalaFixed.getOrElse(ScalaPin.Missing)
-    val scalaNote = scalaRaw match
+    val scalaRaw         = scalaFixed.getOrElse(ScalaPin.Missing)
+    val scalaNote        = scalaRaw match
       case ScalaPin.Bad(raw) => List(s"// unmapped: scalaVersion $raw")
       case ScalaPin.Missing  => List("// unmapped: scala version was not in the source")
       case ScalaPin.Found(_) => Nil
-    val scalaVer = versionOf(scalaRaw)
-    val versions  = List(scalaVer)
+    val scalaVer    = versionOf(scalaRaw)
+    val versions    = List(scalaVer)
     val sharedScala = versions.distinct.length == 1
     val expr        = if sharedScala then "scala3" else s"""scala"$scalaVer""""
     val header      =
@@ -343,21 +367,17 @@ object ImportDraft:
         "  def graph =",
       )
     val scalaLine = if sharedScala then List(s"""    val scala3 = scala"$scalaVer"""") else Nil
-    val bodies = ordered.flatMap(mod => renderModule(mod, expr, idents))
-    val aggLines =
+    val bodies    = ordered.flatMap(mod => renderModule(mod, expr, idents))
+    val aggLines  =
       if modules.isEmpty then Nil
       else
-        aggs.map(mod =>
-          s"""    val ${mod.ident} = aggregate("${mod.name}", ${modules.map(_.ident).mkString(", ")})"""
-        )
+        aggs.map(mod => s"""    val ${mod.ident} = aggregate("${mod.name}", ${modules.map(_.ident).mkString(", ")})""")
     val aggNote =
       if aggs.nonEmpty && modules.isEmpty then List("// unmapped: aggregate with no modules") else Nil
     val comments =
-      (scalaNote ++ notes ++ rejected ++ cycle ++ aggNote ++ named.flatMap(_.notes)).distinct.map(note =>
-        s"    $note"
-      )
-    val listed    = (ordered ++ aggs).map(_.ident)
-    val projects  = organization match
+      (scalaNote ++ notes ++ rejected ++ cycle ++ aggNote ++ named.flatMap(_.notes)).distinct.map(note => s"    $note")
+    val listed   = (ordered ++ aggs).map(_.ident)
+    val projects = organization match
       case Some(org) =>
         List(s"    Projects", s"""      .organization(organization"$org")(${listed.mkString(", ")})""")
       case None => List(s"    Projects(${listed.mkString(", ")})")
@@ -368,7 +388,7 @@ object ImportDraft:
     Compiled(chosen, chosen, None, Nil, Nil, Nil, None, Nil, aggregate = false)
 
   private def renderModule(mod: Compiled, scalaExpr: String, idents: Map[String, String]): List[String] =
-    val head = s"""    val ${mod.ident} = module("${mod.name}", Jvm)($scalaExpr)"""
+    val head   = s"""    val ${mod.ident} = module("${mod.name}", Jvm)($scalaExpr)"""
     val chains = List(
       mod.directory.map(dir => s""".in(path"$dir")"""),
       if mod.edges.isEmpty then None else Some(s".dependsOn(${mod.edges.map(idents).mkString(", ")})"),
@@ -397,13 +417,14 @@ object ImportDraft:
         case _   =>
           val ready = rest.filter(_.edges.forall(done.contains))
           if ready.nonEmpty then
-            val (later, more) = go(rest.filterNot(mod => ready.exists(_.name == mod.name)), done ++ ready.map(_.name), notes)
+            val (later, more) =
+              go(rest.filterNot(mod => ready.exists(_.name == mod.name)), done ++ ready.map(_.name), notes)
             (ready ++ later, more)
           else
-            val head    = rest.head
-            val dropped = head.edges.filterNot(done.contains)
-            val extra   = dropped.map(edge => s"// unmapped: ${head.name} depends on $edge")
-            val fixed   = head.copy(edges = head.edges.filter(done.contains))
+            val head          = rest.head
+            val dropped       = head.edges.filterNot(done.contains)
+            val extra         = dropped.map(edge => s"// unmapped: ${head.name} depends on $edge")
+            val fixed         = head.copy(edges = head.edges.filter(done.contains))
             val (later, more) = go(rest.tail, done + head.name, notes ++ extra)
             (fixed :: later, more)
     go(pending, Set.empty, Nil)
@@ -417,7 +438,7 @@ object ImportDraft:
     idents
 
   private def identFor(name: String, used: Set[String]): String =
-    val raw = name.map(char => if char == '-' then '_' else char)
+    val raw   = name.map(char => if char == '-' then '_' else char)
     val base0 =
       if raw.nonEmpty && raw.head.isLetter && raw.forall(char => char.isLetterOrDigit || char == '_') then raw
       else "module"
@@ -438,15 +459,15 @@ object ImportDraft:
   private val IdentList = """[A-Za-z_][\w]*(\s*,\s*[A-Za-z_][\w]*)*""".r
   private val DepPat    =
     """"([^"]+)"\s*(%%%|%%|%)\s*"([^"]+)"\s*%\s*(?:"([^"]+)"|([A-Za-z_][\w]*))(?:\s*%\s*(?:"([^"]+)"|([A-Za-z_][\w]*)))?""".r
-  private val ScalaPat = """scalaVersion\s*:=\s*(?:"([^"]+)"|([A-Za-z_][\w]*))""".r
-  private val OrgPat   = """organization\s*:=\s*(?:"([^"]+)"|([A-Za-z_][\w]*))""".r
-  private val NamePat  = """(?<![.\w])name\s*:=\s*"([^"]+)"""".r
-  private val Assign   = """(?:lazy\s+)?val\s+([A-Za-z_][\w]*)\s*=\s*"([^"]*)"""".r
-  private val MainPat  = """Some\(\s*"([^"]+)"\s*\)""".r
-  private val Block    = """(?s)/\*.*?\*/""".r
+  private val ScalaPat    = """scalaVersion\s*:=\s*(?:"([^"]+)"|([A-Za-z_][\w]*))""".r
+  private val OrgPat      = """organization\s*:=\s*(?:"([^"]+)"|([A-Za-z_][\w]*))""".r
+  private val NamePat     = """(?<![.\w])name\s*:=\s*"([^"]+)"""".r
+  private val Assign      = """(?:lazy\s+)?val\s+([A-Za-z_][\w]*)\s*=\s*"([^"]*)"""".r
+  private val MainPat     = """Some\(\s*"([^"]+)"\s*\)""".r
+  private val Block       = """(?s)/\*.*?\*/""".r
   private val LineComment = """//.*""".r
-  private val ValUse   = """\$([A-Za-z_][\w]*)""".r
-  private val Unmapped = List(
+  private val ValUse      = """\$([A-Za-z_][\w]*)""".r
+  private val Unmapped    = List(
     "scalacOptions",
     "resolvers",
     "semanticdb",

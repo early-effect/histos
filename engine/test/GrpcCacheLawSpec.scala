@@ -14,11 +14,11 @@ object GrpcCacheLawSpec extends ZIOSpecDefault:
     test("off stores nothing, a reader cannot write, and purge is not a remote-execution call"):
       ZIO.scoped {
         for
-          port  <- closed
-          off   <- GrpcCache.open("127.0.0.1", port, tls = false, RemoteMode.Off, dev)
-          read  <- GrpcCache.open("127.0.0.1", port, tls = false, RemoteMode.Read, CacheNamespace.Main)
-          found <- off.find(action)
-          kept  <- off.store(action, body).either
+          port   <- closed
+          off    <- GrpcCache.open("127.0.0.1", port, tls = false, RemoteMode.Off, dev)
+          read   <- GrpcCache.open("127.0.0.1", port, tls = false, RemoteMode.Read, CacheNamespace.Main)
+          found  <- off.find(action)
+          kept   <- off.store(action, body).either
           denied <- read.store(action, body).either
           purged <- read.purge.either
         yield assertTrue(
@@ -44,8 +44,7 @@ object GrpcCacheLawSpec extends ZIOSpecDefault:
           refused == Left(RemoteError.Rpc("UNAVAILABLE")),
           writer.mode == RemoteMode.Write,
         )
-      }
-    ,
+      },
   )
 
   private def closed: ZIO[Any, Nothing, Int] =
@@ -57,3 +56,4 @@ object GrpcCacheLawSpec extends ZIOSpecDefault:
         port
       }
       .catchAll(error => ZIO.dieMessage(error.getClass.getName))
+end GrpcCacheLawSpec
