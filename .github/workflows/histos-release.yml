@@ -166,7 +166,7 @@ jobs:
           path: dist-in
       - run: |
           set -eu
-          version=0.2.4
+          version=0.2.5
           jar=dist-in/histos-jar/histos.jar
           linux=dist-in/client-linux-x86_64/histos-client
           mac=dist-in/client-macos-aarch64/histos-client
