@@ -50,7 +50,10 @@ object LoaderConfiguredPluginLawSpec extends ZIOSpecDefault:
             found == Left(
               LoadError.Plugin(PluginLoadError.ForeignEntry(cfg, EntryName.trusted("java.lang.String")))
             )
-          ),
+          )
+      ,
+      test("a path plugin whose entry lives under resources still loads and runs"):
+        executeResource.map(found => assertTrue(found == Right(PluginOutput("noted", Nil)))),
     ) @@ TestAspect.sequential @@ TestAspect.withLiveSystem).provideSomeLayerShared[TestEnvironment](site)
 
   private val site: ZLayer[Any, Nothing, Site] =
@@ -99,6 +102,38 @@ object LoaderConfiguredPluginLawSpec extends ZIOSpecDefault:
         yield output
       .either
       .provideSome[Site](loaderLayer ++ runLayer)
+
+  /** The entry is under `resources/`, the layout a module publishes from. The path root stays the Scala tree. */
+  private def executeResource =
+    ZIO
+      .scoped:
+        for
+          env <- ZIO.service[Site]
+          _   <- Workspace
+            .writeString(env.root.resolve("plugins/res/src/main/scala/Res.scala"), resourceSource)
+            .mapError(LoadError.Io(_))
+          _ <- Workspace
+            .writeString(
+              env.root.resolve(s"plugins/res/src/main/resources/${HistosPlugin.EntryResourceName}"),
+              "res.Res$\n",
+            )
+            .mapError(LoadError.Io(_))
+          _      <- stub[ResolutionService](_.current)(ZIO.succeed(DependencyLock(Nil)))
+          _      <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.dieMessage("fetched"))
+          found  <- loadFile(resourceBuild).mapError(Left(_))
+          output <- found.plugins.run(PluginTaskId(resId, go), PluginArgs.empty).mapError(Right(_))
+        yield output
+      .either
+      .provideSome[Site](loaderLayer ++ runLayer)
+
+  private val resId = PluginId.trusted("law.res")
+
+  private def loadFile(text: String): ZIO[Loader & Site & Scope, LoadError, LoadedBuild] =
+    for
+      env   <- ZIO.service[Site]
+      _     <- Workspace.writeString(env.root.resolve("histos.scala"), text).mapError(LoadError.Io(_))
+      found <- ZIO.serviceWithZIO[Loader](_.load(env.root, env.api))
+    yield found
 
   private def buildFile(uses: String): String =
     s"""plugin(path"plugins/cfg")
@@ -154,5 +189,43 @@ object LoaderConfiguredPluginLawSpec extends ZIOSpecDefault:
       |
       |  def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
       |    ZIO.succeed(PluginOutput("outside", Nil))
+      |""".stripMargin
+
+  private val resourceBuild =
+    """plugin(path"plugins/res/src/main/scala")
+      |import histos.*
+      |import res.*
+      |
+      |object build extends HistosBuild:
+      |  def graph =
+      |    val loaderlaw = module("loaderlaw", Jvm)(scala"3.10.0")
+      |    Projects(use(Res.noted), loaderlaw)
+      |""".stripMargin
+
+  private val resourceSource =
+    """package res
+      |
+      |import histos.plugin.*
+      |import zio.{Scope, ZIO}
+      |
+      |object Res extends HistosPlugin:
+      |  val id: PluginId = PluginId("law.res")
+      |
+      |  def contribute: Contribution =
+      |    Contribution(List(DeclaredTask(TaskName("go"), Seal.Hermetic, Set.empty, Nil, Nil, Nil)), Nil, Nil)
+      |
+      |  def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+      |    ZIO.succeed(PluginOutput("object", Nil))
+      |
+      |  def noted: HistosPlugin = Noted()
+      |end Res
+      |
+      |final class Noted extends HistosPlugin:
+      |  def id: PluginId                  = Res.id
+      |  override def entryClass: Class[?] = Res.getClass
+      |  def contribute: Contribution      = Res.contribute
+      |
+      |  def run(request: RunRequest): ZIO[Scope & PluginScopes, PluginRunError, PluginOutput] =
+      |    ZIO.succeed(PluginOutput("noted", Nil))
       |""".stripMargin
 end LoaderConfiguredPluginLawSpec

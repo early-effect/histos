@@ -44,16 +44,16 @@ private[load] object PluginCompile:
       tree: Path,
       classpath: List[Path],
   ): IO[LoadError, Path] =
-    treeSha(tree).flatMap(sources =>
+    val resources = moduleResources(tree)
+    (treeSha(tree) <&> resourceSha(resources)).flatMap: (sources, extra) =>
       cached(
         store,
         launcher,
         sources,
-        Nil,
+        extra.toList,
         classpath,
-        fillTree(tree, classpath),
+        fillTree(tree, resources, classpath),
       )
-    )
 
   /** A `.class` file under `histos`, `zio`, or `scala` in a compiled plugin tree.
     */
@@ -123,14 +123,37 @@ private[load] object PluginCompile:
           _       <- copyResources(src, classes)
         yield ()
 
-  private def fillTree(tree: Path, classpath: List[Path])(
+  private def fillTree(tree: Path, resources: Option[Path], classpath: List[Path])(
       classes: Path
   ): IO[LoadError, Unit] =
     for
       sources <- scalaSources(tree)
       _       <- scalac(sources, classpath, classes)
       _       <- copyResources(tree, classes)
+      _       <- resources match
+        case Some(dir) => copyResources(dir, classes)
+        case None      => ZIO.unit
     yield ()
+
+  /** `plugin(path".../src/main/scala")` names the sources. `src/main/resources` is that directory's sibling, and a
+    * module publishes `META-INF` from there. A path that is not a Scala source root has no sibling resources.
+    */
+  private def moduleResources(tree: Path): Option[Path] =
+    Option(tree.getFileName)
+      .map(_.toString)
+      .filter(_ == "scala")
+      .map: _ =>
+        tree.getParent.resolve("resources")
+
+  private def resourceSha(resources: Option[Path]): IO[LoadError, Option[String]] =
+    resources match
+      case None      => ZIO.succeed(None)
+      case Some(dir) =>
+        ZIO
+          .attemptBlocking(Files.isDirectory(dir))
+          .mapError(_ => LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(dir))))
+          .flatMap: present =>
+            if present then treeSha(dir).map(Some(_)) else ZIO.succeed(None)
 
   private def key(
       launcher: ApiDigest,
