@@ -387,6 +387,7 @@ direct org.ow2.asm asm-commons 9.11.1 java
 direct org.ow2.asm asm-util 9.11.1 java
 direct org.ow2.asm asm-analysis 9.11.1 java
 direct org.bouncycastle bcpg-jdk18on 1.86 java
+direct org.scalameta scalafmt-interfaces 3.11.5 java
 direct io.grpc grpc-api 1.85.1 java
 direct io.grpc grpc-netty-shaded 1.85.1 java
 direct com.fasterxml.jackson.core jackson-annotations 2.22 java
@@ -413,6 +414,7 @@ artifact org.ow2.asm asm-commons 9.11.1 6a5095ec53726156a78b2cd2efd45bc4e877754e
 artifact org.ow2.asm asm-util 9.11.1 23fdffacdfc38f447cbd8b80e058f462451fa5d4709e437067d530fa6513579d central
 artifact org.ow2.asm asm-analysis 9.11.1 3a91769287d0a186333d6e384e5d4eec37e4b8f705dcf920ff4aea4cc452fac2 central
 artifact org.bouncycastle bcpg-jdk18on 1.86 8a52ea45b2063f6d41b8ca94409f255a1f4604922f7451c18a7cfd3a3c5b85ab central
+artifact org.scalameta scalafmt-interfaces 3.11.5 eb8c7d5fd1728b1ea1905817d18d6e5859e5614ee4bf417b20c8f60c439f6f4c central
 artifact io.grpc grpc-api 1.85.1 159371ce7ecb1de72f910571436f7866baa595c820271fcb930961212b7c6363 central
 artifact io.grpc grpc-netty-shaded 1.85.1 ea75fb829517724d40c1ebedd6dad1362b284203716725a1b5ae740f4c91931e central
 artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
@@ -582,6 +584,7 @@ direct org.ow2.asm asm-commons 9.11.1 java
 direct org.ow2.asm asm-util 9.11.1 java
 direct org.ow2.asm asm-analysis 9.11.1 java
 direct org.bouncycastle bcpg-jdk18on 1.86 java
+direct org.scalameta scalafmt-interfaces 3.11.5 java
 direct io.grpc grpc-api 1.85.1 java
 direct io.grpc grpc-netty-shaded 1.85.1 java
 direct com.fasterxml.jackson.core jackson-annotations 2.22 java
@@ -612,6 +615,7 @@ artifact org.ow2.asm asm-commons 9.11.1 6a5095ec53726156a78b2cd2efd45bc4e877754e
 artifact org.ow2.asm asm-util 9.11.1 23fdffacdfc38f447cbd8b80e058f462451fa5d4709e437067d530fa6513579d central
 artifact org.ow2.asm asm-analysis 9.11.1 3a91769287d0a186333d6e384e5d4eec37e4b8f705dcf920ff4aea4cc452fac2 central
 artifact org.bouncycastle bcpg-jdk18on 1.86 8a52ea45b2063f6d41b8ca94409f255a1f4604922f7451c18a7cfd3a3c5b85ab central
+artifact org.scalameta scalafmt-interfaces 3.11.5 eb8c7d5fd1728b1ea1905817d18d6e5859e5614ee4bf417b20c8f60c439f6f4c central
 artifact io.grpc grpc-api 1.85.1 159371ce7ecb1de72f910571436f7866baa595c820271fcb930961212b7c6363 central
 artifact io.grpc grpc-netty-shaded 1.85.1 ea75fb829517724d40c1ebedd6dad1362b284203716725a1b5ae740f4c91931e central
 artifact com.fasterxml.jackson.core jackson-annotations 2.22 21ddb598807d3a51a876704eb979d9296e1c6a6f47ab1826ff88c6d6a127a2d0 central
@@ -937,3 +941,49 @@ artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecf
 artifact org.scala-native nir_3 0.5.13-20261030-eb3f3b8-SNAPSHOT 578ad76d008e1e337fa4337b3df25d61334efaef21726a4983ffdd321f043df8 maven:https://central.sonatype.com/repository/maven-snapshots/
 artifact org.scala-native util_3 0.5.13-20261030-eb3f3b8-SNAPSHOT d0eb923281259550a74ce01ebfc70728c207d751e548c32e2385e72b2db5e0ad maven:https://central.sonatype.com/repository/maven-snapshots/
 artifact org.scala-lang scala-library 2.13.8 a0882b82514190c2bac7d1a459872a75f005fc0f3e88b2bc0390367146e35db7 central
+tool scalafmtdynamic 2.13.18 jvm
+root org.scalameta scalafmt-dynamic-core_2.13 3.11.5 closure build
+resolver central
+artifact org.scalameta scalafmt-dynamic-core_2.13 3.11.5 f55a6614c5815f4435451eaf24b0b0a771fc26a2b3603cc8f4428ccfc6ae96c0 central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+artifact org.scalameta scalafmt-interfaces 3.11.5 eb8c7d5fd1728b1ea1905817d18d6e5859e5614ee4bf417b20c8f60c439f6f4c central
+artifact org.scalameta scalafmt-sysops_2.13 3.11.5 314582e8086be283b9df1c22b41269cf22eb6fed5af37be0a6049ba5ee08594e central
+artifact com.typesafe config 1.4.9 47d13e3196c84f2a8ccd014ae563738c3da5b7406b38e03505ec0601a2f4fc37 central
+tool scalafmtcore 2.13.18 jvm
+root org.scalameta scalafmt-core_2.13 3.11.5 closure build
+root org.scala-lang scala-reflect 2.13.18 closure build
+resolver central
+artifact org.scalameta scalafmt-core_2.13 3.11.5 301fffd68a5723390d62ce62b075ed2e9c84003a0994634951638c4df6eb77f8 central
+artifact org.scala-lang scala-reflect 2.13.18 6935ff1982b2ac93d695f15aa66921be2f602921277afe002f018fd8c7d6e29b central
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
+artifact org.scalameta scalafmt-sysops_2.13 3.11.5 314582e8086be283b9df1c22b41269cf22eb6fed5af37be0a6049ba5ee08594e central
+artifact org.scalameta scalafmt-config_2.13 3.11.5 0e000fe9c11c991f9a012331b829a7295b10995c1f5421701755e1cce6373149 central
+artifact org.scalameta scalafmt-macros_2.13 3.11.5 7edb248e9d74ad95ce8cabf9fd903dc20419f405a3e86eedbeefdf02e291cbe5 central
+artifact org.scalameta scalameta_2.13 4.17.3 5d7b942d074c764f10da068903f7a8667838d68c6e7a737ad0d0061cada0d182 central
+artifact org.scalameta mdoc-parser_2.13 2.9.1 4ce63efb015b6ea92bd0bcf107c8153b3e2857495821a9a59dc41424b4015831 central
+artifact org.scalameta metaconfig-core_2.13 0.18.7 9493d98e6a9b8b43bdbd7a00e06fa1dcf295180e0bf0d94d705f18801c75ec80 central
+artifact org.scalameta metaconfig-typesafe-config_2.13 0.18.7 85085a7a082eead66bf0dccd08d402e5a4bad1f3fc73673284fac8e8f9e6c4ec central
+artifact org.scalameta parsers_2.13 4.17.3 21931f60d741a95f6fc364f5514672b587b24a2316df0a80fc67059a9989828d central
+artifact org.scalameta metaconfig-pprint_2.13 0.18.7 9f727dfdf0883c4066509e82f9ab58142ce0fb25371599d4a1b15e35d52467af central
+artifact org.typelevel paiges-core_2.13 0.4.4 ffbd59d3648e71c5b8f4474a54121fb3512707e7901245831669aa9e85f3bbf0 central
+artifact org.scala-lang.modules scala-collection-compat_2.13 2.14.0 95986ac32df70c9ebdd96edfb276cdc038deedbe600177a45f6584022f34a13f central
+artifact com.typesafe config 1.4.9 47d13e3196c84f2a8ccd014ae563738c3da5b7406b38e03505ec0601a2f4fc37 central
+artifact org.scalameta trees_2.13 4.17.3 38047a5a7b0f66faad77e18177a6152413de848b23353b615b1cecab2c0212f3 central
+artifact org.scala-lang scala-compiler 2.13.18 2f15891fcae7aad30a3892194fb2abb6224cf7ce5d2bd90fba7f1c48682fca21 central
+artifact com.lihaoyi fansi_2.13 0.5.1 e50796c69261fac857469122ab75f5aab4aeef855ca414f184cb132b318c2d9d central
+artifact org.scalameta common_2.13 4.17.3 e15f1eca7e1d855daf0fd62874b944272b84d2bbee96f3adfaef0cdd34ec91e4 central
+artifact org.scalameta io_2.13 4.17.3 c9aa7493cf90a1acafcc96dad84670409aeb3b5e280a38ce40332eb6a21cf49f central
+artifact org.scalameta trees2_2.13 4.17.3 3f3729adf6faa48802f8b7c77ac67a6077cb99073596dc3eaf48d6ca9371fe55 central
+artifact io.github.java-diff-utils java-diff-utils 4.16 620403030d676a4a27f780a3acec7438dee1b1651a1c804fa6bb11bb07399a6f central
+artifact org.jline jline 3.29.0 ed2680487642df95379f220c09c0f77e25095713387e2bc00c2d6581bb79c804 central jdk8
+artifact com.lihaoyi sourcecode_2.13 0.4.4 bd4e99aef8267a410b6ed716c487cf5256f801425f158a8c9cbd056eb032d80d central
+artifact org.scalameta common2_2.13 4.17.3 d16050f3557e472ac3489501edd4d941d975bc0a6f72a54363b6598e29a972d0 central
+evict com.lihaoyi sourcecode_2.13 0.4.0 0.4.4
+evict org.scala-lang scala-compiler 2.13.15 2.13.18
+evict org.scala-lang scala-compiler 2.13.8 2.13.18
+evict org.scala-lang scala-library 2.13.14 2.13.18
+evict org.scala-lang scala-library 2.13.15 2.13.18
+evict org.scala-lang scala-library 2.13.17 2.13.18
+evict org.scala-lang scala-library 2.13.8 2.13.18
+evict org.scala-lang scala-reflect 2.13.15 2.13.18
+evict org.scala-lang scala-reflect 2.13.8 2.13.18

@@ -65,6 +65,7 @@ object CommandName:
     trusted("cache"),
     trusted("resolve"),
     trusted("workflow"),
+    trusted("fmt"),
     trusted("launcher"),
     trusted("reload"),
     trusted("reboot"),
@@ -108,7 +109,7 @@ enum CommandNameError:
 end CommandNameError
 
 /** A CI job name. Same token rule as a task name. `test`, `versions`, `workflow`, `affected`, `launcher`, `doc`,
-  * `coverage`, `pages`, `cache-seed`, `supply-chain`, and `dependency-snapshot` are reserved.
+  * `coverage`, `format`, `pages`, `cache-seed`, `supply-chain`, and `dependency-snapshot` are reserved.
   */
 opaque type JobName = String
 
@@ -123,6 +124,7 @@ object JobName:
     trusted("launcher"),
     trusted("doc"),
     trusted("coverage"),
+    trusted("format"),
     trusted("pages"),
     trusted("cache-seed"),
     trusted("supply-chain"),

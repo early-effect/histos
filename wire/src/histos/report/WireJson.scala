@@ -465,6 +465,7 @@ private object WireBuild extends WireSupport:
   given JsonCodec[LockError]                             = JsonCodec.derived
   given JsonCodec[RepositoryIo]                          = JsonCodec.derived
   given JsonCodec[PluginLoadError]                       = JsonCodec.derived
+  given JsonCodec[histos.format.ScalafmtConfError]       = JsonCodec.derived
   private val resolveErrorCodec: JsonCodec[ResolveError] = JsonCodec.derived
   given JsonCodec[ResolveError]                          = resolveErrorCodec
   given JsonEncoder[ResolveError]                        = resolveErrorCodec.encoder
@@ -578,6 +579,8 @@ private object WireCall extends WireSupport:
   given JsonCodec[LocalPublishError]                       = JsonCodec.derived
   given JsonCodec[PreviewError]                            = JsonCodec.derived
   given JsonCodec[WatchError]                              = JsonCodec.derived
+  given JsonCodec[histos.format.ScalafmtPackage]           = JsonCodec.derived
+  given JsonCodec[histos.format.FormatError]               = JsonCodec.derived
   given JsonCodec[CommitShaError]                          = JsonCodec.derived
   given JsonCodec[BranchError]                             = JsonCodec.derived
   given JsonCodec[PullRequestError]                        = JsonCodec.derived

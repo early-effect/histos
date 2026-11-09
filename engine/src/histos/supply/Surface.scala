@@ -145,7 +145,7 @@ object DoctorSurface:
     )
     val core =
       pins :: github :: release ++ histos.doctor.ShipChecks.checks(repo, graph, env, feed) ++
-        histos.doctor.ToolchainChecks.checks(machine, graph)
+        histos.doctor.ToolchainChecks.checks(machine, graph) ++ histos.doctor.FormatChecks.checks(repo, graph)
     val all = histos.doctor.Registry.collect(graph, core)
     request.preflight match
       case Some(job) => preflight(job)

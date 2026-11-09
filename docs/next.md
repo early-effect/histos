@@ -10,6 +10,8 @@ Publishing is [publishing.md](publishing.md). The catalog is `ships(Ship("histos
 
 The cache is why this tool exists. The decisions and the checklist are in [cache-work-plan.md](cache-work-plan.md).
 
+Formatting is a locked tool like the compiler. `histos fmt` runs the scalafmt the configuration names, and nothing needs to be installed for it. The decisions and the checklist are in [format-work-plan.md](format-work-plan.md).
+
 A module can compile against another checkout. A library can be built from a git commit instead of fetched from Central. The lock names the commit. A branch is an update input. The decisions are in [source-work-plan.md](source-work-plan.md).
 
 A scenario is how a cache claim is checked, including Histos against itself: one store, several checkouts, and an assertion on the values. The same shape is the Histos side of a comparison with sbt and zipx. The decisions are in [scenario-work-plan.md](scenario-work-plan.md). The code is [Scenario](../engine/test/Scenario.scala). It is a test, not a command.

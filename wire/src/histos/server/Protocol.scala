@@ -2,6 +2,7 @@ package histos.server
 
 import histos.build.BuildEvent
 import histos.cache.CacheCleanMode
+import histos.format.{FormatMode, FormatTargets}
 import histos.plugin.{FlagName, NamedText, ParamName, PluginArgs}
 import histos.report.{BuildFault, CallResult}
 import histos.schedule.CacheNamespace
@@ -141,6 +142,7 @@ enum Call derives JsonCodec:
   case Toolchain
   case Resolve(action: ResolveAction)
   case Workflow(action: WorkflowAction)
+  case Format(targets: FormatTargets, mode: FormatMode)
   case Assembly(destination: Option[String])
   case Clean(projects: List[ProjectName])
   case CleanFull

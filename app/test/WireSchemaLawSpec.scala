@@ -606,6 +606,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           "nativesuite",
           "nativetestinterface",
           "scoverage",
+          "scalafmtdynamic",
+          "scalafmtcore",
         ),
         "compiler",
         histos.resolve.ToolRole.Compiler,
@@ -839,7 +841,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "Platform(error) | Task(error) | Plugin(error) | PluginTask(error) | " +
               "Preview(error) | Assemble(error) | Launcher(error) | Cache(error) | " +
               "Remote(error) | Store(failure) | Io(failure) | Version(error) | " +
-              "Watch(error) | Interrupted() | Rejected(rejection)"
+              "Watch(error) | Format(error) | Interrupted() | Rejected(rejection)"
           ),
           """{"Interrupted":{}}""",
           histos.report.BuildFault.Interrupted,
@@ -1423,7 +1425,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "PreviewOperation(raw) | MissingRunName() | Parameter(error) | " +
               "ProjectName(error) | SuitePattern(error) | RunId(error) | " +
               "TestMode(error) | CacheClean(error) | Flag(error) | " +
-              "TaskPlatform(name) | CommandHelp(names)"
+              "TaskPlatform(name) | CommandHelp(names) | FormatMode(raw) | FormatTargets() | FormatPath(raw)"
           ),
           """{"NotATool":{}}""",
           histos.report.Rejection.NotATool,
@@ -1464,7 +1466,7 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "LockDrift(module,scalaVersion,platform,scope,changed) | " +
               "PluginDrift(dependency,changed) | NoLock(path) | " +
               "UnsupportedPlatform(platform) | Lock(error) | Io(failure) | " +
-              "Plugin(error) | Repository(op)"
+              "Plugin(error) | Repository(op) | Scalafmt(error)"
           ),
           """{"NotFound":{"organization":"dev.zio","name":"zio","revision":"0"}}""",
           histos.resolve.ResolveError.NotFound("dev.zio", "zio", "0"),

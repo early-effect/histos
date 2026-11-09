@@ -136,6 +136,7 @@ object ReportLawSpec extends ZIOSpecDefault:
     BuildFault.Io(io),
     BuildFault.Version(VersionError.Unreadable),
     BuildFault.Watch(WatchError.Read(path)),
+    BuildFault.Format(histos.format.FormatError.CoreDrift(Nil, List(histos.format.ScalafmtPackage("o", "a", "1")))),
     BuildFault.Interrupted,
     BuildFault.Rejected(Rejection.NotATool),
   )
@@ -162,6 +163,9 @@ object ReportLawSpec extends ZIOSpecDefault:
     Rejection.Flag(FlagNameError.Bad("1flag")),
     Rejection.TaskPlatform("inspect"),
     Rejection.CommandHelp(List("nope")),
+    Rejection.FormatMode("diff"),
+    Rejection.FormatTargets,
+    Rejection.FormatPath("/etc"),
   )
 
   private val results: List[CallResult] = List(

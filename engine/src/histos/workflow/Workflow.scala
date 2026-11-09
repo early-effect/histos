@@ -14,6 +14,7 @@ import histos.{
   ClientBuilds,
   CoverageFloors,
   CoverageJob,
+  Formatting,
   DocCheck,
   FollowUp,
   JobTimeout,
@@ -322,10 +323,13 @@ object Workflow:
     val coverage = graph.coverage match
       case CoverageJob.Off        => Nil
       case CoverageJob.Ask(asked) => List(coverageJob(graph, asked))
+    val format = graph.formatting match
+      case Formatting.Off         => Nil
+      case Formatting.Scalafmt(_) => List(formatJob(graph))
     val seed = if modules.nonEmpty then List(cacheSeed(jobs, graph)) else Nil
     val boot = if selfHosted(graph) then List(toolchainJob(graph)) else Nil
     val body =
-      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ planned.ci ++ seed ++
+      boot ++ List(affectedJob(graph)) ++ test ++ versions ++ doc ++ coverage ++ format ++ planned.ci ++ seed ++
         List(workflowJob(graph)) ++ List(SupplyYaml.supplyChain(graph)) ++ SupplyYaml.snapshot(graph).toList
     (header(planned.header, graph, branch) ++ body).mkString("\n") + "\n"
 
@@ -1443,6 +1447,23 @@ object Workflow:
       s"      - run: ${quote(command)}"
     )
     lines.mkString("\n")
+
+  /** Beside the suite. It does not wait for the suite, and it compiles nothing, so it restores no store. */
+  private def formatJob(graph: ProjectGraph): String =
+    val prepare = steps(graph.runnerTools, graph.resolution, ToolNeed(false, false, false), MatrixScope.Whole)
+    (List(
+      "  format:"
+    ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
+      s"    runs-on: $Runner"
+    ) ++ jobLimit(graph) ++ List(
+      "    permissions:"
+    ) ++ actionsRead(graph) ++ List(
+      "      contents: read",
+      "    steps:",
+      s"      - uses: $Checkout",
+    ) ++ coursierCli(graph, "format") ++ prepare ++ List(
+      s"      - run: ${quote("./histos fmt --check")}"
+    )).mkString("\n")
 
   private def docNeed(modules: List[Module], tools: RunnerTools): ToolNeed =
     val native     = modules.exists(_.platforms.all.contains(Platform.Native))

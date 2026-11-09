@@ -40,15 +40,17 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
         val graph = ProjectGraph.trusted(List(module(Nil)))
         val run   =
           for
-            _       <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.dieMessage("fetched"))
-            _       <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.dieMessage("resolved"))
-            ranged  <- Resolve.check(root, ProjectGraph.trusted(List(module(List(rangedDep)))), Repositories.central).either
-            _       <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.succeed(artifact(sha)))
-            _       <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.succeed(Classpath(Nil, Nil)))
-            _       <- record(root, graph, Nil)
-            agreed  <- Resolve.check(root, graph, Repositories.central).either
-            _       <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.succeed(Classpath(List(artifact(sha, "9.9.9")), Nil)))
-            _       <- record(root, graph, List(held(sha)))
+            _      <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.dieMessage("fetched"))
+            _      <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.dieMessage("resolved"))
+            ranged <- Resolve
+              .check(root, ProjectGraph.trusted(List(module(List(rangedDep)))), Repositories.central)
+              .either
+            _      <- stub[Resolve](_.fetch(any[LockedArtifact]))(ZIO.succeed(artifact(sha)))
+            _      <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.succeed(Classpath(Nil, Nil)))
+            _      <- record(root, graph, Nil)
+            agreed <- Resolve.check(root, graph, Repositories.central).either
+            _ <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.succeed(Classpath(List(artifact(sha, "9.9.9")), Nil)))
+            _ <- record(root, graph, List(held(sha)))
             drifted <- Resolve.check(root, graph, Repositories.central).either
             _       <- stub[Resolve](_.resolve(any[ResolveCell]))(ZIO.succeed(Classpath(List(artifact(other)), Nil)))
             summed  <- Resolve.check(root, graph, Repositories.central).either
@@ -75,28 +77,38 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
           for
             compiler <- histos.toolchain.BuildCompiler.version.catchAll(error => ZIO.dieMessage(error.message))
             published = ArtifactName.of(plugin, compiler, Platform.Jvm)
-            _        <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.dieMessage("plugin"))
-            _        <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.dieMessage("plugin"))
+            _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
               ZIO.dieMessage("sources")
             )
             idle    <- Resolve.checkPlugins(root, Nil, Repositories.central).either
             _       <- writePlugins(root, Nil)
-            missing <- Resolve.checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central).either
-            moved   = ResolvedArtifact("org.example", published, "9.9.9", jar, sha, Repository.Central)
-            _       <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(moved), Nil)))
-            _       <- writePlugins(root, List(lockedPlugin(published, sha, None)))
-            drifted <- Resolve.checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central).either
-            fresh   = ResolvedArtifact("org.example", published, plugin.revision, jar, other, Repository.Central)
-            _       <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(fresh), Nil)))
-            summed  <- Resolve.checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central).either
-            kept    = ResolvedArtifact("org.example", published, plugin.revision, jar, sha, Repository.Central)
-            _       <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(kept), Nil)))
-            agreed  <- Resolve.checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central).either
-            _       <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            missing <- Resolve
+              .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
+              .either
+            moved = ResolvedArtifact("org.example", published, "9.9.9", jar, sha, Repository.Central)
+            _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(moved), Nil)))
+            _ <- writePlugins(root, List(lockedPlugin(published, sha, None)))
+            drifted <- Resolve
+              .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
+              .either
+            fresh = ResolvedArtifact("org.example", published, plugin.revision, jar, other, Repository.Central)
+            _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(fresh), Nil)))
+            summed <- Resolve
+              .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
+              .either
+            kept = ResolvedArtifact("org.example", published, plugin.revision, jar, sha, Repository.Central)
+            _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(kept), Nil)))
+            agreed <- Resolve
+              .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
+              .either
+            _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
               ZIO.succeed(ResolvedArtifact("org.example", "plug", plugin.revision, jar, other, Repository.Central))
             )
-            _        <- writePlugins(root, List(lockedPlugin(published, sha, Some(held(sha)))))
-            sourced  <- Resolve.checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central).either
+            _       <- writePlugins(root, List(lockedPlugin(published, sha, Some(held(sha)))))
+            sourced <- Resolve
+              .checkPlugins(root, List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)), Repositories.central)
+              .either
           yield assertTrue(
             idle == Right(()),
             missing == Left(ResolveError.NotFound(plugin.organization, published, plugin.revision)),
@@ -111,8 +123,7 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
             sourced == Left(ResolveError.Checksum(jar, sha, other)),
           )
         run.provideSomeLayer[Scope](stubbed[Resolve])
-      }
-    ,
+      },
   )
 
   private val rangedDep = Dep.trusted("org.example", "demo", "1.+", DepKind.Java)
@@ -135,7 +146,7 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
 
   private def record(repo: Path, graph: ProjectGraph, artifacts: List[LockedArtifact]) =
     for
-      planned <- LockedTools.plan(graph, NativeOrigin.Central)
+      planned <- LockedTools.plan(repo, graph, NativeOrigin.Central)
       tools = planned.map(pin)
       lock  = DependencyLock(
         List(LockedCell(name, version, Platform.Jvm, Nil, artifacts, Nil)),

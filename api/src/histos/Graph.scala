@@ -142,6 +142,7 @@ final case class ProjectGraph private (
     supply: SupplyChain = SupplyChain(),
     coverage: CoverageJob = CoverageJob.Off,
     coverageExcludes: CoverageExcludes = CoverageExcludes(),
+    formatting: Formatting = Formatting.Off,
 ):
   def get(name: ProjectName): Option[Project] =
     projects.find(_.name == name)
@@ -202,6 +203,7 @@ object ProjectGraph:
       supply: SupplyChain = SupplyChain(),
       coverage: CoverageJob = CoverageJob.Off,
       coverageExcludes: CoverageExcludes = CoverageExcludes(),
+      formatting: Formatting = Formatting.Off,
   ): ProjectGraph =
     new ProjectGraph(
       projects,
@@ -221,6 +223,7 @@ object ProjectGraph:
       supply,
       coverage,
       coverageExcludes,
+      formatting,
     )
 end ProjectGraph
 
@@ -237,97 +240,92 @@ object HistosBuild:
       def graph: Either[BuildError, ProjectGraph] = Right(found)
 
 object Projects:
-  def tools(catalog: ToolCatalog): Organized =
-    Organized(None, Nil, tools = catalog)
+  def tools(catalog: ToolCatalog): Organized = Organized.empty.tools(catalog)
 
   /** Empty installs nothing. A build that never calls this asks the runner for no tools. */
-  def runnerTools(tools: RunnerTools): Organized =
-    Organized(None, Nil, runnerTools = tools)
+  def runnerTools(tools: RunnerTools): Organized = Organized.empty.runnerTools(tools)
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
-  def testLog: Organized =
-    Organized(None, Nil, logged = true)
+  def testLog: Organized = Organized.empty.testLog
 
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
-  def docCheck: Organized =
-    Organized(None, Nil, checked = DocCheck.On)
+  def docCheck: Organized = Organized.empty.docCheck
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
-  def locked: Organized =
-    Organized(None, Nil, resolution = Resolution.Lock)
+  def locked: Organized = Organized.empty.locked
 
   /** Every published module uses this organization. A build that does not publish omits it.
     */
-  def organization(organization: Organization): Organized =
-    Organized(Some(organization), Nil)
+  def organization(organization: Organization): Organized = Organized.empty.organization(organization)
 
   /** Repositories this build resolves from. The list is not Central unless `central` is in it. An empty list, from
     * [[apply]], is Central.
     */
-  def resolvers(first: Resolver, rest: Resolver*): Organized =
-    Organized(None, first :: rest.toList)
+  def resolvers(first: Resolver, rest: Resolver*): Organized = Organized.empty.resolvers(first, rest*)
 
   /** How a push to main fills the main index. Omission, from [[apply]], is rebuild. */
-  def promote(value: Promote): Organized =
-    Organized(None, Nil, promote = value)
+  def promote(value: Promote): Organized = Organized.empty.promote(value)
 
   /** Runners, action pins, secrets, and graph env for the workflow. */
-  def ci(settings: CiSettings): Organized =
-    Organized(None, Nil, ci = settings)
+  def ci(settings: CiSettings): Organized = Organized.empty.ci(settings)
 
   /** Caps every generated job. [[JobTimeout.Unbounded]] leaves the platform limit. */
-  def jobTimeout(value: JobTimeout): Organized =
-    Organized(None, Nil, ci = CiSettings.empty.copy(timeout = value))
+  def jobTimeout(value: JobTimeout): Organized = Organized.empty.jobTimeout(value)
 
   /** CI runs `histos coverage`. Off unless a build asks. A floor on the ask is a flag on the job. */
-  def coverage(floors: CoverageFloors = CoverageFloors()): Organized =
-    Organized(None, Nil, coverageJob = CoverageJob.Ask(floors))
+  def coverage(floors: CoverageFloors = CoverageFloors()): Organized = Organized.empty.coverage(floors)
 
   /** Classes and files `histos coverage` always excludes. This does not turn the CI job on. */
-  def coverageExcludes(excludes: CoverageExcludes): Organized =
-    Organized(None, Nil, coverageExcludes = excludes)
+  def coverageExcludes(excludes: CoverageExcludes): Organized = Organized.empty.coverageExcludes(excludes)
+
+  /** `histos fmt` formats with the `.scalafmt.conf` at the repository root, and CI checks it. Off unless a build asks.
+    */
+  def scalafmt: Organized = Organized.empty.scalafmt
+
+  /** `histos fmt` formats with the scalafmt configuration at `conf`, and CI checks it. */
+  def scalafmt(conf: RepoPath): Organized = Organized.empty.scalafmt(conf)
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList)
+    build(Organized.Settings(), Splits.aggregate, CatalogSpec.empty, defs.toList)
 
   def apply(
       splits: Splits,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    build(None, Nil, splits, CatalogSpec.empty, defs.toList)
+    build(Organized.Settings(), splits, CatalogSpec.empty, defs.toList)
 
   def apply(
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    build(None, Nil, Splits.aggregate, catalog, defs.toList)
+    build(Organized.Settings(), Splits.aggregate, catalog, defs.toList)
 
   def apply(
       splits: Splits,
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    build(None, Nil, splits, catalog, defs.toList)
+    build(Organized.Settings(), splits, catalog, defs.toList)
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    build(None, Nil, Splits.aggregate, CatalogSpec.empty, defs.toList, uses)
+    build(Organized.Settings(), Splits.aggregate, CatalogSpec.empty, defs.toList, uses)
 
   def apply(
       uses: Uses,
       splits: Splits,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    build(None, Nil, splits, CatalogSpec.empty, defs.toList, uses)
+    build(Organized.Settings(), splits, CatalogSpec.empty, defs.toList, uses)
 
   def apply(
       uses: Uses,
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    build(None, Nil, Splits.aggregate, catalog, defs.toList, uses)
+    build(Organized.Settings(), Splits.aggregate, catalog, defs.toList, uses)
 
   def apply(
       uses: Uses,
@@ -335,65 +333,14 @@ object Projects:
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    build(None, Nil, splits, catalog, defs.toList, uses)
+    build(Organized.Settings(), splits, catalog, defs.toList, uses)
 
-  private[histos] def assemble(
-      organization: Option[Organization],
-      resolvers: List[Resolver],
+  private[histos] def build(
+      settings: Organized.Settings,
       splits: Splits,
       catalog: CatalogSpec,
       listed: List[ProjectDef],
       uses: Uses = Uses(Nil),
-      tools: ToolCatalog = ToolCatalog.default,
-      runnerTools: RunnerTools = RunnerTools.empty,
-      facts: OrganizationFacts = OrganizationFacts.empty,
-      promote: Promote = Promote.Rebuild,
-      testLog: Boolean = false,
-      resolution: Resolution = Resolution.Solve,
-      docCheck: DocCheck = DocCheck.Off,
-      ci: CiSettings = CiSettings.empty,
-      supply: SupplyChain = SupplyChain(),
-      coverage: CoverageJob = CoverageJob.Off,
-      coverageExcludes: CoverageExcludes = CoverageExcludes(),
-  ): Either[BuildError, ProjectGraph] =
-    build(
-      organization,
-      resolvers,
-      splits,
-      catalog,
-      listed,
-      uses,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      testLog,
-      resolution,
-      docCheck,
-      ci,
-      supply,
-      coverage,
-      coverageExcludes,
-    )
-
-  private def build(
-      organization: Option[Organization],
-      resolvers: List[Resolver],
-      splits: Splits,
-      catalog: CatalogSpec,
-      listed: List[ProjectDef],
-      uses: Uses = Uses(Nil),
-      tools: ToolCatalog = ToolCatalog.default,
-      runnerTools: RunnerTools = RunnerTools.empty,
-      facts: OrganizationFacts = OrganizationFacts.empty,
-      promote: Promote = Promote.Rebuild,
-      testLog: Boolean = false,
-      resolution: Resolution = Resolution.Solve,
-      docCheck: DocCheck = DocCheck.Off,
-      ci: CiSettings = CiSettings.empty,
-      supply: SupplyChain = SupplyChain(),
-      coverage: CoverageJob = CoverageJob.Off,
-      coverageExcludes: CoverageExcludes = CoverageExcludes(),
   ): Either[BuildError, ProjectGraph] =
     for
       registered <- registerAll(uses)
@@ -406,27 +353,28 @@ object Projects:
       _          <- cycle(built)
       _          <- bindPlugins(registered, built)
       ships      <- ShipLink.catalog(catalog, built)
-      _          <- uniqueResolvers(resolvers)
+      _          <- uniqueResolvers(settings.resolvers)
       builtGraph <-
         Right(
           ProjectGraph.trusted(
             built,
             splits,
             ships,
-            organization,
-            resolvers,
+            settings.organization,
+            settings.resolvers,
             registered,
-            tools,
-            runnerTools,
-            facts,
-            promote,
-            testLog,
-            resolution,
-            docCheck,
-            ci,
-            supply,
-            coverage,
-            coverageExcludes,
+            settings.tools,
+            settings.runnerTools,
+            settings.facts,
+            settings.promote,
+            settings.testLog,
+            settings.resolution,
+            settings.docCheck,
+            settings.ci,
+            settings.supply,
+            settings.coverage,
+            settings.coverageExcludes,
+            settings.formatting,
           )
         )
       _ <- JobCheck.arrange(builtGraph)
@@ -918,440 +866,119 @@ object Projects:
 end Projects
 
 /** [[Projects]] with an organization, repositories, or both already chosen. */
-final class Organized(
-    organization: Option[Organization],
-    resolvers: List[Resolver],
-    tools: ToolCatalog = ToolCatalog.default,
-    runnerTools: RunnerTools = RunnerTools.empty,
-    facts: OrganizationFacts = OrganizationFacts.empty,
-    promote: Promote = Promote.Rebuild,
-    logged: Boolean = false,
-    resolution: Resolution = Resolution.Solve,
-    checked: DocCheck = DocCheck.Off,
-    ci: CiSettings = CiSettings.empty,
-    supply: SupplyChain = SupplyChain(),
-    coverageJob: CoverageJob = CoverageJob.Off,
-    coverageExcludes: CoverageExcludes = CoverageExcludes(),
-):
-  def tools(catalog: ToolCatalog): Organized =
-    Organized(
-      organization,
-      resolvers,
-      catalog,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+final class Organized private (settings: Organized.Settings):
+  def tools(catalog: ToolCatalog): Organized = Organized(settings.copy(tools = catalog))
 
-  def organization(value: Organization): Organized =
-    Organized(
-      Some(value),
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def organization(value: Organization): Organized = Organized(settings.copy(organization = Some(value)))
 
   def resolvers(first: Resolver, rest: Resolver*): Organized =
-    Organized(
-      organization,
-      resolvers ++ (first :: rest.toList),
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+    Organized(settings.copy(resolvers = settings.resolvers ++ (first :: rest.toList)))
 
-  def runnerTools(value: RunnerTools): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      value,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def runnerTools(value: RunnerTools): Organized = Organized(settings.copy(runnerTools = value))
 
-  def promote(value: Promote): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      value,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def promote(value: Promote): Organized = Organized(settings.copy(promote = value))
 
   /** Plain test logs under `.histos/tests`. Off unless a build asks.
     */
-  def testLog: Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      true,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def testLog: Organized = Organized(settings.copy(testLog = true))
 
   /** CI runs scaladoc beside the suite and fails on a warning. Off unless a build asks.
     */
-  def docCheck: Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      DocCheck.On,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def docCheck: Organized = Organized(settings.copy(docCheck = DocCheck.On))
 
   /** Pin jars to `dependencies.lock`. Omission resolves from the build.
     */
-  def locked: Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      Resolution.Lock,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def locked: Organized = Organized(settings.copy(resolution = Resolution.Lock))
+
+  /** `histos fmt` formats with the `.scalafmt.conf` at the repository root, and CI checks it. Off unless a build asks.
+    */
+  def scalafmt: Organized = Organized(settings.copy(formatting = Formatting.Scalafmt(ScalafmtConf.Root)))
+
+  /** `histos fmt` formats with the scalafmt configuration at `conf`, and CI checks it. */
+  def scalafmt(conf: RepoPath): Organized =
+    Organized(settings.copy(formatting = Formatting.Scalafmt(ScalafmtConf.At(conf))))
 
   /** Written once. A second call replaces it. */
   def license(value: License): Organized =
-    withFacts(facts.copy(license = Some(value)))
+    withFacts(settings.facts.copy(license = Some(value)))
 
   /** Written once. A second call replaces it. */
   def developer(value: Developer): Organized =
-    withFacts(facts.copy(developer = Some(value)))
+    withFacts(settings.facts.copy(developer = Some(value)))
 
   /** Written once. A second call replaces it. */
   def scm(value: Scm): Organized =
-    withFacts(facts.copy(scm = Some(value)))
+    withFacts(settings.facts.copy(scm = Some(value)))
 
   /** The description a ship may replace. */
   def description(text: PomText): Organized =
-    withFacts(facts.copy(description = Some(text)))
+    withFacts(settings.facts.copy(description = Some(text)))
 
   /** The url a ship may replace. */
   def url(value: HttpUrl): Organized =
-    withFacts(facts.copy(url = Some(value)))
+    withFacts(settings.facts.copy(url = Some(value)))
 
-  private def withFacts(value: OrganizationFacts): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      value,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  private def withFacts(value: OrganizationFacts): Organized = Organized(settings.copy(facts = value))
 
   /** Pins, advisories, and the weekly bump. A second call replaces the policy. */
-  def supplyChain(value: SupplyChain): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      value,
-      coverageJob,
-      coverageExcludes,
-    )
+  def supplyChain(value: SupplyChain): Organized = Organized(settings.copy(supply = value))
 
   /** CI runs `histos coverage`. Off unless a build asks. A floor on the ask is a flag on the job. */
   def coverage(floors: CoverageFloors = CoverageFloors()): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      CoverageJob.Ask(floors),
-      coverageExcludes,
-    )
+    Organized(settings.copy(coverage = CoverageJob.Ask(floors)))
 
   /** Classes and files `histos coverage` always excludes. A second call replaces the list. This does not change whether
     * CI runs the job.
     */
-  def coverageExcludes(value: CoverageExcludes): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      value,
-    )
+  def coverageExcludes(value: CoverageExcludes): Organized = Organized(settings.copy(coverageExcludes = value))
 
   /** Caps every generated job. A second call replaces the cap. [[ci]] replaces the whole settings value, including
     * this.
     */
   def jobTimeout(value: JobTimeout): Organized =
-    ci(ci.copy(timeout = value))
+    ci(settings.ci.copy(timeout = value))
 
   /** Runners, action pins, secrets, and graph env. A second call replaces the settings. */
-  def ci(settings: CiSettings): Organized =
-    Organized(
-      organization,
-      resolvers,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      settings,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+  def ci(value: CiSettings): Organized = Organized(settings.copy(ci = value))
 
   def apply(defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      Splits.aggregate,
-      CatalogSpec.empty,
-      defs.toList,
-      tools = tools,
-      runnerTools = runnerTools,
-      facts = facts,
-      promote = promote,
-      testLog = logged,
-      resolution = resolution,
-      docCheck = checked,
-      ci = ci,
-      supply = supply,
-      coverage = coverageJob,
-      coverageExcludes = coverageExcludes,
-    )
+    Projects.build(settings, Splits.aggregate, CatalogSpec.empty, defs.toList)
 
   def apply(
       splits: Splits,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      splits,
-      CatalogSpec.empty,
-      defs.toList,
-      tools = tools,
-      runnerTools = runnerTools,
-      facts = facts,
-      promote = promote,
-      testLog = logged,
-      resolution = resolution,
-      docCheck = checked,
-      ci = ci,
-      supply = supply,
-      coverage = coverageJob,
-      coverageExcludes = coverageExcludes,
-    )
+    Projects.build(settings, splits, CatalogSpec.empty, defs.toList)
 
   def apply(
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      Splits.aggregate,
-      catalog,
-      defs.toList,
-      tools = tools,
-      runnerTools = runnerTools,
-      facts = facts,
-      promote = promote,
-      testLog = logged,
-      resolution = resolution,
-      docCheck = checked,
-      ci = ci,
-      supply = supply,
-      coverage = coverageJob,
-      coverageExcludes = coverageExcludes,
-    )
+    Projects.build(settings, Splits.aggregate, catalog, defs.toList)
 
   def apply(
       splits: Splits,
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      splits,
-      catalog,
-      defs.toList,
-      tools = tools,
-      runnerTools = runnerTools,
-      facts = facts,
-      promote = promote,
-      testLog = logged,
-      resolution = resolution,
-      docCheck = checked,
-      ci = ci,
-      supply = supply,
-      coverage = coverageJob,
-      coverageExcludes = coverageExcludes,
-    )
+    Projects.build(settings, splits, catalog, defs.toList)
 
   def apply(uses: Uses, defs: ProjectDef*): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      Splits.aggregate,
-      CatalogSpec.empty,
-      defs.toList,
-      uses,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+    Projects.build(settings, Splits.aggregate, CatalogSpec.empty, defs.toList, uses)
 
   def apply(
       uses: Uses,
       splits: Splits,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      splits,
-      CatalogSpec.empty,
-      defs.toList,
-      uses,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+    Projects.build(settings, splits, CatalogSpec.empty, defs.toList, uses)
 
   def apply(
       uses: Uses,
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      Splits.aggregate,
-      catalog,
-      defs.toList,
-      uses,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+    Projects.build(settings, Splits.aggregate, catalog, defs.toList, uses)
 
   def apply(
       uses: Uses,
@@ -1359,23 +986,29 @@ final class Organized(
       catalog: CatalogSpec,
       defs: ProjectDef*
   ): Either[BuildError, ProjectGraph] =
-    Projects.assemble(
-      organization,
-      resolvers,
-      splits,
-      catalog,
-      defs.toList,
-      uses,
-      tools,
-      runnerTools,
-      facts,
-      promote,
-      logged,
-      resolution,
-      checked,
-      ci,
-      supply,
-      coverageJob,
-      coverageExcludes,
-    )
+    Projects.build(settings, splits, catalog, defs.toList, uses)
+end Organized
+
+object Organized:
+  /** Every build-level choice [[Projects]] carries into the graph. */
+  private[histos] final case class Settings(
+      organization: Option[Organization] = None,
+      resolvers: List[Resolver] = Nil,
+      tools: ToolCatalog = ToolCatalog.default,
+      runnerTools: RunnerTools = RunnerTools.empty,
+      facts: OrganizationFacts = OrganizationFacts.empty,
+      promote: Promote = Promote.Rebuild,
+      testLog: Boolean = false,
+      resolution: Resolution = Resolution.Solve,
+      docCheck: DocCheck = DocCheck.Off,
+      ci: CiSettings = CiSettings.empty,
+      supply: SupplyChain = SupplyChain(),
+      coverage: CoverageJob = CoverageJob.Off,
+      coverageExcludes: CoverageExcludes = CoverageExcludes(),
+      formatting: Formatting = Formatting.Off,
+  )
+
+  private[histos] val empty: Organized = new Organized(Settings())
+
+  private def apply(settings: Settings): Organized = new Organized(settings)
 end Organized
