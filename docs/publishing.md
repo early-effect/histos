@@ -4,7 +4,7 @@
 
 This file is the decision. [release-work-plan.md](release-work-plan.md) is the history of how the commands got here. A catalog row is `ships(Ship("histos").next(0, 2, 3)(api, app))`. Editing this file does not upload it.
 
-The number in `.next(0, 2, 5)` is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `0.2.5-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write `0.2.5-<sha>-SNAPSHOT`. `publish snapshots` also writes the `0.2.5-SNAPSHOT` pointer from any checkout. `publish local` writes that pointer only on the default branch. A release session publishes `0.2.5`, and that command still requires `HISTOS_SESSION=release`.
+The number in `.next(0, 2, 6)` is the next release. SNAPSHOT is not written in the catalog. The versions line for a development session is `0.2.6-ci`. `publish local` and `publish snapshots` name the commit at HEAD and write `0.2.6-<sha>-SNAPSHOT`. `publish snapshots` also writes the `0.2.6-SNAPSHOT` pointer from any checkout. `publish local` writes that pointer only on the default branch. A release session publishes `0.2.6`, and that command still requires `HISTOS_SESSION=release`.
 
 `histos run versions` prints a session you name. `publish local` and `publish snapshots` do not need these exports. `publish release` does need `HISTOS_SESSION=release`.
 
