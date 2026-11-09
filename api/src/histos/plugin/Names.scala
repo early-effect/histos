@@ -108,7 +108,7 @@ enum CommandNameError:
     case Bad(raw) => s"'$raw' is not a command name"
 end CommandNameError
 
-/** A CI job name. Same token rule as a task name. `test`, `versions`, `workflow`, `affected`, `launcher`, `doc`,
+/** A CI job name. Same token rule as a task name. `test`, `versions`, `workflow`, `affected`, `launcher`, `scaladoc`,
   * `coverage`, `format`, `pages`, `cache-seed`, `supply-chain`, and `dependency-snapshot` are reserved.
   */
 opaque type JobName = String
@@ -122,7 +122,7 @@ object JobName:
     trusted("workflow"),
     trusted("affected"),
     trusted("launcher"),
-    trusted("doc"),
+    trusted("scaladoc"),
     trusted("coverage"),
     trusted("format"),
     trusted("pages"),

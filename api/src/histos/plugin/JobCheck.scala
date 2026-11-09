@@ -50,7 +50,7 @@ object JobCheck:
     val base    = List(JobName.trusted("workflow"), JobName.trusted("affected"))
     val suite   =
       if modules.nonEmpty then List(JobName.trusted("test"), JobName.trusted("cache-seed")) else Nil
-    val doc      = if graph.docCheck == DocCheck.On then List(JobName.trusted("doc")) else Nil
+    val doc      = if graph.docCheck == DocCheck.On then List(JobName.trusted("scaladoc")) else Nil
     val coverage = graph.coverage match
       case CoverageJob.Off    => Nil
       case CoverageJob.Ask(_) => List(JobName.trusted("coverage"))

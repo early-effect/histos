@@ -156,14 +156,14 @@ object JobYamlLawSpec extends ZIOSpecDefault:
     test("a job need is the needs line, and the default policy adds the none-failed condition"):
       jobName("nightly"): nightly =>
         jobName("test"): suite =>
-          jobName("doc"): doc =>
+          jobName("scaladoc"): doc =>
             val one    = TaskJob(nightly, TaskName("echo"), needs = List(suite))
             val two    = TaskJob(nightly, TaskName("echo"), needs = List(suite, doc))
             val read   = List("      contents: read")
             val single =
               taskText("nightly", onCiAndNeeds, ubuntu, List("    needs: test"), Nil, read, Nil, echoRun)
             val both =
-              taskText("nightly", onCiAndNeeds, ubuntu, List("    needs: [test, doc]"), Nil, read, Nil, echoRun)
+              taskText("nightly", onCiAndNeeds, ubuntu, List("    needs: [test, scaladoc]"), Nil, read, Nil, echoRun)
             assertTrue(
               yaml(built(List(one))) == Right(Right(JobYaml.Rendered(List(single), Nil, header))),
               yaml(documented(List(two))) == Right(Right(JobYaml.Rendered(List(both), Nil, header))),

@@ -168,7 +168,7 @@ object PluginSpec extends ZIOSpecDefault:
           "workflow",
           "launcher",
           "affected",
-          "doc",
+          "scaladoc",
           "coverage",
           "format",
           "pages",
@@ -177,7 +177,8 @@ object PluginSpec extends ZIOSpecDefault:
           "dependency-snapshot",
         ),
         JobName("docs").isReserved == false,
-        JobName("doc").isReserved,
+        JobName("doc").isReserved == false,
+        JobName("scaladoc").isReserved,
         JobName("pages").isReserved,
       )
     ,

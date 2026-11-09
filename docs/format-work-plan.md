@@ -124,7 +124,7 @@ final case class FormatRequest(repo: Path, graph: ProjectGraph, targets: FormatT
 - MCP: `histos__fmt` with `FmtArgs(projects: List[String] = Nil, files: List[String] = Nil, mode: Option[String])`. `mode` is `write` or `check`, and absent means `write`. Projects and files together are rejected.
 - Native client: `fmt` and `fmt --check` with or without project names batch. `--file` goes to the JVM client.
 - Doctor: `format.config` (a declared formatter with a missing conf or `version`) and `format.lock` (the conf version is not the locked core), as pure outcomes in `FormatChecks`.
-- Workflow: a `format` job beside `doc` and `coverage` that runs `./histos fmt --check`. No Node, LLVM, Playwright, or store restore. It renders only when the build declares `.scalafmt()`.
+- Workflow: a `format` job beside `scaladoc` and `coverage` that runs `./histos fmt --check`. No Node, LLVM, Playwright, or store restore. It renders only when the build declares `.scalafmt`.
 
 ## Left out
 

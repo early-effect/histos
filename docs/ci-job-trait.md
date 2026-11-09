@@ -2,7 +2,7 @@
 
 A plugin contributes jobs by implementing `CiJob`. The trait is open. Histos ships `TaskJob` and `SiteJob`. The engine never matches on the trait. It matches the sealed `JobRender` vocabulary that `render` returns: one task, one cron, one site shape, or one fan.
 
-A fan is one module. Each `Target` is a matrix row (a region, an account), not a second job. `needs` names another contribution job or a generated job that is actually on the graph: `test`, `doc`, `workflow`, `launcher`, `affected`, and `cache-seed` when that job is rendered. `pages` is not a `CiJob` and is not a legal need. A job that names itself is `UnknownNeed`. A repeated name is `DuplicateNeed`. The message is `job X needs Y, which is not a job on this graph`.
+A fan is one module. Each `Target` is a matrix row (a region, an account), not a second job. `needs` names another contribution job or a generated job that is actually on the graph: `test`, `scaladoc`, `coverage`, `format`, `workflow`, `launcher`, `affected`, and `cache-seed` when that job is rendered. `pages` is not a `CiJob` and is not a legal need. A job that names itself is `UnknownNeed`. A repeated name is `DuplicateNeed`. The message is `job X needs Y, which is not a job on this graph`.
 
 ## Decisions
 
@@ -22,7 +22,7 @@ A path belongs to the module whose directory is the longest prefix. Dependents o
 
 **Runners.** `CiSettings.runners` maps a `RunnerName` to the `runs-on` label. `Runner.Default` is `ubuntu-26.04`. An unknown name is `UnknownRunner`. The catalog is `ProjectGraph.ci`, not the ship catalog.
 
-**Verify.** There is no gate job. `test`, `doc`, `versions`, and `workflow` run when the event is `pull_request` or `workflow_dispatch`. A push to the default branch still starts the workflow. Those jobs skip. A push to any other branch does not start `ci.yml`, so a pull-request commit is one run. `cache-seed` runs on a push to the default branch, compiles, and saves the cache. It does not set the cache namespace. The test job is the only writer of that namespace.
+**Verify.** There is no gate job. `test`, `scaladoc`, `format`, `versions`, and `workflow` run when the event is `pull_request` or `workflow_dispatch`. A push to the default branch still starts the workflow. Those jobs skip. A push to any other branch does not start `ci.yml`, so a pull-request commit is one run. `cache-seed` runs on a push to the default branch, compiles, and saves the cache. It does not set the cache namespace. The test job is the only writer of that namespace.
 
 **Triggers.** `Trigger` is an open trait. It renders only into the closed `On` and `Cond` vocabularies. `Cond` is an expression tree. The printer is the only place a condition becomes a string. Shipped presets are `Ci`, `DefaultPush`, `Tag`, `Dispatch`, `Label`, `Paths`, and `Nightly` (`TaskJob.nightly`, which is `Dispatch` plus a cron). `SitePublish` (`Automatic`, `Manual`, `Both`, default `Both`) is those presets applied to a site. A site has no cron, so `ScheduledSite` cannot be constructed.
 

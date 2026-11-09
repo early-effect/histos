@@ -845,21 +845,21 @@ object Workflow:
             s"        type: $kind",
           ) ++ input.default.toList.map(value => s"        default: ${quote(value)}")
 
-  /** The test job, and the doc check when a build asks for it. The doc job restores the store because it compiles, and
-    * it does not save: the suite is the writer. It does not wait for the suite. Versions, plugin docs, deploy,
-    * workflow, and release do not restore these. This workflow does not fetch a JDK, so it emits no JDK key. Node is
-    * installed for a JavaScript module, or when Playwright is installed. `setup-node` does not set `cache: npm`: that
-    * key is a package lock, and Chekhov does not read it. LLVM is installed for a native module. The runner is
-    * `ubuntu-26.04`, so a miss downloads `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and unpacks
-    * it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads Playwright
-    * from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this runner. A
-    * Playwright revision installs the browser even when no module is Firefox, because a JVM suite can launch it.
-    * `npm install` and `install firefox` run when that cache misses. The step still runs on a hit, checks the package,
-    * and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. A step `if` that skips the
-    * download leaves a job that did not run. Coursier is the Linux default of `Resolve.coursier` when `COURSIER_CACHE`
-    * is unset. `hashFiles` names the build file while the build resolves, and the pin while it is locked. No step sets
-    * `restore-keys`. Every job that runs `./histos` uses the setup action and does not install a JDK or the `cs`
-    * binary.
+  /** The test job, and the scaladoc check when a build asks for it. The scaladoc job restores the store because it
+    * compiles, and it does not save: the suite is the writer. It does not wait for the suite. Versions, plugin docs,
+    * deploy, workflow, and release do not restore these. This workflow does not fetch a JDK, so it emits no JDK key.
+    * Node is installed for a JavaScript module, or when Playwright is installed. `setup-node` does not set
+    * `cache: npm`: that key is a package lock, and Chekhov does not read it. LLVM is installed for a native module. The
+    * runner is `ubuntu-26.04`, so a miss downloads `LLVM-<revision>-Linux-X64.tar.xz` from the llvm-project release and
+    * unpacks it. A hit does not. The step runs either way: it checks `clang` and puts `bin` on `PATH`. Chekhov reads
+    * Playwright from `~/.cache/chekhov`. An unset `PLAYWRIGHT_BROWSERS_PATH` is `~/.cache/ms-playwright` on this
+    * runner. A Playwright revision installs the browser even when no module is Firefox, because a JVM suite can launch
+    * it. `npm install` and `install firefox` run when that cache misses. The step still runs on a hit, checks the
+    * package, and runs `install-deps firefox`: it is apt, and a runner does not keep those packages. A step `if` that
+    * skips the download leaves a job that did not run. Coursier is the Linux default of `Resolve.coursier` when
+    * `COURSIER_CACHE` is unset. `hashFiles` names the build file while the build resolves, and the pin while it is
+    * locked. No step sets `restore-keys`. Every job that runs `./histos` uses the setup action and does not install a
+    * JDK or the `cs` binary.
     */
   private def steps(
       tools: RunnerTools,
@@ -1413,7 +1413,7 @@ object Workflow:
     val chosen    = modules.filter(module => published.contains(module.name))
     val prepare   = steps(graph.runnerTools, graph.resolution, docNeed(chosen, graph.runnerTools), MatrixScope.Whole)
     val lines     = List(
-      "  doc:"
+      "  scaladoc:"
     ) ++ toolchainNeeds(graph) ++ verifyIf ++ List(
       s"    runs-on: $Runner"
     ) ++ jobLimit(graph) ++ List(
@@ -1422,7 +1422,7 @@ object Workflow:
       "      contents: read",
       "    steps:",
       s"      - uses: $Checkout",
-    ) ++ coursierCli(graph, "doc") ++ prepare ++ storeRestore ++ List(
+    ) ++ coursierCli(graph, "scaladoc") ++ prepare ++ storeRestore ++ List(
       s"      - run: ${quote("./histos run doc")}"
     )
     lines.mkString("\n")
