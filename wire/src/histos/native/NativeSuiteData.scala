@@ -1,7 +1,7 @@
 package histos.native
 
-import histos.zinc.{CompileError}
-import histos.resolve.{ResolveError}
+import histos.zinc.CompileError
+import histos.resolve.ResolveError
 import java.nio.file.Path
 
 enum NativeSuiteError:

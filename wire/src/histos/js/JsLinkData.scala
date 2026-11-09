@@ -1,7 +1,7 @@
 package histos.js
 
-import histos.zinc.{CompileError}
-import histos.resolve.{ResolveError}
+import histos.zinc.CompileError
+import histos.resolve.ResolveError
 
 enum JsLinkError:
   case Resolved(error: ResolveError)

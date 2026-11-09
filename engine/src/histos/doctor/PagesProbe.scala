@@ -28,9 +28,9 @@ object PagesProbe:
       "User-Agent"    -> "histos",
     )
     get(net, s"$root/pages", headers).flatMap:
-      case None => ZIO.succeed(Hit.Unreachable)
+      case None                                                      => ZIO.succeed(Hit.Unreachable)
       case Some(pages) if pages.status == 401 || pages.status == 403 => ZIO.succeed(Hit.Unreachable)
-      case Some(pages) =>
+      case Some(pages)                                               =>
         val source =
           if pages.status == 200 && Scan.strings(pages.body, "build_type").contains("workflow") then Source.Actions
           else Source.Other
@@ -38,11 +38,11 @@ object PagesProbe:
 
   private def gate(net: Net, root: String, branch: String, headers: List[(String, String)]): UIO[Gate] =
     get(net, s"$root/environments/github-pages", headers).flatMap:
-      case None => ZIO.succeed(Gate.Unread)
+      case None                               => ZIO.succeed(Gate.Unread)
       case Some(reply) if reply.status == 404 => ZIO.succeed(Gate.Open)
       case Some(reply) if reply.status != 200 => ZIO.succeed(Gate.Unread)
-      case Some(reply) =>
-        val body = reply.body
+      case Some(reply)                        =>
+        val body       = reply.body
         val nullPolicy =
           body.contains("\"deployment_branch_policy\":null") || body.contains("\"deployment_branch_policy\": null")
         if nullPolicy then ZIO.succeed(Gate.Open)

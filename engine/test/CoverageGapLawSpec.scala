@@ -59,8 +59,8 @@ object CoverageGapLawSpec extends ZIOSpecDefault:
       )
     ,
     test("empty exclusion lists omit the flag, and the identity moves when an exclusion or the source root moves"):
-      val data = Path.of("/data")
-      val root = Path.of("/root")
+      val data   = Path.of("/data")
+      val root   = Path.of("/root")
       val plugin = Path.of("/plugin.jar")
       val empty  = Excludes(Nil, Nil)
       assertTrue(
@@ -73,6 +73,5 @@ object CoverageGapLawSpec extends ZIOSpecDefault:
         Flags.identity("2.13", data, root, empty, "2") != Flags.identity("2.13", data, root, empty, ""),
         Cell.revision(ScalaVersion.trusted("3.10.0"), histos.ToolRevision.trusted("2")) == "",
         Cell.revision(ScalaVersion.trusted("2.13.18"), histos.ToolRevision.trusted("2")) == "2",
-      )
+      ),
   )
-end CoverageGapLawSpec

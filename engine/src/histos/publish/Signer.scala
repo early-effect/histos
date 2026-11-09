@@ -43,6 +43,7 @@ trait Signer:
 
   /** The signing key, for the keyserver read. A gpg signer has this only when `PGP_KEY_HEX` names it. */
   def fingerprint: IO[SignerError, histos.central.Fingerprint]
+end Signer
 
 object Signer:
   /** Decoded secret-key bytes and the passphrase that unlocks them. Fails before yielding a signer when the secret has

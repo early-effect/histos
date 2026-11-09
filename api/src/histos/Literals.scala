@@ -10,19 +10,19 @@ extension (inline sc: StringContext)
   inline def scala(inline args: String*): ScalaVersion             = ${ LiteralMacro.scalaVersion('sc, 'args) }
   inline def dep(inline args: String*): Dep                        = ${ LiteralMacro.dep('sc, 'args) }
   inline def ship(inline args: String*): histos.version.ShipNumber = ${ LiteralMacro.shipNumber('sc, 'args) }
-  inline def organization(inline args: String*): Organization           = ${ LiteralMacro.organization('sc, 'args) }
-  inline def artifact(inline args: String*): ArtifactBase               = ${ LiteralMacro.artifact('sc, 'args) }
-  inline def maven(inline args: String*): Resolver                      = ${ LiteralMacro.maven('sc, 'args) }
-  inline def path(inline args: String*): ProjectPath                    = ${ LiteralMacro.projectPath('sc, 'args) }
-  inline def asset(inline args: String*): histos.plugin.RepoPath        = ${ LiteralMacro.asset('sc, 'args) }
-  inline def pom(inline args: String*): PomText                         = ${ LiteralMacro.pomText('sc, 'args) }
-  inline def url(inline args: String*): HttpUrl                         = ${ LiteralMacro.httpUrl('sc, 'args) }
-  inline def license(inline args: String*): LicenseName                 = ${ LiteralMacro.licenseName('sc, 'args) }
-  inline def developer(inline args: String*): DeveloperId               = ${ LiteralMacro.developerId('sc, 'args) }
-  inline def connection(inline args: String*): ScmConnection            = ${ LiteralMacro.scmConnection('sc, 'args) }
-  inline def sbt(inline args: String*): SbtSeries                       = ${ LiteralMacro.sbtSeries('sc, 'args) }
-  inline def promote(inline args: String*): Promote                     = ${ LiteralMacro.promote('sc, 'args) }
-  inline def ghsa(inline args: String*): histos.supply.AdvisoryId =
+  inline def organization(inline args: String*): Organization      = ${ LiteralMacro.organization('sc, 'args) }
+  inline def artifact(inline args: String*): ArtifactBase          = ${ LiteralMacro.artifact('sc, 'args) }
+  inline def maven(inline args: String*): Resolver                 = ${ LiteralMacro.maven('sc, 'args) }
+  inline def path(inline args: String*): ProjectPath               = ${ LiteralMacro.projectPath('sc, 'args) }
+  inline def asset(inline args: String*): histos.plugin.RepoPath   = ${ LiteralMacro.asset('sc, 'args) }
+  inline def pom(inline args: String*): PomText                    = ${ LiteralMacro.pomText('sc, 'args) }
+  inline def url(inline args: String*): HttpUrl                    = ${ LiteralMacro.httpUrl('sc, 'args) }
+  inline def license(inline args: String*): LicenseName            = ${ LiteralMacro.licenseName('sc, 'args) }
+  inline def developer(inline args: String*): DeveloperId          = ${ LiteralMacro.developerId('sc, 'args) }
+  inline def connection(inline args: String*): ScmConnection       = ${ LiteralMacro.scmConnection('sc, 'args) }
+  inline def sbt(inline args: String*): SbtSeries                  = ${ LiteralMacro.sbtSeries('sc, 'args) }
+  inline def promote(inline args: String*): Promote                = ${ LiteralMacro.promote('sc, 'args) }
+  inline def ghsa(inline args: String*): histos.supply.AdvisoryId  =
     histos.supply.Interp.ghsa(sc, args*)
   inline def reason(inline args: String*): histos.supply.Reason =
     histos.supply.Interp.reason(sc, args*)

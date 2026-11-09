@@ -1,6 +1,5 @@
 package histos.pack
 
-
 enum MainClassError:
   case Empty
   case Bad(raw: String)

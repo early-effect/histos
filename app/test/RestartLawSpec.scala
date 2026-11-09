@@ -25,24 +25,24 @@ object RestartLawSpec extends ZIOSpecDefault:
           started <- Ref.make(0)
           allow   <- Ref.make(true)
           live    <- Ref.make(Option.empty[Child])
-          say      = quiet
-          child    = stand(repo, started, live)
-          roots    = ZIO.succeed(Watching.Watched(List(repo.resolve("src")), Set.empty))
-          again    = (changed: List[Path]) => allow.get.map(ok => ok && changed.nonEmpty)
-          fiber   <- Watching.beside(say, child, roots, again).fork
-          first   <- awaitPid(live)
-          _       <- Workspace.writeString(source, "two\n")
-          second  <- awaitNext(live, first.pid)
-          kept     = first.pid
-          _       <- allow.set(false)
-          _       <- Workspace.writeString(source, "three\n")
-          _       <- ZIO.sleep(SourceWatch.Poll + SourceWatch.Settle + SourceWatch.Poll)
-          during  <- live.get
-          alive   <- during match
+          say   = quiet
+          child = stand(repo, started, live)
+          roots = ZIO.succeed(Watching.Watched(List(repo.resolve("src")), Set.empty))
+          again = (changed: List[Path]) => allow.get.map(ok => ok && changed.nonEmpty)
+          fiber  <- Watching.beside(say, child, roots, again).fork
+          first  <- awaitPid(live)
+          _      <- Workspace.writeString(source, "two\n")
+          second <- awaitNext(live, first.pid)
+          kept = first.pid
+          _      <- allow.set(false)
+          _      <- Workspace.writeString(source, "three\n")
+          _      <- ZIO.sleep(SourceWatch.Poll + SourceWatch.Settle + SourceWatch.Poll)
+          during <- live.get
+          alive  <- during match
             case Some(found) => running(found.pid)
             case None        => ZIO.succeed(false)
-          _    <- fiber.interrupt
-          gone <- gone(second.pid)
+          _     <- fiber.interrupt
+          gone  <- gone(second.pid)
           times <- started.get
         yield assertTrue(
           second.pid != kept,
@@ -60,16 +60,14 @@ object RestartLawSpec extends ZIOSpecDefault:
     ZIO.scoped {
       for
         work <- ZIO.attemptBlocking(Files.createTempDirectory(repo, "child")).orDie
-        file  = work.resolve("pid")
-        process <- ZIO
-          .attemptBlocking {
-            new ProcessBuilder("sh", "-c", "echo $$ > pid; exec sleep 30")
-              .directory(work.toFile)
-              .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-              .redirectError(ProcessBuilder.Redirect.DISCARD)
-              .start()
-          }
-          .orDie
+        file = work.resolve("pid")
+        process <- ZIO.attemptBlocking {
+          new ProcessBuilder("sh", "-c", "echo $$ > pid; exec sleep 30")
+            .directory(work.toFile)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        }.orDie
         _   <- started.update(_ + 1)
         pid <- readPid(file)
         _   <- live.set(Some(Child(pid)))

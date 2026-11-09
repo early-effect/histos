@@ -1,8 +1,8 @@
 package histos.process
 
 import histos.Platform
-import histos.workspace.{IoFailure}
-import java.nio.file.{Path}
+import histos.workspace.IoFailure
+import java.nio.file.Path
 
 /** Text a process wrote. It is text because the process speaks text. */
 opaque type ProcessOutput = String

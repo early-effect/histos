@@ -12,3 +12,4 @@ object LoadedBuild:
   /** Tests that only have a graph. `local` and `sona` stay the stock layers. */
   def apply(graph: ProjectGraph, plugins: PluginRuntime): LoadedBuild =
     new LoadedBuild(graph, plugins, HistosBuild.fixed(graph))
+end LoadedBuild

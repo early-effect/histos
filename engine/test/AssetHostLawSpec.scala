@@ -170,7 +170,7 @@ object AssetHostLawSpec extends ZIOSpecDefault:
           uploadHits.count(_.method == "POST") == 2,
           uploadHits.forall(_.body.sameElements(bytes.toArray)),
         )
-      }
+      },
   )
 
   private def release(id: String): String =
@@ -224,16 +224,15 @@ object AssetHostLawSpec extends ZIOSpecDefault:
     ZIO.fromEither(AssetBase.from(s"http://127.0.0.1:$port")).catchAll(error => ZIO.dieMessage(error.message))
 
   private def listen(answer: Hit => Reply, seen: ConcurrentLinkedQueue[Hit]): ZIO[Scope, Nothing, Int] =
-    ZIO.acquireRelease(
-      ZIO
-        .attempt {
+    ZIO
+      .acquireRelease(
+        ZIO.attempt {
           val server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0)
           server.createContext("/", exchange => reply(exchange, answer, seen))
           server.start()
           server
-        }
-        .orDie
-    )(server => ZIO.attempt(server.stop(0)).orDie)
+        }.orDie
+      )(server => ZIO.attempt(server.stop(0)).orDie)
       .map(_.getAddress.getPort)
 
   private def reply(exchange: HttpExchange, answer: Hit => Reply, seen: ConcurrentLinkedQueue[Hit]): Unit =

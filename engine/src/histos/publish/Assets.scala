@@ -197,7 +197,7 @@ private final class AssetClient(
         .copy(query = QueryParams.of("per_page" -> PageSize.toString, "page" -> number.toString))
       exchange(Method.GET, url, Body.empty).flatMap: response =>
         response.status.code match
-          case 200       =>
+          case 200 =>
             readPage(response, name).flatMap { (found, count) =>
               found match
                 case Some(_) => ZIO.succeed(found)
@@ -215,9 +215,11 @@ private final class AssetClient(
       case Some(bytes) =>
         val body = new String(bytes.toArray, java.nio.charset.StandardCharsets.UTF_8)
         val rows = objects(body)
-        val hit  = rows.iterator.flatMap { obj =>
-          if field(obj, "name").contains(name) then numberField(obj, "id") else None
-        }.nextOption()
+        val hit  = rows.iterator
+          .flatMap { obj =>
+            if field(obj, "name").contains(name) then numberField(obj, "id") else None
+          }
+          .nextOption()
         ZIO.succeed((hit, rows.length))
       case None => ZIO.fail(AssetError.Inventory)
 
@@ -228,20 +230,30 @@ private final class AssetClient(
     linked.orElse(full)
 
   private def pageLink(header: String): Option[Int] =
-    header.split(",", -1).iterator.map(_.trim).collectFirst {
-      case part if part.contains("rel=\"next\"") || part.contains("rel=next") =>
-        val open  = part.indexOf('<')
-        val close = part.indexOf('>')
-        if open >= 0 && close > open then pageQuery(part.substring(open + 1, close)) else None
-    }.flatten
+    header
+      .split(",", -1)
+      .iterator
+      .map(_.trim)
+      .collectFirst {
+        case part if part.contains("rel=\"next\"") || part.contains("rel=next") =>
+          val open  = part.indexOf('<')
+          val close = part.indexOf('>')
+          if open >= 0 && close > open then pageQuery(part.substring(open + 1, close)) else None
+      }
+      .flatten
 
   private def pageQuery(url: String): Option[Int] =
     val at = url.indexOf('?')
     if at < 0 then None
     else
-      url.substring(at + 1).split("&", -1).iterator.collectFirst {
-        case pair if pair.startsWith("page=") => pair.drop(5).toIntOption
-      }.flatten
+      url
+        .substring(at + 1)
+        .split("&", -1)
+        .iterator
+        .collectFirst {
+          case pair if pair.startsWith("page=") => pair.drop(5).toIntOption
+        }
+        .flatten
 
   /** `DELETE /repos/{owner}/{repo}/releases/assets/{id}` on the API host. `404` is already gone. */
   private def erase(id: String): IO[AssetError, Unit] =

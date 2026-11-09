@@ -65,11 +65,18 @@ object ProvisionLawSpec extends ZIOSpecDefault:
           val marker  = """addSbtPlugin("com.example" % "sbt-demo" % "1.0.0")"""
           val program =
             for
-              _       <- write(demo.resolve("build.sbt"), "name := \"demo\"\n")
-              _       <- write(plugins, marker + "\n")
-              made    <- Provision.init(demo, "0.1.0", Path.of("api.jar"), machine, bare.copy(source = Some(ImportSource.Sbt)))
+              _    <- write(demo.resolve("build.sbt"), "name := \"demo\"\n")
+              _    <- write(plugins, marker + "\n")
+              made <- Provision
+                .init(demo, "0.1.0", Path.of("api.jar"), machine, bare.copy(source = Some(ImportSource.Sbt)))
               missing <- Provision
-                .init(parent.resolve("empty"), "0.1.0", Path.of("api.jar"), machine, bare.copy(source = Some(ImportSource.Sbt)))
+                .init(
+                  parent.resolve("empty"),
+                  "0.1.0",
+                  Path.of("api.jar"),
+                  machine,
+                  bare.copy(source = Some(ImportSource.Sbt)),
+                )
                 .either
             yield
               val text = Files.readString(made.dir.resolve("histos.scala"))
@@ -88,8 +95,8 @@ object ProvisionLawSpec extends ZIOSpecDefault:
           val sources = demo.resolve("core").resolve("src")
           val program =
             for
-              _ <- write(demo.resolve("project").resolve("ZipxVersions.scala"), "object ZipxVersions\n")
-              _ <- write(sources.resolve(".keep"), "")
+              _    <- write(demo.resolve("project").resolve("ZipxVersions.scala"), "object ZipxVersions\n")
+              _    <- write(sources.resolve(".keep"), "")
               made <- Provision.init(
                 demo,
                 "0.1.0",
@@ -97,13 +104,19 @@ object ProvisionLawSpec extends ZIOSpecDefault:
                 machine,
                 bare.copy(source = Some(ImportSource.Zipx)),
               )
-              _ <- write(spaced.resolve("project").resolve("ZipxVersions.scala"), "object ZipxVersions\n")
-              _ <- write(spaced.resolve("src").resolve(".keep"), "")
+              _   <- write(spaced.resolve("project").resolve("ZipxVersions.scala"), "object ZipxVersions\n")
+              _   <- write(spaced.resolve("src").resolve(".keep"), "")
               bad <- Provision
                 .init(spaced, "0.1.0", Path.of("api.jar"), machine, bare.copy(source = Some(ImportSource.Zipx)))
                 .either
               gone <- Provision
-                .init(parent.resolve("plain"), "0.1.0", Path.of("api.jar"), machine, bare.copy(source = Some(ImportSource.Zipx)))
+                .init(
+                  parent.resolve("plain"),
+                  "0.1.0",
+                  Path.of("api.jar"),
+                  machine,
+                  bare.copy(source = Some(ImportSource.Zipx)),
+                )
                 .either
             yield
               val text = Files.readString(made.dir.resolve("histos.scala"))
@@ -112,8 +125,7 @@ object ProvisionLawSpec extends ZIOSpecDefault:
                 bad == Left(ProvisionError.Files(SkeletonError.Name("not a name"))),
                 gone == Left(ProvisionError.Import("no project/ZipxVersions.scala")),
               )
-          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader] ++ stubbed[Resolve])
-    ,
+          program.provideSomeLayer[TestEnvironment & Scope](stubbed[Loader] ++ stubbed[Resolve]),
   )
 
   private def write(path: Path, text: String): ZIO[Any, Nothing, Unit] =
@@ -124,3 +136,4 @@ object ProvisionLawSpec extends ZIOSpecDefault:
         ()
       }
       .catchAll(error => ZIO.dieMessage(error.getClass.getName))
+end ProvisionLawSpec

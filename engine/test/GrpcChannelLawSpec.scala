@@ -42,8 +42,7 @@ object GrpcChannelLawSpec extends ZIOSpecDefault:
           empty == Left(RemoteError.Rpc("UNAVAILABLE")),
           coded == Left(RemoteError.Rpc("UNAVAILABLE")),
         )
-      }
-    ,
+      },
   )
 
   private def closed: ZIO[Any, Nothing, Int] =
@@ -55,3 +54,4 @@ object GrpcChannelLawSpec extends ZIOSpecDefault:
         port
       }
       .catchAll(error => ZIO.dieMessage(error.getClass.getName))
+end GrpcChannelLawSpec

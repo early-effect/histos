@@ -1,10 +1,10 @@
 package histos.preview
 
 import histos.doctor.{Diagnostic, Noted}
-import histos.publish.{LocalPublishError}
-import histos.select.{SelectError}
-import histos.testrun.{SuitePatternError}
-import histos.version.{VersionError}
+import histos.publish.LocalPublishError
+import histos.select.SelectError
+import histos.testrun.SuitePatternError
+import histos.version.VersionError
 import histos.workspace.IoFailure
 import histos.{Aggregate, Platform, ProjectName}
 
@@ -18,7 +18,7 @@ enum RunMiss:
   case BadId(detail: String)
 
   def message: String = this match
-    case Absent(name, _)        => s"'$name' is not a module"
+    case Absent(name, _)         => s"'$name' is not a module"
     case Aggregate(name)         => s"'${name.value}' is an aggregate"
     case NoMain(name)            => s"'${name.value}' does not name a main"
     case Choose(name, platforms) =>
@@ -28,7 +28,7 @@ enum RunMiss:
       val tokens = built.map(_.token).mkString(", ")
       s"'${name.value}' does not build ${platform.token}. It builds $tokens"
     case UnknownTask(id) => s"'$id' is not a task"
-    case BadId(detail) => detail
+    case BadId(detail)   => detail
 
   def diagnose: Diagnostic = this match
     case Absent(_, near) =>
@@ -61,7 +61,7 @@ enum PreviewError:
     case Version(error)   => error.message
     case Publish(error)   => error.message
     case Run(miss)        => miss.message
-    case Pattern(error) => error.message
+    case Pattern(error)   => error.message
 
   def diagnose: Diagnostic = this match
     case Target(error)  => error.diagnose

@@ -3,7 +3,7 @@ package histos.toolchain
 import histos.jdk.{JdkSurvey, ToolchainError}
 import histos.native.{ClangMiss, NativeDeclaration}
 import histos.node.{NodeMiss, NodeSurvey}
-import histos.{ProjectName}
+import histos.ProjectName
 
 /** A JDK decision, and a Node decision when the graph asked for one, before clang is resolved.
   */

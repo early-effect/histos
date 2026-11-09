@@ -26,4 +26,3 @@ object CliClasspathLawSpec extends ZIOSpecDefault:
         !done.err.contains(".histos/classes"),
       )
   )
-end CliClasspathLawSpec

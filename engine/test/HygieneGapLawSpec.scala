@@ -9,7 +9,7 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object HygieneGapLawSpec extends ZIOSpecDefault:
   private val ship   = ShipName.trusted("core")
   private val number = ShipNumber.trusted(1, 2, 3)
-  private val line = Ship.Line(ship, number, ::(ProjectName.trusted("core"), Nil)) match
+  private val line   = Ship.Line(ship, number, ::(ProjectName.trusted("core"), Nil)) match
     case row: Ship.Line => row
   private val catalog = Catalog.Lines(::(line, Nil))
 
@@ -49,6 +49,6 @@ object HygieneGapLawSpec extends ZIOSpecDefault:
           Outcome.Skipped(HygieneChecks.pagesId, Probe.GitHubRead, Fix.Command(ShellLine.trusted("gh auth login")))
         ),
         blocks == List(Outcome.Found(PagesDiagnostic.Branch("main"))),
-      )
+      ),
   )
 end HygieneGapLawSpec

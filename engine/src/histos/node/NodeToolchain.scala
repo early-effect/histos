@@ -89,9 +89,8 @@ object NodeToolchain:
       case first :: rest =>
         val tooOld =
           !histos.toolchain.VersionOrder.atLeast(first.version.value, Floor.value, stripJavaOne = false)
-        val newer = rest.filter(item =>
-          histos.toolchain.VersionOrder.compare(item.version.value, first.version.value) > 0
-        )
+        val newer =
+          rest.filter(item => histos.toolchain.VersionOrder.compare(item.version.value, first.version.value) > 0)
         if !tooOld || newer.isEmpty then None
         else
           val best = newer

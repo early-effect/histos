@@ -33,7 +33,7 @@ object GrammarLawSpec extends ZIOSpecDefault:
           List("~", "--restart", "run", "api") -> Right(
             Command.Watch(Command.Run(ready.api, None), List("--restart", "run", "api"))
           ),
-          List("~", "--restart", "compile") -> Left(CliParseError.WatchCommand("--restart watches a program")),
+          List("~", "--restart", "compile")        -> Left(CliParseError.WatchCommand("--restart watches a program")),
           List("~", "--restart", "run", "inspect") -> Left(CliParseError.WatchCommand("--restart watches a program")),
         )
     ,
@@ -224,8 +224,8 @@ object GrammarLawSpec extends ZIOSpecDefault:
     ,
     test("an unknown family token is that family and an unknown root is not a command"):
       held(
-        List("help", "nope")   -> Right(Command.Help(List("nope"))),
-        List("help", "compil") -> Right(Command.Help(List("compil"))),
+        List("help", "nope")         -> Right(Command.Help(List("nope"))),
+        List("help", "compil")       -> Right(Command.Help(List("compil"))),
         List("setup", "suply-chain") -> Left(
           CliParseError.UnknownCommand("suply-chain", histos.doctor.Suggest.near("suply-chain", List("supply-chain")))
         ),

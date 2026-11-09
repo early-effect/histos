@@ -11,18 +11,20 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object CiBranchLawSpec extends ZIOSpecDefault:
   def spec = suite("ci branch laws")(
     test("origin HEAD is main, a non-repository has none, and a symref line is the branch"):
-      Workspace.work("histos-ci-branch").flatMap: dir =>
-        val repo = repository
-        for
-          found   <- CiBranch.read(repo).either
-          missing <- CiBranch.read(dir).either
-        yield assertTrue(
-          found == Right(CiBranch("main")),
-          missing == Left(CiError.NoDefaultBranch),
-          CiBranch.headFromLsRemote("ref: refs/heads/main\tHEAD\n") == Some("main"),
-          CiBranch.headFromLsRemote("ref: refs/heads/HEAD\tHEAD") == None,
-          CiBranch.headFromLsRemote("no ref here") == None,
-        )
+      Workspace
+        .work("histos-ci-branch")
+        .flatMap: dir =>
+          val repo = repository
+          for
+            found   <- CiBranch.read(repo).either
+            missing <- CiBranch.read(dir).either
+          yield assertTrue(
+            found == Right(CiBranch("main")),
+            missing == Left(CiError.NoDefaultBranch),
+            CiBranch.headFromLsRemote("ref: refs/heads/main\tHEAD\n") == Some("main"),
+            CiBranch.headFromLsRemote("ref: refs/heads/HEAD\tHEAD") == None,
+            CiBranch.headFromLsRemote("no ref here") == None,
+          )
   )
 
   private def repository: Path =

@@ -31,7 +31,7 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
                 val source = repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
                 val store  = repo.resolve("store")
                 val built  = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(app)), app)
-                val run =
+                val run    =
                   for
                     sha <- LawGit.ready(repo)
                     revision = s"1.2.3-${sha.abbreviate.value}-SNAPSHOT"
@@ -60,9 +60,9 @@ object PublishInstallLawSpec extends ZIOSpecDefault:
                         line => notes.update(_ :+ line),
                       )
                       .either
-                    said    <- notes.get
-                    onDisk  <- present(jar, pom)
-                    _       <- wipe(ivy)
+                    said   <- notes.get
+                    onDisk <- present(jar, pom)
+                    _      <- wipe(ivy)
                   yield assertTrue(
                     found.map(_.lines) == Right(List(s"${group.value} runlaw_3 $revision")),
                     said.contains(s"installing runlaw_3 $revision"),

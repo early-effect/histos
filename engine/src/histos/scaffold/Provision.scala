@@ -57,7 +57,7 @@ object Provision:
 
   private def draft(dir: Path, source: Option[ImportSource]): IO[ProvisionError, Option[String]] =
     source match
-      case None => ZIO.succeed(None)
+      case None                   => ZIO.succeed(None)
       case Some(ImportSource.Sbt) =>
         val build   = dir.resolve("build.sbt")
         val plugins = dir.resolve("project").resolve("plugins.sbt")
@@ -112,10 +112,13 @@ object Provision:
     request.branch match
       case Some(name) => ZIO.fromEither(accepted(name))
       case None       =>
-        CiBranch.read(dir).either.flatMap:
-          case Right(branch)                 => ZIO.succeed(branch.name)
-          case Left(CiError.NoDefaultBranch) => request.askBranch.flatMap(name => ZIO.fromEither(accepted(name)))
-          case Left(error)                   => ZIO.fail(ProvisionError.Workflow(error.message))
+        CiBranch
+          .read(dir)
+          .either
+          .flatMap:
+            case Right(branch)                 => ZIO.succeed(branch.name)
+            case Left(CiError.NoDefaultBranch) => request.askBranch.flatMap(name => ZIO.fromEither(accepted(name)))
+            case Left(error)                   => ZIO.fail(ProvisionError.Workflow(error.message))
 
   private def accepted(raw: String): Either[ProvisionError, String] =
     if raw.nonEmpty && raw.forall(char => !char.isWhitespace && !char.isControl) then Right(raw)
@@ -143,12 +146,16 @@ object Provision:
         val children = Files.list(dir)
         val names    =
           try
-            children.iterator.asScala.filter(child => Files.isDirectory(child)).flatMap { child =>
-              val name = Option(child.getFileName).fold("")(_.toString)
-              if name.startsWith(".") || name == "project" || name == "target" then None
-              else if Files.isDirectory(child.resolve("src")) && ProjectName.from(name).isRight then Some(name)
-              else None
-            }.toList.sorted
+            children.iterator.asScala
+              .filter(child => Files.isDirectory(child))
+              .flatMap { child =>
+                val name = Option(child.getFileName).fold("")(_.toString)
+                if name.startsWith(".") || name == "project" || name == "target" then None
+                else if Files.isDirectory(child.resolve("src")) && ProjectName.from(name).isRight then Some(name)
+                else None
+              }
+              .toList
+              .sorted
           finally children.close()
         if names.nonEmpty then names
         else if Files.isDirectory(dir.resolve("src")) && ProjectName.from(directoryName(dir)).isRight then
@@ -179,11 +186,11 @@ enum ProvisionError:
   case Branch(raw: String)
 
   def message: String = this match
-    case Files(error)    => error.message
-    case Import(detail)  => detail
-    case Load(error)     => error.message
+    case Files(error)     => error.message
+    case Import(detail)   => detail
+    case Load(error)      => error.message
     case Workflow(detail) => detail
-    case Lock(error)     =>
+    case Lock(error)      =>
       s"${error.message}\nThe project is written. Run 'histos resolve --update'."
     case Branch(raw) => s"'$raw' is not a branch name"
 end ProvisionError

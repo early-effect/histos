@@ -2,7 +2,7 @@ package histos.central
 
 import histos.doctor.{Diagnostic, Noted}
 
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 /** Why a publish filesystem call failed. The path stays on `PublishError.Io`. */
 enum PublishFault:
@@ -35,7 +35,7 @@ enum PublishError:
     case NotSnapshot(error)  => error.message
     case Status(code)        => s"publish failed with HTTP $code"
     case Transport(reason)   => reason.message
-    case Metadata(reason) => reason.message
+    case Metadata(reason)    => reason.message
 
   def diagnose: Diagnostic = this match
     case Unauthorized =>

@@ -23,54 +23,56 @@ object CallsWorkflowLawSpec extends ZIOSpecDefault:
 
   def spec = suite("calls workflow laws")(
     test("update writes the audit workflow, and check matches that file until an extra workflow appears"):
-      Workspace.work("histos-calls-workflow").flatMap: dir =>
-        val built = Projects
-          .organization(organization"example.com")
-          .supplyChain(chain)(module("wflowlaw", Jvm)(scala"3.10.0"))
-        for
-          graph <- ZIO.fromEither(built).catchAll(error => ZIO.dieMessage(error.message))
-          loaded = LoadedBuild(graph, idle)
-          _ <- origin(dir)
-          (missing, missingHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
-          (updated, updatedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Update, say))
-          auditPath = Workflow.file(dir, SupplyYaml.auditName)
-          ciPath    = Workflow.path(dir)
-          auditFile <- ZIO.attemptBlocking(Files.isRegularFile(auditPath)).orDie
-          audit     <- ZIO.attemptBlocking(Files.readString(auditPath)).orDie
-          ciFile    <- ZIO.attemptBlocking(Files.isRegularFile(ciPath)).orDie
-          ci        <- ZIO.attemptBlocking(Files.readString(ciPath)).orDie
-          (checked, checkedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
-          _ <- ZIO.attemptBlocking(Files.writeString(Workflow.file(dir, "histos-extra.yml"), "name: extra\n")).orDie
-          (drifted, driftedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
-        yield
-          val written = outs(updatedHeard)
-          assertTrue(
-            missing == Right(()),
-            done(missingHeard).exists(faultHas("no workflow at")),
-            done(missingHeard).exists(faultHas("ci.yml")),
-            updated == Right(()),
-            done(updatedHeard).contains(CallResult.reported()),
-            written == ciPath.toString,
-            auditFile,
-            ciFile,
-            audit.contains("0 6 * * *"),
-            audit.contains("America/Chicago"),
-            audit.contains("./histos deps audit"),
-            audit.contains("security:"),
-            audit.contains("needs: audit"),
-            audit.contains("secrets.HISTOS_APP_ID"),
-            audit.contains("secrets.HISTOS_APP_PRIVATE_KEY"),
-            audit.contains("./histos deps update --security --yes"),
-            audit.contains("./histos doctor --preflight audit"),
-            ci.contains("./histos doctor --preflight"),
-            ci.contains("./histos test --affected"),
-            checked == Right(()),
-            done(checkedHeard).contains(CallResult.reported()),
-            outs(checkedHeard) == ciPath.toString,
-            drifted == Right(()),
-            done(driftedHeard).exists(faultHas("histos-extra.yml")),
-            done(driftedHeard).exists(faultHas("does not match the graph")),
-          )
+      Workspace
+        .work("histos-calls-workflow")
+        .flatMap: dir =>
+          val built = Projects
+            .organization(organization"example.com")
+            .supplyChain(chain)(module("wflowlaw", Jvm)(scala"3.10.0"))
+          for
+            graph <- ZIO.fromEither(built).catchAll(error => ZIO.dieMessage(error.message))
+            loaded = LoadedBuild(graph, idle)
+            _                       <- origin(dir)
+            (missing, missingHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
+            (updated, updatedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Update, say))
+            auditPath = Workflow.file(dir, SupplyYaml.auditName)
+            ciPath    = Workflow.path(dir)
+            auditFile               <- ZIO.attemptBlocking(Files.isRegularFile(auditPath)).orDie
+            audit                   <- ZIO.attemptBlocking(Files.readString(auditPath)).orDie
+            ciFile                  <- ZIO.attemptBlocking(Files.isRegularFile(ciPath)).orDie
+            ci                      <- ZIO.attemptBlocking(Files.readString(ciPath)).orDie
+            (checked, checkedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
+            _ <- ZIO.attemptBlocking(Files.writeString(Workflow.file(dir, "histos-extra.yml"), "name: extra\n")).orDie
+            (drifted, driftedHeard) <- speak(say => Calls.workflow(dir, loaded, WorkflowAction.Check, say))
+          yield
+            val written = outs(updatedHeard)
+            assertTrue(
+              missing == Right(()),
+              done(missingHeard).exists(faultHas("no workflow at")),
+              done(missingHeard).exists(faultHas("ci.yml")),
+              updated == Right(()),
+              done(updatedHeard).contains(CallResult.reported()),
+              written == ciPath.toString,
+              auditFile,
+              ciFile,
+              audit.contains("0 6 * * *"),
+              audit.contains("America/Chicago"),
+              audit.contains("./histos deps audit"),
+              audit.contains("security:"),
+              audit.contains("needs: audit"),
+              audit.contains("secrets.HISTOS_APP_ID"),
+              audit.contains("secrets.HISTOS_APP_PRIVATE_KEY"),
+              audit.contains("./histos deps update --security --yes"),
+              audit.contains("./histos doctor --preflight audit"),
+              ci.contains("./histos doctor --preflight"),
+              ci.contains("./histos test --affected"),
+              checked == Right(()),
+              done(checkedHeard).contains(CallResult.reported()),
+              outs(checkedHeard) == ciPath.toString,
+              drifted == Right(()),
+              done(driftedHeard).exists(faultHas("histos-extra.yml")),
+              done(driftedHeard).exists(faultHas("does not match the graph")),
+            )
   )
 
   private val chain = SupplyChain(

@@ -1,7 +1,7 @@
 package histos.publish
 
-import histos.workspace.{IoFailure}
-import java.nio.file.{Path}
+import histos.workspace.IoFailure
+import java.nio.file.Path
 
 enum ScriptError:
   case Drift(path: Path)

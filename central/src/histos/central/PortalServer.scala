@@ -176,5 +176,10 @@ enum PortalOpenError:
         ),
       )
     case Bind =>
-      histos.doctor.Noted.carry("publish.portal", message, "The loopback portal could not listen.", "histos help portal")
+      histos.doctor.Noted.carry(
+        "publish.portal",
+        message,
+        "The loopback portal could not listen.",
+        "histos help portal",
+      )
 end PortalOpenError

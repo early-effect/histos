@@ -20,38 +20,40 @@ object CallsSnapshotLawSpec extends ZIOSpecDefault:
 
   def spec = suite("calls snapshot laws")(
     test("snapshots and promote name the missing credentials, and assets with nothing to upload do not"):
-      Workspace.work("histos-calls-snap").flatMap: dir =>
-        val program =
-          for
-            graph <- ZIO
-              .fromEither(Projects.organization(group)(ships(Ship("demo").next(1, 2, 3)(named)), named))
-              .catchAll(error => ZIO.dieMessage(error.message))
-            loaded <- Machine.load(dir).either
-            machine <- loaded match
-              case Left(error)  => ZIO.dieMessage(error.message)
-              case Right(value) => ZIO.succeed(value.copy(env = Map.empty))
-            found <- GraphCompile.jdk(machine).either
-            jdk <- found match
-              case Left(error)  => ZIO.dieMessage(error.message)
-              case Right(value) => ZIO.succeed(value)
-            (snapped, snapHeard) <- speak(say =>
-              Calls.publishSnapshots(dir, graph, HistosBuild.fixed(graph), machine, jdk, Nil, say)
+      Workspace
+        .work("histos-calls-snap")
+        .flatMap: dir =>
+          val program =
+            for
+              graph <- ZIO
+                .fromEither(Projects.organization(group)(ships(Ship("demo").next(1, 2, 3)(named)), named))
+                .catchAll(error => ZIO.dieMessage(error.message))
+              loaded  <- Machine.load(dir).either
+              machine <- loaded match
+                case Left(error)  => ZIO.dieMessage(error.message)
+                case Right(value) => ZIO.succeed(value.copy(env = Map.empty))
+              found <- GraphCompile.jdk(machine).either
+              jdk   <- found match
+                case Left(error)  => ZIO.dieMessage(error.message)
+                case Right(value) => ZIO.succeed(value)
+              (snapped, snapHeard) <- speak(say =>
+                Calls.publishSnapshots(dir, graph, HistosBuild.fixed(graph), machine, jdk, Nil, say)
+              )
+              (promoted, promoteHeard) <- speak(say => Calls.promote(dir, machine, "nope", say))
+              (assets, assetHeard)     <- speak(say => Calls.publishAssets(dir, graph, machine, Nil, say))
+            yield assertTrue(
+              snapped == Right(()),
+              fault(snapHeard, "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"),
+              promoted == Right(()),
+              fault(promoteHeard, "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"),
+              assets == Right(()),
+              done(assetHeard).exists {
+                case CallResult.Reported(report) =>
+                  report.err.isEmpty && !report.out.exists(_.contains("SONATYPE"))
+                case CallResult.Fault(_) => false
+              },
             )
-            (promoted, promoteHeard) <- speak(say => Calls.promote(dir, machine, "nope", say))
-            (assets, assetHeard) <- speak(say => Calls.publishAssets(dir, graph, machine, Nil, say))
-          yield assertTrue(
-            snapped == Right(()),
-            fault(snapHeard, "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"),
-            promoted == Right(()),
-            fault(promoteHeard, "SONATYPE_USERNAME and SONATYPE_PASSWORD are required"),
-            assets == Right(()),
-            done(assetHeard).exists {
-              case CallResult.Reported(report) =>
-                report.err.isEmpty && !report.out.exists(_.contains("SONATYPE"))
-              case CallResult.Fault(_) => false
-            },
-          )
-        program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+          program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def fault(heard: Chunk[Message], text: String): Boolean =

@@ -34,41 +34,44 @@ object PluginCompileCellLawSpec extends ZIOSpecDefault:
   def spec = suite("plugin compile cell laws")(
     test("the cell writes main and test classes, and a type error is a compile fault"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-plugin-cell").flatMap: dir =>
-          val main = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Plug.scala")
-          val probe = dir.resolve(lawName.value).resolve("src").resolve("test").resolve("scala").resolve("Probe.scala")
-          val mainClass = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Plug.class")
-          val testClass = TestCompile.testClasses(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
-          val cell = PluginCells.Cell(module, scala3, Platform.Jvm)
-          val program =
-            for
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              _ <- Workspace.createDirectories(parentOf(main))
-              _ <- Workspace.createDirectories(parentOf(probe))
-              _ <- Workspace.writeString(main, "object Plug:\n  def ready: Int = 1\n")
-              _ <- Workspace.writeString(probe, "object Probe:\n  def n: Int = Plug.ready\n")
-              session = CompileSession(dir, graph, jdk, NativeOrigin.read(machine.env), pinned(lock))
-              compiled <- PluginCells.compile(session, cell).either
-              wroteMain <- ZIO.attempt(Files.isRegularFile(mainClass)).orDie
-              wroteTest <- ZIO.attempt(Files.isRegularFile(testClass)).orDie
-              _ <- Workspace.writeString(main, "object Plug:\n  def ready: Int = \"no\"\n")
-              broken <- PluginCells.compile(session, cell).either
-            yield
-              val detail = broken.fold(_.message, _ => "")
-              assertTrue(
-                compiled == Right(()),
-                wroteMain,
-                wroteTest,
-                detail.contains("'pluglaw' 3.10.0 jvm failed to compile"),
-              )
-          program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
+        Workspace
+          .work("histos-plugin-cell")
+          .flatMap: dir =>
+            val main  = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Plug.scala")
+            val probe =
+              dir.resolve(lawName.value).resolve("src").resolve("test").resolve("scala").resolve("Probe.scala")
+            val mainClass = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Plug.class")
+            val testClass = TestCompile.testClasses(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
+            val cell      = PluginCells.Cell(module, scala3, Platform.Jvm)
+            val program   =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                _ <- Workspace.createDirectories(parentOf(main))
+                _ <- Workspace.createDirectories(parentOf(probe))
+                _ <- Workspace.writeString(main, "object Plug:\n  def ready: Int = 1\n")
+                _ <- Workspace.writeString(probe, "object Probe:\n  def n: Int = Plug.ready\n")
+                session = CompileSession(dir, graph, jdk, NativeOrigin.read(machine.env), pinned(lock))
+                compiled  <- PluginCells.compile(session, cell).either
+                wroteMain <- ZIO.attempt(Files.isRegularFile(mainClass)).orDie
+                wroteTest <- ZIO.attempt(Files.isRegularFile(testClass)).orDie
+                _         <- Workspace.writeString(main, "object Plug:\n  def ready: Int = \"no\"\n")
+                broken    <- PluginCells.compile(session, cell).either
+              yield
+                val detail = broken.fold(_.message, _ => "")
+                assertTrue(
+                  compiled == Right(()),
+                  wroteMain,
+                  wroteTest,
+                  detail.contains("'pluglaw' 3.10.0 jvm failed to compile"),
+                )
+            program.provideSomeLayer[Resolve & Scope](sessionLayer(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def module: Module =
@@ -96,9 +99,7 @@ object PluginCompileCellLawSpec extends ZIOSpecDefault:
       ResolutionService.pinned(pinned(lock))
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells =
-      LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells
-    )
+    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
 
   private def opened =
     Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++

@@ -7,9 +7,9 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object GitHubCredentialLawSpec extends ZIOSpecDefault:
   def spec = suite("github credential laws")(
     test("github.com, localhost, and ghe read GH_TOKEN, and another host reads the enterprise pair"):
-      val github = Map("GH_TOKEN" -> "", "GITHUB_TOKEN" -> "second")
-      val local  = Map("GITHUB_TOKEN" -> "loop")
-      val spaces = Map("GH_ENTERPRISE_TOKEN" -> "   ")
+      val github     = Map("GH_TOKEN" -> "", "GITHUB_TOKEN" -> "second")
+      val local      = Map("GITHUB_TOKEN" -> "loop")
+      val spaces     = Map("GH_ENTERPRISE_TOKEN" -> "   ")
       val enterprise = Map("GH_ENTERPRISE_TOKEN" -> "", "GITHUB_ENTERPRISE_TOKEN" -> "ent")
       assertTrue(
         GitHubCredential.githubHost("github.com"),
@@ -28,8 +28,8 @@ object GitHubCredentialLawSpec extends ZIOSpecDefault:
     test("an environment token is not read from gh, and a blank host still asks gh with no hostname"):
       val asked = Ref.make(Option.empty[Option[String]])
       for
-        seen     <- asked
-        direct   <- GitHubCredential.resolve(
+        seen   <- asked
+        direct <- GitHubCredential.resolve(
           Map("GH_HOST" -> " github.com ", "GH_TOKEN" -> "tok"),
           host => seen.set(Some(host)) *> ZIO.dieMessage("gh was asked"),
         )
@@ -45,10 +45,10 @@ object GitHubCredentialLawSpec extends ZIOSpecDefault:
           Map("GH_HOST" -> " acme.example ", "GH_ENTERPRISE_TOKEN" -> "ent"),
           host => seen.set(Some(host)) *> ZIO.dieMessage("gh was asked"),
         )
-        _         <- seen.set(None)
-        empty     <- GitHubCredential.resolve(Map("GH_TOKEN" -> ""), host => seen.set(Some(host)).as(Some("cli")))
-        kept      <- seen.get
-        spaces    <- GitHubCredential.resolve(
+        _      <- seen.set(None)
+        empty  <- GitHubCredential.resolve(Map("GH_TOKEN" -> ""), host => seen.set(Some(host)).as(Some("cli")))
+        kept   <- seen.get
+        spaces <- GitHubCredential.resolve(
           Map("GH_TOKEN" -> "   "),
           host => seen.set(Some(host)) *> ZIO.dieMessage("gh was asked"),
         )
@@ -56,8 +56,8 @@ object GitHubCredentialLawSpec extends ZIOSpecDefault:
           Map("GH_HOST" -> "ghe.example"),
           host => seen.set(Some(host)).as(Some("  cli ")),
         )
-        named     <- seen.get
-        missing   <- GitHubCredential.resolve(Map.empty, host => ZIO.succeed(None))
+        named   <- seen.get
+        missing <- GitHubCredential.resolve(Map.empty, host => ZIO.succeed(None))
       yield
         val api = direct match
           case Some(token) => token.api
@@ -85,6 +85,5 @@ object GitHubCredentialLawSpec extends ZIOSpecDefault:
       for
         plain <- GitHubCredential.gh(None)
         named <- GitHubCredential.gh(Some("127.0.0.1"))
-      yield assertTrue(plain.forall(_.nonEmpty), named.forall(_.nonEmpty))
+      yield assertTrue(plain.forall(_.nonEmpty), named.forall(_.nonEmpty)),
   )
-end GitHubCredentialLawSpec

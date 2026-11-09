@@ -58,6 +58,7 @@ enum ReleaseDiagnostic(
           )
         ),
       )
+end ReleaseDiagnostic
 
 /** Pages findings. The fix names both settings the deploy needs. */
 enum PagesDiagnostic(
@@ -87,8 +88,8 @@ enum PagesDiagnostic(
         "A push to the default branch requests that environment. The allow-list has to include it.",
         fixes(Fix.Steps(lines(PagesDiagnostic.fixText))),
       )
+end PagesDiagnostic
 
 object PagesDiagnostic:
   val fixText: String =
     "Settings > Pages > Source: GitHub Actions. Environments > github-pages allow-list: include the default branch."
-end PagesDiagnostic

@@ -40,14 +40,14 @@ object ModuleReportLawSpec extends ZIOSpecDefault:
             .load(dir)
             .either
             .flatMap:
-              case Left(error) => ZIO.succeed(assertTrue(error.message == ""))
+              case Left(error)    => ZIO.succeed(assertTrue(error.message == ""))
               case Right(machine) =>
                 GraphCompile
                   .jdk(machine)
                   .either
                   .flatMap:
                     case Left(error) => ZIO.succeed(assertTrue(error.message == ""))
-                    case Right(jdk) =>
+                    case Right(jdk)  =>
                       ZIO.serviceWithZIO[DependencyLock]: lock =>
                         val main  = dir.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
                         val probe = dir.resolve("src").resolve("test").resolve("scala").resolve("Probe.scala")
@@ -107,9 +107,7 @@ object ModuleReportLawSpec extends ZIOSpecDefault:
     )
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells =
-      LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells
-    )
+    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
 
   private def opened =
     Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++

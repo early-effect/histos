@@ -45,8 +45,8 @@ object SurveyLawSpec extends ZIOSpecDefault:
 
   def spec = suite("survey laws")(
     test("shown keeps every line already collected, and a jdk failure has none"):
-      val jdkLine  = Toolchain.text(jdk)
-      val both     = s"$jdkLine\n${NodeToolchain.text(node)}"
+      val jdkLine    = Toolchain.text(jdk)
+      val both       = s"$jdkLine\n${NodeToolchain.text(node)}"
       val undeclared = Survey.shown(SurveyError.Undeclared(bare, missing))
       val split      = Survey.shown(SurveyError.Split(reached, left, right))
       val clang      = Survey.shown(SurveyError.Clang(bare, ClangMiss.Absent))
@@ -67,47 +67,59 @@ object SurveyLawSpec extends ZIOSpecDefault:
       )
     ,
     test("a native module with no clang major fails clang and does not ask for node"):
-      Workspace.work("histos-survey-missing").flatMap: dir =>
-        Machine.load(dir).flatMap: machine =>
-          Survey.collect(machine, one(missing, ClangPin.Unused)).map: found =>
-            val jdkDetail = found.jdk match
-              case JdkRead.Chosen(_, _)      => ""
-              case JdkRead.Failed(error, _)  => error.message
-            val clang = found.clang match
-              case ClangSlot.Failed(message) => message
-              case ClangSlot.Idle            => "idle"
-              case ClangSlot.Ready(_)        => "ready"
-            assertTrue(
-              jdkDetail == "",
-              found.node == NodeSlot.Idle,
-              clang.contains(missing.value),
-              clang.contains(NativeDeclaration.Missing(missing).message),
-            )
+      Workspace
+        .work("histos-survey-missing")
+        .flatMap: dir =>
+          Machine
+            .load(dir)
+            .flatMap: machine =>
+              Survey
+                .collect(machine, one(missing, ClangPin.Unused))
+                .map: found =>
+                  val jdkDetail = found.jdk match
+                    case JdkRead.Chosen(_, _)     => ""
+                    case JdkRead.Failed(error, _) => error.message
+                  val clang = found.clang match
+                    case ClangSlot.Failed(message) => message
+                    case ClangSlot.Idle            => "idle"
+                    case ClangSlot.Ready(_)        => "ready"
+                  assertTrue(
+                    jdkDetail == "",
+                    found.node == NodeSlot.Idle,
+                    clang.contains(missing.value),
+                    clang.contains(NativeDeclaration.Missing(missing).message),
+                  )
     ,
     test("two clang majors disagree before clang is probed"):
-      Workspace.work("histos-survey-split").flatMap: dir =>
-        Machine.load(dir).flatMap: machine =>
-          val graph = ProjectGraph.trusted(
-            List(
-              native(left, ClangPin.Major(ClangMajor(20))),
-              native(right, ClangPin.Major(ClangMajor(21))),
-            ),
-            Splits.aggregate,
-            Catalog.empty,
-            None,
-            Nil,
-          )
-          Survey.collect(machine, graph).map: found =>
-            val clang = found.clang match
-              case ClangSlot.Failed(message) => message
-              case ClangSlot.Idle            => "idle"
-              case ClangSlot.Ready(_)        => "ready"
-            assertTrue(
-              found.node == NodeSlot.Idle,
-              clang.contains(left.value),
-              clang.contains(right.value),
-              clang.contains("clang is resolved from PATH"),
-            )
+      Workspace
+        .work("histos-survey-split")
+        .flatMap: dir =>
+          Machine
+            .load(dir)
+            .flatMap: machine =>
+              val graph = ProjectGraph.trusted(
+                List(
+                  native(left, ClangPin.Major(ClangMajor(20))),
+                  native(right, ClangPin.Major(ClangMajor(21))),
+                ),
+                Splits.aggregate,
+                Catalog.empty,
+                None,
+                Nil,
+              )
+              Survey
+                .collect(machine, graph)
+                .map: found =>
+                  val clang = found.clang match
+                    case ClangSlot.Failed(message) => message
+                    case ClangSlot.Idle            => "idle"
+                    case ClangSlot.Ready(_)        => "ready"
+                  assertTrue(
+                    found.node == NodeSlot.Idle,
+                    clang.contains(left.value),
+                    clang.contains(right.value),
+                    clang.contains("clang is resolved from PATH"),
+                  ),
   ) @@ TestAspect.withLiveSystem
 
   private def one(name: ProjectName, clang: ClangPin): ProjectGraph =

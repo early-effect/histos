@@ -11,8 +11,8 @@ enum ChannelRefresh:
   case Ttl(window: Duration)
 
   def fresh(age: Duration): Boolean = this match
-    case EveryCall     => false
-    case Ttl(window)   =>
+    case EveryCall   => false
+    case Ttl(window) =>
       val millis = age.toMillis
       millis >= 0 && millis < window.toMillis
 end ChannelRefresh

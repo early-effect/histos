@@ -11,7 +11,7 @@ object ReleaseReportLawSpec extends ZIOSpecDefault:
     test("refused, held, failed, and deployed stay in that order, and a pending deploy has no token"):
       val ship = ShipName("demo")
       DeploymentId.from("dep-1") match
-        case Left(_) => assertTrue(false)
+        case Left(_)   => assertTrue(false)
         case Right(id) =>
           val validated = Deployed(ship, id, DeploymentState.Validated, "1.2.3")
           val pending   = Deployed(ship, id, DeploymentState.Pending, "1.2.3")
@@ -32,4 +32,3 @@ object ReleaseReportLawSpec extends ZIOSpecDefault:
             ReleaseError.Rejected.message == "the portal rejected the token. Regenerate the portal user token.",
           )
   )
-end ReleaseReportLawSpec

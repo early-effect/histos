@@ -11,8 +11,8 @@ import zio.{IO, ZIO}
 
 /** A development session becomes the snapshot at HEAD before a local or snapshot write. `publish snapshots` then moves
   * the pointer from any checkout. A local write moves it only on the recorded default branch. A pull request stays. A
-  * release stays, so a local write of that session still writes the release number. A release write does not settle.
-  * An empty catalog is not a publish, so it is not asked for a commit.
+  * release stays, so a local write of that session still writes the release number. A release write does not settle. An
+  * empty catalog is not a publish, so it is not asked for a commit.
   */
 object SessionSettle:
   def prepare(

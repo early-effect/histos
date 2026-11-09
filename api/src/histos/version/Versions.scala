@@ -48,8 +48,6 @@ enum Decision:
   case Publish(kind: PublishKind, lines: ::[PublishLine])
   case Refused(refusals: ::[Refusal])
 
-end Decision
-
 object Decision:
   /** The versions line for one ship, including a hold and its reason. */
   def rendered(line: PublishLine): String = publishText(line)

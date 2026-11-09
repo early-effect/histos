@@ -27,7 +27,9 @@ import java.nio.file.{Files, Path}
 import zio.{Chunk, Ref, Scope, ZIO, ZLayer}
 import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite, test}
 
-/** Built-in tasks name the projects and refuse arguments. Toolchain names the JDK and skips tools the graph does not need. */
+/** Built-in tasks name the projects and refuse arguments. Toolchain names the JDK and skips tools the graph does not
+  * need.
+  */
 object CallsTaskLawSpec extends ZIOSpecDefault:
   private val scala3  = ScalaVersion("3.10.0")
   private val lawName = ProjectName.trusted("tasklaw")
@@ -35,51 +37,51 @@ object CallsTaskLawSpec extends ZIOSpecDefault:
   def spec = suite("calls task laws")(
     test("inspect names the project, versions has no catalog, and toolchain skips node and clang"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-calls-task").flatMap: dir =>
-          val program =
-            for
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              (blank, blankHeard) <- speak(say =>
-                Calls.task(dir, graph, idle, machine, "", PluginArgs.empty, say)
-              )
-              (shaped, shapedHeard) <- speak(say =>
-                Calls.task(dir, graph, idle, machine, "nope", PluginArgs.empty, say)
-              )
-              (extra, extraHeard) <- speak(say =>
-                Calls.task(dir, graph, idle, machine, "inspect", PluginArgs(Nil, Set(FlagName("extra"))), say)
-              )
-              (inspected, inspectedHeard) <- speak(say =>
-                Calls.task(dir, graph, idle, machine, "inspect", PluginArgs.empty, say)
-              )
-              (versions, versionsHeard) <- speak(say =>
-                Calls.task(dir, graph, idle, machine, "versions", PluginArgs.empty, say)
-              )
-              (tools, toolsHeard) <- speak(say => Calls.toolchain(machine, graph, say))
-            yield
-              val toolText = outs(toolsHeard)
-              assertTrue(
-                blank == Right(()),
-                done(blankHeard).exists(faultHas("a task id is not empty")),
-                shaped == Right(()),
-                done(shapedHeard).exists(faultHas("'nope' is not a plugin task id")),
-                extra == Right(()),
-                done(extraHeard).exists(faultHas("run inspect does not take arguments")),
-                inspected == Right(()),
-                done(inspectedHeard).contains(CallResult.reported()),
-                outs(inspectedHeard) == lawName.value,
-                versions == Right(()),
-                done(versionsHeard).contains(CallResult.reported()),
-                outs(versionsHeard) == "no catalog",
-                tools == Right(()),
-                done(toolsHeard).contains(CallResult.reported()),
-                toolText.contains("node not required"),
-                toolText.contains("clang not required"),
-                toolText.contains("from "),
-              )
-          program.provideSomeLayer[Resolve & Scope](session(dir, lock))
+        Workspace
+          .work("histos-calls-task")
+          .flatMap: dir =>
+            val program =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                (blank, blankHeard)   <- speak(say => Calls.task(dir, graph, idle, machine, "", PluginArgs.empty, say))
+                (shaped, shapedHeard) <- speak(say =>
+                  Calls.task(dir, graph, idle, machine, "nope", PluginArgs.empty, say)
+                )
+                (extra, extraHeard) <- speak(say =>
+                  Calls.task(dir, graph, idle, machine, "inspect", PluginArgs(Nil, Set(FlagName("extra"))), say)
+                )
+                (inspected, inspectedHeard) <- speak(say =>
+                  Calls.task(dir, graph, idle, machine, "inspect", PluginArgs.empty, say)
+                )
+                (versions, versionsHeard) <- speak(say =>
+                  Calls.task(dir, graph, idle, machine, "versions", PluginArgs.empty, say)
+                )
+                (tools, toolsHeard) <- speak(say => Calls.toolchain(machine, graph, say))
+              yield
+                val toolText = outs(toolsHeard)
+                assertTrue(
+                  blank == Right(()),
+                  done(blankHeard).exists(faultHas("a task id is not empty")),
+                  shaped == Right(()),
+                  done(shapedHeard).exists(faultHas("'nope' is not a plugin task id")),
+                  extra == Right(()),
+                  done(extraHeard).exists(faultHas("run inspect does not take arguments")),
+                  inspected == Right(()),
+                  done(inspectedHeard).contains(CallResult.reported()),
+                  outs(inspectedHeard) == lawName.value,
+                  versions == Right(()),
+                  done(versionsHeard).contains(CallResult.reported()),
+                  outs(versionsHeard) == "no catalog",
+                  tools == Right(()),
+                  done(toolsHeard).contains(CallResult.reported()),
+                  toolText.contains("node not required"),
+                  toolText.contains("clang not required"),
+                  toolText.contains("from "),
+                )
+            program.provideSomeLayer[Resolve & Scope](session(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private val idle: PluginRuntime = new PluginRuntime:
@@ -127,14 +129,12 @@ object CallsTaskLawSpec extends ZIOSpecDefault:
     )
 
   private def session(dir: Path, lock: DependencyLock) =
-    val store = ZLayer.succeed(ContentStore.in(dir.resolve("store")))
+    val store   = ZLayer.succeed(ContentStore.in(dir.resolve("store")))
     val resolve = Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath)
     (resolve ++ store) >+> Loader.live ++ store ++ ResolutionService.pinned(pinned(lock))
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells =
-      LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells
-    )
+    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
 
   private def opened =
     Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++

@@ -1,7 +1,7 @@
 package histos.native
 
 import histos.ClangMajor
-import java.nio.file.{Path}
+import java.nio.file.Path
 
 /** The version token `clang --version` reported, such as `21.0.0`. The major is part of it. */
 final case class ClangVersion private (value: String, major: ClangMajor)
