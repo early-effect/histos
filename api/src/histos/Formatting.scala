@@ -2,8 +2,7 @@ package histos
 
 import histos.plugin.RepoPath
 
-/** Where the scalafmt configuration lives. `Root` is `.scalafmt.conf`, which a [[histos.plugin.RepoPath]] cannot
-  * spell.
+/** Where the scalafmt configuration lives. `Root` is `.scalafmt.conf`, which a [[histos.plugin.RepoPath]] cannot spell.
   */
 enum ScalafmtConf:
   case Root
