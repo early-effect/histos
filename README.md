@@ -141,7 +141,7 @@ flowchart TD
 - `publish local` and `publish snapshots` write the snapshot coordinate of HEAD. They do not write `<ship>-ci`. A pull-request session is kept. `publish snapshots` moves the pointer from any checkout. `publish local` moves it only on the default branch.
 - `publish release` publishes the ship number and requires `HISTOS_SESSION=release`.
 
-A catalog row is `ships(Ship("histos").next(0, 2, 3)(api, app))`. The number is the next release. The versions line for a development session is `0.2.3-ci`. `publish snapshots` writes `0.2.3-<sha>-SNAPSHOT` and moves the `0.2.3-SNAPSHOT` pointer from any checkout. `0.2.2` is already on Central. `ship"..."` is only the number.
+A catalog row is `ships(Ship("histos").next(0, 2, 5)(api, app))`. The number is the next release. The versions line for a development session is `0.2.5-ci`. `publish snapshots` writes `0.2.5-<sha>-SNAPSHOT` and moves the `0.2.5-SNAPSHOT` pointer from any checkout. `0.2.4` is already on Central. `ship"..."` is only the number.
 
 A laptop runs `./histos publish snapshots`. The commit at HEAD is the coordinate. Export the session only to choose a different commit, a pull request, or a release. The catalog stays on the next release. `releases` may be empty. An empty file means the catalog number is not released. `histos matches` means that number is already released, and both snapshot and release publishes are held.
 
@@ -154,7 +154,7 @@ export HISTOS_BRANCH=default
 ./histos run versions
 ```
 
-`publish snapshots` moves the `0.2.3-SNAPSHOT` pointer without those exports, from any checkout. `publish local` moves it only on the default branch. `other` stores only the commit snapshot for a local write. `publish release` uses `export HISTOS_SESSION=release` and the same `releases` file. `histos doctor` warns `ship.should-bump` when that number is already released, from `releases` or from Maven Central, and `ship.pin` when `histos.version` trails a published Histos release. It does not open a bump pull request or rewrite the pin.
+`publish snapshots` moves the `0.2.5-SNAPSHOT` pointer without those exports, from any checkout. `publish local` moves it only on the default branch. `other` stores only the commit snapshot for a local write. `publish release` uses `export HISTOS_SESSION=release` and the same `releases` file. `histos doctor` warns `ship.should-bump` when that number is already released, from `releases` or from Maven Central, and `ship.pin` when `histos.version` trails a published Histos release. It does not open a bump pull request or rewrite the pin.
 
 A dependency on an owned ship is a pin, not a revision string. Third-party coordinates stay `dep"..."`.
 
@@ -167,7 +167,7 @@ Ship("histos").next(0, 2, 3).commit("0123456789abcdef0123456789abcdef01234567").
 Ship("histos").next(0, 2, 3).released.dep(organization"rocks.earlyeffect", artifact"histos")
 ```
 
-`.pointer` is `0.2.3-SNAPSHOT`. `.commit` is `0.2.3-<12 hex>-SNAPSHOT`. `.released` is `0.2.3`. The three types are distinct, so a release API does not accept a snapshot pin.
+`.pointer` is `0.2.5-SNAPSHOT`. `.commit` is `0.2.5-<12 hex>-SNAPSHOT`. `.released` is `0.2.5`. The three types are distinct, so a release API does not accept a snapshot pin.
 
 The default `sona` is `Sona.layer(ReleaseMode.Automatic)`. That upload sends `publishingType=AUTOMATIC` and polls until `PUBLISHED` or `FAILED`. The deployment file is written as `PUBLISHED`. A build that overrides `sona` with `Sona.layer(ReleaseMode.Hold)` sends `USER_MANAGED` and polls until `VALIDATED` or `FAILED`. The client prints each step as it happens: `building`, `staged`, `signing`, `bundling`, `uploading`, and `installing`. A local install prints `installing`. A snapshot prints `uploading <artifact> <revision>`. A release prints `signing`, `bundling`, and `uploading <ship> to the portal`. The portal post then prints `uploading bundle to the portal`, and `uploading...` if that post is still running after 30 seconds. Each status is `portal <id> is <STATE>`. Until the waited state arrives, the line names it. The first read, a changed state, and every thirty quiet reads print. A status read that has not returned prints `reading portal <id>` after that same wait. A failure is printed when it happens. `--automatic` forces Automatic for that one run. There is no `--hold`. The snapshot branch ignores the mode.
 
