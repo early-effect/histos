@@ -8,6 +8,11 @@ import histos.server.{LauncherAction, ResolveAction}
 import histos.task.{RunId, TaskId}
 import histos.testrun.SuitePattern
 import histos.workflow.WorkflowAction
+import histos.format.{FormatMode, FormatTargets}
+
+import java.nio.file.Path
+
+import zio.NonEmptyChunk
 import histos.scaffold.ImportSource
 import histos.{Platform, ProjectName}
 
@@ -55,6 +60,7 @@ object Grammar:
     case Resolve(action: ResolveAction)
     case Launcher(action: LauncherAction)
     case Workflow(action: WorkflowAction)
+    case Fmt(check: Boolean, files: Boolean, args: List[String])
     case PreviewCompile(projects: List[String])
     case PreviewTest(projects: List[String])
     case PreviewPublishLocal(tokens: List[String])
@@ -168,6 +174,10 @@ object Grammar:
       case _            => Right(WorkflowAction.Check)
   private val workflow =
     CliCommand("workflow", workflowAction).map(Wire.Workflow(_))
+  private val fmt =
+    CliCommand("fmt", Options.boolean("check") ++ Options.boolean("file"), Args.text("target").*).map {
+      case ((check, files), args) => Wire.Fmt(check, files, args.toList)
+    }
   private val launcherFlag =
     (Options.boolean("update") ++ Options.boolean("latest")).mapOrFail:
       case (true, false) => Right(LauncherAction.Update)
@@ -241,7 +251,7 @@ object Grammar:
   )
   private val root =
     CliCommand("histos").subcommands(
-      version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview | helpCmd
+      version | graph | run | test | coverage | affected | testOnly | testQuick | compile | client | fresh | init | cleanBuild | cleanFull | assembly | publishLocal | publish | mcp | bsp | server | portal | toolchain | cache | resolve | workflow | fmt | launcher | reload | reboot | cancel | observe | doctor | deps | setup | preview | helpCmd
     )
 
   /** Reserved root words never fall through to plugin dispatch, including a word held for a later surface.
@@ -276,7 +286,7 @@ object Grammar:
   /** `--restart` repeats a program. Every other watched command runs, then polls. */
   private def watched(command: Command, policy: histos.server.WatchPolicy): IO[CliParseError, Command] =
     policy match
-      case histos.server.WatchPolicy.After => ZIO.succeed(command)
+      case histos.server.WatchPolicy.After   => ZIO.succeed(command)
       case histos.server.WatchPolicy.Restart =>
         command match
           case Command.Run(id, _) if !id.builtIn => ZIO.succeed(command)
@@ -322,6 +332,7 @@ object Grammar:
       case Wire.Resolve(action)          => ZIO.succeed(Command.Resolve(action))
       case Wire.Launcher(action)         => ZIO.succeed(Command.Launcher(action))
       case Wire.Workflow(action)         => ZIO.succeed(Command.Workflow(action))
+      case Wire.Fmt(check, files, args)  => ZIO.fromEither(fmtOf(check, files, args))
       case Wire.Test(affected, projects) =>
         choice(affected).flatMap(picked => projectList("test", projects).map(names => Command.Test(names, picked)))
       case Wire.Coverage(projects, raw) =>
@@ -511,6 +522,38 @@ object Grammar:
             ZIO
               .foreach(names)(name => ZIO.fromEither(ProjectName.from(name)).mapError(CliParseError.ProjectName(_)))
               .map(parsed => AffectedChoice.Only(parsed))
+
+  /** zio-cli reads an option only while it is the next token, so a flag after a target is still in `args`. No target is
+    * the build. `--file` makes every target a repository-relative file.
+    */
+  private def fmtOf(check: Boolean, files: Boolean, args: List[String]): Either[CliParseError, Command] =
+    val mode    = if check || args.contains("--check") then FormatMode.Check else FormatMode.Write
+    val named   = files || args.contains("--file")
+    val targets = args.filterNot(token => token == "--check" || token == "--file")
+    targets.find(_.startsWith("-")) match
+      case Some(flag) => Left(CliParseError.Fmt(FmtUsage.Flag(flag)))
+      case None       =>
+        val chosen =
+          if named then
+            targets
+              .foldRight[Either[FmtUsage, List[Path]]](Right(Nil))((raw, rest) =>
+                rest.flatMap(paths => path(raw).map(_ :: paths))
+              )
+              .flatMap(paths => NonEmptyChunk.fromIterableOption(paths).toRight(FmtUsage.NoFiles))
+              .map(FormatTargets.Files(_))
+              .left
+              .map(CliParseError.Fmt(_))
+          else
+            parsedNames(targets).map(names =>
+              NonEmptyChunk.fromIterableOption(names).fold(FormatTargets.Build)(FormatTargets.Projects(_))
+            )
+        chosen.map(Command.Fmt(_, mode))
+
+  private def path(raw: String): Either[FmtUsage, Path] =
+    scala.util.Try(Path.of(raw)).toOption match
+      case None                            => Left(FmtUsage.BadPath(raw))
+      case Some(found) if found.isAbsolute => Left(FmtUsage.Absolute(raw))
+      case Some(found)                     => Right(found)
 
   private def projectList(
       command: String,

@@ -29,37 +29,39 @@ object CallsPreviewLawSpec extends ZIOSpecDefault:
 
   def spec = suite("calls preview laws")(
     test("compile and test preview the cell, a task run names the task, and an absent run is a fault"):
-      Workspace.work("histos-calls-preview").flatMap: dir =>
-        for
-          expectedCompile <- Plan.show(dir, graph, List(lawName))
-          expectedTest    <- Plan.test(dir, graph, List(lawName)).map(Plan.renderTest(dir, _))
-          expectedClean <- Plan.clean(dir, graph, List(lawName)).map(Plan.renderClean(dir, _))
-          (compiled, compiledHeard) <- speak(say => Calls.previewCompile(dir, graph, List(lawName), say))
-          (tested, testedHeard)     <- speak(say => Calls.previewTest(dir, graph, List(lawName), say))
-          (cleaned, cleanedHeard)   <- speak(say => Calls.previewClean(dir, graph, List(lawName), say))
-          (ran, ranHeard)           <- speak(say => Calls.previewRun(graph, lawName.value, None, say))
-          (task, taskHeard)         <- speak(say => Calls.previewRun(graph, "doc", None, say))
-          (platform, platformHeard) <- speak(say => Calls.previewRun(graph, "doc", Some(Platform.Jvm), say))
-          (absent, absentHeard)     <- speak(say => Calls.previewRun(graph, "missing", None, say))
-        yield assertTrue(
-          expectedCompile.contains("previewlaw 3.10.0 jvm selected"),
-          compiled == Right(()),
-          outs(compiledHeard) == expectedCompile,
-          expectedTest.contains("previewlaw 3.10.0 jvm selected"),
-          tested == Right(()),
-          outs(testedHeard) == expectedTest,
-          expectedClean.nonEmpty,
-          cleaned == Right(()),
-          outs(cleanedHeard) == expectedClean,
-          ran == Right(()),
-          outs(ranHeard) == "previewlaw jvm\nupstreams",
-          task == Right(()),
-          outs(taskHeard) == "doc",
-          platform == Right(()),
-          done(platformHeard).exists(faultContains("run doc does not take a platform")),
-          absent == Right(()),
-          done(absentHeard).exists(faultContains("'missing' is not a module")),
-        )
+      Workspace
+        .work("histos-calls-preview")
+        .flatMap: dir =>
+          for
+            expectedCompile           <- Plan.show(dir, graph, List(lawName))
+            expectedTest              <- Plan.test(dir, graph, List(lawName)).map(Plan.renderTest(dir, _))
+            expectedClean             <- Plan.clean(dir, graph, List(lawName)).map(Plan.renderClean(dir, _))
+            (compiled, compiledHeard) <- speak(say => Calls.previewCompile(dir, graph, List(lawName), say))
+            (tested, testedHeard)     <- speak(say => Calls.previewTest(dir, graph, List(lawName), say))
+            (cleaned, cleanedHeard)   <- speak(say => Calls.previewClean(dir, graph, List(lawName), say))
+            (ran, ranHeard)           <- speak(say => Calls.previewRun(graph, lawName.value, None, say))
+            (task, taskHeard)         <- speak(say => Calls.previewRun(graph, "doc", None, say))
+            (platform, platformHeard) <- speak(say => Calls.previewRun(graph, "doc", Some(Platform.Jvm), say))
+            (absent, absentHeard)     <- speak(say => Calls.previewRun(graph, "missing", None, say))
+          yield assertTrue(
+            expectedCompile.contains("previewlaw 3.10.0 jvm selected"),
+            compiled == Right(()),
+            outs(compiledHeard) == expectedCompile,
+            expectedTest.contains("previewlaw 3.10.0 jvm selected"),
+            tested == Right(()),
+            outs(testedHeard) == expectedTest,
+            expectedClean.nonEmpty,
+            cleaned == Right(()),
+            outs(cleanedHeard) == expectedClean,
+            ran == Right(()),
+            outs(ranHeard) == "previewlaw jvm\nupstreams",
+            task == Right(()),
+            outs(taskHeard) == "doc",
+            platform == Right(()),
+            done(platformHeard).exists(faultContains("run doc does not take a platform")),
+            absent == Right(()),
+            done(absentHeard).exists(faultContains("'missing' is not a module")),
+          )
   )
 
   private def faultContains(text: String)(result: CallResult): Boolean =

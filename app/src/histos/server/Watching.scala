@@ -24,51 +24,53 @@ object Watching:
       roots: ZIO[R, ServerError, Watched],
       again: List[Path] => ZIO[R, ServerError, Boolean],
   ): ZIO[R, ServerError, Unit] =
-    Ref.make(Option.empty[zio.Fiber[ServerError, Unit]]).flatMap: current =>
-      def remember(
-          child: zio.Fiber[ServerError, Unit],
-          stay: Boolean,
-      ): ZIO[Any, Nothing, Option[zio.Fiber[ServerError, Unit]]] =
-        val next = if stay then Some(child) else None
-        current.set(next).as(next)
-      def cycle(
-          start: Option[SourceWatch.Snapshot],
-          running: Option[zio.Fiber[ServerError, Unit]],
-      ): ZIO[R & zio.Scope, ServerError, Unit] =
-        // The child outlives one cycle, so a refused change can leave it running. Cancelling the watch interrupts it.
-        val fiber = running match
-          case Some(live) => ZIO.succeed(live)
-          case None       => run.forkScoped
-        fiber.flatMap: child =>
-          for
-            done    <- Promise.make[Nothing, Unit]
-            _       <- child.await.foldCauseZIO(_ => done.succeed(()), _ => done.succeed(())).fork
-            watched <- roots
-            origin  <- baseline(say, watched, start)
-            woke    <- poll(say, watched, origin).race(done.await.as(List.empty[Path]))
-            stay    <- held(child, woke, again)
-            _       <- ZIO.unless(stay)(child.interrupt)
-            next    <- remember(child, stay)
-            _ <- roots.flatMap: held =>
-              SourceWatch
-                .take(held.paths, held.excluded)
-                .foldZIO(
-                  error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
-                  now => cycle(Some(now), next),
-                )
-          yield ()
-      ZIO
-        .scoped(cycle(None, None))
-        .ensuring(current.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
-        .foldCauseZIO(
-          cause =>
-            if cause.isInterruptedOnly then Calls.finish(say, CallResult.Fault(BuildFault.Interrupted))
-            else
-              cause.failureOrCause match
-                case Left(error) => ZIO.fail(error)
-                case Right(_)    => Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.WatchStopped))),
-          _ => ZIO.unit,
-        )
+    Ref
+      .make(Option.empty[zio.Fiber[ServerError, Unit]])
+      .flatMap: current =>
+        def remember(
+            child: zio.Fiber[ServerError, Unit],
+            stay: Boolean,
+        ): ZIO[Any, Nothing, Option[zio.Fiber[ServerError, Unit]]] =
+          val next = if stay then Some(child) else None
+          current.set(next).as(next)
+        def cycle(
+            start: Option[SourceWatch.Snapshot],
+            running: Option[zio.Fiber[ServerError, Unit]],
+        ): ZIO[R & zio.Scope, ServerError, Unit] =
+          // The child outlives one cycle, so a refused change can leave it running. Cancelling the watch interrupts it.
+          val fiber = running match
+            case Some(live) => ZIO.succeed(live)
+            case None       => run.forkScoped
+          fiber.flatMap: child =>
+            for
+              done    <- Promise.make[Nothing, Unit]
+              _       <- child.await.foldCauseZIO(_ => done.succeed(()), _ => done.succeed(())).fork
+              watched <- roots
+              origin  <- baseline(say, watched, start)
+              woke    <- poll(say, watched, origin).race(done.await.as(List.empty[Path]))
+              stay    <- held(child, woke, again)
+              _       <- ZIO.unless(stay)(child.interrupt)
+              next    <- remember(child, stay)
+              _       <- roots.flatMap: held =>
+                SourceWatch
+                  .take(held.paths, held.excluded)
+                  .foldZIO(
+                    error => Calls.finish(say, CallResult.Fault(BuildFault.Watch(error))),
+                    now => cycle(Some(now), next),
+                  )
+            yield ()
+        ZIO
+          .scoped(cycle(None, None))
+          .ensuring(current.get.flatMap(ZIO.foreachDiscard(_)(_.interrupt)))
+          .foldCauseZIO(
+            cause =>
+              if cause.isInterruptedOnly then Calls.finish(say, CallResult.Fault(BuildFault.Interrupted))
+              else
+                cause.failureOrCause match
+                  case Left(error) => ZIO.fail(error)
+                  case Right(_)    => Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.WatchStopped))),
+            _ => ZIO.unit,
+          )
 
   private def baseline[R](
       say: Say,
@@ -178,12 +180,12 @@ object Watching:
     call match
       case Call.Task(id, _) =>
         PluginTaskId.parse(id) match
-          case Left(_) => Watched(List(repo.resolve("histos.scala")), Set.empty)
+          case Left(_)       => Watched(List(repo.resolve("histos.scala")), Set.empty)
           case Right(taskId) =>
             graph.plugins
               .find(_.id == taskId.plugin)
               .flatMap(_.contribution.tasks.find(_.name == taskId.name)) match
-              case None => Watched(List(repo.resolve("histos.scala")), Set.empty)
+              case None       => Watched(List(repo.resolve("histos.scala")), Set.empty)
               case Some(task) =>
                 val declared = task.inputs.flatMap(inputPath(repo, graph, _))
                 val outputs  = task.outputs.map(output => repo.resolve(output.path.value)).toSet
@@ -198,8 +200,8 @@ object Watching:
 
   private def inputPath(repo: Path, graph: ProjectGraph, input: DeclaredInput): List[Path] =
     input match
-      case DeclaredInput.File(path)      => List(repo.resolve(path.value))
-      case DeclaredInput.Directory(path) => List(repo.resolve(path.value))
+      case DeclaredInput.File(path)         => List(repo.resolve(path.value))
+      case DeclaredInput.Directory(path)    => List(repo.resolve(path.value))
       case DeclaredInput.Module(name, _, _) =>
         graph.get(name) match
           case Some(module: Module) =>
@@ -231,7 +233,7 @@ object Watching:
       case Call.Compile(names)                  => listed(names)
       case Call.PreviewCompile(names)           => listed(names)
       case Call.PreviewTest(names)              => listed(names)
-      case Call.PreviewPublishLocal(tokens) => publish(graph, tokens)
+      case Call.PreviewPublishLocal(tokens)     => publish(graph, tokens)
       case Call.PreviewPublishSnapshots(tokens) => publish(graph, tokens)
       case Call.PreviewClean(names)             => listed(names)
       case Call.Clean(names)                    => listed(names)

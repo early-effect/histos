@@ -48,10 +48,10 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
       ,
       test("a bad pin line refuses compile and keeps the held graph"):
         for
-          root  <- ZIO.service[Path]
-          repo  <- LawDir.child(root, "bad-pin")
-          scope <- Scope.make
-          _     <- ZIO.attemptBlocking(Files.writeString(repo.resolve(LauncherPin.file), "nope\n")).orDie
+          root   <- ZIO.service[Path]
+          repo   <- LawDir.child(root, "bad-pin")
+          scope  <- Scope.make
+          _      <- ZIO.attemptBlocking(Files.writeString(repo.resolve(LauncherPin.file), "nope\n")).orDie
           desk   <- Session.desk
           _      <- hold(repo, desk, scope)
           before <- desk.held.get
@@ -67,21 +67,21 @@ object SessionFrameLawSpec extends ZIOSpecDefault:
       // Attach compares the printed `histos <pin>` line with the record, not the pin alone.
       test("a different server version drops the held graph"):
         for
-          root  <- ZIO.service[Path]
-          repo  <- LawDir.child(root, "skew")
-          scope <- Scope.make
+          root   <- ZIO.service[Path]
+          repo   <- LawDir.child(root, "skew")
+          scope  <- Scope.make
           closed <- Ref.make(false)
           _      <- scope.addFinalizer(closed.set(true))
-          _ <- ZIO
+          _      <- ZIO
             .attemptBlocking(Files.writeString(repo.resolve(LauncherPin.file), "histos.version=9.8.7\n"))
             .orDie
           fingerprint <- ready(Fingerprint.read(repo))
           _           <- ready(Record.write(repo, "9.8.7", fingerprint, repo.resolve("server.sock")))
           desk        <- Session.desk
           _           <- hold(repo, desk, scope)
-          result <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Version).either
-          held   <- desk.held.get
-          gone   <- closed.get
+          result      <- Session.perform(repo, jar, Calls.idleMachine, desk, Call.Version).either
+          held        <- desk.held.get
+          gone        <- closed.get
         yield assertTrue(
           result == Left(Session.SessionError.DifferentVersion),
           held.isEmpty,

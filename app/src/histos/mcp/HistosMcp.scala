@@ -7,6 +7,7 @@ import heddle.mcp.protocol.ToolName
 import histos.cache.{CacheCleanMode, ContentStore}
 import histos.cli.Cli
 import histos.client.{ClientJson, Session}
+import histos.format.{FormatMode, FormatTargets}
 import histos.report.{BuildFault, Rejection, Stored, WireSchema}
 import WireSchema.given
 import histos.jdk.Machine
@@ -52,6 +53,12 @@ object HistosMcp:
   final case class CleanArgs(projects: List[String] = Nil) derives Schema, JsonCodec
   final case class ResolveArgs(action: String = "verify") derives Schema, JsonCodec
   final case class WorkflowArgs(action: String = "check") derives Schema, JsonCodec
+  final case class FmtArgs(
+      projects: List[String] = Nil,
+      files: List[String] = Nil,
+      mode: Option[String] = None,
+  ) derives Schema,
+        JsonCodec
   final case class LauncherArgs(action: String) derives Schema, JsonCodec
   final case class CacheCleanArgs(mode: Option[String] = None) derives Schema, JsonCodec
   final case class WatchArgs(args: List[String] = Nil) derives Schema, JsonCodec
@@ -118,6 +125,7 @@ object HistosMcp:
     inline val cleanFull        = "cleanFull"
     inline val resolve          = "resolve"
     inline val workflow         = "workflow"
+    inline val fmt              = "fmt"
     inline val reload           = "reload"
     inline val reboot           = "reboot"
     inline val cachePath        = "cachePath"
@@ -145,6 +153,7 @@ object HistosMcp:
         ToolName(cleanFull),
         ToolName(resolve),
         ToolName(workflow),
+        ToolName(fmt),
         ToolName(reload),
         ToolName(reboot),
         ToolName(cachePath),
@@ -247,7 +256,11 @@ object HistosMcp:
           )
           .flatMap(action => ask(Call.Workflow(action)))
       )
-      reloading <- flowing.tool[NoArgs](
+      formatting <- flowing.tool[FmtArgs](
+        Names.fmt,
+        "Format with the locked scalafmt the build declares. An empty projects and files list is every module and histos.scala. projects names modules. files names repository-relative files. mode is write or check, and an absent mode is write. check writes nothing and fails when a file is not formatted.",
+      )(args => ZIO.fromEither(fmtCall(args)).mapError(refused).flatMap(ask))
+      reloading <- formatting.tool[NoArgs](
         Names.reload,
         "Reload the build the running server holds.",
       )(_ => ask(Call.Reload))
@@ -329,6 +342,34 @@ object HistosMcp:
       globs  <- suitePatterns(patterns)
       chosen <- TestMode.from(mode.getOrElse(TestMode.Run.token)).left.map(Rejection.TestMode(_))
     yield Call.Test(found, globs, chosen)
+
+  /** Projects and files are two scopes, so asking for both is refused. No scope is the build. */
+  def fmtCall(args: FmtArgs): Either[Rejection, Call] =
+    val mode = args.mode match
+      case None | Some("write") => Right(FormatMode.Write)
+      case Some("check")        => Right(FormatMode.Check)
+      case Some(other)          => Left(Rejection.FormatMode(other))
+    val targets = (args.projects, args.files) match
+      case (Nil, Nil) => Right(FormatTargets.Build)
+      case (raw, Nil) =>
+        names(raw).map(found =>
+          NonEmptyChunk.fromIterableOption(found).fold(FormatTargets.Build)(FormatTargets.Projects(_))
+        )
+      case (Nil, raw)       => paths(raw).map(FormatTargets.Files(_))
+      case (_ :: _, _ :: _) => Left(Rejection.FormatTargets)
+    for
+      chosen <- mode
+      scope  <- targets
+    yield Call.Format(scope, chosen)
+
+  private def paths(raw: List[String]): Either[Rejection, NonEmptyChunk[Path]] =
+    raw
+      .foldRight[Either[Rejection, List[Path]]](Right(Nil)): (token, rest) =>
+        rest.flatMap: found =>
+          scala.util.Try(Path.of(token)).toOption.filterNot(_.isAbsolute) match
+            case Some(path) => Right(path :: found)
+            case None       => Left(Rejection.FormatPath(token))
+      .flatMap(found => NonEmptyChunk.fromIterableOption(found).toRight(Rejection.FormatTargets))
 
   def publishLocalCall(projects: List[String]): Either[Rejection, Call] =
     Right(Call.PublishLocal(projects))

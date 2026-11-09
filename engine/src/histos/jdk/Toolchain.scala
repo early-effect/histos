@@ -116,7 +116,6 @@ end JdkSource
 enum JdkRead:
   case Chosen(runtime: JdkRuntime, source: JdkSource)
   case Failed(error: ToolchainError, source: Option[JdkSource])
-end JdkRead
 
 object Toolchain:
   /** Oldest JDK this process will accept. The Loom executor needs 21. */

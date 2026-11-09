@@ -22,15 +22,14 @@ enum NodeSlot:
   case Idle
   case Ready(survey: NodeSurvey, source: NodeSource)
   case Failed(error: NodeMiss)
-end NodeSlot
 
-/** Clang was not required, or it was probed. A missing or split declaration is a failure, not a skip of the other tools.
+/** Clang was not required, or it was probed. A missing or split declaration is a failure, not a skip of the other
+  * tools.
   */
 enum ClangSlot:
   case Idle
   case Ready(clang: Clang)
   case Failed(message: String)
-end ClangSlot
 
 /** JDK, Node, and clang, including the ones that failed. */
 final case class Collected(jdk: JdkRead, node: NodeSlot, clang: ClangSlot):
@@ -46,7 +45,7 @@ final case class Collected(jdk: JdkRead, node: NodeSlot, clang: ClangSlot):
     if !ok then None
     else
       jdk match
-        case JdkRead.Failed(_, _)           => None
+        case JdkRead.Failed(_, _)            => None
         case JdkRead.Chosen(runtime, source) =>
           val nodeSurvey = node match
             case NodeSlot.Ready(found, _) => Some(found)
@@ -145,13 +144,16 @@ object Survey:
   private def nodeOf(machine: Machine, graph: ProjectGraph): UIO[NodeSlot] =
     if !Node.required(graph) then ZIO.succeed(NodeSlot.Idle)
     else
-      NodeToolchain.choose(machine, graph.runnerTools.nodePath).either.map:
-        case Right(choice) =>
-          NodeSlot.Ready(
-            NodeSurvey(choice.runtime.binary, choice.runtime.version, choice.runtime.identity),
-            choice.source,
-          )
-        case Left(error) => NodeSlot.Failed(error)
+      NodeToolchain
+        .choose(machine, graph.runnerTools.nodePath)
+        .either
+        .map:
+          case Right(choice) =>
+            NodeSlot.Ready(
+              NodeSurvey(choice.runtime.binary, choice.runtime.version, choice.runtime.identity),
+              choice.source,
+            )
+          case Left(error) => NodeSlot.Failed(error)
 
   private def clangOf(machine: Machine, graph: ProjectGraph): UIO[ClangSlot] =
     NativeProject.declaration(graph) match
@@ -164,9 +166,12 @@ object Survey:
           ClangSlot.Failed(s"${NativeDeclaration.Disagree(left, right).message} clang is resolved from PATH.")
         )
       case NativeDeclaration.Major(major) =>
-        ClangProbe.resolve(major, machine.env).either.map:
-          case Right(clang) => ClangSlot.Ready(clang)
-          case Left(error)  => ClangSlot.Failed(clangProblem(error))
+        ClangProbe
+          .resolve(major, machine.env)
+          .either
+          .map:
+            case Right(clang) => ClangSlot.Ready(clang)
+            case Left(error)  => ClangSlot.Failed(clangProblem(error))
 
   private def shown(reached: Reached): String =
     reached.node match

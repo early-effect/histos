@@ -30,7 +30,7 @@ object Perform:
     call match
       case Call.Compile(_) | Call.Test(_, _, _) | Call.PublishLocal(_) | Call.PublishSnapshots(_) |
           Call.PublishRelease(_, _) | Call.PublishAssets(_) | Call.PublishDrop(_) | Call.Graph | Call.Run(_, _) |
-          Call.Client | Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Assembly(_) |
+          Call.Client | Call.Task(_, _) | Call.Toolchain | Call.Workflow(_) | Call.Format(_, _) | Call.Assembly(_) |
           Call.PreviewCompile(_) | Call.PreviewTest(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) |
           Call.PreviewRun(_, _) =>
         true
@@ -71,7 +71,7 @@ object Perform:
       edges: Edges[R],
   ): ZIO[
     R & Resolve & Loader & ContentStore & histos.zinc.Compilers & histos.zinc.CompileMemo &
-      histos.resolve.ResolutionService,
+      histos.resolve.ResolutionService & histos.format.Formatters,
     ServerError,
     Unit,
   ] =
@@ -150,6 +150,8 @@ object Perform:
             Calls.resolve(repo, apiJar, action, say, machine.native)
           case Call.Workflow(action) =>
             held(build => Calls.workflow(repo, build, action, say))
+          case Call.Format(targets, mode) =>
+            held(build => follow(Calls.format(repo, build.graph, targets, mode, say)))
           case Call.Clean(Nil) =>
             Calls.wipe(repo, say)
           case Call.Clean(projects) =>

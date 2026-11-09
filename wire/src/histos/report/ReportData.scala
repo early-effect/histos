@@ -1,6 +1,6 @@
 package histos.report
 
-import histos.doctor.{Diagnostic => Finding, Noted}
+import histos.doctor.{Diagnostic as Finding, Noted}
 import histos.testrun.TestedCell
 
 import zio.Chunk
@@ -84,7 +84,7 @@ enum ObserveError derives JsonCodec:
   def message: String = this match
     case Missing(path)    => s"no observation at $path"
     case Unreadable(path) => s"could not read $path"
-    case Malformed(path) => s"observation at $path is not a tally"
+    case Malformed(path)  => s"observation at $path is not a tally"
 
   def diagnose: Finding = this match
     case Missing(_) =>

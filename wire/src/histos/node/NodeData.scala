@@ -1,6 +1,5 @@
 package histos.node
 
-
 enum NodeReject:
   case Absent
   case NoBinary

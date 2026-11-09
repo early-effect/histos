@@ -16,52 +16,55 @@ object PluginCompileSuccessLawSpec extends ZIOSpecDefault:
 
   def spec = suite("plugin compile produces classes")(
     test("a marked tree is reused, a type error is the compiler text, and a reserved class is named"):
-      Workspace.work("histos-plugin-compile").flatMap: dir =>
-        val tree  = dir.resolve("tree")
-        val store = ContentStore.in(dir.resolve("cas"))
-        val plug  = tree.resolve("Plug.scala")
-        val notes = tree.resolve("notes.txt")
-        for
-          _        <- Workspace.writeString(plug, good)
-          _        <- Workspace.writeString(notes, "note")
-          libs     <- libraries
-          compiled <- PluginCompile.fromTree(store, launcher, tree, libs)
-          first    <- facts(compiled)
-          _        <- ZIO.attemptBlocking(Files.delete(compiled.resolve("Plug.class"))).orDie
-          reused   <- PluginCompile.fromTree(store, launcher, tree, libs)
-          cached   <- facts(reused)
-          _        <- Workspace.writeString(plug, bad)
-          broken   <- PluginCompile.fromTree(store, launcher, tree, libs).either
-          jarPath  <- zip(
-            dir.resolve("plugin.jar"),
-            List(
-              "Plug.scala" -> good.getBytes(StandardCharsets.UTF_8),
-              "notes.txt"  -> "note".getBytes(StandardCharsets.UTF_8),
-            ),
-          )
-          packed <- PluginCompile.fromJar(store, launcher, jarPath, Nil, libs)
-          jarred <- facts(packed)
-          leak   <- Workspace.writeString(dir.resolve("leak").resolve("histos").resolve("leaklaw").resolve("Mark.scala"), mark)
-          leaked <- PluginCompile.fromTree(store, launcher, dir.resolve("leak"), libs)
-          named  <- PluginCompile.engineClass(leaked)
-        yield
-          val brokenText = broken match
-            case Left(error) => error.message
-            case Right(_)    => ""
-          assertTrue(
-            first.classFile,
-            first.note == "note",
-            first.marked,
-            first.reserved.isEmpty,
-            reused == compiled,
-            !cached.classFile,
-            cached.marked,
-            brokenText.contains("String"),
-            brokenText.contains("Int"),
-            jarred.classFile,
-            jarred.note == "note",
-            named.exists(_.startsWith("histos.leaklaw.Mark")),
-          )
+      Workspace
+        .work("histos-plugin-compile")
+        .flatMap: dir =>
+          val tree  = dir.resolve("tree")
+          val store = ContentStore.in(dir.resolve("cas"))
+          val plug  = tree.resolve("Plug.scala")
+          val notes = tree.resolve("notes.txt")
+          for
+            _        <- Workspace.writeString(plug, good)
+            _        <- Workspace.writeString(notes, "note")
+            libs     <- libraries
+            compiled <- PluginCompile.fromTree(store, launcher, tree, libs)
+            first    <- facts(compiled)
+            _        <- ZIO.attemptBlocking(Files.delete(compiled.resolve("Plug.class"))).orDie
+            reused   <- PluginCompile.fromTree(store, launcher, tree, libs)
+            cached   <- facts(reused)
+            _        <- Workspace.writeString(plug, bad)
+            broken   <- PluginCompile.fromTree(store, launcher, tree, libs).either
+            jarPath  <- zip(
+              dir.resolve("plugin.jar"),
+              List(
+                "Plug.scala" -> good.getBytes(StandardCharsets.UTF_8),
+                "notes.txt"  -> "note".getBytes(StandardCharsets.UTF_8),
+              ),
+            )
+            packed <- PluginCompile.fromJar(store, launcher, jarPath, Nil, libs)
+            jarred <- facts(packed)
+            leak   <- Workspace
+              .writeString(dir.resolve("leak").resolve("histos").resolve("leaklaw").resolve("Mark.scala"), mark)
+            leaked <- PluginCompile.fromTree(store, launcher, dir.resolve("leak"), libs)
+            named  <- PluginCompile.engineClass(leaked)
+          yield
+            val brokenText = broken match
+              case Left(error) => error.message
+              case Right(_)    => ""
+            assertTrue(
+              first.classFile,
+              first.note == "note",
+              first.marked,
+              first.reserved.isEmpty,
+              reused == compiled,
+              !cached.classFile,
+              cached.marked,
+              brokenText.contains("String"),
+              brokenText.contains("Int"),
+              jarred.classFile,
+              jarred.note == "note",
+              named.exists(_.startsWith("histos.leaklaw.Mark")),
+            )
   ) @@ TestAspect.withLiveSystem
 
   private val good =

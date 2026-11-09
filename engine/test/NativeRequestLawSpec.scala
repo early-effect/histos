@@ -51,14 +51,15 @@ object NativeRequestLawSpec extends ZIOSpecDefault:
     ,
     test("central has no origin, ivy and a file maven do, and a snapshot repository is added once"):
       fileOrigin match
-        case None => assertTrue(false)
+        case None        => assertTrue(false)
         case Some(maven) =>
           val asked    = NativeRequests.libraries(scala3, central, repos)
           val fromIvy  = NativeRequests.libraries(scala3, ivy, repos)
           val fromFile = NativeRequests.libraries(scala3, maven, repos)
           val snapshot = NativeRequests.libraries(scala3, NativeToolchain(NativeSource.Central, snap), repos)
-          val again    = NativeRequests.libraries(scala3, NativeToolchain(NativeSource.Central, snap), snapshot.repositories)
-          val url      = "https://central.sonatype.com/repository/maven-snapshots/"
+          val again    =
+            NativeRequests.libraries(scala3, NativeToolchain(NativeSource.Central, snap), snapshot.repositories)
+          val url = "https://central.sonatype.com/repository/maven-snapshots/"
           assertTrue(
             asked.roots.forall(_.origin.isEmpty),
             asked.repositories == repos,
@@ -77,7 +78,8 @@ object NativeRequestLawSpec extends ZIOSpecDefault:
       val suite  = NativeRequests.suite(central, ToolCatalog.default, repos)
       assertTrue(
         linker.id.role == ToolRole.NativeLinker,
-        linker.roots.map(_.name) == List(s"tools_${binary(bridge)}", s"nir_${binary(bridge)}", s"util_${binary(bridge)}"),
+        linker.roots
+          .map(_.name) == List(s"tools_${binary(bridge)}", s"nir_${binary(bridge)}", s"util_${binary(bridge)}"),
         linker.roots.forall(_.transitivity == Transitivity.Single),
         tests.id.role == ToolRole.NativeTestInterface,
         tests.roots.map(_.name) == List("test-interface_native0.5_3"),
@@ -99,7 +101,7 @@ object NativeRequestLawSpec extends ZIOSpecDefault:
         text.contains("""Path.of("/opt/clang++")"""),
         text.contains("""Path.of("/lib/app.jar")"""),
         text.contains("object NativeBridge"),
-      )
+      ),
   )
 
   private def binary(version: ScalaVersion): String =

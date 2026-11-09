@@ -26,64 +26,66 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** Asking for the downstream cell compiles its upstream first. An unknown cell never starts. */
 object GraphCellLawSpec extends ZIOSpecDefault:
-  private val scala3 = ScalaVersion("3.10.0")
+  private val scala3   = ScalaVersion("3.10.0")
   private val coreName = ProjectName.trusted("cellcore")
   private val appName  = ProjectName.trusted("cellapp")
 
   def spec = suite("graph cell laws")(
     test("the downstream cell sees the upstream classes compiled in the same feed"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-graph-cell").flatMap: dir =>
-          val coreSrc = dir.resolve("cellcore").resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
-          val appSrc  = dir.resolve("cellapp").resolve("src").resolve("main").resolve("scala").resolve("App.scala")
-          val missing = ProjectName.trusted("missing")
-          for
-            loaded  <- Machine.load(dir).either
-            machine <- loaded match
-              case Left(error)  => ZIO.dieMessage(error.message)
-              case Right(value) => ZIO.succeed(value)
-            found <- GraphCompile.jdk(machine).either
-            jdk   <- found match
-              case Left(error)  => ZIO.dieMessage(error.message)
-              case Right(value) => ZIO.succeed(value)
-            _ <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
-            unknown <- GraphCompile
-              .cellFeed(dir, graph, List(missing -> scala3), Platform.Jvm, jdk, machine.native)
-              .runCollect
-              .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
-              .either
-            _ <- Workspace.createDirectories(parentOf(coreSrc))
-            _ <- Workspace.createDirectories(parentOf(appSrc))
-            _ <- Workspace.writeString(coreSrc, "object Core:\n  def ready: Int = 1\n")
-            _ <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
-            feeds <- GraphCompile
-              .strict(
-                GraphCompile.cellFeed(dir, graph, List(appName -> scala3), Platform.Jvm, jdk, machine.native)
+        Workspace
+          .work("histos-graph-cell")
+          .flatMap: dir =>
+            val coreSrc = dir.resolve("cellcore").resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
+            val appSrc  = dir.resolve("cellapp").resolve("src").resolve("main").resolve("scala").resolve("App.scala")
+            val missing = ProjectName.trusted("missing")
+            for
+              loaded  <- Machine.load(dir).either
+              machine <- loaded match
+                case Left(error)  => ZIO.dieMessage(error.message)
+                case Right(value) => ZIO.succeed(value)
+              found <- GraphCompile.jdk(machine).either
+              jdk   <- found match
+                case Left(error)  => ZIO.dieMessage(error.message)
+                case Right(value) => ZIO.succeed(value)
+              _       <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
+              unknown <- GraphCompile
+                .cellFeed(dir, graph, List(missing -> scala3), Platform.Jvm, jdk, machine.native)
+                .runCollect
+                .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+                .either
+              _     <- Workspace.createDirectories(parentOf(coreSrc))
+              _     <- Workspace.createDirectories(parentOf(appSrc))
+              _     <- Workspace.writeString(coreSrc, "object Core:\n  def ready: Int = 1\n")
+              _     <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
+              feeds <- GraphCompile
+                .strict(
+                  GraphCompile.cellFeed(dir, graph, List(appName -> scala3), Platform.Jvm, jdk, machine.native)
+                )
+                .runCollect
+                .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+                .either
+              coreClass = GraphCompile.classesDir(dir, coreName, scala3, Platform.Jvm).resolve("Core.class")
+              appClass  = GraphCompile.classesDir(dir, appName, scala3, Platform.Jvm).resolve("App.class")
+              coreThere <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
+              appThere  <- ZIO.attempt(Files.isRegularFile(appClass)).orDie
+            yield
+              val began = feeds.toOption.fold(List.empty[String])(
+                _.collect { case CompileFeed.Began(module, _, _) => module.value }.toList
               )
-              .runCollect
-              .provideSomeLayer[Resolve](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
-              .either
-            coreClass = GraphCompile.classesDir(dir, coreName, scala3, Platform.Jvm).resolve("Core.class")
-            appClass  = GraphCompile.classesDir(dir, appName, scala3, Platform.Jvm).resolve("App.class")
-            coreThere <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
-            appThere  <- ZIO.attempt(Files.isRegularFile(appClass)).orDie
-          yield
-            val began = feeds.toOption.fold(List.empty[String])(
-              _.collect { case CompileFeed.Began(module, _, _) => module.value }.toList
-            )
-            val done = feeds.toOption.fold(List.empty[String])(
-              _.collect { case CompileFeed.Done(cell) => cell.module.value }.toList.sorted
-            )
-            val coreAt = began.indexOf(coreName.value)
-            val appAt  = began.indexOf(appName.value)
-            assertTrue(
-              unknown == Left(GraphCompileError.UnknownCell(missing, scala3)),
-              feeds.isRight,
-              done == List(appName.value, coreName.value),
-              coreAt >= 0 && appAt >= 0 && coreAt < appAt,
-              coreThere,
-              appThere,
-            )
+              val done = feeds.toOption.fold(List.empty[String])(
+                _.collect { case CompileFeed.Done(cell) => cell.module.value }.toList.sorted
+              )
+              val coreAt = began.indexOf(coreName.value)
+              val appAt  = began.indexOf(appName.value)
+              assertTrue(
+                unknown == Left(GraphCompileError.UnknownCell(missing, scala3)),
+                feeds.isRight,
+                done == List(appName.value, coreName.value),
+                coreAt >= 0 && appAt >= 0 && coreAt < appAt,
+                coreThere,
+                appThere,
+              )
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def graph: ProjectGraph =

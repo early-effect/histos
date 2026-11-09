@@ -43,23 +43,23 @@ object DriverLawSpec extends ZIOSpecDefault:
         fingerprint <- must(Fingerprint.read(repo))
         oldSocket  = old.resolve("s")
         nextSocket = next.resolve("s")
-        _          <- must(Record.write(repo, recorded, fingerprint, oldSocket))
-        oldPeer    <- listen(oldSocket)
-        nextPeer   <- listen(nextSocket)
-        _          <- answer(
+        _        <- must(Record.write(repo, recorded, fingerprint, oldSocket))
+        oldPeer  <- listen(oldSocket)
+        nextPeer <- listen(nextSocket)
+        _        <- answer(
           oldPeer,
           heard,
           must(Record.write(repo, shown, fingerprint, nextSocket, mark)),
         ).forkScoped
-        _          <- answer(nextPeer, heard, ZIO.unit).forkScoped
-        missed     <- Ref.make(0)
-        done       <- Cli.compileAt(
+        _      <- answer(nextPeer, heard, ZIO.unit).forkScoped
+        missed <- Ref.make(0)
+        done   <- Cli.compileAt(
           repo,
           Nil,
           missed.update(_ + 1).as(Completed(CliExit.Success, "miss", "", Playback.Held)),
         )
-        n          <- missed.get
-        calls      <- heard.get
+        n     <- missed.get
+        calls <- heard.get
       yield assertTrue(
         n == 0,
         done.exit == CliExit.Success,

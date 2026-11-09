@@ -3,12 +3,7 @@ package histos.archive
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.file.{Files, LinkOption, Path}
-import java.nio.file.attribute.{
-  PosixFileAttributeView,
-  PosixFilePermission,
-  PosixFilePermissions,
-  UserPrincipal,
-}
+import java.nio.file.attribute.{PosixFileAttributeView, PosixFilePermission, PosixFilePermissions, UserPrincipal}
 
 import scala.jdk.CollectionConverters.*
 
@@ -51,7 +46,7 @@ private[histos] object RuntimeCache:
         Files.getOwner(filesystemRoot)
       )
       administrators = Set(system)
-      ancestors = Iterator
+      ancestors      = Iterator
         .iterate(Option(absolute.getParent))(
           _.flatMap(path => Option(path.getParent))
         )

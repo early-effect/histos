@@ -11,39 +11,40 @@ import zio.test.{TestAspect, TestSystem, ZIOSpecDefault, assertTrue, suite, test
 object CliLaunchLawSpec extends ZIOSpecDefault:
   def spec = suite("cli launch laws")(
     test("help, version, explain, and setup answer on this process, and setup does not write without --fix"):
-      Workspace.work("histos-cli-launch").flatMap: dir =>
-        val build = dir.resolve("histos.scala")
-        val pin   = dir.resolve("build.properties")
-        val source = "object Build\n"
-        for
-          help    <- Cli.launch(List("help"), dir)
-          unknown <- Cli.launch(List("help", "no-such-command"), dir)
-          absent  <- Cli.launch(List("setup", "supply-chain"), dir)
-          missing <- Cli.launch(List("version"), dir)
-          _       <- Workspace.writeString(pin, "histos.version=1.2.3\n")
-          version <- Cli.launch(List("version"), dir)
-          _       <- Workspace.writeString(build, source)
-          dry     <- Cli.launch(List("setup", "supply-chain"), dir)
-          kept    <- ZIO.attempt(Files.readString(build)).orDie
-          fixed   <- Cli.launch(List("setup", "supply-chain", "--fix"), dir)
-          wrote   <- ZIO.attempt(Files.readString(build)).orDie
-          named   <- Cli.launch(List("--explain", "jdk.source"), dir)
-          other   <- Cli.launch(List("--explain", "not-a-check"), dir)
-        yield assertTrue(
-          help.exit == CliExit.Success && help.out.contains("histos help <command>"),
-          unknown.exit == CliExit.Usage && unknown.err.contains("unknown command 'no-such-command'"),
-          absent.exit == CliExit.Usage && absent.out == "histos.scala is missing\n",
-          missing.exit == CliExit.ResolveFailed && missing.err.contains("launcher pin is absent"),
-          version.exit == CliExit.Success && version.out == "histos 1.2.3",
-          dry.exit == CliExit.Success && dry.out.contains("would write .supplyChain(SupplyChain())"),
-          kept == source,
-          fixed.exit == CliExit.Success && fixed.out.contains("wrote histos.scala"),
-          wrote.contains(".supplyChain(SupplyChain())"),
-          named.exit == CliExit.Success && named.out.contains("JDK 21"),
-          other.exit == CliExit.Usage && other.err.contains("no explanation for 'not-a-check'"),
-        )
-    @@ TestAspect.withLiveSystem
-    ,
+      Workspace
+        .work("histos-cli-launch")
+        .flatMap: dir =>
+          val build  = dir.resolve("histos.scala")
+          val pin    = dir.resolve("build.properties")
+          val source = "object Build\n"
+          for
+            help    <- Cli.launch(List("help"), dir)
+            unknown <- Cli.launch(List("help", "no-such-command"), dir)
+            absent  <- Cli.launch(List("setup", "supply-chain"), dir)
+            missing <- Cli.launch(List("version"), dir)
+            _       <- Workspace.writeString(pin, "histos.version=1.2.3\n")
+            version <- Cli.launch(List("version"), dir)
+            _       <- Workspace.writeString(build, source)
+            dry     <- Cli.launch(List("setup", "supply-chain"), dir)
+            kept    <- ZIO.attempt(Files.readString(build)).orDie
+            fixed   <- Cli.launch(List("setup", "supply-chain", "--fix"), dir)
+            wrote   <- ZIO.attempt(Files.readString(build)).orDie
+            named   <- Cli.launch(List("--explain", "jdk.source"), dir)
+            other   <- Cli.launch(List("--explain", "not-a-check"), dir)
+          yield assertTrue(
+            help.exit == CliExit.Success && help.out.contains("histos help <command>"),
+            unknown.exit == CliExit.Usage && unknown.err.contains("unknown command 'no-such-command'"),
+            absent.exit == CliExit.Usage && absent.out == "histos.scala is missing\n",
+            missing.exit == CliExit.ResolveFailed && missing.err.contains("launcher pin is absent"),
+            version.exit == CliExit.Success && version.out == "histos 1.2.3",
+            dry.exit == CliExit.Success && dry.out.contains("would write .supplyChain(SupplyChain())"),
+            kept == source,
+            fixed.exit == CliExit.Success && fixed.out.contains("wrote histos.scala"),
+            wrote.contains(".supplyChain(SupplyChain())"),
+            named.exit == CliExit.Success && named.out.contains("JDK 21"),
+            other.exit == CliExit.Usage && other.err.contains("no explanation for 'not-a-check'"),
+          )
+    @@ TestAspect.withLiveSystem,
     test("new --bare writes the build and the sources, and does not write the wrapper"):
       val jdk  = java.lang.System.getProperty("java.home")
       val home = java.lang.System.getProperty("user.home")
@@ -77,10 +78,9 @@ object CliLaunchLawSpec extends ZIOSpecDefault:
         mainText.contains("object Main"),
         wrapped == false,
         ci == false,
-      )
+      ),
   )
   private def textAt(path: java.nio.file.Path): ZIO[Any, Nothing, String] =
     ZIO
       .attempt(if Files.isRegularFile(path) then Files.readString(path) else "")
       .orDie
-end CliLaunchLawSpec

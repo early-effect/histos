@@ -254,6 +254,25 @@ object CliLawSpec extends ZIOSpecDefault:
         CallResult.fault(histos.report.BuildFault.Watch(histos.watch.WatchError.Read(path))),
         _ => CliExit.TaskFailed,
       ) &&
+      agrees(
+        all,
+        CallResult.fault(histos.report.BuildFault.Format(histos.format.FormatError.NotDeclared)),
+        _ => CliExit.TaskFailed,
+      ) &&
+      agrees(
+        all,
+        CallResult.fault(histos.report.BuildFault.Format(histos.format.FormatError.Resolved(ResolveErrorNoLock))),
+        _ => CliExit.ResolveFailed,
+      ) &&
+      agrees(
+        all,
+        CallResult.fault(
+          histos.report.BuildFault.Format(
+            histos.format.FormatError.Selected(histos.select.SelectError.Unknown(histos.ProjectName.trusted("nope")))
+          )
+        ),
+        _ => CliExit.Usage,
+      ) &&
       agrees(all, CallResult.fault(histos.report.BuildFault.Interrupted), _ => CliExit.Interrupted) &&
       assertTrue(EnumLaw.covered(oneRejection)) &&
       rejections.foldLeft(assertTrue(oneRejection.length == rejections.length - 1)) { (acc, rejection) =>
@@ -461,7 +480,10 @@ object CliLawSpec extends ZIOSpecDefault:
   private def failedCall(call: Call): CliExit =
     if testCall(call) then CliExit.TestFailed
     else if publish(call) then CliExit.PublishFailed
-    else CliExit.CompileFailed
+    else
+      call match
+        case Call.Format(_, _) => CliExit.TaskFailed
+        case _                 => CliExit.CompileFailed
 
   private def resolveExit(call: Call): CliExit =
     if compileLike(call) then CliExit.CompileFailed
@@ -527,6 +549,9 @@ object CliLawSpec extends ZIOSpecDefault:
       Rejection.Flag(histos.plugin.FlagNameError.Empty),
       Rejection.TaskPlatform("inspect"),
       Rejection.CommandHelp(List("nope")),
+      Rejection.FormatMode("diff"),
+      Rejection.FormatTargets,
+      Rejection.FormatPath("/etc"),
     )
 
   private val rejections: List[Rejection] =
@@ -553,6 +578,9 @@ object CliLawSpec extends ZIOSpecDefault:
       Rejection.TaskPlatform("inspect"),
       Rejection.CommandHelp(List("nope")),
       Rejection.CommandHelp(Nil),
+      Rejection.FormatMode("diff"),
+      Rejection.FormatTargets,
+      Rejection.FormatPath("/etc"),
     )
 
   private val ResolveErrorNoLock: histos.resolve.ResolveError =

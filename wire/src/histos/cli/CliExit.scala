@@ -1,5 +1,6 @@
 package histos.cli
 
+import histos.format.FormatError
 import histos.program.ProgramError
 import histos.report.{BuildFault, CallResult, Rejection, Report, Severity, WorkflowFault}
 import histos.server.Call
@@ -68,7 +69,8 @@ object CliExit:
       case Call.PublishLocal(_) | Call.PublishSnapshots(_) | Call.PublishRelease(_, _) | Call.PublishPromote(_) |
           Call.PublishDrop(_) | Call.PublishAssets(_) | Call.PreviewPublishLocal(_) | Call.PreviewPublishSnapshots(_) =>
         PublishFailed
-      case _ => CompileFailed
+      case Call.Format(_, _) => TaskFailed
+      case _                 => CompileFailed
 
   private def fromFault(call: Call, fault: BuildFault): CliExit =
     fault match
@@ -95,6 +97,9 @@ object CliExit:
       case BuildFault.Io(_)                              => ioExit(call)
       case BuildFault.Version(_)                         => TaskFailed
       case BuildFault.Watch(_)                           => TaskFailed
+      case BuildFault.Format(FormatError.Resolved(_))    => ResolveFailed
+      case BuildFault.Format(FormatError.Selected(_))    => Usage
+      case BuildFault.Format(_)                          => TaskFailed
       case BuildFault.Interrupted                        => Interrupted
       case BuildFault.Rejected(rejection)                => rejectedExit(rejection)
 

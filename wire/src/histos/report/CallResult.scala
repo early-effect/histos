@@ -1,7 +1,8 @@
 package histos.report
 
-import histos.doctor.{Diagnostic => Finding, Noted}
+import histos.doctor.{Diagnostic as Finding, Noted}
 import histos.cache.CacheCleanModeError
+import histos.format.FormatError
 import histos.assembly.AssembleError
 import histos.jdk.ToolchainError
 import histos.load.{LoadError, PluginFault}
@@ -74,6 +75,7 @@ enum BuildFault:
   case Io(failure: IoFailure)
   case Version(error: VersionError)
   case Watch(error: WatchError)
+  case Format(error: FormatError)
   case Interrupted
   case Rejected(rejection: Rejection)
 
@@ -103,6 +105,7 @@ enum BuildFault:
     case Io(failure)         => failure.message
     case Version(error)      => error.message
     case Watch(error)        => error.message
+    case Format(error)       => error.message
     case Interrupted         => "interrupted"
     case Rejected(rejection) => rejection.message
 
@@ -117,6 +120,7 @@ enum BuildFault:
     case Program(error)   => error.diagnose
     case Task(error)      => error.diagnose
     case Preview(error)   => error.diagnose
+    case Format(error)    => error.diagnose
     case Rejected(reason) => reason.diagnose
     case Release(detail)  => Noted.carry("publish.release", detail, detail, "histos help publish")
     case Interrupted      => Noted.carry("build.interrupted", message, "The run was interrupted.", "histos help")
@@ -146,6 +150,9 @@ enum Rejection:
   case Flag(error: FlagNameError)
   case TaskPlatform(name: String)
   case CommandHelp(names: List[String])
+  case FormatMode(raw: String)
+  case FormatTargets
+  case FormatPath(raw: String)
 
   def message: String = this match
     case ResolveAction(raw)     => s"'$raw' is not a resolve action"
@@ -168,7 +175,10 @@ enum Rejection:
     case CacheClean(error)      => error.message
     case Flag(error)            => error.message
     case TaskPlatform(name)     => s"run $name does not take a platform"
-    case CommandHelp(names) =>
+    case FormatMode(raw)        => s"'$raw' is not a fmt mode. It is write or check"
+    case FormatTargets          => "fmt takes projects or files, not both"
+    case FormatPath(raw)        => s"'$raw' is not a path relative to the repository"
+    case CommandHelp(names)     =>
       if names.isEmpty then "unknown command" else s"unknown command: ${names.mkString(", ")}"
 
   def diagnose: Finding = this match

@@ -1,7 +1,20 @@
 package histos.testrun
 
 import histos.workspace.Workspace
-import histos.{ClangMajor, ClangPin, Dep, DepKind, Module, Platform, Platforms, ProjectName, ScalaVersion, ScalaVersions, SourcePos, TestProvider}
+import histos.{
+  ClangMajor,
+  ClangPin,
+  Dep,
+  DepKind,
+  Module,
+  Platform,
+  Platforms,
+  ProjectName,
+  ScalaVersion,
+  ScalaVersions,
+  SourcePos,
+  TestProvider,
+}
 
 import java.nio.file.{Files, Path}
 
@@ -42,7 +55,7 @@ object SuiteFilterLawSpec extends ZIOSpecDefault:
           Workspace
             .work("histos-suite-filter")
             .flatMap: root =>
-              val classes = root.resolve("classes")
+              val classes   = root.resolve("classes")
               val helloFile = classes.resolve("demo").resolve("Hello.class")
               val anon      = classes.resolve("anon").resolve("Hello$$anon.class")
               val note      = classes.resolve("demo").resolve("readme.txt")
@@ -76,14 +89,13 @@ object SuiteFilterLawSpec extends ZIOSpecDefault:
         case _ => zio.ZIO.succeed(assertTrue(false))
     ,
     test("a provider is satisfied only by its own library"):
-      val kit  = Dep.trusted("dev.zio", "zio-test-sbt", "2.1.27", DepKind.Java)
+      val kit   = Dep.trusted("dev.zio", "zio-test-sbt", "2.1.27", DepKind.Java)
       val other = Dep.trusted("dev.zio", "zio-test", "2.1.27", DepKind.Java)
       assertTrue(
         SuiteLaunch.satisfied(module(ClangPin.Unused, List(kit)), TestProvider.Zio),
         !SuiteLaunch.satisfied(module(ClangPin.Unused, List(other)), TestProvider.Zio),
         !SuiteLaunch.satisfied(module(ClangPin.Unused, Nil), TestProvider.Zio),
-      )
-    ,
+      ),
   )
 
   private def module(clang: ClangPin, tests: List[Dep]): Module =
@@ -106,3 +118,4 @@ object SuiteFilterLawSpec extends ZIOSpecDefault:
         ()
       }
       .catchAll(error => zio.ZIO.dieMessage(error.getClass.getName))
+end SuiteFilterLawSpec

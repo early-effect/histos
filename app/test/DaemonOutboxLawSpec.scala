@@ -15,4 +15,3 @@ object DaemonOutboxLawSpec extends ZIOSpecDefault:
         _    <- box.close
       yield assertTrue(got == "hello")
   )
-end DaemonOutboxLawSpec

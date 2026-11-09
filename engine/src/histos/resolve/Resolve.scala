@@ -111,7 +111,7 @@ object Resolve:
       native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
   ): ZIO[Resolve, ResolveError, String] =
     for
-      planned <- LockedTools.plan(graph, native)
+      planned <- LockedTools.plan(repo, graph, native)
       modules = cells(graph, repositories)
       _     <- ZIO.foreachDiscard(modules)(prepare)
       lock  <- readLock(repo)
@@ -128,7 +128,7 @@ object Resolve:
       plugins: PluginUpdate = PluginUpdate.Keep,
   ): ZIO[Resolve, ResolveError, String] =
     for
-      planned <- LockedTools.plan(graph, native)
+      planned <- LockedTools.plan(repo, graph, native)
       _       <- ZIO.foreachDiscard(cells(graph, repositories))(prepare)
       solved  <- ZIO.foreach(cells(graph, repositories))(cell =>
         ZIO.serviceWithZIO[Resolve](_.resolve(cell)).map(lockCell(cell, _))
@@ -175,7 +175,7 @@ object Resolve:
       native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
   ): ZIO[Resolve, ResolveError, Unit] =
     for
-      planned <- LockedTools.plan(graph, native)
+      planned <- LockedTools.plan(repo, graph, native)
       lock    <- readLock(repo)
       tools   <- LockedTools.make(lock, graph)
       _       <- ZIO.foreachDiscard(planned)(tools.materialize)
@@ -188,7 +188,7 @@ object Resolve:
       native: histos.native.NativeOrigin = histos.native.NativeOrigin.Central,
   ): ZIO[Resolve, ResolveError, String] =
     for
-      planned <- LockedTools.plan(graph, native)
+      planned <- LockedTools.plan(repo, graph, native)
       modules = cells(graph, repositories)
       _     <- ZIO.foreachDiscard(modules)(prepare)
       lock  <- readLock(repo)
@@ -339,7 +339,7 @@ object Resolve:
       lock: DependencyLock,
   ): Either[ResolveError, LockedCell] =
     lock.cells.find(same(cell)) match
-      case None => Left(drifted(cell, Nil))
+      case None                                            => Left(drifted(cell, Nil))
       case Some(locked) if locked.directs != directs(cell) =>
         Left(drifted(cell, moved(locked.directs.map(directToken), directs(cell).map(directToken))))
       case Some(locked) => Right(locked)
@@ -349,7 +349,7 @@ object Resolve:
       fresh: Classpath,
       locked: LockedCell,
   ): Either[ResolveError, Unit] =
-    val got   = fresh.artifacts.map(artifact =>
+    val got = fresh.artifacts.map(artifact =>
       (
         artifact.organization,
         artifact.name,

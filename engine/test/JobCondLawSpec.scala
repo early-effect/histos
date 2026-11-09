@@ -37,7 +37,7 @@ object JobCondLawSpec extends ZIOSpecDefault:
         trigger = wide,
         guard = Some(Guard.Affected(::(ProjectName("core"), Nil), Guard.Unguarded)),
       )
-      val pages = SiteJob(JobName("guide"), TaskName("echo"), Site(RepoPath.trusted("docs")))
+      val pages    = SiteJob(JobName("guide"), TaskName("echo"), Site(RepoPath.trusted("docs")))
       val withSite = Projects
         .organization(organization"example.com")
         .ci(CiSettings.empty)(use(new CondEcho(List(gated, pages))), module("core", Jvm)(scala3))
@@ -47,7 +47,7 @@ object JobCondLawSpec extends ZIOSpecDefault:
       (withSite, taskOnly) match
         case (Right(siteGraph), Right(taskGraph)) =>
           JobYaml.render(siteGraph, "main") match
-            case Left(error) => assertTrue(error.message == "")
+            case Left(error)     => assertTrue(error.message == "")
             case Right(rendered) =>
               val body = (rendered.ci ++ rendered.files.map(_.body)).mkString("\n")
               assertTrue(

@@ -433,6 +433,8 @@ private object WireSchemaBuild extends WireSchemaSupport:
 
   given Schema[PluginLoadError] = Schema.derived
 
+  given Schema[histos.format.ScalafmtConfError] = Schema.derived
+
   private val resolveErrorSchema: Schema[ResolveError] = Schema.derived
   given Schema[ResolveError]                           = resolveErrorSchema
 
@@ -583,6 +585,10 @@ private object WireSchemaCall extends WireSchemaSupport:
   given Schema[PreviewError] = Schema.derived
 
   given Schema[WatchError] = Schema.derived
+
+  given Schema[histos.format.ScalafmtPackage] = Schema.derived
+
+  given Schema[histos.format.FormatError] = Schema.derived
 
   given Schema[CommitShaError] = Schema.derived
 

@@ -1,6 +1,7 @@
 package histos.resolve
 
 import histos.doctor.{Diagnostic, Noted, Suggest}
+import histos.format.ScalafmtConfError
 import histos.jdk.Sha256
 import histos.plugin.PluginLoadError
 import histos.workspace.IoFailure
@@ -31,6 +32,7 @@ enum ResolveError:
   case Io(failure: IoFailure)
   case Plugin(error: PluginLoadError)
   case Repository(op: RepositoryIo)
+  case Scalafmt(error: ScalafmtConfError)
 
   def message: String = this match
     case ResolveError.ToolRoot(id, root, fault) =>
@@ -59,6 +61,7 @@ enum ResolveError:
     case ResolveError.Plugin(error)  => error.message
     case ResolveError.Repository(op) =>
       s"resolve failed while ${op.toString.toLowerCase}"
+    case ResolveError.Scalafmt(error) => error.message
 
   def diagnose: Diagnostic = this match
     case ResolveError.LockDrift(_, _, _, _, changed) =>
@@ -73,6 +76,8 @@ enum ResolveError:
       Noted.carry("resolve.plugin-drift", message, explain, "histos resolve --update")
     case ResolveError.ToolDrift(_) =>
       Noted.carry("resolve.tool-drift", message, "The locked tool coordinate moved.", "histos resolve --update")
+    case ResolveError.Scalafmt(error) =>
+      Noted.carry("format.config", message, error.fix, "histos resolve --update")
     case ResolveError.NoLock(_) =>
       Noted.carry("resolve.no-lock", message, "Resolve needs a dependency lock.", "histos resolve --update")
     case ResolveError.NotFound(organization, name, revision) =>

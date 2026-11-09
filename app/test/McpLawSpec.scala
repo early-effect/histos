@@ -2,12 +2,15 @@ package histos.mcp
 
 import heddle.mcp.protocol.ToolName
 import histos.cache.CacheCleanMode
+import histos.cli.{Grammar, Operation}
+import histos.format.{FormatMode, FormatTargets}
 import histos.report.Rejection
 import histos.server.Call
 import histos.task.{RunId, TaskError}
 import histos.testrun.{SuitePattern, SuitePatternError, TestMode}
 import histos.ProjectName
 
+import zio.NonEmptyChunk
 import zio.json.*
 import zio.test.*
 
@@ -92,7 +95,33 @@ object McpLawSpec extends ZIOSpecDefault:
           )
         case Right(_) => assertTrue(false)
     ,
-    test("the tool list is the twenty four commands and does not include portal or bsp"):
+    test("fmt sends the same call as the command line, and refuses a bad mode, a bad path, or two scopes"):
+      val api  = ProjectName.trusted("api")
+      val file = java.nio.file.Path.of("api/src/A.scala")
+      def fmt(projects: List[String] = Nil, files: List[String] = Nil, mode: Option[String] = None) =
+        HistosMcp.fmtCall(HistosMcp.FmtArgs(projects, files, mode))
+      for
+        build   <- Grammar.parse(List("fmt")).map(Operation.operation)
+        checked <- Grammar.parse(List("fmt", "--check", "api")).map(Operation.operation)
+        filed   <- Grammar.parse(List("fmt", "--file", "api/src/A.scala")).map(Operation.operation)
+      yield assertTrue(
+        fmt() == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
+        fmt() == build,
+        fmt(List("api"), mode = Some("check")) == checked,
+        fmt(files = List("api/src/A.scala")) == filed,
+        filed == Right(Call.Format(FormatTargets.Files(NonEmptyChunk(file)), FormatMode.Write)),
+        fmt(mode = Some("write")) == Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
+        fmt(mode = Some("diff")) == Left(Rejection.FormatMode("diff")),
+        fmt(List("api"), List("api/src/A.scala")) == Left(Rejection.FormatTargets),
+        fmt(files = List("/etc/passwd")) == Left(Rejection.FormatPath("/etc/passwd")),
+        fmt(List("1api")).isLeft,
+        HistosMcp.fmtCall(HistosMcp.FmtArgs()).map(Call.encode).flatMap(_.fromJson[Call]) ==
+          Right(Call.Format(FormatTargets.Build, FormatMode.Write)),
+        Call.encode(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)).fromJson[Call] ==
+          Right(Call.Format(FormatTargets.Projects(NonEmptyChunk(api)), FormatMode.Check)),
+      )
+    ,
+    test("the tool list is the twenty five commands and does not include portal or bsp"):
       val names = Set(
         ToolName("graph"),
         ToolName("run"),
@@ -108,6 +137,7 @@ object McpLawSpec extends ZIOSpecDefault:
         ToolName("cleanFull"),
         ToolName("resolve"),
         ToolName("workflow"),
+        ToolName("fmt"),
         ToolName("reload"),
         ToolName("reboot"),
         ToolName("cachePath"),
@@ -119,7 +149,7 @@ object McpLawSpec extends ZIOSpecDefault:
         ToolName("observe"),
         ToolName("doctor"),
       )
-      assertTrue(HistosMcp.toolNames == names, names.size == 24)
+      assertTrue(HistosMcp.toolNames == names, names.size == 25)
     ,
     test("a notice level is info or error"):
       val other = "\"warn\"".fromJson[Notice.Level]

@@ -21,17 +21,22 @@ object CiBranch:
     * the remote is asked next: `git remote set-head origin --auto`, then `git ls-remote --symref origin HEAD`.
     */
   def read(repo: Path): IO[CiError, CiBranch] =
-    ZIO.attemptBlocking(resolve(repo)).mapError(_ => CiError.NoDefaultBranch).flatMap:
-      case Some(name) => ZIO.succeed(CiBranch(name))
-      case None       => ZIO.fail(CiError.NoDefaultBranch)
+    ZIO
+      .attemptBlocking(resolve(repo))
+      .mapError(_ => CiError.NoDefaultBranch)
+      .flatMap:
+        case Some(name) => ZIO.succeed(CiBranch(name))
+        case None       => ZIO.fail(CiError.NoDefaultBranch)
 
   /** The `ref:` line of `git ls-remote --symref origin HEAD`. */
   private[workflow] def headFromLsRemote(text: String): Option[String] =
     val prefix = "ref: refs/heads/"
-    text.linesIterator.map(_.trim).collectFirst:
-      case line if line.startsWith(prefix) =>
-        line.drop(prefix.length).takeWhile(char => char != '\t' && char != ' ')
-    .filter(name => name.nonEmpty && name != "HEAD")
+    text.linesIterator
+      .map(_.trim)
+      .collectFirst:
+        case line if line.startsWith(prefix) =>
+          line.drop(prefix.length).takeWhile(char => char != '\t' && char != ' ')
+      .filter(name => name.nonEmpty && name != "HEAD")
 
   private def resolve(repo: Path): Option[String] =
     local(repo)

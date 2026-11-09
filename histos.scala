@@ -43,6 +43,8 @@ object build extends HistosBuild:
         dep"org.ow2.asm:asm-util:9.11.1",
         dep"org.ow2.asm:asm-analysis:9.11.1",
         dep"org.bouncycastle:bcpg-jdk18on:1.86",
+        // The stable Java API `histos fmt` loads scalafmt-dynamic-core through. The rest of scalafmt is a locked tool.
+        dep"org.scalameta:scalafmt-interfaces:3.11.5",
         // heddle has no gRPC, and the remote-execution stubs are not published.
         dep"io.grpc:grpc-api:1.85.1",
         dep"io.grpc:grpc-netty-shaded:1.85.1",
@@ -117,6 +119,7 @@ object build extends HistosBuild:
         )
       )
       .coverageExcludes(CoverageExcludes(classlikes = List(".*Macro.*")))
+      .scalafmt
       .docCheck(
         ships(Ship("histos").next(0, 2, 4)(api, app)),
         api,

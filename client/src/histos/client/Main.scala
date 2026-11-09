@@ -152,7 +152,7 @@ object Main extends ZIOAppDefault:
       .attempt(Option(System.getenv("HISTOS_VERSION")).filter(_.nonEmpty))
       .mapError(_ => ServerError.Protocol)
       .flatMap:
-        case None => ZIO.succeed(true)
+        case None        => ZIO.succeed(true)
         case Some(found) =>
           AssemblyMark.read(repo).map(mark => found == record.version && mark == record.assembly)
 

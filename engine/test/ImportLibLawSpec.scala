@@ -23,4 +23,3 @@ object ImportLibLawSpec extends ZIOSpecDefault:
         !draft.contains("// unmapped: Lib(zio % Test)"),
       )
   )
-end ImportLibLawSpec

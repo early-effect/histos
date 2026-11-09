@@ -80,7 +80,7 @@ object Build:
                     histos.zinc.Compilers.provide(histos.schedule.Parallelism.default.cpu)(
                       Perform
                         .run(repo, apiJar, loaded, machine, runs, track, version, call, say, edges(say))
-                        .provideSomeLayer(zio.ZLayer.succeed(report))
+                        .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
                     )
                   )
                 }

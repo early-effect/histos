@@ -37,45 +37,48 @@ object CallsCompileLawSpec extends ZIOSpecDefault:
   def spec = suite("calls compile laws")(
     test("the downstream call compiles its upstream, and a missing name is a fault"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-calls-compile").flatMap: dir =>
-          val coreSrc = dir.resolve("callcore").resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
-          val appSrc  = dir.resolve("callapp").resolve("src").resolve("main").resolve("scala").resolve("App.scala")
-          val program =
-            for
-              loaded  <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk   <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              (missed, missedHeard) <- speak(say =>
-                Calls.compile(dir, graph, List(ProjectName.trusted("missing")), jdk, machine, say)
-              )
-              _ <- Workspace.createDirectories(parentOf(coreSrc))
-              _ <- Workspace.createDirectories(parentOf(appSrc))
-              _ <- Workspace.writeString(coreSrc, "object Core:\n  def ready: Int = 1\n")
-              _ <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
-              (compiled, heard) <- speak(say => Calls.compile(dir, graph, List(appName), jdk, machine, say))
-              coreClass = GraphCompile.classesDir(dir, coreName, scala3, Platform.Jvm).resolve("Core.class")
-              appClass  = GraphCompile.classesDir(dir, appName, scala3, Platform.Jvm).resolve("App.class")
-              coreThere <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
-              appThere  <- ZIO.attempt(Files.isRegularFile(appClass)).orDie
-            yield
-              val text    = outs(heard)
-              val tallies = modulesOf(done(heard))
-              assertTrue(
-                missed == Right(()),
-                done(missedHeard).exists(faultNamesMissing),
-                compiled == Right(()),
-                tallies.map(_.module).sorted == List(appName.value, coreName.value),
-                tallies.forall(row => row.compiled.contains(1) && row.classes.contains(2) && row.version == scala3.value),
-                text == "files compiled: 2 skipped: 0; modules: 2; classes: 4",
-                coreThere,
-                appThere,
-              )
-          program.provideSomeLayer[Resolve & Scope](session(dir, lock))
+        Workspace
+          .work("histos-calls-compile")
+          .flatMap: dir =>
+            val coreSrc = dir.resolve("callcore").resolve("src").resolve("main").resolve("scala").resolve("Core.scala")
+            val appSrc  = dir.resolve("callapp").resolve("src").resolve("main").resolve("scala").resolve("App.scala")
+            val program =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                (missed, missedHeard) <- speak(say =>
+                  Calls.compile(dir, graph, List(ProjectName.trusted("missing")), jdk, machine, say)
+                )
+                _                 <- Workspace.createDirectories(parentOf(coreSrc))
+                _                 <- Workspace.createDirectories(parentOf(appSrc))
+                _                 <- Workspace.writeString(coreSrc, "object Core:\n  def ready: Int = 1\n")
+                _                 <- Workspace.writeString(appSrc, "object App:\n  def n: Int = Core.ready\n")
+                (compiled, heard) <- speak(say => Calls.compile(dir, graph, List(appName), jdk, machine, say))
+                coreClass = GraphCompile.classesDir(dir, coreName, scala3, Platform.Jvm).resolve("Core.class")
+                appClass  = GraphCompile.classesDir(dir, appName, scala3, Platform.Jvm).resolve("App.class")
+                coreThere <- ZIO.attempt(Files.isRegularFile(coreClass)).orDie
+                appThere  <- ZIO.attempt(Files.isRegularFile(appClass)).orDie
+              yield
+                val text    = outs(heard)
+                val tallies = modulesOf(done(heard))
+                assertTrue(
+                  missed == Right(()),
+                  done(missedHeard).exists(faultNamesMissing),
+                  compiled == Right(()),
+                  tallies.map(_.module).sorted == List(appName.value, coreName.value),
+                  tallies
+                    .forall(row => row.compiled.contains(1) && row.classes.contains(2) && row.version == scala3.value),
+                  text == "files compiled: 2 skipped: 0; modules: 2; classes: 4",
+                  coreThere,
+                  appThere,
+                )
+            program.provideSomeLayer[Resolve & Scope](session(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def faultNamesMissing(result: CallResult): Boolean =

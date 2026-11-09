@@ -247,7 +247,7 @@ object Session:
                   say,
                   sessionEdges(repo, apiJar, machine, desk)(say),
                 )
-                .provideSomeLayer(zio.ZLayer.succeed(report))
+                .provideSomeLayer(zio.ZLayer.succeed(report) ++ histos.format.Formatters.live)
             )
           )
         }
@@ -325,9 +325,7 @@ object Session:
                       case Left(_)     => Call.Compile(Nil)
                   case _ => Call.Compile(Nil)
                 answer(repo, apiJar, machine, desk, compile, say.dropExit) *>
-                  watched.map(found =>
-                    changed.exists(path => found.paths.exists(root => Watching.covers(root, path)))
-                  ),
+                  watched.map(found => changed.exists(path => found.paths.exists(root => Watching.covers(root, path)))),
             )
           case histos.server.WatchPolicy.After =>
             Watching.session(

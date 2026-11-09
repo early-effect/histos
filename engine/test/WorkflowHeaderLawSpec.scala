@@ -34,20 +34,20 @@ object WorkflowHeaderLawSpec extends ZIOSpecDefault:
       val settings = CiSettings.empty.copy(
         secrets = Set(hidden),
         env = List(
-          plain                 -> EnvValue.Plain("hi"),
-          EnvName("SHA")        -> EnvValue.Github(GithubField.Sha),
-          EnvName("REF")        -> EnvValue.Github(GithubField.RefName),
-          EnvName("TOK")        -> EnvValue.Github(GithubField.Token),
-          EnvName("FROM")       -> EnvValue.Env(plain),
-          EnvName("SECRET")     -> EnvValue.Secret(hidden),
+          plain             -> EnvValue.Plain("hi"),
+          EnvName("SHA")    -> EnvValue.Github(GithubField.Sha),
+          EnvName("REF")    -> EnvValue.Github(GithubField.RefName),
+          EnvName("TOK")    -> EnvValue.Github(GithubField.Token),
+          EnvName("FROM")   -> EnvValue.Env(plain),
+          EnvName("SECRET") -> EnvValue.Secret(hidden),
         ),
       )
-      val job = TaskJob(JobName("header"), TaskName("echo"), trigger = wide)
+      val job   = TaskJob(JobName("header"), TaskName("echo"), trigger = wide)
       val built = Projects
         .organization(organization"example.com")
         .ci(settings)(use(new HeaderEcho(List(job))), module("core", Jvm)(scala3))
       built match
-        case Left(error) => assertTrue(error.message == "")
+        case Left(error)  => assertTrue(error.message == "")
         case Right(graph) =>
           Workflow.render(graph) match
             case Left(error) => assertTrue(error.message == "")

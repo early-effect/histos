@@ -57,14 +57,14 @@ object ProviderLawSpec extends ZIOSpecDefault:
                             val spec = dir.resolve("src").resolve("test").resolve("scala").resolve("Ready.scala")
                             val ran  =
                               for
-                                runtimes <- Runtimes.read(machine, None)
-                                _        <- Workspace.writeString(main, hello)
-                                _        <- Workspace.writeString(spec, ready)
+                                runtimes  <- Runtimes.read(machine, None)
+                                _         <- Workspace.writeString(main, hello)
+                                _         <- Workspace.writeString(spec, ready)
                                 collected <- ModuleTest
                                   .sessionOn(TestRun(dir, graph(held), List(lawName), jdk, runtimes, TestMode.Run))
                                   .runCollect
                                   .either
-                                detail = collected.fold(_.message, _ => "")
+                                detail   = collected.fold(_.message, _ => "")
                                 statuses = collected.toOption.toList.flatMap(chunk =>
                                   chunk.collect { case SessionFeed.Test(TestFeed.Done(cell)) => cell.status }.toList
                                 )
@@ -105,9 +105,8 @@ object ProviderLawSpec extends ZIOSpecDefault:
       Nil,
       Nil,
       SourcePos("law.scala", 1, 1),
-      testDependencies = held.directs.map(direct =>
-        Dep.trusted(direct.organization, direct.name, direct.revision, direct.kind)
-      ),
+      testDependencies =
+        held.directs.map(direct => Dep.trusted(direct.organization, direct.name, direct.revision, direct.kind)),
     )
     ProjectGraph.trusted(
       List(law),

@@ -35,57 +35,56 @@ object CallsRunLawSpec extends ZIOSpecDefault:
   def spec = suite("calls run laws")(
     test("a main prints and its exit is the report, and a missing platform is a fault"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-calls-run").flatMap: dir =>
-          val probe = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
-          val program =
-            for
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              (missed, missedHeard) <- speak(say =>
-                Calls.run(dir, graph, jdk, machine, "missing", None, say)
-              )
-              (unbuilt, unbuiltHeard) <- speak(say =>
-                Calls.run(dir, graph, jdk, machine, lawName.value, Some(Platform.Js), say)
-              )
-              _ <- Workspace.createDirectories(parentOf(probe))
-              _ <- Workspace.writeString(
-                probe,
-                "object Probe:\n  def main(args: Array[String]): Unit = println(\"ran-law\")\n",
-              )
-              (ran, heard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say))
-              clazz = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
-              wrote <- ZIO.attempt(Files.isRegularFile(clazz)).orDie
-              _ <- Workspace.writeString(
-                probe,
-                "object Probe:\n  def main(args: Array[String]): Unit =\n    println(\"ran-law\")\n    System.exit(4)\n",
-              )
-              (stopped, stoppedHeard) <- speak(say =>
-                Calls.run(dir, graph, jdk, machine, lawName.value, None, say)
-              )
-            yield
-              val text = outs(heard)
-              val stoppedText = outs(stoppedHeard)
-              assertTrue(
-                missed == Right(()),
-                done(missedHeard).exists(faultHas("'missing' is not a module")),
-                unbuilt == Right(()),
-                done(unbuiltHeard).exists(faultHas("does not build js")),
-                ran == Right(()),
-                programOf(done(heard)) == Some(0),
-                text.contains("runlaw 3.10.0 jvm"),
-                text.contains("ran-law"),
-                wrote,
-                stopped == Right(()),
-                programOf(done(stoppedHeard)) == Some(4),
-                stoppedText.contains("ran-law"),
-              )
-          program.provideSomeLayer[Resolve & Scope](session(dir, lock))
+        Workspace
+          .work("histos-calls-run")
+          .flatMap: dir =>
+            val probe =
+              dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Probe.scala")
+            val program =
+              for
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                (missed, missedHeard)   <- speak(say => Calls.run(dir, graph, jdk, machine, "missing", None, say))
+                (unbuilt, unbuiltHeard) <- speak(say =>
+                  Calls.run(dir, graph, jdk, machine, lawName.value, Some(Platform.Js), say)
+                )
+                _ <- Workspace.createDirectories(parentOf(probe))
+                _ <- Workspace.writeString(
+                  probe,
+                  "object Probe:\n  def main(args: Array[String]): Unit = println(\"ran-law\")\n",
+                )
+                (ran, heard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say))
+                clazz = GraphCompile.classesDir(dir, lawName, scala3, Platform.Jvm).resolve("Probe.class")
+                wrote <- ZIO.attempt(Files.isRegularFile(clazz)).orDie
+                _     <- Workspace.writeString(
+                  probe,
+                  "object Probe:\n  def main(args: Array[String]): Unit =\n    println(\"ran-law\")\n    System.exit(4)\n",
+                )
+                (stopped, stoppedHeard) <- speak(say => Calls.run(dir, graph, jdk, machine, lawName.value, None, say))
+              yield
+                val text        = outs(heard)
+                val stoppedText = outs(stoppedHeard)
+                assertTrue(
+                  missed == Right(()),
+                  done(missedHeard).exists(faultHas("'missing' is not a module")),
+                  unbuilt == Right(()),
+                  done(unbuiltHeard).exists(faultHas("does not build js")),
+                  ran == Right(()),
+                  programOf(done(heard)) == Some(0),
+                  text.contains("runlaw 3.10.0 jvm"),
+                  text.contains("ran-law"),
+                  wrote,
+                  stopped == Right(()),
+                  programOf(done(stoppedHeard)) == Some(4),
+                  stoppedText.contains("ran-law"),
+                )
+            program.provideSomeLayer[Resolve & Scope](session(dir, lock))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def faultHas(text: String)(result: CallResult): Boolean =
@@ -136,9 +135,7 @@ object CallsRunLawSpec extends ZIOSpecDefault:
       ResolutionService.pinned(pinned(lock))
 
   private def pinned(lock: DependencyLock): DependencyLock =
-    lock.copy(cells =
-      LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells
-    )
+    lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
 
   private def opened =
     Resolve.offline(_root_.coursier.cache.CacheDefaults.location.toPath) ++

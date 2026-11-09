@@ -289,7 +289,9 @@ object LockedTools:
   ): ZLayer[Resolve, ResolveError, LockedTools] =
     ZLayer.fromZIO(Resolve.readLock(repo).flatMap(make(_, graph)))
 
+  /** Every tool cell the lock holds for this build. The formatter cells read the declared scalafmt configuration. */
   def plan(
+      repo: Path,
       graph: ProjectGraph,
       native: NativeOrigin,
   ): IO[ResolveError, List[ToolRequest]] =
@@ -316,6 +318,7 @@ object LockedTools:
                 histos.native.NativeRequests.linker(toolchain, catalog, repos),
                 histos.native.NativeRequests.suite(toolchain, catalog, repos),
               )
+      format <- histos.format.ScalafmtTools.requests(repo, graph).mapError(ResolveError.Scalafmt(_))
     yield
       val jsPlans = js.flatMap: module =>
         val revision = module.jsVersion.getOrElse(catalog.js.revision)
@@ -338,5 +341,6 @@ object LockedTools:
           versions
             .filter(_.value.startsWith("2.13."))
             .map(version => histos.zinc.CompilerRequests.semanticdb(version, catalog, repos))
-      (compilerPlans ++ jsPlans ++ nativePlans.flatten).distinct
+      val formatPlans = format.toList.flatMap(requests => List(requests.dynamic, requests.core))
+      (compilerPlans ++ jsPlans ++ nativePlans.flatten ++ formatPlans).distinct
 end LockedTools

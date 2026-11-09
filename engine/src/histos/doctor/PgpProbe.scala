@@ -18,7 +18,7 @@ object PgpProbe:
     named(env) match
       case Some(raw) =>
         Fingerprint.from(raw) match
-          case Left(_)  => ZIO.succeed(Hit.Bad)
+          case Left(_)   => ZIO.succeed(Hit.Bad)
           case Right(fp) => lookup(fp)
       case None =>
         Signer
@@ -34,9 +34,9 @@ object PgpProbe:
       .key(fingerprint)
       .either
       .map:
-        case Right(_)                                => Hit.Present(fingerprint.value)
-        case Left(PreflightError.KeyMissing(_))      => Hit.Missing(fingerprint.value)
-        case Left(_)                                 => Hit.Unreachable(fingerprint.value)
+        case Right(_)                           => Hit.Present(fingerprint.value)
+        case Left(PreflightError.KeyMissing(_)) => Hit.Missing(fingerprint.value)
+        case Left(_)                            => Hit.Unreachable(fingerprint.value)
 
   private def named(env: Map[String, String]): Option[String] =
     env.get("PGP_KEY_HEX").map(_.trim).filter(_.nonEmpty)

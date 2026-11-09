@@ -32,46 +32,48 @@ object ProcessLawSpec extends ZIOSpecDefault:
         .map(error => assertTrue(error == Left(ChildError.NoProgram)))
     ,
     test("java, javac, classes, artifacts, and a noisy work directory fail in that order"):
-      Workspace.work("histos-child").flatMap: dir =>
-        val java    = dir.resolve("bin/java")
-        val javac   = dir.resolve("bin/javac")
-        val classes = dir.resolve("classes")
-        val artifact = dir.resolve("lib.jar")
-        val work    = dir.resolve("work")
-        val orphan  = Path.of("java")
-        for
-          noParent <- ChildProcess.events(request(orphan, classes, work)).runCollect.either
-          absent   <- ChildProcess.events(request(dir.resolve("missing-java"), classes, work)).runCollect.either
-          _        <- writeFile(java)
-          noJavac  <- ChildProcess.events(request(java, classes, work)).runCollect.either
-          _        <- writeFile(javac)
-          noClass  <- ChildProcess.events(request(java, classes, work)).runCollect.either
-          _        <- Workspace.createDirectories(classes)
-          noJar    <- ChildProcess.events(request(java, classes, work, artifacts = List(artifact))).runCollect.either
-          _        <- writeFile(artifact)
-          _        <- Workspace.createDirectories(work)
-          _        <- writeFile(work.resolve("noise"))
-          noisy    <- ChildProcess.events(request(java, classes, work, artifacts = List(artifact))).runCollect.either
-        yield assertTrue(
-          noParent == Left(ChildError.Java(orphan)),
-          absent == Left(ChildError.Java(dir.resolve("missing-java"))),
-          noJavac == Left(ChildError.Java(javac)),
-          noClass == Left(ChildError.Classes(classes)),
-          noJar == Left(ChildError.Artifact(artifact)),
-          noisy == Left(ChildError.Work(work)),
-        )
+      Workspace
+        .work("histos-child")
+        .flatMap: dir =>
+          val java     = dir.resolve("bin/java")
+          val javac    = dir.resolve("bin/javac")
+          val classes  = dir.resolve("classes")
+          val artifact = dir.resolve("lib.jar")
+          val work     = dir.resolve("work")
+          val orphan   = Path.of("java")
+          for
+            noParent <- ChildProcess.events(request(orphan, classes, work)).runCollect.either
+            absent   <- ChildProcess.events(request(dir.resolve("missing-java"), classes, work)).runCollect.either
+            _        <- writeFile(java)
+            noJavac  <- ChildProcess.events(request(java, classes, work)).runCollect.either
+            _        <- writeFile(javac)
+            noClass  <- ChildProcess.events(request(java, classes, work)).runCollect.either
+            _        <- Workspace.createDirectories(classes)
+            noJar    <- ChildProcess.events(request(java, classes, work, artifacts = List(artifact))).runCollect.either
+            _        <- writeFile(artifact)
+            _        <- Workspace.createDirectories(work)
+            _        <- writeFile(work.resolve("noise"))
+            noisy    <- ChildProcess.events(request(java, classes, work, artifacts = List(artifact))).runCollect.either
+          yield assertTrue(
+            noParent == Left(ChildError.Java(orphan)),
+            absent == Left(ChildError.Java(dir.resolve("missing-java"))),
+            noJavac == Left(ChildError.Java(javac)),
+            noClass == Left(ChildError.Classes(classes)),
+            noJar == Left(ChildError.Artifact(artifact)),
+            noisy == Left(ChildError.Work(work)),
+          )
     ,
     test("a zero status and a non-zero status are both outcomes, and a failed start stays that error"):
       val failed = ChildError.NoProgram
       for
-        passed <- Child.run(start("/usr/bin/true"), failed)
+        passed    <- Child.run(start("/usr/bin/true"), failed)
         failedRun <- Child.run(start("/usr/bin/false"), failed)
-        refused <- Child.run(ZIO.fail(failed), ChildError.Status).either
+        refused   <- Child.run(ZIO.fail(failed), ChildError.Status).either
       yield assertTrue(
         passed.status == 0 && passed.output.isEmpty,
         failedRun.status != 0 && failedRun.output.isEmpty,
         refused == Left(failed),
-      )
+      ),
   )
 
   private def request(

@@ -13,61 +13,63 @@ import zio.test.{ZIOSpecDefault, assertTrue, suite, test}
 object ClangLawSpec extends ZIOSpecDefault:
   def spec = suite("clang laws")(
     test("the pair on PATH agrees, and a script that does not is refused"):
-      Workspace.work("histos-clang").flatMap: dir =>
-        val live = Option(System.getenv("PATH")).filter(_.nonEmpty)
-        val pair = dir.resolve("pair")
-        val skew = dir.resolve("skew")
-        val dead = dir.resolve("dead")
-        val mute = dir.resolve("mute")
-        val lone = dir.resolve("lone")
-        for
-          path <- live match
-            case Some(value) => ZIO.succeed(value)
-            case None        => ZIO.dieMessage("PATH is empty")
-          installed <- ClangProbe.found(Map("PATH" -> path))
-          other = if installed.version.major.value == 1 then ClangMajor(2) else ClangMajor(1)
-          agreed <- ClangProbe.resolve(installed.version.major, Map("PATH" -> path))
-          wrong  <- ClangProbe.resolve(other, Map("PATH" -> path)).either
-          absent <- ClangProbe.found(Map.empty).either
-          bad    <- ClangProbe.found(Map("PATH" -> "\u0000")).either
-          _      <- script(pair.resolve("clang"), version("16.0.0"))
-          _      <- script(pair.resolve("clang++"), version("16.0.0"))
-          paired <- ClangProbe.found(Map("PATH" -> pair.toString))
-          _      <- script(skew.resolve("clang"), version("16.0.0"))
-          _      <- script(skew.resolve("clang++"), version("17.0.0"))
-          skewed <- ClangProbe.found(Map("PATH" -> skew.toString)).either
-          _      <- script(dead.resolve("clang"), "#!/bin/sh\nexit 2\n")
-          _      <- script(dead.resolve("clang++"), "#!/bin/sh\nexit 2\n")
-          failed <- ClangProbe.found(Map("PATH" -> dead.toString)).either
-          _      <- script(mute.resolve("clang"), "#!/bin/sh\nprintf '%s\\n' nope\n")
-          _      <- script(mute.resolve("clang++"), "#!/bin/sh\nprintf '%s\\n' nope\n")
-          quiet  <- ClangProbe.found(Map("PATH" -> mute.toString)).either
-          _      <- script(lone.resolve("clang"), version("16.0.0"))
-          alone  <- ClangProbe.found(Map("PATH" -> lone.toString)).either
-          clangThere <- ZIO.attempt(Files.isRegularFile(installed.clang)).orDie
-          cxxThere   <- ZIO.attempt(Files.isRegularFile(installed.clangpp)).orDie
-        yield assertTrue(
-          clangThere,
-          cxxThere,
-          installed.version == agreed.version,
-          installed.target == agreed.target,
-          refused(wrong)(missedMajor(other)),
-          absent == Left(ClangMiss.Absent),
-          refused(bad)(isBadPath),
-          paired.version.value == "16.0.0",
-          paired.target.value == "arm64-apple-darwin",
-          refused(skewed)(isMismatch),
-          refused(failed)(isStatus(2)),
-          refused(quiet)(isNoVersion),
-          refused(alone)(isNoCxx),
-          ClangReport.parse("") == Left(ClangText.Empty),
-          ClangReport.parse("Target: arm64-apple-darwin") == Left(ClangText.NoVersion),
-          ClangReport.parse("clang version 16.0.0") == Left(ClangText.NoTarget),
-          ClangReport.parse("clang version nope\nTarget: arm64-apple-darwin") == Left(ClangText.BadVersion("nope")),
-          ClangReport.parse("clang version 16.0.0\nTarget: arm64-apple-darwin") == Right(
-            ClangReport(paired.version, paired.target)
-          ),
-        )
+      Workspace
+        .work("histos-clang")
+        .flatMap: dir =>
+          val live = Option(System.getenv("PATH")).filter(_.nonEmpty)
+          val pair = dir.resolve("pair")
+          val skew = dir.resolve("skew")
+          val dead = dir.resolve("dead")
+          val mute = dir.resolve("mute")
+          val lone = dir.resolve("lone")
+          for
+            path <- live match
+              case Some(value) => ZIO.succeed(value)
+              case None        => ZIO.dieMessage("PATH is empty")
+            installed <- ClangProbe.found(Map("PATH" -> path))
+            other = if installed.version.major.value == 1 then ClangMajor(2) else ClangMajor(1)
+            agreed     <- ClangProbe.resolve(installed.version.major, Map("PATH" -> path))
+            wrong      <- ClangProbe.resolve(other, Map("PATH" -> path)).either
+            absent     <- ClangProbe.found(Map.empty).either
+            bad        <- ClangProbe.found(Map("PATH" -> "\u0000")).either
+            _          <- script(pair.resolve("clang"), version("16.0.0"))
+            _          <- script(pair.resolve("clang++"), version("16.0.0"))
+            paired     <- ClangProbe.found(Map("PATH" -> pair.toString))
+            _          <- script(skew.resolve("clang"), version("16.0.0"))
+            _          <- script(skew.resolve("clang++"), version("17.0.0"))
+            skewed     <- ClangProbe.found(Map("PATH" -> skew.toString)).either
+            _          <- script(dead.resolve("clang"), "#!/bin/sh\nexit 2\n")
+            _          <- script(dead.resolve("clang++"), "#!/bin/sh\nexit 2\n")
+            failed     <- ClangProbe.found(Map("PATH" -> dead.toString)).either
+            _          <- script(mute.resolve("clang"), "#!/bin/sh\nprintf '%s\\n' nope\n")
+            _          <- script(mute.resolve("clang++"), "#!/bin/sh\nprintf '%s\\n' nope\n")
+            quiet      <- ClangProbe.found(Map("PATH" -> mute.toString)).either
+            _          <- script(lone.resolve("clang"), version("16.0.0"))
+            alone      <- ClangProbe.found(Map("PATH" -> lone.toString)).either
+            clangThere <- ZIO.attempt(Files.isRegularFile(installed.clang)).orDie
+            cxxThere   <- ZIO.attempt(Files.isRegularFile(installed.clangpp)).orDie
+          yield assertTrue(
+            clangThere,
+            cxxThere,
+            installed.version == agreed.version,
+            installed.target == agreed.target,
+            refused(wrong)(missedMajor(other)),
+            absent == Left(ClangMiss.Absent),
+            refused(bad)(isBadPath),
+            paired.version.value == "16.0.0",
+            paired.target.value == "arm64-apple-darwin",
+            refused(skewed)(isMismatch),
+            refused(failed)(isStatus(2)),
+            refused(quiet)(isNoVersion),
+            refused(alone)(isNoCxx),
+            ClangReport.parse("") == Left(ClangText.Empty),
+            ClangReport.parse("Target: arm64-apple-darwin") == Left(ClangText.NoVersion),
+            ClangReport.parse("clang version 16.0.0") == Left(ClangText.NoTarget),
+            ClangReport.parse("clang version nope\nTarget: arm64-apple-darwin") == Left(ClangText.BadVersion("nope")),
+            ClangReport.parse("clang version 16.0.0\nTarget: arm64-apple-darwin") == Right(
+              ClangReport(paired.version, paired.target)
+            ),
+          )
   )
 
   private def refused(found: Either[ClangMiss, Clang])(accept: ClangMiss => Boolean): Boolean =

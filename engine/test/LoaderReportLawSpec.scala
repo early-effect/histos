@@ -16,29 +16,30 @@ import zio.test.*
 object LoaderReportLawSpec extends ZIOSpecDefault:
   def spec = suite("build report")(
     test("a clean build reports no problems, and an unknown name is an error"):
-      Workspace.work("histos-report").flatMap: root =>
-        val layer =
-          (stubbed[Resolve] ++ ZLayer.succeed(ContentStore.in(root.resolve("store")))) >>> Loader.live
-        val run =
-          for
-            api    <- BuildClasspath(codeSource, root.resolve("cache")).catchAll(error => ZIO.dieMessage(error.message))
-            _      <- Workspace.writeString(root.resolve("histos.scala"), good).catchAll(error =>
-              ZIO.dieMessage(error.message)
+      Workspace
+        .work("histos-report")
+        .flatMap: root =>
+          val layer =
+            (stubbed[Resolve] ++ ZLayer.succeed(ContentStore.in(root.resolve("store")))) >>> Loader.live
+          val run =
+            for
+              api <- BuildClasspath(codeSource, root.resolve("cache")).catchAll(error => ZIO.dieMessage(error.message))
+              _   <- Workspace
+                .writeString(root.resolve("histos.scala"), good)
+                .catchAll(error => ZIO.dieMessage(error.message))
+              clean <- ZIO.serviceWithZIO[Loader](_.reportBuild(root, api))
+              _     <- Workspace
+                .writeString(root.resolve("histos.scala"), bad)
+                .catchAll(error => ZIO.dieMessage(error.message))
+              broken <- ZIO.serviceWithZIO[Loader](_.reportBuild(root, api))
+            yield assertTrue(
+              clean.failed == false,
+              clean.problems.isEmpty,
+              broken.failed,
+              broken.problems
+                .exists(problem => problem.severity == CompileSeverity.Error && problem.message.contains("nope")),
             )
-            clean  <- ZIO.serviceWithZIO[Loader](_.reportBuild(root, api))
-            _      <- Workspace.writeString(root.resolve("histos.scala"), bad).catchAll(error =>
-              ZIO.dieMessage(error.message)
-            )
-            broken <- ZIO.serviceWithZIO[Loader](_.reportBuild(root, api))
-          yield assertTrue(
-            clean.failed == false,
-            clean.problems.isEmpty,
-            broken.failed,
-            broken.problems.exists(problem =>
-              problem.severity == CompileSeverity.Error && problem.message.contains("nope")
-            ),
-          )
-        run.provideSomeLayer[zio.Scope](layer)
+          run.provideSomeLayer[zio.Scope](layer)
   )
 
   private val good =

@@ -247,12 +247,13 @@ object PortalReportLawSpec extends ZIOSpecDefault:
   private def utf8(text: String): Chunk[Byte] =
     Chunk.fromArray(text.getBytes(StandardCharsets.UTF_8))
 
-  /** Two empty stored entries of `name`. `ZipOutputStream` refuses that pair, and the layout law is about reading it. */
+  /** Two empty stored entries of `name`. `ZipOutputStream` refuses that pair, and the layout law is about reading it.
+    */
   private def duplicateZip(name: String): Chunk[Byte] =
-    val raw    = name.getBytes(StandardCharsets.UTF_8)
-    val local  = zipLocal(raw)
-    val first  = zipCentral(raw, 0)
-    val second = zipCentral(raw, local.length)
+    val raw     = name.getBytes(StandardCharsets.UTF_8)
+    val local   = zipLocal(raw)
+    val first   = zipCentral(raw, 0)
+    val second  = zipCentral(raw, local.length)
     val central = first ++ second
     val end     = zipEnd(central.length, local.length * 2)
     Chunk.fromArray(local ++ local ++ central ++ end)

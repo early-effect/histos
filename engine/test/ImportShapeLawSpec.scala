@@ -62,7 +62,7 @@ object ImportShapeLawSpec extends ZIOSpecDefault:
         "",
         "app",
       )
-      val keyword = ImportDraft.sbt("lazy val type = project\n", "", "app")
+      val keyword  = ImportDraft.sbt("lazy val type = project\n", "", "app")
       val versions =
         """val zio = "2.1.27"
           |val artifact = "dev.zio::zio:2.1.27"
@@ -80,6 +80,5 @@ object ImportShapeLawSpec extends ZIOSpecDefault:
         one.contains("""dep"dev.zio::zio:2.1.27""""),
         both.contains("""val my_core = module("my-core", Jvm)"""),
         both.contains("""val my_core1 = module("my_core", Jvm)"""),
-      )
+      ),
   )
-end ImportShapeLawSpec

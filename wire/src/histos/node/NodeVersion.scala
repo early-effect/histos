@@ -1,6 +1,5 @@
 package histos.node
 
-
 opaque type NodeMajor = Int
 
 object NodeMajor:

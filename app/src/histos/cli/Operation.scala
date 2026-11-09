@@ -12,16 +12,16 @@ object Operation:
     command match
       case Command.Watch(inner, args) =>
         operation(inner).map(call => Call.Watch(call, policyOf(args)))
-      case other                   => operation(other)
+      case other => operation(other)
 
   /** A watch payload is already a call. A nested watch or `bsp` is usage. `--restart` repeats a program. */
   def underWatch(inner: Call, policy: WatchPolicy): Either[CliParseError, Call] =
     (inner, policy) match
       case (Call.Watch(_, _), _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case (Call.Bsp, _) => Left(CliParseError.Rejected)
+      case (Call.Bsp, _)                         => Left(CliParseError.Rejected)
       case (Call.Run(_, _), WatchPolicy.Restart) => Right(inner)
-      case (_, WatchPolicy.Restart) =>
+      case (_, WatchPolicy.Restart)              =>
         Left(CliParseError.WatchCommand("--restart watches a program"))
       case (other, WatchPolicy.After) => Right(other)
 
@@ -33,10 +33,9 @@ object Operation:
     command match
       case Command.Watch(_, _) =>
         Left(CliParseError.WatchCommand("watch does not nest"))
-      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe |
-          Command.New(_, _, _, _) | Command.Init(_, _, _, _) | Command.Doctor(_, _, _, _, _) |
-          Command.Explain(_) | Command.Deps(_) | Command.Setup(_, _, _) | Command.Help(_) |
-          Command.Coverage(_, _, _) =>
+      case Command.Mcp | Command.Bsp | Command.Server | Command.Portal | Command.Observe | Command.New(_, _, _, _) |
+          Command.Init(_, _, _, _) | Command.Doctor(_, _, _, _, _) | Command.Explain(_) | Command.Deps(_) |
+          Command.Setup(_, _, _) | Command.Help(_) | Command.Coverage(_, _, _) =>
         Left(CliParseError.Rejected)
       case Command.Version           => Right(Call.Version)
       case Command.Graph             => Right(Call.Graph)
@@ -81,6 +80,7 @@ object Operation:
       case Command.CachePromote(from, to)   => Right(Call.CachePromote(from, to))
       case Command.Resolve(action)          => Right(Call.Resolve(action))
       case Command.Workflow(action)         => Right(Call.Workflow(action))
+      case Command.Fmt(targets, mode)       => Right(Call.Format(targets, mode))
       case Command.Launcher(action)         => Right(Call.Launcher(action))
       case Command.Reload                   => Right(Call.Reload)
       case Command.Reboot                   => Right(Call.Reboot)

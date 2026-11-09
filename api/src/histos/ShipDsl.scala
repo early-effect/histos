@@ -10,12 +10,10 @@ final class ShipStart private (val name: ShipName):
   /** The next release. Components are non-negative integer literals. */
   inline def next(inline major: Int, inline minor: Int, inline patch: Int): ShipDraft =
     ${ ShipDslMacro.next('this, 'major, 'minor, 'patch) }
-end ShipStart
 
 object ShipStart:
   @publicInBinary private[histos] def trusted(name: ShipName): ShipStart =
     new ShipStart(name)
-end ShipStart
 
 /** The next release of one ship. Apply it to the modules that publish that number. */
 final class ShipDraft private (val name: ShipName, val number: ShipNumber):
@@ -36,7 +34,6 @@ end ShipDraft
 object ShipDraft:
   @publicInBinary private[histos] def trusted(name: ShipName, number: ShipNumber): ShipDraft =
     new ShipDraft(name, number)
-end ShipDraft
 
 /** `0.2.0-SNAPSHOT`. Publish release does not accept this type. */
 final class PointerPin private (val number: ShipNumber):
@@ -49,7 +46,6 @@ end PointerPin
 object PointerPin:
   @publicInBinary private[histos] def trusted(number: ShipNumber): PointerPin =
     new PointerPin(number)
-end PointerPin
 
 /** `0.2.0-<sha>-SNAPSHOT`. Publish release does not accept this type. */
 final class CommitPin private (val number: ShipNumber, val sha: CommitSha):
@@ -62,7 +58,6 @@ end CommitPin
 object CommitPin:
   @publicInBinary private[histos] def trusted(number: ShipNumber, sha: CommitSha): CommitPin =
     new CommitPin(number, sha)
-end CommitPin
 
 /** The bare ship number. A snapshot pin is a different type. */
 final class ReleasePin private (val number: ShipNumber):
@@ -77,18 +72,15 @@ end ReleasePin
 object ReleasePin:
   @publicInBinary private[histos] def trusted(number: ShipNumber): ReleasePin =
     new ReleasePin(number)
-end ReleasePin
 
 /** `Ship("histos").next(0, 2, 2)(api, app)` is one catalog row. The number is the next release. */
 object Ship:
   inline def apply(inline name: String): ShipStart =
     ${ ShipDslMacro.start('name) }
-end Ship
 
 private object ShipDep:
   private[histos] def coordinate(organization: Organization, artifact: ArtifactBase, revision: String): Dep =
     Dep.trusted(organization.value, artifact.value, revision, DepKind.Binary)
-end ShipDep
 
 private object ShipDslMacro:
   def start(raw: Expr[String])(using Quotes): Expr[ShipStart] =
@@ -150,7 +142,7 @@ private object ShipDslMacro:
       members: Expr[Seq[ProjectDef]],
   )(using Quotes): Expr[ShipDef] =
     import quotes.reflect.Position
-    val at = Position.ofMacroExpansion
+    val at  = Position.ofMacroExpansion
     val pos =
       '{ SourcePos(${ Expr(at.sourceFile.path) }, ${ Expr(at.startLine + 1) }, ${ Expr(at.startColumn + 1) }) }
     '{ ShipDef.line($draft.name.value, $draft.number, ::($member, $members.toList), $pos) }

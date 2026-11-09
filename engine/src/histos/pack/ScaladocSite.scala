@@ -91,12 +91,14 @@ object ScaladocSite:
   private def fetchTool(scalaVersion: String): ZIO[Any, ScaladocFault, String] =
     ZIO
       .attemptBlocking {
-        val cache = coursier.cache.FileCache().copy(cachePolicies =
-          Seq(
-            coursier.cache.CachePolicy.LocalOnly,
-            coursier.cache.CachePolicy.FetchMissing,
+        val cache = coursier.cache
+          .FileCache()
+          .copy(cachePolicies =
+            Seq(
+              coursier.cache.CachePolicy.LocalOnly,
+              coursier.cache.CachePolicy.FetchMissing,
+            )
           )
-        )
         val fetch = coursier
           .Fetch(cache)(using coursier.util.Task.sync)
           .addDependencies(

@@ -34,38 +34,40 @@ object ModuleMissLawSpec extends ZIOSpecDefault:
   def spec = suite("module miss laws")(
     test("a pattern that names nothing fails after the test class exists"):
       ZIO.serviceWithZIO[DependencyLock]: lock =>
-        Workspace.work("histos-module-miss").flatMap: dir =>
-          val main  = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
-          val probe = dir.resolve(lawName.value).resolve("test").resolve("scala").resolve("Probe.scala")
-          val program =
-            for
-              pattern <- SuitePattern.from("Nope") match
-                case Right(found) => ZIO.succeed(found)
-                case Left(error)  => ZIO.dieMessage(error.message)
-              loaded <- Machine.load(dir).either
-              machine <- loaded match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              found <- GraphCompile.jdk(machine).either
-              jdk <- found match
-                case Left(error)  => ZIO.dieMessage(error.message)
-                case Right(value) => ZIO.succeed(value)
-              runtimes <- Runtimes.read(machine, None)
-              _ <- Workspace.createDirectories(parentOf(main))
-              _ <- Workspace.createDirectories(parentOf(probe))
-              _ <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
-              _ <- Workspace.writeString(main, "object Hello:\n  def ready: Int = 1\n")
-              _ <- Workspace.writeString(probe, "object Probe:\n  def main(args: Array[String]): Unit = ()\n")
-              ran <- ModuleTest
-                .run(TestRun(dir, graph, List(lawName), jdk, runtimes, TestMode.Run, List(pattern)))
-                .either
-            yield
-              val detail = ran.fold(_.message, _ => "matched")
-              assertTrue(
-                detail == "no tests matched Nope",
-                ran == Left(ModuleTestError.NoneMatched(List(pattern))),
-              )
-          program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
+        Workspace
+          .work("histos-module-miss")
+          .flatMap: dir =>
+            val main = dir.resolve(lawName.value).resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val probe   = dir.resolve(lawName.value).resolve("test").resolve("scala").resolve("Probe.scala")
+            val program =
+              for
+                pattern <- SuitePattern.from("Nope") match
+                  case Right(found) => ZIO.succeed(found)
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                loaded  <- Machine.load(dir).either
+                machine <- loaded match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                found <- GraphCompile.jdk(machine).either
+                jdk   <- found match
+                  case Left(error)  => ZIO.dieMessage(error.message)
+                  case Right(value) => ZIO.succeed(value)
+                runtimes <- Runtimes.read(machine, None)
+                _        <- Workspace.createDirectories(parentOf(main))
+                _        <- Workspace.createDirectories(parentOf(probe))
+                _        <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
+                _        <- Workspace.writeString(main, "object Hello:\n  def ready: Int = 1\n")
+                _        <- Workspace.writeString(probe, "object Probe:\n  def main(args: Array[String]): Unit = ()\n")
+                ran      <- ModuleTest
+                  .run(TestRun(dir, graph, List(lawName), jdk, runtimes, TestMode.Run, List(pattern)))
+                  .either
+              yield
+                val detail = ran.fold(_.message, _ => "matched")
+                assertTrue(
+                  detail == "no tests matched Nope",
+                  ran == Left(ModuleTestError.NoneMatched(List(pattern))),
+                )
+            program.provideSomeLayer[Resolve & Scope](ZLayer.succeed(ContentStore.in(dir.resolve("store"))))
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private def graph: ProjectGraph =

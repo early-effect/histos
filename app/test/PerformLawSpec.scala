@@ -104,8 +104,7 @@ object PerformLawSpec extends ZIOSpecDefault:
           seen <- Ref.make(Option.empty[(Call, WatchPolicy)])
           hit  <- Ref.make(List.empty[String])
           watch = Perform.Edges[Any](
-            (call, policy, say) =>
-              seen.set(Some(call -> policy)) *> say(Message.Event(BuildEvent.Out("watch"))),
+            (call, policy, say) => seen.set(Some(call -> policy)) *> say(Message.Event(BuildEvent.Out("watch"))),
             die("reload"),
             die("reboot"),
             die("bsp"),
@@ -159,7 +158,7 @@ object PerformLawSpec extends ZIOSpecDefault:
 
   private def services =
     stubbed[Resolve] ++ stubbed[Loader] ++ stubbed[ContentStore] ++ stubbed[Compilers] ++ stubbed[CompileMemo] ++
-      stubbed[ResolutionService]
+      stubbed[ResolutionService] ++ stubbed[histos.format.Formatters]
 
   private def die(name: String): ZIO[Any, ServerError, Unit] =
     ZIO.die(new IllegalStateException(name))
@@ -184,7 +183,7 @@ object PerformLawSpec extends ZIOSpecDefault:
       call: Call,
       edges: Perform.Edges[Any] = quietEdges,
   ): ZIO[
-    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService,
+    Resolve & Loader & ContentStore & Compilers & CompileMemo & ResolutionService & histos.format.Formatters,
     ServerError,
     Chunk[Message],
   ] =
