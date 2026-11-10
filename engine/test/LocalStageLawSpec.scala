@@ -4,6 +4,7 @@ import histos.cache.ContentStore
 import histos.central.Publisher
 import histos.jdk.Machine
 import histos.plugin.ApiDigest
+import histos.PluginSources
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.workspace.Workspace
 import histos.zinc.GraphCompile
@@ -32,9 +33,10 @@ import zio.test.*
   * one, read offline.
   */
 object LocalStageLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"example.com"
-  private val app    = module("stage", Jvm)(scala3)
+  private val scala3  = scala"3.10.0"
+  private val group   = organization"example.com"
+  private val app     = module("stage", Jvm)(scala3)
+  private val hostApi = ApiDigest.trusted("ab" * 32)
 
   def spec = suite("local stage")(
     test(
@@ -58,7 +60,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     DependencyLock.render(pinned(lock, ProjectName("stage"))),
                   )
                   found <- LocalPublish
-                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
                     )
@@ -122,7 +124,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     DependencyLock.render(pinned(lock, ProjectName("base"), ProjectName("edge"))),
                   )
                   found <- LocalPublish
-                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
                     )
@@ -183,7 +185,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     DependencyLock.render(pinned(lock, ProjectName("pack"))),
                   )
                   found <- LocalPublish
-                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
                     )
@@ -241,7 +243,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     DependencyLock.render(pinned(lock, ProjectName("noted"))),
                   )
                   found <- LocalPublish
-                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
                     )
@@ -299,7 +301,7 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     DependencyLock.render(pinned(lock, ProjectName("plug"))),
                   )
                   found <- LocalPublish
-                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, hostApi)
                     .either
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
@@ -308,6 +310,62 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                 yield assertTrue(
                   text.contains(entry.toString),
                   text.contains("delete it. A plugin is a layer, not a file."),
+                )
+              }
+            }
+          }
+        }
+      }
+    ,
+    test("a plugin coordinate's binary jar carries the api digest, and the sources jar and a sibling do not"):
+      ZIO.scoped {
+        Workspace.work("histos-local-stamp").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[DependencyLock] { lock =>
+                val plugins = module("plugins", Jvm)(scala3)
+                val sibling = module("sibling", Jvm)(scala3).dependsOn(plugins)
+                val maven   = repo.resolve("maven")
+                val store   = repo.resolve("store")
+                val built   = Projects
+                  .organization(group)
+                  .plugins(PluginSources.module(plugins))
+                  .locked(ships(Ship("demo").next(1, 2, 3)(plugins, sibling)), plugins, sibling)
+                val stamp = ApiDigest.trusted("cd" * 32)
+                for
+                  graph <- ZIO.fromEither(built)
+                  _     <- LawGit.ready(repo)
+                  _     <- Workspace.writeString(
+                    repo.resolve("plugins").resolve("src").resolve("main").resolve("scala").resolve("Mark.scala"),
+                    "object Mark:\n  def ready: Int = 1\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("sibling").resolve("src").resolve("main").resolve("scala").resolve("Use.scala"),
+                    "object Use:\n  def ready: Int = Mark.ready\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock.render(pinned(lock, ProjectName("plugins"), ProjectName("sibling"))),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local, stamp)
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  pluginLine     <- lineOf(found, ProjectName("plugins"))
+                  siblingLine    <- lineOf(found, ProjectName("sibling"))
+                  pluginVersion  <- zipTextOf(pluginLine.jar.toList, ApiDigest.resource)
+                  pluginSources  <- zipTextOf(pluginLine.sources.toList, ApiDigest.resource)
+                  siblingVersion <- zipTextOf(siblingLine.jar.toList, ApiDigest.resource)
+                  siblingSources <- zipTextOf(siblingLine.sources.toList, ApiDigest.resource)
+                yield assertTrue(
+                  found.skipped.isEmpty,
+                  found.held.isEmpty,
+                  found.refused.isEmpty,
+                  pluginVersion.contains(s"${stamp.value}\n"),
+                  pluginSources.isEmpty,
+                  siblingVersion.isEmpty,
+                  siblingSources.isEmpty,
                 )
               }
             }
@@ -378,6 +436,11 @@ object LocalStageLawSpec extends ZIOSpecDefault:
     line.pom match
       case Some(path) => ZIO.attemptBlocking(Files.readString(path)).orDie
       case None       => ZIO.succeed("")
+
+  private def lineOf(found: PublishOutput, name: ProjectName): UIO[PublishedModule] =
+    found.modules.find(_.module == name) match
+      case Some(line) => ZIO.succeed(line)
+      case None       => ZIO.dieMessage(s"${name.value} was not published")
 
   private def pinned(lock: DependencyLock, names: ProjectName*): DependencyLock =
     val added = names.toList.map: name =>

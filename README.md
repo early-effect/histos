@@ -371,7 +371,7 @@ A plugin is a service. The layer provides it. Configuration is that layer's envi
 
 `src/main/resources` is copied into the main class directory. `src/test/resources` is copied into the test class directory. `.resources` on the module adds generated files to the main class directory. A generated name replaces an unmanaged file of that name. The same generated name twice is refused when the graph is built. `run`, test, and the binary jar read that class directory. The sources jar stays sources only. This is not the assembly file `publish assets` uploads.
 
-Authors do not commit `META-INF/histos/plugin`. A tree that still contains that file fails the build and names the path. A plugin is a layer, not a file. A plugin module is an ordinary module: its tests compile, and another module may `dependsOn` it.
+A plugin is a layer. A plugin module is an ordinary module: its tests compile, and another module may `dependsOn` it. The binary jar of a module the graph names as a plugin carries `META-INF/histos/version`, the sha256 of the host api jar. The sources jar does not.
 
 ## Scenarios
 

@@ -3,6 +3,7 @@ package histos.publish
 import histos.cache.ContentStore
 import histos.central.Publisher
 import histos.jdk.{JdkRuntime, JdkVersion, Sha256, Sha256Digest}
+import histos.plugin.ApiDigest
 import histos.resolve.Resolve
 import histos.toolchain.RuntimeIdentity
 import histos.version.{ShipName, VersionTask}
@@ -32,12 +33,13 @@ import zio.{Chunk, Scope, ZIO}
 import zio.test.*
 
 object LocalPublishLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val number = ship"1.2.3"
-  private val group  = organization"example.com"
-  private val app    = module("app", Jvm)(scala3)
-  private val core   = module("core", Jvm)(scala3)
-  private val extra  = module("extra", Jvm)(scala3)
+  private val scala3  = scala"3.10.0"
+  private val hostApi = ApiDigest.trusted("ab" * 32)
+  private val number  = ship"1.2.3"
+  private val group   = organization"example.com"
+  private val app     = module("app", Jvm)(scala3)
+  private val core    = module("core", Jvm)(scala3)
+  private val extra   = module("extra", Jvm)(scala3)
 
   private val stock = stubbed[Resolve] ++ stubbed[Publisher] ++ stubbed[ContentStore]
 
@@ -159,7 +161,7 @@ object LocalPublishLawSpec extends ZIOSpecDefault:
     ZIO.fromEither(JdkVersion.from("21")).orDieWith(blow).flatMap { version =>
       val runtime =
         JdkRuntime(Path.of("jdk"), version, RuntimeIdentity.Local(Path.of("jdk"), Sha256Digest.of(Chunk.empty)))
-      LocalPublish.run(repo, graph, names, runtime, env, write)
+      LocalPublish.run(repo, graph, names, runtime, env, write, hostApi)
     }
 
   private def row(jar: Option[Path], unique: Option[String], revision: String): PublishedModule =

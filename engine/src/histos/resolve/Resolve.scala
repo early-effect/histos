@@ -243,7 +243,7 @@ object Resolve:
         _ <- write(path, DependencyLock(prior.cells, solved, prior.tools))
       yield path.toString
 
-  /** A missing plugin cell is `Unlocked` and does not compile. A path plugin has no cell.
+  /** A published pin with no lock cell is `Unlocked` and does not compile.
     */
   def requirePlugins(
       repo: Path,

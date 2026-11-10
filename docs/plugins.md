@@ -37,15 +37,8 @@ Two coordinates, both typed.
 - In-repo: `PluginSources.module(moduleDef)`, the same module value as `dependsOn`. Its tests are normal tests. Other modules may `dependsOn` it.
 - Published: `PluginSources.ship(dep)`, a Ship pin. `.link(LinkStrategy)` selects `BinaryOrSource` or `ExactBinary`. The default is `BinaryOrSource`.
 
-A path of loose sources is not a coordinate. Those sources are a module. `dep"..."` literals stay. The build DSL does not take a plugin coordinate as a `String`.
+Loose sources belong in a module. `dep"..."` literals stay. A coordinate is that module, or a Ship pin.
 
 `histos.scala` names the coordinates. The load then compiles each in-repo plugin module, and the modules it depends on, and resolves each ship pin. `histos.wiring.scala` defines `object HistosWiring` with `def layer`, compiled against those classes. The load builds that layer and reads `Plugins`. A requirement that is still open fails that compile. The wiring closes a requirement by providing the service. `LinkStrategy.Api` is refused. The load fails when a plugin module does not compile, a pin does not resolve, the wiring file does not compile, or building the layer fails. No wiring file means no plugins.
 
-## What is gone
-
-- `plugin(dep"...")` and `plugin(path"...")`.
-- `META-INF/histos/plugin`, in source, in the class directory, and in the jar.
-- Loading an entry class by a binary name read from a file.
-- Treating a directory or a jar that contains that file as Histos. A plugin module is a legal dependency.
-
-The api digest name `META-INF/histos/version` stays the sha256 of the host api jar. Authors do not commit that file, and they do not commit the entry file.
+Publish writes `META-INF/histos/version` into the binary jar of a module the graph names as a plugin. The line is the sha256 of the host api jar plus a newline. The sources jar is not stamped. Authors do not commit that file.

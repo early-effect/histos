@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.version.VersionTask
 import histos.workspace.Workspace
@@ -37,6 +38,7 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** A snapshot with no asset still stages. The channel plan is empty, so nothing is uploaded. */
 object PublishSnapshotLawSpec extends ZIOSpecDefault:
+  private val hostApi  = ApiDigest.trusted("ab" * 32)
   private val scala3   = scala"3.10.0"
   private val group    = organization"example.com"
   private val named    = module("snaplaw", Jvm)(scala3)
@@ -84,6 +86,7 @@ object PublishSnapshotLawSpec extends ZIOSpecDefault:
                     Nil,
                     jdk,
                     env,
+                    hostApi,
                     _ => ZIO.unit,
                     line => notes.update(line :: _),
                   )

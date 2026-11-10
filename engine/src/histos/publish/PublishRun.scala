@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.central.Publisher
 import histos.jdk.JdkRuntime
+import histos.plugin.ApiDigest
 import histos.version.{Revision as ShipRevision, ShipName}
 import histos.zinc.CompileFeed
 import histos.{PublishFault, PublishReceipt, PublishRequest, StagedDependency, StagedModule}
@@ -24,13 +25,14 @@ object PublishRun:
       tokens: List[String],
       jdk: JdkRuntime,
       env: Map[String, String],
+      api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
     ZIO.scoped:
       for
         names  <- ZIO.fromEither(PublishSelect.resolve(graph, tokens)).tapError(error => note(error.message))
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, report, note)
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Local, api, report, note)
         lines  <- localLines(repo, staged, LocalStock.layer(note) >>> build.local)
       yield Report(show(staged, lines))
 
@@ -41,6 +43,7 @@ object PublishRun:
       tokens: List[String],
       jdk: JdkRuntime,
       env: Map[String, String],
+      api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, LocalPublishError, Report] =
@@ -52,7 +55,7 @@ object PublishRun:
         _          <- ZIO.when(sonaSecrets(publishing))(
           ZIO.fromEither(PublishWhere.snapshots(env)).tapError(error => note(error.message)).unit
         )
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, report, note)
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Snapshots, api, report, note)
         plans  <- ZIO
           .fromEither(DistChannel.plan(graph, staged.output.modules))
           .tapError(error => note(error.message))
@@ -71,6 +74,7 @@ object PublishRun:
       jdk: JdkRuntime,
       env: Map[String, String],
       automatic: Boolean,
+      api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore, ReleaseError, ReleaseReport] =
@@ -83,7 +87,7 @@ object PublishRun:
           .fromEither(PublishSelect.resolve(graph, tokens))
           .tapError(error => note(error.message))
           .mapError(ReleaseError.Stage(_))
-        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, report, note).mapError(
+        staged <- stage(repo, graph, names, jdk, env, PublishWrite.Release, api, report, note).mapError(
           ReleaseError.Stage(_)
         )
         pieces <- releasePieces(repo, staged, automatic, layer)
@@ -142,6 +146,7 @@ object PublishRun:
       jdk: JdkRuntime,
       env: Map[String, String],
       write: PublishWrite,
+      api: ApiDigest,
       report: CompileFeed => UIO[Unit],
       note: String => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, LocalPublishError, StagedTree] =
@@ -153,7 +158,7 @@ object PublishRun:
           .mapError(_ => LocalPublishError.Io("histos-stage"))
       )(deleteTree)
       output <- LocalPublish
-        .run(repo, graph, names, jdk, env, write, report)
+        .run(repo, graph, names, jdk, env, write, api, report)
         .tapError(error => note(error.message))
         .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(root))
       _ <- ZIO.foreachDiscard(output.modules)(module => note(s"staged ${module.artifact} ${module.revision}"))

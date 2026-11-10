@@ -109,20 +109,52 @@ object Perform:
           case Call.PublishLocal(projects) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.publishLocal(repo, build.graph, build.build, machine, jdk, projects, say))
+                withJdk(jdk =>
+                  Calls.publishLocal(
+                    repo,
+                    build.graph,
+                    build.build,
+                    machine,
+                    jdk,
+                    projects,
+                    say,
+                    build.plugins.launcher,
+                  )
+                )
               )
             )
           case Call.PublishSnapshots(projects) =>
             held(build =>
               follow(
-                withJdk(jdk => Calls.publishSnapshots(repo, build.graph, build.build, machine, jdk, projects, say))
+                withJdk(jdk =>
+                  Calls.publishSnapshots(
+                    repo,
+                    build.graph,
+                    build.build,
+                    machine,
+                    jdk,
+                    projects,
+                    say,
+                    build.plugins.launcher,
+                  )
+                )
               )
             )
           case Call.PublishRelease(projects, automatic) =>
             held(build =>
               follow(
                 withJdk(jdk =>
-                  Calls.publishRelease(repo, build.graph, build.build, machine, jdk, projects, automatic, say)
+                  Calls.publishRelease(
+                    repo,
+                    build.graph,
+                    build.build,
+                    machine,
+                    jdk,
+                    projects,
+                    automatic,
+                    say,
+                    build.plugins.launcher,
+                  )
                 )
               )
             )

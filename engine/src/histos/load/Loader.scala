@@ -1,8 +1,17 @@
 package histos.load
 
 import histos.jdk.Sha256Digest
-import histos.plugin.{ApiDigest, PluginLinked, PluginLoadError, Plugins, RegisteredPlugin, WiringBuilt}
+import histos.plugin.{
+  ApiDigest,
+  PluginCoordinate,
+  PluginLinked,
+  PluginLoadError,
+  Plugins,
+  RegisteredPlugin,
+  WiringBuilt,
+}
 import histos.resolve.{DependencyLock, Resolve}
+import histos.Resolution
 import histos.workspace.{IoFailure, IoFault}
 import histos.zinc.CompileProblem
 import histos.HistosBuild
@@ -29,8 +38,9 @@ object Loader:
   val live: zio.ZLayer[Resolve, Nothing, Loader] =
     zio.ZLayer.fromZIO(zio.ZIO.serviceWith[Resolve](LoaderLive(_)))
 
-/** Compiles `histos.scala`, reads the graph, compiles in-repo plugin modules, resolves ship pins, then compiles
-  * `histos.wiring.scala` against those classes. `lock` is sequenced so a pin can read it.
+/** Compiles `histos.scala`, reads the graph, compiles in-repo plugin modules, then ship pins. A locked graph fetches
+  * those pins. A solve asks `Resolve`. `histos.wiring.scala` is compiled against those classes. `loadLocked` solves
+  * even when the graph is locked: `resolve update` writes the cells afterwards.
   */
 private final class LoaderLive(resolve: Resolve) extends Loader:
   def buildClasspath(apiJar: Path): IO[LoadError, List[Path]] =
@@ -47,16 +57,30 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
       yield BuildFile.notesOf(reporter, repo.resolve("histos.scala"), source)
 
   def load(repo: Path, apiJar: Path): ZIO[Scope, LoadError, LoadedBuild] =
+    open(repo, apiJar, ShipSource.Follow)
+
+  def loadLocked(
+      repo: Path,
+      apiJar: Path,
+      lock: DependencyLock,
+  ): ZIO[Scope, LoadError, LoadedBuild] =
+    ZIO.succeed(lock) *> open(repo, apiJar, ShipSource.Solve)
+
+  private enum ShipSource:
+    case Follow
+    case Solve
+
+  private def open(repo: Path, apiJar: Path, source: ShipSource): ZIO[Scope, LoadError, LoadedBuild] =
     for
-      text     <- readBuild(repo)
-      launcher <- digestOf(apiJar)
-      boundary <- Boundary.jars(apiJar)
-      out      <- BuildFile.tempDir("histos-classes")
-      source   <- BuildFile.writeTemp(text)
-      _        <- BuildFile.compile(source, boundary, out)
-      graph    <- readGraph(out)
-      modules  <- PluginModules.compile(repo, graph, boundary)
-      ships    <- PluginShips.jars(graph, resolve)
+      text       <- readBuild(repo)
+      launcher   <- digestOf(apiJar)
+      boundary   <- Boundary.jars(apiJar)
+      out        <- BuildFile.tempDir("histos-classes")
+      sourceFile <- BuildFile.writeTemp(text)
+      _          <- BuildFile.compile(sourceFile, boundary, out)
+      graph      <- readGraph(out)
+      modules    <- PluginModules.compile(repo, graph, boundary)
+      ships      <- shipsOf(repo, graph, launcher, source)
       plugins = modules ++ ships
       wired   <- compileWiring(repo, boundary ++ plugins, out)
       opened  <- ZIO.acquireRelease(BuildFile.open(out, plugins))(BuildFile.close)
@@ -67,12 +91,31 @@ private final class LoaderLive(resolve: Resolve) extends Loader:
       runtime <- PluginRuntime.loaded(repo, loaded.graph, opened.build, threads, loaded.links, launcher)
     yield LoadedBuild(loaded.graph, runtime, build)
 
-  def loadLocked(
+  /** No published pin reads no lock and calls no resolver. */
+  private def shipsOf(
       repo: Path,
-      apiJar: Path,
-      lock: DependencyLock,
-  ): ZIO[Scope, LoadError, LoadedBuild] =
-    ZIO.succeed(lock).zipRight(load(repo, apiJar))
+      graph: histos.ProjectGraph,
+      launcher: ApiDigest,
+      source: ShipSource,
+  ): IO[LoadError, List[Path]] =
+    val published = graph.coordinates.exists:
+      case PluginCoordinate.Published(_, _) => true
+      case PluginCoordinate.Module(_)       => false
+    if !published then ZIO.succeed(Nil)
+    else
+      source match
+        case ShipSource.Solve =>
+          PluginShips.jars(graph, resolve, launcher, None)
+        case ShipSource.Follow =>
+          graph.resolution match
+            case Resolution.Solve =>
+              PluginShips.jars(graph, resolve, launcher, None)
+            case Resolution.Lock =>
+              Resolve
+                .readLock(repo)
+                .mapError(LoadError.Resolve(_))
+                .flatMap: lock =>
+                  PluginShips.jars(graph, resolve, launcher, Some(lock))
 
   /** The graph decides the wiring classpath, so it is read before that compile. The loader closes with the graph. */
   private def readGraph(out: Path): IO[LoadError, histos.ProjectGraph] =
