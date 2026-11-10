@@ -853,9 +853,13 @@ evict org.scala-lang scala3-library_3 3.3.8 3.9.0
 tool compiler 3.10.0 jvm
 root org.scala-lang scala3-compiler_3 3.10.0 closure build
 root org.scala-lang scala3-sbt-bridge 3.10.0 closure build
+root org.jline jline-reader 4.3.1 closure build
+root org.jline jline-terminal-jni 4.3.1 closure build
 resolver central
 artifact org.scala-lang scala3-compiler_3 3.10.0 51e241938950723faebe420eb4d3bd4da3a1b686f6be574ad0ff4040a6b4bc1f central
 artifact org.scala-lang scala3-sbt-bridge 3.10.0 c74f713b223693b361a5204c2d319b926565cf394370462fe7777e20c9022439 central
+artifact org.jline jline-reader 4.3.1 02aa899906086ce9d9c992bb05aed776045e5915a180e717dcb661fb87ab84d3 central
+artifact org.jline jline-terminal-jni 4.3.1 1c4873798f36412827087013e424199bced29da7c8421f3850cfe7f31f274c1c central
 artifact org.scala-lang scala3-interfaces 3.10.0 2293237c57462efcc200e1cf9ec7b5764c17458b3886689cc16c5ec9a5552ddf central
 artifact org.scala-lang tasty-core_3 3.10.0 cd8088db4457e84610cfdf0381e8c2f92f409fb565ad5d792a3bdc7d37526058 central
 artifact org.scala-lang scala3-library_3 3.10.0 4daaede24ddfeea082bbed096ba0c492d99e8428632e9fd3c38f82cf7aad4b63 central
@@ -863,41 +867,44 @@ artifact org.ow2.asm asm-util 9.10.1 1bb99d091fba2597dc6d51193e9bbcf0d8447e7ed96
 artifact org.ow2.asm asm-commons 9.10.1 6d0abefb7cbf972ea16edb37ec14835372505063a45f976ab7ea889ed9497895 central
 artifact org.scala-sbt compiler-interface 1.12.0 92f487a505eafdd0a033e4ff4f38a81509a655c76257c64e6808dd873cc145c3 central
 artifact org.scala-lang scala3-repl_3 3.10.0 648c00039a5b4234ba5e618fe9df615c14cd87a679d3943d915f3ccd2a451f0f central
+artifact org.jline jline-terminal 4.3.1 272927363471fdbf2f38710befbfe866acc1ed3472062a8ced02b16686f27bcc central
+artifact org.jline jline-native 4.3.1 ff94ab4bccc3c1549444082ce07a2760cbf1ad4dae04e43508597bd802bcb231 central
 artifact org.scala-lang scala-library 3.10.0 b47befb29e02bbc08a10bbd387b35cf80ff9bf04fda8fdf3dda6c8ad6895f325 central
 artifact org.ow2.asm asm 9.10.1 ed825d10ab1399c8c0cb669e688cf0c8c82629b4c8399b58352b68e92ca10fcb central
 artifact org.ow2.asm asm-tree 9.10.1 3dfb0d5b6a106cd40b5b250e39935fbf2f927f4477546a5369a3ac609cf0506b central
 artifact org.ow2.asm asm-analysis 9.10.1 dede75a21306b65974ecd8f87114ff6970f09fb794157a4ca09ab25c888c2bfc central
 artifact org.scala-sbt util-interface 1.11.5 1fc950a9e1a35385e79316e23c120d4fd184f6a7af0274e00a703b0dc76376af central
 artifact org.scala-lang scala3-directives-parser_3 3.10.0 2d28f3366f452296134228b0a165ca33cf9a962ae97566085ba59c8031cc2b2b central
-artifact org.jline jline-reader 4.3.1 02aa899906086ce9d9c992bb05aed776045e5915a180e717dcb661fb87ab84d3 central
-artifact org.jline jline-terminal 4.3.1 272927363471fdbf2f38710befbfe866acc1ed3472062a8ced02b16686f27bcc central
-artifact org.jline jline-terminal-jni 4.3.1 1c4873798f36412827087013e424199bced29da7c8421f3850cfe7f31f274c1c central
 artifact io.get-coursier interface 1.0.29-M4 a9173f8348005f7a64ae4748854c473e8acdc3433afad0cd37d82167aec272fc central
-artifact org.jline jline-native 4.3.1 ff94ab4bccc3c1549444082ce07a2760cbf1ad4dae04e43508597bd802bcb231 central
 artifact org.slf4j slf4j-api 1.7.36 d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0 central
 evict org.scala-lang scala-library 2.12.20 3.10.0
 evict org.scala-lang scala-library 2.13.17 3.10.0
 tool compiler 3.9.0 jvm
 root org.scala-lang scala3-compiler_3 3.9.0 closure build
 root org.scala-lang scala3-sbt-bridge 3.9.0 closure build
+root org.jline jline-reader 4.3.1 closure build
+root org.jline jline-terminal-jni 4.3.1 closure build
 resolver central
 artifact org.scala-lang scala3-compiler_3 3.9.0 3e2c09a5ca6cef17a55f2f66e123815f9c4ea061fce20d0e9d2371989405a61a central
 artifact org.scala-lang scala3-sbt-bridge 3.9.0 25f2c099d7d3db2acf504e6e5c9df10e235c56c6eb9d55d399e823baca4fc004 central
+artifact org.jline jline-reader 4.3.1 02aa899906086ce9d9c992bb05aed776045e5915a180e717dcb661fb87ab84d3 central
+artifact org.jline jline-terminal-jni 4.3.1 1c4873798f36412827087013e424199bced29da7c8421f3850cfe7f31f274c1c central
 artifact org.scala-lang scala3-interfaces 3.9.0 64dfde1d2c6309d65a01c5f3ea836137eb84338dcadeb16f85764561ef4e10db central
 artifact org.scala-lang tasty-core_3 3.9.0 66e12dda98bb23e864f3a31f8527c8338bf47bce9b85cc380b368c69c1ba8d0f central
 artifact org.scala-lang scala3-library_3 3.9.0 9343f9651453945fc6a9b75bb4fd230418ee28a1f88ea28ee429f3ebe0511aba central
 artifact org.scala-lang.modules scala-asm 9.9.0-scala-1 75ac366e8ecb691e06a7e85041eed0f67919a646e5262fa0901225698c104375 central
 artifact org.scala-sbt compiler-interface 1.12.0 92f487a505eafdd0a033e4ff4f38a81509a655c76257c64e6808dd873cc145c3 central
 artifact org.scala-lang scala3-repl_3 3.9.0 f4e3d0eaa6c5b91e576e2a51584eb3e60fe46c3995ce55ea068c9ff4ff9dbc3a central
+artifact org.jline jline-terminal 4.3.1 272927363471fdbf2f38710befbfe866acc1ed3472062a8ced02b16686f27bcc central
+artifact org.jline jline-native 4.3.1 ff94ab4bccc3c1549444082ce07a2760cbf1ad4dae04e43508597bd802bcb231 central
 artifact org.scala-lang scala-library 3.9.0 b844bf6fb3080c73df6b9c523b7a69b9ef4a980bb15e5c37c35443d1d0b0e0cd central
 artifact org.scala-sbt util-interface 1.11.5 1fc950a9e1a35385e79316e23c120d4fd184f6a7af0274e00a703b0dc76376af central
 artifact org.scala-lang scala3-directives-parser_3 3.9.0 abc8a5fe3c9fa739bc13d0f434832dd9d28e84da871fe71bf02dfbc8fb8a646e central
-artifact org.jline jline-reader 4.0.14 1c7f57caf0521cdb708c1bb9e4dce2c0988f49672b7bbff1df8edcac7517e073 central
-artifact org.jline jline-terminal 4.0.14 9698961d2f512b55c47054ec67eb31fbd1f7ddf2d6f056eee0773d361baea73f central
-artifact org.jline jline-terminal-jni 4.0.14 5af4a6ebb3b935bcef2f9ceb43a544c28810ccb91d2cad1419603fc69f6a64b4 central
 artifact io.get-coursier interface 1.0.29-M4 a9173f8348005f7a64ae4748854c473e8acdc3433afad0cd37d82167aec272fc central
-artifact org.jline jline-native 4.0.14 72f9da7bef7c2f3c0dbb4eda3f4c0bd012caa047755452a7f40f25e61187fc08 central
 artifact org.slf4j slf4j-api 1.7.36 d3ef575e3e4979678dc01bf1dcce51021493b4d11fb7f1be8ad982877c16a1c0 central
+evict org.jline jline-reader 4.0.14 4.3.1
+evict org.jline jline-terminal 4.0.14 4.3.1
+evict org.jline jline-terminal-jni 4.0.14 4.3.1
 evict org.scala-lang scala-library 2.12.20 3.9.0
 evict org.scala-lang scala-library 2.13.17 3.9.0
 tool nativelibraries 3.10.0 native:0.5.13-20261030-eb3f3b8-SNAPSHOT
@@ -932,15 +939,17 @@ artifact org.scala-native nir_3 0.5.13-20261030-eb3f3b8-SNAPSHOT 578ad76d008e1e3
 artifact org.scala-native util_3 0.5.13-20261030-eb3f3b8-SNAPSHOT d0eb923281259550a74ce01ebfc70728c207d751e548c32e2385e72b2db5e0ad maven:https://central.sonatype.com/repository/maven-snapshots/
 tool nativesuite 3.9.0 native:0.5.13-20261030-eb3f3b8-SNAPSHOT
 root org.scala-native test-runner_3 0.5.13-20261030-eb3f3b8-SNAPSHOT closure build
+root org.scala-lang scala-library 2.13.18 single build
 resolver maven:https://central.sonatype.com/repository/maven-snapshots/
 resolver central
 artifact org.scala-native test-runner_3 0.5.13-20261030-eb3f3b8-SNAPSHOT 6ed8c79f9dcb312f760e702af6b904a63183ed18cd90dd40073da6dff6f0a382 maven:https://central.sonatype.com/repository/maven-snapshots/
+artifact org.scala-lang scala-library 2.13.18 4e85d96ff7bc7dc627985523c3541b9917aaa08e956391380c42db21a2c4e5a0 central
 artifact org.scala-native tools_3 0.5.13-20261030-eb3f3b8-SNAPSHOT 318c9d00ad5d79b678d53f903d52816f4b6e4e1380c86c9426049c0219d67e35 maven:https://central.sonatype.com/repository/maven-snapshots/
 artifact org.scala-lang scala3-library_3 3.1.3 1ac79970d94a1762ce6af4208820b4fa4c70093409decaad85c69d8b5f46e422 central
 artifact org.scala-sbt test-interface 1.0 15f70b38bb95f3002fec9aea54030f19bb4ecfbad64c67424b5e5fea09cd749e central
 artifact org.scala-native nir_3 0.5.13-20261030-eb3f3b8-SNAPSHOT 578ad76d008e1e337fa4337b3df25d61334efaef21726a4983ffdd321f043df8 maven:https://central.sonatype.com/repository/maven-snapshots/
 artifact org.scala-native util_3 0.5.13-20261030-eb3f3b8-SNAPSHOT d0eb923281259550a74ce01ebfc70728c207d751e548c32e2385e72b2db5e0ad maven:https://central.sonatype.com/repository/maven-snapshots/
-artifact org.scala-lang scala-library 2.13.8 a0882b82514190c2bac7d1a459872a75f005fc0f3e88b2bc0390367146e35db7 central
+evict org.scala-lang scala-library 2.13.8 2.13.18
 tool scalafmtdynamic 2.13.18 jvm
 root org.scalameta scalafmt-dynamic-core_2.13 3.11.5 closure build
 resolver central
