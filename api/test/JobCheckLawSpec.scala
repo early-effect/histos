@@ -260,9 +260,10 @@ object JobCheckLawSpec extends ZIOSpecDefault:
 
   private def fault(built: Either[BuildError, List[Placed]]): String =
     built match
-      case Left(BuildError.Ci(found)) => found.productPrefix
-      case Left(other)                => other.productPrefix
-      case Right(_)                   => "graph"
+      case Left(BuildError.Ci(found))          => found.productPrefix
+      case Left(BuildError.PluginGraph(found)) => found.productPrefix
+      case Left(other)                         => other.productPrefix
+      case Right(_)                            => "graph"
 
   private def fileOf(built: Either[BuildError, List[Placed]]): Either[BuildError, List[WorkflowFile]] =
     built.map(_.map(_.file))

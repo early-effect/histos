@@ -7,21 +7,21 @@ import java.nio.file.Path
 import zio.test.*
 
 object PluginMessageLawSpec extends ZIOSpecDefault:
-  private val binary    = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Binary)
-  private val java      = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Java)
-  private val full      = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Full)
+  private val binary     = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Binary)
+  private val java       = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Java)
+  private val full       = Dep.trusted("dev.earlyeffect", "specular", "0.2.0", DepKind.Full)
   private val moduleName = ProjectName("tools")
   private val plugin     = PluginId("test.echo")
   private val other      = PluginId("test.other")
-  private val pluginApi = ApiDigest.trusted("a" * 64)
-  private val launcher  = ApiDigest.trusted("b" * 64)
-  private val echo      = PluginTaskId(plugin, TaskName("echo"))
-  private val site      = PluginTaskId(plugin, TaskName("site"))
+  private val pluginApi  = ApiDigest.trusted("a" * 64)
+  private val launcher   = ApiDigest.trusted("b" * 64)
+  private val echo       = PluginTaskId(plugin, TaskName("echo"))
+  private val site       = PluginTaskId(plugin, TaskName("site"))
 
   def spec = suite("plugin message laws")(
     test("a load error is that sentence, and the coordinate keeps its separator"):
       val rows = List(
-        PluginLoadError.Unlocked(binary.render) -> s"plugin ${binary.render} is not in the lock",
+        PluginLoadError.Unlocked(binary.render)    -> s"plugin ${binary.render} is not in the lock",
         PluginLoadError.Unversioned(binary.render) ->
           s"plugin ${binary.render} does not contain ${ApiDigest.resource}",
         PluginLoadError.VersionMismatch(binary, pluginApi, launcher) ->

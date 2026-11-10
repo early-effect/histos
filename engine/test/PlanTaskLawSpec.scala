@@ -1,15 +1,6 @@
 package histos.preview
 
-import histos.plugin.{
-  Contribution,
-  DeclaredTask,
-  HistosPlugin,
-  PluginId,
-  RegisteredPlugin,
-  RunRequest,
-  Seal,
-  TaskName,
-}
+import histos.plugin.{Contribution, DeclaredTask, HistosPlugin, PluginId, RegisteredPlugin, RunRequest, Seal, TaskName}
 import histos.version.Catalog
 import histos.{Platform, ProjectGraph, ProjectNameError, Splits}
 

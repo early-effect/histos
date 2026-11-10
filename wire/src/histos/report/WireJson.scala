@@ -166,6 +166,7 @@ import histos.zinc.{
 import histos.{
   BuildError,
   CiFault,
+  PluginGraphFault,
   ClangMajor,
   Dep,
   DepError,
@@ -496,6 +497,7 @@ private object WireBuild extends WireSupport:
       },
     )
   given JsonCodec[CiFault]              = JsonCodec.derived
+  given JsonCodec[PluginGraphFault]     = JsonCodec.derived
   given JsonCodec[BuildError]           = JsonCodec.derived
   given JsonCodec[LoadError]            = JsonCodec.derived
   given JsonCodec[ProcessOutput]        = JsonCodec.string.transform(ProcessOutput.from, _.text)

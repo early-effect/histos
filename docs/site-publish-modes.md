@@ -118,9 +118,10 @@ private def jobProblem(
     tasks: List[TaskName],
 ): Option[BuildError] =
   plugin.contribution.jobs.collectFirst:
-    case job if job.name.isReserved       => BuildError.ReservedJob(job.name)
+    case job if job.name.isReserved       =>
+      BuildError.PluginGraph(PluginGraphFault.ReservedJob(job.name))
     case job if !tasks.contains(job.task) =>
-      BuildError.UnknownPluginTask(plugin.id, job.task)
+      BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, job.task))
 ```
 
 Reserved ids are `test`, `versions`, `workflow`, and `launcher` (`api/src/histos/plugin/Names.scala` lines 109-114). The generator also emits a job named `doc` when `DocCheck` is on (`Workflow.scala` lines 903-916). `doc` is not reserved. That hole is in the audit ledger. It is not this feature.
@@ -181,9 +182,9 @@ Two illegal configurations are representable if we only add the types. Both are 
 
 | Fact | When | Error |
 | --- | --- | --- |
-| Two jobs carry a `Site` | `Projects.checkPlugins`, across every plugin | `BuildError.DuplicateSite(first: JobName, second: JobName)` |
+| Two jobs carry a `Site` | `Projects.checkPlugins`, across every plugin | `BuildError.PluginGraph(PluginGraphFault.DuplicateSite(first, second))` |
 | A `JobWhen.Schedule` job carries a `Site` | the same check | `BuildError.ScheduledSite(name: JobName)` |
-| A job is named `pages` | the existing reserved-name check | `BuildError.ReservedJob` |
+| A job is named `pages` | the existing reserved-name check | `BuildError.PluginGraph(PluginGraphFault.ReservedJob(name))` |
 
 `DuplicateSite` is required by the platform. `actions/upload-pages-artifact@v5` defaults the artifact name to `github-pages`, and a workflow run can upload that name once. GitHub Pages is one site per repository. A pull-request preview environment is a different feature.
 
@@ -192,16 +193,18 @@ Two illegal configurations are representable if we only add the types. Both are 
 `ProjectGraph.trusted` skips `checkPlugins`. `Workflow.render` and `Workflow.renderAll` refuse the same two facts as `CiError`, so a trusted graph cannot emit two uploads or a cron that requests `github-pages`.
 
 ```scala
-enum BuildError:
+enum PluginGraphFault:
   case DuplicateSite(first: JobName, second: JobName)
-  case ScheduledSite(name: JobName)
+
+enum BuildError:
+  case PluginGraph(fault: PluginGraphFault)
 
 enum CiError:
   case DuplicateSite(first: JobName, second: JobName)
   case ScheduledSite(name: JobName)
 ```
 
-`message` on each enum gains an arm. `Schema[BuildError]`, `JsonCodec[BuildError]`, `Schema[CiError]`, and `JsonCodec[CiError]` are derived. They pick up the cases. Do not add a hand-written codec and do not flatten either error to `String`.
+`message` on each enum gains an arm. `Schema[PluginGraphFault]`, `JsonCodec[PluginGraphFault]`, `Schema[BuildError]`, `JsonCodec[BuildError]`, `Schema[CiError]`, and `JsonCodec[CiError]` are derived. They pick up the cases. Do not add a hand-written codec and do not flatten either error to `String`.
 
 Load is the user-facing gate. Render repeats the check because the test graphs are trusted. The two enums stay apart: `BuildError` is graph load, `CiError` is the workflow effect.
 
@@ -477,9 +480,9 @@ Also assert:
 - `renderAll` of `Manual` and of `Both` includes `RenderedWorkflow("histos-pages.yml", _)`.
 - `Workflow.update` writes the dispatch file, and a later update with `site = None` deletes it and leaves an unrelated workflow in place. The existing orphan test is the pattern.
 - A missing dispatch file is `CiError.Drift` from `Workflow.check`.
-- `BuildError.DuplicateSite` and `BuildError.ScheduledSite` from graph load, in the plugin graph tests next to `DuplicateJob` (`api/test/PluginSpec.scala`).
+- `PluginGraphFault.DuplicateSite`, wrapped as `BuildError.PluginGraph`, from graph load, in the plugin graph tests next to `DuplicateJob` (`api/test/PluginSpec.scala`).
 - `CiError.DuplicateSite` and `CiError.ScheduledSite` from `Workflow.render` on a trusted graph.
-- `BuildError.ReservedJob(JobName("pages"))`.
+- `BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("pages")))`.
 - The specular fixture still contributes `JobName("docs")` / `TaskName("site")` and `site` is `None`.
 
 No new dependency. This repository has no `testFull` task. `testStore` defaults to `Off`, so `./histos test` runs every suite and `./histos testQuick` is the one that skips. The implementation runs `./histos test` on the suites the change touches.

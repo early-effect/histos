@@ -425,7 +425,7 @@ object PluginSpec extends ZIOSpecDefault:
     ,
     test("the same plugin id cannot be registered twice"):
       val built = Projects(use(Echo, Echo), jvm("core"))
-      assertTrue(built == Left(BuildError.DuplicatePlugin(Echo.id)))
+      assertTrue(built == Left(BuildError.PluginGraph(PluginGraphFault.DuplicatePlugin(Echo.id))))
     ,
     test(
       "one plugin cannot declare a task twice, and two plugins can share the local name"
@@ -440,8 +440,9 @@ object PluginSpec extends ZIOSpecDefault:
       val shared   = Projects(use(left, right), jvm("core"))
       assertTrue(
         repeated == Left(
-          BuildError
-            .DuplicatePluginTask(PluginId("test.echo"), TaskName("echo"))
+          BuildError.PluginGraph(
+            PluginGraphFault.DuplicatePluginTask(PluginId("test.echo"), TaskName("echo"))
+          )
         ),
         shared.map(_.plugins.map(_.id)) == Right(
           List(PluginId("test.one"), PluginId("test.two"))
@@ -461,7 +462,7 @@ object PluginSpec extends ZIOSpecDefault:
       )
       val built = Projects(use(left, right), jvm("core"))
       assertTrue(
-        built == Left(BuildError.DuplicateCommand(CommandName("site")))
+        built == Left(BuildError.PluginGraph(PluginGraphFault.DuplicateCommand(CommandName("site"))))
       )
     ,
     test(
@@ -480,11 +481,13 @@ object PluginSpec extends ZIOSpecDefault:
       val shadowed = Projects(use(shadow), jvm("core"))
       val unknown  = Projects(use(missing), jvm("core"))
       assertTrue(
-        shadowed == Left(BuildError.CommandShadow(CommandName("test"))),
+        shadowed == Left(BuildError.PluginGraph(PluginGraphFault.CommandShadow(CommandName("test")))),
         unknown == Left(
-          BuildError.UnknownPluginTask(
-            PluginId("test.echo"),
-            TaskName("absent"),
+          BuildError.PluginGraph(
+            PluginGraphFault.UnknownPluginTask(
+              PluginId("test.echo"),
+              TaskName("absent"),
+            )
           )
         ),
       )
@@ -516,12 +519,14 @@ object PluginSpec extends ZIOSpecDefault:
       val refused    = Projects(use(reserved), jvm("core"))
       val unknown    = Projects(use(missing), jvm("core"))
       assertTrue(
-        duplicated == Left(BuildError.DuplicateJob(JobName("nightly"))),
-        refused == Left(BuildError.ReservedJob(JobName("test"))),
+        duplicated == Left(BuildError.PluginGraph(PluginGraphFault.DuplicateJob(JobName("nightly")))),
+        refused == Left(BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("test")))),
         unknown == Left(
-          BuildError.UnknownPluginTask(
-            PluginId("test.echo"),
-            TaskName("absent"),
+          BuildError.PluginGraph(
+            PluginGraphFault.UnknownPluginTask(
+              PluginId("test.echo"),
+              TaskName("absent"),
+            )
           )
         ),
       )
@@ -552,10 +557,12 @@ object PluginSpec extends ZIOSpecDefault:
       )
       assertTrue(
         Projects(use(first, second), jvm("core")) == Left(
-          BuildError.DuplicateSite(JobName("docs"), JobName("guide"))
+          BuildError.PluginGraph(PluginGraphFault.DuplicateSite(JobName("docs"), JobName("guide")))
         ),
         Projects(use(cron), jvm("core")).isRight,
-        Projects(use(pages), jvm("core")) == Left(BuildError.ReservedJob(JobName("pages"))),
+        Projects(use(pages), jvm("core")) == Left(
+          BuildError.PluginGraph(PluginGraphFault.ReservedJob(JobName("pages")))
+        ),
         schedule.nonEmpty,
       )
     ,
@@ -633,9 +640,11 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects(use(plugin), jvm("core"))
       assertTrue(
         built == Left(
-          BuildError.UnknownPluginTask(
-            PluginId("test.echo"),
-            TaskName("absent"),
+          BuildError.PluginGraph(
+            PluginGraphFault.UnknownPluginTask(
+              PluginId("test.echo"),
+              TaskName("absent"),
+            )
           )
         )
       )
@@ -661,10 +670,10 @@ object PluginSpec extends ZIOSpecDefault:
           .note(PluginId("test.other"), NoteKey("role"), NoteText("site"))
         assertTrue(
           Projects(repeated) == Left(
-            BuildError.DuplicateNote(docs, id, NoteKey("role"))
+            BuildError.PluginGraph(PluginGraphFault.DuplicateNote(docs, id, NoteKey("role")))
           ),
           Projects(use(plugin), docsModule) == Left(
-            BuildError.MissingNote(docs, id, NoteKey("role"))
+            BuildError.PluginGraph(PluginGraphFault.MissingNote(docs, id, NoteKey("role")))
           ),
         )
     ,
@@ -681,7 +690,7 @@ object PluginSpec extends ZIOSpecDefault:
         )
         assertTrue(
           Projects(use(plugin), jvm("core")) == Left(
-            BuildError.PluginMissingModule(PluginId("test.echo"), missing)
+            BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(PluginId("test.echo"), missing))
           )
         )
     ,
@@ -699,7 +708,7 @@ object PluginSpec extends ZIOSpecDefault:
         )
         assertTrue:
           Projects(use(plugin), aggregate("root", core), core) == Left(
-            BuildError.PluginMissingModule(PluginId("test.echo"), root)
+            BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(PluginId("test.echo"), root))
           )
     ,
     test("a named cell has to be one the module builds"):
@@ -719,19 +728,23 @@ object PluginSpec extends ZIOSpecDefault:
         )
         assertTrue(
           version == Left(
-            BuildError.PluginMissingCell(
-              PluginId("test.echo"),
-              core,
-              Some(scala2),
-              None,
+            BuildError.PluginGraph(
+              PluginGraphFault.PluginMissingCell(
+                PluginId("test.echo"),
+                core,
+                Some(scala2),
+                None,
+              )
             )
           ),
           platform == Left(
-            BuildError.PluginMissingCell(
-              PluginId("test.echo"),
-              core,
-              None,
-              Some(Js),
+            BuildError.PluginGraph(
+              PluginGraphFault.PluginMissingCell(
+                PluginId("test.echo"),
+                core,
+                None,
+                Some(Js),
+              )
             )
           ),
         )
@@ -742,7 +755,7 @@ object PluginSpec extends ZIOSpecDefault:
       val built = Projects(use(Boom), jvm("core"))
       assertTrue(
         built == Left(
-          BuildError.PluginDefect(Boom.id, "java.lang.IllegalStateException")
+          BuildError.PluginGraph(PluginGraphFault.PluginDefect(Boom.id, "java.lang.IllegalStateException"))
         ),
         built.is(_.left).message.contains("java.lang.IllegalStateException"),
         !built.is(_.left).message.contains("nope"),

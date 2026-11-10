@@ -68,7 +68,7 @@ object Fingerprint:
     val lock   = repo.resolve("dependencies.lock")
     ZIO
       .attemptBlocking {
-        val wired = if Files.isRegularFile(wiring) then List(wiring) else Nil
+        val wired  = if Files.isRegularFile(wiring) then List(wiring) else Nil
         val pinned = resolution match
           case Resolution.Lock  => List(lock)
           case Resolution.Solve => Nil

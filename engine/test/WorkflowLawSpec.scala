@@ -276,7 +276,8 @@ object WorkflowLawSpec extends ZIOSpecDefault:
         JobYaml.lift(BuildError.Ci(CiFault.UnknownNeed(doc, test))) == CiError.UnknownNeed(doc, test),
         JobYaml.lift(BuildError.Ci(CiFault.UnpinnedWorkflowRun("other.yml"))) ==
           CiError.UnpinnedWorkflowRun("other.yml"),
-        JobYaml.lift(BuildError.DuplicateSite(doc, test)) == CiError.DuplicateSite(doc, test),
+        JobYaml.lift(BuildError.PluginGraph(PluginGraphFault.DuplicateSite(doc, test))) ==
+          CiError.DuplicateSite(doc, test),
       )
     ,
     test("an unpinned action is a fault, a local action is not, and a catalog miss is not a mismatch"):

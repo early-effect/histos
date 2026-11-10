@@ -40,7 +40,7 @@ object PluginSourceLawSpec extends ZIOSpecDefault:
       val missing = PluginRef.Module("plugins", SourcePos("law", 1, 1))
       assertTrue(
         Projects.plugins(missing)(core) ==
-          Left(BuildError.UnknownPluginModule("plugins", SourcePos("law", 1, 1)))
+          Left(BuildError.PluginGraph(PluginGraphFault.UnknownPluginModule("plugins", SourcePos("law", 1, 1))))
       )
     ,
     test("an aggregate is not a plugin module"):
@@ -49,7 +49,7 @@ object PluginSourceLawSpec extends ZIOSpecDefault:
       val named = PluginRef.Module("root", SourcePos("law", 2, 1))
       assertTrue(
         Projects.plugins(named)(core, root) ==
-          Left(BuildError.PluginOnAggregate(ProjectName("root"), SourcePos("law", 2, 1)))
+          Left(BuildError.PluginGraph(PluginGraphFault.PluginOnAggregate(ProjectName("root"), SourcePos("law", 2, 1))))
       )
     ,
     test("the same module twice is refused"):
@@ -57,7 +57,9 @@ object PluginSourceLawSpec extends ZIOSpecDefault:
       val again   = PluginRef.Module("plugins", SourcePos("law", 3, 1))
       assertTrue(
         Projects.plugins(PluginSources.module(plugins), again)(plugins) ==
-          Left(BuildError.DuplicatePluginCoordinate("plugins", SourcePos("law", 3, 1)))
+          Left(
+            BuildError.PluginGraph(PluginGraphFault.DuplicatePluginCoordinate("plugins", SourcePos("law", 3, 1)))
+          )
       ),
   )
 end PluginSourceLawSpec

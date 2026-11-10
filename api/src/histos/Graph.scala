@@ -408,19 +408,24 @@ object Projects:
               case Left(_)     => Left(BuildError.BadName(raw, position))
               case Right(name) =>
                 projects.find(_.name == name) match
-                  case None               => Left(BuildError.UnknownPluginModule(raw, position))
-                  case Some(_: Aggregate) => Left(BuildError.PluginOnAggregate(name, position))
-                  case Some(_: Module)    =>
+                  case None =>
+                    Left(BuildError.PluginGraph(PluginGraphFault.UnknownPluginModule(raw, position)))
+                  case Some(_: Aggregate) =>
+                    Left(BuildError.PluginGraph(PluginGraphFault.PluginOnAggregate(name, position)))
+                  case Some(_: Module) =>
                     val coordinate = PluginCoordinate.Module(name)
                     if seen.contains(coordinate) then
-                      Left(BuildError.DuplicatePluginCoordinate(coordinate.render, position))
+                      Left(
+                        BuildError.PluginGraph(PluginGraphFault.DuplicatePluginCoordinate(coordinate.render, position))
+                      )
                     else Right(seen :+ coordinate)
           case PluginRef.Ship(dependency, link, position) =>
             val coordinate = PluginCoordinate.Published(dependency, link)
             val repeat     = seen.exists:
               case PluginCoordinate.Published(have, _) => have == dependency
               case PluginCoordinate.Module(_)          => false
-            if repeat then Left(BuildError.DuplicatePluginCoordinate(coordinate.render, position))
+            if repeat then
+              Left(BuildError.PluginGraph(PluginGraphFault.DuplicatePluginCoordinate(coordinate.render, position)))
             else Right(seen :+ coordinate)
 
   private def uniqueResolvers(
@@ -738,7 +743,7 @@ object Projects:
   ): Option[BuildError] =
     duplicate(module.notes.map(note => (note.plugin, note.key))) match
       case Some((plugin, key)) =>
-        Some(BuildError.DuplicateNote(name, plugin, key))
+        Some(BuildError.PluginGraph(PluginGraphFault.DuplicateNote(name, plugin, key)))
       case None => None
 
   private def registerAll(
@@ -756,7 +761,7 @@ object Projects:
       try Right(plugin.contribute)
       catch
         case NonFatal(err) =>
-          Left(BuildError.PluginDefect(plugin.id, err.getClass.getName))
+          Left(BuildError.PluginGraph(PluginGraphFault.PluginDefect(plugin.id, err.getClass.getName)))
     contributed.map: contribution =>
       RegisteredPlugin(
         plugin.id,
@@ -774,11 +779,11 @@ object Projects:
       _ <- each(registered)(checkOne)
       _ <- uniqueNames(
         registered.flatMap(_.contribution.commands.map(_.name)),
-        BuildError.DuplicateCommand(_),
+        name => BuildError.PluginGraph(PluginGraphFault.DuplicateCommand(name)),
       )
       _ <- uniqueNames(
         registered.flatMap(_.contribution.jobs.map(_.name)),
-        BuildError.DuplicateJob(_),
+        name => BuildError.PluginGraph(PluginGraphFault.DuplicateJob(name)),
       )
     yield ()
 
@@ -788,7 +793,7 @@ object Projects:
     registered
       .foldLeft[Either[BuildError, List[PluginId]]](Right(Nil)): (acc, plugin) =>
         acc.flatMap: seen =>
-          if seen.contains(plugin.id) then Left(BuildError.DuplicatePlugin(plugin.id))
+          if seen.contains(plugin.id) then Left(BuildError.PluginGraph(PluginGraphFault.DuplicatePlugin(plugin.id)))
           else Right(seen :+ plugin.id)
       .map(_ => ())
 
@@ -813,9 +818,9 @@ object Projects:
       .collect:
         case TaskDep.Same(name) if !tasks.contains(name) => name
     duplicate(tasks)
-      .map(BuildError.DuplicatePluginTask(plugin.id, _))
+      .map(name => BuildError.PluginGraph(PluginGraphFault.DuplicatePluginTask(plugin.id, name)))
       .orElse(
-        missing.headOption.map(BuildError.UnknownPluginTask(plugin.id, _))
+        missing.headOption.map(name => BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, name)))
       )
       .orElse(commandProblem(plugin, tasks))
       .orElse(jobProblem(plugin, tasks)) match
@@ -827,18 +832,20 @@ object Projects:
       tasks: List[TaskName],
   ): Option[BuildError] =
     plugin.contribution.commands.collectFirst:
-      case spec if spec.name.isReserved       => BuildError.CommandShadow(spec.name)
+      case spec if spec.name.isReserved =>
+        BuildError.PluginGraph(PluginGraphFault.CommandShadow(spec.name))
       case spec if !tasks.contains(spec.task) =>
-        BuildError.UnknownPluginTask(plugin.id, spec.task)
+        BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, spec.task))
 
   private def jobProblem(
       plugin: RegisteredPlugin,
       tasks: List[TaskName],
   ): Option[BuildError] =
     plugin.contribution.jobs.collectFirst:
-      case job if job.name.isReserved       => BuildError.ReservedJob(job.name)
+      case job if job.name.isReserved =>
+        BuildError.PluginGraph(PluginGraphFault.ReservedJob(job.name))
       case job if !tasks.contains(job.task) =>
-        BuildError.UnknownPluginTask(plugin.id, job.task)
+        BuildError.PluginGraph(PluginGraphFault.UnknownPluginTask(plugin.id, job.task))
 
   private def bindPlugins(
       registered: List[RegisteredPlugin],
@@ -867,11 +874,11 @@ object Projects:
         cellOf(plugin, modules, name, version, platform)
       case DeclaredInput.Note(name, key) =>
         modules.get(name) match
-          case None         => Some(BuildError.PluginMissingModule(plugin.id, name))
+          case None         => Some(BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(plugin.id, name)))
           case Some(module) =>
             val present = module.notes.exists(note => note.plugin == plugin.id && note.key == key)
             if present then None
-            else Some(BuildError.MissingNote(name, plugin.id, key))
+            else Some(BuildError.PluginGraph(PluginGraphFault.MissingNote(name, plugin.id, key)))
 
   private def depOf(
       plugin: RegisteredPlugin,
@@ -893,18 +900,20 @@ object Projects:
       platform: Option[Platform],
   ): Option[BuildError] =
     modules.get(name) match
-      case None         => Some(BuildError.PluginMissingModule(plugin.id, name))
+      case None         => Some(BuildError.PluginGraph(PluginGraphFault.PluginMissingModule(plugin.id, name)))
       case Some(module) =>
         val versionOk  = version.forall(module.versions.all.contains)
         val platformOk = platform.forall(module.platforms.all.contains)
         if versionOk && platformOk then None
         else
           Some(
-            BuildError.PluginMissingCell(
-              plugin.id,
-              module.name,
-              version,
-              platform,
+            BuildError.PluginGraph(
+              PluginGraphFault.PluginMissingCell(
+                plugin.id,
+                module.name,
+                version,
+                platform,
+              )
             )
           )
 

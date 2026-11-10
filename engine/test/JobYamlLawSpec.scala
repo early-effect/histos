@@ -73,12 +73,13 @@ object JobYamlLawSpec extends ZIOSpecDefault:
               BuildError.Ci(CiFault.DispatchInputConflict("mode"))      -> CiError.DispatchInputConflict("mode"),
               BuildError.Ci(CiFault.ConcurrencyConflict("ci.yml"))      -> CiError.ConcurrencyConflict("ci.yml"),
               BuildError.Ci(CiFault.UnpinnedWorkflowRun("missing.yml")) -> CiError.UnpinnedWorkflowRun("missing.yml"),
-              BuildError.DuplicateSite(docs, suite)                     -> CiError.DuplicateSite(docs, suite),
+              BuildError.PluginGraph(PluginGraphFault.DuplicateSite(docs, suite)) ->
+                CiError.DuplicateSite(docs, suite),
             )
             val other = List(
-              BuildError.DuplicateJob(suite),
-              BuildError.ReservedJob(pages),
-              BuildError.DuplicatePlugin(PluginId("test.echo")),
+              BuildError.PluginGraph(PluginGraphFault.DuplicateJob(suite)),
+              BuildError.PluginGraph(PluginGraphFault.ReservedJob(pages)),
+              BuildError.PluginGraph(PluginGraphFault.DuplicatePlugin(PluginId("test.echo"))),
               BuildError.BadName("Not A Name", SourcePos("law", 1, 1)),
             )
             val lifted = rows.forall: (error, want) =>

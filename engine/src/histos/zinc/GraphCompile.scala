@@ -611,7 +611,7 @@ object GraphCompile:
             upstream <- upstreams(module, chain, version, platform, done, plan)
             paths = upstream._1
             apis  = upstream._2
-            planned <- coveragePlan(plan, module.name, version, platform).mapError(failed)
+            planned  <- coveragePlan(plan, module.name, version, platform).mapError(failed)
             known    <- recall(work, sources, apis, classes, analysis, planned.map(_.identity)).mapError(failed)
             compiled <- known match
               case Some(output) => ZIO.succeed(output)

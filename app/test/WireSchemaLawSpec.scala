@@ -812,18 +812,11 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "AggregateShipMember(ship,aggregate,position) | " +
               "MemberInTwoShips(member,first,second,position) | " +
               "DuplicateResolver(token) | MixedTest(name,position) | " +
-              "DuplicateDirectory(name,other,directory) | DuplicatePlugin(id) | " +
-              "DuplicatePluginTask(plugin,name) | DuplicateCommand(name) | " +
-              "DuplicateJob(name) | ReservedJob(name) | DuplicateSite(first,second) | " +
-              "Ci(fault) | DuplicateNote(module,plugin,key) | " +
-              "MissingNote(module,plugin,key) | PluginMissingModule(plugin,name) | " +
-              "PluginMissingCell(plugin,module,version,platform) | " +
-              "UnknownPluginTask(plugin,name) | CommandShadow(name) | " +
-              "PluginDefect(plugin,binary) | TwoPublications(name,position) | " +
+              "DuplicateDirectory(name,other,directory) | PluginGraph(fault) | " +
+              "Ci(fault) | TwoPublications(name,position) | " +
               "AssemblyShape(name,position) | AssetWithoutAssembly(name,position) | " +
               "TwoAssets(name,position) | DuplicateResource(name,resource,position) | " +
-              "RemoteNeeds(name,needs,position) | UnknownPluginModule(raw,position) | " +
-              "PluginOnAggregate(name,position) | DuplicatePluginCoordinate(render,position)"
+              "RemoteNeeds(name,needs,position)"
           ),
           """{"DuplicateResolver":{"token":"central"}}""",
           histos.BuildError.DuplicateResolver("central"),
@@ -901,6 +894,20 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           ),
           """{"NoDefaultBranch":{}}""",
           histos.workflow.CiError.NoDefaultBranch,
+        ) &&
+        mixed[histos.PluginGraphFault](
+          "PluginGraphFault",
+          (
+            "DuplicatePlugin(id) | DuplicatePluginTask(plugin,name) | DuplicateCommand(name) | " +
+              "DuplicateJob(name) | ReservedJob(name) | DuplicateSite(first,second) | " +
+              "DuplicateNote(module,plugin,key) | MissingNote(module,plugin,key) | " +
+              "PluginMissingModule(plugin,name) | PluginMissingCell(plugin,module,version,platform) | " +
+              "UnknownPluginTask(plugin,name) | CommandShadow(name) | PluginDefect(plugin,binary) | " +
+              "UnknownPluginModule(raw,position) | PluginOnAggregate(name,position) | " +
+              "DuplicatePluginCoordinate(render,position)"
+          ),
+          """{"CommandShadow":{"name":"site"}}""",
+          histos.PluginGraphFault.CommandShadow(histos.plugin.CommandName("site")),
         ) &&
         mixed[histos.CiFault](
           "CiFault",

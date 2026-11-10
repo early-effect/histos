@@ -1,7 +1,18 @@
 package histos.plugin
 
 import histos.version.Catalog
-import histos.{BuildError, CiFault, CoverageJob, DocCheck, Formatting, Module, Platform, ProjectGraph, ProjectName}
+import histos.{
+  BuildError,
+  CiFault,
+  CoverageJob,
+  DocCheck,
+  Formatting,
+  Module,
+  Platform,
+  PluginGraphFault,
+  ProjectGraph,
+  ProjectName,
+}
 
 /** One rendered job, and the workflow file it belongs in. */
 final case class Placed(file: WorkflowFile, plugin: PluginId, render: JobRender)
@@ -83,9 +94,10 @@ object JobCheck:
       .filter: name =>
         items.exists(item => nameOf(item.render) == name && isSite(item.render))
     names match
-      case first :: second :: _ => Left(BuildError.DuplicateSite(first, second))
-      case name :: Nil          => shapes(name, items.filter(item => nameOf(item.render) == name))
-      case Nil                  => Right(())
+      case first :: second :: _ =>
+        Left(BuildError.PluginGraph(PluginGraphFault.DuplicateSite(first, second)))
+      case name :: Nil => shapes(name, items.filter(item => nameOf(item.render) == name))
+      case Nil         => Right(())
 
   private def shapes(name: JobName, items: List[Item]): Either[BuildError, Unit] =
     val found = items.collect { case Item(_, _, JobRender.Site(_, shape)) => shape }
@@ -162,7 +174,7 @@ object JobCheck:
   private def ids(placed: List[Placed]): Either[BuildError, Unit] =
     val pairs = placed.map(item => (item.file, nameOf(item.render)))
     duplicate(pairs) match
-      case Some((_, name)) => Left(BuildError.DuplicateJob(name))
+      case Some((_, name)) => Left(BuildError.PluginGraph(PluginGraphFault.DuplicateJob(name)))
       case None            => Right(())
 
   private def fileChecks(

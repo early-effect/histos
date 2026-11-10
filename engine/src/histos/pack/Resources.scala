@@ -46,7 +46,7 @@ object Resources:
                 if !absolute.startsWith(base) then Left(AssetError.Escaped(name))
                 else
                   ResourceName.from(name) match
-                    case Left(_)                                                     => Left(AssetError.Escaped(name))
+                    case Left(_)                                             => Left(AssetError.Escaped(name))
                     case Right(safe) if safe.value == AssetError.refusedName =>
                       Left(AssetError.CommittedEntry(file))
                     case Right(safe) => Right(seen :+ (safe, file))
