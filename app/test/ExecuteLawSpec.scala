@@ -63,8 +63,14 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     test("version and the launcher print the pin or its absence"):
       pins
     ,
-    test("reload with no server says no histos server is running"):
-      batch("reload", List(Law(List("reload"), CliExit.LoadFailed, "", "no histos server is running", Playback.Held)))
+    test("reload and reboot with no server say no histos server is running"):
+      batch(
+        "absent",
+        List(
+          Law(List("reload"), CliExit.LoadFailed, "", "no histos server is running", Playback.Held),
+          Law(List("reboot"), CliExit.LoadFailed, "", "no histos server is running", Playback.Held),
+        ),
+      )
     ,
     test("cancel names the run that is not live"):
       batch(
@@ -279,7 +285,6 @@ object ExecuteLawSpec extends ZIOSpecDefault:
     held("workflow"),
     held("toolchain"),
     held("server"),
-    held("reboot"),
     held("resolve"),
     held("preview", "compile"),
     held("preview", "test"),

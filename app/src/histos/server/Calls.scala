@@ -1095,7 +1095,7 @@ object Calls:
             (if cause.isInterruptedOnly then fault(say, BuildFault.Interrupted)
              else
                cause.failureOrCause match
-                 case Left(error) => ZIO.fail(error)
+                 case Left(error) => finish(say, CallResult.reported(error.message))
                  case Right(_)    => reject(say, Rejection.RunFailed)),
         _ => runs.update(_ - runId),
       )

@@ -1,6 +1,6 @@
 package histos.client
 
-import histos.build.{Beat, Build}
+import histos.build.{Beat, Build, BuildEvent}
 import histos.cli.{Cli, Operation, Show}
 import histos.jdk.Machine
 import histos.load.{LoadError, LoadedBuild, Loader}
@@ -14,7 +14,7 @@ import histos.Platform
 
 import java.nio.file.Path
 
-import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO, ZLayer}
+import zio.{Chunk, Exit, Fiber, Ref, Scope, UIO, ZIO}
 
 /** One MCP process. It sends [[histos.server.Call]] while the server matches, and keeps a single graph otherwise.
   */
@@ -283,7 +283,9 @@ object Session:
       Perform.Edges(
         watch = (inner, policy, edge) => watch(repo, apiJar, machine, desk, inner, policy, edge),
         reload = ZIO.fail(ServerError.NoServer),
-        reboot = Cli.bootCall(repo, apiJar).provideSomeLayer(ZLayer.succeed(machine)).flatMap(Calls.finish(say, _)),
+        reboot = Cli.bootCall(repo).flatMap { socket =>
+          say(Message.Event(BuildEvent.Out(socket.toString))) *> Calls.finish(say, CallResult.reported())
+        },
         bsp = Calls.finish(say, CallResult.Fault(BuildFault.Rejected(Rejection.NotATool))),
       )
 
