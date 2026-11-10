@@ -3,7 +3,7 @@ package histos.server
 import histos.build.BuildEvent
 import histos.doctor.DoctorPlacement
 import histos.load.{LoadedBuild, PluginRuntime}
-import histos.plugin.{PluginArgs, PluginTaskId, SecretName}
+import histos.plugin.{ApiDigest, PluginArgs, PluginTaskId, SecretName}
 import histos.report.CallResult
 import histos.supply.{AdvisoryPolicy, DailyAudit, PrAuthor, SecurityFixes, SupplyChain, UpdatePolicy}
 import histos.workflow.{SupplyYaml, Workflow, WorkflowAction}
@@ -83,6 +83,8 @@ object CallsWorkflowLawSpec extends ZIOSpecDefault:
   )
 
   private val idle: PluginRuntime = new PluginRuntime:
+    def launcher: ApiDigest = ApiDigest.trusted("a" * 64)
+
     def run(task: PluginTaskId, args: PluginArgs) =
       ZIO.dieMessage("plugin was not asked")
     def bind =

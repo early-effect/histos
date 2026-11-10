@@ -44,7 +44,46 @@ object LoaderProjectLawSpec extends ZIOSpecDefault:
                   assertTrue(modules == List("loaderlaw"), other.lengthIs == 1)
             run.provideSomeLayer[Scope](layer)
       program
+    ,
+    test("a wiring object compiles with the build"):
+      loadWith(wired).map: found =>
+        found.graph.projects match
+          case (module: Module) :: Nil =>
+            assertTrue(module.name.value == "loaderlaw", found.plugins.links.isEmpty)
+          case other =>
+            assertTrue(other.lengthIs == 1)
+    ,
+    test("a wiring file that does not compile fails the load"):
+      loadWith("not scala").either.map: found =>
+        val refused = found match
+          case Left(LoadError.CompileFailed(diagnostics)) => diagnostics.nonEmpty
+          case _                                          => false
+        assertTrue(refused),
   )
+
+  private val wired =
+    """import histos.plugin.*
+      |import zio.*
+      |
+      |object HistosWiring:
+      |  def layer = ZLayer.succeed(Plugins(Chunk.empty))
+      |""".stripMargin
+
+  private def loadWith(wiring: String) =
+    Workspace
+      .work("histos-load-wiring")
+      .mapError(LoadError.Io(_))
+      .flatMap: root =>
+        val layer =
+          (stubbed[Resolve] ++ ZLayer.succeed(ContentStore.in(root.resolve("store")))) >>> Loader.live
+        val run =
+          for
+            api   <- LoaderApiJar.of(classOf[histos.HistosBuild], root.resolve("histos-api.jar"))
+            _     <- Workspace.writeString(root.resolve("histos.scala"), buildFile).mapError(LoadError.Io(_))
+            _     <- Workspace.writeString(root.resolve("histos.wiring.scala"), wiring).mapError(LoadError.Io(_))
+            found <- ZIO.serviceWithZIO[Loader](_.load(root, api))
+          yield found
+        run.provideSomeLayer[Scope](layer)
 
   private val buildFile =
     """import histos.*

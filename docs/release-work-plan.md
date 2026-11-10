@@ -30,7 +30,7 @@ Central requires the javadoc jar, the sources jar, `.md5`, `.sha1`, and `.asc` o
 These are the same packer with a different coordinate:
 
 - An sbt plugin is a module whose artifact id carries the sbt series. The descriptor is already inside the jar. The portal code has no sbt case. The first series this packs is sbt 2 on Scala 3. The publication names the series, so another series is the same surface.
-- A Histos plugin is that library jar. The loader already resolves a published coordinate. The marker is inside the jar.
+- A Histos plugin is that library jar. The build names the module, or a Ship pin. The binary jar of a named plugin module carries `META-INF/histos/version`, the sha256 of the host api jar. The sources jar does not.
 - A CLI module picks one form. Assembly is the fat jar: no Scala suffix, a real pom with an empty dependency list, `Main-Class` in the manifest. That is `java -jar` and the histos launcher. Application is the thin jar whose pom carries the classpath, which is `coursier launch`.
 
 `histos-api_3` and the `histos` assembly stay two modules in one ship, and one deployment. [Projects.assembly](../api/src/histos/Graph.scala) as a graph-level side door goes away. The empty pom it writes for snapshots will not pass Central.

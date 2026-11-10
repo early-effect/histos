@@ -1,38 +1,26 @@
 package histos.plugin
 
-import histos.{Dep, ProjectName, ProjectPath}
+import histos.{Dep, ProjectName}
 
 import java.nio.file.Path
 
 /** What fails while loading a plugin. The throwable is not a payload. `binary` is an exception class name. */
 enum PluginLoadError:
-  case BadCoordinate(raw: String)
-  case Misplaced(line: Int)
   case Unlocked(coordinate: String)
-  case NoEntry(coordinate: String)
-  case AmbiguousEntry(coordinate: String)
   case Unversioned(coordinate: String)
   case VersionMismatch(dependency: Dep, pluginApi: ApiDigest, launcher: ApiDigest)
   case ApiLink(dependency: Dep)
   case NoSource(coordinate: PluginCoordinate)
-  case PathIsSource(path: ProjectPath)
   case ReservedPackage(binary: String)
   case EngineLeak(coordinate: PluginCoordinate, binary: String)
   case BuildLeak(binary: String)
-  case ForeignEntry(plugin: PluginId, entry: EntryName)
-  case NotEntry(plugin: PluginId, entry: EntryName, expected: EntryName)
   case IdMismatch(declared: PluginId, found: PluginId)
-  case Undeclared(plugin: PluginId)
   case Defect(coordinate: PluginCoordinate, binary: String)
   case Io(op: PluginIo)
+  case Construction(detail: String)
 
   def message: String = this match
-    case BadCoordinate(raw)         => s"'$raw' is not an exact plugin coordinate"
-    case Misplaced(line)            => s"plugin(...) on line $line is outside the header"
-    case Unlocked(coordinate)       => s"plugin $coordinate is not in the lock"
-    case NoEntry(coordinate)        => s"plugin $coordinate does not contain ${HistosPlugin.EntryResourceName}"
-    case AmbiguousEntry(coordinate) =>
-      s"plugin $coordinate has more than one line in ${HistosPlugin.EntryResourceName}"
+    case Unlocked(coordinate)    => s"plugin $coordinate is not in the lock"
     case Unversioned(coordinate) => s"plugin $coordinate does not contain ${ApiDigest.resource}"
     case VersionMismatch(dependency, pluginApi, launcher) =>
       val coordinate = PluginCoordinate.Published(dependency).render
@@ -41,18 +29,13 @@ enum PluginLoadError:
       s"plugin ${PluginCoordinate.Published(dependency).render} uses LinkStrategy.Api, which is refused"
     case NoSource(coordinate) =>
       s"plugin ${coordinate.render} needs sources, and this loader does not have them"
-    case PathIsSource(path)             => s"plugin path '${path.value}' is source and does not take that link strategy"
     case ReservedPackage(binary)        => s"'$binary' is in a reserved package"
     case EngineLeak(coordinate, binary) => s"plugin ${coordinate.render} links '$binary'"
     case BuildLeak(binary)              => s"the build links '$binary', and no plugin class asked for it"
-    case ForeignEntry(plugin, entry)    =>
-      s"plugin ${plugin.value} entry ${entry.value} was not defined by its header jar"
-    case NotEntry(plugin, entry, expected) =>
-      s"plugin ${plugin.value} entry ${entry.value} does not match ${expected.value}"
-    case IdMismatch(declared, found) => s"plugin ${declared.value} loaded as ${found.value}"
-    case Undeclared(plugin)          => s"plugin ${plugin.value} is used and is not in the header"
-    case Defect(coordinate, binary)  => s"plugin ${coordinate.render} failed while loading ($binary)"
-    case Io(op)                      => s"plugin ${op.word} failed at ${op.location}"
+    case IdMismatch(declared, found)    => s"plugin ${declared.value} loaded as ${found.value}"
+    case Defect(coordinate, binary)     => s"plugin ${coordinate.render} failed while loading ($binary)"
+    case Io(op)                         => s"plugin ${op.word} failed at ${op.location}"
+    case Construction(detail)           => s"plugin construction failed ($detail)"
 end PluginLoadError
 
 enum PluginIo:

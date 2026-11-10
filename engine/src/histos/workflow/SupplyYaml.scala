@@ -251,7 +251,7 @@ object SupplyYaml:
       "        continue-on-error: true",
       s"        uses: ${ActionPins.appToken.line}",
       "        with:",
-      s"          app-id: $${{ secrets.$id }}",
+      s"          client-id: $${{ secrets.$id }}",
       s"          private-key: $${{ secrets.$key }}",
       "          permission-contents: write",
       "          permission-pull-requests: write",

@@ -78,6 +78,5 @@ final case class RunRequest(
   */
 final case class RegisteredPlugin(
     id: PluginId,
-    entry: EntryName,
     contribution: Contribution,
 )(val plugin: HistosPlugin)

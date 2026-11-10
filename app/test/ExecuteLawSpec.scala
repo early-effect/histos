@@ -368,7 +368,9 @@ object ExecuteLawSpec extends ZIOSpecDefault:
 
   private def failLoad: URIO[Stubbed[Loader], Unit] =
     stub[Loader](_.load(any[Path], any[Path]))(ZIO.fail(LoadError.NoHome)) *>
-      stub[Loader](_.scan(any[Path]))(ZIO.fail(LoadError.NoHome))
+      stub[Loader](_.loadLocked(any[Path], any[Path], any[histos.resolve.DependencyLock]))(
+        ZIO.fail(LoadError.NoHome)
+      )
 
   private def open[A](prefix: String)(
       use: Path => ZIO[Loader & Stubbed[Loader] & Resolve & ContentStore & Machine & Scope, Nothing, A]

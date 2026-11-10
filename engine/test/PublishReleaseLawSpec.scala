@@ -2,6 +2,7 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.version.VersionTask
 import histos.workspace.Workspace
@@ -37,9 +38,10 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** A release classifies the build's receipt. Credentials fail before that, and a ship with no asset does not upload. */
 object PublishReleaseLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"example.com"
-  private val named  = module("releaselaw", Jvm)(scala3)
+  private val hostApi = ApiDigest.trusted("ab" * 32)
+  private val scala3  = scala"3.10.0"
+  private val group   = organization"example.com"
+  private val named   = module("releaselaw", Jvm)(scala3)
 
   def spec = suite("publish release laws")(
     test("snapshots and promote name the missing credentials, and assets with nothing to upload stay empty"):
@@ -60,7 +62,17 @@ object PublishReleaseLawSpec extends ZIOSpecDefault:
                 case Left(error)  => ZIO.dieMessage(error.message)
                 case Right(value) => ZIO.succeed(value)
               snapped <- PublishRun
-                .snapshots(dir, graph, HistosBuild.fixed(graph), Nil, jdk, Map.empty, _ => ZIO.unit, _ => ZIO.unit)
+                .snapshots(
+                  dir,
+                  graph,
+                  HistosBuild.fixed(graph),
+                  Nil,
+                  jdk,
+                  Map.empty,
+                  hostApi,
+                  _ => ZIO.unit,
+                  _ => ZIO.unit,
+                )
                 .either
               promoted <- PublishRun.promote(dir, Map.empty, "nope", _ => ZIO.unit).either
               assets   <- PublishRun.assets(dir, graph, Nil, Map.empty).either
@@ -110,6 +122,7 @@ object PublishReleaseLawSpec extends ZIOSpecDefault:
                     jdk,
                     Map("HISTOS_SESSION" -> "release"),
                     false,
+                    hostApi,
                     _ => ZIO.unit,
                     _ => ZIO.unit,
                   )

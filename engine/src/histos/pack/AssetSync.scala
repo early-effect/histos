@@ -1,5 +1,6 @@
 package histos.pack
 
+import histos.plugin.ApiDigest
 import histos.{AssetError, GeneratedAsset, ResourceName}
 
 import java.io.IOException
@@ -24,12 +25,16 @@ object AssetSync:
       generated: List[GeneratedAsset],
       repo: Path,
   ): IO[AssetError, Unit] =
+    val unmanagedKept = unmanaged.filterNot(row => row._1.value == ApiDigest.resource)
+    val generatedKept = generated.filterNot(asset => asset.resource.value == ApiDigest.resource)
     for
-      _        <- ZIO.fromEither(distinct(generated))
-      desired  <- prepare(unmanaged, generated, repo)
+      _        <- refuseEntry(unmanaged, generated, repo)
+      _        <- ZIO.fromEither(distinct(generatedKept))
+      desired  <- prepare(unmanagedKept, generatedKept, repo)
       _        <- collide(classes, desired)
       previous <- readManifest(manifest)
       _        <- dropStale(classes, previous, desired.map(_._1).toSet)
+      _        <- dropReserved(classes)
       _        <- writeAll(classes, desired)
       _        <- writeManifest(manifest, desired.map(_._1))
     yield ()
@@ -37,6 +42,32 @@ object AssetSync:
   private enum Payload:
     case Copy(path: Path)
     case Text(text: String)
+
+  private def refuseEntry(
+      unmanaged: List[(ResourceName, Path)],
+      generated: List[GeneratedAsset],
+      repo: Path,
+  ): IO[AssetError, Unit] =
+    val fromFile = unmanaged.collectFirst:
+      case (name, path) if name.value == AssetError.refusedName => path
+    val fromGenerated = generated.collectFirst:
+      case GeneratedAsset.File(name, path) if name.value == AssetError.refusedName =>
+        repo.resolve(path.value)
+      case GeneratedAsset.Text(name, _) if name.value == AssetError.refusedName =>
+        Path.of(name.value)
+    fromFile.orElse(fromGenerated) match
+      case Some(path) => ZIO.fail(AssetError.CommittedEntry(path))
+      case None       => ZIO.unit
+
+  /** A class directory from an older publish may still hold these two files. They are not resources of the module. */
+  private def dropReserved(classes: Path): IO[AssetError, Unit] =
+    ZIO
+      .attemptBlocking:
+        List(AssetError.refusedName, ApiDigest.resource).foreach: name =>
+          val dest = classes.resolve(name)
+          if Files.isRegularFile(dest) then Files.delete(dest)
+      .mapError(_ => AssetError.Unreadable(classes))
+      .unit
 
   private def distinct(generated: List[GeneratedAsset]): Either[AssetError, Unit] =
     generated

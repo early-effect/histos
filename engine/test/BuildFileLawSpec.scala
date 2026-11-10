@@ -103,9 +103,9 @@ object BuildFileLawSpec extends ZIOSpecDefault:
                 Files.writeString(source, "object Demo\n")
                 Files.writeString(broken, "object Broken { val n: Int = \"no\" }\n")
               compiled <- BuildFile.compile(source, jars, out).either
-              reporter <- BuildFile.drive(source, jars, out)
+              reporter <- BuildFile.drive(List(source), jars, out)
               notes = BuildFile.notesOf(reporter, display, source)
-              failedDrive <- BuildFile.drive(broken, jars, out)
+              failedDrive <- BuildFile.drive(List(broken), jars, out)
               failedNotes = BuildFile.notesOf(failedDrive, display, broken)
               failed <- BuildFile.compile(broken, jars, out).either
               messages = failed match

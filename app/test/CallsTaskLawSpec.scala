@@ -4,7 +4,7 @@ import histos.build.BuildEvent
 import histos.cache.ContentStore
 import histos.jdk.Machine
 import histos.load.{Loader, PluginRuntime}
-import histos.plugin.{FlagName, PluginArgs, PluginTaskId}
+import histos.plugin.{ApiDigest, FlagName, PluginArgs, PluginTaskId}
 import histos.report.CallResult
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, ResolutionService, Resolve}
 import histos.version.Catalog
@@ -85,6 +85,8 @@ object CallsTaskLawSpec extends ZIOSpecDefault:
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
   private val idle: PluginRuntime = new PluginRuntime:
+    def launcher: ApiDigest = ApiDigest.trusted("a" * 64)
+
     def run(id: PluginTaskId, args: PluginArgs) =
       ZIO.dieMessage("plugin was not asked")
     def bind =

@@ -3,6 +3,7 @@ package histos.server
 import histos.build.BuildEvent
 import histos.cache.ContentStore
 import histos.jdk.Machine
+import histos.plugin.ApiDigest
 import histos.report.CallResult
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.version.VersionTask
@@ -33,9 +34,10 @@ import zio.test.{TestAspect, TestEnvironment, ZIOSpecDefault, assertTrue, suite,
 
 /** Publish calls report the build's receipt. Credentials fail before a socket opens. */
 object CallsPublishLawSpec extends ZIOSpecDefault:
-  private val scala3 = scala"3.10.0"
-  private val group  = organization"example.com"
-  private val named  = module("publishlaw", Jvm)(scala3)
+  private val scala3  = scala"3.10.0"
+  private val group   = organization"example.com"
+  private val named   = module("publishlaw", Jvm)(scala3)
+  private val hostApi = ApiDigest.trusted("ab" * 32)
 
   def spec = suite("calls publish laws")(
     test("a missing organization and missing credentials are faults, and a staged jar is the receipt"):
@@ -63,10 +65,10 @@ object CallsPublishLawSpec extends ZIOSpecDefault:
                   case Left(error)  => ZIO.dieMessage(error.message)
                   case Right(value) => ZIO.succeed(value)
                 (missed, missedHeard) <- speak(say =>
-                  Calls.publishLocal(dir, bare, HistosBuild.fixed(bare), machine, jdk, Nil, say)
+                  Calls.publishLocal(dir, bare, HistosBuild.fixed(bare), machine, jdk, Nil, say, hostApi)
                 )
                 (released, releasedHeard) <- speak(say =>
-                  Calls.publishRelease(dir, bare, HistosBuild.fixed(bare), machine, jdk, Nil, false, say)
+                  Calls.publishRelease(dir, bare, HistosBuild.fixed(bare), machine, jdk, Nil, false, say, hostApi)
                 )
                 (dropped, droppedHeard) <- speak(say => Calls.drop(dir, bare, machine, "nope", say))
                 seen                    <- Ref.make(Option.empty[Seen])
@@ -74,7 +76,7 @@ object CallsPublishLawSpec extends ZIOSpecDefault:
                 _                       <- Workspace.writeString(source, "object Ready:\n  def n: Int = 1\n")
                 _ <- Workspace.writeString(dir.resolve("dependencies.lock"), DependencyLock.render(pinned(lock)))
                 (published, heard) <- speak(say =>
-                  Calls.publishLocal(dir, graph, recording(graph, seen), machine, jdk, Nil, say)
+                  Calls.publishLocal(dir, graph, recording(graph, seen), machine, jdk, Nil, say, hostApi)
                 )
                 recorded <- seen.get
               yield

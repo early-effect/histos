@@ -812,14 +812,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "AggregateShipMember(ship,aggregate,position) | " +
               "MemberInTwoShips(member,first,second,position) | " +
               "DuplicateResolver(token) | MixedTest(name,position) | " +
-              "DuplicateDirectory(name,other,directory) | DuplicatePlugin(id) | " +
-              "DuplicatePluginTask(plugin,name) | DuplicateCommand(name) | " +
-              "DuplicateJob(name) | ReservedJob(name) | DuplicateSite(first,second) | " +
-              "Ci(fault) | DuplicateNote(module,plugin,key) | " +
-              "MissingNote(module,plugin,key) | PluginMissingModule(plugin,name) | " +
-              "PluginMissingCell(plugin,module,version,platform) | " +
-              "UnknownPluginTask(plugin,name) | CommandShadow(name) | " +
-              "PluginDefect(plugin,binary) | TwoPublications(name,position) | " +
+              "DuplicateDirectory(name,other,directory) | PluginGraph(fault) | " +
+              "Ci(fault) | TwoPublications(name,position) | " +
               "AssemblyShape(name,position) | AssetWithoutAssembly(name,position) | " +
               "TwoAssets(name,position) | DuplicateResource(name,resource,position) | " +
               "RemoteNeeds(name,needs,position)"
@@ -900,6 +894,20 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
           ),
           """{"NoDefaultBranch":{}}""",
           histos.workflow.CiError.NoDefaultBranch,
+        ) &&
+        mixed[histos.PluginGraphFault](
+          "PluginGraphFault",
+          (
+            "DuplicatePlugin(id) | DuplicatePluginTask(plugin,name) | DuplicateCommand(name) | " +
+              "DuplicateJob(name) | ReservedJob(name) | DuplicateSite(first,second) | " +
+              "DuplicateNote(module,plugin,key) | MissingNote(module,plugin,key) | " +
+              "PluginMissingModule(plugin,name) | PluginMissingCell(plugin,module,version,platform) | " +
+              "UnknownPluginTask(plugin,name) | CommandShadow(name) | PluginDefect(plugin,binary) | " +
+              "UnknownPluginModule(raw,position) | PluginOnAggregate(name,position) | " +
+              "DuplicatePluginCoordinate(render,position)"
+          ),
+          """{"CommandShadow":{"name":"site"}}""",
+          histos.PluginGraphFault.CommandShadow(histos.plugin.CommandName("site")),
         ) &&
         mixed[histos.CiFault](
           "CiFault",
@@ -1285,9 +1293,9 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         ) &&
         mixed[histos.plugin.PluginCoordinate](
           "PluginCoordinate",
-          "Published(dependency) | Path(path)",
-          """{"Path":{"path":"modules/core"}}""",
-          histos.plugin.PluginCoordinate.Path(histos.ProjectPath("modules/core")),
+          "Published(dependency,link) | Module(name)",
+          """{"Module":{"name":"core"}}""",
+          histos.plugin.PluginCoordinate.Module(histos.ProjectName("core")),
         )
     )
 
@@ -1311,18 +1319,14 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
         mixed[histos.plugin.PluginLoadError](
           "PluginLoadError",
           (
-            "BadCoordinate(raw) | Misplaced(line) | Unlocked(coordinate) | " +
-              "NoEntry(coordinate) | AmbiguousEntry(coordinate) | " +
-              "Unversioned(coordinate) | " +
+            "Unlocked(coordinate) | Unversioned(coordinate) | " +
               "VersionMismatch(dependency,pluginApi,launcher) | ApiLink(dependency) | " +
-              "NoSource(coordinate) | PathIsSource(path) | ReservedPackage(binary) | " +
+              "NoSource(coordinate) | ReservedPackage(binary) | " +
               "EngineLeak(coordinate,binary) | BuildLeak(binary) | " +
-              "ForeignEntry(plugin,entry) | NotEntry(plugin,entry,expected) | " +
-              "IdMismatch(declared,found) | Undeclared(plugin) | " +
-              "Defect(coordinate,binary) | Io(op)"
+              "IdMismatch(declared,found) | Defect(coordinate,binary) | Io(op) | Construction(detail)"
           ),
-          """{"BadCoordinate":{"raw":"x"}}""",
-          histos.plugin.PluginLoadError.BadCoordinate("x"),
+          """{"Unlocked":{"coordinate":"demo"}}""",
+          histos.plugin.PluginLoadError.Unlocked("demo"),
         ) &&
         mixed[histos.plugin.PluginRunError](
           "PluginRunError",

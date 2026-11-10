@@ -108,43 +108,29 @@ object AttachLawSpec extends ZIOSpecDefault:
         lockRoots == List(repo.resolve("histos.scala"), repo.resolve("dependencies.lock")),
       )
     ,
-    test("a path plugin is a root and its file bytes change the fingerprint"):
+    test("the wiring file is a root, and an unnamed directory is not"):
       for
         root <- ZIO.service[Path]
-        repo <- LawDir.child(root, "plugin")
-        dir  = repo.resolve("plugins").resolve("demo")
-        note = dir.resolve("Note.scala")
-        _ <- ZIO.attemptBlocking {
-          Files.writeString(repo.resolve("histos.scala"), "plugin(path\"plugins/demo\")\n")
-          Files.createDirectories(dir)
-          Files.writeString(note, "one")
-        }.orDie
-        roots  <- Fingerprint.roots(repo, Resolution.Solve)
-        first  <- Fingerprint.read(repo, Resolution.Solve)
-        _      <- write(note, "two")
-        second <- Fingerprint.read(repo, Resolution.Solve)
-      yield assertTrue(roots.contains(dir), roots.contains(repo.resolve("histos.scala")), first != second)
-    ,
-    test("a header that does not parse adds no plugin root"):
-      for
-        root  <- ZIO.service[Path]
-        plain <- LawDir.child(root, "plain")
-        extra <- LawDir.child(root, "extra")
-        _     <- ZIO.attemptBlocking {
-          Files.writeString(plain.resolve("histos.scala"), "plugin(nope)\n")
-          Files.writeString(extra.resolve("histos.scala"), "plugin(nope)\n")
-          val dir = extra.resolve("plugins").resolve("demo")
-          Files.createDirectories(dir)
-          Files.writeString(dir.resolve("Note.scala"), "secret")
-        }.orDie
-        plainRoots <- Fingerprint.roots(plain, Resolution.Solve)
-        extraRoots <- Fingerprint.roots(extra, Resolution.Solve)
-        plainHash  <- Fingerprint.read(plain, Resolution.Solve)
-        extraHash  <- Fingerprint.read(extra, Resolution.Solve)
+        repo <- LawDir.child(root, "wiring")
+        wiring = repo.resolve("histos.wiring.scala")
+        note   = repo.resolve("plugins").resolve("demo").resolve("Note.scala")
+        _           <- write(repo.resolve("histos.scala"), "object Build\n")
+        _           <- write(note, "one")
+        beforeRoots <- Fingerprint.roots(repo, Resolution.Solve)
+        before      <- Fingerprint.read(repo, Resolution.Solve)
+        _           <- write(wiring, "object HistosWiring\n")
+        midRoots    <- Fingerprint.roots(repo, Resolution.Solve)
+        mid         <- Fingerprint.read(repo, Resolution.Solve)
+        _           <- write(note, "two")
+        after       <- Fingerprint.read(repo, Resolution.Solve)
+        _           <- write(wiring, "object HistosWiring\n\n")
+        changed     <- Fingerprint.read(repo, Resolution.Solve)
       yield assertTrue(
-        plainRoots == List(plain.resolve("histos.scala")),
-        extraRoots == List(extra.resolve("histos.scala")),
-        plainHash == extraHash,
+        beforeRoots == List(repo.resolve("histos.scala")),
+        midRoots == List(repo.resolve("histos.scala"), wiring),
+        before != mid,
+        mid == after,
+        changed != mid,
       ),
   ).provideSomeLayerShared[TestEnvironment & Scope](LawDir.layer)
 

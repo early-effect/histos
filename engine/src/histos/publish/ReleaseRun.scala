@@ -15,6 +15,7 @@ import histos.central.{
   RepositorySecret,
 }
 import histos.jdk.JdkRuntime
+import histos.plugin.ApiDigest
 import histos.version.ShipName
 import histos.zinc.CompileFeed
 import histos.ProjectGraph
@@ -92,6 +93,7 @@ private[publish] object ReleaseRun:
       tokens: List[String],
       jdk: JdkRuntime,
       env: Map[String, String],
+      api: ApiDigest,
       report: CompileFeed => UIO[Unit],
   ): ZIO[histos.resolve.Resolve & histos.cache.ContentStore & Scope, ReleaseError, ReleaseStage] =
     for
@@ -104,7 +106,7 @@ private[publish] object ReleaseRun:
         .mapError(ReleaseError.Stage(_))
       dir    <- ZIO.acquireRelease(directory("histos-release"))(deleteTree)
       output <- LocalPublish
-        .run(repo, graph, names, jdk, env, PublishWrite.Release, report)
+        .run(repo, graph, names, jdk, env, PublishWrite.Release, api, report)
         .provideSome[histos.resolve.Resolve & histos.cache.ContentStore](Publisher.local(dir))
         .mapError(ReleaseError.Stage(_))
     yield ReleaseStage(

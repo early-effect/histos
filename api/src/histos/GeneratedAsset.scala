@@ -22,11 +22,18 @@ enum AssetError:
   case Collides(name: ResourceName)
   case Missing(path: Path)
   case Unreadable(path: Path)
+  case CommittedEntry(path: Path)
 
   def message: String = this match
-    case Escaped(raw)     => s"'$raw' is not a resource name"
-    case Duplicate(name)  => s"resource '${name.value}' is generated twice"
-    case Collides(name)   => s"resource '${name.value}' is already a class file"
-    case Missing(path)    => s"$path is not a file"
-    case Unreadable(path) => s"could not read $path"
+    case Escaped(raw)         => s"'$raw' is not a resource name"
+    case Duplicate(name)      => s"resource '${name.value}' is generated twice"
+    case Collides(name)       => s"resource '${name.value}' is already a class file"
+    case Missing(path)        => s"$path is not a file"
+    case Unreadable(path)     => s"could not read $path"
+    case CommittedEntry(path) =>
+      s"$path names ${AssetError.refusedName}; delete it. A plugin is a layer, not a file."
 end AssetError
+
+object AssetError:
+  /** A committed file of this name is not a plugin. */
+  val refusedName: String = "META-INF/histos/plugin"

@@ -7,7 +7,6 @@ import histos.plugin.{
   Contribution,
   DeclaredOutput,
   DeclaredTask,
-  EntryName,
   HistosPlugin,
   OutputName,
   PluginArgs,
@@ -170,7 +169,6 @@ object PluginOutcomeLawSpec extends ZIOSpecDefault:
       List(
         RegisteredPlugin(
           pluginId,
-          EntryName.trusted("demo.Plugin$"),
           Contribution(tasks, Nil, Nil),
         )(plugin)
       ),

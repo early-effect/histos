@@ -61,6 +61,8 @@ final case class PluginLink(
   * acquire should die with.
   */
 trait PluginRuntime:
+  /** Sha256 of the api jar this process loaded. Publish stamps a plugin coordinate with it. */
+  def launcher: ApiDigest
   def run(
       id: PluginTaskId,
       args: PluginArgs,
@@ -112,7 +114,7 @@ object PluginRuntime:
       loader: ClassLoader,
       threads: PluginThreads,
       val links: List[PluginLink],
-      launcher: ApiDigest,
+      val launcher: ApiDigest,
       runner: Histos,
       generation: Scope.Closeable,
   ) extends PluginRuntime:

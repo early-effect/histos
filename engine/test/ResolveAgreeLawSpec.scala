@@ -123,7 +123,46 @@ object ResolveAgreeLawSpec extends ZIOSpecDefault:
             sourced == Left(ResolveError.Checksum(jar, sha, other)),
           )
         run.provideSomeLayer[Scope](stubbed[Resolve])
-      },
+      }
+    ,
+    test("planning a ship pin records the binary, and exact-binary omits sources"):
+      val run =
+        for
+          compiler <- histos.toolchain.BuildCompiler.version.catchAll(error => ZIO.dieMessage(error.message))
+          published = ArtifactName.of(plugin, compiler, Platform.Jvm)
+          kept      = ResolvedArtifact(plugin.organization, published, plugin.revision, jar, sha, Repository.Central)
+          _ <- stub[Resolve](_.resolvePlugin(any[Dep], any[Repositories]))(ZIO.succeed(Classpath(List(kept), Nil)))
+          _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            ZIO.succeed(
+              ResolvedArtifact(plugin.organization, published, plugin.revision, jar, other, Repository.Central)
+            )
+          )
+          planned <- Resolve.planPlugins(
+            List(PluginRequest.Dep(plugin, LinkStrategy.BinaryOrSource)),
+            Repositories.central,
+          )
+          _ <- stub[Resolve](_.sources(any[String], any[String], any[String], any[Repository]))(
+            ZIO.dieMessage("sources")
+          )
+          exact <- Resolve.planPlugins(
+            List(PluginRequest.Dep(plugin, LinkStrategy.ExactBinary)),
+            Repositories.central,
+          )
+        yield
+          val recorded = planned match
+            case cell :: Nil =>
+              cell.organization == plugin.organization &&
+              cell.name == plugin.name &&
+              cell.revision == plugin.revision &&
+              cell.link == LinkStrategy.BinaryOrSource &&
+              cell.artifacts.map(_.name) == List(published) &&
+              cell.source.map(_.sha256) == Some(other)
+            case _ => false
+          val binary = exact match
+            case cell :: Nil => cell.link == LinkStrategy.ExactBinary && cell.source.isEmpty
+            case _           => false
+          assertTrue(recorded, binary)
+      run.provideSomeLayer[Scope](stubbed[Resolve]),
   )
 
   private val rangedDep = Dep.trusted("org.example", "demo", "1.+", DepKind.Java)
