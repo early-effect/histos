@@ -208,12 +208,13 @@ object ReportLawSpec extends ZIOSpecDefault:
       "every workflow fault round-trips, and a wrong kind is rejected",
       List(WorkflowFault.Files(CiError.Pins("x")), WorkflowFault.Scripts(ScriptError.Revision)),
     ),
-    test("a tally records classes only with sources, and only three failures name a cell"):
+    test("a tally records classes only with sources, and only four failures name a cell"):
       val full      = Tally.recorded(core, scala3, Platform.Js, Some(count), Some(9))
       val uncounted = Tally.recorded(core, scala3, Platform.Js, Some(count), None)
       val unknown   = Tally.recorded(core, scala3, Platform.Native, None, Some(9))
       val named     = List(
         failed,
+        GraphCompileError.Assets(core, scala3, Platform.Jvm, AssetError.Collides(ResourceName.trusted("Demo.class"))),
         GraphCompileError.MissingUpstream(core, api, scala3, Platform.Jvm),
         GraphCompileError.IncompatibleUpstream(core, api, scala3, scala213, Platform.Js),
       )
@@ -239,6 +240,7 @@ object ReportLawSpec extends ZIOSpecDefault:
         unknown.classes.isEmpty,
         unknown.platform == "native",
         named.map(Tally.failed) == List(
+          Some(ModuleTally(core.value, scala3.value, "jvm", None, None, None)),
           Some(ModuleTally(core.value, scala3.value, "jvm", None, None, None)),
           Some(ModuleTally(core.value, scala3.value, "jvm", None, None, None)),
           Some(ModuleTally(core.value, scala3.value, "js", None, None, None)),

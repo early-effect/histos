@@ -189,6 +189,8 @@ import histos.{
   ScalaVersion,
   ScalaVersionError,
   SourcePos,
+  AssetError,
+  ResourceName,
   TestMain,
   TestProvider,
   ToolRevision,
@@ -335,6 +337,7 @@ private object WireSchemaLeaves extends WireSchemaSupport:
   given Schema[TargetName]     = text("TargetName")
   given Schema[ProjectPath]    = text("ProjectPath")
   given Schema[RepoPath]       = text("RepoPath")
+  given Schema[ResourceName]   = text("ResourceName")
   given Schema[Organization]   = text("Organization")
   given Schema[ToolRevision]   = text("ToolRevision")
   given Schema[TestMain]       = text("TestMain")
@@ -394,6 +397,8 @@ private object WireSchemaBuild extends WireSchemaSupport:
   given Schema[NamespaceError] = Schema.derived
 
   given Schema[RemoteError] = Schema.derived
+
+  given Schema[AssetError] = Schema.derived
 
   given Schema[GraphCompileError] = Schema.derived
 

@@ -113,6 +113,17 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
         Projects(jvm("sbt").sbtPlugin(sbt"2")).map(publicationOf("sbt")) == Right(Some(Publication.SbtPlugin(sbt"2"))),
       )
     ,
+    test("a generated resource is kept, and the same name twice is refused"):
+      val note  = GeneratedAsset.Text(ResourceName("note.txt"), "hello")
+      val again = GeneratedAsset.Text(ResourceName("note.txt"), "again")
+      val other = GeneratedAsset.Text(ResourceName("other.txt"), "other")
+      assertTrue(
+        fault(Projects(jvm("core").resources(note, again))) == "DuplicateResource",
+        fault(Projects(jvm("core").resources(note).resources(again))) == "DuplicateResource",
+        Projects(jvm("core").resources(note)).map(resourcesOf("core")) == Right(List(note)),
+        Projects(jvm("core").resources(note).resources(other)).map(resourcesOf("core")) == Right(List(note, other)),
+      )
+    ,
     test("a remote store with a need is refused, and a test main excludes a provider"):
       val remote = jvm("core").testStore(TestStore.Remote).needs(Need.Network)
       val mixed  = jvm("core").test(TestMain("app.Test")).testProvider(TestProvider.Zio)
@@ -246,6 +257,9 @@ object GraphShapeLawSpec extends ZIOSpecDefault:
 
   private def named(graph: ProjectGraph, name: String): Option[Module] =
     modules(graph).find(_.name.value == name)
+
+  private def resourcesOf(name: String)(graph: ProjectGraph): List[GeneratedAsset] =
+    named(graph, name).toList.flatMap(_.resources)
 
   private def upstream(name: String, platform: Platform)(graph: ProjectGraph): List[String] =
     named(graph, name).toList.flatMap(_.upstream(platform).map(_.value))

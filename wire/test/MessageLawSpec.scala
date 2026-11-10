@@ -240,6 +240,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "could not read source roots under /work/repo",
           "could not write /work/repo",
           s"'core' 3.10.0 jvm failed to compile\n$sources",
+          "'core' 3.10.0 jvm could not copy resources\nresource 'Demo.class' is already a class file",
           root,
         ),
         graphErrors.map(error => noted(error.diagnose)) == List(
@@ -252,6 +253,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           ("compile.failed", "histos help compile"),
           ("compile.failed", "histos help compile"),
           ("resolve.not-found", "histos resolve --update"),
+          ("compile.failed", "histos help compile"),
           ("compile.failed", "histos help compile"),
           ("compile.failed", "histos help compile"),
           ("compile.failed", "histos help compile"),
@@ -327,6 +329,7 @@ object MessageLawSpec extends ZIOSpecDefault:
           "'core' publishes an assembly, which is one jvm jar (1:1)",
           "'core' names an asset and does not publish an assembly (1:1)",
           "'core' names two assets (1:1)",
+          "'core' names resource 'note.txt' twice (1:1)",
           "'core' stores remote test results and needs docker, network (1:1)",
         ),
       )

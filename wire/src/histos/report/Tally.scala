@@ -29,6 +29,8 @@ object Tally:
     error match
       case GraphCompileError.Failed(module, version, platform, _) =>
         Some(blank(module, version, platform))
+      case GraphCompileError.Assets(module, version, platform, _) =>
+        Some(blank(module, version, platform))
       case GraphCompileError.MissingUpstream(module, _, version, platform) =>
         Some(blank(module, version, platform))
       case GraphCompileError.IncompatibleUpstream(module, _, version, _, platform) =>

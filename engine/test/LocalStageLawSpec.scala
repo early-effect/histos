@@ -2,12 +2,25 @@ package histos.publish
 
 import histos.cache.ContentStore
 import histos.central.Publisher
-import histos.jdk.Machine
+import histos.jdk.{Machine, Sha256Digest}
+import histos.plugin.{ApiDigest, HistosPlugin}
 import histos.resolve.{ClasspathScope, DependencyLock, LockedCell, Resolve}
 import histos.workspace.Workspace
-import histos.zinc.GraphCompile
+import histos.zinc.{GraphCompile, ScalacClasspath}
 import histos.version.ShipName
-import histos.{Jvm, MainClass, Platform, ProjectName, Projects, Ship, module, organization, ships}
+import histos.{
+  GeneratedAsset,
+  Jvm,
+  MainClass,
+  Platform,
+  ProjectName,
+  Projects,
+  ResourceName,
+  Ship,
+  module,
+  organization,
+  ships,
+}
 import histos.scala
 
 import java.nio.file.{Files, Path}
@@ -49,10 +62,12 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                     .provideSomeLayer[Resolve](
                       Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
                     )
-                  text    <- pomOf(found)
-                  jars    <- onDisk(maven, found.modules.flatMap(_.jar.toList))
-                  sources <- onDisk(maven, found.modules.flatMap(_.sources.toList))
-                  javadoc <- onDisk(maven, found.modules.flatMap(_.javadoc.toList))
+                  text          <- pomOf(found)
+                  jars          <- onDisk(maven, found.modules.flatMap(_.jar.toList))
+                  sources       <- onDisk(maven, found.modules.flatMap(_.sources.toList))
+                  javadoc       <- onDisk(maven, found.modules.flatMap(_.javadoc.toList))
+                  binaryVersion <- zipTextOf(found.modules.flatMap(_.jar.toList), ApiDigest.resource)
+                  sourceVersion <- zipTextOf(found.modules.flatMap(_.sources.toList), ApiDigest.resource)
                   revision = coordinate(sha)
                 yield assertTrue(
                   found.skipped.isEmpty,
@@ -69,6 +84,8 @@ object LocalStageLawSpec extends ZIOSpecDefault:
                   text.contains(s"<version>$revision</version>"),
                   !text.contains("-ci"),
                   !text.contains("<dependencies>"),
+                  binaryVersion.isEmpty,
+                  sourceVersion.isEmpty,
                 )
               }
             }
@@ -190,6 +207,130 @@ object LocalStageLawSpec extends ZIOSpecDefault:
             }
           }
         }
+      }
+    ,
+    test("a library jar keeps unmanaged resources, and generated text of the same name wins"):
+      ZIO.scoped {
+        Workspace.work("histos-local-resources").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[DependencyLock] { lock =>
+                val noted = module("noted", Jvm)(scala3).resources(
+                  GeneratedAsset.Text(ResourceName("note.txt"), "generated")
+                )
+                val maven = repo.resolve("maven")
+                val store = repo.resolve("store")
+                val built = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(noted)), noted)
+                for
+                  graph <- ZIO.fromEither(built)
+                  _     <- LawGit.ready(repo)
+                  _     <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala"),
+                    "object Hello:\n  def ready: Int = 1\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("resources").resolve("note.txt"),
+                    "plain",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("resources").resolve("other.txt"),
+                    "other",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock.render(pinned(lock, ProjectName("noted"))),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  note          <- zipTextOf(found.modules.flatMap(_.jar.toList), "note.txt")
+                  other         <- zipTextOf(found.modules.flatMap(_.jar.toList), "other.txt")
+                  version       <- zipTextOf(found.modules.flatMap(_.jar.toList), ApiDigest.resource)
+                  sources       <- zipTextOf(found.modules.flatMap(_.sources.toList), "note.txt")
+                  sourceVersion <- zipTextOf(found.modules.flatMap(_.sources.toList), ApiDigest.resource)
+                  classNote     <- Workspace.readIfPresent(
+                    GraphCompile.classesDir(repo, ProjectName("noted"), scala3).resolve("note.txt")
+                  )
+                  refused = found.refused.isEmpty && found.skipped.isEmpty && found.held.isEmpty
+                  count   = found.modules.length
+                yield assertTrue(
+                  refused,
+                  count == 1,
+                  note.contains("generated"),
+                  other.contains("other"),
+                  version.isEmpty,
+                  sources.isEmpty,
+                  sourceVersion.isEmpty,
+                  classNote.contains("generated"),
+                )
+              }
+            }
+          }
+        }
+      }
+    ,
+    test("a plugin jar's version line is the host api digest, and the class directory keeps the planted line"):
+      ZIO.scoped {
+        Workspace.work("histos-local-plugin").flatMap { repo =>
+          Machine.load(repo).flatMap { machine =>
+            GraphCompile.jdk(machine).flatMap { jdk =>
+              ZIO.serviceWithZIO[DependencyLock] { lock =>
+                val plug    = module("plug", Jvm)(scala3)
+                val maven   = repo.resolve("maven")
+                val store   = repo.resolve("store")
+                val built   = Projects.organization(group).locked(ships(Ship("demo").next(1, 2, 3)(plug)), plug)
+                val planted = "ab" * 32
+                for
+                  graph <- ZIO.fromEither(built)
+                  _     <- LawGit.ready(repo)
+                  _     <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("scala").resolve("Plug.scala"),
+                    "object Plug:\n  def ready: Int = 1\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("resources").resolve(HistosPlugin.EntryResourceName),
+                    "plug\n",
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("src").resolve("main").resolve("resources").resolve(ApiDigest.resource),
+                    planted,
+                  )
+                  _ <- Workspace.writeString(
+                    repo.resolve("dependencies.lock"),
+                    DependencyLock.render(pinned(lock, ProjectName("plug"))),
+                  )
+                  found <- LocalPublish
+                    .run(repo, graph, Nil, jdk, Map.empty, PublishWrite.Local)
+                    .provideSomeLayer[Resolve](
+                      Publisher.local(maven) ++ ZLayer.succeed(ContentStore.in(store))
+                    )
+                  api     <- ScalacClasspath.hostApi(repo)
+                  host    <- ZIO.attemptBlocking(Sha256Digest.of(Chunk.fromArray(Files.readAllBytes(api))).value).orDie
+                  version <- zipTextOf(found.modules.flatMap(_.jar.toList), ApiDigest.resource)
+                  plugin  <- zipTextOf(found.modules.flatMap(_.jar.toList), HistosPlugin.EntryResourceName)
+                  sourceVersion <- zipTextOf(found.modules.flatMap(_.sources.toList), ApiDigest.resource)
+                  classVersion  <- Workspace.readIfPresent(
+                    GraphCompile.classesDir(repo, ProjectName("plug"), scala3).resolve(ApiDigest.resource)
+                  )
+                  refused     = found.refused.isEmpty && found.skipped.isEmpty && found.held.isEmpty
+                  count       = found.modules.length
+                  stamped     = version.getOrElse("")
+                  plantedHere = classVersion.getOrElse("")
+                yield assertTrue(
+                  refused,
+                  count == 1,
+                  stamped == host + "\n",
+                  plantedHere == planted,
+                  stamped != plantedHere,
+                  plugin.contains("plug\n"),
+                  sourceVersion.isEmpty,
+                )
+              }
+            }
+          }
+        }
       },
   ).provideSomeLayerShared[TestEnvironment & Scope](opened) @@ TestAspect.withLiveSystem
 
@@ -220,6 +361,20 @@ object LocalStageLawSpec extends ZIOSpecDefault:
       case path :: Nil =>
         ZIO.attemptBlocking(Files.readString(path)).orDie
       case _ => ZIO.succeed("")
+
+  private def zipTextOf(paths: List[Path], name: String): UIO[Option[String]] =
+    paths match
+      case path :: Nil =>
+        ZIO.attemptBlocking {
+          val zip = new java.util.zip.ZipFile(path.toFile)
+          try
+            Option(zip.getEntry(name)).map: entry =>
+              val stream = zip.getInputStream(entry)
+              try new String(stream.readAllBytes, java.nio.charset.StandardCharsets.UTF_8)
+              finally stream.close()
+          finally zip.close()
+        }.orDie
+      case _ => ZIO.succeed(None)
 
   private def manifestOf(found: PublishOutput): UIO[String] =
     found.modules.flatMap(_.jar.toList) match

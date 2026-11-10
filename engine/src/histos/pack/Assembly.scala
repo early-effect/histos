@@ -28,12 +28,15 @@ object Assembly:
       main: MainClass,
       destination: Path,
       resources: List[AssemblyFile] = Nil,
+      replacing: List[AssemblyFile] = Nil,
   ): IO[AssemblyError, Assembled] =
     for
       files <- classFiles(classes, destination)
+      dropped = replacing.map(_.entry).toSet
+      kept    = files.filterNot((name, _) => dropped.contains(name))
       _     <- overlap(jars, destination)
-      _     <- accept(resources, files.map(_._1).toSet)
-      count <- place(destination, classes, files, jars, resources, main)
+      _     <- accept(resources ++ replacing, kept.map(_._1).toSet)
+      count <- place(destination, classes, kept, jars, resources ++ replacing, main)
     yield Assembled(destination, count)
 
   private def classFiles(classes: List[Path], destination: Path): IO[AssemblyError, List[(String, Path)]] =

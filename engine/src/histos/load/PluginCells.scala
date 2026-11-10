@@ -8,9 +8,8 @@ import histos.workspace.Workspace
 import histos.resolve.LockedTools
 import histos.resolve.{BuildResolvers, ClasspathScope, DependencyLock, Repositories, Resolve, ResolveCell, ResolveError}
 import histos.native.NativeOrigin
-import histos.pack.Resources
 import histos.testrun.{ModuleTestError, TestCompile}
-import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, GraphCompileError, JvmCompile}
+import histos.zinc.{CompileFeed, CompiledCell, GraphCompile, JvmCompile}
 import histos.{Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion}
 
 import java.nio.file.{Files, Path}
@@ -270,13 +269,11 @@ private[load] object PluginCells:
           zio.ZLayer.fromZIO(LockedTools.make(lock, graph))
         )
       sources <- testSources(repo, graph, cell).mapError(PluginFault.Tested(_))
-      tested  <- resourceDirs(repo, cell.module, modules, tests = true)
       test    <-
         if sources.isEmpty then ZIO.succeed(compile)
         else
-          val extraResources = tested.filterNot(compile.toSet.contains)
           testJars(cell, lock, repositories)
-            .map(extra => testClasses(repo, cell) :: (extraResources ++ compile ++ extra))
+            .map(extra => testClasses(repo, cell) :: (compile ++ extra))
     yield CellClasspath(
       cell.module.name,
       cell.version,
@@ -284,22 +281,6 @@ private[load] object PluginCells:
       compile,
       test,
     )
-
-  private def resourceDirs(
-      repo: Path,
-      module: Module,
-      modules: List[Module],
-      tests: Boolean,
-  ): ZIO[Any, PluginFault, List[Path]] =
-    GraphCompile
-      .sourceBase(repo, module, modules)
-      .mapError(PluginFault.Compiled(_))
-      .flatMap:
-        case None      => ZIO.succeed(Nil)
-        case Some(src) =>
-          Resources
-            .directories(src, tests)
-            .mapError(_ => PluginFault.Compiled(GraphCompileError.RootRead(src)))
 
   private def compileClasspath(
       repo: Path,
@@ -319,10 +300,7 @@ private[load] object PluginCells:
         ClasspathScope.Compile,
         cell.module.dependencies,
       )
-      library <- standardLibrary(cell).mapError(PluginFault.Tested(_))
-      own     <- resourceDirs(repo, cell.module, modules, tests = false)
-      above   <- ZIO.foreach(Module.chain(cell.module, modules, cell.platform)): dependency =>
-        resourceDirs(repo, dependency, modules, tests = false)
+      library    <- standardLibrary(cell).mapError(PluginFault.Tested(_))
       transitive <- ZIO.foreach(Module.chain(cell.module, modules, cell.platform)): dependency =>
         histos.zinc.UpstreamCells.chosen(cell.version, dependency, cell.platform, modules) match
           case None =>
@@ -342,7 +320,7 @@ private[load] object PluginCells:
       jars =
         (fetched ++ transitive.flatten.distinct.filterNot(fetched.toSet.contains))
           .filterNot(path => cell.platform == Platform.Jvm && JvmCompile.isStandardLibrary(path))
-    yield classes(repo, cell) :: (upstream ++ own ++ above.flatten ++ library ++ jars)
+    yield classes(repo, cell) :: (upstream ++ library ++ jars)
 
   private def testJars(
       cell: Cell,

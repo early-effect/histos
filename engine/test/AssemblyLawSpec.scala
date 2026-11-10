@@ -1,6 +1,7 @@
 package histos.pack
 
 import histos.jdk.Toolchain
+import histos.plugin.ApiDigest
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
@@ -102,6 +103,34 @@ object AssemblyLawSpec extends ZIOSpecDefault:
               escaped == Left(AssemblyError.Escaped("..")),
               again == Left(AssemblyError.Duplicate(entry)),
               absent == Left(AssemblyError.NotAFile(root.resolve("gone"))),
+            )
+          }
+    ,
+    test("replacing drops the class-directory file and stores the replacement"):
+      MainClass.from(mainName) match
+        case Left(_)     => ZIO.succeed(assertTrue(false))
+        case Right(main) =>
+          ZIO.acquireRelease(directory("histos-assembly-replace"))(delete).flatMap { root =>
+            val classes = root.resolve("classes")
+            val dest    = root.resolve("out.jar")
+            val stamp   = root.resolve("api.version")
+            val version = classes.resolve(ApiDigest.resource)
+            for
+              _ <- ZIO.attemptBlocking {
+                writeClass(classes, "demo/Main", "own")
+                Option(version.getParent).foreach(Files.createDirectories(_))
+                Files.writeString(version, "planted\n")
+                Files.writeString(stamp, "host\n")
+              }.orDie
+              _ <- Assembly
+                .write(List(classes), Nil, main, dest, replacing = List(AssemblyFile(ApiDigest.resource, stamp)))
+              found    <- zipBytes(dest, ApiDigest.resource)
+              manifest <- zipBytes(dest, "META-INF/MANIFEST.MF")
+              stored = found.map(bytes => new String(bytes, StandardCharsets.UTF_8)).getOrElse("")
+              header = manifest.map(bytes => new String(bytes, StandardCharsets.UTF_8)).getOrElse("")
+            yield assertTrue(
+              stored == "host\n",
+              header == manifestOf(main),
             )
           },
   )
