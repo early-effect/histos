@@ -309,6 +309,17 @@ private object ProjectPathMacro:
           case Left(err) => report.errorAndAbort(err.message, raw)
           case Right(_)  => '{ ProjectPath.trusted(${ Expr(text) }) }
 
+private object ResourceNameMacro:
+  def literal(raw: Expr[String])(using Quotes): Expr[ResourceName] =
+    import quotes.reflect.report
+    raw.value match
+      case None =>
+        report.errorAndAbort("ResourceName(...) takes a literal. Use ResourceName.from at runtime.", raw)
+      case Some(text) =>
+        ResourceName.from(text) match
+          case Left(err) => report.errorAndAbort(err.message, raw)
+          case Right(_)  => '{ ResourceName.trusted(${ Expr(text) }) }
+
 private object ClangMajorMacro:
   def literal(raw: Expr[Int])(using Quotes): Expr[ClangMajor] =
     import quotes.reflect.report

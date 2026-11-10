@@ -1,29 +1,31 @@
 package histos.pack
 
+import histos.{AssetError, ResourceName}
+
 import java.nio.file.{Files, Path}
 
 import scala.jdk.CollectionConverters.*
 
 import zio.{IO, ZIO}
 
-/** Files under `src/main/resources`. Entry names are the path relative to that directory.
-  *
-  * A classes directory is not a jar, so a run from that directory needs the resource root on the classpath. `main` is
-  * the compile classpath. `test` is added only for the module being tested.
+/** Files under a resource directory. Entry names are the path relative to that directory. Sync copies them into the
+  * class directory, so run, test, and package read one tree.
   */
 object Resources:
-  def directories(src: Path, tests: Boolean): IO[JarError, List[Path]] =
-    ZIO
-      .attemptBlocking {
-        val main = existing(src.resolve("main").resolve("resources"))
-        val test =
-          if tests then existing(src.resolve("test").resolve("resources")) else Nil
-        main ++ test
-      }
-      .mapError(_ => JarError.Io(JarIo.Read(src)))
-
   def files(sourceBase: Path): IO[JarError, List[(String, Path)]] =
-    val root = sourceBase.resolve("main").resolve("resources")
+    filesAt(sourceBase.resolve("main").resolve("resources")).mapBoth(
+      {
+        case AssetError.Escaped(raw)     => JarError.Escaped(raw)
+        case AssetError.Duplicate(name)  => JarError.Duplicate(name.value)
+        case AssetError.Collides(name)   => JarError.Duplicate(name.value)
+        case AssetError.Missing(path)    => JarError.Io(JarIo.Read(path))
+        case AssetError.Unreadable(path) => JarError.Io(JarIo.Read(path))
+      },
+      _.map((name, path) => name.value -> path),
+    )
+
+  /** Regular files under `root`. A missing directory is empty. A name that leaves the directory is refused. */
+  def filesAt(root: Path): IO[AssetError, List[(ResourceName, Path)]] =
     ZIO
       .attemptBlocking {
         if !Files.isDirectory(root) then Right(Nil)
@@ -35,23 +37,17 @@ object Resources:
             finally walk.close()
           found
             .sortBy(_.toString)
-            .foldLeft[Either[JarError, List[(String, Path)]]](Right(Nil)): (acc, file) =>
+            .foldLeft[Either[AssetError, List[(ResourceName, Path)]]](Right(Nil)): (acc, file) =>
               acc.flatMap: seen =>
                 val absolute = file.toAbsolutePath.normalize
                 val relative = base.relativize(absolute)
                 val name     = relative.iterator.asScala.map(_.toString).mkString("/")
-                if !absolute.startsWith(base) || rejected(name) then Left(JarError.Escaped(name))
-                else Right(seen :+ (name, file))
+                if !absolute.startsWith(base) then Left(AssetError.Escaped(name))
+                else
+                  ResourceName.from(name) match
+                    case Left(_)     => Left(AssetError.Escaped(name))
+                    case Right(safe) => Right(seen :+ (safe, file))
       }
-      .mapError(_ => JarError.Io(JarIo.Read(root)))
+      .mapError(_ => AssetError.Unreadable(root))
       .flatMap(ZIO.fromEither)
-
-  private def existing(dir: Path): List[Path] =
-    if Files.isDirectory(dir) then List(dir) else Nil
-
-  private def rejected(name: String): Boolean =
-    name.isEmpty ||
-      name.startsWith("/") ||
-      name.contains('\\') ||
-      name.split("/", -1).exists(part => part.isEmpty || part == "." || part == "..")
 end Resources

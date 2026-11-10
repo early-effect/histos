@@ -60,6 +60,7 @@ final case class Module(
     asset: Option[RepoPath] = None,
     testStore: TestStore = TestStore.Off,
     needs: Set[Need] = Set.empty,
+    resources: List[GeneratedAsset] = Nil,
 ) extends Project:
   /** `<directory>/src`, or `<name>/src` when the module does not name a directory.
     */
@@ -434,6 +435,7 @@ object Projects:
           )
           .orElse(clangOf(n.name, m))
           .orElse(duplicateNote(n.name, m))
+          .orElse(duplicateResource(n.name, m))
       case a: AggregateDef =>
         val children = a.children.map(_.name)
         if children.contains(a.name) then Some(BuildError.AggregateIncludesItself(n.name, a.position))
@@ -518,6 +520,7 @@ object Projects:
                   asset,
                   m.testStore,
                   m.needs,
+                  m.resources,
                 )
 
   private def publicationOf(
@@ -678,6 +681,14 @@ object Projects:
           if seen.contains(item) then (seen, Some(item))
           else (item :: seen, None)
       ._2
+
+  private def duplicateResource(
+      name: ProjectName,
+      module: ModuleBody[?],
+  ): Option[BuildError] =
+    duplicate(module.resources.map(_.resource)) match
+      case Some(resource) => Some(BuildError.DuplicateResource(name, resource, module.position))
+      case None           => None
 
   private def duplicateNote(
       name: ProjectName,

@@ -11,9 +11,10 @@ object Faults:
   /** A compile that never started. A cell that ran stays on the report, so this is empty then. */
   def compileStopped(error: GraphCompileError): Option[BuildFault] =
     error match
-      case GraphCompileError.Failed(_, _, _, _) | GraphCompileError.Cells(_) => None
-      case GraphCompileError.Lock(found)                                     => Some(BuildFault.Resolve(found))
-      case other                                                             => Some(BuildFault.Compile(other))
+      case GraphCompileError.Failed(_, _, _, _) | GraphCompileError.Assets(_, _, _, _) | GraphCompileError.Cells(_) =>
+        None
+      case GraphCompileError.Lock(found) => Some(BuildFault.Resolve(found))
+      case other                         => Some(BuildFault.Compile(other))
 
   /** A test request that never became a run. `None` means the compile or the selector ran. */
   def testStopped(error: ModuleTestError): Option[BuildFault] =
