@@ -821,7 +821,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "UnknownPluginTask(plugin,name) | CommandShadow(name) | " +
               "PluginDefect(plugin,binary) | TwoPublications(name,position) | " +
               "AssemblyShape(name,position) | AssetWithoutAssembly(name,position) | " +
-              "TwoAssets(name,position) | RemoteNeeds(name,needs,position)"
+              "TwoAssets(name,position) | DuplicateResource(name,resource,position) | " +
+              "RemoteNeeds(name,needs,position)"
           ),
           """{"DuplicateResolver":{"token":"central"}}""",
           histos.BuildError.DuplicateResolver("central"),
@@ -999,7 +1000,8 @@ object WireSchemaLawSpec extends ZIOSpecDefault:
               "MissingUpstream(module,dependency,version,platform) | " +
               "IncompatibleUpstream(module,dependency,version,upstream,platform) | " +
               "Cycle(module) | Lock(error) | LockRead(path) | RootRead(path) | " +
-              "Output(path) | Failed(module,version,platform,error) | Cells(errors)"
+              "Output(path) | Failed(module,version,platform,error) | " +
+              "Assets(module,version,platform,error) | Cells(errors)"
           ),
           """{"NoRoot":{"module":"core"}}""",
           histos.zinc.GraphCompileError.NoRoot(core),

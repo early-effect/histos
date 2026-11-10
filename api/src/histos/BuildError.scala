@@ -102,6 +102,7 @@ enum BuildError:
   case AssemblyShape(name: ProjectName, position: SourcePos)
   case AssetWithoutAssembly(name: ProjectName, position: SourcePos)
   case TwoAssets(name: ProjectName, position: SourcePos)
+  case DuplicateResource(name: ProjectName, resource: ResourceName, position: SourcePos)
   case RemoteNeeds(name: ProjectName, needs: Set[Need], position: SourcePos)
 
   def message: String = this match
@@ -189,6 +190,8 @@ enum BuildError:
       s"'${name.value}' names an asset and does not publish an assembly (${position.line}:${position.column})"
     case TwoAssets(name, position) =>
       s"'${name.value}' names two assets (${position.line}:${position.column})"
+    case DuplicateResource(name, resource, position) =>
+      s"'${name.value}' names resource '${resource.value}' twice (${position.line}:${position.column})"
     case RemoteNeeds(name, needs, position) =>
       val listed = needs.toList.map(needWord).sorted.mkString(", ")
       s"'${name.value}' stores remote test results and needs $listed (${position.line}:${position.column})"

@@ -249,6 +249,7 @@ object CodecSamples:
     GraphCompileError.RootRead(path),
     GraphCompileError.Output(path),
     GraphCompileError.Failed(core, scala3, Platform.Jvm, noSources),
+    GraphCompileError.Assets(core, scala3, Platform.Jvm, AssetError.Collides(ResourceName.trusted("Demo.class"))),
     GraphCompileError.Cells(NonEmptyChunk(noRoot)),
   )
 
@@ -312,6 +313,7 @@ object CodecSamples:
     BuildError.AssemblyShape(core, pos),
     BuildError.AssetWithoutAssembly(core, pos),
     BuildError.TwoAssets(core, pos),
+    BuildError.DuplicateResource(core, ResourceName.trusted("note.txt"), pos),
     BuildError.RemoteNeeds(core, Set(Need.Network, Need.Docker), pos),
   )
 

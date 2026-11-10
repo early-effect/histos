@@ -188,6 +188,8 @@ import histos.{
   ScalaVersion,
   ScalaVersionError,
   SourcePos,
+  AssetError,
+  ResourceName,
   TestMain,
   TestProvider,
   ToolRevision,
@@ -342,6 +344,7 @@ private object WireLeaves extends WireSupport:
   given JsonCodec[TargetName]       = parsed(TargetName.from, _.message, _.value)
   given JsonCodec[ProjectPath]      = parsed(ProjectPath.from, _.message, _.value)
   given JsonCodec[RepoPath]         = parsed(RepoPath.from, _.message, _.value)
+  given JsonCodec[ResourceName]     = parsed(ResourceName.from, _.message, _.value)
   given JsonCodec[Organization]     = parsed(Organization.from, _.message, _.value)
   given JsonCodec[ToolRevision]     = parsed(ToolRevision.from, _.message, _.value)
   given JsonCodec[TestMain]         = parsed(TestMain.from, _.message, _.value)
@@ -428,6 +431,7 @@ private object WireBuild extends WireSupport:
   given JsonCodec[DevNameError]      = JsonCodec.derived
   given JsonCodec[NamespaceError]    = JsonCodec.derived
   given JsonCodec[RemoteError]       = JsonCodec.derived
+  given JsonCodec[AssetError]        = JsonCodec.derived
   given JsonCodec[GraphCompileError] = JsonCodec.derived
   given JsonCodec[JsEnv]             =
     choose("js environment", JsEnv.values.toList.map(env => env.token -> env), _.token)

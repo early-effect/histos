@@ -1,7 +1,7 @@
 package histos.load
 
 import histos.cache.ContentStore
-import histos.plugin.ApiDigest
+import histos.plugin.{ApiDigest, HistosPlugin}
 import histos.workspace.{IoFailure, IoFault, Workspace}
 
 import java.nio.charset.StandardCharsets
@@ -65,6 +65,35 @@ object PluginCompileSuccessLawSpec extends ZIOSpecDefault:
               jarred.note == "note",
               named.exists(_.startsWith("histos.leaklaw.Mark")),
             )
+    ,
+    test("a scala source root copies its resources sibling and does not invent a version file"):
+      Workspace
+        .work("histos-plugin-resources")
+        .flatMap: dir =>
+          val scalaDir  = dir.resolve("scala")
+          val resources = dir.resolve("resources")
+          val plug      = scalaDir.resolve("Plug.scala")
+          val entry     = resources.resolve(HistosPlugin.EntryResourceName)
+          val note      = resources.resolve("notes.txt")
+          val store     = ContentStore.in(dir.resolve("cas"))
+          for
+            _         <- Workspace.writeString(plug, good)
+            _         <- Workspace.writeString(entry, "histos.Plug\n")
+            _         <- Workspace.writeString(note, "from-resources")
+            libs      <- libraries
+            compiled  <- PluginCompile.fromTree(store, launcher, scalaDir, libs)
+            plugin    <- Workspace.readString(compiled.resolve(HistosPlugin.EntryResourceName))
+            copied    <- Workspace.readString(compiled.resolve("notes.txt"))
+            classFile <- ZIO.attemptBlocking(Files.isRegularFile(compiled.resolve("Plug.class"))).orDie
+            version   <- ZIO.attemptBlocking(Files.exists(compiled.resolve(ApiDigest.resource))).orDie
+            listed    <- ZIO.attemptBlocking(Files.exists(compiled.resolve("resources.list"))).orDie
+          yield assertTrue(
+            classFile,
+            plugin == "histos.Plug\n",
+            copied == "from-resources",
+            !version,
+            !listed,
+          ),
   ) @@ TestAspect.withLiveSystem
 
   private val good =

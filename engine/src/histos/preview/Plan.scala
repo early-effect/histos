@@ -610,7 +610,8 @@ object Plan:
           GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) |
           GraphCompileError.MissingUpstream(_, _, _, _) | GraphCompileError.IncompatibleUpstream(_, _, _, _, _) |
           GraphCompileError.Cycle(_) | GraphCompileError.Lock(_) | GraphCompileError.LockRead(_) |
-          GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) | GraphCompileError.Cells(_) =>
+          GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) | GraphCompileError.Assets(_, _, _, _) |
+          GraphCompileError.Cells(_) =>
         PreviewError.Sources(IoFailure(repo, IoFault.Stat))
 
   private def sourceFault(root: Path, error: CompileError): PreviewError =

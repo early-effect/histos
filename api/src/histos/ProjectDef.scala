@@ -87,6 +87,11 @@ sealed trait ModuleDef[P] extends ProjectDef:
     */
   def asset(file: RepoPath): ModuleDef[P]
 
+  /** Files written into the main class directory. A generated name replaces an unmanaged resource of that name. A
+    * repeated name is refused at load. This is not the assembly file `publish assets` uploads.
+    */
+  def resources(asset: GeneratedAsset, rest: GeneratedAsset*): ModuleDef[P]
+
   /** Replace this module's scalac flags. A second call replaces the list. It does not append. */
   def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P]
 
@@ -128,6 +133,7 @@ object ModuleDef:
       Nil,
       ScalacFlags.empty,
       None,
+      Nil,
       Nil,
       Nil,
       TestStore.Off,
@@ -182,6 +188,7 @@ private[histos] final class ModuleBody[P](
     val published: Option[ArtifactBase],
     val publications: List[Publication],
     val assets: List[RepoPath],
+    val resources: List[GeneratedAsset],
     val testStore: TestStore,
     val needs: Set[Need],
 ) extends ModuleDef[P]:
@@ -234,6 +241,9 @@ private[histos] final class ModuleBody[P](
   override def asset(file: RepoPath): ModuleDef[P] =
     revise(assets = assets :+ file)
 
+  override def resources(asset: GeneratedAsset, rest: GeneratedAsset*): ModuleDef[P] =
+    revise(resources = this.resources ++ (asset +: rest.toList))
+
   override def scalac(flag: ScalacFlag, rest: ScalacFlag*): ModuleDef[P] =
     revise(flags = ScalacFlags.of(flag, rest*))
 
@@ -276,6 +286,7 @@ private[histos] final class ModuleBody[P](
       published: Option[ArtifactBase] = this.published,
       publications: List[Publication] = this.publications,
       assets: List[RepoPath] = this.assets,
+      resources: List[GeneratedAsset] = this.resources,
       testStore: TestStore = this.testStore,
       needs: Set[Need] = this.needs,
   ): ModuleDef[P] =
@@ -301,6 +312,7 @@ private[histos] final class ModuleBody[P](
       published,
       publications,
       assets,
+      resources,
       testStore,
       needs,
     )

@@ -112,6 +112,59 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
                   assertTrue(detail == "", done.length == 1)
             ran.provideSomeLayer[TestEnvironment & Scope & Resolve & Compilers](
               graphEnv(lock, dir.resolve("store"))
+            )
+    ,
+    test("a resource lands in classes, and deleting it removes that file without a scala change"):
+      Workspace
+        .work("histos-resource-sync")
+        .flatMap: dir =>
+          ZIO.serviceWithZIO[DependencyLock]: lock =>
+            val source = dir.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val note   = dir.resolve("src").resolve("main").resolve("resources").resolve("note.txt")
+            val ran    =
+              for
+                _      <- Workspace.writeString(source, "object Hello:\n  def ready: Int = 1\n")
+                _      <- Workspace.writeString(note, "plain")
+                first  <- feed(dir, lock)
+                copied <- readNote(cellOf(first))
+                _      <- ZIO.attemptBlocking(Files.delete(note)).orDie
+                second <- feed(dir, lock)
+                after  <- ZIO.succeed(cellOf(second))
+                still  <- exists(after.map(_.classes.resolve("note.txt")))
+                klass  <- existsFile(after.map(_.classes.resolve("Hello.class")))
+                recalled   = after.exists(!_.changed)
+                secondText = after.fold(identity, _ => "")
+                text       = copied
+                present    = still
+                classFile  = klass
+              yield assertTrue(text == "plain", secondText == "", !present, classFile, recalled)
+            ran.provideSomeLayer[TestEnvironment & Scope & Resolve & Compilers](
+              graphEnv(lock, dir.resolve("store"))
+            )
+    ,
+    test("a resource that is already a class file fails and leaves that class"):
+      Workspace
+        .work("histos-resource-class")
+        .flatMap: dir =>
+          ZIO.serviceWithZIO[DependencyLock]: lock =>
+            val source = dir.resolve("src").resolve("main").resolve("scala").resolve("Hello.scala")
+            val klass  = dir.resolve("src").resolve("main").resolve("resources").resolve("Hello.class")
+            val ran    =
+              for
+                _         <- Workspace.writeString(source, "object Hello:\n  def ready: Int = 1\n")
+                _         <- Workspace.writeString(klass, "not a class")
+                collected <- feed(dir, lock)
+                detail    = collected.fold(_.message, chunk => failedText(chunk))
+                classPath = GraphCompile.classesDir(dir, lawName, scala3).resolve("Hello.class")
+                bytes <- ZIO.attemptBlocking {
+                  if Files.isRegularFile(classPath) then Files.readAllBytes(classPath) else Array.emptyByteArray
+                }.orDie
+                present = bytes.nonEmpty
+                planted = bytes.sameElements("not a class".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                said    = detail
+              yield assertTrue(said.contains("already a class file"), present, !planted)
+            ran.provideSomeLayer[TestEnvironment & Scope & Resolve & Compilers](
+              graphEnv(lock, dir.resolve("store"))
             ),
   ).provideSomeLayerShared[TestEnvironment & Scope](opened)
 
@@ -156,6 +209,37 @@ object ZincCompileLawSpec extends ZIOSpecDefault:
   /** The checkout's compiler tools, plus an empty cell for the module under test. */
   private def pinned(lock: DependencyLock): DependencyLock =
     lock.copy(cells = LockedCell(lawName, scala3, Platform.Jvm, Nil, Nil, Nil, ClasspathScope.Compile) :: lock.cells)
+
+  private def feed(dir: Path, lock: DependencyLock) =
+    GraphCompile
+      .cellFeed(session(dir, lock), List(lawName -> scala3), Platform.Jvm)
+      .runCollect
+      .either
+
+  /** The one finished cell. The text is the failure when the feed did not finish one cell. */
+  private def cellOf(collected: Either[GraphCompileError, Chunk[CompileFeed]]): Either[String, CompiledCell] =
+    collected match
+      case Left(error)  => Left(error.message)
+      case Right(chunk) =>
+        val done = chunk.collect { case CompileFeed.Done(cell) => cell }.toList
+        done match
+          case cell :: Nil if failedText(chunk).isEmpty => Right(cell)
+          case _                                        => Left(failedText(chunk))
+
+  private def readNote(found: Either[String, CompiledCell]) =
+    found match
+      case Right(cell) => Workspace.readString(cell.classes.resolve("note.txt"))
+      case Left(text)  => ZIO.succeed(text)
+
+  private def exists(found: Either[String, Path]) =
+    found match
+      case Right(path) => ZIO.attemptBlocking(Files.exists(path)).orDie
+      case Left(_)     => ZIO.succeed(true)
+
+  private def existsFile(found: Either[String, Path]) =
+    found match
+      case Right(path) => ZIO.attemptBlocking(Files.isRegularFile(path)).orDie
+      case Left(_)     => ZIO.succeed(false)
 
   private def failedText(feeds: Chunk[CompileFeed]): String =
     feeds.collect { case CompileFeed.Failed(error) => error.message }.mkString("\n")

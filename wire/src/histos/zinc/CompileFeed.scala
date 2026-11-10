@@ -4,7 +4,7 @@ import histos.doctor.{Diagnostic, Noted}
 import histos.jdk.{Sha256, ToolchainError}
 import histos.resolve.ResolveError
 import histos.select.SelectError
-import histos.{Platform, ProjectName, ScalaVersion}
+import histos.{AssetError, Platform, ProjectName, ScalaVersion}
 
 import java.nio.file.Path
 
@@ -69,6 +69,12 @@ enum GraphCompileError:
       platform: Platform,
       error: CompileError,
   )
+  case Assets(
+      module: ProjectName,
+      version: ScalaVersion,
+      platform: Platform,
+      error: AssetError,
+  )
   case Cells(errors: NonEmptyChunk[GraphCompileError])
 
   def message: String = this match
@@ -91,6 +97,8 @@ enum GraphCompileError:
     case Output(path)                             => s"could not write $path"
     case Failed(module, version, platform, error) =>
       s"'${module.value}' ${version.value} ${platform.token} failed to compile\n${error.message}"
+    case Assets(module, version, platform, error) =>
+      s"'${module.value}' ${version.value} ${platform.token} could not copy resources\n${error.message}"
     case Cells(errors) => errors.map(_.message).mkString("\n")
 
   def diagnose: Diagnostic = this match

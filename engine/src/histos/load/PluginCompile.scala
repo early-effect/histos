@@ -3,7 +3,9 @@ package histos.load
 import histos.cache.ContentStore
 import histos.workspace.{IoFailure, IoFault, Workspace}
 import histos.jdk.{Sha256, Sha256Digest}
+import histos.pack.{AssetSync, Resources}
 import histos.plugin.{ApiDigest, PluginIo, PluginLoadError}
+import histos.AssetError
 import histos.schedule.Digest
 import histos.zinc.Dotty
 
@@ -131,7 +133,7 @@ private[load] object PluginCompile:
       _       <- scalac(sources, classpath, classes)
       _       <- copyResources(tree, classes)
       _       <- resources match
-        case Some(dir) => copyResources(dir, classes)
+        case Some(dir) => syncResources(dir, classes)
         case None      => ZIO.unit
     yield ()
 
@@ -280,6 +282,24 @@ private[load] object PluginCompile:
                 )
               )
             else ZIO.unit
+
+  /** The resources sibling is its own tree. The extract and the Scala tree stay on `copyResources`, which skips sources
+    * and class files mixed into those directories.
+    */
+  private def syncResources(from: Path, classes: Path): IO[LoadError, Unit] =
+    Resources
+      .filesAt(from)
+      .flatMap(found => AssetSync.sync(classes, None, found, Nil, from))
+      .mapError(assetFault(from))
+
+  private def assetFault(dir: Path)(error: AssetError): LoadError =
+    val path = error match
+      case AssetError.Missing(path)    => path
+      case AssetError.Unreadable(path) => path
+      case AssetError.Escaped(_)       => dir
+      case AssetError.Duplicate(_)     => dir
+      case AssetError.Collides(_)      => dir
+    LoadError.Plugin(PluginLoadError.Io(PluginIo.Read(path)))
 
   private def copyResources(from: Path, to: Path): IO[LoadError, Unit] =
     ZIO

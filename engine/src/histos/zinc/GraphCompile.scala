@@ -490,7 +490,8 @@ object GraphCompile:
     error match
       case GraphCompileError.NoRoot(_) | GraphCompileError.NoSources(_, _) |
           GraphCompileError.MissingUpstream(_, _, _, _) | GraphCompileError.IncompatibleUpstream(_, _, _, _, _) |
-          GraphCompileError.RootRead(_) | GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) =>
+          GraphCompileError.RootRead(_) | GraphCompileError.Output(_) | GraphCompileError.Failed(_, _, _, _) |
+          GraphCompileError.Assets(_, _, _, _) =>
         Some(error)
       case _ => None
 
@@ -666,7 +667,29 @@ object GraphCompile:
             ),
             compiled.miss,
           )
+      _ <- copyResources(plan, module, version, platform, base, compiled.cell.classes)
     yield compiled
+
+  /** Unmanaged resources and generated assets, after compile and after a product restore. The ownership list lives in
+    * the analysis directory, so a class-directory wipe does not forget which files this sync owns.
+    */
+  private def copyResources(
+      plan: CompilePlan,
+      module: Module,
+      version: ScalaVersion,
+      platform: Platform,
+      source: Path,
+      classes: Path,
+  ): IO[GraphCompileError, Unit] =
+    val refused  = (error: histos.AssetError) => GraphCompileError.Assets(module.name, version, platform, error)
+    val manifest = analysisRoot(plan, module.name, version, platform).resolve(histos.pack.AssetSync.Manifest)
+    histos.pack.Resources
+      .filesAt(source.resolve("main").resolve("resources"))
+      .mapError(refused)
+      .flatMap: unmanaged =>
+        histos.pack.AssetSync
+          .sync(classes, Some(manifest), unmanaged, module.resources, plan.repo)
+          .mapError(refused)
 
   /** No main sources. The classes directory stays empty so a later test compile has a classpath root.
     */

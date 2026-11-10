@@ -14,7 +14,7 @@ import histos.native.{
   NativeToolchain,
 }
 import histos.node.{NodeBinary, NodeMiss}
-import histos.pack.Resources
+
 import histos.toolchain.Runtimes
 import histos.resolve.{
   BuildResolvers,
@@ -46,7 +46,7 @@ import histos.zinc.{
   Sources,
   ToolchainMiss,
 }
-import histos.pack.{MainClass, MainClassError}
+import histos.pack.{AssetSync, MainClass, MainClassError, Resources}
 import histos.{ClangPin, Dep, Module, Platform, ProjectGraph, ProjectName, ScalaVersion, TestMain, TestProvider}
 
 import java.nio.file.{Files, Path}
@@ -135,21 +135,6 @@ private[histos] object TestCompile:
       }
       .mapError(_ => ModuleTestError.Root(repo))
 
-  /** `src/main/resources`, and `src/test/resources` when `tests` is set. A missing directory is an empty list. */
-  private def resourceDirs(
-      repo: Path,
-      module: Module,
-      modules: List[Module],
-      tests: Boolean,
-  ): ZIO[Any, ModuleTestError, List[Path]] =
-    GraphCompile
-      .sourceBase(repo, module, modules)
-      .mapError(ModuleTestError.Compile(_))
-      .flatMap:
-        case None      => ZIO.succeed(Nil)
-        case Some(src) =>
-          Resources.directories(src, tests).mapError(_ => ModuleTestError.Root(src))
-
   private[testrun] def upstreamClasses(
       repo: Path,
       module: Module,
@@ -191,7 +176,6 @@ private[histos] object TestCompile:
       upstream: List[Sha256],
       classDirs: List[Path],
       permitted: List[Path],
-      resources: List[Path],
   )
 
   private[histos] def runtimeClasspath(
@@ -231,9 +215,6 @@ private[histos] object TestCompile:
       api     <-
         if fetched.needsHost then histos.zinc.ScalacClasspath.hostApi(repo).mapBoth(ModuleTestError.Compile(_), Some(_))
         else ZIO.none
-      ownResources      <- resourceDirs(repo, module, modules, tests = true)
-      upstreamResources <- ZIO.foreach(Module.chain(module, modules, cell.platform)): dependency =>
-        resourceDirs(repo, dependency, modules, tests = false)
       drop = dropJvmLibrary(cell.platform)
       kept =
         if drop then
@@ -249,7 +230,6 @@ private[histos] object TestCompile:
       own            = kept.map(_._2).toSet
       upstreamHashes =
         libraries.map(_.sha256).distinct.filterNot(own.contains)
-      resources = (ownResources ++ upstreamResources.flatten).distinct
       classes <- extendRuntime(coverage, cell, cell.classes :: (upstream ++ library ++ jars))
     yield Linked(
       classes,
@@ -257,7 +237,6 @@ private[histos] object TestCompile:
       upstreamHashes,
       cell.classes :: upstream,
       api.toList,
-      resources,
     )
 
   /** A resolved JVM `scala-library` is a second copy of the compiler runtime. JavaScript supplies its own library list.
@@ -333,7 +312,33 @@ private[histos] object TestCompile:
       )
       _ <- onCompiled(facts)
       _ <- restoreMeasured(coverage, held, module.name, cell.version)
+      _ <- syncTests(repo, modules, module, cell, classes, analysis)
     yield linked
+
+  /** `src/test/resources` only. Main resources stay in the main class directory, which is already on `linked.paths`. */
+  private def syncTests(
+      repo: Path,
+      modules: List[Module],
+      module: Module,
+      cell: CompiledCell,
+      classes: Path,
+      analysis: Path,
+  ): ZIO[Any, ModuleTestError, Unit] =
+    val refused = (error: histos.AssetError) =>
+      ModuleTestError.Compile(GraphCompileError.Assets(module.name, cell.version, cell.platform, error))
+    GraphCompile
+      .sourceBase(repo, module, modules)
+      .mapError(ModuleTestError.Compile(_))
+      .flatMap:
+        case None      => ZIO.unit
+        case Some(src) =>
+          Resources
+            .filesAt(src.resolve("test").resolve("resources"))
+            .mapError(refused)
+            .flatMap: found =>
+              AssetSync
+                .sync(classes, Some(analysis.resolve(AssetSync.Manifest)), found, Nil, repo)
+                .mapError(refused)
 
   /** Scala 2.13 runs the instrumented classes with the scoverage runtime. Scala 3 already has it in the compiler. */
   private def extendRuntime(

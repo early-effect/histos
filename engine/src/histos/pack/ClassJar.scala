@@ -15,16 +15,21 @@ object ClassJar:
   def write(classes: Path, destination: Path): IO[JarError, Jarred] =
     write(classes, Nil, destination)
 
-  /** Class files plus named extras. A repeated entry name is refused. */
+  /** Class files plus named extras. A repeated entry name is refused. `replacing` drops those names from the class walk
+    * and then adds its own files. Only the plugin stamp uses that list.
+    */
   def write(
       classes: Path,
       extra: List[(String, Path)],
       destination: Path,
+      replacing: List[(String, Path)] = Nil,
   ): IO[JarError, Jarred] =
     for
       files <- entries(classes, destination)
-      _     <- accept(extra, files.map(_._1))
-      named = files ++ extra
+      dropped = replacing.map(_._1).toSet
+      kept    = files.filterNot((name, _) => dropped.contains(name))
+      _ <- accept(extra ++ replacing, kept.map(_._1))
+      named = kept ++ extra ++ replacing
       _ <- place(destination, named.sortBy(_._1))
     yield Jarred(destination, named.length)
 
