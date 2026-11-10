@@ -77,7 +77,10 @@ object SupplyLawSpec extends ZIOSpecDefault:
         authors.forall: author =>
           val yaml  = SupplyYaml.fullDoctor(author).mkString("\n")
           val mints = yaml.contains("actions/create-github-app-token@")
-          mints == (author != PrAuthor.Actions) && yaml.contains("GH_TOKEN:"),
+          mints == (author != PrAuthor.Actions) &&
+          yaml.contains("GH_TOKEN:") &&
+          mints == yaml.contains("client-id:") &&
+          !yaml.contains("app-id:"),
   )
 
   private def policy(author: PrAuthor): SupplyChain =
