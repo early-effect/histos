@@ -310,7 +310,7 @@ object Daemon:
       build: IO[histos.load.LoadError, histos.load.BuildNotes],
       plugins: histos.load.PluginRuntime = Calls.quiet,
       machine: histos.jdk.Machine = Calls.idleMachine,
-      relaunch: Path => IO[ServerError, Unit] = successor,
+      relaunch: Path => IO[ServerError, Unit] = spawn,
       assembly: Option[String] = None,
   ): ZIO[
     Scope & histos.resolve.Resolve & histos.load.Loader & histos.cache.ContentStore,
@@ -348,17 +348,25 @@ object Daemon:
       relaunch: IO[ServerError, Unit],
   )
 
-  private def successor(repo: Path): IO[ServerError, Unit] =
+  /** Cold start and a reboot successor. The child must not inherit the caller's stdin. */
+  private[histos] def launch(repo: Path): ProcessBuilder =
+    val log = repo.resolve(".histos").resolve("server.log")
+    new ProcessBuilder("./histos", "server")
+      .directory(repo.toFile)
+      .redirectInput(ProcessBuilder.Redirect.from(Path.of("/dev/null").toFile))
+      .redirectErrorStream(true)
+      .redirectOutput(ProcessBuilder.Redirect.appendTo(log.toFile))
+
+  private[histos] def spawn(repo: Path): IO[ServerError, Unit] =
+    val log = repo.resolve(".histos").resolve("server.log")
     ZIO
       .attemptBlocking {
-        new ProcessBuilder("./histos", "server")
-          .directory(repo.toFile)
-          .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-          .redirectError(ProcessBuilder.Redirect.DISCARD)
-          .start()
+        Option(log.getParent).foreach(dir => Files.createDirectories(dir))
+        if !Files.exists(log) then Files.createFile(log)
+        launch(repo).start()
         ()
       }
-      .mapError(_ => ServerError.Io(ServerIo.Bind(repo)))
+      .mapError(_ => ServerError.Io(ServerIo.Bind(log)))
 
   private def run(
       repo: Path,
@@ -574,11 +582,11 @@ object Daemon:
             case Some(asked) =>
               val say = Say.frames(output, bound)
 
-              /** Reload, reboot, and bsp own the process. Everything else that reads the graph adopts one. */
+              /** Reload and bsp own the process. Reboot replaces it and does not read the graph. */
               def adopts(target: Call): Boolean =
                 Perform.needsGraph(target) || (target match
-                  case Call.Reload | Call.Reboot | Call.Bsp => true
-                  case _                                    => false)
+                  case Call.Reload | Call.Bsp => true
+                  case _                      => false)
 
               def edges(
                   out: Say
@@ -747,7 +755,7 @@ object Daemon:
                     val have = Right(Some(LoadedBuild(held.graph, held.plugins, held.build)))
                     val ran  =
                       target match
-                        case Call.Bsp | Call.Reboot | Call.Reload =>
+                        case Call.Bsp | Call.Reload =>
                           execute(target, out, have, machine)
                         case _ =>
                           histos.jdk.Machine
@@ -902,14 +910,14 @@ object Daemon:
       output: OutputStream,
   ): ZIO[Any, ServerError, Unit] =
     for
-      _ <- life.armed.set(false)
-      _ <- remove(repo, bound)
-      _ <- life.relaunch
       _ <- write(
         output,
         wire(Message.Done(CallResult.Reported(Report.empty))),
         bound,
       )
+      _ <- life.armed.set(false)
+      _ <- remove(repo, bound)
+      _ <- life.relaunch
       _ <- life.stopping.succeed(())
       _ <- ZIO.attemptBlocking(server.close()).ignore
     yield ()

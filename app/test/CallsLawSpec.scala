@@ -169,7 +169,7 @@ object CallsLawSpec extends ZIOSpecDefault:
           case None        => false,
       )
     ,
-    test("a tracked failure keeps the out line and an interrupt is a fault frame"):
+    test("a tracked failure ends with the error line and done, and an interrupt is a fault frame"):
       for
         runs    <- Ref.make(Map.empty[RunId, Fiber[ServerError, Unit]])
         failed  <- speak(say => Calls.tracked(runs, say)(ZIO.fail(ServerError.NoServer)))
@@ -177,8 +177,8 @@ object CallsLawSpec extends ZIOSpecDefault:
         died    <- speak(say => Calls.tracked(runs, say)(ZIO.die(new IllegalStateException("boom"))))
         left    <- runs.get
       yield assertTrue(
-        failed._1 == Left(ServerError.NoServer),
-        outOnly(failed._2),
+        failed._1 == Right(()),
+        trackedFailure(failed._2, ServerError.NoServer.message),
         stopped._1 == Right(()),
         terminal(stopped._2, CallResult.Fault(BuildFault.Interrupted)),
         died._1 == Right(()),
@@ -229,10 +229,18 @@ object CallsLawSpec extends ZIOSpecDefault:
       heard  <- messages.get
     yield (result, heard)
 
-  private def outOnly(heard: Chunk[Message]): Boolean =
+  private def trackedFailure(heard: Chunk[Message], sentence: String): Boolean =
     heard match
-      case Chunk(Message.Event(BuildEvent.Out(text))) => text.startsWith("run ") && text.length > 4
-      case _                                          => false
+      case Chunk(
+            Message.Event(BuildEvent.Out(text)),
+            Message.Event(BuildEvent.Err(err)),
+            Message.Done(CallResult.Reported(report)),
+          ) =>
+        text.startsWith("run ") &&
+        err == sentence &&
+        report.err == Chunk(sentence) &&
+        report.run.contains(text.drop(4))
+      case _ => false
 
   private def terminal(heard: Chunk[Message], result: CallResult): Boolean =
     heard match
