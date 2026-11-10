@@ -85,8 +85,10 @@ object NativeRequestLawSpec extends ZIOSpecDefault:
         tests.roots.map(_.name) == List("test-interface_native0.5_3"),
         tests.roots.forall(_.transitivity == Transitivity.Single),
         suite.id.role == ToolRole.NativeSuite,
-        suite.roots.map(_.name) == List(s"test-runner_${binary(bridge)}"),
-        suite.roots.map(_.transitivity) == List(Transitivity.Closure),
+        suite.roots.map(_.name) == List(s"test-runner_${binary(bridge)}", "scala-library"),
+        suite.roots.map(_.revision) == List(release.value, "2.13.18"),
+        suite.roots.map(_.transitivity) == List(Transitivity.Closure, Transitivity.Single),
+        suite.roots.drop(1).forall(_.origin.isEmpty),
       )
     ,
     test("the bridge source names the module, the main, and the compilers, and escapes a quote"):

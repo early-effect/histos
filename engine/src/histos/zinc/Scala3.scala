@@ -248,25 +248,42 @@ object CompilerRequests:
     )
 
   def compiler(version: ScalaVersion, repos: Repositories): ToolRequest =
-    val names = if version.value.startsWith("3.") then List("scala3-compiler_3", "scala3-sbt-bridge")
-    else
-      List(
-        "scala-library",
-        "scala-compiler",
-        "scala-reflect",
-        "scala2-sbt-bridge",
+    val scala3 = version.value.startsWith("3.")
+    val names  =
+      if scala3 then List("scala3-compiler_3", "scala3-sbt-bridge")
+      else
+        List(
+          "scala-library",
+          "scala-compiler",
+          "scala-reflect",
+          "scala2-sbt-bridge",
+        )
+    val language = names.map(name =>
+      ToolRoots.of(
+        Dep.trusted("org.scala-lang", name, version.value, DepKind.Java),
+        version,
+        Platform.Jvm,
+        Transitivity.Closure,
+        None,
       )
+    )
+    // scala3-compiler still requests a jline-reader inside GHSA-5q95-hrpc-m3w3.
+    // It also requests jline-terminal-jni, which the patched reader does not bring forward.
+    val pinned =
+      if scala3 then
+        List("jline-reader", "jline-terminal-jni").map(name =>
+          ToolRoots.of(
+            Dep.trusted("org.jline", name, "4.3.1", DepKind.Java),
+            version,
+            Platform.Jvm,
+            Transitivity.Closure,
+            None,
+          )
+        )
+      else Nil
     ToolRequest(
       ToolId(ToolRole.Compiler, version, ToolVariant.Jvm),
-      names.map(name =>
-        ToolRoots.of(
-          Dep.trusted("org.scala-lang", name, version.value, DepKind.Java),
-          version,
-          Platform.Jvm,
-          Transitivity.Closure,
-          None,
-        )
-      ),
+      language ++ pinned,
       repos,
     )
 

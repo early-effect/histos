@@ -259,6 +259,7 @@ object NativeRequests:
       repos: Repositories,
   ): ToolRequest =
     val version = catalog.native.bridgeScala
+    val origin  = nativeOrigin(toolchain.source)
     ToolRequest(
       ToolId(
         ToolRole.NativeSuite,
@@ -276,8 +277,17 @@ object NativeRequests:
           version,
           Platform.Jvm,
           Transitivity.Closure,
-          nativeOrigin(toolchain.source),
-        )
+          origin,
+        ),
+        // test-runner still requests a scala-library inside GHSA-8qv5-68g4-248j.
+        // The library is on the request repositories. The runner's origin does not publish it.
+        ToolRoots.of(
+          Dep.trusted("org.scala-lang", "scala-library", "2.13.18", DepKind.Java),
+          version,
+          Platform.Jvm,
+          Transitivity.Single,
+          None,
+        ),
       ),
       reposFor(toolchain, repos),
     )

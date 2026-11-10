@@ -12,6 +12,7 @@ import histos.resolve.{
   ResolvedArtifact,
   Repository,
   ToolRequest,
+  Transitivity,
 }
 import histos.workspace.Workspace
 import histos.{ScalaVersion, ToolCatalog}
@@ -143,6 +144,20 @@ object Scala3LawSpec extends ZIOSpecDefault:
           properties == Left(CompileError.Toolchain(ToolchainMiss.Missing(scala3, CompilerPart.Library))),
         )
       program.provideSomeLayer[TestEnvironment & Scope](stubbed[ResolutionService] ++ stubbed[Resolve])
+    ,
+    test("a Scala 3 compiler pins jline-reader and a Scala 2 compiler does not"):
+      val current = CompilerRequests.compiler(scala3, repos)
+      val scala2  = CompilerRequests.compiler(ScalaVersion("2.13.18"), repos)
+      assertTrue(
+        current.roots.map(root => (root.organization, root.name, root.revision)) == List(
+          ("org.scala-lang", "scala3-compiler_3", scala3.value),
+          ("org.scala-lang", "scala3-sbt-bridge", scala3.value),
+          ("org.jline", "jline-reader", "4.3.1"),
+          ("org.jline", "jline-terminal-jni", "4.3.1"),
+        ),
+        current.roots.forall(_.transitivity == Transitivity.Closure),
+        scala2.roots.forall(root => root.organization != "org.jline"),
+      ),
   )
 
   private final case class Seen(
